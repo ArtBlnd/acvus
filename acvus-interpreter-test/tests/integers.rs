@@ -148,7 +148,7 @@ async fn to_string_has_an_instance_for_every_width() {
 #[tokio::test]
 async fn a_literal_argument_takes_the_parameter_s_width() {
     let i = Interner::new();
-    let v = run_script(&i, r#"repeat_str("ab", 3)"#, Context::default(), Ty::String).await;
+    let v = run_script(&i, r#"repeat("ab", 3)"#, Context::default(), Ty::String).await;
     assert_eq!(unsafe { v.as_str() }, "ababab");
     let v = run_script(
         &i,

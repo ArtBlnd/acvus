@@ -847,7 +847,7 @@ fn regex_and_datetime_need_no_flag() {
         &[
             "run",
             "-e",
-            "let re = regex(\"a+\".to_string())?; is_match(&re, \"baaad\")",
+            "let re = regex(\"a+\")?; is_match(&re, \"baaad\")",
         ],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
@@ -858,7 +858,7 @@ fn regex_and_datetime_need_no_flag() {
         &[
             "run",
             "-e",
-            "let d = parse_date(\"2026-09-19T09:58:03\".to_string(), \"%Y-%m-%dT%H:%M:%S\".to_string())?; timestamp(d)",
+            "let d = parse_date(\"2026-09-19T09:58:03\", \"%Y-%m-%dT%H:%M:%S\")?; timestamp(d)",
         ],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));

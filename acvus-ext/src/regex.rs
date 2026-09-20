@@ -109,16 +109,16 @@ fn at(text: &str, start: u64) -> Option<usize> {
 
 /// Compiles `pattern` under the flags `regex_flags()` names.
 #[extern_fn(effect = pure)]
-fn regex(pattern: String) -> Result<Regex, RegexError> {
-    regex::Regex::new(&pattern)
+fn regex(pattern: &str) -> Result<Regex, RegexError> {
+    regex::Regex::new(pattern)
         .map(Regex)
-        .map_err(|e| invalid(pattern, &e))
+        .map_err(|e| invalid(pattern.to_owned(), &e))
 }
 
 /// Compiles `pattern` under `flags`.
 #[extern_fn(effect = pure)]
-fn regex_with(pattern: String, flags: RegexFlags) -> Result<Regex, RegexError> {
-    regex::RegexBuilder::new(&pattern)
+fn regex_with(pattern: &str, flags: RegexFlags) -> Result<Regex, RegexError> {
+    regex::RegexBuilder::new(pattern)
         .case_insensitive(flags.case_insensitive)
         .multi_line(flags.multi_line)
         .dot_matches_new_line(flags.dot_matches_new_line)
@@ -127,7 +127,7 @@ fn regex_with(pattern: String, flags: RegexFlags) -> Result<Regex, RegexError> {
         .swap_greed(flags.swap_greed)
         .build()
         .map(Regex)
-        .map_err(|e| invalid(pattern, &e))
+        .map_err(|e| invalid(pattern.to_owned(), &e))
 }
 
 /// The flags `regex` itself compiles with.
@@ -138,8 +138,8 @@ fn regex_flags() -> RegexFlags {
 
 /// A pattern matching `text` literally.
 #[extern_fn(effect = pure)]
-fn escape(text: String) -> String {
-    regex::escape(&text)
+fn escape(text: &str) -> String {
+    regex::escape(text)
 }
 
 // -- Searching ----------------------------------------------------------
@@ -223,10 +223,10 @@ fn group(caps: &Captures, i: u64) -> Option<Match> {
 /// The group `name` names. `None` where the pattern has no group of that
 /// name or the group did not participate in this match.
 #[extern_fn(effect = pure)]
-fn named(caps: &Captures, name: String) -> Option<Match> {
+fn named(caps: &Captures, name: &str) -> Option<Match> {
     caps.0
         .iter()
-        .find(|group| group.name.as_deref() == Some(name.as_str()))?
+        .find(|group| group.name.as_deref() == Some(name))?
         .matched
         .clone()
 }
@@ -251,24 +251,24 @@ fn group_names(re: &Regex) -> Vec<Option<String>> {
 /// `${name}` expand to the group of that number or name and `$$` is one
 /// dollar.
 #[extern_fn(effect = pure)]
-fn replace(re: &Regex, text: &str, with: String) -> String {
-    re.0.replace(text, with.as_str()).into_owned()
+fn replace(re: &Regex, text: &str, with: &str) -> String {
+    re.0.replace(text, with).into_owned()
 }
 
 /// `text` with every non-overlapping match replaced, expanding `with` as
 /// `replace` does.
 #[extern_fn(effect = pure)]
-fn replace_all(re: &Regex, text: &str, with: String) -> String {
-    re.0.replace_all(text, with.as_str()).into_owned()
+fn replace_all(re: &Regex, text: &str, with: &str) -> String {
+    re.0.replace_all(text, with).into_owned()
 }
 
 /// `text` with the first `n` matches replaced, expanding `with` as
 /// `replace` does; an `n` of 0 replaces nothing.
 #[extern_fn(effect = pure)]
-fn replace_n(re: &Regex, text: &str, n: u64, with: String) -> String {
+fn replace_n(re: &Regex, text: &str, n: u64, with: &str) -> String {
     match usize::try_from(n).unwrap_or(usize::MAX) {
         0 => text.to_owned(),
-        n => re.0.replacen(text, n, with.as_str()).into_owned(),
+        n => re.0.replacen(text, n, with).into_owned(),
     }
 }
 

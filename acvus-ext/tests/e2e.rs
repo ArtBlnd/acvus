@@ -194,7 +194,7 @@ async fn regex_match_true() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "abc123"; is_match(&re, &t) } else { false }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "abc123"; is_match(&re, &t) } else { false }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -207,7 +207,7 @@ async fn regex_match_false() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "abc"; is_match(&re, &t) } else { true }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "abc"; is_match(&re, &t) } else { true }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -220,7 +220,7 @@ async fn regex_find_all_collect() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "a1b22c333"; find_all(&re, &t) | map(|m| -> m.text) | collect } else { vec([]) }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "a1b22c333"; find_all(&re, &t) | map(|m| -> m.text) | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -233,7 +233,7 @@ async fn regex_replace() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\s+".to_string()) { let t = "hello   world"; replace_all(&re, &t, " ".to_string()) } else { "?".to_string() }"#,
+        r#"if let Ok(re) = regex("\\s+") { let t = "hello   world"; replace_all(&re, &t, " ") } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -246,7 +246,7 @@ async fn regex_split_collect() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("[,;]\\s*".to_string()) { let t = "a, b;c"; split(&re, &t) | collect } else { vec([]) }"#,
+        r#"if let Ok(re) = regex("[,;]\\s*") { let t = "a, b;c"; split(&re, &t) | collect } else { vec([]) }"#,
         TypedContext::default(),
         vec![regex_registry::<AcvusRuntime>()],
     )
@@ -314,7 +314,7 @@ async fn datetime_format_from_timestamp() {
     // 2024-01-01 00:00:00 UTC = epoch 1704067200
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(dt) = from_timestamp(1704067200) { format_date(dt, "%Y-%m-%d".to_string()) } else { "?".to_string() }"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { format_date(dt, "%Y-%m-%d") } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -340,7 +340,7 @@ async fn datetime_add_days() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(dt) = from_timestamp(1704067200) { let dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d".to_string()) } else { "?".to_string() }"#,
+        r#"if let Ok(dt) = from_timestamp(1704067200) { let dt2 = add_days(dt, 1); format_date(dt2, "%Y-%m-%d") } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     )
@@ -353,7 +353,7 @@ async fn datetime_parse_and_format() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(dt) = parse_date("2024-06-15 12:30:00".to_string(), "%Y-%m-%d %H:%M:%S".to_string()) { format_date(dt, "%m/%d/%Y".to_string()) } else { "?".to_string() }"#,
+        r#"if let Ok(dt) = parse_date("2024-06-15 12:30:00", "%Y-%m-%d %H:%M:%S") { format_date(dt, "%m/%d/%Y") } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![datetime_registry::<AcvusRuntime>()],
     ).await;
@@ -369,7 +369,7 @@ async fn mixed_regex_and_encoding() {
     let i = Interner::new();
     let result = run_ext_script_mode(
         &i,
-        r#"if let Ok(re) = regex("\\d+".to_string()) { let t = "abc123"; let m = is_match(&re, &t); base64_encode("hello".to_string()) + " " + m.to_string() } else { "?".to_string() }"#,
+        r#"if let Ok(re) = regex("\\d+") { let t = "abc123"; let m = is_match(&re, &t); base64_encode("hello".to_string()) + " " + m.to_string() } else { "?".to_string() }"#,
         TypedContext::default(),
         vec![
             regex_registry::<AcvusRuntime>(),
@@ -880,7 +880,7 @@ async fn a_refused_input_names_why_in_its_own_enum() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        r#"{{ r = regex("(".to_string()) }}{{ Err(RegexError::Invalid(e)) = r }}{{ e.pattern }}{{_}}?{{/}}"#,
+        r#"{{ r = regex("(") }}{{ Err(RegexError::Invalid(e)) = r }}{{ e.pattern }}{{_}}?{{/}}"#,
         TypedContext::default(),
         vec![regex_registry()],
     )
@@ -888,7 +888,7 @@ async fn a_refused_input_names_why_in_its_own_enum() {
     assert_str(&v, "(");
     let v = run_ext_template(
         &i,
-        r#"{{ r = parse_date("yesterday".to_string(), "%Y".to_string()) }}{{ Err(DateError::Unparsable(e)) = r }}{{ e.input }} {{ e.format }}{{_}}?{{/}}"#,
+        r#"{{ r = parse_date("yesterday", "%Y") }}{{ Err(DateError::Unparsable(e)) = r }}{{ e.input }} {{ e.format }}{{_}}?{{/}}"#,
         TypedContext::default(),
         vec![datetime_registry()],
     )
@@ -957,7 +957,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
     assert_str(&v, "héllo");
     let v = run_ext_script_mode(
         &i,
-        "if let Ok(re) = regex(\"[0-9]+\".to_string()) { let t = \"ab42cd\"; if let Some(m) = find(&re, &t) { m.text } else { \"none\".to_string() } } else { \"?\".to_string() }",
+        "if let Ok(re) = regex(\"[0-9]+\") { let t = \"ab42cd\"; if let Some(m) = find(&re, &t) { m.text } else { \"none\".to_string() } } else { \"?\".to_string() }",
         TypedContext::default(),
         vec![regex_registry()],
     )

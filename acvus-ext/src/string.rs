@@ -1,18 +1,33 @@
-//! String operations. All pure. A string is a value, not a container of
-//! characters (RFC-0028): there is no `get` returning a reference into it,
-//! because a `String` is UTF-8 and a scalar value is not a storage inside
-//! it; a character is read out by value with `char_at`, as the `char` it
-//! is (RFC-0058).
+//! String operations under Rust `str`'s names and contracts. All pure. A
+//! string is a value, not a container of characters (RFC-0028): there is no
+//! `get` returning a reference into it, because a `String` is UTF-8 and a
+//! scalar value is not a storage inside it; a character is read out by value
+//! with `char_at`, as the `char` it is (RFC-0058).
 //!
 //! Every function that reads takes a `&str`. A function whose result is a
 //! run of its argument's own bytes returns `&str` and the caller holds the
 //! argument's loan for as long as the result; a function that builds new
 //! bytes returns `String` (RFC-0062 Decisions 2 and 3). Two units coexist
-//! here and each function states its own: `len`, `find`, `rfind` and
-//! `substring` are in bytes, `char_at`, `chars` and the `pad_*` width in
-//! Unicode scalar values.
+//! here and each function states its own: `len`, `find`, `rfind`,
+//! `substring`, `is_char_boundary`, `char_indices` and `match_indices` are
+//! in bytes, `char_at`, `chars` and the `pad_*` width in Unicode scalar
+//! values.
+//!
+//! Where Rust panics on a byte offset that is not a character boundary,
+//! this module refuses the run instead of returning an `Option`. The offset
+//! comes from `find`, `rfind` or a regex match, all of which report
+//! boundaries, so a non-boundary offset is a program that computed one, not
+//! a value a caller can sensibly branch on.
+//!
+//! Ordering is `cmp`, `lt`, `le`, `gt` and `ge`, bytewise as Rust's
+//! `Ord for str`. The `<` operator does not reach text: an operator instance
+//! for a `String` waits for RFC-0067's `ord<T>`.
 
-use acvus_extern::{Erased, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind};
+use std::cmp::Ordering;
+
+use acvus_extern::{
+    Erased, OneValue, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind,
+};
 
 use crate::iter::Iter;
 
@@ -25,6 +40,15 @@ fn shortfall(s: &str, width: i64) -> usize {
         return 0;
     };
     width.saturating_sub(s.chars().count())
+}
+
+/// A count the address space cannot hold is a refusal, not a saturation:
+/// the result would not be the one the program asked for either way.
+fn count_of(what: &str, n: u64) -> usize {
+    let Ok(n) = usize::try_from(n) else {
+        panic!("{what}: count {n} exceeds the address space")
+    };
+    n
 }
 
 /// The length in bytes.
@@ -67,6 +91,36 @@ fn trim_end(s: &str) -> &str {
     s.trim_end()
 }
 
+/// A view of `s` with every leading and trailing `pat` cut away. An empty
+/// `pat` cuts nothing.
+#[extern_fn(effect = pure)]
+fn trim_matches<'a>(s: &'a str, pat: &str) -> &'a str {
+    match pat.is_empty() {
+        true => s,
+        false => s.trim_start_matches(pat).trim_end_matches(pat),
+    }
+}
+
+/// A view of `s` with every leading `pat` cut away. An empty `pat` cuts
+/// nothing.
+#[extern_fn(effect = pure)]
+fn trim_start_matches<'a>(s: &'a str, pat: &str) -> &'a str {
+    match pat.is_empty() {
+        true => s,
+        false => s.trim_start_matches(pat),
+    }
+}
+
+/// A view of `s` with every trailing `pat` cut away. An empty `pat` cuts
+/// nothing.
+#[extern_fn(effect = pure)]
+fn trim_end_matches<'a>(s: &'a str, pat: &str) -> &'a str {
+    match pat.is_empty() {
+        true => s,
+        false => s.trim_end_matches(pat),
+    }
+}
+
 #[extern_fn(effect = pure)]
 fn upper(s: &str) -> String {
     s.to_uppercase()
@@ -78,41 +132,57 @@ fn lower(s: &str) -> String {
 }
 
 #[extern_fn(effect = pure)]
+fn to_ascii_uppercase(s: &str) -> String {
+    s.to_ascii_uppercase()
+}
+
+#[extern_fn(effect = pure)]
+fn to_ascii_lowercase(s: &str) -> String {
+    s.to_ascii_lowercase()
+}
+
+#[extern_fn(effect = pure)]
+fn is_ascii(s: &str) -> bool {
+    s.is_ascii()
+}
+
+#[extern_fn(effect = pure)]
 fn contains(s: &str, pat: &str) -> bool {
     s.contains(pat)
 }
 
 #[extern_fn(effect = pure)]
-fn starts_with_str(s: &str, pat: &str) -> bool {
+fn starts_with(s: &str, pat: &str) -> bool {
     s.starts_with(pat)
 }
 
 #[extern_fn(effect = pure)]
-fn ends_with_str(s: &str, pat: &str) -> bool {
+fn ends_with(s: &str, pat: &str) -> bool {
     s.ends_with(pat)
 }
 
 #[extern_fn(effect = pure)]
-fn replace_str(s: &str, from: &str, to: &str) -> String {
+fn replace(s: &str, from: &str, to: &str) -> String {
     s.replace(from, to)
 }
 
+/// `s` with the first `n` occurrences of `from` replaced; an `n` of 0
+/// replaces nothing.
 #[extern_fn(effect = pure)]
-fn split_str<Rt>(rt: &Rt, s: &str, sep: &str) -> Vec<Erased<Rt, String>>
-where
-    Rt: Runtime,
-{
-    s.split(sep)
-        .map(|part| Erased::new(rt, part.to_owned()))
-        .collect()
+fn replacen(s: &str, from: &str, to: &str, n: u64) -> String {
+    s.replacen(from, to, count_of("replacen", n))
 }
 
 #[extern_fn(effect = pure)]
-fn repeat_str(s: &str, n: u64) -> String {
-    let Ok(n) = usize::try_from(n) else {
-        panic!("repeat_str: count {n} exceeds the address space")
-    };
-    s.repeat(n)
+fn repeat(s: &str, n: u64) -> String {
+    s.repeat(count_of("repeat", n))
+}
+
+/// Whether byte `i` is the first byte of a character, the end of `s`
+/// included.
+#[extern_fn(effect = pure)]
+fn is_char_boundary(s: &str, i: u64) -> bool {
+    usize::try_from(i).is_ok_and(|i| s.is_char_boundary(i))
 }
 
 /// A view of the bytes `[start, end)` of `s`, which are `s`'s own, so the
@@ -176,6 +246,39 @@ fn char_at(s: &str, i: i64) -> char {
     c
 }
 
+// -- Ordering -----------------------------------------------------------
+
+/// Rust's `Ord for str`: the bytes compared lexicographically, `-1`, `0` or
+/// `1` as `a` is before, equal to, or after `b`.
+#[extern_fn(effect = pure)]
+fn cmp(a: &str, b: &str) -> i64 {
+    match a.cmp(b) {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn lt(a: &str, b: &str) -> bool {
+    a < b
+}
+
+#[extern_fn(effect = pure)]
+fn le(a: &str, b: &str) -> bool {
+    a <= b
+}
+
+#[extern_fn(effect = pure)]
+fn gt(a: &str, b: &str) -> bool {
+    a > b
+}
+
+#[extern_fn(effect = pure)]
+fn ge(a: &str, b: &str) -> bool {
+    a >= b
+}
+
 // -- Producers ----------------------------------------------------------
 
 fn iter_of<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
@@ -198,6 +301,31 @@ where
     Rt: Runtime,
 {
     iter_of(s.chars().collect())
+}
+
+/// A character and the byte offset it begins at.
+#[derive(TyArg)]
+pub struct CharIndex {
+    index: u64,
+    ch: char,
+}
+
+/// One Unicode scalar value per step, each with its own byte offset.
+#[extern_fn(effect = pure)]
+fn char_indices<E, I, Rt>(s: &str) -> Iter<CharIndex, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(
+        s.char_indices()
+            .map(|(index, ch)| CharIndex {
+                index: index as u64,
+                ch,
+            })
+            .collect(),
+    )
 }
 
 #[extern_fn(effect = pure)]
@@ -229,6 +357,106 @@ where
     Rt: Runtime,
 {
     iter_of(s.split_whitespace().map(str::to_owned).collect())
+}
+
+// -- Splitting ----------------------------------------------------------
+
+#[extern_fn(effect = pure)]
+fn split<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(s.split(pat).map(str::to_owned).collect())
+}
+
+#[extern_fn(effect = pure)]
+fn rsplit<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(s.rsplit(pat).map(str::to_owned).collect())
+}
+
+/// At most `n` pieces: the last one holds the rest of `s`, separators and
+/// all. An `n` of 0 gives no piece.
+#[extern_fn(effect = pure)]
+fn splitn<E, I, Rt>(s: &str, n: u64, pat: &str) -> Iter<String, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(
+        s.splitn(count_of("splitn", n), pat)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// As `splitn`, from the right: the last piece holds the start of `s`.
+#[extern_fn(effect = pure)]
+fn rsplitn<E, I, Rt>(s: &str, n: u64, pat: &str) -> Iter<String, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(
+        s.rsplitn(count_of("rsplitn", n), pat)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// As `split`, without the empty piece a trailing `pat` would give.
+#[extern_fn(effect = pure)]
+fn split_terminator<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(s.split_terminator(pat).map(str::to_owned).collect())
+}
+
+/// Every non-overlapping `pat` in `s`, left to right.
+#[extern_fn(effect = pure)]
+fn matches<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(s.matches(pat).map(str::to_owned).collect())
+}
+
+/// A match and the byte offset it begins at.
+#[derive(TyArg)]
+pub struct MatchIndex {
+    index: u64,
+    text: String,
+}
+
+/// Every non-overlapping `pat` in `s` with its byte offset, left to right.
+#[extern_fn(effect = pure)]
+fn match_indices<E, I, Rt>(s: &str, pat: &str) -> Iter<MatchIndex, E, I, Rt>
+where
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    iter_of(
+        s.match_indices(pat)
+            .map(|(index, text)| MatchIndex {
+                index: index as u64,
+                text: text.to_owned(),
+            })
+            .collect(),
+    )
 }
 
 // -- Searching and shaping ---------------------------------------------
@@ -289,6 +517,14 @@ where
     })
 }
 
+/// Rust's `str::eq_ignore_ascii_case`: only the ASCII letters fold.
+#[extern_fn(effect = pure)]
+fn eq_ignore_ascii_case(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// The full Unicode fold, which Rust's `str` has no method for: `a` and `b`
+/// lowercased and compared.
 #[extern_fn(effect = pure)]
 fn eq_ignore_case(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
@@ -312,12 +548,17 @@ where
     extern_registry! {
         ns: "string",
         fns: [
-            len, is_empty, concat, trim, trim_start, trim_end, upper, lower, contains,
-            starts_with_str, ends_with_str, replace_str, split_str, repeat_str,
-            substring, to_bytes, to_utf8, to_utf8_lossy,
-            char_at, chars, lines, bytes, split_whitespace,
+            len, is_empty, concat, trim, trim_start, trim_end,
+            trim_matches, trim_start_matches, trim_end_matches,
+            upper, lower, to_ascii_uppercase, to_ascii_lowercase, is_ascii,
+            contains, starts_with, ends_with, replace, replacen, repeat,
+            is_char_boundary, substring, to_bytes, to_utf8, to_utf8_lossy,
+            cmp, lt, le, gt, ge,
+            char_at, chars, char_indices, lines, bytes, split_whitespace,
+            split, rsplit, splitn, rsplitn, split_terminator,
+            matches, match_indices,
             find, rfind, pad_start, pad_end, strip_prefix, strip_suffix, split_once,
-            eq_ignore_case, capitalize,
+            eq_ignore_ascii_case, eq_ignore_case, capitalize,
         ],
     }
 }
@@ -333,7 +574,7 @@ mod tests {
         let reg =
             Externs::combine(vec![string_registry::<TypesOnly>()], &i).expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 32);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 32);
+        assert_eq!(reg.functions.len() - core.functions.len(), 53);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 53);
     }
 }

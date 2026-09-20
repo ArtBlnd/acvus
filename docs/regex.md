@@ -16,7 +16,7 @@ The method form is the same call with the regex as the receiver:
 `re.is_match(&text)` is `is_match(&re, &text)`. Three functions here share a
 bare name with a function elsewhere in the standard library — `find`,
 `replace` and `split` — and the receiver type is what picks the one meant:
-`find(&text, "42")` is `string::find` and reports a character index, while
+`find(&text, "42")` is `string::find` and reports a byte offset, while
 `find(&re, &text)` is this module's and reports a `Match`.
 
 ## Offsets are bytes

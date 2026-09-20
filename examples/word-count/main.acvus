@@ -2,30 +2,13 @@
 // folds the case, and a trailing period or comma is stripped with
 // `strip_suffix`.
 // The top three words come out by count descending and, where counts tie,
-// by the word's bytes ascending -- there is no ordering on `String`, so
-// the tiebreak compares `to_bytes` element by element.
+// by the word's bytes ascending -- `string::lt` is that order, Rust's
+// `Ord for str`, because the `<` operator does not reach text.
 
 let bare = |w| -> {
     let no_stop = w.strip_suffix(".").unwrap_or(w);
     let no_comma = no_stop.strip_suffix(",").unwrap_or(no_stop);
     no_comma
-};
-
-let bytes_lt = |a, b| -> {
-    let shorter = if a.len() < b.len() { a.len() } else { b.len() };
-    let verdict = 0;
-    for i in 0u64..shorter {
-        if a[i] < b[i] {
-            verdict = 0 - 1;
-            break;
-        } else if b[i] < a[i] {
-            verdict = 1;
-            break;
-        };
-    }
-    let tied = verdict == 0;
-    let answer = if tied { a.len() < b.len() } else { verdict < 0 };
-    answer
 };
 
 let words = vec([]);
@@ -58,7 +41,7 @@ for i in 0u64..words.len() {
         } else {
             let tied = tally[j] == tally[best];
             let by_name = if tied {
-                bytes_lt(words[j].to_string().to_bytes(), words[best].to_string().to_bytes())
+                lt(&words[j], &words[best])
             } else {
                 false
             };

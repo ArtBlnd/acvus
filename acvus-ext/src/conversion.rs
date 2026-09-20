@@ -6,6 +6,11 @@
 //! reaches every width in both directions, and is a chain leaf rather than
 //! a call. Parsing text is `i64::from_str(s)`, one `from_str` under each
 //! integer type's namespace, and it returns a `Result` (RFC-0038).
+//!
+//! Rust writes the same parse as `s.parse::<i64>()`. The language has no
+//! turbofish, so the target type is written as the namespace instead and
+//! `parse` is registered beside `from_str` under it: `i64::parse(s)` is
+//! `i64::from_str(s)`, and both are what Rust's `FromStr for i64` does.
 
 use std::num::IntErrorKind;
 
@@ -96,10 +101,17 @@ fn parse_int_error(text: String, e: &std::num::ParseIntError) -> ParseIntError {
 }
 
 macro_rules! from_str_ints {
-    ($($name:ident: $t:ty as $ns:literal => $registry:ident),* $(,)?) => {$(
+    ($($from_str:ident / $parse:ident: $t:ty as $ns:literal => $registry:ident),* $(,)?) => {$(
         #[extern_fn(name = "from_str", effect = pure)]
-        fn $name(text: String) -> Result<$t, ParseIntError> {
-            text.parse::<$t>().map_err(|e| parse_int_error(text, &e))
+        fn $from_str(text: &str) -> Result<$t, ParseIntError> {
+            text.parse::<$t>()
+                .map_err(|e| parse_int_error(text.to_owned(), &e))
+        }
+
+        #[extern_fn(name = "parse", effect = pure)]
+        fn $parse(text: &str) -> Result<$t, ParseIntError> {
+            text.parse::<$t>()
+                .map_err(|e| parse_int_error(text.to_owned(), &e))
         }
 
         fn $registry<R>() -> Registry<R>
@@ -108,21 +120,21 @@ macro_rules! from_str_ints {
         {
             extern_registry! {
                 ns: $ns,
-                fns: [$name],
+                fns: [$from_str, $parse],
             }
         }
     )*};
 }
 
 from_str_ints! {
-    from_str_i8: i8 as "i8" => i8_registry,
-    from_str_i16: i16 as "i16" => i16_registry,
-    from_str_i32: i32 as "i32" => i32_registry,
-    from_str_i64: i64 as "i64" => i64_registry,
-    from_str_u8: u8 as "u8" => u8_registry,
-    from_str_u16: u16 as "u16" => u16_registry,
-    from_str_u32: u32 as "u32" => u32_registry,
-    from_str_u64: u64 as "u64" => u64_registry,
+    from_str_i8 / parse_i8: i8 as "i8" => i8_registry,
+    from_str_i16 / parse_i16: i16 as "i16" => i16_registry,
+    from_str_i32 / parse_i32: i32 as "i32" => i32_registry,
+    from_str_i64 / parse_i64: i64 as "i64" => i64_registry,
+    from_str_u8 / parse_u8: u8 as "u8" => u8_registry,
+    from_str_u16 / parse_u16: u16 as "u16" => u16_registry,
+    from_str_u32 / parse_u32: u32 as "u32" => u32_registry,
+    from_str_u64 / parse_u64: u64 as "u64" => u64_registry,
 }
 
 pub fn from_str_registries<R>() -> Vec<Registry<R>>
@@ -202,19 +214,21 @@ mod tests {
     }
 
     #[test]
-    fn every_integer_type_has_its_own_from_str() {
+    fn every_integer_type_has_its_own_from_str_and_parse() {
         let i = Interner::new();
         let reg =
             Externs::combine(from_str_registries::<TypesOnly>(), &i).expect("registries combine");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 8);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 8);
+        assert_eq!(reg.functions.len() - core.functions.len(), 16);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 16);
         for ns in ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"] {
-            let qref = acvus_extern::QualifiedRef::qualified(i.intern(ns), i.intern("from_str"));
-            assert!(
-                reg.handlers.contains_key(&qref),
-                "{ns}::from_str is registered"
-            );
+            for name in ["from_str", "parse"] {
+                let qref = acvus_extern::QualifiedRef::qualified(i.intern(ns), i.intern(name));
+                assert!(
+                    reg.handlers.contains_key(&qref),
+                    "{ns}::{name} is registered"
+                );
+            }
         }
     }
 }

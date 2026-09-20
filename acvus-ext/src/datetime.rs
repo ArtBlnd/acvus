@@ -13,8 +13,8 @@ fn now() -> DateTime {
 }
 
 #[extern_fn(effect = pure)]
-fn format_date(dt: DateTime, fmt: String) -> String {
-    dt.0.format(&fmt).to_string()
+fn format_date(dt: DateTime, fmt: &str) -> String {
+    dt.0.format(fmt).to_string()
 }
 
 /// Why a text is not a date, or an epoch not a moment.
@@ -29,13 +29,13 @@ pub enum DateError {
 }
 
 #[extern_fn(effect = pure)]
-fn parse_date(s: String, fmt: String) -> Result<DateTime, DateError> {
-    chrono::NaiveDateTime::parse_from_str(&s, &fmt)
+fn parse_date(s: &str, fmt: &str) -> Result<DateTime, DateError> {
+    chrono::NaiveDateTime::parse_from_str(s, fmt)
         .map(|ndt| DateTime(ndt.and_utc()))
         .map_err(|e| DateError::Unparsable {
             message: e.to_string(),
-            input: s,
-            format: fmt,
+            input: s.to_owned(),
+            format: fmt.to_owned(),
         })
 }
 

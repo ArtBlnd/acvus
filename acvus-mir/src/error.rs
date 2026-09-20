@@ -134,6 +134,14 @@ pub enum MirErrorKind {
         op: &'static str,
         ty: Ty,
     },
+    /// A comparison operator on a type that has no ordering. Both operands
+    /// are text often enough that the refusal names the ordering functions
+    /// `string::cmp` offers, which is what a program reaching for `<` on a
+    /// `String` wants; `<` itself waits for RFC-0067's `ord<T>`.
+    NoOrdering {
+        op: &'static str,
+        ty: Ty,
+    },
     /// A call of a shared signature that no instance matches (RFC-0027).
     NoInstance {
         ty: Ty,
@@ -562,6 +570,17 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     ty.shown(interner)
                 )
             }
+            MirErrorKind::NoOrdering { op, ty } => {
+                write!(
+                    f,
+                    "`{op}` is not defined on {}{}",
+                    ty.shown(interner),
+                    match holds_text(ty) {
+                        true => USE_STRING_CMP,
+                        false => "",
+                    }
+                )
+            }
             MirErrorKind::TypeOutOfBound { ty, bound } => {
                 write!(
                     f,
@@ -744,6 +763,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
 
 /// The spelling that turns a view into the owned text (RFC-0062 Decision 3).
 const COPY_OF_A_VIEW: &str = "; write `.to_string()` for the owned text";
+
+/// The bytewise ordering `acvus-ext`'s `string` module offers in place of
+/// the operator.
+const USE_STRING_CMP: &str = "; use `string::cmp`, `lt`, `le`, `gt` or `ge`";
 
 /// `str`, or a reference to it: what a string literal is.
 fn is_text_view(ty: &Ty) -> bool {

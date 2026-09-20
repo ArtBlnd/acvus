@@ -1,4 +1,5 @@
 mod array;
+mod char;
 mod conversion;
 mod datetime;
 mod decimal;
@@ -16,6 +17,7 @@ mod string;
 mod vec;
 
 pub use array::array_registry;
+pub use char::char_registry;
 pub use conversion::{conversion_registry, from_str_registries};
 pub use datetime::datetime_registry;
 pub use decimal::{Decimal, decimal_registry};
@@ -48,6 +50,7 @@ where
 {
     let mut registries = vec![
         string_registry(),
+        char_registry(),
         conversion_registry(),
         decimal_registry(),
         vec_registry(),

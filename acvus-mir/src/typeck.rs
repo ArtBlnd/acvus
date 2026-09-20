@@ -3910,6 +3910,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         true
     }
 
+    fn no_ordering(&mut self, op: &'static str, operand: InferTy, span: Span) {
+        self.error(
+            MirErrorKind::NoOrdering {
+                op,
+                ty: self.type_as_written(&operand),
+            },
+            span,
+        );
+    }
+
     fn binop_error(&mut self, op: &'static str, left: InferTy, right: InferTy, span: Span) {
         self.error(
             MirErrorKind::TypeMismatchBinOp {
@@ -4664,19 +4674,34 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             self.solver.resolve_ty(&lt)
                         }
                     }
+                    // Two operands of one type that the operator has no
+                    // ordering for is a missing ordering, not a mismatch:
+                    // `.to_string()` settles a mismatch and settles nothing
+                    // here. Both operands text is the same refusal, because
+                    // no representation of text is ordered either.
+                    BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte
+                        if holds_text(&self.solver.resolve_ty(&lt))
+                            && holds_text(&self.solver.resolve_ty(&rt)) =>
+                    {
+                        self.no_ordering(op_str(*op), self.solver.resolve_ty(&lt), *span);
+                        TyTerm::Bool
+                    }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        let ok = self.unify_operands(*op, &lt, &rt, *span)
-                            && matches!(
-                                self.solver.resolve_ty(&lt),
-                                TyTerm::Int(_) | TyTerm::Float | TyTerm::Char | TyTerm::Var(_)
-                            );
-                        if !ok {
+                        if !self.unify_operands(*op, &lt, &rt, *span) {
                             self.binop_error(
                                 op_str(*op),
                                 self.solver.resolve_ty(&lt),
                                 self.solver.resolve_ty(&rt),
                                 *span,
                             );
+                            return self.record_ret(*id, TyTerm::Bool);
+                        }
+                        let operand = self.solver.resolve_ty(&lt);
+                        if !matches!(
+                            operand,
+                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Char | TyTerm::Var(_)
+                        ) {
+                            self.no_ordering(op_str(*op), operand, *span);
                         }
                         TyTerm::Bool
                     }

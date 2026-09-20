@@ -32,7 +32,7 @@ async fn one_compiled_regex_serves_three_searches() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]+") {
              let one = "a1";
              let two = "bb";
              let three = "c3";
@@ -51,9 +51,9 @@ async fn the_method_form_reads_the_regex_as_the_receiver() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]+") {
              let t = "a1b2";
-             let cut = re.replace_all(t, "~".to_string());
+             let cut = re.replace_all(t, "~");
              let n = re.find_all(t).count();
              cut + " " + n.to_string()
            } else { "?".to_string() }"#,
@@ -71,7 +71,7 @@ async fn find_resolves_on_a_string_and_on_a_regex() {
     let s = text_of(
         &i,
         r#"let t = "price is 42 dollars";
-           if let Ok(re) = regex("[0-9]+".to_string()) {
+           if let Ok(re) = regex("[0-9]+") {
              let by_regex = if let Some(m) = find(&re, t) { m.start as i64 } else { -1 };
              let by_string = unwrap_or(find(t, "42"), -1);
              by_regex.to_string() + " " + by_string.to_string()
@@ -89,7 +89,7 @@ async fn a_match_carries_its_byte_span() {
     let s = text_of(
         &i,
         &format!(
-            r#"if let Ok(re) = regex("[0-9]+".to_string()) {{
+            r#"if let Ok(re) = regex("[0-9]+") {{
                  let t = "{text}";
                  if let Some(m) = find(&re, t) {{
                    m.start.to_string() + " " + m.end.to_string() + " " + m.text
@@ -111,7 +111,7 @@ async fn find_at_starts_where_it_is_told() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]+") {
              let t = "a1b22";
              let first = if let Some(m) = find_at(&re, t, 0u64) { m.text } else { "-".to_string() };
              let next = if let Some(m) = find_at(&re, t, 2u64) { m.text } else { "-".to_string() };
@@ -128,7 +128,7 @@ async fn find_all_yields_every_match() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]+") {
              let t = "a1b22c333";
              find_all(&re, t) | map(|m| -> m.text) | join(",".to_string())
            } else { "?".to_string() }"#,
@@ -142,7 +142,7 @@ async fn shortest_match_reports_a_byte_end() {
     let i = Interner::new();
     let n = int_of(
         &i,
-        r#"if let Ok(re) = regex("a+".to_string()) {
+        r#"if let Ok(re) = regex("a+") {
              let t = "xaaa";
              if let Some(end) = shortest_match(&re, t) { end as i64 } else { -1 }
            } else { -2 }"#,
@@ -156,13 +156,13 @@ async fn captures_reach_a_group_by_index_and_by_name() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("(?<key>[a-z]+)=([0-9]+)".to_string()) {
+        r#"if let Ok(re) = regex("(?<key>[a-z]+)=([0-9]+)") {
              let t = "width=64";
              if let Some(c) = captures(&re, t) {
                let whole = if let Some(m) = group(&c, 0u64) { m.text } else { "-".to_string() };
                let value = if let Some(m) = group(&c, 2u64) { m.text } else { "-".to_string() };
-               let key = if let Some(m) = named(&c, "key".to_string()) { m.text } else { "-".to_string() };
-               let absent = if let Some(m) = named(&c, "nope".to_string()) { m.text } else { "-".to_string() };
+               let key = if let Some(m) = named(&c, "key") { m.text } else { "-".to_string() };
+               let absent = if let Some(m) = named(&c, "nope") { m.text } else { "-".to_string() };
                whole + " " + key + " " + value + " " + absent
              } else { "no match".to_string() }
            } else { "?".to_string() }"#,
@@ -176,7 +176,7 @@ async fn a_group_that_did_not_participate_is_none() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("(a)|(b)".to_string()) {
+        r#"if let Ok(re) = regex("(a)|(b)") {
              let t = "b";
              if let Some(c) = captures(&re, t) {
                let first = if let Some(m) = group(&c, 1u64) { m.text } else { "-".to_string() };
@@ -195,7 +195,7 @@ async fn group_one_of_every_match_is_captures_all_and_map() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("k=([0-9]+)".to_string()) {
+        r#"if let Ok(re) = regex("k=([0-9]+)") {
              let t = "k=1 x k=22 k=333";
              captures_all(&re, t)
                | map(|c| -> if let Some(m) = group(&c, 1u64) { m.text } else { "".to_string() })
@@ -211,7 +211,7 @@ async fn a_pattern_names_its_groups_and_counts_them() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("(?<key>[a-z]+)=([0-9]+)".to_string()) {
+        r#"if let Ok(re) = regex("(?<key>[a-z]+)=([0-9]+)") {
              let n = group_count(&re);
              let names = group_names(&re) | into_iter | map(|g| -> unwrap_or(g, "-".to_string())) | join(",".to_string());
              n.to_string() + " " + names
@@ -226,10 +226,10 @@ async fn replace_expands_a_numbered_group() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("([a-z]+)=([0-9]+)".to_string()) {
+        r#"if let Ok(re) = regex("([a-z]+)=([0-9]+)") {
              let t = "w=1 h=2";
-             let all = re.replace_all(t, "$2:$1".to_string());
-             let one = re.replace(t, "$2:$1".to_string());
+             let all = re.replace_all(t, "$2:$1");
+             let one = re.replace(t, "$2:$1");
              all + " | " + one
            } else { "?".to_string() }"#,
     )
@@ -242,11 +242,11 @@ async fn replace_n_replaces_the_first_n_and_nothing_at_zero() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[0-9]".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]") {
              let t = "1 2 3";
-             let none = re.replace_n(t, 0u64, "~".to_string());
-             let two = re.replace_n(t, 2u64, "~".to_string());
-             let more = re.replace_n(t, 9u64, "~".to_string());
+             let none = re.replace_n(t, 0u64, "~");
+             let two = re.replace_n(t, 2u64, "~");
+             let more = re.replace_n(t, 9u64, "~");
              none + " | " + two + " | " + more
            } else { "?".to_string() }"#,
     )
@@ -259,7 +259,7 @@ async fn replace_with_calls_the_closure_per_match() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]+") {
              let t = "a1b22c".to_string();
              replace_with(&re, &t, |m| -> "<" + m.text + "@" + m.start.to_string() + ">")
            } else { "?".to_string() }"#,
@@ -273,7 +273,7 @@ async fn split_cuts_on_every_match() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("[,;]\\s*".to_string()) {
+        r#"if let Ok(re) = regex("[,;]\\s*") {
              let t = "a, b;c";
              split(&re, t) | join("|".to_string())
            } else { "?".to_string() }"#,
@@ -287,7 +287,7 @@ async fn split_n_keeps_the_rest_in_the_last_piece() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex(",".to_string()) {
+        r#"if let Ok(re) = regex(",") {
              let t = "a,b,c";
              split_n(&re, t, 2u64) | join("|".to_string())
            } else { "?".to_string() }"#,
@@ -303,8 +303,8 @@ async fn case_insensitive_changes_a_result() {
         &i,
         r#"let flags = { case_insensitive: true, multi_line: false, dot_matches_new_line: false,
                         ignore_whitespace: false, unicode: true, swap_greed: false, };
-           if let Ok(re) = regex_with("abc".to_string(), flags) {
-             if let Ok(plain) = regex("abc".to_string()) {
+           if let Ok(re) = regex_with("abc", flags) {
+             if let Ok(plain) = regex("abc") {
                let t = "ABC";
                let loose = is_match(&re, t);
                let strict = is_match(&plain, t);
@@ -326,7 +326,7 @@ async fn a_flags_literal_missing_a_field_is_refused_at_the_call() {
     text_of(
         &i,
         r#"let partial = { case_insensitive: true, };
-           if let Ok(re) = regex_with("abc".to_string(), partial) {
+           if let Ok(re) = regex_with("abc", partial) {
              let t = "ABC";
              let hit = is_match(&re, t);
              hit.to_string()
@@ -342,8 +342,8 @@ async fn regex_flags_is_what_regex_compiles_with() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex_with("A.c".to_string(), regex_flags()) {
-             if let Ok(plain) = regex("A.c".to_string()) {
+        r#"if let Ok(re) = regex_with("A.c", regex_flags()) {
+             if let Ok(plain) = regex("A.c") {
                let upper = "AbcA";
                let lower = "abc";
                let a = is_match(&re, upper);
@@ -364,7 +364,7 @@ async fn multi_line_and_dot_match_the_switches_they_name() {
         &i,
         r#"let both = { case_insensitive: false, multi_line: true, dot_matches_new_line: true,
                        ignore_whitespace: false, unicode: true, swap_greed: false, };
-           if let Ok(re) = regex_with("^b.$".to_string(), both) {
+           if let Ok(re) = regex_with("^b.$", both) {
              let t = "a\nb\n";
              let hit = is_match(&re, t);
              hit.to_string()
@@ -379,7 +379,8 @@ async fn escape_makes_a_pattern_that_matches_itself() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex(escape("a.c".to_string())) {
+        r#"let pattern = escape("a.c");
+           if let Ok(re) = regex(&pattern) {
              let dotted = "a.c";
              let other = "abc";
              let a = is_match(&re, dotted);
@@ -396,7 +397,7 @@ async fn is_match_at_answers_from_a_byte_offset() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("b".to_string()) {
+        r#"if let Ok(re) = regex("b") {
              let t = "ab";
              let at_zero = is_match_at(&re, t, 0u64);
              let at_one = is_match_at(&re, t, 1u64);
@@ -415,7 +416,7 @@ async fn a_start_offset_does_not_move_the_anchor() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Ok(re) = regex("^b".to_string()) {
+        r#"if let Ok(re) = regex("^b") {
              let t = "ab";
              let at_zero = is_match_at(&re, t, 0u64);
              let at_one = is_match_at(&re, t, 1u64);
@@ -431,7 +432,7 @@ async fn a_pattern_that_is_not_a_regex_names_itself() {
     let i = Interner::new();
     let s = text_of(
         &i,
-        r#"if let Err(RegexError::Invalid(e)) = regex("(".to_string()) { e.pattern } else { "compiled".to_string() }"#,
+        r#"if let Err(RegexError::Invalid(e)) = regex("(") { e.pattern } else { "compiled".to_string() }"#,
     )
     .await;
     assert_eq!(s, "(");

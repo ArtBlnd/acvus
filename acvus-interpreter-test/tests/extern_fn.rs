@@ -127,7 +127,7 @@ async fn regex_match_via_extern() {
     let c = ctx(&i, vec![("text", string("hello world 42"))]);
     let result = run_script_mode_with_externs(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) { is_match(&re, &@text) } else { false }"#,
+        r#"if let Ok(re) = regex("[0-9]+") { is_match(&re, &@text) } else { false }"#,
         c,
         registries,
         Ty::Bool,
@@ -147,7 +147,7 @@ async fn regex_find_via_extern() {
     let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
     let result = run_script_mode_with_externs(
         &i,
-        r#"if let Ok(re) = regex("[0-9]+".to_string()) {
+        r#"if let Ok(re) = regex("[0-9]+") {
              if let Some(m) = find(&re, &@text) { m.text } else { "no match".to_string() }
            } else { "?".to_string() }"#,
         c,

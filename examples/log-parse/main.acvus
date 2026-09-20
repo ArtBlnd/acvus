@@ -5,8 +5,8 @@
 // between them is a count of seconds; the longest message is measured in
 // bytes, which is what `len` on a string counts.
 
-let line_re = regex("^(?<stamp>\\S+) (?<level>\\S+) (?<message>.*)$".to_string())?;
-let stamp_format = "%Y-%m-%dT%H:%M:%S".to_string();
+let line_re = regex("^(?<stamp>\\S+) (?<level>\\S+) (?<message>.*)$")?;
+let stamp_format = "%Y-%m-%dT%H:%M:%S";
 
 let levels = vec(["ERROR".to_string(), "WARN".to_string(), "INFO".to_string()]);
 let counts = vec([0, 0, 0]);
@@ -19,9 +19,9 @@ let longest = 0u64;
 let records = &@log | lines;
 while let Some(line) = records.next() {
     let fields = line_re.captures(&line).unwrap();
-    let stamp = fields.named("stamp".to_string()).unwrap().text;
-    let level = fields.named("level".to_string()).unwrap().text;
-    let message = fields.named("message".to_string()).unwrap().text;
+    let stamp = fields.named("stamp").unwrap().text;
+    let level = fields.named("level").unwrap().text;
+    let message = fields.named("message").unwrap().text;
 
     for i in 0u64..levels.len() {
         if levels[i] == level {
@@ -42,8 +42,8 @@ while let Some(line) = records.next() {
     };
 }
 
-let opened = first.to_string().parse_date(stamp_format.to_string())?;
-let closed = last.to_string().parse_date(stamp_format.to_string())?;
+let opened = first.parse_date(stamp_format)?;
+let closed = last.parse_date(stamp_format)?;
 let span = closed.timestamp() - opened.timestamp();
 
 let out = "{{ &seen | to_string }} lines over {{ &span | to_string }} seconds, {{ &first }} .. {{ &last }}";

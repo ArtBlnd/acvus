@@ -363,13 +363,25 @@ where
     parts.join(",")
 }
 
+/// The producer half of E1: a `Vec<Erased<Rt, String>>` built from `text`,
+/// which is what the counts below are counts of.
+#[extern_fn(effect = pure)]
+fn split_erased<Rt>(rt: &Rt, text: &str, sep: &str) -> Vec<Erased<Rt, String>>
+where
+    Rt: Runtime,
+{
+    text.split(sep)
+        .map(|part| Erased::new(rt, part.to_owned()))
+        .collect()
+}
+
 fn registries() -> Vec<Registry<Counting>> {
     vec![
         string_registry(),
         vec_registry(),
         extern_registry! {
             ns: "t",
-            fns: [join_erased],
+            fns: [join_erased, split_erased],
         },
     ]
 }
@@ -467,21 +479,21 @@ fn from_value_on_a_value_of_the_type_is_the_value() {
 // -- E1 -----------------------------------------------------------------
 
 #[test]
-fn split_str_is_typed_vec_of_string() {
+fn a_vec_of_erased_string_is_declared_as_a_vec_of_string() {
     let w = World::new();
     assert_eq!(
-        w.declared_return("string", "split_str"),
+        w.declared_return("t", "split_erased"),
         vec_of(PolyTy::String, &w.interner)
     );
 }
 
 #[test]
-fn split_str_boxes_each_element_once_and_the_vec_once() {
+fn a_returned_vec_boxes_each_element_once_and_the_vec_once() {
     let w = World::new();
     let (text, sep) = ("a,b,c".to_owned(), ",".to_owned());
     let args = [w.str_view(&text), w.str_view(&sep)].concat();
     let start = w.rt.counts();
-    let _parts = w.call("string", "split_str", args);
+    let _parts = w.call("t", "split_erased", args);
     assert_eq!(
         w.rt.since(start),
         Counts {
@@ -496,8 +508,8 @@ fn reverse_on_the_vec_is_one_unbox_and_one_box() {
     let w = World::new();
     let (text, sep) = ("a,b,c".to_owned(), ",".to_owned());
     let parts = w.call(
-        "string",
-        "split_str",
+        "t",
+        "split_erased",
         [w.str_view(&text), w.str_view(&sep)].concat(),
     );
     let start = w.rt.counts();
@@ -516,8 +528,8 @@ fn join_reads_through_as_ref_with_no_unbox() {
     let w = World::new();
     let (text, sep) = ("a,b,c".to_owned(), ",".to_owned());
     let parts = w.call(
-        "string",
-        "split_str",
+        "t",
+        "split_erased",
         [w.str_view(&text), w.str_view(&sep)].concat(),
     );
     let reversed = w.call("vec", "reverse", vec![parts]);

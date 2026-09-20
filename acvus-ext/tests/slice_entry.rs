@@ -31,7 +31,10 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
             "string::substring",
             "string::trim",
             "string::trim_end",
+            "string::trim_end_matches",
+            "string::trim_matches",
             "string::trim_start",
+            "string::trim_start_matches",
             "vec::as_slice",
             "vec::as_slice_mut",
         ]

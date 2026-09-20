@@ -69,8 +69,14 @@ async fn as_reads_every_number_at_the_named_type() {
 }
 
 fn from_str_src(ty: &str, input: &str) -> String {
+    parse_src("from_str", ty, input)
+}
+
+/// `parse` and `from_str` are one function under two names, Rust's method
+/// spelling and Rust's trait spelling, so every case runs through both.
+fn parse_src(func: &str, ty: &str, input: &str) -> String {
     format!(
-        r#"let r = {ty}::from_str("{input}".to_string());
+        r#"let r = {ty}::{func}("{input}");
            if let Ok(n) = r {{ "ok " + n.to_string() }}
            else if let Err(ParseIntError::Invalid(t)) = r {{ "invalid " + t }}
            else if let Err(ParseIntError::OutOfRange(t)) = r {{ "out of range " + t }}
@@ -147,4 +153,19 @@ async fn int_to_char_refuses_what_is_not_a_code_point() {
     assert_eq!(script_mode_text(&src(65)).await, "ok A");
     assert_eq!(script_mode_text(&src(-1)).await, "not a char -1");
     assert_eq!(script_mode_text(&src(0xD800)).await, "not a char 55296");
+}
+
+#[tokio::test]
+async fn parse_is_from_str_under_rust_s_method_name() {
+    for ty in ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"] {
+        assert_eq!(script_mode_text(&parse_src("parse", ty, "7")).await, "ok 7");
+    }
+    assert_eq!(
+        script_mode_text(&parse_src("parse", "u8", "256")).await,
+        "out of range 256"
+    );
+    assert_eq!(
+        script_mode_text(&parse_src("parse", "i64", "4x")).await,
+        "invalid 4x"
+    );
 }

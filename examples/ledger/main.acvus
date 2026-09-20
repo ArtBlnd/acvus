@@ -6,11 +6,11 @@
 // transaction, the closing balance, and the largest single debit.
 
 let to_cents = |text| -> {
-    let negative = text.starts_with_str("-");
+    let negative = text.starts_with("-");
     let body = text.strip_prefix("-").unwrap_or(text);
     let parts = body.split_once(".").unwrap();
-    let read_whole = i64::from_str(parts[0u64].to_string());
-    let read_frac = i64::from_str(parts[1u64].to_string());
+    let read_whole = i64::from_str(&parts[0u64]);
+    let read_frac = i64::from_str(&parts[1u64]);
     let cents = read_whole? * 100 + read_frac?;
     let signed = if negative { 0 - cents } else { cents };
     Ok(signed)
