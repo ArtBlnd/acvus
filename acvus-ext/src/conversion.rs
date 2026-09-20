@@ -101,7 +101,7 @@ fn parse_int_error(text: String, e: &std::num::ParseIntError) -> ParseIntError {
 }
 
 macro_rules! from_str_ints {
-    ($($from_str:ident / $parse:ident: $t:ty as $ns:literal => $registry:ident),* $(,)?) => {$(
+    ($($from_str:ident / $parse:ident / $radix:ident: $t:ty as $ns:literal => $registry:ident),* $(,)?) => {$(
         #[extern_fn(name = "from_str", effect = pure)]
         fn $from_str(text: &str) -> Result<$t, ParseIntError> {
             text.parse::<$t>()
@@ -114,27 +114,40 @@ macro_rules! from_str_ints {
                 .map_err(|e| parse_int_error(text.to_owned(), &e))
         }
 
+        /// `<int>::from_str_radix`. A radix outside Rust's `2..=36` is a
+        /// trap and not an `Err`: Rust panics on it too, because it is the
+        /// caller's constant and not the parsed text.
+        #[extern_fn(name = "from_str_radix", effect = pure)]
+        fn $radix(text: &str, radix: u32) -> Result<$t, ParseIntError> {
+            assert!(
+                (2..=36).contains(&radix),
+                "from_str_radix: radix {radix} is outside 2..=36"
+            );
+            <$t>::from_str_radix(text, radix)
+                .map_err(|e| parse_int_error(text.to_owned(), &e))
+        }
+
         fn $registry<R>() -> Registry<R>
         where
             R: Runtime,
         {
             extern_registry! {
                 ns: $ns,
-                fns: [$from_str, $parse],
+                fns: [$from_str, $parse, $radix],
             }
         }
     )*};
 }
 
 from_str_ints! {
-    from_str_i8 / parse_i8: i8 as "i8" => i8_registry,
-    from_str_i16 / parse_i16: i16 as "i16" => i16_registry,
-    from_str_i32 / parse_i32: i32 as "i32" => i32_registry,
-    from_str_i64 / parse_i64: i64 as "i64" => i64_registry,
-    from_str_u8 / parse_u8: u8 as "u8" => u8_registry,
-    from_str_u16 / parse_u16: u16 as "u16" => u16_registry,
-    from_str_u32 / parse_u32: u32 as "u32" => u32_registry,
-    from_str_u64 / parse_u64: u64 as "u64" => u64_registry,
+    from_str_i8 / parse_i8 / from_str_radix_i8: i8 as "i8" => i8_registry,
+    from_str_i16 / parse_i16 / from_str_radix_i16: i16 as "i16" => i16_registry,
+    from_str_i32 / parse_i32 / from_str_radix_i32: i32 as "i32" => i32_registry,
+    from_str_i64 / parse_i64 / from_str_radix_i64: i64 as "i64" => i64_registry,
+    from_str_u8 / parse_u8 / from_str_radix_u8: u8 as "u8" => u8_registry,
+    from_str_u16 / parse_u16 / from_str_radix_u16: u16 as "u16" => u16_registry,
+    from_str_u32 / parse_u32 / from_str_radix_u32: u32 as "u32" => u32_registry,
+    from_str_u64 / parse_u64 / from_str_radix_u64: u64 as "u64" => u64_registry,
 }
 
 pub fn from_str_registries<R>() -> Vec<Registry<R>>
@@ -219,10 +232,10 @@ mod tests {
         let reg =
             Externs::combine(from_str_registries::<TypesOnly>(), &i).expect("registries combine");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 16);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 16);
+        assert_eq!(reg.functions.len() - core.functions.len(), 24);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 24);
         for ns in ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"] {
-            for name in ["from_str", "parse"] {
+            for name in ["from_str", "parse", "from_str_radix"] {
                 let qref = acvus_extern::QualifiedRef::qualified(i.intern(ns), i.intern(name));
                 assert!(
                     reg.handlers.contains_key(&qref),

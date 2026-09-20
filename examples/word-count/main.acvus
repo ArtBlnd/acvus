@@ -53,7 +53,7 @@ for i in 0u64..words.len() {
 
 let distinct = words.len();
 let wanted = 3u64;
-let shown = if distinct < wanted { distinct } else { wanted };
+let shown = min(distinct, wanted);
 
 let out = "{{ &total | to_string }} words, {{ &distinct | to_string }} distinct, top {{ &shown | to_string }}:";
 for k in 0u64..shown {

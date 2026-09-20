@@ -28,7 +28,7 @@ pub use hash::hash_registry;
 pub use io::io_registry;
 pub use iter::Iter;
 pub use iterator::iterator_registry;
-pub use num::num_registry;
+pub use num::{num_constant_registries, num_registry, num_width_registries};
 pub use option::option_registry;
 pub use panic::panic_registry;
 pub use regex::regex_registry;
@@ -66,5 +66,7 @@ where
         hash_registry(),
     ];
     registries.extend(from_str_registries());
+    registries.extend(num_width_registries());
+    registries.extend(num_constant_registries());
     registries
 }

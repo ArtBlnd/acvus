@@ -18,7 +18,7 @@ let to_cents = |text| -> {
 
 let money = |cents| -> {
     let negative = cents < 0;
-    let size = if negative { 0 - cents } else { cents };
+    let size = cents.abs();
     let sign = if negative { "-".to_string() } else { "".to_string() };
     let whole = size / 100;
     let frac = size % 100;
