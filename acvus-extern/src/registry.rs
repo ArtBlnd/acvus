@@ -899,17 +899,16 @@ fn instance_type(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
         .find_map(|(s, i)| instance_at_first_var(&s.ty, &i.ty))
 }
 
-/// The heads this walk does not descend — a function type, an array, a
-/// slice, an option, a result, a handle, an object, an enum — are a
-/// decision rather than an omission. A signature's first variable is the
-/// one the per-length instance match reads, and reaching it through a
-/// container would make it that container's element instead; a signature
-/// written that way keeps the `InstanceMismatch` it was refused with
-/// before this walk replaced the bare `Var(0)` and `&Var(0)` cases.
+/// The instance's type facing the signature's first `Var(0)`, and `None`
+/// where the signature names that variable only under a head with no arm
+/// here — a function type, a slice, an option, a result, a handle, an
+/// object, an enum. Descending those is not built, and `add_instance`
+/// refuses such a signature with `InstanceMismatch`.
 fn instance_at_first_var(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
     match (signature, instance) {
         (PolyTy::Var(0), t) => Some(t.clone()),
         (PolyTy::Ref(_, s), PolyTy::Ref(_, i)) => instance_at_first_var(&s.ty, &i.ty),
+        (PolyTy::Array(s, _), PolyTy::Array(i, _)) => instance_at_first_var(s, i),
         (PolyTy::UserDefined { type_args: sa, .. }, PolyTy::UserDefined { type_args: ia, .. }) => {
             sa.iter()
                 .zip(ia)

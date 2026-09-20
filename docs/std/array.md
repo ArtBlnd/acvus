@@ -20,33 +20,31 @@ offers.
 | `get` | `get(c: &Array<T, N>, at: u64) -> Option<&T>` | `slice::get` | `u64` index; an index past the address space is `None` |
 | `contains` | `contains(c: &Array<T, N>, x: &T) -> bool` | `slice::contains` | ambiguous as a bare name against `iter::contains`; written `array::contains(&a, &x)`. The argument must be a variable — the language has no `&literal`. Instances for `i64`, `u64`, `f64`, `bool`, `String` |
 | `binary_search` | `binary_search(c: &Array<T, N>, x: &T) -> Option<u64>` | `slice::binary_search` | a miss is `None`, not `Err(at)`; same instance set as `contains` |
+| `is_sorted` | `is_sorted(c: &Array<T, N>) -> bool` | `slice::is_sorted` | same instance set as `contains` |
+| `to_vec` | `to_vec(c: &Array<T, N>) -> Vec<T>` | `slice::to_vec` | **waits on `vec::to_vec`'s escaping iterator** — see below. `vec(a)` is the declared cast and answers the same vec |
 
 ## Not here
 
 A fixed length admits no `sort`, `push`, `pop` or `resize`, and none is
 declared.
 
-`array::is_sorted` and `array::to_vec` are absent because they cannot be
-registered, and the cause is known. `Externs::combine` gives an instance
-its type through `instance_at_first_var`
-(`acvus-extern/src/registry.rs:594`), which walks the signature looking for
-`PolyTy::Var(0)`; it has arms for `Var`, `Ref`, `UserDefined` and `Tuple`,
-and **none for `PolyTy::Array`**, which is what `Arr<T, N>` lowers to
-(`acvus-extern/src/len.rs:65`). A signature whose only mention of the
-element type sits inside the array therefore yields no instance type and is
-refused with "`array::…` does not have the type of `array::…`".
-
-`array::contains` and `array::binary_search` register only because their
-second parameter, `x: &T`, mentions the element type outside the array, so
-`find_map` skips the array parameter and settles on that one. Measured one
-variable apart: two signatures identical but for a second `x: &T`
-parameter — the one with it registers, the one without it is refused.
-`vec::is_sorted` and `vec::to_vec` are unaffected because `Vec<T>` is a
-`PolyTy::UserDefined`, which that walk handles.
-
-The fix is one arm in `instance_at_first_var`, in `acvus-extern`. Until
-then an array is ordered by `vec(a).is_sorted()` and copied by `vec(a)`,
-which is the declared cast (RFC-0043) and Rust's `Vec::from(a)`.
+`array::to_vec` registers — `instance_at_first_var` now descends an array —
+but it cannot be kept, and the defect is `vec::to_vec`'s body rather than
+anything an array does. That body is
+`elements(run).cloned().collect()`, whose `Cloned<Map<Range, closure>>` is a
+stack local the address of which reaches `Vec::<String>::from_iter`; with
+one caller LLVM inlines `from_iter` and nothing escapes, and with a second
+caller — `array::to_vec`, which shares `vec::elements`'s closure and so the
+same `from_iter` monomorphization — it outlines it, and LLVM's sibling-call
+rule then refuses a tail call out of every `Op::run` that reaches the
+handler. Measured one variable apart with `cargo bench --bench asm_probe`:
+with `array::to_vec` registered, five bodies land with a call
+(`CallExtern1` x3 and `CallWindow` x2 over `vec::__extern_fn_to_vec_str`);
+with it alone unregistered, the probe is green at 4873 / 49 / 16 / 16.
+Naming the copy in one shared `pub(crate)` function did not move it — LLVM
+inlines that function into both operations too. The row returns when
+`vec::to_vec` fills its result without an intermediate iterator object;
+that is a change to `vec::to_vec`, not to this module.
 
 `iter`, `first`, `last` and the rest of the read-only surface are reachable
 on the view: `a.as_slice()` and then `docs/std/vec.md`'s `slice` table.

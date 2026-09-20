@@ -1222,6 +1222,39 @@ async fn set_extend<K, E, Rt>(
     }
 }
 
+fn union_now<K, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    mut a: HashSet<K, E, Rt>,
+    b: HashSet<K, E, Rt>,
+) -> HashSet<K, E, Rt>
+where
+    K: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    for entry in b.0.entries {
+        a.table_mut().occupy_now(ctx, entry.binding);
+    }
+    a
+}
+
+#[extern_fn(effect = E, sync = union_now)]
+async fn union<K, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    mut a: HashSet<K, E, Rt>,
+    b: HashSet<K, E, Rt>,
+) -> HashSet<K, E, Rt>
+where
+    K: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    for entry in b.0.entries {
+        a.table_mut().occupy(ctx, entry.binding).await;
+    }
+    a
+}
+
 /// Whether `b` holds the key: `b`'s own hasher and comparator decide, as
 /// they do for every lookup in `b`.
 fn keeps_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &Owned<Rt>) -> bool
@@ -1422,7 +1455,7 @@ where
             hash_set, set_len, set_is_empty, set_clear,
             as_iter_set, into_iter_set,
             set_insert, contains, set_remove, set_extend,
-            intersection, difference, is_subset, from_iter,
+            union, intersection, difference, is_subset, from_iter,
         ],
     }
 }

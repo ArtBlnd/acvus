@@ -4,9 +4,10 @@
 //! the rest of the call has already emptied the set.
 //!
 //! `fx_p::f(&str, &str)` is the plain one, `fx_q::f<T>(&Vec<T>, &Vec<T>)`
-//! the signature, with an `i64` instance. `fx_q::max<T>(&Vec<T>)` stands
-//! beside `iter::max` for the same question over a consumer, and
-//! `fx_p::map` beside `iter::map` for one over a closure argument.
+//! the signature, with an `i64` instance. `vec::max` stands beside
+//! `iter::max` for the same question over a consumer — the real
+//! declaration, which is why no fixture does — and `fx_p::map` beside
+//! `iter::map` for one over a closure argument.
 
 use acvus_extern::Ctx;
 use acvus_extern::{
@@ -79,13 +80,6 @@ mod fx_q {
             T: Var<kind::Type>;
     }
 
-    extern_signature! {
-        ns: "fx_q",
-        fn max<T>(c: &Vec<T>) -> Option<T>
-        where
-            T: Var<kind::Type>;
-    }
-
     #[extern_fn(instance_of = f, effect = pure)]
     fn f_int<Rt>(
         ctx: &mut Ctx<'_, Rt>,
@@ -99,20 +93,11 @@ mod fx_q {
         unreachable!("a type-only fixture is never run")
     }
 
-    #[extern_fn(instance_of = max, effect = pure)]
-    fn max_int<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<i64>, Shared, Rt>) -> Option<i64>
-    where
-        Rt: Runtime,
-    {
-        let _ = (ctx.rt, c);
-        unreachable!("a type-only fixture is never run")
-    }
-
     pub fn registry() -> Registry<TypesOnly> {
         extern_registry! {
             ns: "fx_q",
-            signatures: [f, max],
-            fns: [f_int, max_int],
+            signatures: [f],
+            fns: [f_int],
         }
     }
 }
@@ -292,7 +277,7 @@ fn max_of_an_iterator_settles_iter_max_beside_a_vec_max_signature() {
     let c = checked(&i, "into_iter(vec([3, 1, 2])) | max");
     assert_eq!(c.ret, Ty::Option(Box::new(Ty::I64)));
     assert_eq!(calls(&c, "iter::max"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "fx_q::max"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "vec::max"), 0, "{:?}", c.callees);
 }
 
 #[test]
@@ -300,7 +285,7 @@ fn max_of_a_lent_vec_settles_the_vec_max_signature() {
     let i = Interner::new();
     let c = checked(&i, "let v = vec([3, 1, 2]); max(&v)");
     assert_eq!(c.ret, Ty::Option(Box::new(Ty::I64)));
-    assert_eq!(calls(&c, "fx_q::max"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "vec::max"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "iter::max"), 0, "{:?}", c.callees);
 }
 

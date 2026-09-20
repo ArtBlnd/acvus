@@ -44,6 +44,8 @@ view, `&v` stays a `&Vec<T>`.
 | `sort_by` | `sort_by(c: &mut Vec<T>, f: \|&T, &T\| -> i64)` | `slice::sort_by` | stable; the closure answers −1/0/1, the protocol `string::cmp` speaks, because the language has no `Ordering` |
 | `sort_by_key` | `sort_by_key(c: &mut Vec<T>, f: \|&T\| -> i64)` | `slice::sort_by_cached_key` | stable; the key is `i64` and nothing else, as `iter::min_by_key`'s is — a `Closure` has no specialized representation for a `Monomorphize` member to cross at. Rust's `sort_by_key` calls its closure once per *comparison*; this one calls it once per *element*, as `sort_by_cached_key` does, because a closure that crosses the boundary is dear. For a key that answers the same twice, the order is the same |
 | `is_sorted` | `is_sorted(c: &Vec<T>) -> bool` | `slice::is_sorted` | same instance set as `sort` |
+| `min` | `min(c: &Vec<T>) -> Option<T>` | `slice::iter().min()` | answers the element, where Rust's yields `Option<&T>`: a shared signature's result is an owned value, and `iter::min` already spells the language's `min` that way. First of equal elements, as Rust's; same instance set as `sort`. Written `min(&v)`: the method form `v.min()` waits on the receiver-mode rule, as `contains` does |
+| `max` | `max(c: &Vec<T>) -> Option<T>` | `slice::iter().max()` | as `min`, and last of equal elements, as Rust's |
 | `contains` | `contains(c: &Vec<T>, x: &T) -> bool` | `slice::contains` | ambiguous as a bare name against `iter::contains`; written `vec::contains(&v, &x)`. The argument must be a variable — the language has no `&literal` |
 | `binary_search` | `binary_search(c: &Vec<T>, x: &T) -> Option<u64>` | `slice::binary_search` | Rust's `Err(at)` carries where the element would go; the language has no `Result<u64, u64>` to tell two indices of one meaning apart, so a miss is `None` |
 | `to_vec` | `to_vec(c: &Vec<T>) -> Vec<T>` | `slice::to_vec` | same instance set as `sort` |
@@ -87,21 +89,27 @@ value. A script dedups with `into_iter(v) | dedup | collect` and fills with
 `Option` — a store through what such a call binds is refused with "cannot
 store through &_: not a `&mut`". An element is written through `v[i] = x`.
 
-`min` and `max` are the iterator's, and declaring them for `vec` too makes
-the bare name unresolvable — `as_iter(&scores) | max` stops compiling,
-refused as "declared by iter::max and vec::max". A vec's least element is
-`into_iter(v) | min`; the aggregates take the element by value, so a
-borrowing `as_iter` is refused as "`&i64` is outside the declared bound".
+`as_iter(&v) | max` is still refused: `iter::max` takes its element by
+value and has no instance at a reference element, so the aggregate over a
+borrowing view is "`&i64` is outside the declared bound". `max(&v)` and
+`into_iter(v) | max` both answer.
 
-There is no `slice::reverse`, and that is a collision rather than a bound.
-`vec::reverse` already holds the bare name with a by-value
+There is still no `slice::reverse`, and that is a collision rather than a
+bound. `vec::reverse` holds the bare name with a by-value
 `Vec<T> -> Vec<T>` signature, and a second declaration stops a call that
-used to settle: `reverse(v)` over a `Vec<#Float>` is refused with "no
+used to settle: `reverse(x)` over a `Vec<#Float>` is refused with "no
 `reverse` takes a call of type Fn(Vec<#Float>) -> Vec<_>". Measured one
 variable apart — registering it fails
 `acvus-mir-test/tests/regression_0041.rs`, unregistering it passes. A view
 is reversed by `swap` over its halves until `vec::reverse` takes Rust's
 in-place shape or RFC-0043 settles the pair.
+
+A method receiver written `v.f()` does not settle between a candidate that
+lends it and one that consumes it, so `v.max()`, `v.min()` and
+`v.contains(&x)` are each "`f` is declared by iter::f and vec::f" while
+`max(&v)`, `min(&v)` and `contains(&v, &x)` settle. Measured one variable
+apart in `acvus-ext/tests/vec_ops.rs`. The call form is the answer until
+RFC-0043 gains a mode rule for method receivers.
 
 `split_at` is not here: one call returns one pair (RFC-0062), and two views
 are two pairs.

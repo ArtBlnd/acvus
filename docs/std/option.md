@@ -43,21 +43,24 @@ or operator.
 
 ## What Rust has and this does not
 
-A method whose name `Iter` also carries and which takes a closure cannot be
-a second entry, which costs `map` and `filter` their rows. Registering
-`map` in any namespace and in either registration order stops
-`examples/grades`'s `@students.as_iter() | map(|s| -> s.score)` compiling,
-with ``no `map` takes a call of type Fn(Iterator<&{name: String, score:
-i64}, Pure>, Fn({score: _}) -> _) -> Iterator<i64, Pure>``; registering
-`filter` stops `a | filter(|x| -> x > 1)` compiling. `step_signature` in
-`acvus-mir/src/solver.rs` narrows an overloaded call by the candidates the
-call shape still takes: one candidate settles at once and hands the closure
-its parameter type, two settle only after the closure has been typed from
-its body alone, and the type that yields belongs to neither. Folding the
-three `map`s into one `extern_signature!` does not reach it either — an
-instance whose return constructor differs from the signature's is refused by
-`Externs::combine`. `flatten`, which takes no closure, coexists, and
-`acvus-interpreter-test/tests/option_methods.rs` pins that.
+`map` and `filter` **wait on `step_signature`** in
+`acvus-mir/src/solver.rs`, here and in `result`. Both are written and both
+register; what stops them is the solver, and each was measured one variable apart. With
+`option::map` declared beside `iter::map`, `acvus-ext/tests/e2e.rs` and
+`examples/grades` are refused at `as_iter() | map(|p| -> p.x)` with ``no
+`map` takes a call of type Fn(Iterator<&Pt{label: String, x: i64}, Pure>,
+Fn({x: _}) -> _) -> Iterator<i64, Pure>``. With `option::filter` declared
+beside `iter::filter`, `acvus-interpreter-test/tests/extern_call_forms.rs`
+is refused at `a | filter(|x| -> x > 1) | count` with ``no `filter` takes a
+call of type Fn(_, Fn(i64) -> Bool) -> Iterator<_, Pure>``. Unregistering
+that one name alone makes that one test pass again. `step_signature`
+narrows an overloaded call by the candidates the call shape still takes; a
+receiver whose own type is not yet settled leaves two closure-taking
+candidates open, the closure is then typed from its body alone, and the
+type that yields belongs to neither. `flatten`, which takes no closure,
+coexists, and `acvus-interpreter-test/tests/option_methods.rs` pins that.
+Meanwhile a mapped option is `o.map_or(default, f)` and a filtered one is
+`if o.is_some_and(p) { o } else { None }`.
 
 `take`, `replace`, `insert`, `get_or_insert`, `get_or_insert_with` and
 `as_ref` each need a place of type `Option<T>` to lend. The runtime stores

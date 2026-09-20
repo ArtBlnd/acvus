@@ -323,6 +323,45 @@ where
     })
 }
 
+/// Rust's `Iterator::min` keeps the first of equal elements and its `max`
+/// keeps the last, which is why the two are written apart.
+///
+/// # Safety
+/// As `elements`.
+unsafe fn least<T, Rt>(rt: &Rt, run: &Elements<Rt>) -> Option<T>
+where
+    T: Order,
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract, forwarded.
+    let mut seen = unsafe { elements::<T, Rt>(rt, run) };
+    let mut best = seen.next()?;
+    for next in seen {
+        if next.order(best) == std::cmp::Ordering::Less {
+            best = next;
+        }
+    }
+    Some(best.clone())
+}
+
+/// # Safety
+/// As `elements`.
+unsafe fn greatest<T, Rt>(rt: &Rt, run: &Elements<Rt>) -> Option<T>
+where
+    T: Order,
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract, forwarded.
+    let mut seen = unsafe { elements::<T, Rt>(rt, run) };
+    let mut best = seen.next()?;
+    for next in seen {
+        if next.order(best) != std::cmp::Ordering::Less {
+            best = next;
+        }
+    }
+    Some(best.clone())
+}
+
 /// # Safety
 /// As `elements`.
 pub(crate) unsafe fn found<T, Rt>(rt: &Rt, run: &Elements<Rt>, x: &T) -> Option<u64>
@@ -492,6 +531,20 @@ extern_signature! {
         T: Var<kind::Type>;
 }
 
+extern_signature! {
+    ns: "vec",
+    fn min<T>(c: &Vec<T>) -> Option<T>
+    where
+        T: Var<kind::Type>;
+}
+
+extern_signature! {
+    ns: "vec",
+    fn max<T>(c: &Vec<T>) -> Option<T>
+    where
+        T: Var<kind::Type>;
+}
+
 macro_rules! ordered_of {
     (
         $t:ty,
@@ -503,6 +556,8 @@ macro_rules! ordered_of {
         starts_with: $starts_with:ident,
         ends_with: $ends_with:ident,
         repeat: $repeat:ident,
+        min: $min:ident,
+        max: $max:ident,
     ) => {
         #[extern_fn(instance_of = sort, effect = pure)]
         fn $sort<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Mut, Rt>)
@@ -616,6 +671,28 @@ macro_rules! ordered_of {
             }
             out
         }
+
+        #[extern_fn(instance_of = min, effect = pure)]
+        fn $min<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Shared, Rt>) -> Option<$t>
+        where
+            Rt: Runtime,
+        {
+            let rt = ctx.rt;
+            let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
+            // SAFETY: as `$sort`, shared.
+            unsafe { least::<$t, Rt>(rt, &run) }
+        }
+
+        #[extern_fn(instance_of = max, effect = pure)]
+        fn $max<Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<$t>, Shared, Rt>) -> Option<$t>
+        where
+            Rt: Runtime,
+        {
+            let rt = ctx.rt;
+            let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
+            // SAFETY: as `$sort`, shared.
+            unsafe { greatest::<$t, Rt>(rt, &run) }
+        }
     };
 }
 
@@ -629,6 +706,8 @@ ordered_of!(
     starts_with: starts_with_int,
     ends_with: ends_with_int,
     repeat: repeat_int,
+    min: min_int,
+    max: max_int,
 );
 
 ordered_of!(
@@ -641,6 +720,8 @@ ordered_of!(
     starts_with: starts_with_index,
     ends_with: ends_with_index,
     repeat: repeat_index,
+    min: min_index,
+    max: max_index,
 );
 
 ordered_of!(
@@ -653,6 +734,8 @@ ordered_of!(
     starts_with: starts_with_float,
     ends_with: ends_with_float,
     repeat: repeat_float,
+    min: min_float,
+    max: max_float,
 );
 
 ordered_of!(
@@ -665,6 +748,8 @@ ordered_of!(
     starts_with: starts_with_bool,
     ends_with: ends_with_bool,
     repeat: repeat_bool,
+    min: min_bool,
+    max: max_bool,
 );
 
 ordered_of!(
@@ -677,6 +762,8 @@ ordered_of!(
     starts_with: starts_with_str,
     ends_with: ends_with_str,
     repeat: repeat_str,
+    min: min_str,
+    max: max_str,
 );
 
 // -- the vec's own ------------------------------------------------------
@@ -750,12 +837,16 @@ where
 }
 
 // There is no `slice::reverse`, and that is a collision rather than a
-// bound. `vec::reverse` already holds the bare name with a by-value
-// `Vec<T> -> Vec<T>` signature, and adding a second declaration stops a
-// call that used to settle: `reverse(v)` on a `Vec<#Float>` is refused
-// with "no `reverse` takes a call of type Fn(Vec<#Float>) -> Vec<_>". A
-// view is reversed by `swap` over its halves until either `vec::reverse`
-// takes Rust's in-place shape or RFC-0043 settles the pair.
+// bound. `vec::reverse` holds the bare name with a by-value
+// `Vec<T> -> Vec<T>` signature, and a second declaration stops a call that
+// used to settle: `reverse(x)` over a `Vec<#Float>` is refused with "no
+// `reverse` takes a call of type Fn(Vec<#Float>) -> Vec<_>". Measured one
+// variable apart — registering it fails
+// `acvus-mir-test/tests/regression_0041.rs`'s
+// `a_specialized_local_pays_one_erase_per_generic_consumer_and_none_at_its_member`,
+// unregistering it passes. A view is reversed by `swap` over its halves
+// until either `vec::reverse` takes Rust's in-place shape or RFC-0043
+// settles the pair.
 
 #[extern_fn(name = "is_empty", effect = pure)]
 fn slice_is_empty<T, Rt>(s: Slice<T, Shared, Rt>) -> bool
@@ -1047,7 +1138,7 @@ where
         types: [Vec<_>],
         signatures: [
             vec, filled, sort, contains, binary_search, is_sorted, to_vec,
-            starts_with, ends_with, repeat,
+            starts_with, ends_with, repeat, min, max,
         ],
         fns: [
             reverse, vec_array, with_capacity,
@@ -1058,14 +1149,19 @@ where
             get,
             sort_int, contains_int, binary_search_int, is_sorted_int,
             to_vec_int, starts_with_int, ends_with_int, repeat_int,
+            min_int, max_int,
             sort_index, contains_index, binary_search_index, is_sorted_index,
             to_vec_index, starts_with_index, ends_with_index, repeat_index,
+            min_index, max_index,
             sort_float, contains_float, binary_search_float, is_sorted_float,
             to_vec_float, starts_with_float, ends_with_float, repeat_float,
+            min_float, max_float,
             sort_bool, contains_bool, binary_search_bool, is_sorted_bool,
             to_vec_bool, starts_with_bool, ends_with_bool, repeat_bool,
+            min_bool, max_bool,
             sort_str, contains_str, binary_search_str, is_sorted_str,
             to_vec_str, starts_with_str, ends_with_str, repeat_str,
+            min_str, max_str,
         ],
     }
 }

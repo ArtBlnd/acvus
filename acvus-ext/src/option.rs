@@ -8,21 +8,23 @@
 //! here.
 //!
 //! `map` and `filter` are absent from this module and from `result`, and
-//! that is a decision two measurements forced. A method whose name `Iter`
-//! also carries and which takes a closure cannot be a second entry: with
-//! `map` registered in any namespace and in either registration order,
-//! `examples/grades`'s `@students.as_iter() | map(|s| -> s.score)` stops
-//! compiling, and with `filter` registered, `a | filter(|x| -> x > 1)` in
-//! `acvus-interpreter-test/tests/extern_call_forms.rs` stops compiling.
-//! `step_signature` in `acvus-mir/src/solver.rs` narrows an overloaded call
-//! by the candidates the call shape still takes: one candidate settles at
-//! once and hands the closure its parameter type, two settle only after the
-//! closure has been typed from its body alone, and the type that yields
-//! belongs to neither. Folding the three `map`s into one
-//! `extern_signature!` does not reach it — an instance whose return
-//! constructor differs from the signature's is refused by
-//! `Externs::combine`. `flatten`, which takes no closure, coexists. Both
-//! rows return when the solver pins a closure argument from the candidates
+//! both wait on `step_signature` in `acvus-mir/src/solver.rs`. It narrows an overloaded call by the
+//! candidates the call shape still takes; where the receiver's own type is
+//! not yet settled, two candidates that each take a closure settle only
+//! after that closure has been typed from its body alone, and the type
+//! which yields belongs to neither. Registered beside `iter::map`,
+//! `option::map` refuses `acvus-ext/tests/e2e.rs`'s and
+//! `examples/grades`'s `as_iter() | map(|p| -> p.x)` with ``no `map` takes
+//! a call of type Fn(Iterator<&Pt{label: String, x: i64}, Pure>,
+//! Fn({x: _}) -> _) -> Iterator<i64, Pure>``; registered beside
+//! `iter::filter`, `option::filter` refuses
+//! `acvus-interpreter-test/tests/extern_call_forms.rs`'s
+//! `a | filter(|x| -> x > 1) | count` with ``no `filter` takes a call of
+//! type Fn(_, Fn(i64) -> Bool) -> Iterator<_, Pure>``. Each was measured
+//! one variable apart: unregistering that one name alone makes that one
+//! test pass. `flatten`, which takes no closure, coexists, and
+//! `acvus-interpreter-test/tests/option_methods.rs` pins that. Both rows
+//! return when the solver pins a closure argument from the candidates
 //! rather than after them.
 //!
 //! Not here either, each for a reason the framework states: `zip` and

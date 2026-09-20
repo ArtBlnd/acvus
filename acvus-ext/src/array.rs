@@ -4,7 +4,7 @@ use acvus_extern::{
     extern_registry, extern_signature, kind,
 };
 
-use crate::vec::{elements, found};
+use crate::vec::{elements, found, is_ordered};
 
 #[extern_fn(effect = pure)]
 fn len<T, N>(c: &Arr<T, N>) -> u64
@@ -112,11 +112,20 @@ extern_signature! {
         N: Var<kind::Length>;
 }
 
+extern_signature! {
+    ns: "array",
+    fn is_sorted<T, N>(c: &Arr<T, N>) -> bool
+    where
+        T: Var<kind::Type>,
+        N: Var<kind::Length>;
+}
+
 macro_rules! read_of {
     (
         $t:ty,
         contains: $contains:ident,
         binary_search: $binary_search:ident,
+        is_sorted: $is_sorted:ident,
     ) => {
         #[extern_fn(instance_of = contains, effect = pure)]
         fn $contains<N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<$t, N>, Shared, Rt>, x: &$t) -> bool
@@ -146,6 +155,18 @@ macro_rules! read_of {
             // SAFETY: as `$contains`.
             unsafe { found::<$t, Rt>(rt, &run, x) }
         }
+
+        #[extern_fn(instance_of = is_sorted, effect = pure)]
+        fn $is_sorted<N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<$t, N>, Shared, Rt>) -> bool
+        where
+            N: Var<kind::Length>,
+            Rt: Runtime,
+        {
+            let rt = ctx.rt;
+            let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
+            // SAFETY: as `$contains`.
+            unsafe { is_ordered::<$t, Rt>(rt, &run) }
+        }
     };
 }
 
@@ -153,30 +174,35 @@ read_of!(
     i64,
     contains: contains_int,
     binary_search: binary_search_int,
+    is_sorted: is_sorted_int,
 );
 
 read_of!(
     u64,
     contains: contains_index,
     binary_search: binary_search_index,
+    is_sorted: is_sorted_index,
 );
 
 read_of!(
     f64,
     contains: contains_float,
     binary_search: binary_search_float,
+    is_sorted: is_sorted_float,
 );
 
 read_of!(
     bool,
     contains: contains_bool,
     binary_search: binary_search_bool,
+    is_sorted: is_sorted_bool,
 );
 
 read_of!(
     String,
     contains: contains_str,
     binary_search: binary_search_str,
+    is_sorted: is_sorted_str,
 );
 
 pub fn array_registry<R>() -> Registry<R>
@@ -185,14 +211,14 @@ where
 {
     extern_registry! {
         ns: "array",
-        signatures: [contains, binary_search],
+        signatures: [contains, binary_search, is_sorted],
         fns: [
             len, is_empty, as_slice, as_slice_mut, first, last, get,
-            contains_int, binary_search_int,
-            contains_index, binary_search_index,
-            contains_float, binary_search_float,
-            contains_bool, binary_search_bool,
-            contains_str, binary_search_str,
+            contains_int, binary_search_int, is_sorted_int,
+            contains_index, binary_search_index, is_sorted_index,
+            contains_float, binary_search_float, is_sorted_float,
+            contains_bool, binary_search_bool, is_sorted_bool,
+            contains_str, binary_search_str, is_sorted_str,
         ],
     }
 }

@@ -625,3 +625,104 @@ async fn sort_by_key_is_stable_where_the_key_ties() {
         19_11_21
     );
 }
+
+// -- min and max --------------------------------------------------------
+
+/// Three declarations hold the bare name `max` — `num::max` over two
+/// numbers, `iter::max` over a stage, `vec::max` over a container — and
+/// one script reaches all three. The container's is written `max(&v)`:
+/// a method receiver does not settle between a lending and a consuming
+/// candidate, the same bound `v.contains(&x)` has (`docs/std/vec.md`).
+#[tokio::test]
+async fn max_resolves_at_a_vec_at_two_numbers_and_over_an_iterator() {
+    assert_eq!(
+        int_of(
+            "let v = vec([3, 9, 4]); \
+             let a = if let Some(x) = max(&v) { x } else { 0 - 1 }; \
+             let w = vec([5, 2]); \
+             let b = if let Some(x) = (w.into_iter() | max()) { x } else { 0 - 1 }; \
+             a * 10000 + b * 100 + max(a, b)"
+        )
+        .await,
+        9_05_09
+    );
+}
+
+#[tokio::test]
+async fn min_resolves_at_a_vec_at_two_numbers_and_over_an_iterator() {
+    assert_eq!(
+        int_of(
+            "let v = vec([3, 9, 4]); \
+             let a = if let Some(x) = min(&v) { x } else { 0 - 1 }; \
+             let w = vec([5, 2]); \
+             let b = if let Some(x) = (w.into_iter() | min()) { x } else { 0 - 1 }; \
+             a * 10000 + b * 100 + min(a, b)"
+        )
+        .await,
+        3_02_02
+    );
+}
+
+/// The method form of a `vec` name an `Iter` also carries waits on the
+/// receiver-mode rule; this is the refusal as it stands.
+#[tokio::test]
+#[should_panic(expected = "`max` is declared by iter::max and vec::max")]
+async fn the_method_form_of_max_does_not_settle_between_a_lent_and_a_consumed_receiver() {
+    int_of("let v = vec([3, 9, 4]); if let Some(x) = v.max() { x } else { 0 - 1 }").await;
+}
+
+#[tokio::test]
+async fn the_least_of_an_empty_vec_is_none() {
+    assert_eq!(
+        int_of(
+            "let v = with_capacity(2); v.push(1); v.pop(); \
+             if let Some(x) = min(&v) { x } else { 0 - 1 }"
+        )
+        .await,
+        -1
+    );
+}
+
+/// `f64` orders by `total_cmp`, as `sort` does.
+#[tokio::test]
+async fn the_least_float_is_read_at_the_order_sort_uses() {
+    assert_eq!(
+        float_of("let v = vec([2.5, 0.5, 1.5]); if let Some(x) = min(&v) { x } else { 0.0 }").await,
+        0.5
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "compile failed")]
+async fn max_of_a_vec_of_something_no_instance_orders_is_refused() {
+    int_of("let v = vec([vec([1]), vec([2])]); if let Some(x) = max(&v) { x[0] } else { 0 - 1 }")
+        .await;
+}
+
+// -- an array ordered and copied ----------------------------------------
+
+#[tokio::test]
+async fn an_array_answers_whether_it_is_sorted() {
+    assert!(bool_of("let a = [1, 2, 3]; a.is_sorted()").await);
+    assert!(!bool_of("let a = [3, 1, 2]; a.is_sorted()").await);
+}
+
+/// `is_sorted` is declared for `Vec` and for `Array` alike, and one script
+/// settles both by their receivers.
+#[tokio::test]
+async fn is_sorted_settles_at_an_array_and_at_a_vec_in_one_script() {
+    assert!(
+        bool_of(
+            "let a = [1, 2, 3]; \
+             let v = vec([3, 1, 2]); \
+             a.is_sorted() && !v.is_sorted() && vec(a).is_sorted()"
+        )
+        .await
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "compile failed")]
+async fn is_sorted_over_an_array_of_something_no_instance_orders_is_refused() {
+    bool_of("let a = [vec([1]), vec([2])]; a.is_sorted()").await;
+}

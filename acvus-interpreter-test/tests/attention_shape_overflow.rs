@@ -5,8 +5,10 @@
 //!
 //! The capture is admitted now (RFC-0064 Decision 2), and the refusal that
 //! remains is one signature short of the program: no `max` takes an iterator
-//! of references. Closing that is RFC-0047's business and not this test's;
-//! what this test holds is that the compile reports rather than overflows.
+//! of references — neither `iter::max`, whose element crosses by value, nor
+//! `vec::max`, which takes the container. Closing that is RFC-0047's
+//! business and not this test's; what this test holds is that the compile
+//! reports rather than overflows.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -23,7 +25,7 @@ fn context(i: &Interner) -> Context {
 }
 
 #[tokio::test]
-#[should_panic(expected = "no instance of the signature has the call type")]
+#[should_panic(expected = "no `max` takes a call of type Fn(Iterator<&_, Pure>) -> _")]
 async fn a_reference_captured_after_if_let_over_max_is_reported_not_overflowed() {
     let i = Interner::new();
     let _: Value = run_script_mode(

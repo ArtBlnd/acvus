@@ -566,3 +566,34 @@ fn is_subset_asks_the_other_set_for_every_key() {
     assert!(boolean(&format!("{pair} is_subset(&a, &b)")));
     assert!(!boolean(&format!("{pair} is_subset(&b, &a)")));
 }
+
+#[test]
+fn union_takes_both_sets_and_keeps_the_receiver_s_order() {
+    let pair = format!(
+        "let a = hash_set({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
+         let b = hash_set({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
+    );
+    assert_eq!(
+        int(&format!(
+            "{pair} into_iter(union(a, b)) | fold(0, |acc, k| -> acc * 10 + k)"
+        )),
+        735
+    );
+    assert_eq!(count(&format!("{pair} len(&union(a, b))")), 3);
+}
+
+#[test]
+fn union_refuses_a_set_of_another_key_type() {
+    let messages = refusal_at_both(
+        &format!(
+            "let a = hash_set({KEYING}); insert(&mut a, 7); \
+             let b = hash_set({KEYING}); insert(&mut b, \"7\".to_string()); \
+             len(&union(a, b))"
+        ),
+        Ty::U64,
+    );
+    assert!(
+        !messages.is_empty(),
+        "a union of two sets of different key types compiled"
+    );
+}

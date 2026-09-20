@@ -58,7 +58,8 @@ compiling.
 | `insert` | `Fn(&mut HashSet<K>, K) -> Bool` | `HashSet::insert` | none; the answer is whether the set gained the key, and a key already there is left as it was |
 | `contains` | `Fn(&HashSet<K>, &K) -> Bool` | `HashSet::contains` | the probe is a `&K` |
 | `remove` | `Fn(&mut HashSet<K>, &K) -> Bool` | `HashSet::remove` | the keys after it move down, so the order of what is left is the order it was |
-| `extend` | `Fn(&mut HashSet<K>, HashSet<K>) -> ()` | `HashSet::extend` | the argument is another set, consumed. There is no `union`: a union is written `extend(&mut a, b)`, which keeps `a`'s hasher, comparator and order |
+| `extend` | `Fn(&mut HashSet<K>, HashSet<K>) -> ()` | `HashSet::extend` | the argument is another set, consumed |
+| `union` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::union` | consumes both and answers a set, as `intersection`; the hasher, comparator and order kept are the first set's. Its body writes the second set's keys into the first in place rather than calling `set::extend`: the earlier `union` lent a handler local `&mut a` to that un-inlined handler, and LLVM's sibling-call rule refuses a tail call out of any function an alloca's address escapes, so every `Op::run` reaching it landed with a call |
 | `intersection` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::intersection` | consumes both and answers a set; Rust borrows both and yields references, which needs a clone of a key to build a set from, and the runtime offers none. The hasher, comparator and order kept are the first set's; the second set's own hasher and comparator decide each membership |
 | `difference` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::difference` | consumes both and answers a set, as `intersection` |
 | `is_subset` | `Fn(&HashSet<K>, &HashSet<K>) -> Bool` | `HashSet::is_subset` | the second set's own hasher and comparator decide each membership |
