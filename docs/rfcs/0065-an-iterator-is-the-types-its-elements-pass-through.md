@@ -44,26 +44,37 @@ collections.
    length run one Rust instance). The checker infers every element of the
    tuple while typing the pipeline; no syntax reaches the author.
 
-2. **Length, not shape, is what Rust sees.** Every `T` in the tuple is a
-   `TyVar`, which the extern crate erases to the runtime's value; two
-   tuples of the same length are one Rust instantiation, and a consumer
-   needs none per length at all: it is one generic declaration over the
-   list variable, since the runtime carries the stage count in the array.
-   **The length is bounded at 8**, and the bound lives on the adaptors:
-   every adaptor is a shared signature with `instance_of` instances for
-   input lengths 0..=7 (adaptors are `effect = pure`, which is what a
-   shared signature admits; consumers are `effect = E` and cannot be
-   instanced — `Externs::combine` refuses an effect-variable instance),
-   so the ninth adaptor is refused by the checker with the declared-bound
-   message. One macro in `acvus-ext` emits the eight instances per adaptor.
+2. **Length, not shape, is what Rust sees, and Rust sees the list.** Every
+   `T` in the tuple is a `TyVar`, which the extern crate erases to the
+   runtime's value; in an `instance_of` instance the tuple's *structure*
+   survives and only its leaves erase (`(Owned, (Owned, ()))`), so the
+   pipeline's Rust type carries the list. Every adaptor **and every
+   consumer** is a shared signature with `instance_of` instances for the
+   lengths it admits (adaptors 0..=7 on their input, consumers 0..=8);
+   **the length is bounded at 8** and the ninth adaptor is refused by the
+   checker with the declared-bound message. A shared signature declares
+   its call effect from the declaration's own effect variable, so an
+   `effect = E` consumer is instanceable (decided 2026-09-20: the macro's
+   `Known(PURE)` literal becomes the declared effect). One macro in
+   `acvus-ext` emits the instances.
 
-3. **A stage is a value: one element in, zero or more out.** The runtime
-   shape is one struct, `Iter { source, stages: [Stage; N] }`, `N` the
-   tuple length. A stage is `Map(Fn1)` (one out), `Filter(Fn1)` (zero or
-   one), `Take`/`Skip`/`StepBy`/`TakeWhile`/`SkipWhile` (one or zero, with
-   state), `Enumerate` (one, `T → (u64, T)`), `FlatMap(Fn1)` (many),
-   `Chunks(n)` (one per `n`), `Dedup` (zero or one, with state). Each is
-   an arm of one enum; the type tuple records only its output type.
+3. **A stage is typed, and the pipeline is a typed list of stages.**
+   `Stage<In, Out>` is one enum: `Map(Fn1<In, Out>)` calls the closure
+   **typed** (`call_now(rt, frame, (x,))` with `x: In`); `Filter`,
+   `Take`, `Skip`, `StepBy`, `TakeWhile`, `SkipWhile`, `Dedup` carry a
+   `Same<In, Out>` — a type-equality witness constructible only at
+   `Same<T, T>`, the identity as a value, which is how "specialize when
+   `In = Out`" is written without specialization; `Flatten` and `Chunks`
+   carry the witness for `Out = Vec<In>`'s inverse and `Vec<In>`. The
+   pipeline holds `Stages<Ts, O>`: for `Ts = (T, Ts')`, `(Stage<T, O>,
+   Stages<Ts', T>)`, recursion by one trait over the list. At the glue
+   every leaf is `Owned`, so a length is one Rust instantiation and the
+   kind stays in the enum. **No raw-value closure entry exists**: a
+   closure receives what its type says, or nothing; `Fn1::call_value_now`
+   and `call_value` are removed. The pipeline's internals hold no
+   `unsafe`; the one trust point is the `ExternType` materialize every
+   extern value already has (the checker selects the instance whose
+   length matches the value's Rust type).
 
 4. **A consumer pushes.** `collect`, `sum`, `count`, `fold`, `any`, `all`,
    `find`, `join`, `contains`, `reduce` run one loop: for each source
@@ -97,11 +108,20 @@ collections.
 
 ## What it costs
 
-- No checker change and no `acvus-extern` change: nested pairs are
-  plain 2-tuples, which both already carry. The ninth adaptor is refused
-  today by the instance list ("outside the declared bound one of …");
-  naming the bound of 8 in that message is a diagnostics change in
-  `acvus-mir/src/error.rs` (`NoInstance` / the `OneOf` display).
+- `acvus-extern-macro`: `extern_signature!` declares the call effect from
+  the declaration's effect variable instead of `Known(PURE)`, so a
+  consumer can be instanced. No checker change: nested pairs are plain
+  2-tuples, which the checker already unifies structurally. The ninth
+  adaptor is refused today by the instance list ("outside the declared
+  bound one of …"); naming the bound of 8 in that message is a
+  diagnostics change in `acvus-mir/src/error.rs`.
+- The pipeline's Rust type changes at every adaptor, so the `Large` box
+  holding it is re-made per adaptor: one allocation per adaptor, as
+  today, with no `dyn` and no `unsafe`. Zero allocations per adaptor
+  would need an in-place fixed buffer and `unsafe`; `unsafe`-free is the
+  choice (decided 2026-09-20).
+- Instances: (13 adaptors × 8) + (consumers × 9), one Rust instantiation
+  each at `Owned` leaves; the `.text` delta is stated at merge.
 - `acvus-ext/src/{iter.rs, iterator.rs}` are rewritten: one `Stage` enum,
   one `Iter` struct, consumers as push loops, `next` as pull over the
   same array; the trait pair `SyncStage`/`AsyncStage` goes.
@@ -122,16 +142,23 @@ collections.
 - **Fusing closures into one stage** (extern fn fusion): a different
   lever, kept as such; this RFC leaves the closure call per stage per
   element as the one remaining cost.
+- **An erased stage array** (`[Stage<Owned, Owned>; 8]` with the list only
+  in the acvus type): one allocation per pipeline, but every closure call
+  inside is `Fn1<Owned, Owned>` on a raw value — a lambda typed `T → U`
+  can be handed any value, and the only fence is `unsafe` discharged by
+  citing the checker. Rejected for the typed list (decided 2026-09-20).
 - **Keeping the dyn chain and only flattening it** into a `Vec<Box<dyn
   Stage>>`: removes the nesting, keeps a box and a virtual call per stage
   and the `Option` per boundary.
 
 ## Order of work
 
-1. The type-level cons in `acvus-extern` and the checker's unification of
-   it; a test that `range(0,n) | map(f) | filter(g)` types as `Iter<(U, T),
-   U>` and the ninth adaptor is refused.
-2. `Stage`, `Iter { source, stages }`, push consumers, pull `next`; every
-   existing iterator test green; `accum` rows `range | sum`, `map * | sum`,
-   `while let map` and `shapes`/`examples` measured under `setarch -R`
-   against the base.
+1. `extern_signature!` declares its effect variable; a test that an
+   `effect = E` declaration is an instance of a shared signature.
+2. `Stage<In, Out>`, `Same<In, Out>`, `Stages<Ts, O>`, adaptors and
+   consumers as per-length instances, push consumers, pull `next`; the
+   raw-value closure entry removed; every existing iterator test green;
+   examples byte-identical.
+3. Fused arms; `accum` rows `range | sum`, `map * | sum`, `while let map`
+   and `shapes` measured under `setarch -R` against the base; the
+   allocation difference; `.text`.
