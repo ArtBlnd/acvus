@@ -72,9 +72,20 @@ fn a_method_call_lends_its_receiver_as_the_callee_s_first_parameter_asks() {
 }
 
 #[test]
-fn a_method_receiver_that_must_be_lent_is_a_place() {
-    let err = check("[1, 2].len()").expect_err("a temporary is not a place");
-    assert!(err.contains("can be referenced"), "{err}");
+fn a_receiver_temporary_is_built_before_an_argument_temporary() {
+    let ir = check(r#"("a".to_string() + "b").starts_with(&("c".to_string() + "d"))"#)
+        .expect("both sides are bound and borrowed");
+    let at = |needle: &str| ir.find(needle).unwrap_or_else(|| panic!("{needle}\n{ir}"));
+    assert!(at("assign v7 = r4") < at("assign v16 = r12"), "{ir}");
+    assert!(at("assign v16 = r12") < at("call #1(r7, r15)"), "{ir}");
+}
+
+#[test]
+fn a_method_receiver_that_must_be_lent_is_bound_to_a_temporary() {
+    let ir = check("[1, 2].len()").expect("the array is bound for the call that borrows it");
+    assert!(ir.contains("assign v4 = r0"), "{ir}");
+    assert!(ir.contains("ref &v4"), "{ir}");
+    assert!(ir.contains("drop r5"), "{ir}");
 }
 
 #[test]

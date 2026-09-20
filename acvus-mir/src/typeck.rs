@@ -3198,12 +3198,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A call that is an instruction of the language (RFC-0020).
-    /// `&place` / `&mut place`: the reference type, with the place checked
-    /// as a place.
+    /// `&e` / `&mut e`: the reference type. Where `e` names no place, the
+    /// value it produces is bound to a temporary storage and the reference
+    /// names that temporary, which lives as long as the loans on it do.
     fn check_borrow(&mut self, place: &Expr, mutable: bool, span: Span) -> InferTy {
-        if place_of(place).is_none() {
-            self.error(MirErrorKind::NotAPlace, span);
-        }
         let mutability = if mutable {
             Mutability::Mut
         } else {
@@ -3469,24 +3467,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A receiver that is a place is lent as the parameter asks; a receiver
-    /// that is already a reference value is passed as it is (RFC-0030).
+    /// that is already a reference value is passed as it is (RFC-0030); a
+    /// receiver that is a value is bound to a temporary storage and that
+    /// temporary is lent.
     fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
         match mode {
             ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => FirstArg {
                 ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
                 site: ArgSite::lent(receiver, taken_by),
             },
-            ReceiverMode::Lent(_) => {
+            ReceiverMode::Lent(mutability) => {
                 let ty = self.check_expr(receiver);
-                if !matches!(
+                if matches!(
                     self.solver.resolve_ty(&ty),
-                    TyTerm::Ref(..) | TyTerm::Var(_) | TyTerm::Error(_)
+                    TyTerm::Ref(..) | TyTerm::Error(_)
                 ) {
-                    self.error(MirErrorKind::NotAPlace, receiver.span());
+                    return FirstArg {
+                        ty,
+                        site: ArgSite::value(receiver, taken_by),
+                    };
                 }
                 FirstArg {
-                    ty,
-                    site: ArgSite::value(receiver, taken_by),
+                    ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
+                    site: ArgSite::lent(receiver, taken_by),
                 }
             }
             ReceiverMode::Value => FirstArg {

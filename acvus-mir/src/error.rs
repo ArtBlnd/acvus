@@ -313,8 +313,6 @@ pub enum MirErrorKind {
         expected: usize,
         got: usize,
     },
-    /// `&` or `&mut` on something that is not a place.
-    NotAPlace,
     /// `a[i]` where `a`'s type has no `as_slice` instance (RFC-0047 §2).
     CannotIndex {
         ty: Ty,
@@ -524,12 +522,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "cannot assign to `{name}`: it is captured by the lambda, not bound in it"
-                )
-            }
-            MirErrorKind::NotAPlace => {
-                write!(
-                    f,
-                    "only a variable, a context, or a field of one can be referenced"
                 )
             }
             MirErrorKind::CannotIndex { ty } => {

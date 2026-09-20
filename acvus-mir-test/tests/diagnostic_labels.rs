@@ -384,6 +384,12 @@ mod reference_returned_from_body {
         let (message, _) = only("let xs = [1]; nope::len(&xs)", &nothing);
         assert_eq!(message, WORDS);
     }
+
+    #[test]
+    fn a_reference_to_a_temporary_is_refused_as_a_reference_to_a_local_is() {
+        let (message, _) = only("let a = 1; &(a + 1)", &nothing);
+        assert_eq!(message, "a reference to a local cannot leave the body");
+    }
 }
 
 /// A reference is not an `Option`'s or a `Result`'s payload. `MakeSome`

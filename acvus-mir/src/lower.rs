@@ -1574,9 +1574,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// The storage a place expression names. Type checking admitted only a
-    /// local, a context, or a field path of one.
-    fn place(&mut self, place: &Expr) -> Place {
+    fn place_or_temporary(&mut self, place: &Expr) -> Place {
         let ty = self.type_of_id(place.id());
         let mut path: Vec<PathSeg> = Vec::new();
         let mut root = place;
@@ -1591,9 +1589,13 @@ impl<'a> Lowerer<'a> {
             }
         }
         path.reverse();
-        let target = self.storage_through(root).unwrap_or_else(|| {
-            panic!("not a place: {root:?}; type checking admits only places here")
-        });
+        let target = match self.storage_through(root) {
+            Some(target) => target,
+            None => {
+                let value = self.lower_before_coercion(root);
+                self.temporary(root.span(), value, self.type_of_id(root.id()))
+            }
+        };
         // A place that is a reference names what the reference names
         // (RFC-0029).
         let ty = match ty {
@@ -1692,10 +1694,18 @@ impl<'a> Lowerer<'a> {
             return self.emit_ref(span, target, path, Mutability::Shared, ty);
         }
         let value = self.lower_expr(operand);
-        let owned = self.alloc_val();
-        self.set_val_type(owned, ty.clone());
-        self.emit_assign(span, RefTarget::Var(owned), vec![], value);
-        self.emit_ref(span, RefTarget::Var(owned), vec![], Mutability::Shared, ty)
+        let owned = self.temporary(span, value, ty.clone());
+        self.emit_ref(span, owned, vec![], Mutability::Shared, ty)
+    }
+
+    /// The slot a value with no storage of its own is bound to. It is an
+    /// ordinary slot, so `optimize::drop_insertion` releases it where it
+    /// dies, as it releases the slot a `let` binds.
+    fn temporary(&mut self, span: Span, value: ValueId, ty: Ty) -> RefTarget {
+        let slot = self.alloc_val();
+        self.set_val_type(slot, ty);
+        self.emit_assign(span, RefTarget::Var(slot), vec![], value);
+        RefTarget::Var(slot)
     }
 
     /// `a[i]` (RFC-0047): the container's slice, then the element. The
@@ -1783,7 +1793,7 @@ impl<'a> Lowerer<'a> {
                 let lent = Lent {
                     id: object.id(),
                     span: object.span(),
-                    place: self.place(object),
+                    place: self.place_or_temporary(object),
                     mutability,
                 };
                 let container = self.lend_place(lent, &mut restores);
@@ -2452,11 +2462,16 @@ impl<'a> Lowerer<'a> {
 
     /// Lower an expression to a value.
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
+        let val = self.lower_before_coercion(expr);
+        self.maybe_cast(expr.id(), expr.span(), val)
+    }
+
+    fn lower_before_coercion(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_expr_inner(expr);
         if matches!(self.type_of_id(expr.id()), Ty::Never) {
             self.emit_diverge(expr.span());
         }
-        self.maybe_cast(expr.id(), expr.span(), val)
+        val
     }
 
     /// The expression just lowered was typed `!`: nothing after it runs.
@@ -2481,7 +2496,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     Mutability::Shared
                 };
-                let place = self.place(place);
+                let place = self.place_or_temporary(place);
                 self.emit_ref(*span, place.target, place.path, mutability, place.ty)
             }
             Expr::Literal { id, value, span } => {
@@ -3207,7 +3222,7 @@ impl<'a> Lowerer<'a> {
                     let lent = Lent {
                         id: *id,
                         span: *span,
-                        place: self.place(place),
+                        place: self.place_or_temporary(place),
                         mutability,
                     };
                     self.lend_place(lent, &mut call.restores)
@@ -3373,12 +3388,17 @@ impl<'a> Lowerer<'a> {
         let first = match lent {
             // A receiver that is already a reference value is passed as it
             // is (RFC-0030).
-            Some(_) if !crate::typeck::is_place(receiver) => self.lower_expr(receiver),
+            Some(_)
+                if !crate::typeck::is_place(receiver)
+                    && matches!(self.type_of_id(receiver.id()), Ty::Ref(..)) =>
+            {
+                self.lower_expr(receiver)
+            }
             Some(mutability) => {
                 let lent = Lent {
                     id: receiver.id(),
                     span: receiver.span(),
-                    place: self.place(receiver),
+                    place: self.place_or_temporary(receiver),
                     mutability,
                 };
                 self.lend_place(lent, &mut restores)

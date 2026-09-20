@@ -277,11 +277,12 @@ fn a_lending_parameter_rejects_the_other_mode() {
 }
 
 #[test]
-fn only_a_place_can_be_lent() {
+fn a_value_lent_at_a_parameter_is_bound_to_a_temporary() {
     let i = Interner::new();
-    let err =
-        compile_script_mode_raw(&i, "next(&mut (@items | into_iter))", &items_ctx(&i)).unwrap_err();
-    assert!(err.contains("can be referenced"), "{err}");
+    let ir = compile_script_mode_raw(&i, "next(&mut (@items | into_iter))", &items_ctx(&i))
+        .expect("the iterator is bound for the call that borrows it");
+    assert!(ir.contains("assign v5 = r2"), "{ir}");
+    assert!(ir.contains("ref &mut v5"), "{ir}");
 }
 
 // =======================================================================

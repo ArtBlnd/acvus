@@ -17,7 +17,18 @@ about copying.
 storage that holds a `T`: it is made by `&place` or `&mut place`, held in
 a local binding, passed to a call, received by a parameter, and read
 through `*r`, which yields the `T` when `T` is a primitive and is a type
-error otherwise. A `&T` is never accepted where a `T` is expected, and a
+error otherwise.
+
+An expression that names no place is lent as well. The value it produces
+is bound to a temporary storage, and the reference names that temporary:
+`(a + b).to_string()`, `vec([1, 2]).len()`, `("a".to_string() + "b").len()`
+and `f(&(a + b))` each bind one, where the receiver or the argument meets
+a reference parameter. The temporary is an ordinary storage — it is the
+place the loan names, the exclusion rule reaches it as it reaches a local,
+and it is released where it dies, which is where a `let`'s storage is
+released. A reference into a temporary is therefore refused from a
+return, from data, and from a capture by the rules below, exactly as a
+reference to a local is. A `&T` is never accepted where a `T` is expected, and a
 `T` never where a `&T` is: types unify exactly. Assigning through a
 `&mut T` stores into the storage it names.
 
