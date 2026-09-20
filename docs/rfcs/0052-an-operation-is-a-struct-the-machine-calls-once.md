@@ -591,7 +591,30 @@ interference query `assign_slots` does not expose.
   path buys nothing on its own. Two cases are slower than their base
   (mandelbrot +3 %, `grade while` +2 %) while executing *fewer* instructions
   (−0.4 %, −2.3 %) and more cycles (+1.4 %, +2.2 %), with branch misses that
-  do not account for it. The cause is placement. It is named and not tuned.
+  do not account for it. The cause is the exec-time load base (next
+  bullet), not the code; it is named and not tuned.
+
+- **That spread is the exec-time load base, not where the compiler put the
+  bodies.** `accum`'s `for range` at n = 1e6 spans 916.8–1347.1 µs over 30
+  invocations of **one** binary on one pinned core, +46.9 %; disabling
+  address-space randomization for the exec (`setarch -R`) collapses 20
+  invocations of that same binary to 916.9–941.9 µs, +2.7 %, and collapses the
+  flagged binary likewise. A ±3 % floor read from three reps is therefore a
+  sample from a bimodal distribution whose high mode appears in roughly a
+  tenth to a third of execs, and the +19.8 % this bench set has recorded
+  between two binaries whose 2834 `Op::run` bodies are instruction-identical
+  is that mode rather than their layout. Pinning the load base is what makes
+  such a comparison mean anything. Aligning every function entry to a cache
+  line does not: with `-C llvm-args=-align-all-functions=6` every `Op::run`
+  entry sits at an address ≡ 0 (mod 64) against a uniform quarter each over
+  {0, 16, 32, 48} without it, and the flagged binary still spans
+  917.0–1291.4 µs with randomization on. The flag does remove a second,
+  smaller mode — `range | sum` reads above 1750 µs in 14 of 60 unflagged
+  execs and 0 of 60 flagged — at `.text` +5.2 % to +6.2 % (`acvus-cli`
+  10,625,575 → 11,178,087 bytes), and it trades rather than wins: over 20
+  alternating execs with the load base pinned, `shapes`'s `option match` runs
+  −12.1 % and `enum match held` −6.7 % against `construct via extern` at
+  **+11.5 %**, ranges disjoint. It is not kept.
 
 - **Three cases `r0` does not reach, each for a reason in the shape.**
   A loop's condition cannot ride, because `Loop::run` tests it after the
