@@ -81,7 +81,7 @@ pub struct Var {
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
-    /// The `S` of each `Instance<S>` bound, in the order it was written
+    /// The `S` of each `InstanceOf<S>` bound, in the order it was written
     /// (RFC-0067 Decision 1).
     pub requires: Vec<Type>,
     /// What fills this variable when the handler runs: the carrier
@@ -113,9 +113,14 @@ fn bounds_of<'a>(
     tp.bounds.iter().chain(from_where)
 }
 
-/// The signature of every `Instance<S>` bound, in written order. Two bounds
-/// naming one signature are refused here: a type has at most one instance of
-/// a signature (RFC-0019), so the second could only select the same entry.
+fn states_a_requirement(seg: &syn::PathSegment) -> bool {
+    seg.ident == "InstanceOf" || seg.ident == "InstanceOfAsync"
+}
+
+/// The signature of every bound that states a requirement, in written
+/// order. Two bounds naming one signature are refused here: a type has at
+/// most one instance of a signature (RFC-0019), so the second could only
+/// select the same entry.
 fn required_signatures<'a>(
     ident: &Ident,
     bounds: impl Iterator<Item = &'a TypeParamBound>,
@@ -129,21 +134,21 @@ fn required_signatures<'a>(
         let Some(seg) = t.path.segments.last() else {
             continue;
         };
-        if seg.ident != "Instance" {
+        if !states_a_requirement(seg) {
             continue;
         }
         let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
             return Err(syn::Error::new_spanned(
                 seg,
-                "Instance takes the signature it requires, at this declaration's own \
-                 variables: `Instance<sig::eq<T, Rt>>`",
+                "InstanceOf takes the signature it requires, at this declaration's own \
+                 variables: `InstanceOf<sig::eq<T, Rt>>`",
             ));
         };
         let Some(syn::GenericArgument::Type(sig)) = args.args.first() else {
             return Err(syn::Error::new_spanned(
                 seg,
-                "Instance takes the signature it requires, at this declaration's own \
-                 variables: `Instance<sig::eq<T, Rt>>`",
+                "InstanceOf takes the signature it requires, at this declaration's own \
+                 variables: `InstanceOf<sig::eq<T, Rt>>`",
             ));
         };
         let name = signature_head(sig)?;
@@ -305,6 +310,15 @@ impl Vars {
         self.0
             .iter()
             .find(|v| v.kind == VarKind::Ty)
+            .map(|v| &v.ident)
+    }
+
+    /// Every type variable, in declaration order: the kind a carrier fills,
+    /// so the kind an `ExternType` payload may not name.
+    pub fn type_vars(&self) -> impl Iterator<Item = &Ident> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Ty)
             .map(|v| &v.ident)
     }
 

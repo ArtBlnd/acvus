@@ -61,14 +61,14 @@ generics inside the machine, which the principle above forbids.
 
 1. **A requirement is a Rust trait bound naming the signature at the
    handler's own variables.** `fn sum<I, T, E, Rt>(it: I) -> T where I:
-   Instance<next<I, T, E, Rt>>`. What the instance's other variables are
+   InstanceOf<next<I, T, E, Rt>>`. What the instance's other variables are
    — the element `T` of an `I` — is read off the instance's type by
    unification, as a call reads it today. No associated type and no
    marker: the signature's own variables carry the relation, and the body
    calls `I::call(&it, rt, frame, args)`.
 
 2. **An instance may stand at a pattern.** `fn next_map<I, T, U, E, Rt>(it:
-   &mut Map<I, T, U, E, Rt>) -> Option<U> where I: Instance<next<I, T, E,
+   &mut Map<I, T, U, E, Rt>) -> Option<U> where I: InstanceOf<next<I, T, E,
    Rt>>` is the instance of `next` at the pattern `Map<I, T, U, E>`. Two
    instances whose patterns unify are refused at combine, as two concrete
    instances at one type are today. A bound is therefore a predicate — an
@@ -77,7 +77,7 @@ generics inside the machine, which the principle above forbids.
    ends because types are finite trees. This lives in the checker only.
 
 3. **The compiler passes the pointer.** At a call whose declaration bounds
-   a variable by `Instance<S<…>>`, lowering resolves `S` at the ground type
+   a variable by `InstanceOf<S<…>>`, lowering resolves `S` at the ground type
    and passes the glue entry of that instance as one more argument: a
    word holding a function pointer of the framework's uniform value ABI.
    Nothing is looked up at run time; the pointer is right for the same
@@ -85,9 +85,9 @@ generics inside the machine, which the principle above forbids.
 
 4. **The carrier of a bounded variable is the value with its pointers
    beside it.** In the uniform instantiation a type variable is filled by
-   the runtime's carrier; a variable with `n` `Instance` bounds is filled by
+   the runtime's carrier; a variable with `n` `InstanceOf` bounds is filled by
    that carrier and `n` pointers, assembled by the glue from the arguments
-   of Decision 3. `Instance<S>::call` reads the pointer for `S` out of
+   of Decision 3. `InstanceOf<S>::call` reads the pointer for `S` out of
    `&self` and calls it. Because the pointers ride with the value, a
    handler that stores `it: I` in a value it builds (`Map(it, f)`) stores
    them too, and the instance of `next` at `Map` reaches its inner `next`
@@ -98,7 +98,7 @@ generics inside the machine, which the principle above forbids.
 5. **The one specialization is `Monomorphize`.** A variable declared over a
    finite member set is filled by each member, the handler compiled once
    per member, and in that body `T` is the Rust type itself — `acc + x`
-   over `T: Add`, no materialization — and `T::call` for an `Instance`
+   over `T: Add`, no materialization — and `T::call` for an `InstanceOf`
    bound on a member is a direct call to that member's handler. To the
    machine these are more instances, not generics.
 
@@ -114,15 +114,15 @@ fn next_range(it: &mut Range) -> Option<i64> { … }
 
 #[derive(ExternType)] #[extern_type(name = "Map")]
 pub struct Map<I, T, U, E, Rt>(I, Closure<(T,), U, E, Rt>)
-where I: Var<kind::Type> + Instance<sig::next<I, T, E, Rt>>, …;
+where I: Var<kind::Type> + InstanceOf<sig::next<I, T, E, Rt>>, …;
 
 #[extern_fn(effect = pure)]
 fn map<I, T, U, E, Rt>(it: I, f: Closure<(T,), U, E, Rt>) -> Map<I, T, U, E, Rt>
-where I: Instance<sig::next<I, T, E, Rt>> { Map(it, f) }
+where I: InstanceOf<sig::next<I, T, E, Rt>> { Map(it, f) }
 
 #[extern_fn(instance_of = sig::next, effect = E)]               // next @ Map<I, T, U, E>
 fn next_map<I, T, U, E, Rt>(it: &mut Map<I, T, U, E, Rt>) -> Option<U>
-where I: Instance<sig::next<I, T, E, Rt>> {
+where I: InstanceOf<sig::next<I, T, E, Rt>> {
     let Map(inner, f) = it;
     let x = I::call(inner, rt, frame, ())?;                     // the pointer beside the value
     Some(f.call_now(rt, frame, (x,)))
@@ -130,7 +130,7 @@ where I: Instance<sig::next<I, T, E, Rt>> {
 
 #[extern_fn(effect = E)]
 fn sum<I, T, E, Rt>(it: I) -> T
-where I: Instance<sig::next<I, T, E, Rt>>, T: Monomorphize<(i64, f64)> + Add<Output = T> + Default {
+where I: InstanceOf<sig::next<I, T, E, Rt>>, T: Monomorphize<(i64, f64)> + Add<Output = T> + Default {
     let mut it = it; let mut acc = T::default();
     while let Some(x) = I::call(&mut it, rt, frame, ()) { acc = acc + x; }
     acc
@@ -151,7 +151,7 @@ with an instance of `next`.
 
 - A word form for a function pointer in the machine's value (`FnValue` is
   a heap `Arc<dyn Callable>` today; an instance is a bare pointer).
-- The `Instance<S>` trait, the carrier that bundles a value with its
+- The `InstanceOf<S>` trait, the carrier that bundles a value with its
   pointers, and the macro output: an impl per declared instance, the
   bundle impls that select a slot by signature, the hidden arguments per
   bound.
@@ -193,7 +193,7 @@ with an instance of `next`.
   check must report which one.
 - Bundles: the pairing of slot to signature is done by Rust's trait
   selection over the bundle's tuple; two bounds naming the same signature
-  at different variables (`Instance<eq<A>> + Instance<eq<B>>`) must select
+  at different variables (`InstanceOf<eq<A>> + InstanceOf<eq<B>>`) must select
   different slots — the signature's full type is the key, not its name.
 - `Map<Map<Range>>` resolves by structural recursion; an instance whose
   bound unifies with its own pattern is a cycle and is refused at combine.
@@ -206,7 +206,7 @@ with an instance of `next`.
 
 1. Type-helper pass batches A–C (done: A `69cbd6e7`, B `3c2b4dec`; C in
    review) — `Closure`, `Loan`, the kinds, one crossing trait.
-2. The function-pointer word in the machine's value; `Instance<S>`, the
+2. The function-pointer word in the machine's value; `InstanceOf<S>`, the
    bundle carrier, the macro's impls and hidden arguments; `clone<T>` as
    the first bound — a handler that calls what it requires, at `T =
    Owned<Rt>` and at a `Monomorphize` member.
@@ -231,7 +231,7 @@ A handler writes the requirement at its own variables:
 #[extern_fn(effect = pure)]
 fn same<T, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: T, b: T) -> bool
 where
-    T: Var<kind::Type> + Carrier<Rt> + Instance<sig::eq<T, Rt>, Rt>,
+    T: Var<kind::Type> + Carrier<Rt> + InstanceOf<sig::eq<T, Rt>, Rt>,
     Rt: Runtime,
 {
     T::call(&a, rt, frame, (&b,))
@@ -241,13 +241,13 @@ where
 `extern_signature!` gives each marker the signature's own declared
 variables, with the runtime appended as `__Rt` where the signature declares
 none, and every parameter defaulted so that `instance_of = sig::eq` still
-resolves. `#[extern_fn]` reads each variable's `Instance<…>` bounds in
+resolves. `#[extern_fn]` reads each variable's `InstanceOf<…>` bounds in
 order and records them on `FnDecl::requires` as `Requirement { var,
 signature }`; two bounds on one variable naming one signature are refused
 at the macro, since a type has at most one instance of a signature
 (RFC-0019) and the second could only select the first's entry.
 
-`Carrier<Rt>` stands in the bound beside `Instance` and is not redundant.
+`Carrier<Rt>` stands in the bound beside `InstanceOf` and is not redundant.
 What a call takes and gives is the signature's, read through `<sig::eq<T,
 Rt> as Signature<Rt>>`, and that projection normalizes only where the
 impl applies — which is where `T` is a carrier. Without it the handler
@@ -279,7 +279,7 @@ an argument word.
 
 Per bounded variable, `#[extern_fn]` writes a struct holding `Owned<Rt>`
 and one `Entry<Rt>` field per bound, with `Var<kind::Type>`, `TyArg` (the
-variable's own acvus type), `Carrier<Rt>`, and one `impl Instance<S, Rt>`
+variable's own acvus type), `Carrier<Rt>`, and one `impl InstanceOf<S, Rt>`
 per field. `Arg::take` builds it from the argument's value and the site's
 entries. There is no `frunk` index and no bundle: the fields are named
 where they are written, and each impl names its own.
@@ -336,22 +336,15 @@ storage of their own — the scalars, `String`, and the extension types.
 
 ### What waits
 
-- **A `Monomorphize` member's impls.** `impl Instance<sig::S<Concrete,
-  Rt>, Rt> for Concrete` needs `sig::S<Concrete, Rt>: Signature<Rt>`,
-  whose `This` is a `Carrier<Rt>`, and a member is a Rust type rather than
-  a carrier. Either `Instance` grows items of its own again — which puts
-  `Rest` and `Ret` back in the requiring handler's bound — or `Signature`
-  splits into the shape and the receiver. It is a design decision and not a
-  transcription, so it is not written here.
 - **A requirement of a container's element**, per the paragraph above.
-- **Pattern instances and the solver's deferred requirement**, which step 3
-  reached and stopped inside: "Where a pattern instance stops", below.
+- **A `Monomorphize` member's impls**, refused as of step 3's second half
+  and recorded under "What waits" there with the measurement.
 
 ### Step 3: a signature is a shape
 
 `Signature` is the shape of a call and carries no receiver concept. Its
 `Recv<'a>` is `&'a This`, `&'a mut This` or `This`, one per mode the
-declaration wrote, and `Instance::call` takes the receiver that way; a
+declaration wrote, and `InstanceOf::call` takes the receiver that way; a
 handler that lends `&it` where the signature takes `&mut I` is refused at
 its own `I::call`, which
 `acvus-extern-macro/tests/compile_fail/instance_wrong_mode.rs` executes.
@@ -375,49 +368,113 @@ an instance at `i64` and a handler `drive<I, Rt>` requiring it;
 `a_required_instance_whose_first_parameter_is_mut_runs_through_the_entry`
 runs the entry and reads the bumped place back.
 
-### Where a pattern instance stops
+### Step 3, second half: an entry is a tree
 
-A pattern instance is not built, and the obstacle is the carrier's identity
-rather than the field it would ride in. An extension type is
-`#[repr(transparent)]` and crosses by `rt.erase::<P>(payload)`, a move of
-the whole Rust payload into the host's box, so an `Entry<Rt>` inside that
-payload survives: the sketch `Map(inner, f)` stands on that point.
+A pattern instance stands, and what a site resolves for a requirement is a
+tree rather than a pointer.
 
-What does not stand is that `#[extern_fn]` writes **one carrier type per
-declaration**. The adaptor `map` fills its variable with
-`__ExternBoundmapI<Rt>` and stores that into the value; the instance
-`next_map` reads the same value back as `__ExternBoundnext_mapI<Rt>`. Those
-are two Rust types of one layout and two `TypeId`s, and a crossing selects
-the payload by `TypeId`, so the producer and the consumer of one acvus
-variable do not agree on the Rust type the pointer rides in.
+**A value carries no pointer.** An `ExternType` payload holding a bounded
+variable's value holds `Held<Rt>` — one of the runtime's values and nothing
+else. The acvus type parameter stays (`Doubled<I, Rt>` is still
+`Doubled<Counter>` at the checker) but is phantom in the Rust payload, so
+the handler that writes the payload and the instance that reads it back
+name one Rust type. `#[derive(ExternType)]` refuses a payload naming a type
+variable and says which held form to write;
+`acvus-extern-macro/tests/compile_fail/carrier_in_a_payload.rs` executes
+that refusal.
 
-Measured, on a `Doubled<I, Rt>` extension type with `doubled` building it
-and an instance of `t::step` at the pattern consuming it, with the three
-`#[extern_fn]` refusals that stand in the way lifted: every declaration
-compiles, and the call panics where the value is read back —
-*"value is not a `__ExternBoundstep_doubledI<Tiny>`"*. Lifting the
-refusals is therefore not what is missing; the carrier is.
+**An entry is the instance, with the instances its own bounds required
+under it.** `EntryNode<Rt>` is `{ run: EntryFn<Rt>, children: Box<[Entry]> }`,
+and `Entry<Rt>` is one word: the address of such a node. The nodes live in a
+`NodeArena<Rt>` owned by the registry's `InstanceTable` and kept alive by
+every site table that read one, so a node outlives every call the glue
+holding its address can make. `Kind::Entry` carries the word, and
+`Runtime::entry_value`/`entry_of` cross it.
 
-Two ways out, and both are decisions rather than transcriptions:
+`Externs::combine` records, per instance, where in that instance's pattern
+each of its own bounds stands — a path of type-argument positions
+(`BoundAt`). A bound standing somewhere no ground type can be walked to is
+refused there (`CombineError::RequirementOffThePattern`). `InstanceTable::
+entry_at` then walks a ground type by those paths, recursing once per
+bound, and builds the node. The recursion is structural on the declaration
+and the filling comes from the ground type, so no new solver task carries
+it; what admits the call is still the `OneOf` meet of Decision 1.
 
-- **Key the carrier by the signature, not by the declaration.**
-  `Signature` grows a `Head` — the marker with every parameter defaulted,
-  which `extern_signature!` already makes resolvable — and `acvus-extern`
-  holds one `Bound<Rt, Heads>` whose `Instance` impls are written once,
-  generically. Two declarations bounding a variable by one signature then
-  name one type. The cost is that selecting an entry among several bounds
-  becomes a position in `Heads`, which is the type-level index the
-  per-declaration carrier removed.
-- **Resolve the inner entry at the site instead of carrying it.** The
-  instance's argument type is `Map<Range, ..>` at the site, so the ground
-  type at the pattern's first variable is readable there and its entry is
-  `entry_at`'s. The value then holds `Owned<Rt>` and nothing else. The cost
-  is Decision 4's sentence that the pointers ride with the value.
+**A carrier is rebuilt at each call, never stored.** In a requiring handler
+`I` is (value, entries): `Carrier::of(value, bounds)`. `Signature::
+call_entry` builds the run as receiver + rest + **the entry's own word**,
+and the instance's glue reads its children off that trailing word. That is
+one of the two sources of a pattern instance's inner entries; the other is
+the site table, when the instance is called from a script site
+(`advance(&mut d)` on a `Doubled<Counter>`). They are two mechanisms, one
+per trait — `Sited` reads the site, `SitedAtEntry` reads the run — and the
+glue that a declaration gets is chosen by which of the two it was built
+for, so neither path pays for the other. The macro writes one body for both.
+
+**The entries are the `where` clause's, not a parameter's.** A handler
+whose parameter *holds* a bounded variable rather than taking it writes
+only its acvus parameters; `#[extern_fn]` appends the binding carrying the
+entries, named by the variable in lower case followed by `_bound`. Writing
+that parameter by hand is refused: the bound already says the entries are
+there, and restating it as an argument blurs the split between the bound
+form here and step 5's parameter form (`Instance<S>`, a pointer passed as
+its own argument for a container's element).
+
+**Two traits, one direction.** `InstanceOf<S, Rt>` is the sync call,
+`InstanceOfAsync<S, Rt>` the async one, and every sync instance is an async
+instance through one blanket impl over a ready future. There is no impl the
+other way: an async instance suspends and a sync caller has nowhere to
+suspend to. A requiring handler's async body bounds its variable by
+`InstanceOfAsync` and its `_now` twin by `InstanceOf`; either spelling
+states the same requirement, so a site resolves the same entries for both.
+`acvus-extern/tests/decl.rs`'s `drive_await` reaches `t::step`'s sync
+instance at `i64` through the blanket impl.
 
 An instance whose first parameter does not stand at the signature's first
 variable, or whose later parameters are not each one whole value, gets no
 `Signature` impl, and the missing impl is the refusal: `std::vec` and
 `vec::filled` cannot be required as bounds.
+
+#### Rejected
+
+- **(a) Key the carrier by the signature, not by the declaration.**
+  `Signature` grows a `Head`, and `acvus-extern` holds one `Bound<Rt,
+  Heads>` whose instance impls are written once. Two declarations bounding
+  a variable by one signature then name one type. Rejected because
+  selecting an entry among several bounds becomes a position in `Heads` —
+  the type-level index the per-declaration carrier removed.
+- **(b) Resolve the inner entry at the site and carry nothing.** Rejected
+  because it fails one level down: an instance reached through an entry
+  from another instance's body has no site of its own to read. (c) is (b)
+  with that level supplied: the site resolves the whole tree, and the run
+  carries the branch each level needs.
+
+#### What waits
+
+**A variable that is both `Monomorphize<(A, B)>` and bounded** is refused.
+The two fill it with different Rust types in one monomorphization:
+`Monomorphize` compiles the body once per member with the variable standing
+for that member, while a requirement fills it with the carrier, which has
+none of the member's methods. Measured — `ByBound<i64>` demands `i64:
+Carrier<Rt>` — and pinned by
+`acvus-extern-macro/tests/compile_fail/monomorphized_and_bounded.rs`. A
+carrier that derefs to its member would answer it, and that is step 5's
+parameter form rather than this step's.
+
+**A refusal does not name the signature it required.** `combine` meets a
+requirement into `TyVarBound::OneOf`, which carries the patterns an
+instance stands at but not the name of the signature, so the checker's
+`TypeOutOfBound` says *"type i64 is outside the declared bound one of
+Counter, Doubled<'0>"* — the ground type and every pattern, without the
+signature. Carrying the name would widen `TyVarBound` or add `requires` to
+`FnKind::Extern`, both shared across `acvus-mir`.
+
+**The inner bound is checked at the constructor, not at the pattern.** A
+value of `Doubled<X>` can only come from a handler that itself required `X:
+InstanceOf<advance>`, so `entry_at` is total on what the checker admits.
+That is a property of the declarations, not a guarantee: a registry that
+built such a value without the bound would reach `entry_at`'s panic instead
+of a refusal.
 
 ### The entry, unchanged from the first half
 

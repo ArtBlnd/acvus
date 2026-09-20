@@ -246,11 +246,11 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 
     /// A resolved instance's entry as one of this runtime's values
     /// (RFC-0067 Decision 3).
-    fn entry_value(&self, entry: crate::handler::Entry<Self>) -> Self::Value;
+    fn entry_value(&self, entry: crate::instance::Entry<Self>) -> Self::Value;
 
     /// # Safety
     /// `value` was made by `entry_value` of this same runtime.
-    unsafe fn entry_of(&self, value: &Self::Value) -> crate::handler::Entry<Self>;
+    unsafe fn entry_of(&self, value: &Self::Value) -> crate::instance::Entry<Self>;
 
     /// A reference value naming `target`'s storage (RFC-0018): what a
     /// handler passes to a closure whose parameter is `&T` / `&mut T`.
@@ -384,10 +384,10 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
-    fn entry_value(&self, _: crate::handler::Entry<Self>) {
+    fn entry_value(&self, _: crate::instance::Entry<Self>) {
         no_values()
     }
-    unsafe fn entry_of(&self, _: &()) -> crate::handler::Entry<Self> {
+    unsafe fn entry_of(&self, _: &()) -> crate::instance::Entry<Self> {
         no_values()
     }
     fn none(&self) {

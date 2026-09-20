@@ -148,6 +148,11 @@ fn is_str(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident("str"))
 }
 
+fn names_bound(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.qself.is_none()
+        && p.path.segments.last().is_some_and(|s| s.ident == "Bound"))
+}
+
 /// How the Rust result crosses back, which is the `Mode` of the return
 /// position.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -229,6 +234,24 @@ enum RustParam {
     State(StateParam),
 }
 
+/// A bounded variable no parameter takes by value, whose value a
+/// parameter's type holds instead: `it: &mut Doubled<I, Rt>` where `I:
+/// InstanceOf<…>`.
+///
+/// `#[extern_fn]` appends the parameter carrying the entries to the emitted
+/// `fn` rather than asking the author for one — the `where` clause already
+/// says the bound is there. The handler body that reads it is in another
+/// crate and spells the identifier by hand, so the `format_ident!` below is
+/// one half of a contract nothing in this file can show: the variable's
+/// name in lower case followed by `_bound`, which
+/// `acvus-extern/tests/decl.rs` and
+/// `acvus-interpreter-test/tests/entry_tree.rs` both write as `i_bound`.
+struct HeldVar {
+    var: Ident,
+    binding: Ident,
+    held_by: usize,
+}
+
 fn generate_extern_fn(
     attr: ExternFnAttr,
     func: &mut ItemFn,
@@ -285,50 +308,101 @@ fn generate_extern_fn(
         }
     }
 
+    let mut held: Vec<HeldVar> = Vec::new();
     for bounded in vars.bounded() {
+        if bounded.mono.is_some() {
+            return Err(syn::Error::new(
+                bounded.ident.span(),
+                format!(
+                    "`{0}` is bounded by `Monomorphize` and by a required instance, and the \
+                     two fill it with different Rust types: `Monomorphize` compiles the body \
+                     once per member with `{0}` standing for that member, while a \
+                     requirement fills `{0}` with the carrier — the value with its entries \
+                     beside it — which has none of the member's methods. One variable cannot \
+                     be both in one monomorphization. Split the declaration, or drop the \
+                     `Monomorphize` bound and take `{0}` as the carrier alone (RFC-0067, \
+                     step 3 second half).",
+                    bounded.ident
+                ),
+            ));
+        }
         let stands = |ty: &Type| Vars::is_exactly(ty, &bounded.ident);
-        let elsewhere = params
+        let borrowed = params
             .iter()
-            .filter(|p| !(p.mode == Mode::Value && stands(&p.ty)))
-            .map(|p| &p.ty)
-            .chain(std::iter::once(&ret))
-            .any(|ty| Vars::mentions(ty, &bounded.ident));
-        if elsewhere {
+            .any(|p| p.mode != Mode::Value && stands(&p.ty));
+        if borrowed {
             return Err(syn::Error::new(
                 bounded.ident.span(),
                 format!(
                     "`{}` requires an instance, so it is filled by a carrier: the value with \
                      one entry beside it per bound (RFC-0067 Decision 4). A carrier is wider \
-                     than one of the runtime's values, so it stands only where a parameter \
-                     takes one whole value — `x: {0}` — and nowhere else. Behind `&{0}` the \
-                     storage the caller lent holds the value alone, inside `Vec<{0}>` the \
-                     container's buffer does, and a result carries no site. Take the bounded \
-                     variable by value.",
+                     than one of the runtime's values, and the storage the caller lent holds \
+                     the value alone, so there is nothing behind `&{0}` shaped like one. Take \
+                     the bounded variable by value.",
                     bounded.ident
                 ),
             ));
         }
-        if !params
+        if params
             .iter()
             .any(|p| p.mode == Mode::Value && stands(&p.ty))
         {
+            continue;
+        }
+        let Some(held_by) = params
+            .iter()
+            .position(|p| Vars::mentions(&p.ty, &bounded.ident))
+        else {
             return Err(syn::Error::new(
                 bounded.ident.span(),
                 format!(
-                    "`{}` requires an instance and no parameter takes it, so the call site \
-                     has nothing to resolve the entry at (RFC-0067 Decision 3).",
+                    "`{}` requires an instance and nothing at the call says what fills it: no \
+                     parameter takes it by value, and no parameter's type holds its value \
+                     (RFC-0067 Decision 3).",
+                    bounded.ident
+                ),
+            ));
+        };
+        if attr.instance_of.is_none() {
+            return Err(syn::Error::new(
+                bounded.ident.span(),
+                format!(
+                    "`{}` requires an instance and a parameter holds its value rather than \
+                     taking it, so the entries are the children of this declaration's own \
+                     entry — which only an instance of a shared signature has. Declare this \
+                     `instance_of = <signature>`, or take `{0}` by value (RFC-0067, step 3 \
+                     second half).",
                     bounded.ident
                 ),
             ));
         }
+        held.push(HeldVar {
+            binding: format_ident!("{}_bound", bounded.ident.to_string().to_lowercase()),
+            var: bounded.ident.clone(),
+            held_by,
+        });
     }
-    if vars.bounded().count() > 0 && attr.instance_of.is_some() {
-        return Err(syn::Error::new(
-            func.sig.ident.span(),
-            "an instance of a shared signature requires none of its own: its type is the \
-             signature's at one concrete type, and a signature's variables carry no bounds \
-             (RFC-0019)",
-        ));
+    let held = held;
+    if let Some(first) = held.first() {
+        let Some(rt) = vars.runtime_ident().cloned() else {
+            return Err(syn::Error::new(
+                first.var.span(),
+                format!(
+                    "`{}` requires an instance and a parameter holds its value, so this \
+                     declaration is handed the entries the site resolved — which are one \
+                     runtime's. Declare a `Rt: Runtime` variable.",
+                    first.var
+                ),
+            ));
+        };
+        for h in &held {
+            let (binding, var) = (&h.binding, &h.var);
+            func.sig
+                .inputs
+                .push(syn::parse_quote! { #binding: ::acvus_extern::Bound<#var, #rt> });
+        }
+        func.attrs
+            .push(syn::parse_quote! { #[allow(unused_variables)] });
     }
 
     let fn_ident = &func.sig.ident;
@@ -503,9 +577,10 @@ fn generate_extern_fn(
         let arg_markers: Vec<proc_macro2::TokenStream> = params
             .iter()
             .zip(&rt_tys)
-            .map(|(p, ty)| {
+            .enumerate()
+            .map(|(at, (p, ty))| {
                 let c = crossing(&p.ty, member);
-                match p.mode {
+                let marker = match p.mode {
                     Mode::Value if vars.bounded().any(|b| Vars::is_exactly(&p.ty, &b.ident)) => {
                         quote! { ::acvus_extern::ByBound<#ty> }
                     }
@@ -521,18 +596,37 @@ fn generate_extern_fn(
                         let at_static = at_static(ty);
                         quote! { ::acvus_extern::ByProjection<#at_static> }
                     }
+                };
+                match held.iter().find(|h| h.held_by == at) {
+                    None => marker,
+                    Some(h) => {
+                        let var = &h.var;
+                        let carrier = vars.to_runtime_instance(&syn::parse_quote! { #var }, member);
+                        let signature = attr
+                            .instance_of
+                            .as_ref()
+                            .expect("a held bounded variable is refused outside an instance");
+                        quote! {
+                            ::acvus_extern::AtBound<#marker, #carrier, #signature>
+                        }
+                    }
                 }
             })
             .collect();
         let turbofish = vars.runtime_turbofish_instance(member);
-        let mut acvus_args = arg_idents.iter();
+        let mut acvus_at = 0usize;
         let mut state_at = 0usize;
-        let passed: Vec<proc_macro2::TokenStream> = rust_params
+        let declared: Vec<proc_macro2::TokenStream> = rust_params
             .iter()
             .map(|p| match p {
                 RustParam::Acvus(_) => {
-                    let a = acvus_args.next().expect("one ident per acvus parameter");
-                    quote! { #a }
+                    let at = &arg_idents[acvus_at];
+                    let held_here = held.iter().any(|h| h.held_by == acvus_at);
+                    acvus_at += 1;
+                    match held_here {
+                        false => quote! { #at },
+                        true => quote! { #at.parameter },
+                    }
                 }
                 RustParam::State(_) => {
                     let at = proc_macro2::Literal::usize_unsuffixed(state_at);
@@ -541,6 +635,11 @@ fn generate_extern_fn(
                 }
             })
             .collect();
+        let appended = held.iter().map(|h| {
+            let at = &arg_idents[h.held_by];
+            quote! { #at.bound }
+        });
+        let passed: Vec<proc_macro2::TokenStream> = declared.into_iter().chain(appended).collect();
         let capture_state = (!states.is_empty()).then(|| {
             quote! { let __state = ::std::sync::Arc::clone(&__state); }
         });
@@ -576,6 +675,23 @@ fn generate_extern_fn(
                 })
             }
         } else if has_entry {
+            // The run an entry is called with ends in the caller's own
+            // entry word, which `Signature::call_entry` wrote there; a
+            // declaration whose bounds nothing reads leaves it unread.
+            let bounds_of_run = match held.is_empty() {
+                true => quote! { let __bounds = ::acvus_extern::Bounds::none(); },
+                false => quote! {
+                    // SAFETY: the run's last word is the entry
+                    // `call_entry` called this one through, and its arena
+                    // is the calling site's, which outlives this call.
+                    let __bounds = unsafe {
+                        ::acvus_extern::Entry::bounds(::acvus_extern::Runtime::entry_of(
+                            __rt,
+                            &__run[<(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::WIDTH],
+                        ))
+                    };
+                },
+            };
             let at = entries.borrow().len();
             let entry_ident = format_ident!("__extern_entry_{}_{}", fn_ident, at);
             let entry_ty = format_ident!("__ExternEntry{}{}", fn_ident, at);
@@ -590,6 +706,9 @@ fn generate_extern_fn(
                 where
                     __R: ::acvus_extern::Runtime,
                 {
+                    #bounds_of_run
+                    let __sites = <(#(#arg_markers,)*) as ::acvus_extern::SitesAtEntry<__R>>
+                        ::sites_at_entry(__bounds);
                     // SAFETY: the values ABI's contract — `__run` is this
                     // declaration's whole argument run and every storage a
                     // reference in it names is live for the call — which is
@@ -598,7 +717,7 @@ fn generate_extern_fn(
                         <(#(#arg_markers,)*) as ::acvus_extern::Parameters<__R>>::take(
                             __rt,
                             __run,
-                            &<(#(#arg_markers,)*) as ::acvus_extern::NoSites<__R>>::SITES,
+                            &__sites,
                         )
                     };
                     <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(#entry_call, __rt, __out);
@@ -612,7 +731,7 @@ fn generate_extern_fn(
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    const ENTRY: ::core::option::Option<::acvus_extern::Entry<__R>> =
+                    const ENTRY: ::core::option::Option<::acvus_extern::EntryFn<__R>> =
                         ::core::option::Option::Some(#entry_ident::<__R>);
                 }
             });
@@ -793,7 +912,7 @@ fn generate_extern_fn(
                 .collect();
             let instance_impls = at_runtime.iter().zip(&fields).map(|(sig, field)| {
                 quote! {
-                    impl<__R> ::acvus_extern::Instance<#sig, __R> for #name<__R>
+                    impl<__R> ::acvus_extern::InstanceOf<#sig, __R> for #name<__R>
                     where
                         __R: ::acvus_extern::Runtime,
                         #sig: ::acvus_extern::Signature<__R, This = Self>,
@@ -853,29 +972,36 @@ fn generate_extern_fn(
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    type Entries = [::acvus_extern::Entry<__R>; #count];
-
-                    fn entries(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Entries {
-                        [#(
-                            __at.instances.entry_at(
-                                <#paths as ::acvus_extern::SharedSignature>::qref(__at.interner),
-                                __at.ty,
-                            )
-                        ),*]
+                    fn entries(
+                        __at: ::acvus_extern::ArgAt<'_, __R>,
+                    ) -> ::acvus_extern::Bounds<__R> {
+                        __at.instances.bounds_at(
+                            &[#(
+                                <#paths as ::acvus_extern::SharedSignature>::qref(__at.interner)
+                            ),*],
+                            __at.ty,
+                        )
                     }
 
                     fn of(
                         __v: <__R as ::acvus_extern::Runtime>::Value,
-                        __e: &Self::Entries,
+                        __b: ::acvus_extern::Bounds<__R>,
                     ) -> Self {
                         Self {
                             __value: ::acvus_extern::Owned::from_value(__v),
-                            #(#fields: __e[#slots],)*
+                            // SAFETY: the entries are the site's, whose
+                            // arena the site table holds, or the caller's
+                            // own, which outlives the call being made.
+                            #(#fields: unsafe { ::acvus_extern::Bounds::at(__b, #slots) },)*
                         }
                     }
 
                     fn value(&self) -> &<__R as ::acvus_extern::Runtime>::Value {
                         ::core::ops::Deref::deref(&self.__value)
+                    }
+
+                    fn into_value(self) -> <__R as ::acvus_extern::Runtime>::Value {
+                        ::acvus_extern::Owned::into_value(self.__value)
                     }
                 }
 
@@ -986,6 +1112,15 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
                 ty: (*r.elem).clone(),
             }));
             continue;
+        }
+        if names_bound(pat_type.ty.as_ref()) {
+            return Err(syn::Error::new_spanned(
+                &pat_type.ty,
+                "the entries of a bounded variable a parameter holds are what this \
+                 declaration's `where` clause already asks for, so `#[extern_fn]` appends \
+                 them itself: write no parameter for them and reach them by the variable's \
+                 name in lower case followed by `_bound` (RFC-0067, step 3 second half).",
+            ));
         }
         let (ty, mode) = match pat_type.ty.as_ref() {
             Type::Reference(r) if r.mutability.is_some() && is_str(&r.elem) => {
@@ -1159,6 +1294,23 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ));
     };
     let payload_ty = &payload.ty;
+    if let Some(var) = vars.type_vars().find(|v| Vars::is_exactly(payload_ty, v)) {
+        let runtime = vars
+            .runtime_ident()
+            .map_or_else(|| "Rt".to_string(), Ident::to_string);
+        return Err(syn::Error::new_spanned(
+            payload_ty,
+            format!(
+                "the payload of `{ident}` is `{var}`, and what fills a type variable while a \
+                 handler runs is a carrier — the value with the entry of each required \
+                 instance beside it. A carrier's Rust type is the *declaration's*, so the \
+                 handler that stores one here and the instance that reads it back name two \
+                 types and disagree on the `TypeId`. Hold the value alone: write \
+                 `acvus_extern::Held<{runtime}>` in the payload and `{var}` in the \
+                 `PhantomData` (RFC-0067, step 3 second half)."
+            ),
+        ));
+    }
     if !is_repr_transparent(&input.attrs) {
         return Err(syn::Error::new(
             ident.span(),
@@ -2889,7 +3041,11 @@ fn signature_call(
                 __this: Self::Recv<'_>,
                 __rest: Self::Rest<'_>,
             ) -> #ret {
-                let __run = [#head_of_run, #(#rest_values,)*];
+                let __run = [
+                    #head_of_run,
+                    #(#rest_values,)*
+                    ::acvus_extern::Runtime::entry_value(__rt, __entry),
+                ];
                 let mut __out = [
                     <<#runtime as ::acvus_extern::Runtime>::Value as ::core::default::Default>
                         ::default(),
@@ -2898,7 +3054,9 @@ fn signature_call(
                 // signature's instance at the type `__this` stands at — and
                 // the run above is that instance's whole argument run, one
                 // value per declared parameter in declared order.
-                unsafe { __entry(__rt, __frame, &__run, &mut __out) };
+                unsafe {
+                    (::acvus_extern::Entry::run(__entry))(__rt, __frame, &__run, &mut __out)
+                };
                 // SAFETY: the instance wrote its result into `__out` through
                 // `Ret::into_run`, which for a one-value result is what
                 // `Cross::from_run` reads back.

@@ -8,9 +8,9 @@ use std::marker::PhantomData;
 
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs,
-    Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared, Slice,
-    Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature,
-    kind,
+    Held, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared,
+    Slice, Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry,
+    extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -32,6 +32,9 @@ enum V {
     Erased(*mut (dyn Any + Send + Sync)),
     Closure(Closure),
     Reference(*const V),
+    /// The word a run carries an entry in: the last of the run an instance
+    /// is called through, which its own bounds are read from.
+    Entry(acvus_extern::Entry<Tiny>),
 }
 
 // SAFETY: a `Reference` is used only while its target is live (RFC-0018).
@@ -46,7 +49,7 @@ impl acvus_extern::Release for V {
             V::Some(payload) => (*unsafe { Box::from_raw(payload) }).release(),
             V::Erased(any) => drop(unsafe { Box::from_raw(any) }),
             V::Closure(c) => drop(unsafe { Box::from_raw(c.0) }),
-            V::Taken | V::None | V::Undef | V::Tag(_) | V::Reference(_) => {}
+            V::Taken | V::None | V::Undef | V::Tag(_) | V::Reference(_) | V::Entry(_) => {}
         }
     }
 }
@@ -102,6 +105,10 @@ where
             "peek: value is a closure, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Entry(_) => panic!(
+            "peek: value is an instance entry, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::Reference(_) => panic!(
             "peek: value is a reference, not a {}",
             std::any::type_name::<T>()
@@ -136,6 +143,10 @@ where
             "materialize: value is a closure, not a {}",
             std::any::type_name::<T>()
         ),
+        V::Entry(_) => panic!(
+            "materialize: value is an instance entry, not a {}",
+            std::any::type_name::<T>()
+        ),
         V::Reference(_) => panic!(
             "materialize: value is a reference, not a {}",
             std::any::type_name::<T>()
@@ -165,7 +176,8 @@ impl Tiny {
             | V::Some(_)
             | V::Taken
             | V::Erased(_)
-            | V::Reference(_) => {
+            | V::Reference(_)
+            | V::Entry(_) => {
                 panic!("call on a value that is not a closure")
             }
         }
@@ -354,12 +366,15 @@ impl Runtime for Tiny {
         // SAFETY: the target is live and, by the checker, exclusively named.
         open_mut(unsafe { &mut *(*p as *mut V) })
     }
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
-        panic!("this runtime holds no instance entry")
+    fn entry_value(&self, entry: acvus_extern::Entry<Self>) -> V {
+        V::Entry(entry)
     }
 
-    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
-        panic!("this runtime holds no instance entry")
+    unsafe fn entry_of(&self, value: &V) -> acvus_extern::Entry<Self> {
+        let V::Entry(entry) = value else {
+            panic!("entry_of: not an entry: {value:?}")
+        };
+        *entry
     }
 
     unsafe fn reference(&self, target: &V) -> V {
@@ -569,7 +584,7 @@ fn eq_point(a: &Point, b: &Point) -> bool {
 #[extern_fn(effect = pure)]
 fn same<T, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: T, b: T) -> bool
 where
-    T: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::Instance<eq<T, Rt>, Rt>,
+    T: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::InstanceOf<eq<T, Rt>, Rt>,
     Rt: Runtime,
 {
     T::call(&a, rt, frame, (&b,))
@@ -586,11 +601,63 @@ fn step_int(n: &mut i64) -> i64 {
 #[extern_fn(effect = pure)]
 fn drive<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: I) -> i64
 where
-    I: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::Instance<step<I, Rt>, Rt>,
+    I: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::InstanceOf<step<I, Rt>, Rt>,
     Rt: Runtime,
 {
     let mut it = it;
     I::call(&mut it, rt, frame, ())
+}
+
+/// Rule 6's one direction, executed. This body bounds `I` by the async
+/// trait; the only impl any carrier reaching it has is the sync one, so
+/// what makes the call compile is the blanket impl, and what makes a sync
+/// handler able to drain the future is that impl's readiness.
+#[extern_fn(effect = pure)]
+fn drive_await<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: I) -> i64
+where
+    I: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::InstanceOfAsync<step<I, Rt>, Rt>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let call = <I as acvus_extern::InstanceOfAsync<step<I, Rt>, Rt>>::call(&mut it, rt, frame, ());
+    futures::FutureExt::now_or_never(call).expect("a sync instance's async call is ready")
+}
+
+/// A value holding a bounded variable's value: what an adaptor builds and
+/// an instance at the pattern `Doubled<I>` reads back. The payload names no
+/// type parameter, so the handler that wrote it and the instance that reads
+/// it name one Rust type.
+#[derive(ExternType)]
+#[repr(transparent)]
+#[extern_type(name = "Doubled")]
+struct Doubled<I, Rt>(Held<Rt>, PhantomData<I>)
+where
+    I: Var<kind::Type>,
+    Rt: Runtime;
+
+/// The adaptor: the carrier it was handed becomes the value alone.
+#[extern_fn(effect = pure)]
+fn doubled<I, Rt>(it: I) -> Doubled<I, Rt>
+where
+    I: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::InstanceOf<step<I, Rt>, Rt>,
+    Rt: Runtime,
+{
+    Doubled(Held::of(it), PhantomData)
+}
+
+/// The instance at the pattern: it reaches its inner `step` through the
+/// entries the site resolved. `#[extern_fn]` appended `i_bound` for the
+/// `where` clause's bound — from the site table at a direct call, and from
+/// the run's trailing word when this instance is itself reached through an
+/// entry.
+#[extern_fn(instance_of = step, effect = pure)]
+fn step_doubled<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: &mut Doubled<I, Rt>) -> i64
+where
+    I: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::InstanceOf<step<I, Rt>, Rt>,
+    Rt: Runtime,
+{
+    let mut inner = it.0.at(&i_bound);
+    I::call(&mut *inner, rt, frame, ()) * 2
 }
 
 /// A greeting held by the handler: what a `#[state]` parameter carries.
@@ -607,10 +674,11 @@ where
 {
     extern_registry! {
         ns: "t",
-        types: [Boxed<_, _, R>, Token<_>],
+        types: [Boxed<_, _, R>, Token<_>, Doubled<_, R>],
         signatures: [eq, step],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, eq_int, eq_point, same, step_int, drive,
+              sum_slice, eq_int, eq_point, same, step_int, drive, drive_await, doubled,
+              step_doubled,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -851,6 +919,75 @@ fn a_required_instance_whose_first_parameter_is_mut_runs_through_the_entry() {
         open::<i64>(out),
         8,
         "t::step at i64 bumps the place it lends"
+    );
+}
+
+/// RFC-0067, step 3 second half: an async instance is an instance.
+#[test]
+fn a_body_bounded_by_the_async_trait_reaches_a_sync_instance() {
+    let (i, reg) = combined::<Tiny>();
+    let ExternHandler::Sync(f) = handler(&reg, &i, "drive_await") else {
+        panic!("`drive_await` is declared with a plain `fn`")
+    };
+    let at = acvus_extern::ArgAt {
+        interner: &i,
+        ty: &acvus_extern::Ty::I64,
+        instances: &reg.instances,
+    };
+    let f = f.clone().at_site(&[at]);
+    // SAFETY: one argument of the declaration's own type, as the site says.
+    let out = unsafe { f.into_op(()).call_run(&Tiny, &[erased(7i64)]) };
+    assert_eq!(
+        open::<i64>(out),
+        8,
+        "the awaited call is the same instance `drive` runs"
+    );
+}
+
+/// The type `Doubled<i64>` as the checker settles it at this registry.
+fn doubled_ty(i: &Interner) -> acvus_extern::Ty {
+    acvus_extern::Ty::UserDefined {
+        id: acvus_extern::QualifiedRef::root(i.intern("Doubled")),
+        type_args: vec![acvus_extern::TypeArg::uniform(acvus_extern::Ty::I64)],
+        effect_args: vec![],
+        identity_args: vec![],
+    }
+}
+
+/// A pattern instance reaches its own bound: `drive` at `Doubled<i64>` runs
+/// `step_doubled`, which runs `step_int` through the entry its node carries
+/// as a child (RFC-0067, step 3 second half).
+#[test]
+fn an_instance_at_a_pattern_reaches_its_own_bound_through_the_entry_tree() {
+    let (i, reg) = combined::<Tiny>();
+    let ExternHandler::Sync(build) = handler(&reg, &i, "doubled") else {
+        panic!("`doubled` is declared with a plain `fn`")
+    };
+    let at_i64 = acvus_extern::ArgAt {
+        interner: &i,
+        ty: &acvus_extern::Ty::I64,
+        instances: &reg.instances,
+    };
+    let build = build.clone().at_site(&[at_i64]);
+    // SAFETY: one argument of the declaration's own type, as the site says.
+    let value = unsafe { build.into_op(()).call_run(&Tiny, &[erased(7i64)]) };
+
+    let ExternHandler::Sync(drive) = handler(&reg, &i, "drive") else {
+        panic!("`drive` is declared with a plain `fn`")
+    };
+    let doubled = doubled_ty(&i);
+    let at_doubled = acvus_extern::ArgAt {
+        interner: &i,
+        ty: &doubled,
+        instances: &reg.instances,
+    };
+    let drive = drive.clone().at_site(&[at_doubled]);
+    // SAFETY: as above, at the type the site says.
+    let out = unsafe { drive.into_op(()).call_run(&Tiny, &[value]) };
+    assert_eq!(
+        open::<i64>(out),
+        16,
+        "t::step at Doubled<i64> bumps the held 7 to 8 through its own bound, and doubles it"
     );
 }
 

@@ -33,14 +33,18 @@ pub use effect::{Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{ArgTypes, Args, CallArgs, CallToken, Closure, ClosureFn};
 pub use handler::{
-    Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtEntry, AtSite,
-    Borrowable, BorrowableSpecialized, ByBound, ByRef, ByValue, DeclaredInstance, DirectOp, Entry,
-    ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries,
-    Instances, IntoRun, NoEntry, NoInstances, NoSites, Parameters, REGISTER_FORM, Ret, Sited,
-    SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
-    ValuesOnly, Width, async_glue, glue, glue_at_entry,
+    Arg, ArgAt, ArgAtBound, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtBound,
+    AtBounds, AtEntry, AtSite, Borrowable, BorrowableSpecialized, ByBound, ByRef, ByValue,
+    DeclaredInstance, DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters,
+    InWindow, InstanceEntries, Instances, IntoRun, NoEntry, NoInstances, Parameters, REGISTER_FORM,
+    Ret, SiteAtBound, Sited, SitedAtEntry, SitesAtEntry, SitesNoParameterReads, Specialized,
+    TakenForm, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, glue,
+    glue_at_entry,
 };
-pub use instance::{Carrier, Instance, Signature, one_value};
+pub use instance::{
+    Bound, Bounds, Carrier, Entry, EntryFn, EntryNode, Held, HeldMut, InstanceOf, InstanceOfAsync,
+    NodeArena, Signature, one_value,
+};
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{
@@ -54,9 +58,9 @@ pub use projection::{
 };
 pub use reference::Ref;
 pub use registry::{
-    CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, InstanceAt,
-    InstanceTable, Manifest, MemberType, Registry, Requirement, SharedSignature, SignatureDecl,
-    family_casts,
+    BoundAt, CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers,
+    InstanceAt, InstanceTable, Manifest, MemberType, Registry, Requirement, SharedSignature,
+    SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use slice::{Elements, Slice, Words};

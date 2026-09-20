@@ -2,6 +2,7 @@
 //! combined once into the compiler's and the runtime's inputs (RFC-0021).
 
 use std::fmt;
+use std::sync::Arc;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -12,7 +13,8 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::handler::{DeclaredInstance, Entry, ExternHandler, InstanceEntries, Instances};
+use crate::handler::{DeclaredInstance, ExternHandler, InstanceEntries, Instances};
+use crate::instance::{Entry, EntryFn, NodeArena};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -34,7 +36,7 @@ pub struct FnDecl {
     pub requires: Vec<Requirement>,
 }
 
-/// One `Instance<sig::S<..>>` bound of a declaration: which of the
+/// One `InstanceOf<sig::S<..>>` bound of a declaration: which of the
 /// declaration's type variables carries it, and which signature it names.
 /// The order of these on a `FnDecl` is the order of the entries in the
 /// carrier `#[extern_fn]` writes for that variable.
@@ -288,6 +290,13 @@ pub enum CombineError {
         function: QualifiedRef,
         signature: QualifiedRef,
     },
+    /// An instance whose own bound stands at a variable its pattern does
+    /// not hold as a type argument, so no ground type the instance is
+    /// chosen at says what fills it (RFC-0067, step 3 second half).
+    RequirementOffThePattern {
+        instance: QualifiedRef,
+        signature: QualifiedRef,
+    },
     /// A handler that runs above the task its declaration names (RFC-0046).
     HandlerTask {
         function: String,
@@ -321,6 +330,15 @@ impl fmt::Display for CombineError {
             } => write!(
                 f,
                 "{function:?} requires an instance of {signature:?}, which no registry declares"
+            ),
+            Self::RequirementOffThePattern {
+                instance,
+                signature,
+            } => write!(
+                f,
+                "{instance:?} requires an instance of {signature:?} of a variable its own \
+                 pattern does not hold as a type argument, so the ground type it is chosen at \
+                 does not say what fills that variable"
             ),
             Self::HandlerTask {
                 function,
@@ -396,7 +414,8 @@ pub struct Externs<R: Runtime> {
 }
 
 /// One instance of one shared signature as a site table needs it: the
-/// ground type it stands at, and the plain function that runs it.
+/// pattern it stands at, the plain function that runs it, and what its own
+/// bounds require under it.
 pub struct InstanceAt<R>
 where
     R: Runtime,
@@ -405,7 +424,49 @@ where
     /// `None` where the instance has no entry — it holds a `#[state]`
     /// value, takes a projection parameter, or is reached only by the glue
     /// that suspends the caller (RFC-0067, the entry's refusal list).
-    pub entry: Option<Entry<R>>,
+    pub entry: Option<EntryFn<R>>,
+    pub requires: Vec<BoundAt>,
+}
+
+/// One bound of an instance's own declaration: the signature it names, and
+/// where in the instance's pattern the variable carrying it stands, as the
+/// type-argument positions to walk down a ground type.
+pub struct BoundAt {
+    pub signature: QualifiedRef,
+    pub at: Vec<usize>,
+}
+
+/// Where a declaration's type variable stands inside the pattern its
+/// instance is matched by. `None` where the variable stands somewhere a
+/// ground type cannot be walked to by type-argument position.
+fn path_to_var(pattern: &PolyTy, var: u32, at: &mut Vec<usize>) -> bool {
+    match pattern {
+        TyTerm::Var(v) => *v == var,
+        TyTerm::UserDefined { type_args, .. } => type_args.iter().enumerate().any(|(n, arg)| {
+            at.push(n);
+            path_to_var(&arg.ty, var, at) || {
+                at.pop();
+                false
+            }
+        }),
+        _ => false,
+    }
+}
+
+/// What filled the variable `path` leads to, in a ground type of the
+/// pattern's shape.
+fn arg_at<'a>(ty: &'a Ty, path: &[usize]) -> &'a Ty {
+    let mut at = ty;
+    for step in path {
+        let TyTerm::UserDefined { type_args, .. } = at else {
+            panic!(
+                "a required instance's variable stands at type argument {step} of {at:?}, which \
+                 names no type arguments; the ground type does not have the instance's shape"
+            )
+        };
+        at = &type_args[*step].ty;
+    }
+    at
 }
 
 /// Every shared signature's instances, in the order `Externs::combine`
@@ -416,6 +477,7 @@ where
     R: Runtime,
 {
     by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt<R>>>,
+    arena: Arc<NodeArena<R>>,
 }
 
 impl<R> Default for InstanceTable<R>
@@ -425,6 +487,7 @@ where
     fn default() -> Self {
         Self {
             by_signature: FxHashMap::default(),
+            arena: Arc::new(NodeArena::default()),
         }
     }
 }
@@ -434,6 +497,10 @@ where
     R: Runtime,
 {
     fn entry_at(&self, signature: QualifiedRef, ty: &Ty) -> Entry<R> {
+        let ty = match ty {
+            TyTerm::Ref(_, target) => &target.ty,
+            at => at,
+        };
         let Some(instances) = self.by_signature.get(&signature) else {
             panic!("{signature:?} is required but no registry declares it")
         };
@@ -450,7 +517,16 @@ where
                  reached only by the glue that suspends the caller is written without one"
             )
         };
-        entry
+        let children = found
+            .requires
+            .iter()
+            .map(|bound| self.entry_at(bound.signature, arg_at(ty, &bound.at)))
+            .collect();
+        self.arena.node(entry, children)
+    }
+
+    fn arena(&self) -> Arc<NodeArena<R>> {
+        Arc::clone(&self.arena)
     }
 }
 
@@ -605,7 +681,10 @@ impl<R: Runtime> Externs<R> {
             types,
             handlers,
             space,
-            instances: InstanceTable { by_signature },
+            instances: InstanceTable {
+                by_signature,
+                arena: Arc::new(NodeArena::default()),
+            },
         })
     }
 }
@@ -655,9 +734,28 @@ fn add_instance<R: Runtime>(
         rule.fn_ref = sig;
         collected.casts.push(rule);
     }
+    let requires = decl
+        .requires
+        .iter()
+        .map(|required| {
+            let mut at = Vec::new();
+            let var = u32::try_from(required.var)
+                .expect("a declaration's type variables are numbered by PolyVars");
+            path_to_var(&ty, var, &mut at)
+                .then_some(BoundAt {
+                    signature: required.signature,
+                    at,
+                })
+                .ok_or(CombineError::RequirementOffThePattern {
+                    instance: decl.qref,
+                    signature: required.signature,
+                })
+        })
+        .collect::<Result<Vec<BoundAt>, CombineError>>()?;
     collected.entries.push(InstanceAt {
         ty: ty.clone(),
         entry: admitted.iter().find_map(|i| i.handler.entry()),
+        requires,
     });
     collected.instance_types.push(ty);
     collected.instances.extend(admitted);

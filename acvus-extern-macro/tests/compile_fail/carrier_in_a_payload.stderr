@@ -1,0 +1,5 @@
+error: the payload of `Doubled` is `I`, and what fills a type variable while a handler runs is a carrier — the value with the entry of each required instance beside it. A carrier's Rust type is the *declaration's*, so the handler that stores one here and the instance that reads it back name two types and disagree on the `TypeId`. Hold the value alone: write `acvus_extern::Held<Rt>` in the payload and `I` in the `PhantomData` (RFC-0067, step 3 second half).
+  --> tests/compile_fail/carrier_in_a_payload.rs:13:23
+   |
+13 | struct Doubled<I, Rt>(I, PhantomData<Rt>)
+   |                       ^

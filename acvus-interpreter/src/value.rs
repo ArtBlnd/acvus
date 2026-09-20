@@ -377,13 +377,13 @@ impl Value {
         }
     }
 
-    /// A resolved instance's entry, as the one word it is (RFC-0067
-    /// Decision 3).
+    /// A resolved instance's entry, as the one word it is: the address of
+    /// the node the site resolved (RFC-0067 Decision 3).
     #[inline]
     pub fn entry(entry: acvus_extern::Entry<AcvusRuntime>) -> Value {
         Value {
             kind: Kind::Entry,
-            word: entry as usize as u64,
+            word: entry.addr() as u64,
         }
     }
 
@@ -393,8 +393,8 @@ impl Value {
     pub unsafe fn as_entry(&self) -> acvus_extern::Entry<AcvusRuntime> {
         debug_assert_eq!(self.kind, Kind::Entry, "as_entry: {self:?} is not an entry");
         // SAFETY: the caller's contract: the word is the address `entry`
-        // wrote, which is the address of a function of this type.
-        unsafe { std::mem::transmute::<u64, acvus_extern::Entry<AcvusRuntime>>(self.word) }
+        // wrote, which is a node of the arena the calling site holds.
+        unsafe { acvus_extern::Entry::from_addr(self.word as usize) }
     }
 
     /// # Safety
