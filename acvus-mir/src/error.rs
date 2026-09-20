@@ -5,6 +5,7 @@ use acvus_ast::report::Label;
 use acvus_utils::Interner;
 
 use crate::graph::QualifiedRef;
+use crate::ir::SwitchKey;
 use crate::ty::Ty;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +177,11 @@ pub enum MirErrorKind {
     /// a tuple, a nested refutable payload -- has no shape `validate` can
     /// decide exhaustiveness on, so it must say so itself (RFC-0051 §3).
     MatchIsNotADispatch,
+    /// The later arm can never be taken, and the language has no warning
+    /// axis (RFC-0051 §2).
+    MatchArmKeyRepeated {
+        key: SwitchKey,
+    },
     /// A `match` arm names a variant the scrutinee cannot hold (RFC-0051
     /// §2). The arms contribute no variant: the scrutinee's type is its
     /// own, so an arm outside it can never be taken.
@@ -666,6 +672,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "non-exhaustive match: these arms are not one dispatch over a tag, so the variants they cover are not known; add a `_` arm"
+                )
+            }
+            MirErrorKind::MatchArmKeyRepeated { key } => {
+                write!(
+                    f,
+                    "unreachable pattern: `{}` is already covered by an earlier arm",
+                    key.shown(interner)
                 )
             }
             MirErrorKind::UnreachablePattern {

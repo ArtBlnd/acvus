@@ -10,7 +10,7 @@ use acvus_utils::{Astr, LocalFactory};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use crate::ir::{DebugInfo, ForSource, Inst, InstKind, Label, MirBody, ValueId};
+use crate::ir::{DebugInfo, ForSource, Inst, InstKind, Label, MirBody, SwitchKey, ValueId};
 use crate::ty::{Task, Ty};
 
 // -- BlockIdx ------------------------------------------------------
@@ -62,14 +62,14 @@ pub enum Terminator {
         else_args: Vec<ValueId>,
         join: Label,
     },
-    /// One dispatch over a variant's tag (RFC-0051): the tag is read once
-    /// and the block leaves through the arm that tag names. `default` is
-    /// the edge a tag outside `arms` takes, and it is present exactly when
-    /// the `match` had a catch-all -- a `Switch` without one is exhaustive
-    /// over `arms`, which is what `validate`'s exhaustiveness pass decides.
+    /// One dispatch (RFC-0051): the value is read once and the block leaves
+    /// through the arm whose key it holds. `default` is the edge a key
+    /// outside `arms` takes, and it is present exactly when the `match` had
+    /// a catch-all -- a `Switch` without one is exhaustive over `arms`,
+    /// which is what `validate`'s exhaustiveness pass decides.
     Switch {
         tag: ValueId,
-        arms: Vec<(Astr, Label, Vec<ValueId>)>,
+        arms: Vec<(SwitchKey, Label, Vec<ValueId>)>,
         default: Option<(Label, Vec<ValueId>)>,
     },
     /// One traversal (RFC-0057). The terminator is the loop's condition: no

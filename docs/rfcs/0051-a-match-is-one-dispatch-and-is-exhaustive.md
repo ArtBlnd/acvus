@@ -217,8 +217,83 @@ and join. Threading alone runs `enum match` at 16.8 ns against 9.9 at
 operations where base had two and six. RFC-0053's Consequences carries the
 measurement.
 
-**Not decided here**: a `match` whose arms are not one dispatch over a tag
-(a literal arm, a nested refutable payload) has no `Switch` to read, so
-`typeck` refuses it outright unless it has a `_` arm — the same sentence the
-`Open` case writes. Nested positions are not asked separately; the `_` is
-asked for at the `match`.
+**Not decided here**: a `match` whose arms are not one dispatch (a nested
+refutable payload, a tuple, a list) has no `Switch` to read, so `typeck`
+refuses it outright unless it has a `_` arm. Nested positions are not asked
+separately; the `_` is asked for at the `match`.
+
+### A match on literals is one dispatch too
+
+A `match` whose arms are literals was the chain this RFC replaced for tags:
+`TestLiteral` and `JumpIf` per arm, so `k` arms cost up to `k` tests and `k`
+branches, and the source's one dispatch was gone from the MIR. It is now the
+same `Switch`.
+
+**One instruction, keys of one kind.** `InstKind::Switch` and
+`Terminator::Switch` key their arms by `ir::SwitchKey` — `Tag(Astr)`,
+`Int(i128)`, `Bool(bool)`, `Char(char)`, `Str(Astr)` — and no second
+instruction exists. One `Switch`'s keys are all of one variant, which the
+scrutinee's type fixes: `typeck` refuses an arm whose pattern is not the
+scrutinee's type before the lowering asks whether the arms are one dispatch,
+so `Dispatch::plan`'s one-kind rule is the defence behind that and no source
+reaches it.
+
+**No float and no byte-string key.** Equality on a float is not a jump, and a
+byte string is a list. A `match` with such an arm keeps the chain, and so
+keeps needing the `_` that makes it exhaustive.
+
+**Two arms naming one key are refused.** The later arm can never be taken and
+the language has no warning axis, which is §2's rule; the refusal names the
+key and covers a repeated tag as well as a repeated literal.
+
+**Exhaustiveness reads the value space.** `Bool` is the one literal space a
+set of arms closes: both values covered needs no catch-all, one value and no
+catch-all is refused naming the missing one. Integers, chars and strings are
+open — no set of arms closes them — and a `Switch` on them with no catch-all
+is refused saying so. The tag rule is unchanged, and `known_variants` is
+still where the widening lands.
+
+**The machine.** `prepare::switch_op` chooses by the key's kind.
+
+- An integer or a char is an inline word, so the read is the register itself
+  where a variant's is `as_variant().tag()`. `switch::SwitchWord<T>` carries
+  the scrutinee's width and normalizes the word through the same `Int::read`
+  that `pattern::TestInt<T>` normalizes the one it compared, and `prepare`
+  normalizes the keys through it as well — the dispatch decides exactly what
+  the chain decided. A char is `u32`, as its `TestInt` already was.
+- A `Bool` dispatch is the machine's own two-way branch, `control::JumpIf`,
+  whose `!= 0` is `Value::as_bool`. It needs no arm array and no scan, so
+  `recognize_switch` refuses a `Bool` dispatch and no region form builds one.
+- A string needs content comparison. `string::SwitchStr` holds the keys and
+  scans them in the order the `match` wrote them; the sorted keys and a
+  binary search were not built, because a string comparison starts with the
+  length, so a missing arm costs one word compare, and the arm counts are the
+  handful a `match` on names is written with — the measurement above that
+  kept the tag scan over a hashed table at seven arms. `LentText` gained
+  `Own`, so one operation reads all three shapes a scrutinee's text takes: a
+  `String` the register holds, a `&String`, and the pair of a `&str`.
+- The region forms follow from `recognize_switch` being keyed on
+  `InstKind::Switch`: `switch::SwitchWordRegion<T>` and
+  `string::SwitchStrRegion` are the rejoining forms, built from the same
+  recognizer a tag dispatch is.
+
+**A place lent to a terminator is live across it.** Moving the read into the
+terminator exposed `optimize::drop_insertion`: it mapped an instruction's use
+of a reference back to the storage that reference borrows, and a
+terminator's use not at all, so the lent place was dropped before the
+dispatch read through it. The shape was already in the tree for a tag
+dispatch through a reference — `drop` before `switch` — and only became a
+use after free when a string dispatch read freed bytes.
+`drop_insertion::terminator_uses_with_storage` now reads a terminator's uses
+through `Loans::storage_behind`, as the instruction path already did.
+
+**Measured over the corpus** (435 scripts that compile at `Opt::Full` without
+a context, MIR after every pass): `test` instructions 27 → 22 and `switch`
+instructions 1 → 5. Four scripts moved, each trading its chain for one
+dispatch; the `bf table` shape of `reborrow.rs` falls from two tests, two
+branches and three blocks to one `switch` and loses six blocks, and
+`sroa.rs`'s three-armed `match i % 3` does the same. `asm_probe`: 2741
+operations tail-call their successor, 46 end a chain, 28 hold a stack
+address — 2734 / 39 / 28 before, with the seven new terminators
+(`SwitchWord` at six surviving widths and `SwitchStr`) and the seven new
+region bodies, and no exception added.

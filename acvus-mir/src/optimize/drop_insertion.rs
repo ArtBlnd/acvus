@@ -67,7 +67,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
         // Values defined in this block that are never used, or whose last use
         // is the terminator and it consumes them (no Drop needed).
-        let term_uses = terminator_use_set(&block.terminator);
+        let term_uses = terminator_uses_with_storage(&block.terminator, &loans);
         let already_dropped: FxHashSet<ValueId> = drops_after.iter().map(|(_, v)| *v).collect();
 
         // Collect all defs in this block.
@@ -399,7 +399,7 @@ fn is_last_use_in_block(
             return false;
         }
     }
-    if terminator_use_set(&block.terminator).contains(&val) {
+    if terminator_uses_with_storage(&block.terminator, loans).contains(&val) {
         return false;
     }
     true
@@ -412,7 +412,19 @@ fn is_used_in_block(block: &crate::cfg::Block, val: ValueId, loans: &Loans) -> b
             return true;
         }
     }
-    terminator_use_set(&block.terminator).contains(&val)
+    terminator_uses_with_storage(&block.terminator, loans).contains(&val)
+}
+
+/// The values a terminator keeps alive: the ones it uses, plus the storage
+/// each of those reaches through its loans. A terminator that reads a place
+/// through a reference -- `Terminator::Switch`'s key among them (RFC-0051) --
+/// is the last use of that place, so the drop belongs after the block, not
+/// before the read.
+fn terminator_uses_with_storage(term: &Terminator, loans: &Loans) -> FxHashSet<ValueId> {
+    let mut uses = terminator_use_set(term);
+    let direct: Vec<ValueId> = uses.iter().copied().collect();
+    uses.extend(loans.storage_behind(&direct));
+    uses
 }
 
 /// Extract ValueIds directly used by a terminator (not forwarded args).

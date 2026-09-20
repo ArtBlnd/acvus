@@ -15,6 +15,55 @@ pub enum Intrinsic {
 
 acvus_utils::declare_local_id!(pub ValueId);
 
+/// Decision not to build, RFC-0051: no `Float` and no `Bytes` key. Equality
+/// on a float is not a jump, and a byte string is a list. A `match` written
+/// with such an arm keeps the chain `lower_match_expr` emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SwitchKey {
+    Tag(Astr),
+    Int(i128),
+    Bool(bool),
+    Char(char),
+    Str(Astr),
+}
+
+impl SwitchKey {
+    pub fn of_literal(literal: &Literal, interner: &Interner) -> Option<SwitchKey> {
+        match literal.desugared() {
+            Literal::Int(n) => Some(SwitchKey::Int(n)),
+            Literal::Bool(b) => Some(SwitchKey::Bool(b)),
+            Literal::Char(c) => Some(SwitchKey::Char(c)),
+            Literal::String(s) => Some(SwitchKey::Str(interner.intern(&s))),
+            Literal::Float(_)
+            | Literal::Bytes(_)
+            | Literal::IntOf(_)
+            | Literal::List(_)
+            | Literal::Unit => None,
+        }
+    }
+
+    pub fn tag(self) -> Option<Astr> {
+        match self {
+            SwitchKey::Tag(tag) => Some(tag),
+            _ => None,
+        }
+    }
+
+    pub fn same_kind(self, other: SwitchKey) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
+    }
+
+    pub fn shown(self, interner: &Interner) -> String {
+        match self {
+            SwitchKey::Tag(tag) => interner.resolve(tag).to_string(),
+            SwitchKey::Int(n) => n.to_string(),
+            SwitchKey::Bool(b) => b.to_string(),
+            SwitchKey::Char(c) => format!("{c:?}"),
+            SwitchKey::Str(text) => format!("{:?}", interner.resolve(text)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Label(pub u32);
 
@@ -502,13 +551,16 @@ pub enum InstKind {
         else_args: Vec<ValueId>,
         join: Label,
     },
-    /// One dispatch over a variant's tag (RFC-0051). `tag` is the value
-    /// whose tag is read -- once -- and `arms` the labels its tags take;
-    /// `default` is the arm a tag outside `arms` takes, and it is present
-    /// exactly when the `match` had a catch-all.
+    /// One dispatch (RFC-0051). `tag` is the value read -- once -- and
+    /// `arms` the labels its keys take; `default` is the arm a key outside
+    /// `arms` takes, and it is present exactly when the `match` had a
+    /// catch-all.
+    ///
+    /// Every arm's key satisfies [`SwitchKey::same_kind`] with every other,
+    /// because `tag`'s type decides which kind the source could write.
     Switch {
         tag: ValueId,
-        arms: Vec<(Astr, Label, Vec<ValueId>)>,
+        arms: Vec<(SwitchKey, Label, Vec<ValueId>)>,
         default: Option<(Label, Vec<ValueId>)>,
     },
     For {

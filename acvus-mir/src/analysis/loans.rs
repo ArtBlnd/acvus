@@ -673,6 +673,17 @@ impl Loans {
         all
     }
 
+    /// The storage `values` keep alive, which a use of a reference reaches
+    /// through its loans: the half of [`Self::uses_with_storage`] a reader
+    /// that has its own use list needs.
+    pub fn storage_behind(&self, values: &[ValueId]) -> SmallVec<[ValueId; 4]> {
+        let mut storage: SmallVec<[ValueId; 4]> = SmallVec::new();
+        for value in values {
+            self.reachable_storage(*value, &mut storage);
+        }
+        storage
+    }
+
     fn reachable_storage(&self, value: ValueId, out: &mut SmallVec<[ValueId; 4]>) {
         for loan in &self.region(value).loans {
             let storage = loan.storage.value();

@@ -36,7 +36,7 @@ use super::ssa_pass::{apply_subst, apply_subst_terminator, patch_instructions};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::{escape, inst_info};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, PathSeg, RefTarget, ValueId};
+use crate::ir::{Inst, InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
 use crate::ty::Ty;
 
 /// The registers one storage slot is replaced by, and -- for an enum --
@@ -299,29 +299,31 @@ fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Pla
 }
 
 /// The `Switch` over a replaced slot, of any width, or `None` where an arm
-/// names a tag this shape does not number.
+/// names a key this shape does not number. Only a tag is numbered: the slot
+/// a replacement takes apart is an enum, and a literal dispatch reads a word
+/// this pass never built.
 fn dispatch_for(
     shape: &Shape,
     slot: ValueId,
-    arms: &[(Astr, Label, Vec<ValueId>)],
+    arms: &[(SwitchKey, Label, Vec<ValueId>)],
     default: Option<&(Label, Vec<ValueId>)>,
 ) -> Option<Dispatch> {
     let edge = |label: &Label, args: &Vec<ValueId>| Edge {
         label: *label,
         args: args.clone(),
     };
-    arms.iter()
-        .all(|(tag, _, _)| shape.tags.contains_key(tag))
-        .then_some(())?;
+    let numbered = |key: &SwitchKey| key.tag().filter(|tag| shape.tags.contains_key(tag));
     Some(Dispatch {
         slot,
         arms: arms
             .iter()
-            .map(|(tag, label, args)| Arm {
-                tag: *tag,
-                edge: edge(label, args),
+            .map(|(key, label, args)| {
+                Some(Arm {
+                    tag: numbered(key)?,
+                    edge: edge(label, args),
+                })
             })
-            .collect(),
+            .collect::<Option<Vec<Arm>>>()?,
         default: default.map(|(label, args)| edge(label, args)),
     })
 }

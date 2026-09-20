@@ -463,6 +463,8 @@ pub enum ConcatPart {
 /// RFC-0062 Decision 3 admits, as the preparation read the operand's type.
 #[derive(Clone, Copy)]
 pub enum LentText {
+    /// A `String` the register holds itself.
+    Own(Off),
     /// A `&String`, read through the reference.
     Through(Off),
     /// A `&str`: the pair holding `(ptr, len)` of the bytes.

@@ -226,3 +226,193 @@ fn a_match_on_a_returned_value_needs_no_catch_all() {
         format!("{TWO_CONSTRUCTIONS}let f = |q| -> q; match f(e) {{ E::A(x) => x, E::B(x) => x }}");
     compile_script_ir(&i, &source, &flag(&i)).unwrap();
 }
+
+// -- Literal arms (RFC-0051, extended 2026-09-20) --------------------
+
+#[test]
+fn a_match_on_integer_literals_is_one_switch() {
+    let i = Interner::new();
+    let raw = compile_script_raw(
+        &i,
+        "let n = 2; match n { 1 => 10, 2 => 20, _ => 0 }",
+        &flag(&i),
+    )
+    .unwrap();
+    assert!(
+        raw.contains("switch ") && raw.contains("1 -> ") && raw.contains("2 -> "),
+        "the printer writes the literal keys: {raw}"
+    );
+    assert!(
+        !raw.contains(" test "),
+        "no chain of tests is left beside the dispatch: {raw}"
+    );
+}
+
+#[test]
+fn a_match_on_string_literals_is_one_switch() {
+    let i = Interner::new();
+    let raw = compile_script_raw(
+        &i,
+        "let s = \"put\"; match s { \"get\" => 1, \"put\" => 2, _ => 0 }",
+        &flag(&i),
+    )
+    .unwrap();
+    assert!(
+        raw.contains("switch ") && raw.contains("\"get\" -> ") && raw.contains("\"put\" -> "),
+        "the printer writes the string keys as written: {raw}"
+    );
+    assert!(!raw.contains(" test "), "{raw}");
+}
+
+#[test]
+fn a_match_on_char_literals_is_one_switch() {
+    let i = Interner::new();
+    let raw = compile_script_raw(
+        &i,
+        "let c = 'b'; match c { 'a' => 1, 'b' => 2, _ => 0 }",
+        &flag(&i),
+    )
+    .unwrap();
+    assert!(
+        raw.contains("switch ") && raw.contains("'a' -> ") && raw.contains("'b' -> "),
+        "the printer writes the char keys quoted: {raw}"
+    );
+}
+
+#[test]
+fn a_match_on_both_bools_needs_no_catch_all() {
+    let i = Interner::new();
+    let raw = compile_script_raw(&i, "match @c { true => 1, false => 0 }", &flag(&i)).unwrap();
+    assert!(
+        raw.contains("switch ") && raw.contains("true -> ") && raw.contains("false -> "),
+        "{raw}"
+    );
+    assert!(
+        !raw.contains("_ -> "),
+        "no catch-all was written, so the Switch has no default: {raw}"
+    );
+    compile_script_ir(&i, "match @c { true => 1, false => 0 }", &flag(&i)).unwrap();
+}
+
+#[test]
+fn a_match_on_one_bool_and_no_catch_all_is_refused() {
+    let i = Interner::new();
+    let err = compile_script_ir(&i, "match @c { true => 1 }", &flag(&i)).unwrap_err();
+    assert_eq!(
+        err,
+        "non-exhaustive match: `false` is not covered; add that arm or a `_` arm"
+    );
+}
+
+#[test]
+fn a_match_on_integer_literals_without_a_catch_all_is_refused() {
+    let i = Interner::new();
+    let err =
+        compile_script_ir(&i, "let n = 2; match n { 1 => 10, 2 => 20 }", &flag(&i)).unwrap_err();
+    assert_eq!(
+        err,
+        "non-exhaustive match: the integers are an open value space; add a `_` arm"
+    );
+}
+
+#[test]
+fn a_match_on_string_literals_without_a_catch_all_is_refused() {
+    let i = Interner::new();
+    let err = compile_script_ir(
+        &i,
+        "let s = \"put\"; match s { \"get\" => 1, \"put\" => 2 }",
+        &flag(&i),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        "non-exhaustive match: the strings are an open value space; add a `_` arm"
+    );
+}
+
+#[test]
+fn a_match_on_char_literals_without_a_catch_all_is_refused() {
+    let i = Interner::new();
+    let err = compile_script_ir(&i, "let c = 'b'; match c { 'a' => 1, 'b' => 2 }", &flag(&i))
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "non-exhaustive match: the chars are an open value space; add a `_` arm"
+    );
+}
+
+#[test]
+fn two_arms_naming_one_literal_are_refused() {
+    let i = Interner::new();
+    let err = compile_script_ir(
+        &i,
+        "let n = 2; match n { 1 => 10, 1 => 20, _ => 0 }",
+        &flag(&i),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("unreachable pattern: `1` is already covered by an earlier arm"),
+        "{err}"
+    );
+}
+
+#[test]
+fn two_arms_naming_one_string_are_refused() {
+    let i = Interner::new();
+    let err = compile_script_ir(
+        &i,
+        "let s = \"a\"; match s { \"a\" => 1, \"a\" => 2, _ => 0 }",
+        &flag(&i),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("unreachable pattern: `\"a\"` is already covered by an earlier arm"),
+        "{err}"
+    );
+}
+
+#[test]
+fn two_arms_naming_one_tag_are_refused() {
+    let i = Interner::new();
+    let source = format!("{TWO_CONSTRUCTIONS}match e {{ E::A(v) => v, E::A(v) => v, _ => 0 }}");
+    let err = compile_script_ir(&i, &source, &flag(&i)).unwrap_err();
+    assert!(
+        err.contains("unreachable pattern: `A` is already covered by an earlier arm"),
+        "{err}"
+    );
+}
+
+/// Equality on a float is not a jump, so a float arm is no dispatch key and
+/// the `match` keeps the chain of tests -- which is why it still needs the
+/// `_` that makes it exhaustive.
+#[test]
+fn a_match_on_float_literals_keeps_the_chain() {
+    let i = Interner::new();
+    let source = "let x = 1.5; match x { 1.5 => 1, 2.5 => 2, _ => 0 }";
+    let raw = compile_script_raw(&i, source, &flag(&i)).unwrap();
+    assert!(!raw.contains("switch "), "no dispatch is written: {raw}");
+    assert_eq!(
+        raw.matches(" test ").count(),
+        2,
+        "one test per tested arm: {raw}"
+    );
+    let err = compile_script_ir(&i, "let x = 1.5; match x { 1.5 => 1, 2.5 => 2 }", &flag(&i))
+        .unwrap_err();
+    assert!(err.contains("not one dispatch over a tag"), "{err}");
+}
+
+/// The keys of one `Switch` are of one kind, and `typeck` is what makes that
+/// so: an arm whose pattern is not the scrutinee's type is refused before
+/// the lowering asks whether the arms are one dispatch. `Dispatch::plan`'s
+/// one-kind rule is the defence behind this, and no source reaches it.
+#[test]
+fn an_arm_of_another_kind_than_the_scrutinee_is_refused_by_typeck() {
+    let i = Interner::new();
+    let tag_and_int = format!("{TWO_CONSTRUCTIONS}match e {{ E::A(v) => v, 1 => 2, _ => 0 }}");
+    let err = compile_script_ir(&i, &tag_and_int, &flag(&i)).unwrap_err();
+    assert!(err.contains("pattern type i64 incompatible"), "{err}");
+
+    let int_and_char = "let n = 1; match n { 1 => 1, 'a' => 2, _ => 0 }";
+    let err = compile_script_ir(&i, int_and_char, &flag(&i)).unwrap_err();
+    assert!(err.contains("expected char, got i64"), "{err}");
+}

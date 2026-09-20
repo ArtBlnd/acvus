@@ -19,8 +19,8 @@ use acvus_extern::{ArgAt, FieldAt, FormKind, ObjectShape, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, TwoWay,
-    ValueId, two_way,
+    Callee, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, SwitchKey,
+    TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -33,7 +33,7 @@ use crate::code::{
     SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
-use crate::ops::arith::{self, Unary, for_int_ty};
+use crate::ops::arith::{self, Int, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
 use crate::ops::place;
 use crate::ops::run::{LaidKonst, LaidMove};
@@ -1359,7 +1359,15 @@ impl<'a> Prepare<'a> {
     fn side(&self, placed: &[Placed], default: BlockId, name: &str) -> BlockId {
         placed
             .iter()
-            .find(|arm| self.tag_is(arm.key, name))
+            .find(|arm| arm.key.tag().is_some_and(|tag| self.tag_is(tag, name)))
+            .map_or(default, |arm| arm.block)
+    }
+
+    /// The block a `Bool` dispatch enters for `want`.
+    fn bool_side(&self, placed: &[Placed], default: BlockId, want: bool) -> BlockId {
+        placed
+            .iter()
+            .find(|arm| arm.key == SwitchKey::Bool(want))
             .map_or(default, |arm| arm.block)
     }
 
@@ -1376,15 +1384,15 @@ impl<'a> Prepare<'a> {
     fn switch_op(
         &mut self,
         tag: ValueId,
-        arms: &[(Astr, Label, Vec<ValueId>)],
+        arms: &[(SwitchKey, Label, Vec<ValueId>)],
         default: Option<&(Label, Vec<ValueId>)>,
     ) -> Box<dyn Op> {
+        let form = self.dispatch_form_of(tag, arms);
         let placed_run = self
             .run_tag(tag)
             .map(|run| (Off::of(run.base), run.layout.tags().clone()));
         let src = self.off(tag);
         let through = self.is_ref(tag);
-        let form = variant_form(self.scrutinee_ty(tag));
         let (tested, default) = match default {
             Some((label, args)) => (arms, self.dispatch_edge(*label, args)),
             None => {
@@ -1402,11 +1410,48 @@ impl<'a> Prepare<'a> {
             })
             .collect();
 
+        let form = match form {
+            DispatchForm::Tag(form) => form,
+            DispatchForm::Word(width) => {
+                let arms: Box<[switch::Arm]> = placed
+                    .iter()
+                    .map(|arm| switch::Arm {
+                        key: word_key(arm.key, width),
+                        target: arm.block,
+                    })
+                    .collect();
+                return for_int_ty!(width, |T| Box::new(switch::SwitchWord::<T>::new(
+                    src, arms, default
+                )) as Box<dyn Op>);
+            }
+            DispatchForm::Bool => {
+                let on_true = self.bool_side(&placed, default, true);
+                let on_false = self.bool_side(&placed, default, false);
+                return Box::new(control::JumpIf::<place::Slot> {
+                    cond: src,
+                    on_true,
+                    on_false,
+                    at: PhantomData,
+                });
+            }
+            DispatchForm::Text => {
+                let src = self.text_at(tag);
+                let arms: Box<[string::StrArm]> = placed
+                    .iter()
+                    .map(|arm| string::StrArm {
+                        key: self.text_key(arm.key),
+                        target: arm.block,
+                    })
+                    .collect();
+                return Box::new(string::SwitchStr { src, arms, default });
+            }
+        };
+
         if let Some((src, tags)) = placed_run {
             let arms: Box<[run_ops::RunArm]> = placed
                 .iter()
                 .map(|arm| run_ops::RunArm {
-                    tag: member_of(&tags, arm.key).word(),
+                    tag: member_of(&tags, tag_of(arm.key)).word(),
                     target: arm.block,
                 })
                 .collect();
@@ -1434,7 +1479,7 @@ impl<'a> Prepare<'a> {
                 let arms: Box<[switch::Arm]> = placed
                     .iter()
                     .map(|arm| switch::Arm {
-                        key: Value::tag(arm.key).bits(),
+                        key: Value::tag(tag_of(arm.key)).bits(),
                         target: arm.block,
                     })
                     .collect();
@@ -1446,6 +1491,37 @@ impl<'a> Prepare<'a> {
         }
     }
 
+    /// The shape this dispatch reads its key in: the arms name the kind, the
+    /// value the dispatch reads names the width or the variant form.
+    fn dispatch_form_of(
+        &self,
+        tag: ValueId,
+        arms: &[(SwitchKey, Label, Vec<ValueId>)],
+    ) -> DispatchForm {
+        let (key, _, _) = arms
+            .first()
+            .expect("a Switch names at least one arm, which is the key kind it reads");
+        dispatch_form(*key, self.scrutinee_ty(tag))
+    }
+
+    /// Where a text dispatch reads its scrutinee: the register's own
+    /// `String`, the `String` a reference names, or the two words of a
+    /// `&str`.
+    fn text_at(&self, id: ValueId) -> LentText {
+        match (SlotClass::of(self.ty(id)), self.is_ref(id)) {
+            (SlotClass::Slice, _) => LentText::Pair(self.pair(id)),
+            (_, true) => LentText::Through(self.off(id)),
+            (_, false) => LentText::Own(self.off(id)),
+        }
+    }
+
+    fn text_key(&self, key: SwitchKey) -> Box<str> {
+        let SwitchKey::Str(text) = key else {
+            panic!("a text dispatch on the key {key:?}")
+        };
+        self.ctx.interner.resolve(text).into()
+    }
+
     /// `switch_op`'s region form (RFC-0052 rule 3): the same four dispatches
     /// over the same tag, each successor a chain this operation runs rather
     /// than a block the machine enters.
@@ -1455,12 +1531,12 @@ impl<'a> Prepare<'a> {
         };
         let (tag, arms, default) = (*tag, arms.clone(), default.clone());
 
+        let form = self.dispatch_form_of(tag, &arms);
         let placed_run = self
             .run_tag(tag)
             .map(|run| (Off::of(run.base), run.layout.tags().clone()));
         let src = self.off(tag);
         let through = self.is_ref(tag);
-        let form = variant_form(self.scrutinee_ty(tag));
         let (tested, fallback) = match &default {
             Some((label, args)) => (
                 arms.as_slice(),
@@ -1480,6 +1556,49 @@ impl<'a> Prepare<'a> {
                         args,
                     },
                 )
+            }
+        };
+
+        let form = match form {
+            DispatchForm::Tag(form) => form,
+            DispatchForm::Bool => panic!(
+                "`recognize_switch` refuses a `Bool` dispatch, which the machine's two-way \
+                 branch runs and no region form of this pass builds"
+            ),
+            DispatchForm::Word(width) => {
+                let arms = self.region_arms(region, tested, rides);
+                let otherwise = self.arm_chain(region, fallback, rides);
+                let arms: Box<[switch::RegionArm]> = arms
+                    .into_iter()
+                    .map(|(key, head)| switch::RegionArm {
+                        key: word_key(key, width),
+                        head,
+                    })
+                    .collect();
+                return for_int_ty!(width, |T| made(move |next| Box::new(
+                    switch::SwitchWordRegion::<T>::new(src, arms, otherwise, next)
+                )
+                    as Box<dyn Op>));
+            }
+            DispatchForm::Text => {
+                let src = self.text_at(tag);
+                let arms = self.region_arms(region, tested, rides);
+                let otherwise = self.arm_chain(region, fallback, rides);
+                let arms: Box<[string::StrRegionArm]> = arms
+                    .into_iter()
+                    .map(|(key, head)| string::StrRegionArm {
+                        key: self.text_key(key),
+                        head,
+                    })
+                    .collect();
+                return made(move |next| {
+                    Box::new(string::SwitchStrRegion {
+                        src,
+                        arms,
+                        default: otherwise,
+                        next,
+                    }) as Box<dyn Op>
+                });
             }
         };
 
@@ -1508,25 +1627,14 @@ impl<'a> Prepare<'a> {
             };
         }
 
-        let mut chains: Vec<(Astr, Box<dyn Op>)> = Vec::with_capacity(tested.len());
-        for (key, label, args) in tested {
-            let head = self.arm_chain(
-                region,
-                JoinEdge {
-                    label: *label,
-                    args,
-                },
-                rides,
-            );
-            chains.push((*key, head));
-        }
+        let chains = self.region_arms(region, tested, rides);
         let otherwise = self.arm_chain(region, fallback, rides);
 
         if let Some((src, tags)) = placed_run {
             let arms: Box<[run_ops::RunRegionArm]> = chains
                 .into_iter()
                 .map(|(key, head)| run_ops::RunRegionArm {
-                    tag: member_of(&tags, key).word(),
+                    tag: member_of(&tags, tag_of(key)).word(),
                     head,
                 })
                 .collect();
@@ -1543,7 +1651,7 @@ impl<'a> Prepare<'a> {
         let arms: Box<[switch::RegionArm]> = chains
             .into_iter()
             .map(|(key, head)| switch::RegionArm {
-                key: Value::tag(key).bits(),
+                key: Value::tag(tag_of(key)).bits(),
                 head,
             })
             .collect();
@@ -1567,17 +1675,39 @@ impl<'a> Prepare<'a> {
         }
     }
 
+    /// Each tested arm as the chain the machine runs for it, in arm order.
+    fn region_arms(
+        &mut self,
+        region: &SwitchRegion,
+        tested: &[(SwitchKey, Label, Vec<ValueId>)],
+        rides: &Rides,
+    ) -> Vec<(SwitchKey, Box<dyn Op>)> {
+        let mut chains: Vec<(SwitchKey, Box<dyn Op>)> = Vec::with_capacity(tested.len());
+        for (key, label, args) in tested {
+            let head = self.arm_chain(
+                region,
+                JoinEdge {
+                    label: *label,
+                    args,
+                },
+                rides,
+            );
+            chains.push((*key, head));
+        }
+        chains
+    }
+
     /// The edge a two-sided dispatch takes for the tag `name`: the arm that
     /// names it, or the edge the dispatch falls out of.
     fn side_edge<'r>(
         &self,
-        tested: &'r [(Astr, Label, Vec<ValueId>)],
+        tested: &'r [(SwitchKey, Label, Vec<ValueId>)],
         fallback: JoinEdge<'r>,
         name: &str,
     ) -> JoinEdge<'r> {
         tested
             .iter()
-            .find(|(key, _, _)| self.tag_is(*key, name))
+            .find(|(key, _, _)| key.tag().is_some_and(|tag| self.tag_is(tag, name)))
             .map_or(fallback, |(_, label, args)| JoinEdge {
                 label: *label,
                 args,
@@ -1970,16 +2100,25 @@ impl<'a> Prepare<'a> {
             return None;
         }
 
-        if let VariantForm::Option = variant_form(self.scrutinee_ty(*tag)) {
-            let tested = match default {
-                Some(_) => arms.as_slice(),
-                None => arms.split_last()?.1,
-            };
-            let named_a_side =
-                |key: &Astr| ["Some", "None"].iter().any(|name| self.tag_is(*key, name));
-            if !tested.iter().all(|(key, _, _)| named_a_side(key)) {
-                return None;
+        match self.dispatch_form_of(*tag, arms) {
+            // The machine runs a `Bool` dispatch as its own two-way branch,
+            // which holds no chain, so no region collapses one.
+            DispatchForm::Bool => return None,
+            DispatchForm::Tag(VariantForm::Option) => {
+                let tested = match default {
+                    Some(_) => arms.as_slice(),
+                    None => arms.split_last()?.1,
+                };
+                let named_a_side = |key: &SwitchKey| {
+                    ["Some", "None"]
+                        .iter()
+                        .any(|name| key.tag().is_some_and(|tag| self.tag_is(tag, name)))
+                };
+                if !tested.iter().all(|(key, _, _)| named_a_side(key)) {
+                    return None;
+                }
             }
+            DispatchForm::Tag(VariantForm::Enum) | DispatchForm::Word(_) | DispatchForm::Text => {}
         }
 
         let join = self.switch_join(at + 1)?;
@@ -4355,11 +4494,19 @@ enum VariantForm {
     Enum,
 }
 
-/// One arm of a dispatch once its block is decided: the tag the arm names,
+/// One arm of a dispatch once its block is decided: the key the arm names,
 /// and the block the machine enters for it.
 struct Placed {
-    key: Astr,
+    key: SwitchKey,
     block: BlockId,
+}
+
+/// The tag a dispatch over a variant's arms names. A key of another kind
+/// reaching here is `lower::Dispatch`'s one-kind rule having been lost
+/// between the lowering and this pass.
+fn tag_of(key: SwitchKey) -> Astr {
+    key.tag()
+        .unwrap_or_else(|| panic!("a tag dispatch on the key {key:?}"))
 }
 
 fn variant_form(ty: &Ty) -> VariantForm {
@@ -4368,6 +4515,56 @@ fn variant_form(ty: &Ty) -> VariantForm {
         Ty::Result(..) | Ty::Enum { .. } => VariantForm::Enum,
         other => panic!("a variant instruction on {other:?}"),
     }
+}
+
+/// In which shape a dispatch reads what its arms compare against, which the
+/// kind of their keys decides (RFC-0051).
+enum DispatchForm {
+    Tag(VariantForm),
+    /// An inline word at this width, which `ops::switch::SwitchWord`
+    /// normalizes the read and the keys at.
+    Word(IntTy),
+    /// The two values of a `Bool`, which the machine's own two-way branch
+    /// dispatches on: `control::JumpIf` reads `!= 0`, which is
+    /// `Value::as_bool`.
+    Bool,
+    Text,
+}
+
+fn dispatch_form(key: SwitchKey, ty: &Ty) -> DispatchForm {
+    match key {
+        SwitchKey::Tag(_) => DispatchForm::Tag(variant_form(ty)),
+        SwitchKey::Bool(_) => DispatchForm::Bool,
+        SwitchKey::Str(_) => DispatchForm::Text,
+        SwitchKey::Char(_) => DispatchForm::Word(IntTy::U32),
+        SwitchKey::Int(_) => match ty {
+            Ty::Int(k) => DispatchForm::Word(*k),
+            other => panic!("a Switch on integer keys reads {other:?}"),
+        },
+    }
+}
+
+/// The word the machine holds for a literal key, normalized at the width the
+/// dispatch compares at, so that the key and the register it is scanned
+/// against are canonical in one function.
+///
+/// The `holds` assertion is `typeck`'s fact restated: `IntegerLiteralOutOfRange`
+/// refuses a literal the scrutinee's settled width cannot hold, so a key that
+/// truncates here is that refusal having been lost between the checker and
+/// this pass.
+fn word_key(key: SwitchKey, width: IntTy) -> u64 {
+    let value = match key {
+        SwitchKey::Int(n) => n,
+        SwitchKey::Char(c) => i128::from(u32::from(c)),
+        other => panic!("a word dispatch on the key {other:?}"),
+    };
+    assert!(
+        width.holds(value),
+        "the key {value} does not fit {}, which the MIR type checker settled for the value the \
+         dispatch reads",
+        width.name()
+    );
+    for_int_ty!(width, |T| T::read(value as u64).word())
 }
 
 /// The types a step can land on; none, when `ty` has no such step.

@@ -713,7 +713,9 @@ fn write_body(
                 drop(edge);
                 writeln!(f, "for {over} -> {taken} else {left}")?
             }
-            // `switch r5 { A -> L1, B -> L2, _ -> L3 }` (RFC-0051).
+            // `switch r5 { A -> L1, B -> L2, _ -> L3 }`, and a literal
+            // dispatch's keys as written: `switch r5 { 1 -> L1, _ -> L2 }`
+            // (RFC-0051).
             InstKind::Switch { tag, arms, default } => {
                 let mut edge = |label: &Label, args: &[ValueId]| {
                     if args.is_empty() {
@@ -728,8 +730,8 @@ fn write_body(
                 };
                 let mut parts: Vec<String> = arms
                     .iter()
-                    .map(|(t, label, args)| {
-                        format!("{} -> {}", ctx.interner.resolve(*t), edge(label, args))
+                    .map(|(key, label, args)| {
+                        format!("{} -> {}", key.shown(ctx.interner), edge(label, args))
                     })
                     .collect();
                 if let Some((label, args)) = default {

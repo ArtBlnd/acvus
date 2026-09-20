@@ -96,8 +96,17 @@ fn a_three_armed_match_is_threaded_the_same_way_as_a_two_armed_one() {
     );
     nothing_aggregate(&listing);
     assert!(
-        !listing.contains("switch "),
-        "a three-armed dispatch over a replaced slot leaves no `Switch`: {listing}"
+        !["A -> ", "B -> ", "C -> "]
+            .iter()
+            .any(|tag| listing.contains(tag)),
+        "a three-armed dispatch over a replaced slot leaves no `Switch` over its \
+         tags: {listing}"
+    );
+    assert_eq!(
+        listing.matches("switch ").count(),
+        1,
+        "the one dispatch left is the `match i % 3` that chose the constructor, \
+         which is one `Switch` over its literal keys (RFC-0051): {listing}"
     );
     insta::assert_snapshot!("enum_match_three@optimized", listing);
 }

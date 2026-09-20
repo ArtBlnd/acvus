@@ -118,9 +118,12 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 "{inst_name} takes {expected_constructor} and got {}",
                 actual.display(self.interner)
             ),
-            ValidationErrorKind::NonExhaustiveMatch => write!(
+            ValidationErrorKind::NonExhaustiveMatch { over } => {
+                write!(f, "non-exhaustive match: {}; add a `_` arm", over.shown())
+            }
+            ValidationErrorKind::MatchMissesBoolArm { missing } => write!(
                 f,
-                "non-exhaustive match: the scrutinee's type names no variants; add a `_` arm"
+                "non-exhaustive match: `{missing}` is not covered; add that arm or a `_` arm"
             ),
             ValidationErrorKind::DiamondArmMissesJoin { side, join } => write!(
                 f,

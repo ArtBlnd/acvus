@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess, IndexMode, Inst,
-    InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, ValOrigin, ValueId,
-    reaches,
+    InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey, ValOrigin,
+    ValueId, reaches,
 };
 use crate::solver::CaptureRead;
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
@@ -217,26 +217,37 @@ fn short_circuit_of(op: BinOp) -> Option<ShortCircuit> {
 /// bind, a tuple of such, or an object of such. The type checker has
 /// already required every key an object pattern names to exist on the
 /// source type, so the pattern cannot fail at run time.
-/// A `match` whose arms are one dispatch over a tag: every arm is a variant
-/// pattern whose payload asks nothing (RFC-0051 §5 -- a nested refutable
-/// payload is more than a tag test), with at most one catch-all, last.
-/// `tags` runs in arm order and skips the catch-all; `catch_all` is that
-/// arm's index.
+/// A `match` whose arms are one dispatch: every arm is a variant pattern
+/// whose payload asks nothing (RFC-0051 §5 -- a nested refutable payload is
+/// more than a tag test) or a literal pattern that is a [`SwitchKey`], with
+/// at most one catch-all, last, and every key of one kind. `keys` runs in
+/// arm order and skips the catch-all; `catch_all` is that arm's index.
 pub(crate) struct Dispatch {
-    tags: Vec<Astr>,
+    keys: Vec<SwitchKey>,
     catch_all: Option<usize>,
 }
 
 impl Dispatch {
-    pub(crate) fn of(arms: &[MatchExprArm]) -> Option<Self> {
-        Self::plan(arms)
+    pub(crate) fn of(arms: &[MatchExprArm], interner: &Interner) -> Option<Self> {
+        Self::plan(arms, interner)
     }
 
     /// Whether the arms can hold one dispatch at all: an arm that is a
     /// catch-all answers yes on its own, because `_` is always the way
     /// through (RFC-0051 §3).
-    pub(crate) fn is_decidable(arms: &[MatchExprArm]) -> bool {
-        Self::plan(arms).is_some() || arms.iter().any(Self::is_catch_all)
+    pub(crate) fn is_decidable(arms: &[MatchExprArm], interner: &Interner) -> bool {
+        Self::plan(arms, interner).is_some() || arms.iter().any(Self::is_catch_all)
+    }
+
+    /// The first key two arms of this dispatch both name, which is an arm no
+    /// value can reach because the one before it holds first.
+    pub(crate) fn repeated_key(arms: &[MatchExprArm], interner: &Interner) -> Option<SwitchKey> {
+        let plan = Self::plan(arms, interner)?;
+        plan.keys
+            .iter()
+            .enumerate()
+            .find(|(at, key)| plan.keys[..*at].contains(key))
+            .map(|(_, key)| *key)
     }
 
     fn is_catch_all(arm: &MatchExprArm) -> bool {
@@ -250,30 +261,38 @@ impl Dispatch {
         )
     }
 
-    fn plan(arms: &[MatchExprArm]) -> Option<Self> {
-        let mut tags = Vec::with_capacity(arms.len());
+    fn plan(arms: &[MatchExprArm], interner: &Interner) -> Option<Self> {
+        let mut keys: Vec<SwitchKey> = Vec::with_capacity(arms.len());
         let mut catch_all = None;
         for (index, arm) in arms.iter().enumerate() {
-            match &arm.pattern {
+            let key = match &arm.pattern {
                 Pattern::Variant { tag, payload, .. }
                     if payload.as_deref().is_none_or(pattern_is_irrefutable) =>
                 {
-                    if catch_all.is_some() {
-                        // An arm after the catch-all can never be taken;
-                        // the chain keeps the arm order the source wrote.
-                        return None;
-                    }
-                    tags.push(*tag);
+                    SwitchKey::Tag(*tag)
                 }
+                Pattern::Literal { value, .. } => SwitchKey::of_literal(value, interner)?,
                 Pattern::Wildcard { .. }
                 | Pattern::Binding {
                     ref_kind: RefKind::Value,
                     ..
-                } if catch_all.is_none() => catch_all = Some(index),
+                } if catch_all.is_none() => {
+                    catch_all = Some(index);
+                    continue;
+                }
                 _ => return None,
+            };
+            if catch_all.is_some() {
+                // An arm after the catch-all can never be taken; the chain
+                // keeps the arm order the source wrote.
+                return None;
             }
+            if keys.first().is_some_and(|first| !first.same_kind(key)) {
+                return None;
+            }
+            keys.push(key);
         }
-        (!tags.is_empty()).then_some(Self { tags, catch_all })
+        (!keys.is_empty()).then_some(Self { keys, catch_all })
     }
 }
 
@@ -852,7 +871,7 @@ impl<'a> Lowerer<'a> {
             self.lower_expr(scrutinee);
             return self.emit_unit(span);
         };
-        if let Some(dispatch) = Dispatch::of(arms) {
+        if let Some(dispatch) = Dispatch::of(arms, self.interner) {
             return self.lower_match_switch(&dispatch, scrutinee, arms, result_ty, span);
         }
         let src = self.pattern_source(scrutinee, arms.iter().map(|arm| &arm.pattern));
@@ -928,25 +947,14 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> ValueId {
         let src = self.pattern_source(scrutinee, arms.iter().map(|arm| &arm.pattern));
-        // The tag is read from one value: a register holds the scrutinee
-        // itself, a place is lent for the read, as `TestVariant` takes it.
-        let tag = match &src {
-            PatSrc::Value(reg) => *reg,
-            PatSrc::Place { target, path, ty } => self.emit_ref(
-                span,
-                target.clone(),
-                path.clone(),
-                Mutability::Shared,
-                ty.clone(),
-            ),
-        };
+        let tag = self.dispatch_source(dispatch.keys[0], &src, span);
         let merge_label = self.alloc_label();
         let arm_labels: Vec<Label> = arms.iter().map(|_| self.alloc_label()).collect();
-        let switch_arms: Vec<(Astr, Label, Vec<ValueId>)> = dispatch
-            .tags
+        let switch_arms: Vec<(SwitchKey, Label, Vec<ValueId>)> = dispatch
+            .keys
             .iter()
             .zip(&arm_labels)
-            .map(|(tag, label)| (*tag, *label, Vec::new()))
+            .map(|(key, label)| (*key, *label, Vec::new()))
             .collect();
         let default = dispatch
             .catch_all
@@ -982,6 +990,29 @@ impl<'a> Lowerer<'a> {
             },
         );
         result
+    }
+
+    /// The one value a dispatch reads, read as the key it is compared
+    /// against needs it. A tag is read through a reference to the variant,
+    /// as `TestVariant` takes it. A literal key is compared against the
+    /// value itself, so the read is the one `lower_pattern_test` writes for
+    /// `Pattern::Literal`: a place is taken, a reference to a word is read
+    /// through, and anything else is already the value.
+    fn dispatch_source(&mut self, key: SwitchKey, src: &PatSrc, span: Span) -> ValueId {
+        match (key, src) {
+            (SwitchKey::Tag(_), PatSrc::Value(reg)) => *reg,
+            (SwitchKey::Tag(_), PatSrc::Place { target, path, ty }) => self.emit_ref(
+                span,
+                target.clone(),
+                path.clone(),
+                Mutability::Shared,
+                ty.clone(),
+            ),
+            (_, PatSrc::Place { target, path, ty }) => {
+                self.emit_take(span, target.clone(), path.to_vec(), ty.clone())
+            }
+            (_, PatSrc::Value(reg)) => self.read_word_through(span, *reg),
+        }
     }
 
     /// One arm's bindings, statements and tail, in a scope of their own.

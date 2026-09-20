@@ -3,7 +3,9 @@
 
 use acvus_extern::{Release, StrView, Words};
 
-use crate::code::{ConcatPart, Exit, LentText, Marked, Off, Op, successor};
+#[cfg(any(debug_assertions, feature = "probe"))]
+use crate::code::OwnedOps;
+use crate::code::{BlockId, ConcatPart, Exit, LentText, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::regs::Regs;
@@ -88,6 +90,9 @@ unsafe fn lent<'a>(regs: &'a Regs<'_>, text: LentText) -> &'a str {
     match text {
         // SAFETY: the caller's contract, and the checker admits only a live
         // reference to a `String` at this shape.
+        // SAFETY: the caller's contract, and the checker admits only a
+        // `String` at this shape.
+        LentText::Own(slot) => unsafe { regs.peek(slot).as_str() },
         LentText::Through(slot) => unsafe { regs.peek(slot).target().as_str() },
         LentText::Pair(pair) => {
             let words = Words {
@@ -132,5 +137,95 @@ impl Op for Concat {
         regs.take_mask(self.owns_large);
         regs.define::<true>(self.dst, Value::string(out));
         self.next.run(m, r0)
+    }
+}
+
+/// One tested arm of a text dispatch: the string it names and the block the
+/// machine enters for it.
+pub struct StrArm {
+    pub key: Box<str>,
+    pub target: BlockId,
+}
+
+/// A `match` on string literals (RFC-0051): the text is read once and the
+/// arms are scanned in the order the `match` wrote them.
+///
+/// Decision not to build: the sorted keys and the binary search RFC-0051 §5
+/// names for a table. A string comparison starts with the length, so a
+/// missing arm costs one word compare, and the arm counts here are the
+/// handful a `match` on names is written with — the same measurement that
+/// kept `Switch`'s scan over a hashed table at seven arms.
+pub struct SwitchStr {
+    pub src: LentText,
+    pub arms: Box<[StrArm]>,
+    pub default: BlockId,
+}
+
+impl Op for SwitchStr {
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        // SAFETY: the checker keeps the scrutinee live over this operation.
+        let text = unsafe { lent(m.regs(), self.src) };
+        self.arms
+            .iter()
+            .find(|arm| &*arm.key == text)
+            .map_or(self.default, |arm| arm.target)
+            .into()
+    }
+}
+
+/// One arm of a rejoining text dispatch: the string it names and the chain
+/// the machine runs for it (RFC-0052 §3).
+pub struct StrRegionArm {
+    pub key: Box<str>,
+    pub head: Box<dyn Op>,
+}
+
+/// The region form of [`SwitchStr`].
+pub struct SwitchStrRegion {
+    pub src: LentText,
+    pub arms: Box<[StrRegionArm]>,
+    pub default: Box<dyn Op>,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for SwitchStrRegion {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        // SAFETY: the checker keeps the scrutinee live over this operation.
+        let text = unsafe { lent(m.regs(), self.src) };
+        let arm = self
+            .arms
+            .iter()
+            .find(|arm| &*arm.key == text)
+            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
+        let word = arm.run(m, r0);
+        self.next.run(m, word)
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        self.arms
+            .iter()
+            .map(|arm| OwnedOps {
+                part: "arm",
+                head: arm.head.as_ref(),
+            })
+            .chain([OwnedOps {
+                part: "default",
+                head: self.default.as_ref(),
+            }])
+            .collect()
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+        self.arms
+            .iter_mut()
+            .map(|arm| &mut arm.head)
+            .chain([&mut self.default])
+            .collect()
     }
 }

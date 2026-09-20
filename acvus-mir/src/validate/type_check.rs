@@ -46,6 +46,28 @@ impl ValidationError {
     }
 }
 
+/// A set of values no list of arms can name in full, so a `match` over one
+/// closes only through a catch-all (RFC-0051 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenSpace {
+    /// The scrutinee's type names no variants at all.
+    AType,
+    Integers,
+    Chars,
+    Strings,
+}
+
+impl OpenSpace {
+    pub fn shown(self) -> &'static str {
+        match self {
+            OpenSpace::AType => "the scrutinee's type names no variants",
+            OpenSpace::Integers => "the integers are an open value space",
+            OpenSpace::Chars => "the chars are an open value space",
+            OpenSpace::Strings => "the strings are an open value space",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ValidationErrorKind {
     TypeMismatch {
@@ -75,9 +97,11 @@ pub enum ValidationErrorKind {
         expected: usize,
         got: usize,
     },
-    /// A `match` whose scrutinee's variants this stage cannot name has no
-    /// catch-all (RFC-0051 §3).
-    NonExhaustiveMatch,
+    /// A `match` with no catch-all whose arms do not close what the
+    /// scrutinee can hold (RFC-0051 §3).
+    NonExhaustiveMatch {
+        over: OpenSpace,
+    },
     /// The two bounds of a `for i in lo..hi` are not one integer width
     /// (RFC-0057 Decision 1).
     ForRangeWidths {
@@ -98,6 +122,10 @@ pub enum ValidationErrorKind {
     MatchMissesVariants {
         enum_name: Option<Astr>,
         missing: Vec<Astr>,
+    },
+    /// A `match` over `Bool` names one of the two values and no catch-all.
+    MatchMissesBoolArm {
+        missing: bool,
     },
     /// A `match` over an `Option` or a `Result` leaves a variant untaken.
     /// The arms are named by typeck, so the count is the whole check.

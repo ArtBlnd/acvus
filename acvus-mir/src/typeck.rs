@@ -5281,8 +5281,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 },
             });
         }
-        if !crate::lower::Dispatch::is_decidable(arms) {
+        if !crate::lower::Dispatch::is_decidable(arms, self.interner) {
             self.error(MirErrorKind::MatchIsNotADispatch, span);
+        }
+        if let Some(key) = crate::lower::Dispatch::repeated_key(arms, self.interner) {
+            self.error(MirErrorKind::MatchArmKeyRepeated { key }, span);
         }
         joined.map_or(TyTerm::Unit, |b| b.ty)
     }

@@ -1,6 +1,6 @@
-//! A `match` is one dispatch (RFC-0051 §5): the tag is read once and the
+//! A `match` is one dispatch (RFC-0051 §5): the key is read once and the
 //! block it names is returned, where the chain used to run one
-//! `TestVariant` and one `JumpIf` per arm.
+//! `TestVariant` or `TestLiteral` and one `JumpIf` per arm.
 //!
 //! Obligation across artifacts: `prepare::switch_op` and its region form
 //! `prepare::switch_region_op` hand every one of these operations a
@@ -17,14 +17,17 @@
 //! three pinned reps, ranges apart). `ops::run::SwitchRun` records the same
 //! effect for a table a dense ordinal would have allowed.
 
+use std::marker::PhantomData;
+
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
 use crate::code::{BlockId, Exit, Off, Op, successor};
 use crate::machine::Machine;
+use crate::ops::arith::Int;
 use crate::ops::variant::scrutinee;
 
-/// One tested arm: the tag word it names and the block the machine enters for
-/// it.
+/// One tested arm: the word it names — a variant's tag or a literal
+/// (RFC-0051) — and the block the machine enters for it.
 pub struct Arm {
     pub key: u64,
     pub target: BlockId,
@@ -71,7 +74,7 @@ impl<const THROUGH: bool> Op for SwitchOption<THROUGH> {
     }
 }
 
-/// One tested arm of a `match` whose arms all rejoin: the tag it names and
+/// One tested arm of a `match` whose arms all rejoin: the word it names and
 /// the chain the machine runs for it, ended by `Yield` as every region part
 /// is (RFC-0052 §3).
 pub struct RegionArm {
@@ -169,5 +172,127 @@ impl<const THROUGH: bool> Op for SwitchOptionRegion<THROUGH> {
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.on_some, &mut self.on_none]
+    }
+}
+
+/// A `match` on integer or char literals (RFC-0051): the scrutinee is an
+/// inline word, so the read is the register itself where a variant's is
+/// `as_variant().tag()`.
+///
+/// `T` is the scrutinee's width, so the word is normalized exactly as
+/// `pattern::TestInt` normalizes the one it compares, and `prepare`
+/// normalized the keys through the same function: a dispatch decides what
+/// the chain of tests decided.
+pub struct SwitchWord<T>
+where
+    T: Int,
+{
+    src: Off,
+    arms: Box<[Arm]>,
+    default: BlockId,
+    width: PhantomData<fn() -> T>,
+}
+
+impl<T> SwitchWord<T>
+where
+    T: Int,
+{
+    pub fn new(src: Off, arms: Box<[Arm]>, default: BlockId) -> SwitchWord<T> {
+        SwitchWord {
+            src,
+            arms,
+            default,
+            width: PhantomData,
+        }
+    }
+}
+
+impl<T> Op for SwitchWord<T>
+where
+    T: Int,
+{
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        let word = T::read(m.regs().word(self.src)).word();
+        self.arms
+            .iter()
+            .find(|arm| arm.key == word)
+            .map_or(self.default, |arm| arm.target)
+            .into()
+    }
+}
+
+/// The region form of [`SwitchWord`].
+pub struct SwitchWordRegion<T>
+where
+    T: Int,
+{
+    src: Off,
+    arms: Box<[RegionArm]>,
+    default: Box<dyn Op>,
+    next: Box<dyn Op>,
+    width: PhantomData<fn() -> T>,
+}
+
+impl<T> SwitchWordRegion<T>
+where
+    T: Int,
+{
+    pub fn new(
+        src: Off,
+        arms: Box<[RegionArm]>,
+        default: Box<dyn Op>,
+        next: Box<dyn Op>,
+    ) -> SwitchWordRegion<T> {
+        SwitchWordRegion {
+            src,
+            arms,
+            default,
+            next,
+            width: PhantomData,
+        }
+    }
+}
+
+impl<T> Op for SwitchWordRegion<T>
+where
+    T: Int,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let word = T::read(m.regs().word(self.src)).word();
+        let arm = self
+            .arms
+            .iter()
+            .find(|arm| arm.key == word)
+            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
+        let taken = arm.run(m, r0);
+        self.next.run(m, taken)
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        self.arms
+            .iter()
+            .map(|arm| OwnedOps {
+                part: "arm",
+                head: arm.head.as_ref(),
+            })
+            .chain([OwnedOps {
+                part: "default",
+                head: self.default.as_ref(),
+            }])
+            .collect()
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+        self.arms
+            .iter_mut()
+            .map(|arm| &mut arm.head)
+            .chain([&mut self.default])
+            .collect()
     }
 }

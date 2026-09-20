@@ -10,6 +10,10 @@
 //! type. Maranget's matrix over nested positions is the widening still
 //! owed; it changes neither the rule nor its place.
 //!
+//! A dispatch keyed on literals is read the same way, with the value space
+//! in place of the variant set: `Bool` covering both values is closed, and
+//! an integer, a char or a string is an open space no set of arms closes.
+//!
 //! The pass reads `InstKind::Switch`, the one shape that names a `match`.
 //! An `if let` is two arms and always exhaustive, and never wears one.
 
@@ -17,9 +21,9 @@ use std::collections::BTreeSet;
 
 use acvus_utils::Astr;
 
-use crate::ir::{InstKind, MirBody, MirModule, ValueId};
+use crate::ir::{InstKind, Label, MirBody, MirModule, SwitchKey, ValueId};
 use crate::ty::Ty;
-use crate::validate::type_check::{ValidationError, ValidationErrorKind};
+use crate::validate::type_check::{OpenSpace, ValidationError, ValidationErrorKind};
 
 /// A builtin enum whose type names its variants: the count is the whole
 /// answer, because typeck has already refused any arm outside the set
@@ -74,27 +78,16 @@ fn check_body(body: &MirBody, scope: &str, errors: &mut Vec<ValidationError>) {
         if default.is_some() {
             continue;
         }
-        let covered: BTreeSet<Astr> = arms.iter().map(|(tag, _, _)| *tag).collect();
-        let kind = match known_variants(body, *tag) {
-            Known::Open => ValidationErrorKind::NonExhaustiveMatch,
-            Known::ClosedBuiltin(builtin) if covered.len() < builtin.arity => {
-                ValidationErrorKind::MatchMissesBuiltinVariants {
-                    enum_name: builtin.name,
-                    arity: builtin.arity,
-                    covered: covered.len(),
-                }
-            }
-            Known::ClosedBuiltin(_) => continue,
-            Known::Closed(set) => {
-                let missing: Vec<Astr> = set.difference(&covered).copied().collect();
-                if missing.is_empty() {
-                    continue;
-                }
-                ValidationErrorKind::MatchMissesVariants {
-                    enum_name: enum_name_of(body, *tag),
-                    missing,
-                }
-            }
+        let kind = match cover(arms) {
+            Cover::Tags(covered) => match missed_variants(body, *tag, &covered) {
+                None => continue,
+                Some(kind) => kind,
+            },
+            Cover::Bools(covered) if covered.len() == 2 => continue,
+            Cover::Bools(covered) => ValidationErrorKind::MatchMissesBoolArm {
+                missing: !covered.contains(&true),
+            },
+            Cover::OpenSpace(space) => ValidationErrorKind::NonExhaustiveMatch { over: space },
         };
         errors.push(ValidationError {
             scope: scope.to_string(),
@@ -102,6 +95,62 @@ fn check_body(body: &MirBody, scope: &str, errors: &mut Vec<ValidationError>) {
             span: inst.span,
             kind,
         });
+    }
+}
+
+/// What the arms of a `Switch` close over, which the kind of their keys
+/// decides (`lower::Dispatch` gives one `Switch` keys of one kind).
+enum Cover {
+    Tags(BTreeSet<Astr>),
+    Bools(BTreeSet<bool>),
+    /// Integers, chars and strings: spaces no set of arms closes.
+    OpenSpace(OpenSpace),
+}
+
+fn cover(arms: &[(SwitchKey, Label, Vec<ValueId>)]) -> Cover {
+    let keys = || arms.iter().map(|(key, _, _)| *key);
+    match keys().next() {
+        Some(SwitchKey::Bool(_)) => Cover::Bools(
+            keys()
+                .filter_map(|key| match key {
+                    SwitchKey::Bool(b) => Some(b),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        Some(SwitchKey::Int(_)) => Cover::OpenSpace(OpenSpace::Integers),
+        Some(SwitchKey::Char(_)) => Cover::OpenSpace(OpenSpace::Chars),
+        Some(SwitchKey::Str(_)) => Cover::OpenSpace(OpenSpace::Strings),
+        Some(SwitchKey::Tag(_)) | None => Cover::Tags(keys().filter_map(SwitchKey::tag).collect()),
+    }
+}
+
+/// The refusal a tag dispatch earns, or `None` where its arms cover the
+/// variant set the scrutinee's type names.
+fn missed_variants(
+    body: &MirBody,
+    tag: ValueId,
+    covered: &BTreeSet<Astr>,
+) -> Option<ValidationErrorKind> {
+    match known_variants(body, tag) {
+        Known::Open => Some(ValidationErrorKind::NonExhaustiveMatch {
+            over: OpenSpace::AType,
+        }),
+        Known::ClosedBuiltin(builtin) if covered.len() < builtin.arity => {
+            Some(ValidationErrorKind::MatchMissesBuiltinVariants {
+                enum_name: builtin.name,
+                arity: builtin.arity,
+                covered: covered.len(),
+            })
+        }
+        Known::ClosedBuiltin(_) => None,
+        Known::Closed(set) => {
+            let missing: Vec<Astr> = set.difference(covered).copied().collect();
+            (!missing.is_empty()).then(|| ValidationErrorKind::MatchMissesVariants {
+                enum_name: enum_name_of(body, tag),
+                missing,
+            })
+        }
     }
 }
 
@@ -145,7 +194,7 @@ mod tests {
     use acvus_utils::Interner;
 
     use super::*;
-    use crate::ir::{Inst, Label};
+    use crate::ir::Inst;
 
     /// `typeck` refuses every source that would reach [`Known::Open`], so the
     /// body is built here.
@@ -159,7 +208,7 @@ mod tests {
             span: Span::ZERO,
             kind: InstKind::Switch {
                 tag,
-                arms: vec![(interner.intern("A"), Label(0), Vec::new())],
+                arms: vec![(SwitchKey::Tag(interner.intern("A")), Label(0), Vec::new())],
                 default: None,
             },
         });
@@ -170,7 +219,12 @@ mod tests {
             panic!("one refusal, got {errors:?}");
         };
         assert!(
-            matches!(error.kind, ValidationErrorKind::NonExhaustiveMatch),
+            matches!(
+                error.kind,
+                ValidationErrorKind::NonExhaustiveMatch {
+                    over: OpenSpace::AType
+                }
+            ),
             "{:?}",
             error.kind
         );
