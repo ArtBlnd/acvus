@@ -29,7 +29,5 @@ pub use ops::index as index_handlers;
 pub use prepare::{PrepareCtx, prepare_module};
 pub use runtime::{AcvusRuntime, ExternHandler};
 pub use space::{DirStore, Head, MemoryStore, Mode, Space, SpacePage, Store, hex};
-pub use value::{
-    Array, FnValue, HandleValue, Kind, Object, Place, ResultValue, Tuple, Value, VariantValue,
-};
+pub use value::{Array, FnValue, HandleValue, Kind, Object, Place, Tuple, Value, VariantValue};
 pub use vtable::{Composite, Vtable};

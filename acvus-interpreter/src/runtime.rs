@@ -2,15 +2,16 @@
 
 use std::any::{TypeId, type_name};
 use std::future::Future;
+use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_extern::{CallToken, Runtime};
+use acvus_extern::{CallToken, Owned, Runtime, Variant};
 
 use crate::interpreter::InterpreterContext;
 use crate::ops::call;
 use crate::regs::{FrameState, Store};
-use crate::value::{Kind, Value};
+use crate::value::{Kind, Value, VariantValue};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
@@ -25,6 +26,47 @@ impl AcvusRuntime {
     pub fn of(shared: &Arc<InterpreterContext>) -> &AcvusRuntime {
         // SAFETY: `#[repr(transparent)]` over `Arc<InterpreterContext>`.
         unsafe { &*(shared as *const Arc<InterpreterContext>).cast::<AcvusRuntime>() }
+    }
+}
+
+/// The Rust type `acvus-extern`'s `OneValue for Result<T, E>` erases into this
+/// runtime and materializes back out of it (RFC-0038). It is the crossing's
+/// shape, not the held one: RFC-0050 rule 8 gives a `Result` the flat variant
+/// every other variant type has, and `erase` and `materialize` below are the
+/// one boundary that sees both spellings. Teach `acvus-extern` to erase a
+/// `Variant` directly and the two arms that name this type go away.
+type CrossedResult = Result<Owned<AcvusRuntime>, Owned<AcvusRuntime>>;
+
+impl AcvusRuntime {
+    fn variant_of_result(&self, crossed: CrossedResult) -> Value {
+        let (tag, payload) = match crossed {
+            Ok(v) => ("Ok", v),
+            Err(e) => ("Err", e),
+        };
+        Value::variant(self.0.interner.intern(tag), Some(payload))
+    }
+
+    /// # Panics
+    /// The tag is neither `Ok` nor `Err`, which `variant_of_result` — the only
+    /// writer `materialize`'s contract admits — cannot write.
+    fn result_of_variant(&self, value: Value) -> CrossedResult {
+        // SAFETY: `materialize`'s contract: the value came from the `erase`
+        // above, which wrote a variant.
+        let held = unsafe { value.materialize::<VariantValue>() };
+        let Variant {
+            values: [tag, payload],
+        } = held;
+        // SAFETY: the first register of a variant this runtime wrote is its tag.
+        let tag = unsafe { tag.into_value().as_tag() };
+        if tag == self.0.interner.intern("Ok") {
+            return Ok(payload);
+        }
+        assert!(
+            tag == self.0.interner.intern("Err"),
+            "a Result crossed back holding the tag `{}`",
+            tag.display(&self.0.interner)
+        );
+        Err(payload)
     }
 }
 
@@ -212,6 +254,14 @@ impl Runtime for AcvusRuntime {
     where
         T: Send + Sync + 'static,
     {
+        if TypeId::of::<T>() == TypeId::of::<CrossedResult>() {
+            let crossed = self.result_of_variant(value);
+            // SAFETY: the `TypeId` above says `T` is `CrossedResult`; the copy
+            // takes ownership and the original is forgotten.
+            let out: T = unsafe { mem::transmute_copy(&crossed) };
+            mem::forget(crossed);
+            return out;
+        }
         unsafe { value.materialize::<T>() }
     }
 
@@ -219,6 +269,12 @@ impl Runtime for AcvusRuntime {
     where
         T: Send + Sync + 'static,
     {
+        if TypeId::of::<T>() == TypeId::of::<CrossedResult>() {
+            // SAFETY: as `materialize`'s.
+            let crossed: CrossedResult = unsafe { mem::transmute_copy(&value) };
+            mem::forget(value);
+            return self.variant_of_result(crossed);
+        }
         unsafe { Value::erase(value) }
     }
 

@@ -71,25 +71,6 @@ impl<const THROUGH: bool> Op for SwitchOption<THROUGH> {
     }
 }
 
-/// A `Result`'s dispatch, reading the tag where `TestResult` reads it.
-pub struct SwitchResult<const THROUGH: bool> {
-    pub src: Off,
-    pub on_ok: BlockId,
-    pub on_err: BlockId,
-}
-
-impl<const THROUGH: bool> Op for SwitchResult<THROUGH> {
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
-        let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
-        // SAFETY: the preparation read `Result` from the source's type.
-        match unsafe { source.as_result() }.is_ok() {
-            true => self.on_ok.into(),
-            false => self.on_err.into(),
-        }
-    }
-}
-
 /// One tested arm of a `match` whose arms all rejoin: the tag it names and
 /// the chain the machine runs for it, ended by `Yield` as every region part
 /// is (RFC-0052 §3).
@@ -188,48 +169,5 @@ impl<const THROUGH: bool> Op for SwitchOptionRegion<THROUGH> {
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.on_some, &mut self.on_none]
-    }
-}
-
-/// The region form of `SwitchResult`.
-pub struct SwitchResultRegion<const THROUGH: bool> {
-    pub src: Off,
-    pub on_ok: Box<dyn Op>,
-    pub on_err: Box<dyn Op>,
-    pub next: Box<dyn Op>,
-}
-
-impl<const THROUGH: bool> Op for SwitchResultRegion<THROUGH> {
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
-        // SAFETY: the preparation read `Result` from the source's type.
-        let arm = match unsafe { source.as_result() }.is_ok() {
-            true => self.on_ok.as_ref(),
-            false => self.on_err.as_ref(),
-        };
-        let word = arm.run(m, r0);
-        self.next.run(m, word)
-    }
-
-    #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns(&self) -> Vec<OwnedOps<'_>> {
-        vec![
-            OwnedOps {
-                part: "on_ok",
-                head: self.on_ok.as_ref(),
-            },
-            OwnedOps {
-                part: "on_err",
-                head: self.on_err.as_ref(),
-            },
-        ]
-    }
-
-    #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
-        vec![&mut self.on_ok, &mut self.on_err]
     }
 }

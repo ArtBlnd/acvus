@@ -108,10 +108,8 @@ async fn a_script_returns_early_through_a_question_mark() {
         Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)),
     )
     .await;
-    assert_eq!(
-        unsafe { v.as_result() }.as_ref().ok().map(|v| v.as_int()),
-        Some(30)
-    );
+    assert_eq!(tag_of(&i, &v), "Ok");
+    assert_eq!(payload_of(&v).as_int(), 30);
     let v = run_script_mode(
         &i,
         src,
@@ -119,12 +117,22 @@ async fn a_script_returns_early_through_a_question_mark() {
         Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)),
     )
     .await;
-    assert_eq!(
-        unsafe { v.as_result() }.as_ref().err().map(|e| text_ref(e)),
-        Some("bad".to_owned())
-    );
+    assert_eq!(tag_of(&i, &v), "Err");
+    assert_eq!(text_ref(payload_of(&v)), "bad");
 }
 
 fn text_ref(v: &Value) -> String {
     unsafe { v.as_str() }.to_owned()
+}
+
+fn tag_of(i: &Interner, v: &Value) -> String {
+    // SAFETY: the script's declared return type is a `Result`.
+    let variant = unsafe { v.as_variant() };
+    // SAFETY: the same witness — a variant's first register is its tag.
+    i.resolve(unsafe { variant.tag().as_tag() }).to_owned()
+}
+
+fn payload_of(v: &Value) -> &Value {
+    // SAFETY: as `tag_of`'s.
+    unsafe { v.as_variant() }.payload()
 }

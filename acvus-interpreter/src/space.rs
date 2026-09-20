@@ -539,10 +539,13 @@ impl Space {
                 }
                 Ok(())
             }
-            Ty::Result(ok, err) => match unsafe { value.as_result_mut() } {
-                Ok(v) => self.commit_nested(rt, ok, v, moved),
-                Err(e) => self.commit_nested(rt, err, e, moved),
-            },
+            Ty::Result(ok, err) => {
+                let variant = unsafe { value.as_variant_mut() };
+                // SAFETY: the same witness — a variant's first register is its tag.
+                let tag = unsafe { variant.tag().as_tag() };
+                let (_, held) = layout::result_side(rt, tag, ok, err)?;
+                self.commit_nested(rt, held, variant.payload_mut(), moved)
+            }
             Ty::Enum { variants, .. } => {
                 let variant = unsafe { value.as_variant_mut() };
                 // SAFETY: the same witness — a variant's first register is its tag.

@@ -472,11 +472,6 @@ pub type Object = acvus_extern::Obj<Owned<AcvusRuntime>>;
 /// `V = Owned<AcvusRuntime>`, under the same obligation as `Array`.
 pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 
-/// The language's `Result<T, E>` is Rust's `Result` at
-/// `T = E = Owned<AcvusRuntime>`, so it crosses the extern boundary as
-/// itself (RFC-0038), under the same obligation as `Array`.
-pub type ResultValue = Result<Owned<AcvusRuntime>, Owned<AcvusRuntime>>;
-
 /// A self-contained callable: execution context, prepared body, captures.
 ///
 /// Created at `MakeClosure` time. It shares the run's live page: a
@@ -591,12 +586,6 @@ typed_debug_fn! { VariantValue;
         }
     };
 }
-typed_debug_fn! { ResultValue;
-    dbg_result = |d, f| match d {
-        Ok(v) => write!(f, "Ok({v:?})"),
-        Err(e) => write!(f, "Err({e:?})"),
-    };
-}
 typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
 
 static STRING: Vtable = vtable::<String>(|| "String", Composite::String, Some(dbg_string));
@@ -605,7 +594,6 @@ static TUPLE: Vtable = vtable::<Tuple>(|| "Tuple", Composite::Tuple, Some(dbg_tu
 static OBJECT: Vtable = vtable::<Object>(|| "Object", Composite::Object, Some(dbg_object));
 static VARIANT: Vtable =
     vtable::<VariantValue>(|| "Variant", Composite::Variant, Some(dbg_variant));
-static RESULT: Vtable = vtable::<ResultValue>(|| "Result", Composite::Result, Some(dbg_result));
 static FN: Vtable = vtable::<FnValue>(|| "Fn", Composite::Fn, Some(dbg_fn));
 static HANDLE: Vtable = vtable::<HandleValue>(|| "Handle", Composite::Handle, None);
 
@@ -624,9 +612,7 @@ where
     T: 'static,
 {
     let id = TypeId::of::<T>();
-    for vtable in [
-        &STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &RESULT, &FN, &HANDLE,
-    ] {
+    for vtable in [&STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &FN, &HANDLE] {
         if id == vtable.type_id {
             return Some(vtable);
         }
@@ -771,9 +757,6 @@ impl Value {
         }
     }
 
-    pub fn result(payload: ResultValue) -> Self {
-        large(&RESULT, payload)
-    }
     pub fn closure(fv: FnValue) -> Self {
         large(&FN, fv)
     }
@@ -820,19 +803,6 @@ impl Value {
     /// them.
     pub fn option_payload_mut(&mut self) -> Option<&mut Value> {
         (self.kind != Kind::None).then_some(self)
-    }
-    pub fn is_result(&self) -> bool {
-        self.composite() == Some(Composite::Result)
-    }
-    /// # Safety
-    /// The value is a `Result`.
-    pub unsafe fn as_result(&self) -> &ResultValue {
-        unsafe { self.peek::<ResultValue>() }
-    }
-    /// # Safety
-    /// The value is a `Result`.
-    pub unsafe fn as_result_mut(&mut self) -> &mut ResultValue {
-        unsafe { self.peek_mut::<ResultValue>() }
     }
     /// # Safety
     /// The value is a `String`.
@@ -935,7 +905,6 @@ mod tests {
         assert_composite(vtable_of::<Tuple>(), Composite::Tuple, "Tuple");
         assert_composite(vtable_of::<Object>(), Composite::Object, "Object");
         assert_composite(vtable_of::<VariantValue>(), Composite::Variant, "Variant");
-        assert_composite(vtable_of::<ResultValue>(), Composite::Result, "Result");
         assert_composite(vtable_of::<FnValue>(), Composite::Fn, "Fn");
         assert_composite(vtable_of::<HandleValue>(), Composite::Handle, "Handle");
     }

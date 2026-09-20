@@ -98,6 +98,13 @@ let e = if i % 3 == 0 { E::A(i) } else { if i % 3 == 1 { E::B(i + 1) } else { E:
 let v = [e]; let m = len(&v); let z = m - m; \
 match &v[z] { E::A(w) => { acc = acc + *w; }, E::B(w) => { acc = acc + *w; }, \
 E::C(w) => { acc = acc + *w; } }; i = i + 1; } acc";
+/// `ENUM_MATCH_HEAPED`'s shape at the one variant type the language names the
+/// tags of: the `Result` escapes into an array, so it is built and matched on
+/// the heap rather than in a run.
+const RESULT_MATCH_HEAPED: &str = "let acc = 0; let i = 0; while i < @n { \
+let r = if i % 2 == 0 { Ok(i) } else { Err(i + 1) }; \
+let v = [r]; let m = len(&v); let z = m - m; \
+match &v[z] { Ok(w) => { acc = acc + *w; }, Err(w) => { acc = acc + *w; } }; i = i + 1; } acc";
 const OPTION_MATCH: &str = "let i = 0; let acc = 0; while i < @n { if let Some(v) = some_of(i) { acc = acc + v; }; i = i + 1; } acc";
 
 /// `v[i]` takes a `u64` index and integer literals are `i64`, so the index
@@ -265,6 +272,24 @@ fn rust_enum_match_heaped(n: i64) -> f64 {
             E3::A(w) => acc += *w,
             E3::B(w) => acc += *w,
             E3::C(w) => acc += *w,
+        }
+        i += 1;
+    }
+    acc as f64
+}
+
+fn rust_result_match_heaped(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let r: Result<i64, i64> = match black_box(i) % 2 {
+            0 => Ok(i),
+            _ => Err(i + 1),
+        };
+        let v = vec![r];
+        match &v[0] {
+            Ok(w) => acc += *w,
+            Err(w) => acc += *w,
         }
         i += 1;
     }
@@ -466,6 +491,14 @@ fn main() {
             source: ENUM_MATCH_HEAPED,
             registries: std_only,
             rust: rust_enum_match_heaped,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "result match heaped",
+            source: RESULT_MATCH_HEAPED,
+            registries: std_only,
+            rust: rust_result_match_heaped,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },

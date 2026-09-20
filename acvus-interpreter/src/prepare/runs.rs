@@ -111,6 +111,10 @@ impl Layout {
         lay(ty, interner, Level::Outer, &mut words)?;
         let tags = match ty {
             Ty::Enum { variants, .. } => Tags::of(variants.keys(), interner),
+            Ty::Result(..) => Tags::of(
+                [interner.intern("Ok"), interner.intern("Err")].iter(),
+                interner,
+            ),
             _ => Tags::default(),
         };
         Some(Layout {
@@ -1123,6 +1127,35 @@ mod tests {
                 crate::value::Kind::Undef,
                 "a tag that carries nothing leaves rule 8's Undef"
             );
+        }
+    }
+
+    /// The sibling of the test above for the one variant type whose tags the
+    /// language names rather than a declaration. `Ok` and `Err` reach the tag
+    /// register through `Layout::tag_word` and `Value::tag` exactly as a
+    /// declared variant's name does, so a `Result` and an enum are one layout.
+    #[test]
+    fn a_heap_result_and_a_run_of_one_result_are_the_same_words() {
+        let i = Interner::new();
+        let ty = Ty::Result(Box::new(Ty::I64), Box::new(Ty::String));
+        let laid = layout(&ty, &i);
+        assert_eq!(
+            usize::from(laid.len()),
+            acvus_extern::VARIANT_WIDTH,
+            "a run of a Result is the registers a heap variant holds"
+        );
+        assert_eq!(usize::from(laid.payload()), 1);
+
+        for name in ["Ok", "Err"] {
+            let tag = i.intern(name);
+            let run = laid.tag_word(tag).expect("a Result names this side");
+            let payload = acvus_extern::Owned::from_value(crate::value::Value::int(7));
+            let heap = crate::value::Value::variant(tag, Some(payload));
+            // SAFETY: `Value::variant` erased a variant.
+            let held = unsafe { heap.as_variant() };
+            assert_eq!(run.kind(), held.tag().kind(), "the tag register's kind");
+            assert_eq!(run.bits(), held.tag().bits(), "the tag register's word");
+            assert_eq!(held.payload().as_int(), 7);
         }
     }
 

@@ -1472,13 +1472,6 @@ pub mod corpus {
                 fields.sort_by(|(a, _), (b, _)| a.cmp(b));
                 Json::Object(fields.into_iter().collect())
             }
-            Some(Composite::Result) => {
-                let (tag, v) = match unsafe { value.as_result() } {
-                    Ok(v) => ("Ok", v),
-                    Err(e) => ("Err", e),
-                };
-                Json::Object(Map::from_iter([(tag.to_owned(), render(interner, v))]))
-            }
             Some(Composite::Variant) => {
                 let variant = unsafe { value.as_variant() };
                 // SAFETY: the same witness — a variant's first register is its tag.

@@ -7,10 +7,10 @@
 //! `benches/programs.rs`'s to read.
 //!
 //! Obligation across artifacts: one case per operation `prepare::switch_op`
-//! can choose — `switch::Switch` over a boxed variant, with a catch-all and
-//! without, by value and through a reference; `switch::SwitchOption` and
-//! `switch::SwitchResult` over the two forms whose tag is the value's own
-//! kind (RFC-0039).
+//! can choose — `switch::Switch` over a heap variant, with a catch-all and
+//! without, by value and through a reference, a `Result` among them
+//! (RFC-0050 rule 8); and `switch::SwitchOption` over the one form whose tag
+//! is the value's own kind (RFC-0039).
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;

@@ -90,5 +90,8 @@ async fn both_returns_agreeing_with_the_declaration_run() {
     )
     .await;
     // SAFETY: the host declared `Result<i64, String>`.
-    assert!(unsafe { v.as_result() }.is_ok());
+    let variant = unsafe { v.as_variant() };
+    // SAFETY: the same witness — a variant's first register is its tag.
+    let tag = unsafe { variant.tag().as_tag() };
+    assert_eq!(interner.resolve(tag), "Ok");
 }

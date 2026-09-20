@@ -22,7 +22,6 @@ const NO_SUCCESSOR: &[&str] = &[
     "control::ForAt",
     "switch::Switch",
     "switch::SwitchOption",
-    "switch::SwitchResult",
     "run::SwitchRun",
     "control::Return",
     "control::Diverge",

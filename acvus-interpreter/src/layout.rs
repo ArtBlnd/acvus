@@ -67,6 +67,28 @@ fn sorted_variants<'a>(
     out
 }
 
+/// Which side of a `Result` the tag word names: `Ok`'s type, `Err`'s, and the
+/// byte the canonical form spells it with. RFC-0050 rule 8 leaves a `Result` a
+/// variant holding one of two tags, and this is where a reader that has the
+/// type turns that word back into the side.
+pub fn result_side<'t>(
+    rt: &AcvusRuntime,
+    tag: Astr,
+    ok: &'t Ty,
+    err: &'t Ty,
+) -> SpaceResult<(u8, &'t Ty)> {
+    if tag == rt.0.interner.intern("Ok") {
+        return Ok((0, ok));
+    }
+    if tag == rt.0.interner.intern("Err") {
+        return Ok((1, err));
+    }
+    Err(SpaceError::new(format!(
+        "a Result holds the tag `{}`",
+        tag.display(&rt.0.interner)
+    )))
+}
+
 pub fn encode(
     rt: &AcvusRuntime,
     nested: &dyn Nested,
@@ -122,16 +144,14 @@ pub fn encode(
             }
             None => out.push(0),
         },
-        Ty::Result(ok, err) => match unsafe { value.as_result() } {
-            Ok(v) => {
-                out.push(0);
-                encode(rt, nested, ok, v, out)?;
-            }
-            Err(e) => {
-                out.push(1);
-                encode(rt, nested, err, e, out)?;
-            }
-        },
+        Ty::Result(ok, err) => {
+            let variant = unsafe { value.as_variant() };
+            // SAFETY: the same witness — a variant's first register is its tag.
+            let tag = unsafe { variant.tag().as_tag() };
+            let (byte, held) = result_side(rt, tag, ok, err)?;
+            out.push(byte);
+            encode(rt, nested, held, variant.payload(), out)?;
+        }
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
             // SAFETY: the same witness — a variant's first register is its tag.
@@ -246,11 +266,15 @@ pub fn decode(
             1 => Value::some(decode(rt, nested, inner, input)?),
             other => return Err(SpaceError::new(format!("Option: tag {other}"))),
         },
-        Ty::Result(ok, err) => Value::result(match take(input, 1)?[0] {
-            0 => Ok(Owned::from_value(decode(rt, nested, ok, input)?)),
-            1 => Err(Owned::from_value(decode(rt, nested, err, input)?)),
-            other => return Err(SpaceError::new(format!("Result: tag {other}"))),
-        }),
+        Ty::Result(ok, err) => {
+            let (tag, held) = match take(input, 1)?[0] {
+                0 => ("Ok", ok),
+                1 => ("Err", err),
+                other => return Err(SpaceError::new(format!("Result: tag {other}"))),
+            };
+            let payload = Owned::from_value(decode(rt, nested, held, input)?);
+            Value::variant(rt.0.interner.intern(tag), Some(payload))
+        }
         Ty::Enum { variants, .. } => {
             let sorted = sorted_variants(&rt.0.interner, variants);
             let index = take_u64(input)? as usize;

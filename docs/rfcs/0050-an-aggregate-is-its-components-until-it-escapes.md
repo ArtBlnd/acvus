@@ -378,6 +378,36 @@ fewer instructions — a second data-dependent indirect branch beside the
 machine's own dispatch costs more than three compares save. The dispatch
 is a scan of tag words.
 
+`Result` shares the enum layout. It was the one type the rule left with two
+forms: a run of one `Result` laid `[tag, payload]` while a heap `Result` was
+Rust's `Result<Owned, Owned>` behind its own vtable, and a second operation
+family — `MakeOk`, `MakeErr`, `TestResult`, `UnwrapResult`, `SwitchResult`,
+`SwitchResultRegion`, `Step::ResultPayload` — existed to read that form. The
+heap `Result` is now the flat variant holding the tag word `Ok` or `Err`, the
+family is removed, and `prepare`'s `Ty::Result` arms fall into the enum arms;
+`benches/shapes.rs` `result match heaped` runs `Switch` and `MakeVariant`
+where it ran `SwitchResult` and `MakeOk`, at the same operation count.
+Measured at n = 1,000,000, three alternating pinned reps of each binary on an
+idle machine: **33.2 ns an iteration against 32.0, ranges disjoint** — base
+33.2, 33.2, 33.2 and tree 31.9, 32.7, 32.0 — while the tree executes **2.5 %
+more instructions and 4.2 % more branches at equal branch misses and equal
+cache misses**. A variant's tag and payload are neighbours in one allocation where
+the Rust `Result`'s discriminant and payload were read by two separate tests,
+but that is a reading of the counts and not a probe of them; what the
+measurement settles is only that the one layout costs nothing.
+`layout.rs`'s canonical bytes are unchanged — one byte, `Ok` first — because
+the crossing is by tag name and `layout::result_side` is the one place the
+word becomes a side. A handler still writes and reads Rust's `Result<T, E>` by
+value (RFC-0038): `runtime.rs`'s `erase` and `materialize` translate at that
+boundary. A handler that borrows one no longer compiles. `acvus-extern`'s
+`CrossSpecialized` impl for `Result` went with the second form it read, which
+was what admitted `&Result<T, E>` into a signature — with the `NO_STORAGE`
+panic behind it rather than a refusal. Dropping the impl also refuses a
+`Result` at a monomorphized parameter or return, by value as well as by
+reference; narrowing that back to the reference alone needs a bound of its own
+on `ByRef<_, Specialized>` in `handler.rs`, and no handler in the workspace
+wants it yet.
+
 Rule 4's heap realization is flat. A heap object is its type's field names in
 rule 8's order, shared by every object of the type through one `ObjectShape`,
 and one `Value` per field in that order; `prepare` resolves every field a body

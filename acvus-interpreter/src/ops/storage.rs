@@ -90,24 +90,6 @@ impl Segment for OptionPayload {
     }
 }
 
-pub struct ResultPayload;
-
-impl Segment for ResultPayload {
-    #[inline]
-    fn at<'v>(&self, value: &'v Value) -> Place<'v> {
-        // SAFETY: the preparation read `Result` from the type.
-        let (Ok(payload) | Err(payload)) = unsafe { value.as_result() };
-        Place::At(payload)
-    }
-
-    #[inline]
-    fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
-        // SAFETY: the preparation read `Result` from the type.
-        let (Ok(payload) | Err(payload)) = unsafe { value.as_result_mut() };
-        PlaceMut::At(payload)
-    }
-}
-
 pub struct VariantPayload;
 
 impl Segment for VariantPayload {
@@ -166,7 +148,6 @@ fn segment<'v>(value: &'v Value, step: &Step) -> Place<'v> {
             false => Index::<false>(*i).at(value),
         },
         Step::OptionPayload => OptionPayload.at(value),
-        Step::ResultPayload => ResultPayload.at(value),
         Step::VariantPayload => VariantPayload.at(value),
     }
 }
@@ -193,7 +174,6 @@ fn segment_mut<'v>(value: &'v mut Value, step: &Step) -> PlaceMut<'v> {
             false => Index::<false>(*i).at_mut(value),
         },
         Step::OptionPayload => OptionPayload.at_mut(value),
-        Step::ResultPayload => ResultPayload.at_mut(value),
         Step::VariantPayload => VariantPayload.at_mut(value),
     }
 }

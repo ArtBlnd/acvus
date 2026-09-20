@@ -1414,16 +1414,6 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            VariantForm::Result => {
-                let on_ok = self.side(&placed, default, "Ok");
-                let on_err = self.side(&placed, default, "Err");
-                match through {
-                    true => {
-                        Box::new(switch::SwitchResult::<true> { src, on_ok, on_err }) as Box<dyn Op>
-                    }
-                    false => Box::new(switch::SwitchResult::<false> { src, on_ok, on_err }),
-                }
-            }
             VariantForm::Enum => {
                 let arms: Box<[switch::Arm]> = placed
                     .iter()
@@ -1477,42 +1467,25 @@ impl<'a> Prepare<'a> {
             }
         };
 
-        if let Some(sided) = two_sided(&form) {
-            let [first, second] = sided.names();
-            let on_first = self.side_edge(tested, fallback, first);
-            let on_second = self.side_edge(tested, fallback, second);
-            let on_first = self.arm_chain(region, on_first, rides);
-            let on_second = self.arm_chain(region, on_second, rides);
-            return match (sided, through) {
-                (TwoSided::Option, true) => made(move |next| {
+        if let VariantForm::Option = form {
+            let on_some = self.side_edge(tested, fallback, "Some");
+            let on_none = self.side_edge(tested, fallback, "None");
+            let on_some = self.arm_chain(region, on_some, rides);
+            let on_none = self.arm_chain(region, on_none, rides);
+            return match through {
+                true => made(move |next| {
                     Box::new(switch::SwitchOptionRegion::<true> {
                         src,
-                        on_some: on_first,
-                        on_none: on_second,
+                        on_some,
+                        on_none,
                         next,
                     }) as Box<dyn Op>
                 }),
-                (TwoSided::Option, false) => made(move |next| {
+                false => made(move |next| {
                     Box::new(switch::SwitchOptionRegion::<false> {
                         src,
-                        on_some: on_first,
-                        on_none: on_second,
-                        next,
-                    }) as Box<dyn Op>
-                }),
-                (TwoSided::Result, true) => made(move |next| {
-                    Box::new(switch::SwitchResultRegion::<true> {
-                        src,
-                        on_ok: on_first,
-                        on_err: on_second,
-                        next,
-                    }) as Box<dyn Op>
-                }),
-                (TwoSided::Result, false) => made(move |next| {
-                    Box::new(switch::SwitchResultRegion::<false> {
-                        src,
-                        on_ok: on_first,
-                        on_err: on_second,
+                        on_some,
+                        on_none,
                         next,
                     }) as Box<dyn Op>
                 }),
@@ -1983,13 +1956,13 @@ impl<'a> Prepare<'a> {
             return None;
         }
 
-        if let Some(names) = two_sided(&variant_form(self.scrutinee_ty(*tag))) {
+        if let VariantForm::Option = variant_form(self.scrutinee_ty(*tag)) {
             let tested = match default {
                 Some(_) => arms.as_slice(),
                 None => arms.split_last()?.1,
             };
             let named_a_side =
-                |key: &Astr| names.names().iter().any(|name| self.tag_is(*key, name));
+                |key: &Astr| ["Some", "None"].iter().any(|name| self.tag_is(*key, name));
             if !tested.iter().all(|(key, _, _)| named_a_side(key)) {
                 return None;
             }
@@ -3239,12 +3212,6 @@ impl<'a> Prepare<'a> {
                     (VariantForm::Option, false) => {
                         test_option::<false>(slots, self.tag_is(tag, "Some"))
                     }
-                    (VariantForm::Result, true) => {
-                        test_result::<true>(slots, self.tag_is(tag, "Ok"))
-                    }
-                    (VariantForm::Result, false) => {
-                        test_result::<false>(slots, self.tag_is(tag, "Ok"))
-                    }
                     (VariantForm::Enum, true) => {
                         let tag = Value::tag(tag).bits();
                         node(move |next| variant::TestVariant::<true> { slots, tag, next })
@@ -3266,12 +3233,6 @@ impl<'a> Prepare<'a> {
                     }
                     (VariantForm::Option, false) => {
                         node(move |next| variant::UnwrapOption::<false> { slots, next })
-                    }
-                    (VariantForm::Result, true) => {
-                        node(move |next| variant::UnwrapResult::<true> { slots, next })
-                    }
-                    (VariantForm::Result, false) => {
-                        node(move |next| variant::UnwrapResult::<false> { slots, next })
                     }
                     (VariantForm::Enum, true) => {
                         node(move |next| variant::UnwrapVariant::<true> { slots, next })
@@ -4110,9 +4071,9 @@ impl<'a> Prepare<'a> {
             dst: out,
             src: self.marked(id),
         });
-        // An option is its payload's own value (RFC-0022), and a `Result`
-        // or an enum boxes whatever it carries, so `LARGE` here is always
-        // the payload's own ownership.
+        // An option is its payload's own value (RFC-0022), and a variant boxes
+        // whatever it carries, so `LARGE` here is always the payload's own
+        // ownership.
         let large = payload.is_some_and(|id| self.owns(id));
         match (self.ty(dst), carried) {
             (Ty::Option(_), Some(slots)) => match large {
@@ -4120,13 +4081,6 @@ impl<'a> Prepare<'a> {
                 false => node(move |next| variant::MakeSome::<false> { slots, next }),
             },
             (Ty::Option(_), None) => node(move |next| variant::MakeNone { dst: out.at, next }),
-            (Ty::Result(..), Some(slots)) => match (self.tag_is(tag, "Ok"), large) {
-                (true, true) => node(move |next| variant::MakeOk::<true> { slots, next }),
-                (true, false) => node(move |next| variant::MakeOk::<false> { slots, next }),
-                (false, true) => node(move |next| variant::MakeErr::<true> { slots, next }),
-                (false, false) => node(move |next| variant::MakeErr::<false> { slots, next }),
-            },
-            (Ty::Result(..), None) => panic!("Ok and Err carry a payload"),
             (_, Some(slots)) => {
                 let tag = Value::tag(tag);
                 match large {
@@ -4351,7 +4305,6 @@ impl ValueSet {
 /// Which shape a value of `ty` carries its tag in.
 enum VariantForm {
     Option,
-    Result,
     Enum,
 }
 
@@ -4362,36 +4315,10 @@ struct Placed {
     block: BlockId,
 }
 
-/// A value whose tag is its own kind (RFC-0039), which a dispatch reads
-/// without comparing a name. An enum has as many tags as it has variants and
-/// is not one of these.
-enum TwoSided {
-    Option,
-    Result,
-}
-
-impl TwoSided {
-    fn names(&self) -> [&'static str; 2] {
-        match self {
-            TwoSided::Option => ["Some", "None"],
-            TwoSided::Result => ["Ok", "Err"],
-        }
-    }
-}
-
-fn two_sided(form: &VariantForm) -> Option<TwoSided> {
-    match form {
-        VariantForm::Option => Some(TwoSided::Option),
-        VariantForm::Result => Some(TwoSided::Result),
-        VariantForm::Enum => None,
-    }
-}
-
 fn variant_form(ty: &Ty) -> VariantForm {
     match ty {
         Ty::Option(_) => VariantForm::Option,
-        Ty::Result(..) => VariantForm::Result,
-        Ty::Enum { .. } => VariantForm::Enum,
+        Ty::Result(..) | Ty::Enum { .. } => VariantForm::Enum,
         other => panic!("a variant instruction on {other:?}"),
     }
 }
@@ -4487,8 +4414,7 @@ fn payload_step(at: &[Ty]) -> Option<Step> {
     let shape = |ty: &Ty| match ty {
         Ty::Option(inner) if matches!(**inner, Ty::Option(_)) => Some(Step::OptionPayload),
         Ty::Option(_) => None,
-        Ty::Result(..) => Some(Step::ResultPayload),
-        Ty::Enum { .. } => Some(Step::VariantPayload),
+        Ty::Result(..) | Ty::Enum { .. } => Some(Step::VariantPayload),
         other => panic!("a payload step on {other:?}"),
     };
     let mut live = at
@@ -7502,10 +7428,6 @@ macro_rules! at_step {
                 let $seg = storage::OptionPayload;
                 $body
             }
-            (Step::ResultPayload, _) => {
-                let $seg = storage::ResultPayload;
-                $body
-            }
             (Step::VariantPayload, _) => {
                 let $seg = storage::VariantPayload;
                 $body
@@ -7678,13 +7600,6 @@ fn test_option<const THROUGH: bool>(slots: Unary, some: bool) -> Node {
     match some {
         true => node(move |next| variant::TestOption::<THROUGH, true> { slots, next }),
         false => node(move |next| variant::TestOption::<THROUGH, false> { slots, next }),
-    }
-}
-
-fn test_result<const THROUGH: bool>(slots: Unary, ok: bool) -> Node {
-    match ok {
-        true => node(move |next| variant::TestResult::<THROUGH, true> { slots, next }),
-        false => node(move |next| variant::TestResult::<THROUGH, false> { slots, next }),
     }
 }
 

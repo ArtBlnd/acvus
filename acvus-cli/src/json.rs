@@ -50,11 +50,19 @@ pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
             None => Json::Null,
         },
         Ty::Result(ok, err) => {
-            let (tag, ty, v) = match unsafe { value.as_result() } {
-                Ok(v) => ("Ok", ok, v),
-                Err(e) => ("Err", err, e),
+            let variant = unsafe { value.as_variant() };
+            // SAFETY: the same witness — a variant's first register is its tag.
+            let tag = unsafe { variant.tag().as_tag() };
+            let name = interner.resolve(tag).to_string();
+            let held = match name.as_str() {
+                "Ok" => ok,
+                "Err" => err,
+                _ => return Json::from(format!("<{}>", ty.display(interner))),
             };
-            Json::Object(Map::from_iter([(tag.to_owned(), of(interner, ty, v))]))
+            Json::Object(Map::from_iter([(
+                name,
+                of(interner, held, variant.payload()),
+            )]))
         }
         Ty::Enum { variants, .. } => {
             let variant = unsafe { value.as_variant() };
@@ -141,13 +149,6 @@ fn by_composite(interner: &Interner, value: &Value) -> Json {
                 .map(|(k, v)| (interner.resolve(*k).to_string(), by_kind(interner, v)))
                 .collect(),
         ),
-        Some(Composite::Result) => {
-            let (tag, v) = match unsafe { value.as_result() } {
-                Ok(v) => ("Ok", v),
-                Err(e) => ("Err", e),
-            };
-            Json::Object(Map::from_iter([(tag.to_owned(), by_kind(interner, v))]))
-        }
         Some(Composite::Variant) => {
             let variant = unsafe { value.as_variant() };
             // SAFETY: the same witness — a variant's first register is its tag.

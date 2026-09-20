@@ -1,5 +1,12 @@
-//! Variants: the language's `Option` and `Result`, and the tagged union
-//! every other variant type is.
+//! Variants: the language's `Option`, and the tagged union every other
+//! variant type is.
+//!
+//! A `Result` reaches the variant operations below with the tag word `Ok` or
+//! `Err`. It had its own family once — `MakeOk`, `MakeErr`, `TestResult`,
+//! `UnwrapResult` over Rust's `Result<Owned, Owned>` — and RFC-0050 rule 8
+//! removed it, because that family was the second layout one type had.
+//! `prepare::runs`'s `a_heap_result_and_a_run_of_one_result_are_the_same_words`
+//! is what holds the two to one word.
 //!
 //! Which shape a constructor builds and which tag a test resolved to are
 //! the destination's and the source's types as the preparation read them.
@@ -9,7 +16,7 @@ use acvus_extern::Owned;
 use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
-use crate::value::{Kind, ResultValue, Value, VariantValue};
+use crate::value::{Kind, Value, VariantValue};
 
 /// The place a variant test reads. A `Some` whose payload is a `None` has
 /// no storage to point at, so a reference to it is the depth word itself
@@ -52,40 +59,6 @@ impl Op for MakeNone {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().put(self.dst, Value::NONE);
-        self.next.run(m, r0)
-    }
-}
-
-/// `Value::result` boxes either side, so the destination owns a `Large`
-/// whatever `LARGE` — the payload's own ownership — says.
-pub struct MakeOk<const LARGE: bool> {
-    pub slots: Unary,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for MakeOk<LARGE> {
-    successor!();
-
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
-        regs.define::<true>(self.slots.dst, Value::result(Ok(payload)));
-        self.next.run(m, r0)
-    }
-}
-
-pub struct MakeErr<const LARGE: bool> {
-    pub slots: Unary,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for MakeErr<LARGE> {
-    successor!();
-
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
-        regs.define::<true>(self.slots.dst, Value::result(Err(payload)));
         self.next.run(m, r0)
     }
 }
@@ -143,25 +116,6 @@ impl<const THROUGH: bool, const SOME: bool> Op for TestOption<THROUGH, SOME> {
     }
 }
 
-/// `OK` is what the tag the arm tests for resolved to at preparation.
-pub struct TestResult<const THROUGH: bool, const OK: bool> {
-    pub slots: Unary,
-    pub next: Box<dyn Op>,
-}
-
-impl<const THROUGH: bool, const OK: bool> Op for TestResult<THROUGH, OK> {
-    successor!();
-
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
-        // SAFETY: the preparation read `Result` from the source's type.
-        let is_ok = unsafe { source.as_result() }.is_ok();
-        regs.set_word(self.slots.dst.at, (is_ok == OK) as u64);
-        self.next.run(m, r0)
-    }
-}
-
 pub struct TestVariant<const THROUGH: bool> {
     pub slots: Unary,
     pub tag: u64,
@@ -195,26 +149,6 @@ impl<const LARGE: bool> Op for UnwrapOption<LARGE> {
         let regs = m.regs();
         let option = regs.take::<LARGE>(self.slots.src);
         regs.define::<LARGE>(self.slots.dst, Value::some_payload(option));
-        self.next.run(m, r0)
-    }
-}
-
-/// The `Result` box is the frame's, whichever side it carries; `LARGE` is
-/// the payload's ownership, which leaves the box for the destination.
-pub struct UnwrapResult<const LARGE: bool> {
-    pub slots: Unary,
-    pub next: Box<dyn Op>,
-}
-
-impl<const LARGE: bool> Op for UnwrapResult<LARGE> {
-    successor!();
-
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let result = regs.take::<true>(self.slots.src);
-        // SAFETY: the preparation read `Result` from the source's type.
-        let (Ok(payload) | Err(payload)) = unsafe { result.materialize::<ResultValue>() };
-        regs.define::<LARGE>(self.slots.dst, payload.into_value());
         self.next.run(m, r0)
     }
 }

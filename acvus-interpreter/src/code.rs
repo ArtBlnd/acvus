@@ -474,7 +474,6 @@ pub enum Step {
     Field(FieldAt),
     Index(usize),
     OptionPayload,
-    ResultPayload,
     VariantPayload,
 }
 

@@ -818,34 +818,12 @@ where
     }
 }
 
-impl<T, E, Rt> CrossSpecialized<Rt> for Result<T, E>
-where
-    T: CrossSpecialized<Rt>,
-    E: CrossSpecialized<Rt>,
-    Rt: Runtime,
-{
-    fn erase(self, rt: &Rt) -> Rt::Value {
-        let inner: Result<Owned<Rt>, Owned<Rt>> = self
-            .map(|v| Owned::from_value(v.erase(rt)))
-            .map_err(|e| Owned::from_value(e.erase(rt)));
-        // SAFETY: the language's Result is the runtime's
-        // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 §7).
-        unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
-    }
-
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes a
-        // `Result<Owned<Rt>, Owned<Rt>>`.
-        let inner = unsafe { rt.materialize::<Result<Owned<Rt>, Owned<Rt>>>(value) };
-        // SAFETY: the caller's contract, forwarded: `erase` erased the payload
-        // from a `T` or an `E`.
-        unsafe {
-            inner
-                .map(|v| T::materialize(rt, v.into_value()))
-                .map_err(|e| E::materialize(rt, e.into_value()))
-        }
-    }
-}
+// A `Result` has no `CrossSpecialized` impl. That is a decision, not an
+// omission: the impl existed until RFC-0050 rule 8, and the only thing it
+// still bought was `ByRef<Result<T, E>, Specialized>`, which inherited the
+// `NO_STORAGE` panic above rather than refusing at the signature. The
+// `borrowed_result` compile-fail case in `acvus-extern-macro` is where that
+// refusal is now pinned; restoring the impl makes it pass silently.
 
 impl<T, N, Rt> CrossSpecialized<Rt> for Arr<T, N>
 where
