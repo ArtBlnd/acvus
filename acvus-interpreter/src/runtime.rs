@@ -55,9 +55,6 @@ impl AcvusRuntime {
         Value::variant(self.shared.interner.intern(tag), Some(payload))
     }
 
-    /// # Panics
-    /// The tag is neither `Ok` nor `Err`, which `variant_of_result` — the only
-    /// writer `materialize`'s contract admits — cannot write.
     fn result_of_variant(&self, value: Value) -> CrossedResult {
         // SAFETY: `materialize`'s contract: the value came from the `erase`
         // above, which wrote a variant.
@@ -70,9 +67,10 @@ impl AcvusRuntime {
         if tag == self.shared.interner.intern("Ok") {
             return Ok(payload);
         }
-        assert!(
+        debug_assert!(
             tag == self.shared.interner.intern("Err"),
-            "a Result crossed back holding the tag `{}`",
+            "a Result crossed back holding the tag `{}`, and `variant_of_result` — the only \
+             writer `materialize`'s contract admits — writes `Ok` or `Err`",
             tag.display(&self.shared.interner)
         );
         Err(payload)
@@ -439,7 +437,7 @@ impl Runtime for AcvusRuntime {
     {
         const {
             assert!(
-                A::WIDTH <= u16::MAX as usize,
+                A::WIDTH <= crate::regs::MAX_ARG_SLOTS,
                 "a closure takes at most one cell of arguments"
             )
         };

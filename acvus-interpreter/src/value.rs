@@ -627,9 +627,6 @@ impl HandleValue {
             inner: Box::new(value),
         }
     }
-    pub fn downcast<T: std::any::Any + Send + Sync>(self) -> T {
-        *self.inner.downcast().expect("HandleValue type mismatch")
-    }
     pub fn try_downcast<T: std::any::Any + Send + Sync>(self) -> Result<T, Self> {
         match self.inner.downcast::<T>() {
             Ok(val) => Ok(*val),
@@ -767,15 +764,12 @@ impl Value {
         f64::from_bits(self.bits())
     }
     /// The scalar value this word spells.
-    ///
-    /// # Panics
-    /// When the word is not one, which a `Char` register's is by the
-    /// checker: every way into one is `Value::char_` or a `u8 as char`.
     pub fn as_char(&self) -> u32 {
         let code = self.bits() as u32;
-        assert!(
+        debug_assert!(
             char::from_u32(code).is_some(),
-            "a char's word is a Unicode scalar value, found {code:#x}"
+            "a char's word is a Unicode scalar value, found {code:#x}; every way into a `Char` \
+             register is `Value::char_` or a `u8 as char`"
         );
         code
     }

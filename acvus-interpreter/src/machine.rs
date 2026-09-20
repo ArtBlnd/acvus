@@ -19,8 +19,8 @@ use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
-    BlockId, Body, Code, EntryKonst, Exit, Expr, ExprBody, ExprChain, Marked, Off, Op, Pending,
-    Prepared, RETURN, Runs, SENTINEL, SUSPEND, SlicePair,
+    BlockId, Body, EntryKonst, Exit, Expr, ExprBody, ExprChain, Marked, Off, Op, Pending, Prepared,
+    RETURN, Runs, SENTINEL, SUSPEND, SlicePair,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
@@ -384,9 +384,7 @@ where
     R: Returned,
 {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
-    let Code::Body(body) = prepared.main.as_ref() else {
-        panic!("a module's entry body is one chain, which no call into a module can be")
-    };
+    let body = prepared.main.as_ref();
     let mut store = Store::new();
     let (mut regs, _) = store.bind(body);
     open_frame(body, &mut regs);
@@ -408,9 +406,7 @@ pub fn call_module_sync<R>(
 where
     R: Returned,
 {
-    let Code::Body(body) = prepared.main.as_ref() else {
-        panic!("a module's entry body is one chain, which no call into a module can be")
-    };
+    let body = prepared.main.as_ref();
     machine.call_sync(body, &id, arity, |callee| {
         if let Some(order) = body.order_param {
             callee.regs.put(order, Value::unit());

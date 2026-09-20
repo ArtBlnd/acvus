@@ -4,7 +4,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-use crate::code::{Code, Named, Op};
+use crate::code::{Body, Code, Named, Op};
 
 #[derive(Serialize)]
 pub struct BlockListing {
@@ -209,9 +209,13 @@ fn collect_part_ops(parts: &[PartListing], found: &mut Vec<String>) {
 
 pub fn code_listing(code: &Code) -> Vec<BlockListing> {
     match code {
-        Code::Body(body) => listing(&body.heads),
+        Code::Body(body) => body_listing(body),
         Code::Expr(_) => Vec::new(),
     }
+}
+
+pub fn body_listing(body: &Body) -> Vec<BlockListing> {
+    listing(&body.heads)
 }
 
 /// One `L<n>` per chain head, its operations under it, and a region's parts
@@ -253,9 +257,13 @@ pub enum CodeText {
 
 pub fn code_text(code: &Code) -> CodeText {
     match code {
-        Code::Body(body) => CodeText::Blocks(listing(&body.heads)),
+        Code::Body(body) => body_text(body),
         Code::Expr(_) => CodeText::Frameless,
     }
+}
+
+pub fn body_text(body: &Body) -> CodeText {
+    CodeText::Blocks(listing(&body.heads))
 }
 
 impl fmt::Display for CodeText {

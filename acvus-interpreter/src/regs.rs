@@ -67,6 +67,10 @@ const WINDOW_CELLS: usize = 3;
 /// a frame that cannot offer this cell cannot host a call at all.
 const ARG_CELLS: usize = 1;
 
+/// The arguments one call can lay in the window it opens: the cell a bound
+/// frame keeps above itself, in registers.
+pub const MAX_ARG_SLOTS: usize = CELL_SLOTS as usize * ARG_CELLS;
+
 /// One cell: four cache lines of registers, starting one. It holds no mark
 /// word — a frame wider than a cell has to be one run of `Value`s, and an
 /// interleaved word would break the displacement an `Off` already is.
@@ -288,7 +292,8 @@ impl FrameState {
              begins with",
             at.index()
         );
-        // SAFETY: `Regs::of` refuses a frame without the cell this writes,
+        // SAFETY: `Store::widen` and `FrameState::fits` size every window with
+        // the cell this writes before a frame is bound in it,
         // `Store::root_window` holds the widest frame there is, and the debug
         // assertion above holds the displacement inside that cell.
         unsafe {
@@ -322,15 +327,14 @@ impl FrameState {
     /// The callee's first `width` parameter registers, for a crossing that
     /// writes a call's arguments into them at their own widths (RFC-0059).
     ///
-    /// # Panics
-    /// The run leaves the cell a window's arguments sit in, which is a
-    /// closure of more parameters than `ARG_CELLS` cells hold.
+    /// `AcvusRuntime::call_now` proves the bound below at its own
+    /// monomorphization, out of `IntoRun::WIDTH` (RFC-0059).
     #[inline]
     pub fn run_mut(&mut self, width: usize) -> &mut [Value] {
-        assert!(
-            width <= CELL_SLOTS as usize * ARG_CELLS,
-            "a call lays {width} arguments, past the {} the cell a window begins with holds",
-            CELL_SLOTS as usize * ARG_CELLS
+        debug_assert!(
+            width <= MAX_ARG_SLOTS,
+            "a call lays {width} arguments, past the {MAX_ARG_SLOTS} the cell a window begins \
+             with holds"
         );
         let run = &mut self.cells()[0].slots[..width];
         for slot in run.iter_mut() {
@@ -348,10 +352,6 @@ impl Default for Store {
     }
 }
 
-/// # Panics
-/// The run leaves the frame, which means `prepare` placed a call's argument
-/// window outside the frame it sized.
-///
 /// # Safety
 /// `cells` are one frame's own cells, `len` its registers, and every register
 /// of the run is defined at the call.
@@ -359,7 +359,7 @@ impl Default for Store {
 unsafe fn run_in(cells: &[Cell], at: Off, arity: u16, len: u16) -> &[Value] {
     let from = at.index();
     let to = from + usize::from(arity);
-    assert!(
+    debug_assert!(
         to <= usize::from(len),
         "an argument run of {arity} at register {from} leaves a frame of {len} registers"
     );
@@ -395,11 +395,6 @@ impl<'f> Regs<'f> {
     /// frame is what writes its mark word, so no `Regs` exists whose mark
     /// word is unwritten: `body.param_marks` is the claim the entry hands it
     /// (RFC-0052 rule 7).
-    ///
-    /// # Panics
-    /// `cells` is narrower than a frame of `body.frame_len` registers and the
-    /// cell its calls lay their arguments in, which `Store::bind` and
-    /// `fits_above` answer before this is reached.
     #[inline]
     fn of(cells: &'f mut [Cell], body: &Body) -> Regs<'f> {
         let len = body.frame_len;
@@ -409,9 +404,10 @@ impl<'f> Regs<'f> {
             cells_for(len),
             "a body of {len} registers was prepared with {own} cells"
         );
-        assert!(
+        debug_assert!(
             own + ARG_CELLS <= cells.len(),
-            "a frame of {len} registers was borrowed from {} cells",
+            "a frame of {len} registers was borrowed from {} cells, which `Store::widen` and \
+             `FrameState::fits` answer before this is reached",
             cells.len()
         );
         let mut regs = Regs {
@@ -711,13 +707,13 @@ impl<'f> Regs<'f> {
     pub fn run_of_mut(&mut self, at: Off, width: u16) -> &mut [Value] {
         let from = at.index();
         let to = from + usize::from(width);
-        assert!(
+        debug_assert!(
             to <= usize::from(self.len),
             "a destination run of {width} at register {from} leaves a frame of {} registers",
             self.len
         );
-        // SAFETY: `prepare` placed the run contiguously in this frame, and the
-        // bound above is the frame's.
+        // SAFETY: `prepare` placed the run contiguously in this frame, which
+        // `prepare::check_assignment` proves against `Body::frame_len`.
         unsafe {
             std::slice::from_raw_parts_mut(
                 self.cells.as_mut_ptr().cast::<Value>().add(from),

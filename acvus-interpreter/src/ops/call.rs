@@ -1568,10 +1568,15 @@ impl<const CALLS: usize, const TAIL: bool, const LARGE: bool> Op for Fused<CALLS
             held = call.invoke(m, held);
         }
         let value = match TAIL {
-            true => {
-                let read = self.tail.expect("a fused instance with a tail holds none");
-                read(&held)
-            }
+            true => match self.tail {
+                Some(read) => read(&held),
+                // `shape` picks `TAIL` out of `tail.is_some()`, so this arm is
+                // the pair having come apart.
+                None => {
+                    debug_assert!(false, "a fused instance with a tail holds none");
+                    held
+                }
+            },
             false => held,
         };
         m.regs().define::<LARGE>(self.dst, value);

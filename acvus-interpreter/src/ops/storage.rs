@@ -134,7 +134,7 @@ pub fn walk<'v>(value: &'v Value, steps: &[Step]) -> Place<'v> {
     for step in steps {
         at = match at {
             Place::At(v) => segment(v, step),
-            Place::Depth(v) => depth_step(&v, step),
+            Place::Depth(v) => Place::Depth(depth_step(&v, step)),
         };
     }
     at
@@ -157,10 +157,7 @@ pub fn walk_mut<'v>(value: &'v mut Value, steps: &[Step]) -> PlaceMut<'v> {
     for step in steps {
         at = match at {
             PlaceMut::At(v) => segment_mut(v, step),
-            PlaceMut::Depth(v) => match depth_step(&v, step) {
-                Place::At(_) => unreachable!("a depth step lands on a depth"),
-                Place::Depth(v) => PlaceMut::Depth(v),
-            },
+            PlaceMut::Depth(v) => PlaceMut::Depth(depth_step(&v, step)),
         };
     }
     at
@@ -178,13 +175,20 @@ fn segment_mut<'v>(value: &'v mut Value, step: &Step) -> PlaceMut<'v> {
     }
 }
 
-/// A step under a `None`: the depth word is all there is, so the only step it
-/// admits is the next `Some` it stands for.
-fn depth_step<'v>(value: &Value, step: &Step) -> Place<'v> {
-    let Step::OptionPayload = step else {
-        panic!("{step:?} on {value:?}")
-    };
-    Place::Depth(depth_payload(value).expect("a depth step lands on a depth"))
+/// A step under a `None`: the depth word it stands for (RFC-0022).
+fn depth_step(value: &Value, step: &Step) -> Value {
+    debug_assert!(
+        matches!(step, Step::OptionPayload),
+        "{step:?} on {value:?}: a path under a None is typed `Option`, whose one step is its \
+         payload"
+    );
+    match depth_payload(value) {
+        Some(v) => v,
+        None => {
+            debug_assert!(false, "a depth step lands on a depth (RFC-0022)");
+            *value
+        }
+    }
 }
 
 /// `None` where the payload has a place of its own; the depth word where it

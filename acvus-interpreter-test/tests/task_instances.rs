@@ -11,9 +11,10 @@ use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::Code;
+use acvus_interpreter::code::Body;
+use acvus_interpreter::listing::body_listing;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, TokioExecutor, Value, prepare_module};
-use acvus_interpreter_test::listing::{code_listing, family_of, ops_of_anywhere};
+use acvus_interpreter_test::listing::{family_of, ops_of_anywhere};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::{ParsedAst, QualifiedRef};
 use acvus_mir::ir::MirBody;
@@ -110,7 +111,7 @@ async fn run_on_tokio(source: &str, ret: Ty) -> Value {
 }
 
 /// The entry body of `source`, prepared, with the closures it makes.
-fn prepared_entry(source: &str, ret: Ty) -> (Code, MirBody) {
+fn prepared_entry(source: &str, ret: Ty) -> (Body, MirBody) {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
     let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), ret);
@@ -436,15 +437,15 @@ async fn a_pipeline_over_a_heavy_extern_is_asynchronous() {
 
 // -- The shape the type bought ------------------------------------------
 
-fn loop_count(code: &Code) -> usize {
-    ops_of_anywhere(&code_listing(code))
+fn loop_count(body: &Body) -> usize {
+    ops_of_anywhere(&body_listing(body))
         .iter()
         .filter(|name| family_of(name) == "Loop")
         .count()
 }
 
-fn may_suspend(code: &Code) -> bool {
-    code.may_suspend()
+fn may_suspend(body: &Body) -> bool {
+    body.may_suspend
 }
 
 #[tokio::test]

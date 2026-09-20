@@ -136,11 +136,9 @@ impl<V> Obj<V> {
         Obj { shape, values }
     }
 
-    /// # Panics
-    /// `values` is not one per field of `shape`. `filled` is the constructor
-    /// with no width to get wrong.
+    /// `filled` is the constructor with no width to get wrong.
     pub fn new(shape: Arc<ObjectShape>, values: Box<[V]>) -> Obj<V> {
-        assert_eq!(
+        debug_assert_eq!(
             shape.len(),
             values.len(),
             "an object holds one value per field of its shape"

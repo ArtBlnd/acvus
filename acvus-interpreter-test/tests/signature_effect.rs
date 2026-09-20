@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_extern::{Closure, ExternType, Registry, Runtime, Var, extern_fn, extern_registry, kind};
-use acvus_interpreter::code::Code;
+use acvus_interpreter::code::Body;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::ParsedAst;
@@ -282,7 +282,7 @@ async fn run_i64(source: &str) -> i64 {
         .as_int()
 }
 
-fn prepared_entry(source: &str) -> Code {
+fn prepared_entry(source: &str) -> Body {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
     let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), Ty::I64);
@@ -327,11 +327,11 @@ async fn the_signatures_call_is_sync_over_a_sync_closure_and_async_over_an_async
     let over_sync = "src() | step(|x| -> x + 1) | drain(|x| -> x + 1)";
     let over_async = "src() | step(|x| -> x + 1) | drain(|x| -> seen(x))";
     assert!(
-        !prepared_entry(over_sync).may_suspend(),
+        !prepared_entry(over_sync).may_suspend,
         "every call in the body is synchronous, so the body is"
     );
     assert!(
-        prepared_entry(over_async).may_suspend(),
+        prepared_entry(over_async).may_suspend,
         "the closure the call was handed suspends, and the signature's \
          effect variable is that closure's effect"
     );
@@ -349,9 +349,9 @@ async fn the_pure_instance_is_reached_over_an_async_pipeline() {
 async fn a_declaration_whose_parameter_names_the_effect_is_async_over_an_async_stage() {
     let over_sync = "src() | step(|x| -> x + 1) | depth()";
     let over_async = "src() | step(|x| -> seen(x)) | depth()";
-    assert!(!prepared_entry(over_sync).may_suspend());
+    assert!(!prepared_entry(over_sync).may_suspend);
     assert!(
-        prepared_entry(over_async).may_suspend(),
+        prepared_entry(over_async).may_suspend,
         "the stage's closure suspends, and the parameter type `Pipe<Ts, O, E, I, Rt>` \
          makes the pipeline's effect the call's own"
     );
@@ -363,9 +363,9 @@ async fn a_declaration_whose_parameter_names_the_effect_is_async_over_an_async_s
 async fn a_signature_that_names_the_pipeline_is_async_over_an_async_stage() {
     let over_sync = "src() | step(|x| -> x + 1) | tally()";
     let over_async = "src() | step(|x| -> seen(x)) | tally()";
-    assert!(!prepared_entry(over_sync).may_suspend());
+    assert!(!prepared_entry(over_sync).may_suspend);
     assert!(
-        prepared_entry(over_async).may_suspend(),
+        prepared_entry(over_async).may_suspend,
         "the stage's closure suspends, and the signature's parameter type \
          `Pipe<Ts, O, E, I, Rt>` makes the pipeline's effect the call's own"
     );
@@ -383,6 +383,6 @@ async fn a_signature_that_names_the_pipeline_is_async_over_an_async_stage() {
 #[tokio::test]
 async fn a_signature_that_hides_the_pipeline_leaves_its_call_sync() {
     let over_async = "src() | step(|x| -> seen(x)) | bare_tally()";
-    assert!(!prepared_entry(over_async).may_suspend());
+    assert!(!prepared_entry(over_async).may_suspend);
     assert_eq!(run_i64(over_async).await, 1);
 }

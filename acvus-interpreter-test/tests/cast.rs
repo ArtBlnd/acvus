@@ -12,7 +12,7 @@
 use acvus_interpreter::code::Shape;
 use acvus_interpreter::{ChainTy, LeafRead, Value};
 use acvus_interpreter_test::listing::{
-    ChainShape, chains_of, ops_of, prepared_script, script_listing,
+    ChainShape, chains_of_body, ops_of, prepared_script, script_listing,
 };
 use acvus_interpreter_test::*;
 use acvus_mir::ty::{IntTy, Ty};
@@ -140,7 +140,7 @@ async fn a_cast_binds_tighter_than_a_binary_operator_and_looser_than_a_unary_one
 
 fn chains(i: &Interner, source: &str, context: Context, ret: Ty) -> Vec<ChainShape> {
     let prepared = prepared_script(i, source, context, ret);
-    chains_of(prepared.main.as_ref())
+    chains_of_body(&prepared.main)
 }
 
 /// The `accum` bench's `float while` body, character for character;

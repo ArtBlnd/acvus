@@ -9,7 +9,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::code::{Code, Prepared};
+use crate::code::Prepared;
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
@@ -153,9 +153,7 @@ impl Interpreter {
     /// OneValue` refuses it there, so reaching this assert means a program
     /// arrived without passing the checker.
     pub async fn execute(&mut self) -> Value {
-        let Code::Body(entry) = lookup_module(&self.rt.shared, &self.entry).main.as_ref() else {
-            panic!("a module's entry body is one chain, which no call into a module can be")
-        };
+        let entry = lookup_module(&self.rt.shared, &self.entry).main.as_ref();
         assert!(
             !entry.returns_a_view,
             "the entry's result is a view, and a host reads one value by kind (RFC-0054); \

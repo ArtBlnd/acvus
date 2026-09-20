@@ -75,14 +75,8 @@ pub fn prepared_script(
     Arc::new(prepare_module(module, &ctx))
 }
 
-/// # Panics
-/// The entry module's `main` is one chain, which a body-shape test has
-/// nothing to read.
 pub fn main_body(prepared: &Prepared) -> &Body {
-    let Code::Body(body) = prepared.main.as_ref() else {
-        panic!("the entry module's main is a body, not a one-chain expression")
-    };
-    body
+    prepared.main.as_ref()
 }
 
 /// Every chain operation of a body, those inside its superinstructions
@@ -91,6 +85,10 @@ pub fn chains_of(code: &Code) -> Vec<ChainShape> {
     let Code::Body(body) = code else {
         return Vec::new();
     };
+    chains_of_body(body)
+}
+
+pub fn chains_of_body(body: &Body) -> Vec<ChainShape> {
     let mut found = Vec::new();
     collect_chains(&body.heads, &mut found);
     found

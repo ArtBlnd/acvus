@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Owned};
-use acvus_interpreter::code::{Code, Op, substitute};
+use acvus_interpreter::code::{Body, Code, Op, substitute};
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
@@ -380,11 +380,7 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
 
 /// Every `Index` handler in a prepared body, swapped for the unchecked
 /// form of the same mode (RFC-0047 §7).
-fn drop_the_bound_check(code: &mut Code) {
-    let Code::Body(body) = code else {
-        panic!("a body with a loop prepares as a Body")
-    };
-    let body = Arc::get_mut(body).expect("the prepared body is swapped before anything shares it");
+fn drop_the_bound_check(body: &mut Body) {
     let swapped: usize = body.heads.iter_mut().map(swap_in_chain).sum();
     assert_eq!(swapped, 2, "both element reads lost their bound check");
 }
@@ -437,10 +433,7 @@ struct Timing {
 
 /// The operations one iteration runs: the loop's head and its body, which
 /// is what a band is built from.
-fn dispatches_per_iteration(code: &Code) -> usize {
-    let Code::Body(body) = code else {
-        panic!("a body with a loop prepares as a Body")
-    };
+fn dispatches_per_iteration(body: &Body) -> usize {
     body.heads
         .iter()
         .flat_map(|head| chain_of(head.as_ref()))

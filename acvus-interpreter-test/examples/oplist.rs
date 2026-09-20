@@ -189,7 +189,7 @@ fn main() {
     };
     for (qref, module) in &cr.modules {
         let prepared = prepare_module(module, &ctx);
-        dump(&format!("{qref:?} main"), &prepared.main);
+        dump_body(&format!("{qref:?} main"), &prepared.main);
         for (label, closure) in &prepared.closures {
             dump(&format!("{qref:?} closure {label:?}"), closure);
         }

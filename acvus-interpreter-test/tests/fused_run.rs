@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use acvus_extern::{ExternType, Registry, Var, extern_fn, extern_registry, kind};
+use acvus_interpreter::listing::body_listing;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, Value, prepare_module};
 use acvus_interpreter_test::listing::{code_listing, ops_of_anywhere};
 use acvus_interpreter_test::{
@@ -157,9 +158,10 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
     let mut found = Vec::new();
     for module in cr.modules.values() {
         let prepared = prepare_module(module, &ctx);
-        let bodies = std::iter::once(&prepared.main).chain(prepared.closures.values());
-        for code in bodies {
-            for op in ops_of_anywhere(&code_listing(code)) {
+        let listings = std::iter::once(body_listing(&prepared.main))
+            .chain(prepared.closures.values().map(|code| code_listing(code)));
+        for listing in listings {
+            for op in ops_of_anywhere(&listing) {
                 if let Some(shape) = fused_shape(&op) {
                     found.push(shape);
                 }

@@ -5,7 +5,7 @@
 
 use acvus_interpreter::code::{ChainBounds, Code, ExprBody, Off, Prepared, Shape};
 use acvus_interpreter::{PrepareCtx, Value, prepare_module};
-use acvus_interpreter_test::listing::{ChainShape, chains_of};
+use acvus_interpreter_test::listing::{ChainShape, chains_of, chains_of_body};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::ty::{IntTy, Ty};
@@ -47,6 +47,10 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
 
 fn chains(code: &Code) -> Vec<ChainShape> {
     chains_of(code)
+}
+
+fn main_chains(prepared: &Prepared) -> Vec<ChainShape> {
+    chains_of_body(&prepared.main)
 }
 
 fn only_closure(prepared: &Prepared) -> &Code {
@@ -222,9 +226,7 @@ async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
     assert_eq!(v.as_int(), 19);
 
     let module = prepared(&i, "@n * 3 + 4", ctx(&i, "n", IntTy::I64, 5), Ty::I64);
-    let Code::Body(body) = &*module.main else {
-        panic!("a script's entry body runs on a frame")
-    };
+    let body = &*module.main;
     let filled: Vec<i64> = body
         .entry_konsts
         .iter()
@@ -234,7 +236,7 @@ async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
         filled.contains(&3) && filled.contains(&4),
         "the chain's constants are not registers the entry fills: {filled:?}"
     );
-    let chain = chains(&module.main);
+    let chain = main_chains(&module);
     let chain = chain.first().expect("one chain");
     let konst_slots: Vec<Off> = body.entry_konsts.iter().map(|konst| konst.slot).collect();
     let reads_a_konst = chain.leaves.iter().any(|off| {
@@ -254,9 +256,7 @@ async fn a_constant_a_call_reads_is_not_hoisted() {
         Context::default(),
         Ty::Int(IntTy::U64),
     );
-    let Code::Body(body) = &*module.main else {
-        panic!("a script's entry body runs on a frame")
-    };
+    let body = &*module.main;
     assert!(
         body.entry_konsts.is_empty(),
         "a string a call reads became an entry constant"
@@ -331,7 +331,7 @@ async fn a_run_of_more_than_three_nodes_is_several_chains_through_a_register() {
     assert_eq!(v.as_int(), 6 * 2 + 6 * 3 + 6 * 4 + 6 * 5);
 
     let module = prepared(&i, source, ctx(&i, "n", IntTy::I64, 6), Ty::I64);
-    let found = chains(&module.main);
+    let found = main_chains(&module);
     assert!(
         found.len() >= 2,
         "a run of seven nodes is more than one chain, found {}",
@@ -344,9 +344,6 @@ async fn a_run_of_more_than_three_nodes_is_several_chains_through_a_register() {
             chain.shape.interior() + 1
         );
     }
-    let Code::Body(body) = &*module.main else {
-        panic!("a script's entry body runs on a frame")
-    };
     let written: Vec<u16> = found.iter().filter_map(|chain| chain.dst).collect();
     let through_a_register = found.iter().any(|chain| {
         chain.leaves.iter().any(|off| {
@@ -418,10 +415,8 @@ fn every_chain_leaf_is_inside_the_frame_it_reads_unchecked() {
         ctx(&i, "n", IntTy::I64, 4),
         Ty::I64,
     );
-    let Code::Body(body) = &*module.main else {
-        panic!("a script's entry body runs on a frame")
-    };
-    for chain in chains(&module.main) {
+    let body = &*module.main;
+    for chain in main_chains(&module) {
         for offset in &chain.leaves {
             assert!(
                 *offset < ChainBounds::byte_offset_of_word(Off::of(body.frame_len)),

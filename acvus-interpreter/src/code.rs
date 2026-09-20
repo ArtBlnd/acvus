@@ -39,13 +39,11 @@ impl Off {
     /// against `MAX_FRAME_SLOTS`, so the two bounds cannot disagree.
     pub const MAX_INDEX: u16 = 319;
 
-    /// # Panics
-    /// `slot` is past `MAX_INDEX`, which `prepare`'s frame sizing must not
-    /// emit — the same bound `regs::Store::widen` asserts.
     pub const fn of(slot: Slot) -> Off {
-        assert!(
+        debug_assert!(
             slot <= Off::MAX_INDEX,
-            "an operation names a register past the ones one frame holds"
+            "an operation names a register past the ones one frame holds, which \
+             `Prepare::plan_runs` asserts against `regs::MAX_FRAME_SLOTS` before emitting one"
         );
         Off(slot * size_of::<Value>() as u16)
     }
@@ -56,9 +54,6 @@ impl Off {
         self.0 as usize
     }
 
-    /// # Panics
-    /// The pair's second register is past `MAX_INDEX`, which is `Off::of`'s
-    /// bound and `assign_slots` must not place a pair across it.
     #[inline(always)]
     const fn next(self) -> Off {
         Off::of(self.index() as Slot + 1)
@@ -77,8 +72,6 @@ impl Off {
     /// `of` cannot produce it.
     pub const PREVIOUS: Off = Off(u16::MAX);
 
-    /// # Panics
-    /// As `Off::of`.
     #[inline(always)]
     pub const fn field(self, at: u16) -> Off {
         Off::of(self.index() as Slot + at)
@@ -756,7 +749,7 @@ pub struct Body {
 /// Each body here was prepared once, when the module was loaded (RFC-0044);
 /// a `MakeClosure` copies an `Arc`.
 pub struct Prepared {
-    pub main: Arc<Code>,
+    pub main: Arc<Body>,
     pub closures: FxHashMap<Label, Arc<Code>>,
 }
 

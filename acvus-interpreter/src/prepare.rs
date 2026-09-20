@@ -202,19 +202,13 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
                 .collect::<Vec<_>>()
         );
         for (label, body) in ready {
-            let code = prepare_body(body, ctx, &closures, &literals, BodyRole::Closure);
+            let code = prepare_closure(body, ctx, &closures, &literals);
             closures.insert(*label, Arc::new(code));
         }
         remaining.retain(|(label, _)| !closures.contains_key(label));
     }
 
-    let main = Arc::new(prepare_body(
-        &module.main,
-        ctx,
-        &closures,
-        &literals,
-        BodyRole::Entry,
-    ));
+    let main = Arc::new(prepare_entry(&module.main, ctx, &closures, &literals));
     Prepared { main, closures }
 }
 
@@ -232,24 +226,33 @@ fn made_closures(body: &MirBody) -> impl Iterator<Item = Label> + '_ {
     })
 }
 
-/// Which body of a module is being prepared.
-///
-/// Only a closure body can become a `Code::Expr`. A module's entry body is
-/// entered with a frame — `call_module` fills its parameter registers and
-/// `Machine::run` walks its operations — and a chain has no frame to be
-/// entered with.
+/// Which body of a module is being prepared, for the messages `framed` writes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BodyRole {
     Entry,
     Closure,
 }
 
-pub fn prepare_body(
+pub fn prepare_entry(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
-    role: BodyRole,
+) -> Body {
+    let mut prep = Prepare::new(body, ctx, closures, literals, label_map(body));
+
+    let scalars = prep.hoist_konsts();
+    prep.plan_runs(scalars);
+    let regions = prep.regions();
+
+    framed(prep, literals, &regions, BodyRole::Entry)
+}
+
+pub fn prepare_closure(
+    body: &MirBody,
+    ctx: &PrepareCtx<'_>,
+    closures: &FxHashMap<Label, Arc<Code>>,
+    literals: &Arc<Literals>,
 ) -> Code {
     let mut prep = Prepare::new(body, ctx, closures, literals, label_map(body));
 
@@ -257,13 +260,26 @@ pub fn prepare_body(
     prep.plan_runs(scalars);
     let regions = prep.regions();
 
-    if let BodyRole::Closure = role
-        && let Some(expr) = prep.expression_body()
-    {
+    if let Some(expr) = prep.expression_body() {
         return Code::Expr(Arc::new(expr));
     }
 
-    let blocks = prep.blocks(0..body.insts.len(), &regions);
+    Code::Body(Arc::new(framed(
+        prep,
+        literals,
+        &regions,
+        BodyRole::Closure,
+    )))
+}
+
+fn framed(
+    mut prep: Prepare<'_>,
+    literals: &Arc<Literals>,
+    regions: &[Region],
+    role: BodyRole,
+) -> Body {
+    let body = prep.body;
+    let blocks = prep.blocks(0..body.insts.len(), regions);
     // RFC-0046 asked for equality here. It does not hold, and
     // `io_in_iteration` (acvus-interpreter-test/tests/extern_fn.rs)
     // measures the gap: a closure demoted to the parameter's effect is
@@ -287,7 +303,7 @@ pub fn prepare_body(
         |inst| matches!(&inst.kind, InstKind::Return { value, .. } if is_slice(prep.ty(*value))),
     );
 
-    Code::Body(Arc::new(Body {
+    Body {
         heads: blocks,
         entry: 0,
         frame_len,
@@ -308,7 +324,7 @@ pub fn prepare_body(
             .first()
             .unwrap_or_else(|| panic!("body {role:?} holds no instruction, so it cannot return"))
             .span,
-    }))
+    }
 }
 
 /// The one place a tag name out of the IR meets a run's tags, and so the one
@@ -6436,13 +6452,12 @@ mod recognizer_tests {
                 body.val_types.insert(id, Ty::Int(IntTy::I64));
             }
             let literals = Arc::new(Literals::of(literal_texts(&body)));
-            prepare_body(
+            Code::Body(Arc::new(prepare_entry(
                 &body,
                 &ctx,
                 &FxHashMap::default(),
                 &literals,
-                BodyRole::Entry,
-            )
+            )))
         }
 
         fn recognize(&self, insts: Vec<Inst>) -> Vec<Matched> {
