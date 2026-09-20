@@ -2277,8 +2277,11 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
 
 /// `extern_signature! { ns: "core", fn eq<T>(a: &T, b: &T) -> bool where T: TyVar; }`
 /// declares a shared signature (RFC-0019) and a marker type named after it.
+/// `extern_signature! { ns: "q", effect = E, fn drain<S, E>(it: S) -> i64
+/// where S: TyVar, E: EffectVar; }` declares one whose call effect is `E`.
 struct SignatureInput {
     ns: LitStr,
+    effect: Option<Ident>,
     sig: syn::Signature,
 }
 
@@ -2291,11 +2294,23 @@ impl Parse for SignatureInput {
         input.parse::<Token![:]>()?;
         let ns: LitStr = input.parse()?;
         input.parse::<Token![,]>()?;
+        let effect = if input.peek(Ident) && input.peek2(Token![=]) {
+            let key: Ident = input.parse()?;
+            if key != "effect" {
+                return Err(syn::Error::new(key.span(), "expected `effect`"));
+            }
+            input.parse::<Token![=]>()?;
+            let var: Ident = input.parse()?;
+            input.parse::<Token![,]>()?;
+            Some(var)
+        } else {
+            None
+        };
         let sig: syn::Signature = input.parse()?;
         if input.peek(Token![;]) {
             input.parse::<Token![;]>()?;
         }
-        Ok(Self { ns, sig })
+        Ok(Self { ns, effect, sig })
     }
 }
 
@@ -2352,6 +2367,19 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     let comp_ret = types_only(&vars.to_compile_time_instance(&ret, None));
     let bounds = vars.bound_exprs();
     let counts = vars.counts_expr();
+    let effect = match &input.effect {
+        None => quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE) },
+        Some(e) => match vars.lookup(e) {
+            Some((VarKind::Effect, k)) => quote! { __vars.effects[#k].clone() },
+            _ => {
+                return Err(syn::Error::new(
+                    e.span(),
+                    "a signature's effect is an `EffectVar` parameter of its own generics; \
+                     a signature that declares no effect is pure",
+                ));
+            }
+        },
+    };
     Ok(quote! {
         #[allow(non_camel_case_types)]
         pub struct #ident;
@@ -2368,7 +2396,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                         params: vec![#(#param_terms),*],
                         ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
                         captures: vec![],
-                        effect: ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE),
+                        effect: #effect,
                     },
                     bounds: vec![#(#bounds),*],
                 }

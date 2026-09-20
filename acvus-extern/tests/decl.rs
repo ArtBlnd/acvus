@@ -1381,6 +1381,160 @@ fn two_instances_whose_types_unify_are_refused() {
     );
 }
 
+// -- A signature declares its effect (RFC-0065) ------------------------
+
+extern_signature! {
+    ns: "t",
+    effect = E,
+    fn drain<C, E>(c: C) -> i64
+    where
+        C: TyVar,
+        E: EffectVar;
+}
+
+extern_signature! { ns: "t", fn size<C>(c: C) -> i64 where C: TyVar; }
+
+fn drain_arr_now<T, N, E, Rt>(_: &Rt, _: &mut Rt::Frame<'_>, a: Arr<T, N>) -> i64
+where
+    T: TyVar,
+    N: LenVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    i64::try_from(a.0.len()).expect("an array shorter than i64::MAX")
+}
+
+#[extern_fn(instance_of = drain, effect = E, sync = drain_arr_now)]
+async fn drain_arr<T, N, E, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: Arr<T, N>) -> i64
+where
+    T: TyVar,
+    N: LenVar,
+    E: EffectVar,
+    Rt: Runtime,
+{
+    drain_arr_now::<T, N, E, Rt>(rt, frame, a)
+}
+
+#[extern_fn(instance_of = drain, effect = pure)]
+fn drain_opt<T>(v: Option<T>) -> i64
+where
+    T: TyVar,
+{
+    i64::from(v.is_some())
+}
+
+#[extern_fn(instance_of = size, effect = E)]
+fn size_opt<T, E>(v: Option<T>) -> i64
+where
+    T: TyVar,
+    E: EffectVar,
+{
+    i64::from(v.is_some())
+}
+
+fn drain_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        signatures: [drain],
+        fns: [drain_arr, drain_opt],
+    }
+}
+
+fn size_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        signatures: [size],
+        fns: [size_opt],
+    }
+}
+
+fn effect_of(reg: &Externs<Tiny>, i: &Interner, name: &str) -> EffectTerm<acvus_extern::Poly> {
+    let function = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(i, name))
+        .expect("declared");
+    let PolyTy::Fn { effect, .. } = &function.ty else {
+        panic!("{name} is a function")
+    };
+    effect.clone()
+}
+
+#[test]
+fn a_signature_that_declares_an_effect_variable_carries_it() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![drain_registry::<Tiny>()], &i).expect("registries combine");
+    assert!(
+        matches!(effect_of(&reg, &i, "drain"), EffectTerm::Var(_)),
+        "{:?}",
+        effect_of(&reg, &i, "drain")
+    );
+    let (i2, pure) = combined::<Tiny>();
+    assert_eq!(
+        effect_of(&pure, &i2, "eq"),
+        EffectTerm::Known(Effect::PURE),
+        "a signature that declares no effect is pure"
+    );
+}
+
+#[test]
+fn an_effect_variable_signature_admits_an_effect_instance_and_a_pure_one() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![drain_registry::<Tiny>()], &i).expect("registries combine");
+    let handlers = &reg.handlers[&qref(&i, "drain")];
+    assert_eq!(
+        handlers.len(),
+        3,
+        "the array instance is a Sync/Async pair and the option instance is pure"
+    );
+    assert_eq!(
+        handlers.iter().filter(|h| h.is_sync()).count(),
+        2,
+        "the pair's plain `fn` and the pure instance reach their result without suspending"
+    );
+
+    let on_array = call_type(
+        vec![acvus_extern::Ty::Array(
+            Box::new(acvus_extern::Ty::I64),
+            acvus_extern::LenTerm::Known(2),
+        )],
+        acvus_extern::Ty::I64,
+        &i,
+    );
+    let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
+        Owned::from_value(erased(7i64)),
+        Owned::from_value(erased(8i64)),
+    ]));
+    let h = instance_for(&reg, &i, "drain", &on_array).expect("the array instance");
+    assert_eq!(open::<i64>(call_sync(h, vec![arr])), 2);
+
+    let on_option = call_type(
+        vec![acvus_extern::Ty::Option(Box::new(acvus_extern::Ty::I64))],
+        acvus_extern::Ty::I64,
+        &i,
+    );
+    let h = instance_for(&reg, &i, "drain", &on_option).expect("the option instance");
+    assert_eq!(
+        open::<i64>(call_sync(
+            h,
+            vec![V::Some(Box::into_raw(Box::new(erased(1i64))))]
+        )),
+        1
+    );
+}
+
+#[test]
+fn a_pure_signature_refuses_an_effect_variable_instance() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![size_registry::<Tiny>()], &i)
+        .err()
+        .expect("an instance generic in its effect would widen a pure signature");
+    assert!(
+        matches!(err, acvus_extern::CombineError::InstanceMismatch { .. }),
+        "{err:?}"
+    );
+}
+
 /// An `Inline` element is read, copied and edited through `Erased` with no
 /// runtime in hand; a `String` still needs one.
 #[test]

@@ -567,29 +567,41 @@ fn add_instance<R: Runtime>(
     {
         return Err(CombineError::DuplicateInstance { signature: sig, ty });
     }
-    let Instances {
-        concrete,
-        generic: Some(handler),
-    } = instances
-    else {
-        return Err(mismatch());
-    };
-    if !concrete.is_empty() {
-        return Err(mismatch());
+    let admitted = at_declared_type(&decl.ty, instances).ok_or_else(mismatch)?;
+    for instance in &admitted {
+        ceiling_admits(i, decl.qref, &instance.signature, &instance.handler)?;
     }
-    ceiling_admits(i, decl.qref, &decl.ty, &handler)?;
     if decl.cast {
         let mut rule = cast_rule(&decl)?;
         rule.fn_ref = sig;
         collected.casts.push(rule);
     }
     collected.instance_types.push(ty);
-    collected.instances.push(Instance {
-        signature: decl.ty,
-        handler,
-        admits: Task::Heavy,
-    });
+    collected.instances.extend(admitted);
     Ok(())
+}
+
+fn at_declared_type<R>(declared: &PolyTy, instances: Instances<R>) -> Option<Vec<Instance<R>>>
+where
+    R: Runtime,
+{
+    match instances {
+        Instances {
+            concrete,
+            generic: Some(handler),
+        } if concrete.is_empty() => Some(vec![Instance {
+            signature: declared.clone(),
+            handler,
+            admits: Task::Heavy,
+        }]),
+        Instances {
+            concrete,
+            generic: None,
+        } if !concrete.is_empty() && concrete.iter().all(|i| i.signature == *declared) => {
+            Some(concrete)
+        }
+        _ => None,
+    }
 }
 
 /// The type the signature's first variable takes in `instance`: read off

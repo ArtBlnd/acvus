@@ -53,9 +53,18 @@ collections.
    lengths it admits (adaptors 0..=7 on their input, consumers 0..=8);
    **the length is bounded at 8** and the ninth adaptor is refused by the
    checker with the declared-bound message. A shared signature declares
-   its call effect from the declaration's own effect variable, so an
-   `effect = E` consumer is instanceable (decided 2026-09-20: the macro's
-   `Known(PURE)` literal becomes the declared effect). One macro in
+   its call effect by naming it — `extern_signature! { ns: "iter",
+   effect = E, fn fold<S, A, F, E, Rt>(…) … }` emits `E` as the
+   signature's call effect, and a signature that names none stays
+   `Known(PURE)` — so a consumer whose closure carries `E` is
+   instanceable at `effect = E`. Naming is required rather than read off
+   the generics because a declaration's effect variable is as often a
+   type argument as its call effect: `sig::into_iter`'s and
+   `sig::as_iter`'s `E` is the effect the returned `Iter` carries, and
+   taking it for the call's own effect makes `as_iter` `Async` over an
+   effectful pipeline (`acvus-interpreter-test/tests/extern_fn.rs`
+   `io_in_iteration` and `io_inside_iterator_pipeline` are refused with
+   "a function whose task is Async where Sync is required"). One macro in
    `acvus-ext` emits the instances.
 
 3. **A stage is typed, and the pipeline is a typed list of stages.**
@@ -108,13 +117,38 @@ collections.
 
 ## What it costs
 
-- `acvus-extern-macro`: `extern_signature!` declares the call effect from
-  the declaration's effect variable instead of `Known(PURE)`, so a
-  consumer can be instanced. No checker change: nested pairs are plain
+- `acvus-extern-macro`: `extern_signature!` takes `effect = E` and emits
+  that variable as the call effect instead of `Known(PURE)`, so a
+  consumer can be instanced. Instance admission needs no effect rule of
+  its own: `matches_pattern`'s `effect_matches` under `Unknowns::Fixed`
+  already admits `(_, Var)` — an `E` instance and a pure instance of an
+  `E`-signature both match — and refuses `(Var, Known)`, which is the
+  refusal an `E` instance of a pure signature keeps. What `add_instance`
+  did need is the `Sync`/`Async` pair: a declaration carrying `sync =
+  <fn>` contributes two handlers at one type, where before an
+  `instance_of` declaration could contribute only a single generic one.
+  No checker change: nested pairs are plain
   2-tuples, which the checker already unifies structurally. The ninth
   adaptor is refused today by the instance list ("outside the declared
   bound one of …"); naming the bound of 8 in that message is a
   diagnostics change in `acvus-mir/src/error.rs`.
+- A consumer with **no closure argument** (`count`, `sum`, `last`,
+  `collect`, `next`) takes no task from its signature. The signature's
+  one parameter is the bare type variable the per-length instances are
+  matched by, so nothing in the instantiated signature relates the call's
+  effect to the argument; `Solver::tightest_admitting`
+  (`acvus-mir/src/solver.rs`) reads the call's task where the instance
+  decision closes, finds it still `Sync`, and takes the `Sync` member of
+  the pair, while the same consumer declared under its own name with
+  `Iter<Ts, O, E, I, Rt>` as its parameter type is `Async` over the same
+  pipeline (measured one declaration apart in
+  `acvus-interpreter-test/tests/signature_effect.rs`:
+  `a_signature_with_no_closure_argument_leaves_its_call_sync` against
+  `a_declaration_whose_parameter_names_the_effect_is_async_over_an_async_stage`).
+  Those consumers need either a signature parameter that names `E` — at
+  the cost of the bare variable the per-length match reads — or an
+  instance decision the solver re-opens when the call's effect settles.
+  Neither is built here.
 - The pipeline's Rust type changes at every adaptor, so the `Large` box
   holding it is re-made per adaptor: one allocation per adaptor, as
   today, with no `dyn` and no `unsafe`. Zero allocations per adaptor
@@ -153,8 +187,9 @@ collections.
 
 ## Order of work
 
-1. `extern_signature!` declares its effect variable; a test that an
-   `effect = E` declaration is an instance of a shared signature.
+1. `extern_signature!` takes `effect = E` and declares it; a test that an
+   `effect = E` declaration is an instance of a shared signature, at two
+   lengths and with a pure instance beside them.
 2. `Stage<In, Out>`, `Same<In, Out>`, `Stages<Ts, O>`, adaptors and
    consumers as per-length instances, push consumers, pull `next`; the
    raw-value closure entry removed; every existing iterator test green;
