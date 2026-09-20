@@ -11,73 +11,22 @@ use std::sync::Arc;
 
 use acvus_mir::ty::{PolyTy, Task, Ty};
 use acvus_utils::Interner;
-use acvus_utils::QualifiedRef;
 use futures::future::BoxFuture;
 
-use crate::instance::{Bound, Bounds, Carrier, Entry, EntryRun, NodeArena};
+use crate::instance::EntryRun;
 use crate::loan::Loan;
 use crate::obj::{Cross, Form, FormKind, One, OneValue, Pair, Run};
-use crate::registry::SharedSignature;
 use crate::runtime::Runtime;
 
-/// Where a site table finds the instance a declaration's bound requires:
-/// the combined registry's entries, keyed by signature and by the ground
-/// type an instance stands at (RFC-0067 Decision 3).
-pub trait InstanceEntries<Rt>: Send + Sync
-where
-    Rt: Runtime,
-{
-    /// The instance of `signature` at `ty`, with the instances its own
-    /// bounds require under it.
-    ///
-    /// # Panics
-    /// No instance of `signature` stands at `ty`. The checker admits a call
-    /// only at a type inside the `OneOf` bound `Externs::combine` met the
-    /// requirement with, so reaching this is a defect in that meet and not
-    /// a program error.
-    fn entry_at(&self, signature: QualifiedRef, ty: &Ty) -> Entry<Rt>;
-
-    /// The arena holding every node this table hands out. A site table
-    /// keeps it, which is what makes an `Entry` an address worth reading.
-    fn arena(&self) -> Arc<NodeArena<Rt>>;
-
-    /// What one requiring declaration's bounds resolve to at a variable
-    /// filled by `ty`, in the order `#[extern_fn]` read them.
-    fn bounds_at(&self, signatures: &[QualifiedRef], ty: &Ty) -> Bounds<Rt> {
-        let entries = signatures.iter().map(|s| self.entry_at(*s, ty)).collect();
-        self.arena().bounds(entries)
-    }
-}
-
-/// The registry of a site built where no declaration requires an instance:
-/// every test fixture that fills a table by hand, and `TypesOnly`.
-pub struct NoInstances;
-
-impl<Rt> InstanceEntries<Rt> for NoInstances
-where
-    Rt: Runtime,
-{
-    fn entry_at(&self, _: QualifiedRef, _: &Ty) -> Entry<Rt> {
-        panic!(
-            "this call site was built with no registry, so a required instance cannot be resolved (RFC-0067 Decision 3)"
-        )
-    }
-
-    fn arena(&self) -> Arc<NodeArena<Rt>> {
-        Arc::new(NodeArena::default())
-    }
-}
-
 /// One argument of one call site as the host settled it: the type the
-/// checker gave it, the interner that resolves the names in that type, and
-/// the registry a bounded parameter resolves its entries from.
+/// checker gave it, and the interner that resolves the names in that type.
 pub struct ArgAt<'a, Rt>
 where
     Rt: Runtime,
 {
     pub interner: &'a Interner,
     pub ty: &'a Ty,
-    pub instances: &'a dyn InstanceEntries<Rt>,
+    pub at: PhantomData<fn() -> Rt>,
 }
 
 impl<Rt> Clone for ArgAt<'_, Rt>
@@ -103,7 +52,6 @@ impl<Rt> Copy for ArgAt<'_, Rt> where Rt: Runtime {}
 pub struct SitesNoParameterReads {
     interner: Interner,
     ty: Ty,
-    instances: NoInstances,
 }
 
 impl Default for SitesNoParameterReads {
@@ -111,7 +59,6 @@ impl Default for SitesNoParameterReads {
         SitesNoParameterReads {
             interner: Interner::new(),
             ty: Ty::Unit,
-            instances: NoInstances,
         }
     }
 }
@@ -125,7 +72,7 @@ impl SitesNoParameterReads {
             ArgAt {
                 interner: &self.interner,
                 ty: &self.ty,
-                instances: &self.instances,
+                at: PhantomData,
             };
             n
         ]
@@ -239,40 +186,6 @@ where
     fn site(_: ArgAt<'_, Rt>) {}
 }
 
-impl<T, Rt> SitedAtEntry<Rt> for ByValue<T, Uniform>
-where
-    T: Cross<Rt>,
-    Rt: Runtime,
-{
-    fn site_at_entry(_: Bounds<Rt>) {}
-}
-
-impl<T, Rt> SitedAtEntry<Rt> for ByValue<T, Specialized>
-where
-    T: OneValue<Rt, Specialized>,
-    Rt: Runtime,
-{
-    fn site_at_entry(_: Bounds<Rt>) {}
-}
-
-impl<T, M, Rt> SitedAtEntry<Rt> for ByRef<T, M, Uniform>
-where
-    T: Borrowable<Rt>,
-    M: Loan,
-    Rt: Runtime,
-{
-    fn site_at_entry(_: Bounds<Rt>) {}
-}
-
-impl<T, M, Rt> SitedAtEntry<Rt> for ByRef<T, M, Specialized>
-where
-    T: BorrowableSpecialized<Rt>,
-    M: Loan,
-    Rt: Runtime,
-{
-    fn site_at_entry(_: Bounds<Rt>) {}
-}
-
 impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
 where
     T: Cross<Rt>,
@@ -329,190 +242,6 @@ where
     unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T> {
         // SAFETY: as the uniform impl's, at the specialized representation.
         unsafe { M::borrow::<T, Specialized, Rt>(rt, &run[0]) }
-    }
-}
-
-/// What a parameter whose type holds a bounded variable resolves at its
-/// site: the entries the variable's carrier is built with, and the arena
-/// they are addresses in, which this table is what keeps alive.
-pub struct AtBounds<Rt>
-where
-    Rt: Runtime,
-{
-    /// `None` where the entries came through a call rather than from this
-    /// table: the caller's own site is what holds their arena, and it
-    /// outlives the call it is making.
-    arena: Option<Arc<NodeArena<Rt>>>,
-    bounds: Bounds<Rt>,
-}
-
-impl<Rt> Clone for AtBounds<Rt>
-where
-    Rt: Runtime,
-{
-    fn clone(&self) -> Self {
-        AtBounds {
-            arena: self.arena.clone(),
-            bounds: self.bounds,
-        }
-    }
-}
-
-impl<Rt> AtBounds<Rt>
-where
-    Rt: Runtime,
-{
-    pub fn new(at: ArgAt<'_, Rt>, bounds: Bounds<Rt>) -> Self {
-        AtBounds {
-            arena: Some(at.instances.arena()),
-            bounds,
-        }
-    }
-
-    /// The entries a call through an entry carried in its run.
-    pub fn through(bounds: Bounds<Rt>) -> Self {
-        AtBounds {
-            arena: None,
-            bounds,
-        }
-    }
-
-    pub fn bounds(&self) -> Bounds<Rt> {
-        self.bounds
-    }
-}
-
-/// A parameter whose type is a bounded variable's carrier: the call passes
-/// one of the runtime's values, and the site table holds the entries beside
-/// it (RFC-0067 Decision 4). The argument run is no wider than it would be
-/// without the bound.
-pub struct ByBound<C>(PhantomData<fn() -> C>);
-
-impl<C, Rt> Sited<Rt> for ByBound<C>
-where
-    C: Carrier<Rt>,
-    Rt: Runtime,
-{
-    type Site = AtBounds<Rt>;
-
-    fn site(at: ArgAt<'_, Rt>) -> Self::Site {
-        AtBounds::new(at, <C as Carrier<Rt>>::entries(at))
-    }
-}
-
-impl<'a, C, Rt> Arg<'a, Rt> for ByBound<C>
-where
-    C: Carrier<Rt>,
-    Rt: Runtime,
-{
-    type Out = C;
-    type Form = One;
-
-    unsafe fn take<'s>(_: &'a Rt, run: &'a [Rt::Value], site: &'s AtBounds<Rt>) -> C {
-        <C as Carrier<Rt>>::of(run[0], site.bounds())
-    }
-}
-
-/// A parameter whose type *holds* a bounded variable's value: the pattern
-/// an instance stands at (`&mut Map<I, …>`). The parameter itself crosses
-/// as it would without the bound, and the site resolves this instance's own
-/// entry, whose children are what its `requires` asked for — the same tree
-/// the run's trailing word carries when the instance is reached through an
-/// entry instead of from a script site.
-pub struct AtBound<P, C, S>(PhantomData<fn() -> (P, C, S)>);
-
-/// One parameter's site table where the parameter's type holds a bounded
-/// variable: what the parameter itself needed, and what the variable's
-/// carrier is built with.
-pub struct SiteAtBound<P, Rt>
-where
-    Rt: Runtime,
-{
-    pub parameter: P,
-    pub bounds: AtBounds<Rt>,
-}
-
-impl<P, Rt> Clone for SiteAtBound<P, Rt>
-where
-    P: Clone,
-    Rt: Runtime,
-{
-    fn clone(&self) -> Self {
-        SiteAtBound {
-            parameter: self.parameter.clone(),
-            bounds: self.bounds.clone(),
-        }
-    }
-}
-
-/// What the body is handed for such a parameter: the parameter, and the
-/// entries a `Held` value of the bounded variable is read at.
-pub struct ArgAtBound<T, C, Rt>
-where
-    C: Carrier<Rt>,
-    Rt: Runtime,
-{
-    pub parameter: T,
-    pub bound: Bound<C, Rt>,
-}
-
-impl<P, C, S, Rt> Sited<Rt> for AtBound<P, C, S>
-where
-    P: Sited<Rt>,
-    C: Carrier<Rt>,
-    S: SharedSignature,
-    Rt: Runtime,
-{
-    type Site = SiteAtBound<<P as Sited<Rt>>::Site, Rt>;
-
-    fn site(at: ArgAt<'_, Rt>) -> Self::Site {
-        let entry = at
-            .instances
-            .entry_at(<S as SharedSignature>::qref(at.interner), at.ty);
-        SiteAtBound {
-            parameter: <P as Sited<Rt>>::site(at),
-            // SAFETY: the entry is the arena's own, and `AtBounds` holds
-            // that arena for as long as this table lives.
-            bounds: AtBounds::new(at, unsafe { entry.bounds() }),
-        }
-    }
-}
-
-impl<P, C, S, Rt> SitedAtEntry<Rt> for AtBound<P, C, S>
-where
-    P: SitedAtEntry<Rt>,
-    C: Carrier<Rt>,
-    S: SharedSignature,
-    Rt: Runtime,
-{
-    fn site_at_entry(bounds: Bounds<Rt>) -> Self::Site {
-        SiteAtBound {
-            parameter: <P as SitedAtEntry<Rt>>::site_at_entry(bounds),
-            bounds: AtBounds::through(bounds),
-        }
-    }
-}
-
-impl<'a, P, C, S, Rt> Arg<'a, Rt> for AtBound<P, C, S>
-where
-    P: Arg<'a, Rt>,
-    C: Carrier<Rt>,
-    S: SharedSignature,
-    Rt: Runtime,
-{
-    type Out = ArgAtBound<<P as Arg<'a, Rt>>::Out, C, Rt>;
-    type Form = <P as Arg<'a, Rt>>::Form;
-
-    unsafe fn take<'s>(
-        rt: &'a Rt,
-        run: &'a [Rt::Value],
-        site: &'s SiteAtBound<<P as Sited<Rt>>::Site, Rt>,
-    ) -> Self::Out {
-        ArgAtBound {
-            // SAFETY: the caller's contract, which is `P::take`'s.
-            parameter: unsafe { <P as Arg<'a, Rt>>::take(rt, run, &site.parameter) },
-            bound: Bound::new(site.bounds.bounds()),
-        }
     }
 }
 
@@ -1018,27 +747,6 @@ where
 {
 }
 
-/// A parameter list whose site table a call through an entry can rebuild,
-/// so a glue over it can be an entry: what such a site holds is what the
-/// caller's own node carries and nothing the site alone knew.
-pub trait SitesAtEntry<Rt>: Parameters<Rt>
-where
-    Rt: Runtime,
-{
-    fn sites_at_entry(bounds: Bounds<Rt>) -> Self::Sites;
-}
-
-/// One parameter of such a list. The missing impl is the refusal: a
-/// parameter whose site is resolved at the argument's settled type, and a
-/// bounded variable taken by value, are reachable from a call site and not
-/// from an entry.
-pub trait SitedAtEntry<Rt>: Sited<Rt>
-where
-    Rt: Runtime,
-{
-    fn site_at_entry(bounds: Bounds<Rt>) -> Self::Site;
-}
-
 /// A declaration's entry, as a type: the `fn` item `#[extern_fn]` wrote
 /// beside the Rust body, named where the glue's type is named so that the
 /// glue itself stays the closure and nothing else.
@@ -1502,17 +1210,6 @@ macro_rules! parameters {
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
         {
         }
-
-        impl<Rt, $($arg,)*> SitesAtEntry<Rt> for ($($arg,)*)
-        where
-            Rt: Runtime,
-            $($arg: for<'a> Arg<'a, Rt> + SitedAtEntry<Rt> + 'static,)*
-        {
-            #[allow(unused_variables)]
-            fn sites_at_entry(bounds: Bounds<Rt>) -> Self::Sites {
-                ($(<$arg as SitedAtEntry<Rt>>::site_at_entry(bounds),)*)
-            }
-        }
     };
 }
 
@@ -1553,7 +1250,7 @@ where
 pub fn glue_at_entry<Rt, F, A, R, E>(f: F) -> Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
-    A: SitesAtEntry<Rt>,
+    A: Parameters<Rt>,
     E: AtEntry<Rt>,
     F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt>,
@@ -1587,7 +1284,7 @@ where
 pub fn async_glue_at_entry<Rt, F, A, E>(f: F) -> AsyncGlue<Rt, F, A, Unsited, E>
 where
     Rt: Runtime,
-    A: SitesAtEntry<Rt>,
+    A: Parameters<Rt>,
     E: AtEntry<Rt>,
     F: for<'a, 'w> Fn(
         &'a Rt,

@@ -18,16 +18,6 @@ use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg};
 use crate::ty_arg::{Term, Var, kind};
 
-/// Proof that a call comes through `Closure`: only this module mints it, so a
-/// handler cannot reach the runtime's `call_*` directly.
-pub struct CallToken(());
-
-impl CallToken {
-    fn mint() -> Self {
-        CallToken(())
-    }
-}
-
 /// A closure's parameter tuple.
 pub trait Args: Send + Sync + 'static {
     /// The same tuple with every member at the runtime's own owned value,
@@ -43,11 +33,14 @@ where
     Rt: Runtime,
 {
     /// The awaited call: the runtime entry that takes this many arguments.
-    fn awaited<'a>(
+    ///
+    /// # Safety
+    /// As `Runtime::call_now`'s: `f` is one of the runtime's closures, and
+    /// this tuple is the argument list its declaration names.
+    unsafe fn awaited<'a>(
         self,
         rt: &'a Rt,
         f: &'a Rt::Value,
-        token: CallToken,
     ) -> impl Future<Output = Rt::Value> + Send + 'a;
 }
 
@@ -180,7 +173,9 @@ where
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
-        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
+        // SAFETY: `self.0` is the closure value this `Closure` was built
+        // over, and `A` is the argument list its declaration names.
+        returned(rt, unsafe { rt.call_now(&self.0, frame, args) })
     }
 
     fn call<'a>(
@@ -191,9 +186,11 @@ where
     ) -> impl Future<Output = R> + Send + 'a {
         async move {
             if self.1 {
-                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
+                // SAFETY: as `call_now`'s.
+                return returned(rt, unsafe { rt.call_now(&self.0, frame, args) });
             }
-            returned(rt, args.awaited(rt, &self.0, CallToken::mint()).await)
+            // SAFETY: as `call_now`'s.
+            returned(rt, unsafe { args.awaited(rt, &self.0) }.await)
         }
     }
 }
@@ -219,13 +216,13 @@ impl<Rt> CallArgs<Rt> for ()
 where
     Rt: Runtime,
 {
-    fn awaited<'a>(
+    unsafe fn awaited<'a>(
         self,
         rt: &'a Rt,
         f: &'a Rt::Value,
-        token: CallToken,
     ) -> impl Future<Output = Rt::Value> + Send + 'a {
-        rt.call_0(f, token)
+        // SAFETY: the caller's contract.
+        unsafe { rt.call_0(f) }
     }
 }
 
@@ -251,14 +248,14 @@ where
     A0: OneValue<Rt> + Cross<Rt>,
     Rt: Runtime,
 {
-    fn awaited<'a>(
+    unsafe fn awaited<'a>(
         self,
         rt: &'a Rt,
         f: &'a Rt::Value,
-        token: CallToken,
     ) -> impl Future<Output = Rt::Value> + Send + 'a {
         let a = self.0.erase(rt);
-        rt.call_1(f, a, token)
+        // SAFETY: the caller's contract.
+        unsafe { rt.call_1(f, a) }
     }
 }
 
@@ -281,15 +278,15 @@ macro_rules! args_of {
             $($A: OneValue<Rt> + Cross<Rt>,)+
             Rt: Runtime,
         {
-            fn awaited<'a>(
+            unsafe fn awaited<'a>(
                 self,
                 rt: &'a Rt,
                 f: &'a Rt::Value,
-                token: CallToken,
             ) -> impl Future<Output = Rt::Value> + Send + 'a {
                 async move {
                     let mut run = [$(self.$at.erase(rt)),+];
-                    rt.call_n(f, &mut run, token).await
+                    // SAFETY: the caller's contract.
+                    unsafe { rt.call_n(f, &mut run) }.await
                 }
             }
         }

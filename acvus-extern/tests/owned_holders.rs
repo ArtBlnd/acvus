@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{
-    Arr, Astr, CallToken, Closure, Erased, FromValue, FxHashMap, Interner, OneValue, Opaque, Owned,
-    Ref, Release, Runtime, Shared, cross_as_stored,
+    Arr, Astr, Closure, Erased, FromValue, FxHashMap, Interner, OneValue, Opaque, Owned, Ref,
+    Release, Runtime, Shared, cross_as_stored,
 };
 
 // -- A payload that counts its own drops --------------------------------
@@ -316,14 +316,6 @@ impl Runtime for Counted {
         panic!("{NO_SLICES}")
     }
 
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
-        panic!("this runtime holds no instance entry")
-    }
-
-    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
-        panic!("this runtime holds no instance entry")
-    }
-
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
@@ -332,7 +324,7 @@ impl Runtime for Counted {
         true
     }
 
-    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    unsafe fn call_now<A>(&self, f: &V, _: &mut (), args: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -343,15 +335,15 @@ impl Runtime for Counted {
         open_ref::<UnaryClosure>(f)(self, *a)
     }
 
-    fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Ready<V> {
+    unsafe fn call_0<'a>(&'a self, _: &'a V) -> Ready<V> {
         panic!("Counted runs only unary closures")
     }
 
-    fn call_1<'a>(&'a self, f: &'a V, a: V, _: CallToken) -> Ready<V> {
+    unsafe fn call_1<'a>(&'a self, f: &'a V, a: V) -> Ready<V> {
         std::future::ready(open_ref::<UnaryClosure>(f)(self, a))
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Ready<V> {
+    unsafe fn call_n<'a>(&'a self, _: &'a V, _: &mut [V]) -> Ready<V> {
         panic!("Counted runs only unary closures")
     }
 }
@@ -809,7 +801,7 @@ fn a_shared_projection_reads_every_field_where_it_lies() {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
-            instances: &acvus_extern::NoInstances,
+            at: std::marker::PhantomData,
         });
     let point = unsafe {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -843,7 +835,7 @@ fn an_exclusive_projection_writes_through_to_the_object() {
             <PointMut<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
                 interner: &interner,
                 ty: &settled,
-                instances: &acvus_extern::NoInstances,
+                at: std::marker::PhantomData,
             });
         let point = unsafe {
             <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -872,7 +864,7 @@ fn a_partial_projection_borrows_the_field_it_names() {
         <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
-            instances: &acvus_extern::NoInstances,
+            at: std::marker::PhantomData,
         });
     let only = unsafe {
         <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -935,7 +927,7 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
-            instances: &acvus_extern::NoInstances,
+            at: std::marker::PhantomData,
         });
 
     let borrowed = allocations_of(|| {
@@ -979,7 +971,7 @@ fn a_partial_projections_table_names_the_objects_position_and_not_its_own() {
     let at = acvus_extern::ArgAt {
         interner: &interner,
         ty: &settled,
-        instances: &acvus_extern::NoInstances,
+        at: std::marker::PhantomData,
     };
 
     let whole = <PointRef<'static> as acvus_extern::Projected<Counted>>::table(at);
@@ -1030,7 +1022,7 @@ fn shape_table() -> acvus_extern::VariantAt<3, ((), acvus_extern::ObjectAt<2, ((
     <ShapeRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
         interner: &SYMBOLS,
         ty: &settled,
-        instances: &acvus_extern::NoInstances,
+        at: std::marker::PhantomData,
     })
 }
 

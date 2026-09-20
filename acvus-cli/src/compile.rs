@@ -114,7 +114,6 @@ pub struct Checked {
     entry: QualifiedRef,
     modules: FxHashMap<QualifiedRef, MirModule>,
     externs: FxHashMap<QualifiedRef, Executable>,
-    instances: acvus_extern::InstanceTable<acvus_interpreter::AcvusRuntime>,
     space: acvus_interpreter::SpaceHooksByType,
     fn_types: FxHashMap<QualifiedRef, Ty>,
     context_names: FxHashMap<QualifiedRef, Astr>,
@@ -131,7 +130,6 @@ impl Checked {
             entry,
             modules,
             mut externs,
-            instances,
             space,
             fn_types,
             context_names,
@@ -141,7 +139,6 @@ impl Checked {
             interner,
             externs: &externs,
             context_names: &context_names,
-            instances: &instances,
         };
         let prepared: Vec<(QualifiedRef, Executable)> = modules
             .iter()
@@ -235,7 +232,6 @@ pub fn check(
         types,
         handlers,
         space,
-        instances,
     } = Externs::combine(registries, interner).map_err(|e| {
         vec![Diagnostic {
             message: format!("the registries do not combine: {e}"),
@@ -338,7 +334,6 @@ pub fn check(
             entry,
             modules: optimized.modules,
             externs,
-            instances,
             space,
             fn_types,
             context_names,

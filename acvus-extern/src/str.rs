@@ -125,13 +125,6 @@ where
     fn site(_: crate::handler::ArgAt<'_, Rt>) {}
 }
 
-impl<Rt> crate::handler::SitedAtEntry<Rt> for ByStr
-where
-    Rt: Runtime,
-{
-    fn site_at_entry(_: crate::instance::Bounds<Rt>) {}
-}
-
 impl<'a, Rt> Arg<'a, Rt> for ByStr
 where
     Rt: Runtime,

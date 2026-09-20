@@ -7,14 +7,13 @@ use std::sync::Arc;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
     CastRule, Effect, EffectTerm, IdentityTerm, InstanceSets, InstanceShape, ParamTerm, Poly,
-    PolyBuilder, PolyTy, Repr, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
-    UserDefinedDecl, Viewed, matches_pattern, unify_patterns,
+    PolyBuilder, PolyTy, Repr, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
+    Viewed, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::handler::{DeclaredInstance, ExternHandler, InstanceEntries, Instances};
-use crate::instance::{Entry, EntryRun, NodeArena};
+use crate::handler::{DeclaredInstance, ExternHandler, Instances};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -453,23 +452,13 @@ pub struct Externs<R: Runtime> {
     pub types: TypeRegistry,
     pub handlers: Handlers<R>,
     pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
-    /// What a call site resolves a required instance through (RFC-0067
-    /// Decision 3).
-    pub instances: InstanceTable<R>,
 }
 
-/// One instance of one shared signature as a site table needs it: the
-/// pattern it stands at, the plain function that runs it, and what its own
-/// bounds require under it.
-pub struct InstanceAt<R>
-where
-    R: Runtime,
-{
+/// One instance of one shared signature as the checker's `InstanceSets`
+/// needs it: the pattern it stands at, what its own bounds require, and the
+/// task its body runs at.
+pub struct InstanceAt {
     pub ty: PolyTy,
-    /// `None` where the instance has no entry — it holds a `#[state]`
-    /// value, takes a projection parameter, or is declared `heavy`
-    /// (RFC-0067, the entry's refusal list).
-    pub entry: Option<EntryRun<R>>,
     pub requires: Vec<BoundAt>,
     /// The task this instance's own body runs at: the tightest of the
     /// handlers the declaration contributed, which for a declaration with a
@@ -498,83 +487,6 @@ fn path_to_var(pattern: &PolyTy, var: u32, at: &mut Vec<usize>) -> bool {
     }
 }
 
-/// What filled the variable `path` leads to, in a ground type of the
-/// pattern's shape.
-fn arg_at<'a>(ty: &'a Ty, path: &[usize]) -> &'a Ty {
-    let mut at = ty;
-    for step in path {
-        let TyTerm::UserDefined { type_args, .. } = at else {
-            panic!(
-                "a required instance's variable stands at type argument {step} of {at:?}, which \
-                 names no type arguments; the ground type does not have the instance's shape"
-            )
-        };
-        at = &type_args[*step].ty;
-    }
-    at
-}
-
-/// Every shared signature's instances, in the order `Externs::combine`
-/// collected them. This is the registry half of `InstanceEntries`; the
-/// site table is filled from it once, before the first call.
-pub struct InstanceTable<R>
-where
-    R: Runtime,
-{
-    by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt<R>>>,
-    arena: Arc<NodeArena<R>>,
-}
-
-impl<R> Default for InstanceTable<R>
-where
-    R: Runtime,
-{
-    fn default() -> Self {
-        Self {
-            by_signature: FxHashMap::default(),
-            arena: Arc::new(NodeArena::default()),
-        }
-    }
-}
-
-impl<R> InstanceEntries<R> for InstanceTable<R>
-where
-    R: Runtime,
-{
-    fn entry_at(&self, signature: QualifiedRef, ty: &Ty) -> Entry<R> {
-        let ty = match ty {
-            TyTerm::Ref(_, target) => &target.ty,
-            at => at,
-        };
-        let Some(instances) = self.by_signature.get(&signature) else {
-            panic!("{signature:?} is required but no registry declares it")
-        };
-        let Some(found) = instances.iter().find(|at| matches_pattern(ty, &at.ty)) else {
-            panic!(
-                "{signature:?} has no instance at {ty:?}, so the OneOf bound the requirement \
-                 was met with admitted a type it does not hold (RFC-0067 Decision 3)"
-            )
-        };
-        let Some(entry) = found.entry else {
-            panic!(
-                "the instance of {signature:?} at {ty:?} has no entry, so nothing can require \
-                 it; an instance holding a `#[state]` value, taking a projection parameter, or \
-                 declared `heavy` is written without one"
-            )
-        };
-        let children = found
-            .requires
-            .iter()
-            .map(|bound| self.entry_at(bound.signature, arg_at(ty, &bound.at)))
-            .collect();
-        self.arena.node(entry, children)
-    }
-
-    fn arena(&self) -> Arc<NodeArena<R>> {
-        Arc::clone(&self.arena)
-    }
-}
-
 /// The instances collected for one signature.
 struct Collected<R: Runtime> {
     decl: SignatureDecl,
@@ -582,7 +494,7 @@ struct Collected<R: Runtime> {
     instances: Vec<DeclaredInstance<R>>,
     /// One per declared instance, which `instances` is not: a declaration
     /// with a `sync =` companion contributes two handlers and one type.
-    entries: Vec<InstanceAt<R>>,
+    entries: Vec<InstanceAt>,
     casts: Vec<CastRule>,
 }
 
@@ -730,9 +642,7 @@ impl<R: Runtime> Externs<R> {
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
-        let mut by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt<R>>> = FxHashMap::default();
         for c in collected {
-            by_signature.insert(c.decl.qref, c.entries);
             let mut bounds = c.decl.bounds;
             if let Some(first) = bounds.first_mut() {
                 *first = meet(first, c.decl.qref, &c.instance_types, &sets);
@@ -759,10 +669,6 @@ impl<R: Runtime> Externs<R> {
             types,
             handlers,
             space,
-            instances: InstanceTable {
-                by_signature,
-                arena: Arc::new(NodeArena::default()),
-            },
         })
     }
 }
@@ -847,13 +753,11 @@ fn add_instance<R: Runtime>(
         .collect::<Result<Vec<BoundAt>, CombineError>>()?;
     collected.entries.push(InstanceAt {
         ty: ty.clone(),
-        entry: admitted.iter().find_map(|i| i.handler.entry()),
         requires,
         task: admitted
             .iter()
             .map(|i| i.handler.task())
-            .min()
-            .expect("a declared instance contributes at least one handler"),
+            .fold(Task::Heavy, Task::meet),
     });
     collected.instance_types.push(ty);
     collected.instances.extend(admitted);

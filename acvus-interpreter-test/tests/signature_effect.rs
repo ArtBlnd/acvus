@@ -291,7 +291,6 @@ fn prepared_entry(source: &str) -> Code {
         interner: &i,
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
-        instances: &acvus_extern::NoInstances,
     };
     let prepared = prepare_module(module, &ctx);
     Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"))

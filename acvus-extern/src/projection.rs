@@ -157,7 +157,7 @@ where
             ArgAt {
                 interner: at.interner,
                 ty,
-                instances: at.instances,
+                at: std::marker::PhantomData,
             },
         )
     })
@@ -204,7 +204,7 @@ where
         let payload = payload.as_deref().map(|ty| ArgAt {
             interner: at.interner,
             ty,
-            instances: at.instances,
+            at: std::marker::PhantomData,
         });
         (key.bits(), payload)
     })
@@ -400,7 +400,7 @@ where
         <T as Project<Rt>>::table(ArgAt {
             interner: at.interner,
             ty: payload,
-            instances: at.instances,
+            at: std::marker::PhantomData,
         })
     }
 

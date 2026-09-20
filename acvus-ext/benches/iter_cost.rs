@@ -14,7 +14,7 @@ use std::mem::ManuallyDrop;
 use std::time::{Duration, Instant};
 
 use acvus_ext::Iter;
-use acvus_extern::{CallToken, Erased, Interner, Runtime};
+use acvus_extern::{Erased, Interner, Runtime};
 
 /// No registry these tests combine declares a sliceable container, so the
 /// pair a slice would occupy is never built or read.
@@ -183,14 +183,6 @@ impl Runtime for Words {
         panic!("Words holds no references")
     }
 
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> Word {
-        panic!("Words holds no instance entry")
-    }
-
-    unsafe fn entry_of(&self, _: &Word) -> acvus_extern::Entry<Self> {
-        panic!("Words holds no instance entry")
-    }
-
     unsafe fn reference(&self, _: &Word) -> Word {
         panic!("Words holds no references")
     }
@@ -245,22 +237,22 @@ impl Runtime for Words {
         false
     }
 
-    fn call_now<A>(&self, _: &Word, _: &mut (), _: A, _: CallToken) -> Word
+    unsafe fn call_now<A>(&self, _: &Word, _: &mut (), _: A) -> Word
     where
         A: acvus_extern::IntoRun<Self>,
     {
         self.no_closures()
     }
 
-    fn call_0<'a>(&'a self, _: &'a Word, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_0<'a>(&'a self, _: &'a Word) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 
-    fn call_1<'a>(&'a self, _: &'a Word, _: Word, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_1<'a>(&'a self, _: &'a Word, _: Word) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 
-    fn call_n<'a>(&'a self, _: &'a Word, _: &mut [Word], _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_n<'a>(&'a self, _: &'a Word, _: &mut [Word]) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 }
@@ -526,14 +518,6 @@ impl Runtime for Tags {
         panic!("Tags holds no references")
     }
 
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> TaggedWord {
-        panic!("Tags holds no instance entry")
-    }
-
-    unsafe fn entry_of(&self, _: &TaggedWord) -> acvus_extern::Entry<Self> {
-        panic!("Tags holds no instance entry")
-    }
-
     unsafe fn reference(&self, _: &TaggedWord) -> TaggedWord {
         panic!("Tags holds no references")
     }
@@ -588,31 +572,25 @@ impl Runtime for Tags {
         false
     }
 
-    fn call_now<A>(&self, _: &TaggedWord, _: &mut (), _: A, _: CallToken) -> TaggedWord
+    unsafe fn call_now<A>(&self, _: &TaggedWord, _: &mut (), _: A) -> TaggedWord
     where
         A: acvus_extern::IntoRun<Self>,
     {
         self.no_closures()
     }
 
-    fn call_0<'a>(&'a self, _: &'a TaggedWord, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_0<'a>(&'a self, _: &'a TaggedWord) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 
-    fn call_1<'a>(
-        &'a self,
-        _: &'a TaggedWord,
-        _: TaggedWord,
-        _: CallToken,
-    ) -> Self::CallFuture<'a> {
+    unsafe fn call_1<'a>(&'a self, _: &'a TaggedWord, _: TaggedWord) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 
-    fn call_n<'a>(
+    unsafe fn call_n<'a>(
         &'a self,
         _: &'a TaggedWord,
         _: &mut [TaggedWord],
-        _: CallToken,
     ) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }

@@ -7,8 +7,6 @@
 use std::any::TypeId;
 use std::future::{Future, Ready};
 
-use crate::func::CallToken;
-
 /// The contract a host signs to run declared ExternFns. A `Value` is opaque;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
@@ -244,14 +242,6 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// (RFC-0018).
     unsafe fn slice_from_run(&self, run: &[Self::Value]) -> crate::slice::Words;
 
-    /// A resolved instance's entry as one of this runtime's values
-    /// (RFC-0067 Decision 3).
-    fn entry_value(&self, entry: crate::instance::Entry<Self>) -> Self::Value;
-
-    /// # Safety
-    /// `value` was made by `entry_value` of this same runtime.
-    unsafe fn entry_of(&self, value: &Self::Value) -> crate::instance::Entry<Self>;
-
     /// A reference value naming `target`'s storage (RFC-0018): what a
     /// handler passes to a closure whose parameter is `&T` / `&mut T`.
     ///
@@ -267,31 +257,35 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// Run `f` to its result now, reached only where `call_is_sync`
     /// answered true for this same value. Each argument crosses straight into
     /// the parameter register `frame` holds for it (RFC-0052 §7).
-    fn call_now<A>(
+    ///
+    /// # Safety
+    /// The call comes through `Closure`, which is where a value known to be
+    /// one of this runtime's closures, called at the types its declaration
+    /// names, is the only thing that reaches here.
+    unsafe fn call_now<A>(
         &self,
         f: &Self::Value,
         frame: &mut Self::Frame<'_>,
         args: A,
-        token: CallToken,
     ) -> Self::Value
     where
         A: crate::IntoRun<Self>;
 
     /// Run the closure `f`; each argument moves into the callee's
-    /// parameter. Only `Closure` reaches these: the token is its to
-    /// mint.
-    fn call_0<'a>(&'a self, f: &'a Self::Value, token: CallToken) -> Self::CallFuture<'a>;
-    fn call_1<'a>(
-        &'a self,
-        f: &'a Self::Value,
-        a: Self::Value,
-        token: CallToken,
-    ) -> Self::CallFuture<'a>;
-    fn call_n<'a>(
+    /// parameter.
+    ///
+    /// # Safety
+    /// As `call_now`'s.
+    unsafe fn call_0<'a>(&'a self, f: &'a Self::Value) -> Self::CallFuture<'a>;
+    /// # Safety
+    /// As `call_now`'s.
+    unsafe fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value) -> Self::CallFuture<'a>;
+    /// # Safety
+    /// As `call_now`'s.
+    unsafe fn call_n<'a>(
         &'a self,
         f: &'a Self::Value,
         args: &mut [Self::Value],
-        token: CallToken,
     ) -> Self::CallFuture<'a>;
 }
 
@@ -384,12 +378,6 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
-    fn entry_value(&self, _: crate::instance::Entry<Self>) {
-        no_values()
-    }
-    unsafe fn entry_of(&self, _: &()) -> crate::instance::Entry<Self> {
-        no_values()
-    }
     fn none(&self) {
         no_values()
     }
@@ -432,19 +420,19 @@ impl Runtime for TypesOnly {
     fn call_is_sync(&self, _: &()) -> bool {
         false
     }
-    fn call_now<A>(&self, _: &(), _: &mut (), _: A, _: CallToken)
+    unsafe fn call_now<A>(&self, _: &(), _: &mut (), _: A)
     where
         A: crate::IntoRun<Self>,
     {
         no_values()
     }
-    fn call_0<'a>(&'a self, _: &'a (), _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_0<'a>(&'a self, _: &'a ()) -> Self::CallFuture<'a> {
         no_values()
     }
-    fn call_1<'a>(&'a self, _: &'a (), _: (), _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_1<'a>(&'a self, _: &'a (), _: ()) -> Self::CallFuture<'a> {
         no_values()
     }
-    fn call_n<'a>(&'a self, _: &'a (), _: &mut [()], _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_n<'a>(&'a self, _: &'a (), _: &mut [()]) -> Self::CallFuture<'a> {
         no_values()
     }
 }

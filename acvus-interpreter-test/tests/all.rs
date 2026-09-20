@@ -20,7 +20,6 @@ mod diamond;
 mod differential;
 mod e2e;
 mod element_borrow_key;
-mod entry_tree;
 mod enum_projection;
 mod erased;
 mod extern_aggregate_result;

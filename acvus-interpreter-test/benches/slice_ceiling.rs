@@ -501,7 +501,6 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
             interner: &interner,
             externs: &functions,
             context_names: &context_names,
-            instances: &acvus_extern::NoInstances,
         },
     );
     if shape == Shape::Unchecked {

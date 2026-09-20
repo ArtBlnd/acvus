@@ -6,7 +6,7 @@ use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_extern::{CallToken, Owned, Runtime, Variant};
+use acvus_extern::{Owned, Runtime, Variant};
 
 use crate::interpreter::InterpreterContext;
 use crate::ops::call;
@@ -330,15 +330,6 @@ impl Runtime for AcvusRuntime {
         Value::reference(target)
     }
 
-    fn entry_value(&self, entry: acvus_extern::Entry<Self>) -> Value {
-        Value::entry(entry)
-    }
-
-    unsafe fn entry_of(&self, value: &Value) -> acvus_extern::Entry<Self> {
-        // SAFETY: the caller's contract: `entry_value` wrote this value.
-        unsafe { value.as_entry() }
-    }
-
     fn none(&self) -> Value {
         Value::NONE
     }
@@ -401,31 +392,29 @@ impl Runtime for AcvusRuntime {
         !unsafe { f.as_fn() }.entry.may_suspend()
     }
 
-    fn call_now<A>(&self, f: &Value, frame: &mut &mut FrameState, args: A, _: CallToken) -> Value
+    unsafe fn call_now<A>(&self, f: &Value, frame: &mut &mut FrameState, args: A) -> Value
     where
         A: acvus_extern::IntoRun<Self>,
     {
+        debug_assert!(
+            A::WIDTH <= usize::from(u16::MAX),
+            "a closure takes at most one cell of arguments"
+        );
         args.into_run(self, frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        let arity = u16::try_from(A::WIDTH).expect("a closure takes at most one cell of arguments");
-        crate::machine::fn_value_call_in_window(closure, frame, arity)
+        crate::machine::fn_value_call_in_window(closure, frame, A::WIDTH as u16)
     }
 
-    fn call_0<'a>(&'a self, f: &'a Value, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_0<'a>(&'a self, f: &'a Value) -> Self::CallFuture<'a> {
         self.run(f, &mut [])
     }
 
-    fn call_1<'a>(&'a self, f: &'a Value, a: Value, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_1<'a>(&'a self, f: &'a Value, a: Value) -> Self::CallFuture<'a> {
         self.run(f, &mut [a])
     }
 
-    fn call_n<'a>(
-        &'a self,
-        f: &'a Value,
-        args: &mut [Value],
-        _: CallToken,
-    ) -> Self::CallFuture<'a> {
+    unsafe fn call_n<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> Self::CallFuture<'a> {
         self.run(f, args)
     }
 }

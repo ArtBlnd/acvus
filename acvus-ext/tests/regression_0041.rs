@@ -14,9 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use acvus_ext::{Deque, Iter, vec_registry};
 use acvus_extern::{
-    Arr, CallToken, Closure, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, Mut,
-    OneValue, Owned, QualifiedRef, Ref, Registry, Release, Runtime, Shared, extern_fn,
-    extern_registry,
+    Arr, Closure, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, Mut, OneValue, Owned,
+    QualifiedRef, Ref, Registry, Release, Runtime, Shared, extern_fn, extern_registry,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -256,14 +255,6 @@ impl Runtime for Counting {
         open_mut(unsafe { <V as acvus_extern::OneValue<Counting>>::deref_mut(self, reference) })
     }
 
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
-        panic!("this runtime holds no instance entry")
-    }
-
-    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
-        panic!("this runtime holds no instance entry")
-    }
-
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
@@ -333,7 +324,7 @@ impl Runtime for Counting {
         true
     }
 
-    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    unsafe fn call_now<A>(&self, f: &V, _: &mut (), args: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -344,15 +335,15 @@ impl Runtime for Counting {
         open_ref::<UnaryClosure>(f)(self, *a)
     }
 
-    fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_0<'a>(&'a self, _: &'a V) -> Self::CallFuture<'a> {
         std::future::ready(self.only_unary())
     }
 
-    fn call_1<'a>(&'a self, f: &'a V, a: V, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_1<'a>(&'a self, f: &'a V, a: V) -> Self::CallFuture<'a> {
         std::future::ready(open_ref::<UnaryClosure>(f)(self, a))
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_n<'a>(&'a self, _: &'a V, _: &mut [V]) -> Self::CallFuture<'a> {
         std::future::ready(self.only_unary())
     }
 }

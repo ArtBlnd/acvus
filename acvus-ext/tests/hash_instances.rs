@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::vec_registry;
 use acvus_extern::{
-    CallToken, DirectOp, ExternHandler, Externs, FnKind, Interner, Monomorphize, OneValue, PolyTy,
+    DirectOp, ExternHandler, Externs, FnKind, Interner, Monomorphize, OneValue, PolyTy,
     QualifiedRef, Registry, Release, Repr, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
@@ -271,14 +271,6 @@ impl Runtime for Counting {
         open_mut(unsafe { <V as acvus_extern::OneValue<Counting>>::deref_mut(self, reference) })
     }
 
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
-        panic!("this runtime holds no instance entry")
-    }
-
-    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
-        panic!("this runtime holds no instance entry")
-    }
-
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
@@ -348,22 +340,22 @@ impl Runtime for Counting {
         false
     }
 
-    fn call_now<A>(&self, _: &V, _: &mut (), _: A, _: CallToken) -> V
+    unsafe fn call_now<A>(&self, _: &V, _: &mut (), _: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
         self.no_closures()
     }
 
-    fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_0<'a>(&'a self, _: &'a V) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 
-    fn call_1<'a>(&'a self, _: &'a V, _: V, _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_1<'a>(&'a self, _: &'a V, _: V) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Self::CallFuture<'a> {
+    unsafe fn call_n<'a>(&'a self, _: &'a V, _: &mut [V]) -> Self::CallFuture<'a> {
         std::future::ready(self.no_closures())
     }
 }

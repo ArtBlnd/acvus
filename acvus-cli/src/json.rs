@@ -105,7 +105,6 @@ pub fn by_kind(interner: &Interner, value: &Value) -> Json {
         Kind::Ref => by_kind(interner, unsafe { value.target() }),
         Kind::Undef => Json::from("<undef>"),
         Kind::LargeRef => Json::from("<projection>"),
-        Kind::Entry => Json::from("<instance>"),
         Kind::Large => by_composite(interner, value),
     }
 }

@@ -38,7 +38,6 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
         interner: i,
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
-        instances: &acvus_extern::NoInstances,
     };
     assert_eq!(cr.modules.len(), 1, "these scripts are one module");
     let (_, module) = cr.modules.iter().next().expect("one module");

@@ -84,10 +84,6 @@ pub struct Var {
     /// Each `InstanceOf<S>` or `InstanceOfAsync<S>` bound, in the order it
     /// was written (RFC-0067 Decision 1).
     pub requires: Vec<Required>,
-    /// What fills this variable when the handler runs: the carrier
-    /// `#[extern_fn]` writes where the variable is bounded, and the
-    /// runtime's own value where it is not.
-    pub carrier: Option<Type>,
 }
 
 /// One requirement as its bound was written: the signature, and whether
@@ -296,7 +292,6 @@ impl Vars {
                 mono,
                 mono_fallback,
                 requires,
-                carrier: None,
             });
             counts[slot] += 1;
         }
@@ -329,8 +324,7 @@ impl Vars {
             .map(|v| &v.ident)
     }
 
-    /// Every type variable, in declaration order: the kind a carrier fills,
-    /// so the kind an `ExternType` payload may not name.
+    /// Every type variable, in declaration order.
     pub fn type_vars(&self) -> impl Iterator<Item = &Ident> {
         self.0
             .iter()
@@ -410,10 +404,7 @@ impl Vars {
     /// other must follow; both compile either way.
     fn runtime_stand_in(v: &Var) -> Type {
         match v.kind {
-            VarKind::Ty => match &v.carrier {
-                Some(carrier) => carrier.clone(),
-                None => syn::parse_quote! { ::acvus_extern::Owned<__R> },
-            },
+            VarKind::Ty => syn::parse_quote! { ::acvus_extern::Owned<__R> },
             VarKind::Effect | VarKind::Len | VarKind::Identity => syn::parse_quote! { () },
             VarKind::Runtime => syn::parse_quote! { __R },
         }
@@ -492,31 +483,9 @@ impl Vars {
             .filter(|v| v.kind == VarKind::Ty && !v.requires.is_empty())
     }
 
-    /// Names the carrier that fills each bounded variable when the handler
-    /// runs. Called before any substitution reads `runtime_stand_in`.
-    pub fn set_carriers(&mut self, carrier_of: &dyn Fn(&Ident) -> Type) {
-        for v in &mut self.0 {
-            if v.kind == VarKind::Ty && !v.requires.is_empty() {
-                v.carrier = Some(carrier_of(&v.ident));
-            }
-        }
-    }
-
     /// Whether `ty` is exactly the variable `ident` and nothing else.
     pub fn is_exactly(ty: &Type, ident: &Ident) -> bool {
         matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident(ident))
-    }
-
-    /// Whether `ty` mentions `ident` anywhere.
-    pub fn mentions(ty: &Type, ident: &Ident) -> bool {
-        let found = std::cell::Cell::new(false);
-        subst::substitute(ty, &|at| {
-            if at == ident {
-                found.set(true);
-            }
-            None
-        });
-        found.get()
     }
 
     /// The Monomorphize variable, if any.

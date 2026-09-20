@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{Deque, Iter};
 use acvus_extern::{
-    Astr, CallToken, Closure, FromValue, Interner, OneValue, Owned, Ref, Release, Runtime, Shared,
+    Astr, Closure, FromValue, Interner, OneValue, Owned, Ref, Release, Runtime, Shared,
     cross_as_stored,
 };
 
@@ -312,14 +312,6 @@ impl Runtime for Counted {
         panic!("{NO_SLICES}")
     }
 
-    fn entry_value(&self, _: acvus_extern::Entry<Self>) -> V {
-        panic!("this runtime holds no instance entry")
-    }
-
-    unsafe fn entry_of(&self, _: &V) -> acvus_extern::Entry<Self> {
-        panic!("this runtime holds no instance entry")
-    }
-
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
@@ -328,7 +320,7 @@ impl Runtime for Counted {
         true
     }
 
-    fn call_now<A>(&self, f: &V, _: &mut (), args: A, _: CallToken) -> V
+    unsafe fn call_now<A>(&self, f: &V, _: &mut (), args: A) -> V
     where
         A: acvus_extern::IntoRun<Self>,
     {
@@ -339,15 +331,15 @@ impl Runtime for Counted {
         open_ref::<UnaryClosure>(f)(self, *a)
     }
 
-    fn call_0<'a>(&'a self, _: &'a V, _: CallToken) -> Ready<V> {
+    unsafe fn call_0<'a>(&'a self, _: &'a V) -> Ready<V> {
         panic!("Counted runs only unary closures")
     }
 
-    fn call_1<'a>(&'a self, f: &'a V, a: V, _: CallToken) -> Ready<V> {
+    unsafe fn call_1<'a>(&'a self, f: &'a V, a: V) -> Ready<V> {
         std::future::ready(open_ref::<UnaryClosure>(f)(self, a))
     }
 
-    fn call_n<'a>(&'a self, _: &'a V, _: &mut [V], _: CallToken) -> Ready<V> {
+    unsafe fn call_n<'a>(&'a self, _: &'a V, _: &mut [V]) -> Ready<V> {
         panic!("Counted runs only unary closures")
     }
 }

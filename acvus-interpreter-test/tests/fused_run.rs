@@ -151,7 +151,6 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
         interner: &interner,
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
-        instances: &acvus_extern::NoInstances,
     };
 
     let mut found = Vec::new();
