@@ -119,7 +119,7 @@ async fn an_if_nested_in_an_arm_is_a_diamond_inside_a_diamond() {
         .expect("its true arm");
     assert_eq!(
         arm.ops,
-        vec!["Gt<i64, Slot, Slot, R0>", "Diamond<R0>"],
+        vec!["Gt<i64, Slot, Slot, R0>", "Diamond<R0, Rejoins>"],
         "the outer arm is two operations: the inner test and the inner diamond. `@n` \
          comes from the page, so the inner `@n > 8` is a live compare no fold reaches, \
          and a compare is a chain producer — its word rides in R0 into the diamond \

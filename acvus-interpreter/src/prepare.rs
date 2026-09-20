@@ -444,11 +444,114 @@ struct LoopRegion {
 /// One `for` the recognizer matched, as indexes into `MirBody::insts`.
 struct ForRegion {
     enter_jump: usize,
-    head: usize,
     terminator: usize,
     body_block: Range<usize>,
     body_regions: Vec<Region>,
     back: usize,
+}
+
+/// The block a branch's arms meet at.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Join(Label);
+
+/// The innermost loop a chain runs inside, as the two labels
+/// `acvus_mir::lower::leave_loop` jumps to.
+#[derive(Clone, Copy)]
+struct Within {
+    header: Label,
+    exit: Label,
+}
+
+/// What a chain can hand the region above it besides `FALL`.
+#[derive(Clone, Copy, Default)]
+struct Hands {
+    /// `break` or `continue` of the loop the chain is the body of.
+    loop_verdict: bool,
+    returns: bool,
+}
+
+impl Hands {
+    fn any(self) -> bool {
+        self.loop_verdict || self.returns
+    }
+
+    fn or(self, other: Hands) -> Hands {
+        Hands {
+            loop_verdict: self.loop_verdict || other.loop_verdict,
+            returns: self.returns || other.returns,
+        }
+    }
+
+    /// A loop reads its body's `break` and its `continue` and hands neither
+    /// on; a `return` inside it is the function's and travels to the machine.
+    fn past_a_loop(self) -> Hands {
+        Hands {
+            loop_verdict: false,
+            returns: self.returns,
+        }
+    }
+}
+
+/// What the region above a part reads of the word its chain ends with: the
+/// word the chain computed, or the verdict its body reached.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ends {
+    Word,
+    Verdict,
+}
+
+impl Ends {
+    fn of(hands: Hands) -> Ends {
+        match hands.any() {
+            true => Ends::Verdict,
+            false => Ends::Word,
+        }
+    }
+
+    fn node(self) -> Box<dyn Op> {
+        match self {
+            Ends::Word => Box::new(control::Yield),
+            Ends::Verdict => Box::new(control::Fall),
+        }
+    }
+}
+
+fn hands_of(regions: &[Region]) -> Hands {
+    regions
+        .iter()
+        .fold(Hands::default(), |hands, region| hands.or(region.hands()))
+}
+
+/// Which of the four verdict nodes ends an escaping arm, and the instruction
+/// that is it.
+enum Verdict {
+    Break(usize),
+    Continue(usize),
+    Returns(usize),
+}
+
+/// The side of an escaping branch that carries on, where the lowering laid
+/// it before the escaping side: its own block, and the jump by which it
+/// reaches the label the region continues into.
+struct CarriesOn {
+    block: Range<usize>,
+    regions: Vec<Region>,
+    jump: usize,
+}
+
+/// One `break`, `continue`, `?` or `return` under a test, as indexes into
+/// `MirBody::insts`: the branch, the arm it is under, and where the side that
+/// does not escape carries on. That side is `None` where the lowering laid
+/// the escaping arm first, and the chain the region sits in is then what
+/// carries on.
+struct EscapeRegion {
+    branch: usize,
+    arm_on: bool,
+    carries_on: Option<CarriesOn>,
+    arm_block: Range<usize>,
+    arm_regions: Vec<Region>,
+    verdict: Verdict,
+    after: usize,
 }
 
 /// One `if/else` the recognizer matched, as indexes into `MirBody::insts`.
@@ -513,7 +616,7 @@ impl<'r> Sides<'r> {
             ) => Some(Sides {
                 arm_block: block.clone(),
                 arm_regions: regions,
-                arm_jump: *jump,
+                arm_jump: (*jump)?,
                 passed_args: args.on_false,
                 computes_on_true: true,
             }),
@@ -527,7 +630,7 @@ impl<'r> Sides<'r> {
             ) => Some(Sides {
                 arm_block: block.clone(),
                 arm_regions: regions,
-                arm_jump: *jump,
+                arm_jump: (*jump)?,
                 passed_args: args.on_true,
                 computes_on_true: false,
             }),
@@ -542,7 +645,9 @@ enum ArmRegion {
     Block {
         block: Range<usize>,
         regions: Vec<Region>,
-        jump: usize,
+        /// The `Jump` into the join, and `None` where an `Escape` inside the
+        /// arm already carried the join's moves and the arm falls into it.
+        jump: Option<usize>,
     },
     Branch {
         block: Range<usize>,
@@ -558,6 +663,7 @@ enum Region {
     For(ForRegion),
     Diamond(DiamondRegion),
     Switch(SwitchRegion),
+    Escape(EscapeRegion),
 }
 
 struct StraightRun {
@@ -597,6 +703,7 @@ impl Region {
             Region::For(region) => region.enter_jump,
             Region::Diamond(region) => region.branch,
             Region::Switch(region) => region.dispatch,
+            Region::Escape(region) => region.branch,
         }
     }
 
@@ -606,6 +713,56 @@ impl Region {
             Region::For(region) => region.back + 1,
             Region::Diamond(region) => region.join + 1,
             Region::Switch(region) => region.join + 1,
+            Region::Escape(region) => region.after,
+        }
+    }
+
+    fn hands(&self) -> Hands {
+        match self {
+            Region::Loop(region) => hands_of(&region.body_regions).past_a_loop(),
+            Region::For(region) => hands_of(&region.body_regions).past_a_loop(),
+            Region::Diamond(region) => region.hands(),
+            Region::Switch(region) => region
+                .arms
+                .iter()
+                .fold(Hands::default(), |hands, arm| hands.or(arm.region.hands())),
+            Region::Escape(region) => region.hands(),
+        }
+    }
+}
+
+impl EscapeRegion {
+    fn hands(&self) -> Hands {
+        let reached = match self.verdict {
+            Verdict::Break(_) | Verdict::Continue(_) => Hands {
+                loop_verdict: true,
+                returns: false,
+            },
+            Verdict::Returns(_) => Hands {
+                loop_verdict: false,
+                returns: true,
+            },
+        };
+        let carried = match &self.carries_on {
+            Some(side) => hands_of(&side.regions),
+            None => Hands::default(),
+        };
+        reached.or(hands_of(&self.arm_regions)).or(carried)
+    }
+}
+
+impl DiamondRegion {
+    fn hands(&self) -> Hands {
+        self.on_true.hands().or(self.on_false.hands())
+    }
+}
+
+impl ArmRegion {
+    fn hands(&self) -> Hands {
+        match self {
+            ArmRegion::Direct => Hands::default(),
+            ArmRegion::Block { regions, .. } => hands_of(regions),
+            ArmRegion::Branch { regions, tail, .. } => hands_of(regions).or(tail.hands()),
         }
     }
 }
@@ -696,10 +853,14 @@ impl Prepare<'_> {
             Unit::Chain(run) => self.rides_word(run.dst),
             // A `Select` writes the join's one register and nothing else, so
             // the word it leaves can ride where a `Diamond`'s cannot: the
-            // arms of a diamond each write that register themselves.
-            Unit::Region(Region::Diamond(region)) => {
-                self.rides_word(self.select_shape(region)?.dst)
-            }
+            // arms of a diamond each write that register themselves. An arm
+            // that can escape ends in a verdict rather than the word it
+            // computed, so `branch_node` builds no `Select` for it and
+            // nothing rides out.
+            Unit::Region(Region::Diamond(region)) => match region.hands().any() {
+                true => None,
+                false => self.rides_word(self.select_shape(region)?.dst),
+            },
             _ => None,
         }
     }
@@ -717,12 +878,15 @@ impl Prepare<'_> {
     }
 
     /// A `Loop` reads its condition after its head chain has returned, so the
-    /// word cannot ride to it: the joint is between them. A `Diamond` is an
-    /// operation of this chain, so it can.
+    /// word cannot ride to it: the joint is between them. A `Diamond` and an
+    /// `Escape` are operations of this chain, so they can.
     fn consumes_place(&self, unit: &Unit<'_>, value: ValueId) -> bool {
         match unit {
             Unit::Inst(at) => self.reads_place(*at, value),
-            Unit::Region(Region::Diamond(region)) => self.reads_place(region.branch, value),
+            Unit::Region(Region::Diamond(DiamondRegion { branch, .. }))
+            | Unit::Region(Region::Escape(EscapeRegion { branch, .. })) => {
+                self.reads_place(*branch, value)
+            }
             _ => false,
         }
     }
@@ -1731,7 +1895,7 @@ impl<'a> Prepare<'a> {
             .iter()
             .find(|arm| arm.label == edge.label)
             .expect("a recognized `match` laid an arm for every successor its dispatch names");
-        self.arm(&arm.region, edge, rides)
+        self.arm(&arm.region, edge, rides, Ends::Word)
     }
 
     /// A suspending operation is excluded along with the terminators: it
@@ -1799,12 +1963,12 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    fn straight_run(&self, from: usize, limit: usize) -> StraightRun {
+    fn straight_run(&self, from: usize, limit: usize, within: Option<Within>) -> StraightRun {
         let insts = self.body.insts.as_slice();
         let mut regions = Vec::new();
         let mut at = from;
         while at < limit {
-            if let Some(region) = self.recognize_region(at)
+            if let Some(region) = self.recognize_region(at, within)
                 && region.end() <= limit
             {
                 at = region.end();
@@ -1821,17 +1985,144 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    fn recognize_region(&self, at: usize) -> Option<Region> {
+    fn recognize_region(&self, at: usize, within: Option<Within>) -> Option<Region> {
         if let Some(region) = self.recognize_for(at) {
             return Some(Region::For(region));
         }
         if let Some(region) = self.recognize_loop(at) {
             return Some(Region::Loop(region));
         }
-        if let Some(region) = self.recognize_diamond(at) {
+        if let Some(region) = self.recognize_diamond(at, within) {
             return Some(Region::Diamond(region));
         }
-        self.recognize_switch(at).map(Region::Switch)
+        if let Some(within) = within
+            && let Some(region) = self.recognize_escape(at, within)
+        {
+            return Some(Region::Escape(region));
+        }
+        self.recognize_switch(at, within).map(Region::Switch)
+    }
+
+    /// The `break`, `continue`, `?` or `return` a chain stops at.
+    fn verdict(&self, stops_at: usize, within: Within) -> Option<Verdict> {
+        match &self.body.insts.get(stops_at)?.kind {
+            InstKind::Jump { label, .. } if *label == within.exit => Some(Verdict::Break(stops_at)),
+            InstKind::Jump { label, .. } if *label == within.header => {
+                Some(Verdict::Continue(stops_at))
+            }
+            InstKind::Return { .. } => Some(Verdict::Returns(stops_at)),
+            _ => None,
+        }
+    }
+
+    /// The shape `acvus_mir::lower` gives a `break`, a `continue`, a `?` and a
+    /// `return` under a test, in either of the two orders it lays the sides
+    /// in: the escaping side first, where what carries on is the rest of the
+    /// chain the region sits in, or the escaping side second, where the side
+    /// that carries on is a block of this region that rejoins at the label
+    /// the region continues into.
+    ///
+    /// This region has no join, by decision: only one of its sides reaches
+    /// the continuation, so nothing meets there, and a `Diamond` is what a
+    /// branch whose two sides both rejoin prepares to instead.
+    fn recognize_escape(&self, at: usize, within: Within) -> Option<EscapeRegion> {
+        let insts = self.body.insts.as_slice();
+        let InstKind::JumpIf {
+            then_label,
+            else_label,
+            ..
+        } = &insts.get(at)?.kind
+        else {
+            return None;
+        };
+
+        let near = block_label(insts.get(at + 1)?)?;
+        let near_is_then = match (near == *then_label, near == *else_label) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => return None,
+        };
+        let far = match near_is_then {
+            true => *else_label,
+            false => *then_label,
+        };
+        if self.references(near).as_slice() != [at] {
+            return None;
+        }
+
+        let StraightRun { stops_at, regions } =
+            self.straight_run(at + 2, insts.len(), Some(within));
+        let Some(verdict) = self.verdict(stops_at, within) else {
+            return self.escape_laid_second(at, near_is_then, stops_at, regions, far, within);
+        };
+
+        let after = stops_at + 1;
+        if block_label(insts.get(after)?) != Some(far) || self.references(far).as_slice() != [at] {
+            return None;
+        }
+        let arm_on = near_is_then;
+        let arm_regions = regions;
+
+        let region = EscapeRegion {
+            branch: at,
+            arm_on,
+            carries_on: None,
+            arm_block: at + 2..stops_at,
+            arm_regions,
+            verdict,
+            after,
+        };
+        self.is_closed(at..after).then_some(region)
+    }
+
+    /// The same branch with the sides the other way round: the side laid
+    /// first rejoins at a label, the side laid second escapes, and the label
+    /// the first side reached is where this region continues.
+    fn escape_laid_second(
+        &self,
+        at: usize,
+        near_is_then: bool,
+        near_end: usize,
+        near_regions: Vec<Region>,
+        far: Label,
+        within: Within,
+    ) -> Option<EscapeRegion> {
+        let insts = self.body.insts.as_slice();
+        let InstKind::Jump { label: rejoins, .. } = &insts.get(near_end)?.kind else {
+            return None;
+        };
+        let rejoins = *rejoins;
+        if block_label(insts.get(near_end + 1)?) != Some(far)
+            || self.references(far).as_slice() != [at]
+        {
+            return None;
+        }
+
+        let StraightRun {
+            stops_at,
+            regions: arm_regions,
+        } = self.straight_run(near_end + 2, insts.len(), Some(within));
+        let verdict = self.verdict(stops_at, within)?;
+
+        let after = stops_at + 1;
+        if block_label(insts.get(after)?) != Some(rejoins) {
+            return None;
+        }
+
+        let region = EscapeRegion {
+            branch: at,
+            arm_on: !near_is_then,
+            carries_on: Some(CarriesOn {
+                block: at + 2..near_end,
+                regions: near_regions,
+                jump: near_end,
+            }),
+            arm_block: near_end + 2..stops_at,
+            arm_regions,
+            verdict,
+            after,
+        };
+        self.is_closed(at..after).then_some(region)
     }
 
     fn references(&self, label: Label) -> Vec<usize> {
@@ -1847,6 +2138,28 @@ impl<'a> Prepare<'a> {
     /// The shape `acvus_mir::lower` gives a `while`. A lowering that emits
     /// another shape does not fail here; it stops matching, and the loop
     /// prepares as the separate operations it was before.
+    /// Decided against counting the jumps into a header. A `continue` is one
+    /// of them, and what makes it a `continue` rather than a stray edge is
+    /// that the body's straight run admitted it as an escape; a count here
+    /// would refuse the shape before that run ever happened.
+    fn latch(&self, reaching: &[usize], entry: Option<usize>, head: usize) -> Option<usize> {
+        let (back, above) = reaching.split_last()?;
+        if *back <= head {
+            return None;
+        }
+        let inside = match entry {
+            Some(entry) => match above.split_first() {
+                Some((first, rest)) if *first == entry => rest,
+                _ => return None,
+            },
+            None => above,
+        };
+        inside
+            .iter()
+            .all(|at| (head..*back).contains(at))
+            .then_some(*back)
+    }
+
     fn recognize_loop(&self, at: usize) -> Option<LoopRegion> {
         let insts = self.body.insts.as_slice();
         let (enter_jump, head) = match &insts.get(at)?.kind {
@@ -1858,11 +2171,8 @@ impl<'a> Prepare<'a> {
         };
         let header = block_label(&insts[head])?;
 
-        let back = match (enter_jump, self.references(header).as_slice()) {
-            (None, [back]) if *back > head => *back,
-            (Some(entry), [first, back]) if *first == entry && *back > head => *back,
-            _ => return None,
-        };
+        let reaching = self.references(header);
+        let back = self.latch(&reaching, enter_jump, head)?;
         if !matches!(insts[back].kind, InstKind::Jump { .. }) {
             return None;
         }
@@ -1871,7 +2181,10 @@ impl<'a> Prepare<'a> {
         let StraightRun {
             stops_at: jump_if,
             regions: head_regions,
-        } = self.straight_run(head + 1, back);
+        } = self.straight_run(head + 1, back, None);
+        if hands_of(&head_regions).any() {
+            return None;
+        }
         let InstKind::JumpIf {
             then_label,
             else_label,
@@ -1891,7 +2204,14 @@ impl<'a> Prepare<'a> {
         let StraightRun {
             stops_at: body_end,
             regions: body_regions,
-        } = self.straight_run(body_label + 1, back);
+        } = self.straight_run(
+            body_label + 1,
+            back,
+            Some(Within {
+                header,
+                exit: exit_label,
+            }),
+        );
         if body_end != back {
             return None;
         }
@@ -1914,14 +2234,13 @@ impl<'a> Prepare<'a> {
     /// entry jump, a header holding nothing but its `For`, the body block the
     /// terminator's one edge reaches, and the latch back to the header.
     ///
-    /// A `break` and a `continue` are each refused here, and they are refused
-    /// by the two conditions RFC-0057 Decision 4 names rather than by a test
-    /// of their own. A `break` puts the exit's block between the terminator
-    /// and the body, so the body label is not the instruction after the
-    /// terminator; a `continue` is a third jump to the header, so the header
-    /// has more references than the entry and the latch. Either way this
-    /// answers `None` and the loop prepares as the blocks it was, which is
-    /// what "that loop runs its branches as joints" means in the machine.
+    /// A `break` whose edge carries a drop is refused here, and refused by the
+    /// condition below that the body's label follow the terminator:
+    /// `acvus_mir::optimize::drop_insertion` gives that drop a block of its
+    /// own on the `for`'s exit edge, `lower` lays that block between the
+    /// terminator and the body, and the `break` then jumps past it rather
+    /// than to it. The loop prepares as the blocks it was, which is what
+    /// "that loop runs its branches as joints" means in the machine.
     fn recognize_for(&self, at: usize) -> Option<ForRegion> {
         let insts = self.body.insts.as_slice();
         let InstKind::Jump { label: entered, .. } = &insts.get(at)?.kind else {
@@ -1938,13 +2257,7 @@ impl<'a> Prepare<'a> {
             return None;
         };
         let reaching = self.references(header);
-        let [entry, back] = reaching.as_slice() else {
-            return None;
-        };
-        if *entry != at || *back <= head {
-            return None;
-        }
-        let back = *back;
+        let back = self.latch(&reaching, Some(at), head)?;
         if !matches!(insts[back].kind, InstKind::Jump { .. }) {
             return None;
         }
@@ -1962,14 +2275,20 @@ impl<'a> Prepare<'a> {
         let StraightRun {
             stops_at: body_end,
             regions: body_regions,
-        } = self.straight_run(body_label + 1, back);
+        } = self.straight_run(
+            body_label + 1,
+            back,
+            Some(Within {
+                header,
+                exit: *exit,
+            }),
+        );
         if body_end != back {
             return None;
         }
 
         let region = ForRegion {
             enter_jump: at,
-            head,
             terminator,
             body_block: body_label + 1..back,
             body_regions,
@@ -1984,7 +2303,7 @@ impl<'a> Prepare<'a> {
     /// whole region and the block table gives the arms their extents. A body
     /// whose blocks a pass has reordered out of that layout prepares as
     /// joints instead, which is what every `None` below means.
-    fn recognize_diamond(&self, at: usize) -> Option<DiamondRegion> {
+    fn recognize_diamond(&self, at: usize, within: Option<Within>) -> Option<DiamondRegion> {
         let InstKind::Diamond { join, .. } = &self.body.insts.get(at)?.kind else {
             return None;
         };
@@ -1992,7 +2311,7 @@ impl<'a> Prepare<'a> {
         let Recognized {
             shape,
             after: join_at,
-        } = self.branch_region(at, join)?;
+        } = self.branch_region(at, Join(join), within)?;
         if block_label(self.body.insts.get(join_at)?) != Some(join) {
             return None;
         }
@@ -2003,7 +2322,12 @@ impl<'a> Prepare<'a> {
     /// past both its arms. The join's own index is where the label map puts
     /// it, so a branch nested at the tail of an arm reads the same join as
     /// the branch above it.
-    fn branch_region(&self, at: usize, join: Label) -> Option<Recognized<DiamondRegion>> {
+    fn branch_region(
+        &self,
+        at: usize,
+        join: Join,
+        within: Option<Within>,
+    ) -> Option<Recognized<DiamondRegion>> {
         let insts = self.body.insts.as_slice();
         let InstKind::Diamond {
             then_label,
@@ -2014,7 +2338,7 @@ impl<'a> Prepare<'a> {
         else {
             return None;
         };
-        if *named != join {
+        if *named != join.0 {
             return None;
         }
 
@@ -2023,8 +2347,8 @@ impl<'a> Prepare<'a> {
             true => (*then_label, *else_label),
             false => (*else_label, *then_label),
         };
-        let near = self.arm_region(at + 1, near_label, join)?;
-        let far = self.arm_region(near.after, far_label, join)?;
+        let near = self.arm_region(at + 1, near_label, join, within)?;
+        let far = self.arm_region(near.after, far_label, join, within)?;
         let (on_true, on_false) = match then_is_near {
             true => (near.shape, far.shape),
             false => (far.shape, near.shape),
@@ -2034,7 +2358,7 @@ impl<'a> Prepare<'a> {
                 branch: at,
                 on_true,
                 on_false,
-                join: self.label(&join) as usize,
+                join: self.label(&join.0) as usize,
             },
             after: far.after,
         })
@@ -2043,8 +2367,14 @@ impl<'a> Prepare<'a> {
     /// The arm a terminator sends to `label`, and the index one past it. An
     /// arm whose label is the join is the terminator's own edge into it and
     /// occupies no instruction of its own.
-    fn arm_region(&self, from: usize, label: Label, join: Label) -> Option<Recognized<ArmRegion>> {
-        if label == join {
+    fn arm_region(
+        &self,
+        from: usize,
+        label: Label,
+        join: Join,
+        within: Option<Within>,
+    ) -> Option<Recognized<ArmRegion>> {
+        if label == join.0 {
             return Some(Recognized {
                 shape: ArmRegion::Direct,
                 after: from,
@@ -2054,18 +2384,32 @@ impl<'a> Prepare<'a> {
         if block_label(insts.get(from)?) != Some(label) {
             return None;
         }
-        let StraightRun { stops_at, regions } = self.straight_run(from + 1, insts.len());
+        let join_at = self.label(&join.0) as usize;
+        if join_at <= from {
+            return None;
+        }
+        let StraightRun { stops_at, regions } = self.straight_run(from + 1, join_at, within);
         match &insts.get(stops_at)?.kind {
-            InstKind::Jump { label: reached, .. } if *reached == join => Some(Recognized {
+            InstKind::Jump { label: reached, .. } if *reached == join.0 => Some(Recognized {
                 shape: ArmRegion::Block {
                     block: from + 1..stops_at,
                     regions,
-                    jump: stops_at,
+                    jump: Some(stops_at),
                 },
                 after: stops_at + 1,
             }),
+            // The arm ran to the join's own label: an `Escape` inside it
+            // carried the join's moves on the side that did not escape.
+            InstKind::BlockLabel { label: reached, .. } if *reached == join.0 => Some(Recognized {
+                shape: ArmRegion::Block {
+                    block: from + 1..stops_at,
+                    regions,
+                    jump: None,
+                },
+                after: stops_at,
+            }),
             InstKind::Diamond { .. } => {
-                let tail = self.branch_region(stops_at, join)?;
+                let tail = self.branch_region(stops_at, join, within)?;
                 Some(Recognized {
                     shape: ArmRegion::Branch {
                         block: from + 1..stops_at,
@@ -2088,7 +2432,13 @@ impl<'a> Prepare<'a> {
     /// Two successors that are the same block are refused, because each arm
     /// of the region is a chain of its own and two tags cannot hold one; so
     /// is a dispatch of one successor, which chooses nothing.
-    fn recognize_switch(&self, at: usize) -> Option<SwitchRegion> {
+    ///
+    /// An arm that holds a `break`, a `continue` or a `?` is refused too, and
+    /// that one is a decision rather than a shape: `ops::switch` and
+    /// `ops::string` hold four dispatch forms, each would need the escaping
+    /// monomorphization `control::Diamond` has, and a `match` arm that leaves
+    /// a loop prepares as the blocks it was until they are built.
+    fn recognize_switch(&self, at: usize, within: Option<Within>) -> Option<SwitchRegion> {
         let insts = self.body.insts.as_slice();
         let InstKind::Switch { tag, arms, default } = &insts.get(at)?.kind else {
             return None;
@@ -2127,7 +2477,7 @@ impl<'a> Prepare<'a> {
             DispatchForm::Tag(VariantForm::Enum) | DispatchForm::Word(_) | DispatchForm::Text => {}
         }
 
-        let join = self.switch_join(at + 1)?;
+        let join = self.switch_join(at + 1, within)?;
         let mut laid: Vec<SwitchArm> = named
             .iter()
             .filter(|label| **label == join)
@@ -2142,7 +2492,7 @@ impl<'a> Prepare<'a> {
             if !named.contains(&label) || laid.iter().any(|arm| arm.label == label) {
                 return None;
             }
-            let found = self.arm_region(from, label, join)?;
+            let found = self.arm_region(from, label, Join(join), within)?;
             laid.push(SwitchArm {
                 label,
                 region: found.shape,
@@ -2150,6 +2500,9 @@ impl<'a> Prepare<'a> {
             from = found.after;
         }
         if block_label(insts.get(from)?) != Some(join) {
+            return None;
+        }
+        if laid.iter().any(|arm| arm.region.hands().any()) {
             return None;
         }
 
@@ -2163,10 +2516,10 @@ impl<'a> Prepare<'a> {
 
     /// The block the arm laid at `first` jumps to, which a rejoining `match`
     /// takes as its join.
-    fn switch_join(&self, first: usize) -> Option<Label> {
+    fn switch_join(&self, first: usize, within: Option<Within>) -> Option<Label> {
         let insts = self.body.insts.as_slice();
         block_label(insts.get(first)?)?;
-        let StraightRun { stops_at, .. } = self.straight_run(first + 1, insts.len());
+        let StraightRun { stops_at, .. } = self.straight_run(first + 1, insts.len(), within);
         match &insts.get(stops_at)?.kind {
             InstKind::Jump { label, .. } => Some(*label),
             _ => None,
@@ -2188,7 +2541,7 @@ impl<'a> Prepare<'a> {
         let mut found = Vec::new();
         let mut at = 0;
         while at < self.body.insts.len() {
-            match self.recognize_region(at) {
+            match self.recognize_region(at, None) {
                 Some(region) => {
                     at = region.end();
                     found.push(region);
@@ -2259,8 +2612,9 @@ impl<'a> Prepare<'a> {
         range: Range<usize>,
         nested: &[Region],
         leaving: Vec<Node>,
+        ends: Box<dyn Op>,
     ) -> Box<dyn Op> {
-        self.part(range, nested, leaving, None).0
+        self.part(range, nested, leaving, None, ends).0
     }
 
     /// The part whose region reads the word it ends with — a `while`'s head
@@ -2276,7 +2630,13 @@ impl<'a> Prepare<'a> {
         leaving: Vec<Node>,
         hands: ValueId,
     ) -> (Box<dyn Op>, Where) {
-        let (head, rode) = self.part(range, nested, leaving, Some(hands));
+        let (head, rode) = self.part(
+            range,
+            nested,
+            leaving,
+            Some(hands),
+            Box::new(control::Yield),
+        );
         let at = match rode {
             true => Where::Register,
             false => Where::Frame(self.off(hands)),
@@ -2292,7 +2652,21 @@ impl<'a> Prepare<'a> {
         nested: &[Region],
         leaving: Vec<Node>,
         hands: Option<ValueId>,
+        ends: Box<dyn Op>,
     ) -> (Box<dyn Op>, bool) {
+        let (ops, rode) = self.part_ops(range, nested, leaving, hands);
+        (chain(ops, ends), rode)
+    }
+
+    /// The same part as the operations it is, for the caller that continues
+    /// into a chain rather than ending one.
+    fn part_ops(
+        &mut self,
+        range: Range<usize>,
+        nested: &[Region],
+        leaving: Vec<Node>,
+        hands: Option<ValueId>,
+    ) -> (Vec<Node>, bool) {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
         let units = self.layout(range, nested, &runs, &chains);
@@ -2315,7 +2689,7 @@ impl<'a> Prepare<'a> {
             );
         }
         ops.extend(leaving);
-        (chain(ops, Box::new(control::Yield)), rode)
+        (ops, rode)
     }
 
     /// The operations this unit appends, and the terminator it is where it
@@ -2346,6 +2720,11 @@ impl<'a> Prepare<'a> {
             }
             Unit::Region(Region::Switch(region)) => {
                 let op = self.switch_region_op(region, rides);
+                ops.push(op);
+                None
+            }
+            Unit::Region(Region::Escape(region)) => {
+                let op = self.escape_op(region, rides);
                 ops.push(op);
                 None
             }
@@ -2400,7 +2779,13 @@ impl<'a> Prepare<'a> {
             Vec::new(),
             *cond,
         );
-        let ran = self.straight(region.body_block.clone(), &region.body_regions, back);
+        let exits = Ends::of(hands_of(&region.body_regions));
+        let ran = self.straight(
+            region.body_block.clone(),
+            &region.body_regions,
+            back,
+            exits.node(),
+        );
         debug_assert_eq!(
             self.references(*then_label),
             vec![region.jump_if],
@@ -2409,21 +2794,43 @@ impl<'a> Prepare<'a> {
         );
         let body = chain(into_body, ran);
 
-        ops.push(made(move |next| match cond {
-            Where::Frame(off) => Box::new(control::Loop::<place::Slot> {
-                head,
-                cond: off,
-                body,
-                next,
-                at: PhantomData,
-            }) as Box<dyn Op>,
-            Where::Register => Box::new(control::Loop::<place::R0> {
-                head,
-                cond: (),
-                body,
-                next,
-                at: PhantomData,
-            }),
+        ops.push(made(move |next| match (cond, exits) {
+            (Where::Frame(off), Ends::Word) => {
+                Box::new(control::Loop::<place::Slot, control::Rejoins> {
+                    head,
+                    cond: off,
+                    body,
+                    next,
+                    at: PhantomData,
+                }) as Box<dyn Op>
+            }
+            (Where::Frame(off), Ends::Verdict) => {
+                Box::new(control::Loop::<place::Slot, control::Escapes> {
+                    head,
+                    cond: off,
+                    body,
+                    next,
+                    at: PhantomData,
+                })
+            }
+            (Where::Register, Ends::Word) => {
+                Box::new(control::Loop::<place::R0, control::Rejoins> {
+                    head,
+                    cond: (),
+                    body,
+                    next,
+                    at: PhantomData,
+                })
+            }
+            (Where::Register, Ends::Verdict) => {
+                Box::new(control::Loop::<place::R0, control::Escapes> {
+                    head,
+                    cond: (),
+                    body,
+                    next,
+                    at: PhantomData,
+                })
+            }
         }));
         ops.extend(exit);
     }
@@ -2462,20 +2869,35 @@ impl<'a> Prepare<'a> {
         let leaving = self.move_ops(exit, exit_args);
         let back = self.move_ops(header, back_args);
 
-        let ran = self.straight(region.body_block.clone(), &region.body_regions, back);
+        let exits = Ends::of(hands_of(&region.body_regions));
+        let ran = self.straight(
+            region.body_block.clone(),
+            &region.body_regions,
+            back,
+            exits.node(),
+        );
         let ran = chain(into_body, ran);
 
-        ops.push(self.for_node(region.terminator, ran));
+        ops.push(self.for_node(region.terminator, ran, exits));
         ops.extend(leaving);
     }
 
-    fn for_node(&self, terminator: usize, ran: Box<dyn Op>) -> Node {
+    fn for_node(&self, terminator: usize, ran: Box<dyn Op>, exits: Ends) -> Node {
         for_head!(self, terminator, |src, _Head, _counter| made(move |next| {
-            Box::new(control::For {
-                src,
-                body: ran,
-                next,
-            }) as Box<dyn Op>
+            match exits {
+                Ends::Word => Box::new(control::For::<_, control::Rejoins> {
+                    src,
+                    body: ran,
+                    next,
+                    ends: PhantomData,
+                }) as Box<dyn Op>,
+                Ends::Verdict => Box::new(control::For::<_, control::Escapes> {
+                    src,
+                    body: ran,
+                    next,
+                    ends: PhantomData,
+                }),
+            }
         }))
     }
 
@@ -2676,9 +3098,12 @@ impl<'a> Prepare<'a> {
     }
 
     fn branch_node(&mut self, region: &DiamondRegion, rides: &Rides) -> Node {
-        match self.select_op(region, rides) {
-            Some(op) => op,
-            None => self.diamond_op(region, rides),
+        match Ends::of(region.hands()) {
+            Ends::Verdict => self.diamond_op(region, rides),
+            Ends::Word => match self.select_op(region, rides) {
+                Some(op) => op,
+                None => self.diamond_op(region, rides),
+            },
         }
     }
 
@@ -2695,6 +3120,7 @@ impl<'a> Prepare<'a> {
         };
 
         let cond = self.place_of(rides, cond);
+        let ends = Ends::of(region.hands());
         let on_true = self.arm(
             &region.on_true,
             JoinEdge {
@@ -2702,6 +3128,7 @@ impl<'a> Prepare<'a> {
                 args: then_args,
             },
             rides,
+            ends,
         );
         let on_false = self.arm(
             &region.on_false,
@@ -2710,43 +3137,71 @@ impl<'a> Prepare<'a> {
                 args: else_args,
             },
             rides,
+            ends,
         );
 
-        made(move |next| match cond {
-            Where::Frame(off) => Box::new(control::Diamond::<place::Slot> {
-                cond: off,
-                on_true,
-                on_false,
-                next,
-                at: PhantomData,
-            }) as Box<dyn Op>,
-            Where::Register => Box::new(control::Diamond::<place::R0> {
-                cond: (),
-                on_true,
-                on_false,
-                next,
-                at: PhantomData,
-            }),
+        made(move |next| match (cond, ends) {
+            (Where::Frame(off), Ends::Word) => {
+                Box::new(control::Diamond::<place::Slot, control::Rejoins> {
+                    cond: off,
+                    on_true,
+                    on_false,
+                    next,
+                    at: PhantomData,
+                }) as Box<dyn Op>
+            }
+            (Where::Frame(off), Ends::Verdict) => {
+                Box::new(control::Diamond::<place::Slot, control::Escapes> {
+                    cond: off,
+                    on_true,
+                    on_false,
+                    next,
+                    at: PhantomData,
+                })
+            }
+            (Where::Register, Ends::Word) => {
+                Box::new(control::Diamond::<place::R0, control::Rejoins> {
+                    cond: (),
+                    on_true,
+                    on_false,
+                    next,
+                    at: PhantomData,
+                })
+            }
+            (Where::Register, Ends::Verdict) => {
+                Box::new(control::Diamond::<place::R0, control::Escapes> {
+                    cond: (),
+                    on_true,
+                    on_false,
+                    next,
+                    at: PhantomData,
+                })
+            }
         })
     }
 
-    fn arm(&mut self, region: &ArmRegion, edge: JoinEdge<'_>, rides: &Rides) -> Box<dyn Op> {
+    fn arm(
+        &mut self,
+        region: &ArmRegion,
+        edge: JoinEdge<'_>,
+        rides: &Rides,
+        ends: Ends,
+    ) -> Box<dyn Op> {
         match region {
             ArmRegion::Direct => {
                 let join = self.move_ops(&edge.label, edge.args);
-                chain(join, Box::new(control::Yield))
+                chain(join, ends.node())
             }
             ArmRegion::Block {
                 block,
                 regions,
                 jump,
             } => {
-                let InstKind::Jump { label, args } = &self.body.insts[*jump].kind else {
-                    panic!("a recognized diamond's arm does not end in a jump")
+                let join = match jump {
+                    Some(jump) => self.jump_moves(*jump),
+                    None => Vec::new(),
                 };
-                let (label, args) = (*label, args.clone());
-                let join = self.move_ops(&label, &args);
-                self.straight(block.clone(), regions, join)
+                self.straight(block.clone(), regions, join, ends.node())
             }
             ArmRegion::Branch {
                 block,
@@ -2754,9 +3209,116 @@ impl<'a> Prepare<'a> {
                 tail,
             } => {
                 let node = self.branch_node(tail, rides);
-                self.straight(block.clone(), regions, vec![node])
+                self.straight(block.clone(), regions, vec![node], ends.node())
             }
         }
+    }
+
+    /// The `break`, `continue` or `return` arm as a chain ending in the
+    /// verdict node the region above the loop reads, and the branch that
+    /// takes it.
+    fn escape_op(&mut self, region: &EscapeRegion, rides: &Rides) -> Node {
+        let InstKind::JumpIf {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+        } = &self.body.insts[region.branch].kind
+        else {
+            panic!("a recognized escape's test is not a conditional jump")
+        };
+        let cond = *cond;
+        let (arm_label, arm_args, on_label, on_args) = match region.arm_on {
+            true => (
+                *then_label,
+                then_args.clone(),
+                *else_label,
+                else_args.clone(),
+            ),
+            false => (
+                *else_label,
+                else_args.clone(),
+                *then_label,
+                then_args.clone(),
+            ),
+        };
+
+        let into_arm = self.move_ops(&arm_label, &arm_args);
+        let mut carries_on = self.move_ops(&on_label, &on_args);
+        if let Some(side) = &region.carries_on {
+            let join = self.jump_moves(side.jump);
+            let (ops, _) = self.part_ops(side.block.clone(), &side.regions, join, None);
+            carries_on.extend(ops);
+        }
+        let arm = self.escape_arm(region, rides);
+        let arm = chain(into_arm, arm);
+
+        let cond = self.place_of(rides, cond);
+        let arm_on = region.arm_on;
+        made(move |next| {
+            let next = chain(carries_on, next);
+            match (cond, arm_on) {
+                (Where::Frame(off), true) => Box::new(control::Escape::<place::Slot, true> {
+                    cond: off,
+                    arm,
+                    next,
+                    at: PhantomData,
+                }) as Box<dyn Op>,
+                (Where::Frame(off), false) => Box::new(control::Escape::<place::Slot, false> {
+                    cond: off,
+                    arm,
+                    next,
+                    at: PhantomData,
+                }),
+                (Where::Register, true) => Box::new(control::Escape::<place::R0, true> {
+                    cond: (),
+                    arm,
+                    next,
+                    at: PhantomData,
+                }),
+                (Where::Register, false) => Box::new(control::Escape::<place::R0, false> {
+                    cond: (),
+                    arm,
+                    next,
+                    at: PhantomData,
+                }),
+            }
+        })
+    }
+
+    /// The parallel move a `Jump` carries, as the operations it is.
+    fn jump_moves(&mut self, at: usize) -> Vec<Node> {
+        let InstKind::Jump { label, args } = &self.body.insts[at].kind else {
+            panic!("the instruction prepared as a jump is not one")
+        };
+        let (label, args) = (*label, args.clone());
+        self.move_ops(&label, &args)
+    }
+
+    fn escape_arm(&mut self, region: &EscapeRegion, rides: &Rides) -> Box<dyn Op> {
+        let (leaving, ends): (Vec<Node>, Box<dyn Op>) = match region.verdict {
+            Verdict::Break(jump) | Verdict::Continue(jump) => {
+                let InstKind::Jump { label, args } = &self.body.insts[jump].kind else {
+                    panic!("a recognized escape's `break` or `continue` is not a jump")
+                };
+                let (label, args) = (*label, args.clone());
+                let moves = self.move_ops(&label, &args);
+                let ends: Box<dyn Op> = match region.verdict {
+                    Verdict::Break(_) => Box::new(control::Break),
+                    _ => Box::new(control::Continue),
+                };
+                (moves, ends)
+            }
+            Verdict::Returns(at) => {
+                let mut before = Vec::new();
+                let ends = self
+                    .op(at, Next(None), rides, &mut before)
+                    .expect("a `return` prepares to a terminator");
+                (before, ends)
+            }
+        };
+        self.straight(region.arm_block.clone(), &region.arm_regions, leaving, ends)
     }
 
     fn op(
@@ -5757,6 +6319,10 @@ mod recognizer_tests {
             covers: Range<usize>,
             arms: Vec<Vec<Matched>>,
         },
+        Escape {
+            covers: Range<usize>,
+            arm: Vec<Matched>,
+        },
     }
 
     fn matched(regions: &[Region]) -> Vec<Matched> {
@@ -5776,6 +6342,10 @@ mod recognizer_tests {
             Region::For(region) => Matched::For {
                 covers,
                 nested: matched(&region.body_regions),
+            },
+            Region::Escape(region) => Matched::Escape {
+                covers,
+                arm: matched(&region.arm_regions),
             },
             Region::Diamond(region) => matched_diamond(region),
             Region::Switch(region) => Matched::Switch {

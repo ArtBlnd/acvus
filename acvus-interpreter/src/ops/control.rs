@@ -1,15 +1,17 @@
-//! Control flow: the terminators that choose a block, the two recognized
-//! regions that run their own operations straight, and the instructions that
-//! produce no control at all.
+//! Control flow: the terminators that choose a block, the recognized regions
+//! that run their own operations straight, and the instructions that produce
+//! no control at all.
 //!
 //! Obligation across artifacts (RFC-0052 §3): a region's parts are operation
 //! lists, so nothing here chooses a `BlockId` inside a region — and it is
 //! `prepare::straight_run` that stops a region at the first instruction which
 //! is not straight-line, so that no part ever needs one.
 //!
-//! Decided against: a flag a region tests for a `return` inside it. A `return`
-//! is not straight-line, so the recognizer stops at it and the shape prepares
-//! as the blocks it was (`a_while_that_returns_is_not_a_region`).
+//! Obligation across artifacts: a `Yield` hands back whatever its chain
+//! computed last, which is any word at all. So `prepare` ends a chain whose
+//! word a region reads as a verdict in `Fall`, `Break`, `Continue` or
+//! `Return` instead, and the `Ending` parameter below is how it says which
+//! chains those are.
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
@@ -19,7 +21,9 @@ use acvus_extern::Owned;
 
 use crate::runtime::AcvusRuntime;
 
-use crate::code::{BlockId, Exit, Marked, Off, Op, RETURN, SlicePair, successor};
+use crate::code::{
+    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Off, Op, RETURN, SlicePair, successor,
+};
 use crate::machine::Machine;
 use crate::ops::arith::Int;
 use crate::ops::place::Place;
@@ -179,13 +183,128 @@ impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
 /// A part chooses no block, so what it hands back is a word and not a
 /// `BlockId`; where the part's last operation wrote its result to the frame
 /// instead, the word here is whatever rode into the chain, and the region
-/// that reads a frame register — `Loop<Slot>` — never looks at it.
+/// that reads a frame register — `Loop<Slot, _>` — never looks at it.
 pub struct Yield;
 
 impl Op for Yield {
     #[inline]
     fn run(&self, _: &mut Machine<'_>, r0: u64) -> Exit {
         r0
+    }
+}
+
+pub struct Fall;
+
+impl Op for Fall {
+    #[inline]
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
+        FALL
+    }
+}
+
+pub struct Break;
+
+impl Op for Break {
+    #[inline]
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
+        LEAVE
+    }
+}
+
+pub struct Continue;
+
+impl Op for Continue {
+    #[inline]
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
+        AGAIN
+    }
+}
+
+/// Obligation across artifacts: this is a type and not a `const` parameter so
+/// that the demangled `Op::run` symbol names it. `benches/asm_probe.rs` reads
+/// `Escapes` out of the symbol to know which operations have two ends — a
+/// tail `jmp` to their successor and a `ret` carrying a verdict past it — and
+/// a `bool` would reach the symbol as `true`, indistinguishable from any
+/// other `true` an operation is monomorphized over.
+pub trait Ending {
+    const ESCAPES: bool;
+}
+
+pub struct Rejoins;
+
+/// Some path through the chain ends at a `break`, a `continue`, a `?` or a
+/// `return` inside it.
+pub struct Escapes;
+
+impl Ending for Rejoins {
+    const ESCAPES: bool = false;
+}
+
+impl Ending for Escapes {
+    const ESCAPES: bool = true;
+}
+
+/// What a loop does with the word its body chain handed back.
+enum Handed {
+    Iterate,
+    Leave,
+    /// The function is over: the word is `Return`'s, and it travels to the
+    /// machine's loop through every region between.
+    Over(Exit),
+}
+
+#[inline]
+fn handed<E>(word: Exit) -> Handed
+where
+    E: Ending,
+{
+    match E::ESCAPES {
+        false => Handed::Iterate,
+        true => match word {
+            FALL | AGAIN => Handed::Iterate,
+            LEAVE => Handed::Leave,
+            returned => Handed::Over(returned),
+        },
+    }
+}
+
+/// The `if` whose one arm ends in a `break`, a `continue`, a `?` or a
+/// `return`, as `prepare::recognize_escape` finds it (RFC-0057 amended).
+pub struct Escape<C, const ARM_ON: bool>
+where
+    C: Place,
+{
+    pub cond: C::At,
+    pub arm: Box<dyn Op>,
+    pub next: Box<dyn Op>,
+    pub at: PhantomData<fn() -> C>,
+}
+
+impl<C, const ARM_ON: bool> Op for Escape<C, ARM_ON>
+where
+    C: Place,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        match (C::read(m.regs(), self.cond, r0) != 0) == ARM_ON {
+            true => self.arm.run(m, r0),
+            false => self.next.run(m, r0),
+        }
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        vec![OwnedOps {
+            part: "arm",
+            head: self.arm.as_ref(),
+        }]
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+        vec![&mut self.arm]
     }
 }
 
@@ -202,20 +321,26 @@ impl Op for Yield {
 /// `place::Slot` where it does not, which is the head whose last word is not
 /// the condition (a call tested later, an `Option` test). `prepare` chose
 /// between them, so this `run` holds no test of its own.
-pub struct Loop<C>
+///
+/// `E` is the ending of `body`: over `Escapes` the body's chain ends in a
+/// verdict node and this reads what it handed back, and over `Rejoins` the
+/// body's word is the unread word `Yield` hands and there is no compare.
+pub struct Loop<C, E>
 where
     C: Place,
+    E: Ending,
 {
     pub head: Box<dyn Op>,
     pub cond: C::At,
     pub body: Box<dyn Op>,
     pub next: Box<dyn Op>,
-    pub at: PhantomData<fn() -> C>,
+    pub at: PhantomData<fn() -> (C, E)>,
 }
 
-impl<C> Op for Loop<C>
+impl<C, E> Op for Loop<C, E>
 where
     C: Place,
+    E: Ending,
 {
     successor!();
 
@@ -226,7 +351,11 @@ where
             if C::read(m.regs(), self.cond, word) == 0 {
                 break;
             }
-            self.body.run(m, r0);
+            match handed::<E>(self.body.run(m, r0)) {
+                Handed::Iterate => {}
+                Handed::Leave => break,
+                Handed::Over(word) => return word,
+            }
         }
         self.next.run(m, r0)
     }
@@ -399,18 +528,23 @@ where
 }
 
 /// The shape `prepare::recognize_for` finds in the IR (RFC-0057 Decision 3).
-pub struct For<S>
+///
+/// `E` is `Loop`'s parameter.
+pub struct For<S, E>
 where
     S: Source,
+    E: Ending,
 {
     pub src: S,
     pub body: Box<dyn Op>,
     pub next: Box<dyn Op>,
+    pub ends: PhantomData<fn() -> E>,
 }
 
-impl<S> Op for For<S>
+impl<S, E> Op for For<S, E>
 where
     S: Source,
+    E: Ending,
 {
     successor!();
 
@@ -420,7 +554,11 @@ where
         let mut at = self.src.first(m.regs());
         while S::holds(at, bound) {
             self.src.lay(m.regs(), at);
-            self.body.run(m, r0);
+            match handed::<E>(self.body.run(m, r0)) {
+                Handed::Iterate => {}
+                Handed::Leave => break,
+                Handed::Over(word) => return word,
+            }
             at = S::step(at);
         }
         self.next.run(m, r0)
@@ -536,20 +674,26 @@ where
 /// The `if/else` shape `prepare::recognize_diamond` finds in the IR
 /// (RFC-0044, stage 5), as one operation holding both arms. The moves the
 /// join edge carries are the last operations of each arm.
-pub struct Diamond<C>
+/// `E` is the ending of both arms: over `Escapes` an arm that reached a
+/// `break`, a `continue` or a `return` hands its verdict past this operation
+/// instead of rejoining, and the arm that did not hands `FALL`, which is why
+/// no word rides out of this shape (`prepare::rides_from`).
+pub struct Diamond<C, E>
 where
     C: Place,
+    E: Ending,
 {
     pub cond: C::At,
     pub on_true: Box<dyn Op>,
     pub on_false: Box<dyn Op>,
     pub next: Box<dyn Op>,
-    pub at: PhantomData<fn() -> C>,
+    pub at: PhantomData<fn() -> (C, E)>,
 }
 
-impl<C> Op for Diamond<C>
+impl<C, E> Op for Diamond<C, E>
 where
     C: Place,
+    E: Ending,
 {
     successor!();
 
@@ -560,7 +704,10 @@ where
             false => self.on_false.as_ref(),
         };
         let word = arm.run(m, r0);
-        self.next.run(m, word)
+        match (E::ESCAPES, word) {
+            (true, FALL) | (false, _) => self.next.run(m, word),
+            (true, verdict) => verdict,
+        }
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]

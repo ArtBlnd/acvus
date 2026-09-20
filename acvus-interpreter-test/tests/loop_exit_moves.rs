@@ -7,8 +7,7 @@
 //! `benches/logs.rs` case `inline` is written in, and the `break` its case
 //! `inline break` is written in -- and what they measure is where the two
 //! differ: this scan's flag lives in a slot rather than a block argument, so
-//! the exit costs it no `Mov` either way, and what `break` does change is
-//! that the loop is no longer a region.
+//! the exit costs it no `Mov` either way, and both scans are one region.
 
 use acvus_interpreter_test::listing::script_listing;
 use acvus_interpreter_test::*;
@@ -83,18 +82,22 @@ async fn the_two_scans_count_the_same_hits() {
 }
 
 #[test]
-fn a_flag_loop_is_a_region_and_a_break_loop_is_joints() {
+fn a_flag_loop_and_a_break_loop_are_each_one_region() {
     assert_eq!(
         regions(WITH_A_FLAG),
-        ["Loop<Slot>"],
+        ["Loop<Slot, Rejoins>"],
         "{:?}",
         ops(WITH_A_FLAG)
     );
     assert_eq!(
         regions(WITH_BREAK),
-        Vec::<String>::new(),
-        "an arm that leaves the loop does not rejoin, so neither the loop nor \
-         the branch inside it is a region (RFC-0057 Decision 4): {:?}",
+        ["Loop<Slot, Escapes>"],
+        "the `break` is an `Escape` inside the body: {:?}",
+        ops(WITH_BREAK)
+    );
+    assert!(
+        ops(WITH_BREAK).iter().any(|op| op.starts_with("Escape<")),
+        "{:?}",
         ops(WITH_BREAK)
     );
 }

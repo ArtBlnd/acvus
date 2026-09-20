@@ -1,4 +1,5 @@
-//! Every `impl Op`'s `run` ends in the tail call to its successor.
+//! Every `impl Op`'s `run` ends in the tail call to its successor, and a
+//! region whose body can escape ends there and in a `ret` besides.
 //!
 //! A bench and not a test: what it reads is the release machine, and a debug
 //! build has no tail call in it, so a `cargo test` copy would pass on an
@@ -32,6 +33,9 @@ const NO_SUCCESSOR: &[&str] = &[
     "control::Diverge",
     "control::Poison",
     "control::Yield",
+    "control::Fall",
+    "control::Break",
+    "control::Continue",
     "call::CallExternAsync",
     "call::CallStateAsync",
     "call::CallHeavy",
@@ -148,6 +152,14 @@ const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
     },
 ];
 
+/// The type argument `ops::control::Escapes` reaches the demangled symbol
+/// as, which is how a two-ended operation says so: it tail-calls its
+/// successor on every path that completes the region, and returns the body's
+/// verdict on the path where the function is over. `control::Ending` is the
+/// parameter, and it is a type rather than a `bool` so that this string
+/// exists to be read.
+const TWO_ENDED: &str = "control::Escapes>";
+
 /// What the linker leaves after a function, which is not its last
 /// instruction.
 const PADDING: &[&str] = &["nop", "nopw", "nopl", "int3", "xchg", "cs"];
@@ -182,10 +194,20 @@ impl Run {
         self.rets == 0 && self.jumps.is_some()
     }
 
+    /// A region whose body can escape has two ends, so the `ret` carrying the
+    /// verdict out is not a failure; what is still required of it is the tail
+    /// `jmp` every path that completes the region leaves by.
+    fn two_ended(&self) -> bool {
+        self.symbol.contains(TWO_ENDED)
+    }
+
     /// The obligation `code::Op`'s doc names, held here: an operation that
     /// holds a successor ends by calling it, and that call is a tail call.
     fn lands_right(&self) -> bool {
-        self.ends_a_chain() || self.tail_jumps() || self.excepted().is_some()
+        self.ends_a_chain()
+            || self.tail_jumps()
+            || (self.two_ended() && self.jumps.is_some())
+            || self.excepted().is_some()
     }
 
     fn why(&self) -> String {
@@ -343,9 +365,11 @@ fn main() {
     }
 
     let ends = found.iter().filter(|run| run.ends_a_chain()).count();
+    let two_ended = found.iter().filter(|run| run.two_ended()).count();
     println!(
         "asm_probe: {} operations tail-call their successor, {ends} end a chain, \
-         {still_needed} hold a stack address across a listed callee",
-        found.len() - ends - still_needed
+         {still_needed} hold a stack address across a listed callee, {two_ended} \
+         tail-call their successor and return a verdict besides",
+        found.len() - ends - still_needed - two_ended
     );
 }

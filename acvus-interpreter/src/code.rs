@@ -196,12 +196,21 @@ pub const RETURN: Exit = BlockId::MAX as Exit;
 /// The body left a future in `Machine::pending` for the driver.
 pub const SUSPEND: Exit = RETURN - 1;
 
+/// A `break`: the loop stops iterating and runs its successor.
+pub const LEAVE: Exit = RETURN - 2;
+
+/// A `continue`: the loop steps and tests again.
+pub const AGAIN: Exit = RETURN - 3;
+
+/// The chain ran to its end.
+pub const FALL: Exit = RETURN - 4;
+
 /// `Machine::run` is one compare against this per block.
-pub const SENTINEL: Exit = SUSPEND;
+pub const SENTINEL: Exit = FALL;
 
 const _: () = assert!(
-    RETURN >= SENTINEL && SUSPEND >= SENTINEL,
-    "the machine's loop leaves on RETURN and on SUSPEND"
+    RETURN >= SENTINEL && SUSPEND >= SENTINEL && LEAVE >= SENTINEL && AGAIN >= SENTINEL,
+    "every word that is not a block leaves the machine's loop at its one compare"
 );
 
 /// Not on the release trait: no instance carries a name string outside

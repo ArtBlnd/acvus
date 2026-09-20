@@ -1,6 +1,8 @@
-//! A `for` whose body rejoins is a region and a `for` a `break` leaves or a
-//! `continue` returns to the head of is joints (RFC-0057 Decisions 3 and 4):
-//! the value each head produces, and what the machine runs each as.
+//! A `for` is a region, and a `break` or a `continue` in its body is an
+//! operation of that region (RFC-0057 Decision 3 and Decision 4 amended):
+//! the value each head produces, and what the machine runs each as. The one
+//! traversal still on the joints path is the one whose exit edge carries a
+//! drop, which puts a block between the terminator and the body.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -178,19 +180,19 @@ fn every_head_prepares_to_one_for_region() {
     for head in [
         Head {
             source: SLICE,
-            region: "For<Slice>",
+            region: "For<Slice, Rejoins>",
         },
         Head {
             source: SLICE_MUT,
-            region: "For<Slice>",
+            region: "For<Slice, Rejoins>",
         },
         Head {
             source: ARRAY,
-            region: "For<Array<false, true>>",
+            region: "For<Array<false, true>, Rejoins>",
         },
         Head {
             source: ARRAY_OF_OWNERS,
-            region: "For<Array<true, false>>",
+            region: "For<Array<true, false>, Rejoins>",
         },
     ] {
         assert_eq!(regions(head.source), [head.region], "{}", head.source);
@@ -245,7 +247,7 @@ fn an_else_if_chain_that_joins_where_the_if_joins_leaves_the_for_one_region() {
     let found = i64_blocks(IF_CHAIN);
     assert_eq!(
         regions(IF_CHAIN),
-        ["For<Range<i64>>"],
+        ["For<Range<i64>, Rejoins>"],
         "{:?}",
         ops_of_anywhere(&found)
     );
@@ -275,7 +277,7 @@ fn a_match_whose_arms_all_rejoin_leaves_the_for_one_region() {
     let found = i64_blocks(MATCH_BODY);
     assert_eq!(
         regions(MATCH_BODY),
-        ["For<Range<i64>>"],
+        ["For<Range<i64>, Rejoins>"],
         "{:?}",
         ops_of_anywhere(&found)
     );
@@ -287,13 +289,17 @@ fn a_match_whose_arms_all_rejoin_leaves_the_for_one_region() {
     );
 }
 
-// -- break and continue: the joints path -------------------------------
+// -- break and continue ------------------------------------------------
 
 const BREAK: &str = "let v = vec([1, 2, 3]); let acc = 0; \
                      for x in &v { if *x == 2 { break; }; acc = acc + *x; } acc";
 const CONTINUE: &str = "let v = vec([1, 2, 3]); let acc = 0; \
                         for x in &v { if *x == 2 { continue; }; acc = acc + *x; } acc";
 const RANGE_BREAK: &str = "let s = 0; for i in 0..10 { if i == 5 { break; }; s = s + i; } s";
+/// The same `break` written in a `match` arm, which `recognize_switch`
+/// refuses, so this traversal is the joints path over a `Range` head.
+const RANGE_MATCH_BREAK: &str =
+    "let s = 0; for i in 0..10 { match i { 5 => { break; }, _ => { s = s + i; } }; } s";
 
 #[tokio::test]
 async fn a_break_stops_the_traversal_where_it_stands() {
@@ -395,11 +401,11 @@ async fn a_value_live_across_the_loop_does_not_share_the_counter_register() {
     );
 }
 
-// -- What the machine runs the joints path as --------------------------
+// -- What the machine runs a traversal it cannot collapse as -----------
 
 #[test]
 fn the_preheader_lays_the_counter_the_header_tests_and_the_latch_steps() {
-    let blocks = i64_blocks(RANGE_BREAK);
+    let blocks = i64_blocks(RANGE_MATCH_BREAK);
     let preheader = blocks.first().expect("an entry block");
     assert_eq!(
         preheader.ops.last().map(String::as_str),
@@ -427,31 +433,44 @@ fn the_preheader_lays_the_counter_the_header_tests_and_the_latch_steps() {
 }
 
 #[test]
-fn a_loop_a_break_leaves_is_no_region_and_carries_no_move_or_comparison() {
-    for source in [BREAK, CONTINUE, RANGE_BREAK] {
-        let blocks = i64_blocks(source);
-        assert_eq!(
-            blocks
-                .iter()
-                .flat_map(|block| block.regions.iter())
-                .map(|region| region.name.clone())
-                .collect::<Vec<String>>(),
-            Vec::<String>::new(),
-            "{source} runs as joints"
-        );
-        let ops = ops_of_anywhere(&blocks);
+fn a_loop_a_continue_returns_to_the_head_of_is_one_region() {
+    for source in [CONTINUE, RANGE_BREAK] {
+        let ops = ops_of_anywhere(&i64_blocks(source));
         assert!(
-            !ops.iter()
-                .any(|op| op.starts_with("Mov") || op.starts_with("Lt<") || op == "Yield"),
-            "{source}: {ops:?}"
+            ops.iter().any(|op| op.starts_with("For<")),
+            "{source} is one region: {ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| op.starts_with("ForAt<")),
+            "{source} holds no joint header: {ops:?}"
         );
     }
 }
 
+/// The exit edge of this traversal carries the vec's drop, and `lower` lays
+/// that drop's block between the terminator and the body, where the body's
+/// label has to be for `recognize_for` to match. The `break` then jumps past
+/// the block rather than to it, so the region's one exit word could not name
+/// where the arm goes.
+#[test]
+fn a_traversal_whose_exit_edge_carries_a_drop_keeps_its_break_on_the_joints_path() {
+    let blocks = i64_blocks(BREAK);
+    assert!(
+        blocks.iter().any(|block| block.end.starts_with("ForAt<")),
+        "{BREAK}: {:?}",
+        ops_of_anywhere(&blocks)
+    );
+}
+
+/// A `match` arm that leaves a loop is the one escape `prepare` still refuses:
+/// `recognize_switch` builds no escaping dispatch form, so the loop is joints
+/// and every edge into its header carries a start or a step.
 #[test]
 fn every_edge_into_a_header_carries_a_start_or_a_step() {
-    let blocks =
-        i64_blocks("let acc = 0; for i in 0..4 { if i == 2 { continue; }; acc = acc + i; } acc");
+    let blocks = i64_blocks(
+        "let acc = 0; \
+         for i in 0..4 { match i { 2 => { continue; }, _ => { acc = acc + i; } }; } acc",
+    );
     let ops = ops_of_anywhere(&blocks);
     assert_eq!(
         ops.iter().filter(|op| op.starts_with("ForStart<")).count(),

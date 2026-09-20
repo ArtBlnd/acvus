@@ -102,10 +102,11 @@ questions asked of one terminator — a separate RFC, after this one.
    innermost loop only (no labels). `continue` lowers to the latch jump,
    `break` to the exit jump; the lowering's scope stack emits the drops
    of every scope between the statement and the loop body on that edge.
-   A branch whose arm leaves the loop does not rejoin, so the machine's
-   `Diamond`/`Select` recognizer does not admit it and that loop runs its
-   branches as joints; the loops that contain no such branch are regions
-   as before.
+   A branch whose arm leaves the loop does not rejoin, so it is not a
+   `Diamond`; it is an `Escape`, an operation of the body whose arm ends
+   in the verdict the region above reads (RFC-0052 §3). The loop stays one
+   region, and a loop with no such branch is the region it was, with no
+   compare added.
 
 5. **Aliasing.** `for x in &mut v` holds the container exclusively for
    the loop; the terminator carries that borrow, so `v` named in the body
@@ -187,12 +188,17 @@ obligation. Each iteration moves element `index` out of the array and leaves
 releases the elements a `break` never reached. The machine therefore does
 not release the array, and must not.
 
-A loop a `break` leaves, or one a `continue` returns to the head of, is the
-joints path Decision 4 names, and it runs as three operations rather than
-one. `recognize_for` refuses both shapes -- a `break` puts the exit's drop
-block between the terminator and the body, and a `continue` is a third jump
-to the header -- so the body's blocks stay blocks, and a region may hold no
-block. The header is then the terminator it is in the IR: `ForAt<S>` reads
+A loop a `break` leaves, or one a `continue` returns to the head of, is one
+region: the branch is an `Escape` in the body, the arm ends in `Break` or
+`Continue`, and `For<S, Escapes>` reads the word the body handed back. What
+`recognize_for` still refuses is the one shape whose `break` does not name
+the loop's exit: where `optimize::drop_insertion` gives the exit edge a
+block of its own, `lower` lays that block between the terminator and the
+body and the `break` jumps past it to the continuation both reach, so the
+verdict "leave, then run the region's successor" would run the exit block's
+drops that the arm has already run. A traversal of a slice or an owning
+array that a `break` leaves is that shape, and it runs as joints. The
+header is then the terminator it is in the IR: `ForAt<S>` reads
 the counter, compares it to the bound, and either lays the body block's
 leading parameters and continues to the body or continues to the exit, with
 the two edges' parallel moves in blocks of their own as a `JumpIf`'s are.

@@ -402,6 +402,47 @@ steps = steps + 1; \
 } \
 ";
 
+/// The same scan with the inner `while`'s condition written as a `break`:
+/// the one hot body in this bench whose loop holds an exit edge.
+const BODY_BREAK: &str = "\
+while pc < plen { \
+match &prog[pc] { \
+Op::Inc => { tape[ptr] = tape[ptr] + 1; }, \
+Op::Dec => { tape[ptr] = tape[ptr] - 1; }, \
+Op::Left => { ptr = ptr - one; }, \
+Op::Right => { ptr = ptr + one; }, \
+Op::Open => { if tape[ptr] == 0 { \
+let d = one; \
+while d > zero { \
+pc = pc + one; \
+match &prog[pc] { \
+Op::Open => { d = d + one; }, \
+Op::Close => { d = d - one; }, \
+_ => { d = d; } \
+}; \
+if d == zero { break; }; \
+} \
+}; }, \
+Op::Close => { if tape[ptr] != 0 { \
+let d = one; \
+while d > zero { \
+pc = pc - one; \
+match &prog[pc] { \
+Op::Open => { d = d - one; }, \
+Op::Close => { d = d + one; }, \
+_ => { d = d; } \
+}; \
+if d == zero { break; }; \
+} \
+}; }, \
+Op::Out => { out = out + tape[ptr]; }, \
+_ => { steps = steps; } \
+}; \
+pc = pc + one; \
+steps = steps + 1; \
+} \
+";
+
 /// The same body with the cell update routed through a user function: one
 /// `CallDirect` per `+`/`-` step.
 const BODY_CALL: &str = "\
@@ -428,6 +469,10 @@ fn table_source() -> String {
 
 fn scan_source() -> String {
     format!("{}{STATE}{BODY_SCAN}{TAIL}", prelude())
+}
+
+fn break_source() -> String {
+    format!("{}{STATE}{BODY_BREAK}{TAIL}", prelude())
 }
 
 fn call_source() -> String {
@@ -611,6 +656,11 @@ fn cases() -> Vec<Case> {
             source: call_source(),
             rust: rust_call,
         },
+        Case {
+            name: "bf break",
+            source: break_source(),
+            rust: rust_scan,
+        },
     ]
 }
 
@@ -646,14 +696,13 @@ fn print_listing(blocks: &[BlockListing]) {
 }
 
 fn source_named(name: &str) -> String {
-    match name {
-        "bf table" => table_source(),
-        "bf scan" => scan_source(),
-        "bf call" => call_source(),
-        other => {
-            panic!("no case named {other:?}: it is one of \"bf table\", \"bf scan\", \"bf call\"")
-        }
-    }
+    let found = cases().into_iter().find(|case| case.name == name);
+    found
+        .unwrap_or_else(|| {
+            let all: Vec<&str> = cases().iter().map(|case| case.name).collect();
+            panic!("no case named {name:?}: it is one of {all:?}")
+        })
+        .source
 }
 
 /// The block labels and predecessors the op list's blocks are prepared

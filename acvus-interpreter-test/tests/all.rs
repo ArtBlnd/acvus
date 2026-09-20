@@ -39,6 +39,7 @@ mod lambda_capture;
 mod lent_iterator;
 mod literal;
 mod loop_carried_value;
+mod loop_escape;
 mod loop_exit_moves;
 mod main_return_declaration;
 mod mandelbrot_loop_shape;

@@ -140,12 +140,11 @@ async fn a_return_of_another_type_than_the_host_declared_is_refused() {
 const RETURN_IN_A_RANGE: &str =
     "let acc = 0; for i in 0..10 { acc = acc + i; if acc > 5 { return acc; }; } acc";
 
-/// `return` is the third exit edge, beside `break` and `continue`, that puts
-/// a loop on RFC-0057's joints path: `recognize_for` refuses a body that is
-/// not one straight run, so the loop runs as `ForStart`/`ForAt`/`ForStep`
-/// rather than collapsing into one region operation.
+/// RFC-0057 Decision 4 names `return` as the third exit edge a region's body
+/// may hold, beside `break` and `continue`; change that decision and this
+/// test moves with it.
 #[test]
-fn a_loop_a_return_leaves_is_no_region() {
+fn a_loop_a_return_leaves_is_one_region_that_hands_the_return_up() {
     let i = Interner::new();
     let blocks = script_listing(&i, RETURN_IN_A_RANGE, Context::default(), Ty::I64);
     let regions: Vec<String> = blocks
@@ -153,17 +152,22 @@ fn a_loop_a_return_leaves_is_no_region() {
         .flat_map(|block| block.regions.iter())
         .map(|region| region.name.clone())
         .collect();
-    assert_eq!(regions, Vec::<String>::new(), "the loop runs as joints");
+    assert_eq!(
+        regions,
+        ["For<Range<i64>, Escapes>"],
+        "the loop is one region"
+    );
 
     let ops = ops_of_anywhere(&blocks);
     assert!(
-        ops.iter().any(|op| op.starts_with("ForStart<")),
-        "a preheader lays the counter: {ops:?}"
+        ops.iter().any(|op| op.starts_with("Escape<")),
+        "the `return` is a branch inside the body: {ops:?}"
     );
     assert!(
-        ops.iter().any(|op| op.starts_with("ForStep<")),
-        "a latch steps it: {ops:?}"
+        !ops.iter().any(|op| op.starts_with("ForStart<")),
+        "no preheader lays a counter the region keeps in a local: {ops:?}"
     );
+    assert_eq!(value(RETURN_IN_A_RANGE), "6");
 }
 
 // -- What the return edge releases -------------------------------------

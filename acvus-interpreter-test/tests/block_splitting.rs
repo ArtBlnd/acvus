@@ -106,7 +106,7 @@ async fn a_tail_that_reads_an_arm_sits_after_the_diamond() {
         [
             "Chain2<i64, Slot, 0, 0>",
             "Add<i64, Slot, Slot, Slot>",
-            "Diamond<Slot>",
+            "Diamond<Slot, Rejoins>",
             "Mul<i64, Slot, Slot, Slot>",
             "Mov<false, true>"
         ],
@@ -119,10 +119,8 @@ async fn a_tail_that_reads_an_arm_sits_after_the_diamond() {
     );
 }
 
-/// The decision `ops/control.rs` records: there is no flag a region tests for
-/// a `return` inside it, because the recognizer never admits one.
 #[tokio::test]
-async fn a_while_that_returns_is_not_a_region() {
+async fn a_while_that_returns_is_a_region_and_the_return_travels_out_of_it() {
     let interner = Interner::new();
     let source = r#"let i = 0; let acc = 0;
                     while i < 4 { let step = if i == 3 { None } else { Some(i) };
@@ -136,16 +134,12 @@ async fn a_while_that_returns_is_not_a_region() {
     );
     let names = ops_of_anywhere(&blocks);
     assert!(
-        !names.iter().any(|name| family_of(name) == "Loop"),
-        "a `return` is not straight-line, so `straight_run` stops at it and the \
-         `while` prepares as blocks: {names:?}"
+        names.iter().any(|name| name == "Loop<R0, Escapes>"),
+        "the `while` is one region reading its body's verdict: {names:?}"
     );
     assert!(
-        ends(&blocks).iter().any(|end| end.starts_with("JumpIf"))
-            && ends(&blocks).contains(&"Return<false, false>"),
-        "the loop is blocks: its test is a `JumpIf` terminator and the `?` a \
-         `Return` one — {:?}",
-        ends(&blocks)
+        names.iter().any(|name| family_of(name) == "Escape"),
+        "the `?` is a branch inside the body and not a block of its own: {names:?}"
     );
 
     let value = run_script_mode(

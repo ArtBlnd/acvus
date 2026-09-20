@@ -111,11 +111,36 @@ The core is **branchless**: every branch an operation takes beyond its own
    `prepare::straight_run` walks a candidate range and stops at the first
    instruction that is not straight-line; the loop and diamond recognizers
    admit a shape only where that walk reached the shape's own
-   `JumpIf`/`Jump`. A `return`, a `Switch`, a suspending call — each is a
-   stop, so a `while` or an `if` holding one is not recognized and prepares
-   as the blocks it was. There is no flag a region tests for a `return`
-   inside it: the case that would need one cannot reach the type
-   (`tests/block_splitting.rs::a_while_that_returns_is_not_a_region`).
+   `JumpIf`/`Jump`. A `Switch` and a suspending call are each a stop, so a
+   `while` or an `if` holding one is not recognized and prepares as the
+   blocks it was.
+
+   **A part's word is a verdict where the part can exit.** A chain ends in
+   `Yield`, which hands back whatever the chain computed, or in one of
+   `Fall`, `Break`, `Continue` and `Return`, which hand back `FALL`,
+   `LEAVE`, `AGAIN` and `RETURN`. `code.rs` places those four above every
+   block id, below which `Machine::run`'s one compare already sat, so a
+   verdict that outlived the region reading it leaves the loop rather than
+   indexing a block with it. A `break`, a `continue`, a `?` or a `return`
+   under a test is `prepare::recognize_escape`'s `Escape<C, ARM_ON>`: the
+   arm that escapes ends in a verdict node, and the side that carries on is
+   the rest of the chain the region sits in, or, where the lowering laid the
+   escaping arm second, a block of the region that rejoins at the label it
+   continues into. The region above reads the verdict where it can arrive
+   and does not where it cannot — `For<S, E>`, `Loop<C, E>` and
+   `Diamond<C, E>` are one monomorphization over `Rejoins` and one over
+   `Escapes`, `prepare` picks one, and a loop with no way out holds no
+   compare it did not hold before
+   (`tests/loop_escape.rs::a_loop_with_no_exit_holds_no_verdict`). The two
+   endings never share a chain, which is what keeps a computed word from
+   reading as a verdict.
+
+   **A region whose body can escape has two ends.** Every path that
+   completes such a region leaves by the tail call to its successor, and the
+   path where the function is over leaves by returning the body's `Return`
+   word, which has no successor to call. `benches/asm_probe.rs` reads
+   `Escapes` out of the demangled `run` symbol and judges those two ends
+   together; every other operation owes the one tail call.
 
    **A terminator owns blocks and ids, never a move.** A jump's parallel
    move is `Mov<const LARGE: bool, const WORD: bool> { dst: Off, src: Off }`
