@@ -1,32 +1,36 @@
 // Word counts over the context text: `split_whitespace` cuts it, `lower`
 // folds the case, and a trailing period or comma is stripped with
 // `strip_suffix`.
+// The tally is a `HashMap<String, i64>`: `or_insert` puts a zero the first
+// time a word is seen and lends its count back every time after.
 // The top three words come out by count descending and, where counts tie,
 // by the word's bytes ascending -- `string::lt` is that order, Rust's
 // `Ord for str`, because the `<` operator does not reach text.
+// A map iterates in insertion order, which here is first appearance, so
+// the sort breaks a tie the same way it did over two parallel vectors.
 
 let bare = |w| -> w.strip_suffix(".").or_else(| | -> w.strip_suffix(",")).unwrap_or(w);
 
-let words = vec([]);
-let tally = vec([]);
+let counts = hash_map(|k| -> hash(k), |a, b| -> a == b);
 let total = 0;
 
 let raw = &@text | split_whitespace;
 while let Some(token) = raw.next() {
     let word = bare(token.lower());
     total = total + 1;
-    let seen = false;
-    for i in 0u64..words.len() {
-        if words[i] == word {
-            tally[i] = tally[i] + 1;
-            seen = true;
-            break;
-        };
-    }
-    if !seen {
-        words.push(word);
-        tally.push(1);
-    };
+    let n = or_insert(&mut counts, word, 0);
+    *n = *n + 1;
+}
+
+let words = vec([]);
+let tally = vec([]);
+let seen = keys(&counts);
+while let Some(w) = seen.next() {
+    words.push(w.to_string());
+}
+let totals = values(&counts);
+while let Some(c) = totals.next() {
+    tally.push(*c);
 }
 
 let order = vec([]);

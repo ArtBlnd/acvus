@@ -44,6 +44,7 @@ mod loop_escape;
 mod loop_exit_moves;
 mod main_return_declaration;
 mod mandelbrot_loop_shape;
+mod map;
 mod match_dispatch;
 mod match_literal_dispatch;
 mod match_source;

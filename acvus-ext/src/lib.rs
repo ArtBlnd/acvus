@@ -9,6 +9,7 @@ mod hash;
 mod io;
 mod iter;
 mod iterator;
+mod map;
 mod num;
 mod option;
 mod panic;
@@ -28,6 +29,7 @@ pub use hash::hash_registry;
 pub use io::io_registry;
 pub use iter::Iter;
 pub use iterator::iterator_registry;
+pub use map::{HashMap, HashSet, map_registry, set_registry};
 pub use num::{num_constant_registries, num_registry, num_width_registries};
 pub use option::option_registry;
 pub use panic::panic_registry;
@@ -59,6 +61,8 @@ where
         slice_registry(),
         array_registry(),
         deque_registry(),
+        map_registry(),
+        set_registry(),
         option_registry(),
         result_registry(),
         panic_registry(),
