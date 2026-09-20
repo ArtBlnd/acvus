@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -783,39 +784,73 @@ struct Timing {
     answer: Counted,
 }
 
-/// The first run of each set is the warm-up and is dropped, so three are
-/// kept and the reported figure is their median.
-const REPS: usize = 4;
-const _: () = assert!(REPS >= 2, "a dropped warm-up leaves no sample at REPS < 2");
+const REPS: NonZeroUsize = reps(3);
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
+}
+
+struct Answers {
+    script: Counted,
+    rust: Counted,
+    chunked: Counted,
+}
+
+struct Elapsed {
+    execute: Duration,
+    rust: Duration,
+    chunked: Duration,
+}
 
 fn measure(rt: &Runtime, case: &Case, corpus: &Arc<Corpus>, cores: usize) -> Timing {
     let lines = corpus.lines.as_slice();
     let pat = corpus.pat.as_slice();
     let interner = Interner::new();
-    let mut execute = Vec::new();
-    let mut rust = Vec::new();
-    let mut chunked = Vec::new();
-    let mut script_answer = Counted::ZERO;
-    let mut rust_answer = Counted::ZERO;
-    let mut chunked_answer = Counted::ZERO;
-    for rep in 0..REPS {
+    let run_rep = || {
         let run = run_once(rt, &interner, case, corpus);
-        script_answer = run.answer;
 
         let start = Instant::now();
-        rust_answer = black_box(rust_seq(black_box(lines), black_box(pat)));
+        let rust = black_box(rust_seq(black_box(lines), black_box(pat)));
         let rust_elapsed = start.elapsed();
 
         let start = Instant::now();
-        chunked_answer = black_box(rust_chunked(black_box(lines), black_box(pat), cores));
+        let chunked = black_box(rust_chunked(black_box(lines), black_box(pat), cores));
         let chunked_elapsed = start.elapsed();
 
-        if rep > 0 {
-            execute.push(run.elapsed);
-            rust.push(rust_elapsed);
-            chunked.push(chunked_elapsed);
-        }
+        (
+            Answers {
+                script: run.answer,
+                rust,
+                chunked,
+            },
+            Elapsed {
+                execute: run.elapsed,
+                rust: rust_elapsed,
+                chunked: chunked_elapsed,
+            },
+        )
+    };
+
+    let (mut answers, _warm_up) = run_rep();
+    let mut execute = Vec::with_capacity(REPS.get());
+    let mut rust = Vec::with_capacity(REPS.get());
+    let mut chunked = Vec::with_capacity(REPS.get());
+    for _ in 0..REPS.get() {
+        let (this, elapsed) = run_rep();
+        answers = this;
+        execute.push(elapsed.execute);
+        rust.push(elapsed.rust);
+        chunked.push(elapsed.chunked);
     }
+
+    let Answers {
+        script: script_answer,
+        rust: rust_answer,
+        chunked: chunked_answer,
+    } = answers;
     assert!(
         script_answer == rust_answer,
         "{}: script produced {script_answer:?}, Rust produced {rust_answer:?}",

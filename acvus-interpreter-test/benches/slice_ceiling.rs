@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,7 +61,14 @@ const QUERY: &str = "q";
 const KEYS: &str = "k";
 const LENGTH: &str = "n";
 const N: usize = 1_000_000;
-const REPS: usize = 7;
+const REPS: NonZeroUsize = reps(6);
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
+}
 
 // -- One body, built by hand -----------------------------------------
 
@@ -531,25 +539,31 @@ fn main() {
         .into_iter()
         .filter(|shape| only.as_deref().is_none_or(|name| shape.name() == name))
         .collect();
-    let mut samples: Vec<Vec<Duration>> = vec![Vec::new(); shapes.len()];
+    let checked_shape = |shape: Shape| {
+        let Timing {
+            elapsed,
+            value,
+            dispatches,
+        } = run_shape(shape, N);
+        assert!(
+            value == expected(N),
+            "{}: produced {value}, expected {}",
+            shape.name(),
+            expected(N)
+        );
+        (dispatches, elapsed)
+    };
+
+    for shape in &shapes {
+        let (_dispatches, _warm_up) = checked_shape(*shape);
+    }
+    let mut samples: Vec<Vec<Duration>> = vec![Vec::with_capacity(REPS.get()); shapes.len()];
     let mut dispatches = vec![0usize; shapes.len()];
-    for rep in 0..REPS {
+    for _ in 0..REPS.get() {
         for (at, shape) in shapes.iter().enumerate() {
-            let Timing {
-                elapsed,
-                value,
-                dispatches: per_iteration,
-            } = run_shape(*shape, N);
+            let (per_iteration, elapsed) = checked_shape(*shape);
             dispatches[at] = per_iteration;
-            assert!(
-                value == expected(N),
-                "{}: produced {value}, expected {}",
-                shape.name(),
-                expected(N)
-            );
-            if rep > 0 {
-                samples[at].push(elapsed);
-            }
+            samples[at].push(elapsed);
         }
     }
     println!(

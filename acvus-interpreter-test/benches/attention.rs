@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -256,7 +257,14 @@ struct Case {
     container: Container,
     n: usize,
     d: usize,
-    reps: usize,
+    reps: NonZeroUsize,
+}
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
 }
 
 struct Timing {
@@ -304,6 +312,13 @@ impl Samples {
     }
 }
 
+struct Phases {
+    compile: Duration,
+    setup: Duration,
+    execute: Duration,
+    value: f64,
+}
+
 fn timed<T, F>(body: F) -> (T, Duration)
 where
     F: FnOnce() -> T,
@@ -332,39 +347,55 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
         Samples::of(container, Kernel::InLanguage),
         Samples::of(container, Kernel::Dot),
     ];
-    let mut rust_samples = Vec::new();
-    let mut rust_value = f64::NAN;
 
-    for rep in 0..reps {
+    let run_form = |source: &str| {
+        let (cr, compile) = timed(|| compile_form(&interner, source, &context_types));
+        drop(black_box(cr));
+
+        let cr = compile_form(&interner, source, &context_types);
+        let snapshot = snapshot_of(&interner, &json);
+        let (built, setup) =
+            timed(|| execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor)));
+        drop(black_box(built));
+
+        let cr = compile_form(&interner, source, &context_types);
+        let snapshot = snapshot_of(&interner, &json);
+        let (_shared, mut interp) =
+            execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
+        let (value, execute) = timed(|| rt.block_on(interp.execute()));
+        Phases {
+            compile,
+            setup,
+            execute,
+            value: value.as_float(),
+        }
+    };
+    let run_rust = || timed(|| rust_attention(black_box(&inputs)));
+
+    for form in &forms {
+        let _warm_up = run_form(&form.source);
+    }
+    let (warm_up_value, _warm_up) = run_rust();
+    let mut rust_value = black_box(warm_up_value);
+    let mut rust_samples = Vec::with_capacity(reps.get());
+
+    for _ in 0..reps.get() {
         for form in &mut forms {
-            let (cr, compile) = timed(|| compile_form(&interner, &form.source, &context_types));
-            drop(black_box(cr));
-
-            let cr = compile_form(&interner, &form.source, &context_types);
-            let snapshot = snapshot_of(&interner, &json);
-            let (built, setup) =
-                timed(|| execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor)));
-            drop(black_box(built));
-
-            let cr = compile_form(&interner, &form.source, &context_types);
-            let snapshot = snapshot_of(&interner, &json);
-            let (_shared, mut interp) =
-                execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
-            let (value, execute) = timed(|| rt.block_on(interp.execute()));
-            form.value = value.as_float();
-
-            if rep > 0 {
-                form.compile.push(compile);
-                form.setup.push(setup);
-                form.execute.push(execute);
-            }
+            let Phases {
+                compile,
+                setup,
+                execute,
+                value,
+            } = run_form(&form.source);
+            form.value = value;
+            form.compile.push(compile);
+            form.setup.push(setup);
+            form.execute.push(execute);
         }
 
-        let (value, elapsed) = timed(|| rust_attention(black_box(&inputs)));
+        let (value, elapsed) = run_rust();
         rust_value = black_box(value);
-        if rep > 0 {
-            rust_samples.push(elapsed);
-        }
+        rust_samples.push(elapsed);
     }
 
     for form in &forms {
@@ -412,8 +443,7 @@ fn execute_only(rt: &Runtime, case: &Case, kernel: Kernel) -> Duration {
         split_context(&interner, context_of(&interner, &json)).0;
     let cr = compile_form(&interner, &source, &context_types);
 
-    let mut samples = Vec::new();
-    for rep in 0..reps {
+    let run_once = || {
         let snapshot = snapshot_of(&interner, &json);
         let (_shared, mut interp) = execute_compiled(
             &interner,
@@ -423,11 +453,16 @@ fn execute_only(rt: &Runtime, case: &Case, kernel: Kernel) -> Duration {
         );
         let start = Instant::now();
         let value = rt.block_on(interp.execute());
-        let elapsed = start.elapsed();
+        (value, start.elapsed())
+    };
+
+    let (warm_up_value, _warm_up) = run_once();
+    black_box(warm_up_value);
+    let mut samples = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (value, elapsed) = run_once();
         black_box(value);
-        if rep > 0 {
-            samples.push(elapsed);
-        }
+        samples.push(elapsed);
     }
     drop(black_box(cr));
     median(samples)
@@ -498,7 +533,7 @@ fn case_from_env() -> Case {
             Ok(text) => text
                 .parse()
                 .unwrap_or_else(|e| panic!("ATTENTION_REPS {text:?}: {e}")),
-            Err(_) => 20,
+            Err(_) => reps(19),
         },
     }
 }
@@ -523,7 +558,7 @@ fn main() {
         _ => {}
     }
 
-    let sizes = [(2, 2, 20), (64, 64, 20), (256, 128, 5)];
+    let sizes = [(2, 2, reps(19)), (64, 64, reps(19)), (256, 128, reps(4))];
     let cases: Vec<Case> = [Container::Deque, Container::Vec]
         .into_iter()
         .flat_map(|container| {

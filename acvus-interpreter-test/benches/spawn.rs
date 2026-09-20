@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
@@ -230,9 +231,16 @@ const CASES: [Case; 3] = [
 
 // -- Measurement ------------------------------------------------------
 
-/// Three kept reps, the first thrown away, acvus and Rust alternating so a
-/// drift in the machine lands on both.
-const REPS: usize = 4;
+/// acvus and Rust alternate inside one rep so a drift in the machine lands
+/// on both.
+const REPS: NonZeroUsize = reps(3);
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
+}
 
 fn median(mut samples: Vec<Duration>) -> Duration {
     samples.sort_unstable();
@@ -247,6 +255,18 @@ struct Row {
     acvus: Duration,
     rust_seq: Duration,
     rust_par: Option<Duration>,
+}
+
+struct Values {
+    script: i64,
+    rust_seq: i64,
+    rust_par: Option<i64>,
+}
+
+struct Timings {
+    acvus: Duration,
+    seq: Duration,
+    par: Option<Duration>,
 }
 
 fn run_once(rt: &Runtime, source: &str) -> (Duration, i64) {
@@ -264,42 +284,60 @@ fn run_once(rt: &Runtime, source: &str) -> (Duration, i64) {
 
 fn measure(rt: &Runtime, case: &Case, flavor: &Flavor) -> Row {
     let source = (case.source)(flavor.call);
-    let mut acvus = Vec::new();
-    let mut seq = Vec::new();
-    let mut par = Vec::new();
-    let mut script_value = 0i64;
-    let mut rust_value = 0i64;
-    let mut par_value = 0i64;
-    for rep in 0..REPS {
-        let (elapsed, value) = run_once(rt, &source);
-        script_value = value;
+    let run_rep = || {
+        let (acvus, script) = run_once(rt, &source);
 
         let start = Instant::now();
-        rust_value = black_box((case.rust_seq)());
-        let seq_elapsed = start.elapsed();
+        let rust_seq = black_box((case.rust_seq)());
+        let seq = start.elapsed();
 
-        let par_elapsed = case.rust_par.map(|f| {
+        let par = case.rust_par.map(|f| {
             let start = Instant::now();
-            par_value = black_box(f());
-            start.elapsed()
+            let value = black_box(f());
+            (value, start.elapsed())
         });
 
-        if rep > 0 {
-            acvus.push(elapsed);
-            seq.push(seq_elapsed);
-            par.extend(par_elapsed);
-        }
+        (
+            Values {
+                script,
+                rust_seq,
+                rust_par: par.map(|(value, _)| value),
+            },
+            Timings {
+                acvus,
+                seq,
+                par: par.map(|(_, elapsed)| elapsed),
+            },
+        )
+    };
+
+    let (mut values, _warm_up) = run_rep();
+    let mut acvus = Vec::with_capacity(REPS.get());
+    let mut seq = Vec::with_capacity(REPS.get());
+    let mut par = Vec::with_capacity(REPS.get());
+    for _ in 0..REPS.get() {
+        let (this, timings) = run_rep();
+        values = this;
+        acvus.push(timings.acvus);
+        seq.push(timings.seq);
+        par.extend(timings.par);
     }
+
+    let Values {
+        script,
+        rust_seq,
+        rust_par,
+    } = values;
     assert!(
-        script_value == rust_value,
-        "{} {}: script produced {script_value}, Rust produced {rust_value}",
+        script == rust_seq,
+        "{} {}: script produced {script}, Rust produced {rust_seq}",
         case.name,
         flavor.name
     );
-    if case.rust_par.is_some() {
+    if let Some(par_value) = rust_par {
         assert!(
-            par_value == rust_value,
-            "{} {}: threaded Rust produced {par_value}, sequential Rust produced {rust_value}",
+            par_value == rust_seq,
+            "{} {}: threaded Rust produced {par_value}, sequential Rust produced {rust_seq}",
             case.name,
             flavor.name
         );

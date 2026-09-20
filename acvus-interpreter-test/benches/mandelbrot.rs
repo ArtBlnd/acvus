@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -45,7 +46,14 @@ struct Grid {
     w: i64,
     h: i64,
     max: i64,
-    reps: usize,
+    reps: NonZeroUsize,
+}
+
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
+    }
 }
 
 struct Timing {
@@ -101,9 +109,7 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 fn measure(rt: &Runtime, grid: &Grid) -> Timing {
     let interner = Interner::new();
     let context_types = split_context(&interner, context(&interner, grid)).0;
-    let mut execute = Vec::new();
-    let mut script_total = 0i64;
-    for rep in 0..grid.reps {
+    let run_script = || {
         let cr = compile_script_mode(&interner, MANDELBROT, &context_types, Ty::I64);
         let (_shared, mut interp) = execute_compiled(
             &interner,
@@ -113,21 +119,28 @@ fn measure(rt: &Runtime, grid: &Grid) -> Timing {
         );
         let start = Instant::now();
         let value = rt.block_on(interp.execute());
-        let elapsed = start.elapsed();
-        script_total = value.as_int();
-        if rep > 0 {
-            execute.push(elapsed);
-        }
-    }
-    let mut rust = Vec::new();
-    let mut rust_total = 0i64;
-    for rep in 0..grid.reps {
+        (value.as_int(), start.elapsed())
+    };
+    let run_rust = || {
         let start = Instant::now();
-        rust_total = black_box(rust_mandelbrot(grid.w, grid.h, grid.max));
-        let elapsed = start.elapsed();
-        if rep > 0 {
-            rust.push(elapsed);
-        }
+        let total = black_box(rust_mandelbrot(grid.w, grid.h, grid.max));
+        (total, start.elapsed())
+    };
+
+    let (mut script_total, _warm_up) = run_script();
+    let mut execute = Vec::with_capacity(grid.reps.get());
+    for _ in 0..grid.reps.get() {
+        let (total, elapsed) = run_script();
+        script_total = total;
+        execute.push(elapsed);
+    }
+
+    let (mut rust_total, _warm_up) = run_rust();
+    let mut rust = Vec::with_capacity(grid.reps.get());
+    for _ in 0..grid.reps.get() {
+        let (total, elapsed) = run_rust();
+        rust_total = total;
+        rust.push(elapsed);
     }
     assert!(
         script_total == rust_total,
@@ -156,13 +169,13 @@ fn main() {
             w: 80,
             h: 40,
             max: 100,
-            reps: 10,
+            reps: reps(9),
         },
         Grid {
             w: 200,
             h: 100,
             max: 200,
-            reps: 5,
+            reps: reps(4),
         },
     ];
     println!(

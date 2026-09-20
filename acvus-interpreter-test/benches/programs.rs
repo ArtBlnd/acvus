@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -454,20 +455,15 @@ struct Timing {
     steps: i64,
 }
 
-/// A size and the number of runs made at it. The first run of each pair is
-/// the warm-up and is dropped, so a size is measured only at two or more.
 struct Size {
     n: i64,
-    reps: usize,
+    reps: NonZeroUsize,
 }
 
-impl Size {
-    fn new(n: i64, reps: usize) -> Self {
-        assert!(
-            reps >= 2,
-            "a size is measured at two or more reps, not {reps}"
-        );
-        Size { n, reps }
+const fn reps(n: usize) -> NonZeroUsize {
+    match NonZeroUsize::new(n) {
+        Some(reps) => reps,
+        None => panic!("a size measures at least one rep"),
     }
 }
 
@@ -484,9 +480,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
     let Size { n, reps } = *size;
     let interner = Interner::new();
     let context_types = split_context(&interner, context(&interner, n)).0;
-    let mut execute = Vec::new();
-    let mut script_value = None;
-    for rep in 0..reps {
+    let run_script = || {
         let ast = ParsedAst::Script(
             acvus_ast::parse_script(&interner, &case.source).expect("parse error"),
         );
@@ -499,26 +493,31 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
         );
         let start = Instant::now();
         let value = rt.block_on(interp.execute());
-        let elapsed = start.elapsed();
-        script_value = Some(value.as_int());
-        if rep > 0 {
-            execute.push(elapsed);
-        }
-    }
-    let mut rust = Vec::new();
-    let mut ran = None;
-    for rep in 0..reps {
+        (value.as_int(), start.elapsed())
+    };
+    let run_rust = || {
         let start = Instant::now();
         let this = (case.rust)(black_box(n));
         black_box(this.out);
-        let elapsed = start.elapsed();
-        ran = Some(this);
-        if rep > 0 {
-            rust.push(elapsed);
-        }
+        (this, start.elapsed())
+    };
+
+    let (mut script_value, _warm_up) = run_script();
+    let mut execute = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (value, elapsed) = run_script();
+        script_value = value;
+        execute.push(elapsed);
     }
-    let script_value = script_value.expect("a size runs the script at least twice");
-    let ran = ran.expect("a size runs the twin at least twice");
+
+    let (mut ran, _warm_up) = run_rust();
+    let mut rust = Vec::with_capacity(reps.get());
+    for _ in 0..reps.get() {
+        let (this, elapsed) = run_rust();
+        ran = this;
+        rust.push(elapsed);
+    }
+
     assert!(
         ran.out == outer_count(n) * B,
         "{} n={n}: the nested-loop multiply left {} under the pointer, not {}",
@@ -724,8 +723,20 @@ fn main() {
         .filter(|c| only.as_deref().is_none_or(|o| c.name == o))
     {
         let sizes = match std::env::var("PROGRAMS_N").ok() {
-            Some(n) => vec![Size::new(n.parse().expect("PROGRAMS_N is an integer"), 2)],
-            None => vec![Size::new(1_000_000, 4), Size::new(5_000_000, 3)],
+            Some(n) => vec![Size {
+                n: n.parse().expect("PROGRAMS_N is an integer"),
+                reps: reps(1),
+            }],
+            None => vec![
+                Size {
+                    n: 1_000_000,
+                    reps: reps(3),
+                },
+                Size {
+                    n: 5_000_000,
+                    reps: reps(2),
+                },
+            ],
         };
         for size in sizes {
             let Timing {
