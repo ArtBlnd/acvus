@@ -40,7 +40,7 @@ pub use handler::{
     SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
     ValuesOnly, Width, async_glue, glue, glue_at_entry,
 };
-pub use instance::{Carrier, Instance, Signature};
+pub use instance::{Carrier, Instance, Signature, one_value};
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{

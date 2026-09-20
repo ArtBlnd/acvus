@@ -344,13 +344,80 @@ storage of their own — the scalars, `String`, and the extension types.
   splits into the shape and the receiver. It is a design decision and not a
   transcription, so it is not written here.
 - **A requirement of a container's element**, per the paragraph above.
-- **Pattern instances and the solver's deferred requirement** (step 3),
-  unchanged from the order of work.
+- **Pattern instances and the solver's deferred requirement**, which step 3
+  reached and stopped inside: "Where a pattern instance stops", below.
 
-An instance whose parameter list is not `&V` at the signature's first
-variable, or whose result is not one of the runtime's values, gets no
-`Signature` impl, and the missing impl is the refusal: `std::vec`,
-`vec::filled` and `iter::next` cannot be required as bounds today.
+### Step 3: a signature is a shape
+
+`Signature` is the shape of a call and carries no receiver concept. Its
+`Recv<'a>` is `&'a This`, `&'a mut This` or `This`, one per mode the
+declaration wrote, and `Instance::call` takes the receiver that way; a
+handler that lends `&it` where the signature takes `&mut I` is refused at
+its own `I::call`, which
+`acvus-extern-macro/tests/compile_fail/instance_wrong_mode.rs` executes.
+`extern_signature!` writes the impl for every signature whose first
+parameter stands at its first type variable in any of the three modes and
+whose later parameters and result are each one whole value — a parameter or
+result mentioning a variable is fine, so `next<I, T, E, Rt>(it: &mut I) ->
+Option<T>` has one. A later parameter that is a `str` view, a projection,
+or a borrow of anything but that first variable gets none: a requiring
+handler holds a carrier and its entries, and there is no third thing it
+could lend.
+
+One trait with a receiver projection was chosen over three traits — a
+`Signature`, a `SignatureMut` and a `SignatureOwned`. With three, a
+requiring handler's bound has to say which one it means, and that is the
+signature's own shape restated at the requirement, which is what Decision 1
+exists to remove.
+
+`acvus-extern/tests/decl.rs` declares `t::step<I>(it: &mut I) -> i64` with
+an instance at `i64` and a handler `drive<I, Rt>` requiring it;
+`a_required_instance_whose_first_parameter_is_mut_runs_through_the_entry`
+runs the entry and reads the bumped place back.
+
+### Where a pattern instance stops
+
+A pattern instance is not built, and the obstacle is the carrier's identity
+rather than the field it would ride in. An extension type is
+`#[repr(transparent)]` and crosses by `rt.erase::<P>(payload)`, a move of
+the whole Rust payload into the host's box, so an `Entry<Rt>` inside that
+payload survives: the sketch `Map(inner, f)` stands on that point.
+
+What does not stand is that `#[extern_fn]` writes **one carrier type per
+declaration**. The adaptor `map` fills its variable with
+`__ExternBoundmapI<Rt>` and stores that into the value; the instance
+`next_map` reads the same value back as `__ExternBoundnext_mapI<Rt>`. Those
+are two Rust types of one layout and two `TypeId`s, and a crossing selects
+the payload by `TypeId`, so the producer and the consumer of one acvus
+variable do not agree on the Rust type the pointer rides in.
+
+Measured, on a `Doubled<I, Rt>` extension type with `doubled` building it
+and an instance of `t::step` at the pattern consuming it, with the three
+`#[extern_fn]` refusals that stand in the way lifted: every declaration
+compiles, and the call panics where the value is read back —
+*"value is not a `__ExternBoundstep_doubledI<Tiny>`"*. Lifting the
+refusals is therefore not what is missing; the carrier is.
+
+Two ways out, and both are decisions rather than transcriptions:
+
+- **Key the carrier by the signature, not by the declaration.**
+  `Signature` grows a `Head` — the marker with every parameter defaulted,
+  which `extern_signature!` already makes resolvable — and `acvus-extern`
+  holds one `Bound<Rt, Heads>` whose `Instance` impls are written once,
+  generically. Two declarations bounding a variable by one signature then
+  name one type. The cost is that selecting an entry among several bounds
+  becomes a position in `Heads`, which is the type-level index the
+  per-declaration carrier removed.
+- **Resolve the inner entry at the site instead of carrying it.** The
+  instance's argument type is `Map<Range, ..>` at the site, so the ground
+  type at the pattern's first variable is readable there and its entry is
+  `entry_at`'s. The value then holds `Owned<Rt>` and nothing else. The cost
+  is Decision 4's sentence that the pointers ride with the value.
+
+An instance whose first parameter does not stand at the signature's first
+variable, or whose later parameters are not each one whole value, gets no
+`Signature` impl, and the missing impl is the refusal: `std::vec` and
+`vec::filled` cannot be required as bounds.
 
 ### The entry, unchanged from the first half
 

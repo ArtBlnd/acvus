@@ -270,6 +270,27 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `variant_tags_at` | the tag word of each variant a projection names, beside that payload's settled type | derived from `ArgAt` — the type is read so a payload's own crossing has a site, and so a wrongly typed argument is refused at preparation |
 | `payload_at` | the payload a projection borrows | derived from `variant_tags_at` — the refusal when the variant carries none at this site |
 
+## Axis 8 — requiring
+
+`instance.rs`, `handler.rs`, `registry.rs`.
+
+| name | the acvus concept it stands for | atom, or derived from |
+|---|---|---|
+| `Carrier` | a bounded type variable's filling: the value one argument passed, with the entry of each instance the declaration required beside it | atom — `#[extern_fn]` writes one per bounded variable, and its `Entries` and the `FnDecl::requires` list are the two halves of one order |
+| `Signature` | a shared signature as a Rust caller of one of its instances sees it: the shape of a call | atom — `extern_signature!` writes the impl, so a requiring handler restates no mode and no width |
+| `Signature::Recv` | how the first parameter takes its carrier: `&This`, `&mut This`, or `This` | derived from the declaration's mode — the mode reaches a requiring handler here and nowhere else, so the handler's own `I::call` is where a wrong one is refused |
+| `Signature::as_this` | the carrier a receiver in any of the three modes stands at | derived from `Recv` — the entry lies in the carrier, and an opaque `Recv` is the only handle a generic caller holds |
+| `one_value` | one of the runtime's values holding what a parameter crosses as | derived from `Cross<Form = One>` — the argument run an entry is called with is built out of these |
+| `Instance` | a type with an instance of a shared signature | atom — the handle the deleted marker bound `HasInstance<Sig>` never had |
+| `Entry` | a resolved instance's handler as a plain function | derived from `Handler::call` — without the `&self`, and with the window lent rather than moved |
+| `AtEntry` | a declaration's entry as a type | derived from `Entry` — named where the glue's type is named, so the glue itself stays the closure |
+| `InstanceEntries` | where a site table finds the instance a bound requires | atom — keyed by signature and by the ground type an instance stands at |
+| `NoInstances` | the registry of a site built where no declaration requires an instance | derived from `InstanceEntries` — named explicitly at every such site, so no default hides one that should have had a registry |
+| `InstanceTable` | every shared signature's instances, as `Externs::combine` collected them | derived from `InstanceAt` — the registry half of `InstanceEntries` |
+| `InstanceAt` | one instance as a site table needs it: the ground type it stands at, and the plain function that runs it | atom — the entry is absent where the instance has none |
+| `Requirement` | one `Instance<sig::S<..>>` bound of a declaration | atom — which variable carries it and which signature it names; the order is the order of the carrier's entries |
+| `ByBound` | a parameter whose type is a bounded variable's carrier | derived from `Carrier` — the site holds the entries, so the argument run is no wider than it would be without the bound |
+
 ## What the pass folded
 
 A reader of an older RFC or of `scratchpad/type-helpers/inventory.md` meets

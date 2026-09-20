@@ -799,18 +799,20 @@ fn generate_extern_fn(
                         #sig: ::acvus_extern::Signature<__R, This = Self>,
                     {
                         fn call(
-                            __this: &Self,
+                            __this: <#sig as ::acvus_extern::Signature<__R>>::Recv<'_>,
                             __rt: &__R,
                             __frame: &mut <__R as ::acvus_extern::Runtime>::Frame<'_>,
                             __rest: <#sig as ::acvus_extern::Signature<__R>>::Rest<'_>,
                         ) -> <#sig as ::acvus_extern::Signature<__R>>::Ret {
+                            let __entry =
+                                <#sig as ::acvus_extern::Signature<__R>>::as_this(&__this).#field;
                             // SAFETY: the field holds what
                             // `Carrier::entries` resolved for this
                             // signature at this site's ground type, which
                             // is the type `__this`'s value stands at.
                             unsafe {
                                 <#sig as ::acvus_extern::Signature<__R>>::call_entry(
-                                    __this.#field, __rt, __frame, __this, __rest,
+                                    __entry, __rt, __frame, __this, __rest,
                                 )
                             }
                         }
@@ -2721,15 +2723,106 @@ fn span_of(param: &GenericParam) -> Span {
     }
 }
 
-/// The `Signature` impl of a shared signature every one of whose parameters
-/// is `&V` at the signature's first type variable, and whose result is one
-/// of the runtime's values: `core::eq`, `core::ord`, and every comparison
-/// shaped like them.
+/// The first parameter of a shared signature, as the `Signature` impl
+/// spells it: the `Recv` type its mode gives, the body of `as_this` that
+/// reaches the carrier back through it, and the word it puts at the head of
+/// the argument run.
+struct Receiver {
+    recv: proc_macro2::TokenStream,
+    as_this: proc_macro2::TokenStream,
+    head_of_run: proc_macro2::TokenStream,
+}
+
+impl Receiver {
+    /// `None` where the mode has no receiver form: a `str` view and a
+    /// projection name storage the caller lent, and a carrier is not that
+    /// storage.
+    fn of(mode: Mode, first: &Ident, runtime: &Ident) -> Option<Self> {
+        let through_a_reference = quote! {
+            // SAFETY: the storage is the carrier's own field, which lives
+            // for this call and longer.
+            unsafe {
+                ::acvus_extern::Runtime::reference(
+                    __rt,
+                    <#first as ::acvus_extern::Carrier<#runtime>>::value(__this),
+                )
+            }
+        };
+        match mode {
+            Mode::Borrow => Some(Self {
+                recv: quote! { &'__a #first },
+                as_this: quote! { __recv },
+                head_of_run: through_a_reference,
+            }),
+            Mode::BorrowMut => Some(Self {
+                recv: quote! { &'__a mut #first },
+                as_this: quote! { &**__recv },
+                head_of_run: through_a_reference,
+            }),
+            Mode::Value => Some(Self {
+                recv: quote! { #first },
+                as_this: quote! { __recv },
+                head_of_run: quote! {
+                    *<#first as ::acvus_extern::Carrier<#runtime>>::value(&__this)
+                },
+            }),
+            Mode::Str | Mode::Projection => None,
+        }
+    }
+}
+
+/// One parameter of a shared signature after the first: its type in `Rest`,
+/// the word it puts in the argument run, and the crossing the impl has to
+/// name for that word to exist.
+struct RestParam {
+    ty: proc_macro2::TokenStream,
+    value: proc_macro2::TokenStream,
+    crossing: Option<proc_macro2::TokenStream>,
+}
+
+impl RestParam {
+    /// `None` where the parameter is neither `&V` at the signature's first
+    /// variable nor one whole value: a requiring handler holds a carrier and
+    /// its entries, and nothing else it could lend.
+    fn of(p: &ExternParam, at: usize, first: &Ident, runtime: &Ident) -> Option<Self> {
+        let at = proc_macro2::Literal::usize_unsuffixed(at);
+        let ty = &p.ty;
+        match p.mode {
+            Mode::Borrow if Vars::is_exactly(ty, first) => Some(Self {
+                ty: quote! { &'__a #first },
+                value: quote! {
+                    // SAFETY: the storage is a carrier's own field, which
+                    // lives for this call and longer.
+                    unsafe {
+                        ::acvus_extern::Runtime::reference(
+                            __rt,
+                            <#first as ::acvus_extern::Carrier<#runtime>>::value(__rest.#at),
+                        )
+                    }
+                },
+                crossing: None,
+            }),
+            Mode::Value => Some(Self {
+                ty: quote! { #ty },
+                value: quote! { ::acvus_extern::one_value::<#runtime, #ty>(__rt, __rest.#at) },
+                crossing: Some(quote! {
+                    #ty: ::acvus_extern::Cross<#runtime, Form = ::acvus_extern::One>
+                }),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The `Signature` impl of a shared signature whose first parameter stands
+/// at its first type variable in any of the three modes, and whose later
+/// parameters and result are each one whole value: `core::eq` and
+/// `iter::next` alike.
 ///
 /// A signature outside that shape gets no impl, and the missing impl is the
 /// refusal: a handler that writes `Instance<sig::vec<C, T, Rt>>` is told
-/// that `vec` is not a signature a bound can call, because no run of
-/// references is what its arguments are (RFC-0067 Decision 1).
+/// that `vec` is not a signature a bound can call, because its arguments
+/// are not a run of whole values (RFC-0067 Decision 1).
 fn signature_call(
     ns: &LitStr,
     ident: &Ident,
@@ -2743,19 +2836,32 @@ fn signature_call(
     let Some(first) = vars.first_ty() else {
         return proc_macro2::TokenStream::new();
     };
-    let borrows_the_variable =
-        |p: &ExternParam| p.mode == Mode::Borrow && Vars::is_exactly(&p.ty, first);
-    if params.is_empty() || !params.iter().all(borrows_the_variable) {
+    let Some((head, tail)) = params.split_first() else {
+        return proc_macro2::TokenStream::new();
+    };
+    if !Vars::is_exactly(&head.ty, first) {
         return proc_macro2::TokenStream::new();
     }
-    if vars.mentions_var(ret) {
+    let Some(receiver) = Receiver::of(head.mode, first, runtime) else {
         return proc_macro2::TokenStream::new();
-    }
-    let width = params.len();
-    let rest: Vec<proc_macro2::TokenStream> = (1..width).map(|_| quote! { &'__a #first }).collect();
-    let rest_at: Vec<proc_macro2::Literal> = (0..width - 1)
-        .map(proc_macro2::Literal::usize_unsuffixed)
-        .collect();
+    };
+    let Receiver {
+        recv,
+        as_this,
+        head_of_run,
+    } = receiver;
+    let Some(rest): Option<Vec<RestParam>> = tail
+        .iter()
+        .enumerate()
+        .map(|(at, p)| RestParam::of(p, at, first, runtime))
+        .collect()
+    else {
+        return proc_macro2::TokenStream::new();
+    };
+    let rest_tys = rest.iter().map(|p| &p.ty);
+    let rest_values = rest.iter().map(|p| &p.value);
+    let rest_crossings = rest.iter().filter_map(|p| p.crossing.as_ref());
+    let kinds = vars.kind_predicates();
     quote! {
         impl<#(#marker_params,)*> ::acvus_extern::Signature<#runtime>
             for #ident<#(#marker_params,)*>
@@ -2763,34 +2869,27 @@ fn signature_call(
             #first: ::acvus_extern::Carrier<#runtime>,
             #runtime: ::acvus_extern::Runtime,
             #ret: ::acvus_extern::Cross<#runtime, Form = ::acvus_extern::One>,
+            #(#marker_params: 'static,)*
+            #(#kinds,)*
+            #(#rest_crossings,)*
         {
             type This = #first;
-            type Rest<'__a> = (#(#rest,)*);
+            type Recv<'__a> = #recv;
+            type Rest<'__a> = (#(#rest_tys,)*);
             type Ret = #ret;
+
+            fn as_this<'__a>(__recv: &'__a Self::Recv<'_>) -> &'__a #first {
+                #as_this
+            }
 
             unsafe fn call_entry(
                 __entry: ::acvus_extern::Entry<#runtime>,
                 __rt: &#runtime,
                 __frame: &mut <#runtime as ::acvus_extern::Runtime>::Frame<'_>,
-                __this: &#first,
+                __this: Self::Recv<'_>,
                 __rest: Self::Rest<'_>,
             ) -> #ret {
-                let __run = [
-                    // SAFETY: each storage is a carrier's own field, which
-                    // lives for this call and longer.
-                    unsafe {
-                        ::acvus_extern::Runtime::reference(
-                            __rt,
-                            <#first as ::acvus_extern::Carrier<#runtime>>::value(__this),
-                        )
-                    },
-                    #(unsafe {
-                        ::acvus_extern::Runtime::reference(
-                            __rt,
-                            <#first as ::acvus_extern::Carrier<#runtime>>::value(__rest.#rest_at),
-                        )
-                    },)*
-                ];
+                let __run = [#head_of_run, #(#rest_values,)*];
                 let mut __out = [
                     <<#runtime as ::acvus_extern::Runtime>::Value as ::core::default::Default>
                         ::default(),
@@ -2798,7 +2897,7 @@ fn signature_call(
                 // SAFETY: the caller's contract — `__entry` is this
                 // signature's instance at the type `__this` stands at — and
                 // the run above is that instance's whole argument run, one
-                // reference per declared `&` parameter.
+                // value per declared parameter in declared order.
                 unsafe { __entry(__rt, __frame, &__run, &mut __out) };
                 // SAFETY: the instance wrote its result into `__out` through
                 // `Ret::into_run`, which for a one-value result is what

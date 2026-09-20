@@ -31,9 +31,11 @@ where
     fn value(&self) -> &Rt::Value;
 }
 
-/// A shared signature as a Rust caller of one of its instances sees it.
-/// `extern_signature!` writes the impl, so that a handler which requires a
-/// signature restates none of its modes and none of its widths.
+/// A shared signature as a Rust caller of one of its instances sees it:
+/// the shape of a call and nothing about a receiver beyond how the first
+/// parameter takes it. `extern_signature!` writes the impl, so that a
+/// handler which requires a signature restates none of its modes and none
+/// of its widths.
 pub trait Signature<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
@@ -41,9 +43,19 @@ where
     /// What the signature's first parameter stands at: the variable a bound
     /// names, which RFC-0019 makes the one an instance is matched by.
     type This: Carrier<Rt>;
+    /// The first parameter's mode: `&'a This`, `&'a mut This`, or `This`.
+    /// The mode reaches a requiring handler through this projection alone,
+    /// so the handler's own `I::call` is where a wrong mode is refused;
+    /// `acvus-extern-macro/tests/compile_fail/instance_wrong_mode.rs` is
+    /// that refusal, executed.
+    type Recv<'a>;
     /// The arguments after the first.
     type Rest<'a>;
     type Ret;
+
+    /// The carrier a receiver in any of the three modes stands at, which is
+    /// where the entry of this signature lies.
+    fn as_this<'a>(recv: &'a Self::Recv<'_>) -> &'a Self::This;
 
     /// # Safety
     /// `entry` is the entry of this signature's instance at the acvus type
@@ -53,9 +65,22 @@ where
         entry: Entry<Rt>,
         rt: &Rt,
         frame: &mut Rt::Frame<'_>,
-        this: &Self::This,
+        this: Self::Recv<'_>,
         rest: Self::Rest<'_>,
     ) -> Self::Ret;
+}
+
+/// One of the runtime's values holding what `value` crosses as. The run an
+/// entry is called with is built out of these, one per parameter after the
+/// first.
+pub fn one_value<Rt, T>(rt: &Rt, value: T) -> Rt::Value
+where
+    Rt: Runtime,
+    T: crate::obj::Cross<Rt, Form = crate::obj::One>,
+{
+    let mut out = [<Rt::Value as Default>::default()];
+    value.into_run(rt, &mut out);
+    out[0]
 }
 
 /// A type with an instance of the shared signature `S` (RFC-0067 Decision
@@ -72,7 +97,7 @@ where
     S: Signature<Rt, This = Self>,
 {
     fn call(
-        this: &Self,
+        this: <S as Signature<Rt>>::Recv<'_>,
         rt: &Rt,
         frame: &mut Rt::Frame<'_>,
         rest: <S as Signature<Rt>>::Rest<'_>,

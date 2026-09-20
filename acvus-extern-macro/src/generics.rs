@@ -436,6 +436,25 @@ impl Vars {
         })
     }
 
+    /// The kind bound of every variable, as a where predicate: what a
+    /// declaration wrote in its own `where` clause, restated where a
+    /// generated impl names a type built out of these variables.
+    pub fn kind_predicates(&self) -> Vec<TokenStream> {
+        self.0
+            .iter()
+            .map(|v| {
+                let ident = &v.ident;
+                match v.kind {
+                    VarKind::Runtime => quote! { #ident: ::acvus_extern::Runtime },
+                    kind => {
+                        let marker = kind.marker();
+                        quote! { #ident: ::acvus_extern::Var<#marker> }
+                    }
+                }
+            })
+            .collect()
+    }
+
     /// Every type variable with at least one `Instance` bound.
     pub fn bounded(&self) -> impl Iterator<Item = &Var> {
         self.0

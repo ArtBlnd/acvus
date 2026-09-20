@@ -575,6 +575,24 @@ where
     T::call(&a, rt, frame, (&b,))
 }
 
+extern_signature! { ns: "t", fn step<I>(it: &mut I) -> i64 where I: Var<kind::Type>; }
+
+#[extern_fn(instance_of = step, effect = pure)]
+fn step_int(n: &mut i64) -> i64 {
+    *n += 1;
+    *n
+}
+
+#[extern_fn(effect = pure)]
+fn drive<I, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, it: I) -> i64
+where
+    I: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::Instance<step<I, Rt>, Rt>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    I::call(&mut it, rt, frame, ())
+}
+
 /// A greeting held by the handler: what a `#[state]` parameter carries.
 struct Greeting(String);
 
@@ -590,9 +608,9 @@ where
     extern_registry! {
         ns: "t",
         types: [Boxed<_, _, R>, Token<_>],
-        signatures: [eq],
+        signatures: [eq, step],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, eq_int, eq_point, same,
+              sum_slice, eq_int, eq_point, same, step_int, drive,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -813,6 +831,27 @@ fn a_required_instance_is_the_bound_and_the_entry_beside_the_value() {
     };
     assert!(on_int(7, 7), "t::eq at i64 says 7 == 7");
     assert!(!on_int(7, 8), "t::eq at i64 says 7 != 8");
+}
+
+#[test]
+fn a_required_instance_whose_first_parameter_is_mut_runs_through_the_entry() {
+    let (i, reg) = combined::<Tiny>();
+    let ExternHandler::Sync(f) = handler(&reg, &i, "drive") else {
+        panic!("`drive` is declared with a plain `fn`")
+    };
+    let at = acvus_extern::ArgAt {
+        interner: &i,
+        ty: &acvus_extern::Ty::I64,
+        instances: &reg.instances,
+    };
+    let f = f.clone().at_site(&[at]);
+    // SAFETY: one argument of the declaration's own type, as the site says.
+    let out = unsafe { f.into_op(()).call_run(&Tiny, &[erased(7i64)]) };
+    assert_eq!(
+        open::<i64>(out),
+        8,
+        "t::step at i64 bumps the place it lends"
+    );
 }
 
 /// The declared type of `Point` at this test's registry.
