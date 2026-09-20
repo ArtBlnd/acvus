@@ -1,0 +1,2 @@
+let answer = 8.is_power_of_two();
+answer

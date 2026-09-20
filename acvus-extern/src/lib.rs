@@ -58,9 +58,9 @@ pub use projection::{
 };
 pub use reference::Ref;
 pub use registry::{
-    BoundAt, CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers,
-    InstanceAt, InstanceTable, Manifest, MemberType, Registry, Requirement, SharedSignature,
-    SignatureDecl, family_casts,
+    BoundAt, Coercion, CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl,
+    Handlers, InstanceAt, InstanceTable, Manifest, MemberType, Registry, Requirement,
+    SharedSignature, SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use slice::{Elements, Slice, Words};

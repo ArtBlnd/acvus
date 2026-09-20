@@ -8,7 +8,7 @@ use std::process::Command;
 
 /// The corpus is the evidence that every refusal names a fix, so it does
 /// not shrink below the size that evidence was gathered at.
-const AT_LEAST: usize = 41;
+const AT_LEAST: usize = 42;
 
 /// Set to rewrite every `.expected` from what the compiler says now. The
 /// rewritten files are read, not trusted: a pin is only evidence once a

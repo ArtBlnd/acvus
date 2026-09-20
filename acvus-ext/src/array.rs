@@ -24,6 +24,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
+#[extern_view]
 fn as_slice<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
@@ -34,6 +35,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
+#[extern_view]
 fn as_slice_mut<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Mut, Rt>) -> Slice<T, Mut, Rt>
 where
     T: Var<kind::Type>,

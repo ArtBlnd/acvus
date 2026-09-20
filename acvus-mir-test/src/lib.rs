@@ -589,7 +589,7 @@ pub fn optimized_script_module(
         return Err(errors.join("\n"));
     }
 
-    let opt = acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, Opt::Full);
+    let opt = acvus_mir::graph::optimize::optimize(result.modules, Opt::Full);
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
@@ -667,8 +667,7 @@ pub fn compile_script_optimized(
         return Err(errors.join("\n"));
     }
 
-    let opt_result =
-        acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -807,8 +806,7 @@ pub fn refuse_script_mode_optimized(
         return Err(refusals);
     }
 
-    let opt_result =
-        acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1156,7 +1154,7 @@ fn compile_multi_fn_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, &inf.context_types, opt);
+    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);

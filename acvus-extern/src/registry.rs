@@ -7,7 +7,7 @@ use std::sync::Arc;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
     CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Task,
-    Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, matches_pattern,
+    Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed, matches_pattern,
     unify_patterns,
 };
 use acvus_utils::Interner;
@@ -26,14 +26,27 @@ pub struct FnDecl {
     pub ty: PolyTy,
     /// The declared bound of each type variable of `ty`, by position.
     pub bounds: Vec<TyVarBound>,
-    /// A cast is registered as a coercion rule from its parameter type to
-    /// its return type as well as a function.
-    pub cast: bool,
+    pub coercion: Option<Coercion>,
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
     /// What each type variable is required to have an instance of
     /// (RFC-0067 Decision 1), in the order `#[extern_fn]` read the bounds.
     pub requires: Vec<Requirement>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coercion {
+    /// A rule from the parameter's type to the return type (RFC-0023),
+    /// registered alongside the function.
+    Cast,
+    /// The machine's reading of the storage behind a reference (RFC-0047
+    /// §5, RFC-0062 Decision 3): `&Vec<T>` as `&[T]`, `&String` as `&str`.
+    ///
+    /// This is not written as a `Cast` because a `CastRule` is indexed by
+    /// a user-defined head and both sides of a view are references, so
+    /// `TypeRegistry::register_cast` would reject it; and because a cast
+    /// is a name a script resolves, which a view must not be.
+    View,
 }
 
 /// One `InstanceOf<sig::S<..>>` bound of a declaration: which of the
@@ -81,8 +94,8 @@ where
     R: Runtime,
 {
     a.qref == b.qref
-        && a.cast
-        && b.cast
+        && a.coercion == Some(Coercion::Cast)
+        && b.coercion == Some(Coercion::Cast)
         && a.ty == b.ty
         && a_instances.generic.is_none()
         && b_instances.generic.is_none()
@@ -162,7 +175,7 @@ where
             qref: QualifiedRef::qualified(i.intern(&family), i.intern(name)),
             ty: generic,
             bounds: vec![TyVarBound::Any; ty_vars.len()],
-            cast: true,
+            coercion: Some(Coercion::Cast),
             instance_of: None,
             requires: Vec::new(),
         },
@@ -284,6 +297,10 @@ pub enum CombineError {
         function: QualifiedRef,
         reason: &'static str,
     },
+    /// A declaration marked the machine's view whose type is not one.
+    ViewShape {
+        function: QualifiedRef,
+    },
     /// A declaration requiring a signature no registry declares
     /// (RFC-0067 Decision 1).
     RequiredSignatureUnknown {
@@ -324,6 +341,10 @@ impl fmt::Display for CombineError {
                 write!(f, "{signature:?} has two instances for {ty:?}")
             }
             Self::CastShape { function, reason } => write!(f, "cast {function:?}: {reason}"),
+            Self::ViewShape { function } => write!(
+                f,
+                "view {function:?}: a view lends the run behind its one reference parameter at the same mutability"
+            ),
             Self::RequiredSignatureUnknown {
                 function,
                 signature,
@@ -631,8 +652,10 @@ impl<R: Runtime> Externs<R> {
                 decl.bounds[required.var] =
                     meet(&decl.bounds[required.var], &collected.instance_types);
             }
-            if decl.cast {
-                types.register_cast(cast_rule(&decl)?);
+            match decl.coercion {
+                Some(Coercion::Cast) => types.register_cast(cast_rule(&decl)?),
+                Some(Coercion::View) => types.register_machine_view(decl.qref, view_of(&decl)?),
+                None => {}
             }
             for instance in &instances.concrete {
                 ceiling_admits(interner, decl.qref, &instance.signature, &instance.handler)?;
@@ -729,7 +752,7 @@ fn add_instance<R: Runtime>(
     for instance in &admitted {
         ceiling_admits(i, decl.qref, &instance.signature, &instance.handler)?;
     }
-    if decl.cast {
+    if decl.coercion == Some(Coercion::Cast) {
         let mut rule = cast_rule(&decl)?;
         rule.fn_ref = sig;
         collected.casts.push(rule);
@@ -820,6 +843,12 @@ fn instance_at_first_var(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy
             .find_map(|(s, i)| instance_at_first_var(s, i)),
         _ => None,
     }
+}
+
+fn view_of(decl: &FnDecl) -> Result<Viewed, CombineError> {
+    Viewed::of_declaration(&decl.ty).ok_or(CombineError::ViewShape {
+        function: decl.qref,
+    })
 }
 
 fn cast_rule(decl: &FnDecl) -> Result<CastRule, CombineError> {

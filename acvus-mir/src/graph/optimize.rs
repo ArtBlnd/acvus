@@ -11,7 +11,7 @@ use crate::graph::inliner;
 use crate::ir::{Callee, InstKind, MirModule};
 use crate::optimize;
 
-use crate::ty::Ty;
+#[cfg(debug_assertions)]
 use crate::validate::type_check::ValidationErrorKind;
 use crate::validate::{self, ValidationError};
 
@@ -32,19 +32,7 @@ pub enum Opt {
     Full,
 }
 
-pub fn optimize(
-    modules: FxHashMap<QualifiedRef, MirModule>,
-    context_types: &FxHashMap<QualifiedRef, Ty>,
-    opt: Opt,
-) -> OptimizeResult {
-    optimize_inner(modules, context_types, opt)
-}
-
-fn optimize_inner(
-    modules: FxHashMap<QualifiedRef, MirModule>,
-    context_types: &FxHashMap<QualifiedRef, Ty>,
-    opt: Opt,
-) -> OptimizeResult {
+pub fn optimize(modules: FxHashMap<QualifiedRef, MirModule>, opt: Opt) -> OptimizeResult {
     // -- Pass 0: moves, borrows and exhaustiveness as the source wrote
     // them (RFC-0029, RFC-0051) --
 

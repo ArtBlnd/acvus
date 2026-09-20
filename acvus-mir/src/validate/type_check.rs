@@ -243,16 +243,6 @@ struct BranchEdge<'a> {
 // Structural type equality (invariant, with Error escape)
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if two identity slots match.  `Ty::Error` matches anything.
-/// `Ty::Var(Infallible)` is uninhabitable for concrete types.
-fn identities_match(a: &Ty, b: &Ty) -> bool {
-    match (a, b) {
-        (Ty::Error(_), _) | (_, Ty::Error(_)) => true,
-        (Ty::Var(v), _) | (_, Ty::Var(v)) => match *v {},
-        _ => a == b,
-    }
-}
-
 /// Returns `true` if `expected` and `actual` are structurally equal under
 /// invariant variance.  `Ty::Error` matches anything (poison).
 /// `Ty::Var(Infallible)` is uninhabitable for concrete types.
@@ -274,7 +264,6 @@ fn types_match(expected: &Ty, actual: &Ty) -> bool {
         (Ty::Str, Ty::Str) => true,
         (Ty::Bool, Ty::Bool) => true,
         (Ty::Unit, Ty::Unit) => true,
-        (Ty::Never, Ty::Never) => true,
         (Ty::Order, Ty::Order) => true,
 
         // Containers (invariant inner)

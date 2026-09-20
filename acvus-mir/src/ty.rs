@@ -266,6 +266,7 @@ impl TyVarBound {
 
     pub fn admits(&self, ty: &Ty) -> bool {
         match self {
+            _ if matches!(ty, Ty::Error(_)) => true,
             Self::Any => true,
             Self::OneOf(shapes) => shapes.iter().any(|s| matches_poly(ty, s)),
             Self::Integer { signed, among } => {
@@ -1080,6 +1081,7 @@ pub struct TypeRegistry {
     // pub(crate) for test access.
     pub(crate) from_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
     pub(crate) to_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
+    machine_views: FxHashMap<QualifiedRef, Viewed>,
 }
 
 /// A coercion rule: `from` can be implicitly converted to `to`.
@@ -1247,6 +1249,22 @@ impl TypeRegistry {
     /// Get all cast rules where `to` is a UserDefined matching the given QualifiedRef.
     pub fn rules_to(&self, qref: QualifiedRef) -> &[CastRule] {
         self.to_rules.get(&qref).map_or(&[], |v| v.as_slice())
+    }
+
+    // -- Machine coercions -------------------------------------------
+
+    pub fn register_machine_view(&mut self, qref: QualifiedRef, viewed: Viewed) {
+        let prev = self.machine_views.insert(qref, viewed);
+        assert!(prev.is_none(), "duplicate machine coercion: {qref:?}");
+    }
+
+    /// There is deliberately no way to ask this question of a name or of a
+    /// type. A declaration whose shape is a view is still an ordinary
+    /// function a script may call, and the machine claims one only where
+    /// the registry declared it a coercion, so the answer lives with the
+    /// registration and nowhere else.
+    pub fn machine_view(&self, qref: QualifiedRef) -> Option<Viewed> {
+        self.machine_views.get(&qref).copied()
     }
 }
 
@@ -2023,20 +2041,94 @@ pub struct TypeEnv {
     /// Function type schemes - polymorphic, instantiated per call site.
     /// Every name a script can write resolves here and nowhere else.
     pub functions: FxHashMap<QualifiedRef, Scheme>,
-    /// The signatures the compiler settles for instructions of its own:
-    /// `a[i]` settles `as_slice` or `as_slice_mut` here (RFC-0047 §5).
-    /// `resolve_fn` does not read this map, so a script cannot name one.
-    pub machine: FxHashMap<QualifiedRef, Scheme>,
+    /// These are kept out of `functions` rather than marked inside it so
+    /// that `resolve_fn` cannot reach them at all: a script's bare name
+    /// resolves over `functions` alone, and the only way one of these
+    /// reaches a script is `signature_set` offering it back deliberately.
+    pub machine: FxHashMap<QualifiedRef, MachineCoercion>,
 }
 
-/// Whether an extern declaration is the machine's rather than the
-/// language's: `a[i]` runs `as_slice` as part of an instruction, and no
-/// script names it (RFC-0047 §5).
-pub fn is_machine_signature(interner: &Interner, qref: QualifiedRef) -> bool {
-    matches!(
-        interner.resolve(qref.name),
-        "as_slice" | "as_slice_mut" | "as_str"
-    )
+#[derive(Debug, Clone)]
+pub struct MachineCoercion {
+    pub viewed: Viewed,
+    pub scheme: Scheme,
+}
+
+/// The run behind a reference: a container's elements (RFC-0047 rule 6),
+/// or a `String`'s bytes (RFC-0062 Decision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Slice,
+    Str,
+}
+
+impl View {
+    pub fn of<V>(ty: &TyTerm<V>) -> Option<View>
+    where
+        V: Phase,
+    {
+        match ty {
+            TyTerm::Slice(_) => Some(View::Slice),
+            TyTerm::Str => Some(View::Str),
+            _ => None,
+        }
+    }
+
+    fn taken_of<V>(self, storage: &TyTerm<V>) -> bool
+    where
+        V: Phase,
+    {
+        match self {
+            View::Slice => matches!(storage, TyTerm::UserDefined { .. } | TyTerm::Array(..)),
+            View::Str => matches!(storage, TyTerm::String),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Viewed {
+    pub view: View,
+    pub mutability: Mutability,
+}
+
+impl Viewed {
+    pub fn of_declaration<V>(ty: &TyTerm<V>) -> Option<Viewed>
+    where
+        V: Phase,
+    {
+        let TyTerm::Fn { params, ret, .. } = ty else {
+            return None;
+        };
+        let [
+            ParamTerm {
+                ty: TyTerm::Ref(takes, storage),
+                ..
+            },
+        ] = params.as_slice()
+        else {
+            return None;
+        };
+        let TyTerm::Ref(lends, run) = ret.as_ref() else {
+            return None;
+        };
+        let view = View::of(&run.ty)?;
+        (takes == lends && view.taken_of(&storage.ty)).then_some(Viewed {
+            view,
+            mutability: *takes,
+        })
+    }
+
+    /// These three words are printed, not resolved: a refusal that could
+    /// not settle a coercion names the function the container was missing,
+    /// and `acvus-cli/tests/refusals/36-index-into-what-has-no-slice.expected`
+    /// pins the sentence byte for byte. Changing one moves that golden.
+    pub fn spelling(self) -> &'static str {
+        match (self.view, self.mutability) {
+            (View::Str, _) => "as_str",
+            (View::Slice, Mutability::Shared) => "as_slice",
+            (View::Slice, Mutability::Mut) => "as_slice_mut",
+        }
+    }
 }
 
 /// What a name resolves to among the environment's functions.
@@ -2076,19 +2168,22 @@ impl TypeEnv {
         }
     }
 
-    /// Every declaration of `name` among the machine's own signatures, in
-    /// a stable order. A script's name resolution never reaches these.
-    pub fn machine_set(&self, name: Astr) -> Vec<(QualifiedRef, &Scheme)> {
-        let mut found: Vec<QualifiedRef> = self
-            .machine
-            .keys()
-            .filter(|q| q.name == name)
-            .copied()
-            .collect();
+    /// Every machine coercion, in a stable order.
+    pub fn machine_coercions(&self) -> Vec<(QualifiedRef, &MachineCoercion)> {
+        let mut found: Vec<QualifiedRef> = self.machine.keys().copied().collect();
         found.sort();
         found
             .into_iter()
             .map(|qref| (qref, &self.machine[&qref]))
+            .collect()
+    }
+
+    /// Every declaration that is this coercion, in a stable order.
+    pub fn machine_views(&self, viewed: Viewed) -> Vec<(QualifiedRef, &Scheme)> {
+        self.machine_coercions()
+            .into_iter()
+            .filter(|(_, coercion)| coercion.viewed == viewed)
+            .map(|(qref, coercion)| (qref, &coercion.scheme))
             .collect()
     }
 

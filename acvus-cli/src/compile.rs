@@ -299,7 +299,7 @@ pub fn check(
     }
 
     let watch = Stopwatch::start(timed);
-    let optimized = optimize::optimize(lowered.modules, &inf.context_types, opt);
+    let optimized = optimize::optimize(lowered.modules, opt);
     stages.optimize = watch.stop();
 
     diagnostics.extend(

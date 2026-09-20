@@ -101,6 +101,7 @@ where
 /// indexes this and nothing else. No copy — the slice is a pointer and a
 /// length into the container's own storage.
 #[extern_fn(effect = pure)]
+#[extern_view]
 fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
@@ -110,6 +111,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
+#[extern_view]
 fn as_slice_mut<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Mut, Rt>) -> Slice<T, Mut, Rt>
 where
     T: Var<kind::Type>,

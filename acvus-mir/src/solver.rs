@@ -1,4 +1,4 @@
-//! The type solver: equality now, decisions later (scratchpad/tobe/solver.md).
+//! The type solver: equality now, decisions later (docs/solver.md).
 //!
 //! `Terms` is the union-find over type, effect, length, identity, and
 //! representation variables, and `join` on it is the one unification: the
@@ -1073,9 +1073,6 @@ impl Terms {
     ) -> Result<(), NoJoin> {
         let Some(root) = other_root else {
             let term = self.shallow_resolve_ty(other);
-            if matches!(term, TyTerm::Error(_)) {
-                return Ok(());
-            }
             if integer_bound_refuses(&self.bound_of(var), &term) {
                 return Err(NoJoin);
             }
@@ -2727,6 +2724,9 @@ impl<'src> Solver<'src> {
                 && self.borrows_a_string(&argument.ty)
         });
         let takes_unjoined = awaiting_head.iter().all(|argument| {
+            if self.admission_waits(&option.candidate, argument.index, &argument.ty) {
+                return true;
+            }
             let param = &instance_params[argument.index].ty;
             match self.admits(&option.candidate, argument.index, &argument.ty) {
                 Admission::Refused => false,
@@ -2813,16 +2813,24 @@ impl<'src> Solver<'src> {
         index: usize,
         arg: &InferTy,
     ) -> bool {
-        let TyTerm::Ref(_, lent) = self.terms.shallow_resolve_ty(arg) else {
-            return false;
-        };
-        if !matches!(self.terms.resolve_ty(&lent.ty), TyTerm::Var(_)) {
+        if !self.lends_an_unnamed_head(arg) {
             return false;
         }
         match candidate.param_bound(index) {
             TyVarBound::OneOf(shapes) => shapes.iter().any(borrows_a_view),
             TyVarBound::Any | TyVarBound::Integer { .. } => false,
         }
+    }
+
+    /// Whether the storage this argument lends is one the solve has not
+    /// named (RFC-0043 rule 2). The head is the solve's to name, so no
+    /// site reads the argument's own type as evidence about it, and every
+    /// site that must not asks here rather than deriving it again.
+    pub fn lends_an_unnamed_head(&self, arg: &InferTy) -> bool {
+        let TyTerm::Ref(_, lent) = self.terms.shallow_resolve_ty(arg) else {
+            return false;
+        };
+        matches!(self.terms.resolve_ty(&lent.ty), TyTerm::Var(_))
     }
 
     fn borrows_a_string(&self, arg: &InferTy) -> bool {
@@ -3222,7 +3230,6 @@ impl<'src> Solver<'src> {
                 }
                 bound
             },
-            Identities::Declared,
             reprs,
         );
         let instance = scheme.instances.as_ref().map(|instances| {
@@ -3261,7 +3268,6 @@ impl<'src> Solver<'src> {
         &mut self,
         ty: &PolyTy,
         mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
-        identities: Identities,
         reprs: Reprs,
     ) -> InferTy {
         let mut maps = PolyMaps::default();
@@ -3287,11 +3293,7 @@ impl<'src> Solver<'src> {
             },
             &mut |id: u32| {
                 *maps.identity.entry(id).or_insert_with(|| {
-                    let open = match identities {
-                        Identities::Declared => from_params.contains(&id),
-                        Identities::Open => true,
-                    };
-                    if open {
+                    if from_params.contains(&id) {
                         IdentityTerm::Var(alloc_identity_var(identity_vars))
                     } else {
                         IdentityTerm::Known(sources.next())
@@ -3772,16 +3774,4 @@ enum Reprs {
     /// `Uniform`: the function's one instance is the generic one, and the
     /// generic instance is the uniform one (hash-types.md R3).
     Uniform,
-}
-
-/// What an identity variable of a declaration becomes when the declaration
-/// is instantiated.
-#[derive(Clone, Copy)]
-enum Identities {
-    /// A parameter's identity is a variable the argument fixes; any other
-    /// is a new source (RFC-0012).
-    Declared,
-    /// Every identity is a variable: for unifying with a type whose
-    /// sources are already minted.
-    Open,
 }

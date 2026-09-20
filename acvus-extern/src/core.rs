@@ -12,15 +12,14 @@ extern_signature! { ns: "core", fn eq<T>(a: &T, b: &T) -> bool where T: crate::V
 // is two functions.
 extern_signature! { ns: "core", fn hash<T>(a: &T) -> i64 where T: crate::Var<crate::kind::Type>; }
 
-/// Obligations across artifacts, both in `acvus-mir`. `slice_coercion`
-/// resolves this name out of the environment's machine set to lower a
+/// An obligation across artifacts. `acvus-mir`'s `slice_coercion` takes
+/// this declaration out of the environment's machine set to lower a
 /// `&String` argument at a `&str` parameter (RFC-0062 Decision 3), so the
-/// registry that carries the declaration is the registry in which a `&str`
-/// parameter is reachable; it is core because the instruction is the
-/// language's (RFC-0039). `is_machine_signature` matches the name
-/// `as_str`, which is what keeps a script from resolving it, as it keeps
-/// `as_slice` out.
+/// registry that carries it is the registry in which a `&str` parameter is
+/// reachable; it is core because the instruction is the language's
+/// (RFC-0039).
 #[extern_fn(effect = pure)]
+#[extern_view]
 fn as_str(s: &String) -> StrView {
     StrView::of(s)
 }

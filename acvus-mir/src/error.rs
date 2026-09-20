@@ -168,6 +168,10 @@ pub enum MirErrorKind {
         value: i128,
         ty: Ty,
     },
+    /// RFC-0037.
+    IntegerLiteralWidthUnsettled {
+        among: Vec<crate::ty::IntTy>,
+    },
     /// More than one declared conversion takes the value to the type
     /// (RFC-0023).
     AmbiguousConversion {
@@ -717,6 +721,18 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::IntegerLiteralOutOfRange { value, ty } => {
                 write!(f, "literal {value} does not fit {}", ty.shown(interner))
+            }
+            MirErrorKind::IntegerLiteralWidthUnsettled { among } => {
+                let names: Vec<&str> = among.iter().map(|k| k.name()).collect();
+                write!(
+                    f,
+                    "an integer literal here may be {}: write a suffix",
+                    match names.split_last() {
+                        Some((last, before)) if !before.is_empty() =>
+                            format!("{} or {last}", before.join(", ")),
+                        _ => names.join(", "),
+                    }
+                )
             }
             MirErrorKind::AmbiguousConversion { from, to, rules } => {
                 write!(

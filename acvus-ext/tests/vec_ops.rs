@@ -74,11 +74,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
 
     // Drops are inserted by the optimize pipeline, so a leaked element
     // trips the machine rather than passing quietly (RFC-0041).
-    let result = graph_optimize::optimize(
-        lowered.modules.into_iter().collect(),
-        &FxHashMap::default(),
-        opt,
-    );
+    let result = graph_optimize::optimize(lowered.modules.into_iter().collect(), opt);
     assert!(
         result.errors.is_empty(),
         "validation failed: {:?}",

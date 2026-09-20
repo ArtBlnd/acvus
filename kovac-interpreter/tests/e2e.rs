@@ -76,9 +76,7 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
     }
 
     // Run optimization pipeline (SROA -> SSA -> Inline -> RegColor -> Validate).
-    let context_types = FxHashMap::default();
-
-    let opt = optimize::optimize(result.modules, &context_types, optimize::Opt::Full);
+    let opt = optimize::optimize(result.modules, optimize::Opt::Full);
     // In untyped mode, validate may report type mismatches from shared
     // scalar slots - expected and safe for kovac (all scalars are u64).
     // Skip validate errors for now.

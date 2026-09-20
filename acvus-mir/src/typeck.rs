@@ -19,7 +19,7 @@ use crate::solver::{
 use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm,
-    Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
+    Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -218,46 +218,6 @@ where
         TyTerm::UserDefined { id, .. } => Some(Some(*id)),
         TyTerm::Array(..) => Some(None),
         _ => None,
-    }
-}
-
-/// What the pointee of a reference parameter asks of the argument: the run
-/// of a container's elements (RFC-0047 rule 6), or the run of a `String`'s
-/// bytes (RFC-0062 Decision 3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum View {
-    Slice,
-    Str,
-}
-
-impl View {
-    fn of<V>(ty: &TyTerm<V>) -> Option<View>
-    where
-        V: crate::ty::Phase,
-    {
-        match ty {
-            TyTerm::Slice(_) => Some(View::Slice),
-            TyTerm::Str => Some(View::Str),
-            _ => None,
-        }
-    }
-}
-
-/// A view at the mutability the parameter asks for, which names the one
-/// declaration that takes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Viewed {
-    view: View,
-    mutability: Mutability,
-}
-
-impl Viewed {
-    fn declaration(self) -> &'static str {
-        match (self.view, self.mutability) {
-            (View::Str, _) => "as_str",
-            (View::Slice, Mutability::Shared) => "as_slice",
-            (View::Slice, Mutability::Mut) => "as_slice_mut",
-        }
     }
 }
 
@@ -1485,8 +1445,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if lent != mutability {
             return false;
         }
-        let referent = self.solver.resolve_ty(&container.ty);
-        if matches!(referent, TyTerm::Var(_)) {
+        if self.solver.lends_an_unnamed_head(arg_ty) {
             self.slice_args.push(SliceArg {
                 at: site.id,
                 span: site.span,
@@ -1496,6 +1455,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             });
             return true;
         }
+
+        let referent = self.solver.resolve_ty(&container.ty);
         match self.slice_coercion(
             &referent,
             Viewed { view, mutability },
@@ -1521,7 +1482,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> SliceCoercion {
         let Viewed { view, mutability } = viewed;
-        let name = self.interner.intern(viewed.declaration());
         let head = match view {
             View::Str => None,
             View::Slice => match sliceable_head(referent) {
@@ -1535,7 +1495,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         let taker: Option<(QualifiedRef, crate::ty::Scheme)> = self
             .env
-            .machine_set(name)
+            .machine_views(viewed)
             .into_iter()
             .find(
                 |(_, scheme)| match scheme.params().first().map(|param| &param.ty) {
@@ -1794,7 +1754,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .collect(),
             crate::ty::FnLookup::Missing => Vec::new(),
         };
-        candidates.extend(self.slice_view_signatures(name));
+        candidates.extend(self.view_signatures(name));
         if name.namespace.is_none()
             && let Some(ty) = self.local_signature(name.name)
         {
@@ -1803,29 +1763,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         candidates
     }
 
-    /// The container views of `TypeEnv::machine` (RFC-0047 §5), offered to
-    /// a script's own call as candidates alongside `resolve_fn`'s.
+    /// The coercions of `TypeEnv::machine` (RFC-0047 §5, RFC-0062
+    /// Decision 3), offered to a script's own call as candidates alongside
+    /// `resolve_fn`'s, so that `v.as_slice()` and `s.as_str()` resolve as
+    /// they do in Rust.
     ///
-    /// `as_str` lives in that map too and is deliberately not here. A
-    /// `&String` reaches a `&str` parameter by coercion alone (RFC-0062
-    /// Decision 3); whether a script may also write `s.as_str()` is a
-    /// decision about `String`, not about a container, and it has not been
-    /// made.
-    fn slice_view_signatures(&mut self, name: QualifiedRef) -> Vec<SignatureCandidate> {
-        let is_view = matches!(
-            self.interner.resolve(name.name),
-            "as_slice" | "as_slice_mut"
-        );
-        if !is_view {
-            return Vec::new();
-        }
+    /// The offer is made here and not by putting these in
+    /// `TypeEnv::functions`: a name the script did not write must not reach
+    /// one, and `resolve_fn` is what a bare name, a `did you mean`, and
+    /// every other lookup go through.
+    fn view_signatures(&self, name: QualifiedRef) -> Vec<SignatureCandidate> {
         self.env
-            .machine_set(name.name)
+            .machine_coercions()
             .into_iter()
+            .filter(|(qref, _)| qref.name == name.name)
             .filter(|(qref, _)| name.namespace.is_none_or(|ns| qref.namespace == Some(ns)))
-            .map(|(qref, scheme)| SignatureCandidate::Named {
+            .map(|(qref, coercion)| SignatureCandidate::Named {
                 qref,
-                scheme: scheme.clone(),
+                scheme: coercion.scheme.clone(),
             })
             .collect()
     }
@@ -2056,22 +2011,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// For a component whose type is fixed elsewhere -- a list's element,
-    /// a variant's type parameter, both unified into a variable the
-    /// aggregate's type already holds. Poison there would leave that
-    /// variable open, because the solver never binds a variable to poison
-    /// (`solver.rs::take_other`), and an open variable refuses in its own
-    /// words.
-    fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span, shape: DataShape) {
-        if let Some(kind) = self.reference_in_data(ty, shape) {
-            self.error(kind, span);
-        }
-    }
-
-    /// For a component the aggregate's type is built out of -- an object's
-    /// field, a tuple's element. A refused one is poison, so the aggregate
-    /// does not carry the reference on to a second refusal at the body's
-    /// result.
+    /// A refused component is poison, so the aggregate does not carry the
+    /// reference on to a second refusal at the body's result.
     fn as_data(&mut self, ty: InferTy, span: Span, shape: DataShape) -> InferTy {
         let Some(kind) = self.reference_in_data(&ty, shape) else {
             return ty;
@@ -2653,9 +2594,31 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 );
             }
         }
+        self.settle_int_literals();
+    }
+
+    /// A literal takes a width here or is refused here (solver.md R3).
+    ///
+    /// The refusal is here because of what its absence did. `freeze_ty`
+    /// answers `UnresolvedType` for a literal whose admitted widths have no
+    /// default, no caller reported that answer, and the frozen type became
+    /// poison instead — so `8.is_power_of_two()`, whose instances are the
+    /// unsigned widths only, was admitted and stopped the machine at a
+    /// poison instruction.
+    fn settle_int_literals(&mut self) {
         let literals = std::mem::take(&mut self.int_literals);
+        let mut reported: FxHashSet<crate::ty::TypeBoundId> = FxHashSet::default();
         for IntLiteral { ty, value, span } in literals {
             let Ok(Ty::Int(k)) = self.solver.freeze_ty(&ty) else {
+                let TyTerm::Var(var) = self.solver.shallow_resolve_ty(&ty) else {
+                    continue;
+                };
+                let TyVarBound::Integer { among, .. } = self.solver.bound_of_var(var) else {
+                    continue;
+                };
+                if reported.insert(self.solver.find_ty_root(var)) {
+                    self.error(MirErrorKind::IntegerLiteralWidthUnsettled { among }, span);
+                }
                 continue;
             };
             if !k.holds(value) {
@@ -3227,13 +3190,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             demand,
         } = site;
         let mutability = demand.slice_mutability();
-        let name = self.interner.intern(match mutability {
-            Mutability::Shared => "as_slice",
-            Mutability::Mut => "as_slice_mut",
-        });
+        let viewed = Viewed {
+            view: View::Slice,
+            mutability,
+        };
+        let name = self.interner.intern(viewed.spelling());
         let candidates: Vec<SignatureCandidate> = self
             .env
-            .machine_set(name)
+            .machine_views(viewed)
             .into_iter()
             .map(|(qref, scheme)| SignatureCandidate::Named {
                 qref,
@@ -3768,6 +3732,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         written: CallAsWritten<'_>,
         call_span: Span,
     ) -> InferTy {
+        if types
+            .iter()
+            .any(|ty| Self::is_error(&self.solver.resolve_ty(ty)))
+        {
+            return Self::infer_error();
+        }
+
         let call = CallShape {
             params: types
                 .into_iter()
@@ -4595,13 +4566,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         mutability: Mutability,
         span: Span,
     ) -> InferTy {
-        let name = self.interner.intern(match mutability {
-            Mutability::Shared => "as_slice",
-            Mutability::Mut => "as_slice_mut",
-        });
+        let viewed = Viewed {
+            view: View::Slice,
+            mutability,
+        };
+        let name = self.interner.intern(viewed.spelling());
         let candidates: Vec<SignatureCandidate> = self
             .env
-            .machine_set(name)
+            .machine_views(viewed)
             .into_iter()
             .map(|(qref, scheme)| SignatureCandidate::Named {
                 qref,
@@ -5360,7 +5332,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let element = self.solver.fresh_ty_var();
                 let first_ty = self.check_expr(all_elems[0]);
-                self.reject_reference_in_data(&first_ty, all_elems[0].span(), DataShape::Aggregate);
+                let first_ty = self.as_data(first_ty, all_elems[0].span(), DataShape::Aggregate);
                 self.solver
                     .unify(&first_ty, &element)
                     .expect("a fresh variable takes any type");
@@ -5457,11 +5429,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 return Self::infer_error();
                             };
                             let inner_ty = self.check_expr(inner_expr);
-                            self.reject_reference_in_data(
-                                &inner_ty,
-                                inner_expr.span(),
-                                DataShape::Payload,
-                            );
+                            let inner_ty =
+                                self.as_data(inner_ty, inner_expr.span(), DataShape::Payload);
                             if self.solver.unify(&type_params[*idx], &inner_ty).is_err() {
                                 let resolved_tp = self.solver.resolve_ty(&type_params[*idx]);
                                 let resolved_inner = self.solver.resolve_ty(&inner_ty);

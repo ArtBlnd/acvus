@@ -1,0 +1,5 @@
+error: an integer literal here may be u8, u16, u32 or u64: write a suffix
+  --> 42-an-unsuffixed-literal-with-no-default-width.acvus:1:14
+  |
+1 | let answer = 8.is_power_of_two();
+  |              ^

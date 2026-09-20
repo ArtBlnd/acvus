@@ -321,7 +321,7 @@ where
         });
     }
 
-    let opt_result = graph_optimize::optimize(result.modules.clone(), &inf.context_types, opt);
+    let opt_result = graph_optimize::optimize(result.modules.clone(), opt);
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {

@@ -120,7 +120,6 @@ async fn run_parsed(
     // slot is written again. A run here is the run the CLI does.
     let result = graph_optimize::optimize(
         lowered.modules.into_iter().collect(),
-        &FxHashMap::default(),
         graph_optimize::Opt::Full,
     );
     assert!(

@@ -33,6 +33,7 @@ mod literal;
 mod loans;
 mod loop_invariant_phi;
 mod lsr;
+mod machine_coercion;
 mod match_expr;
 mod method;
 mod moved_lend;

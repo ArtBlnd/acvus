@@ -2029,13 +2029,6 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    /// Look up the param_reg for an extern parameter by name.
-    /// Panics if the param is not found (should be caught by typeck).
-    fn param_slot(&self, name: Astr) -> ValueId {
-        self.try_param_slot(name)
-            .unwrap_or_else(|| panic!("param_slot: extern param {:?} not found", name))
-    }
-
     fn set_val_type(&mut self, val: ValueId, ty: Ty) {
         self.body.val_types.insert(val, ty);
     }
@@ -4315,17 +4308,6 @@ impl<'a> Lowerer<'a> {
                 result
             }
         }
-    }
-
-    fn extract_range_bounds(&self, start: &Pattern, end: &Pattern) -> (i64, i64) {
-        let extract = |p: &Pattern| match p {
-            Pattern::Literal {
-                value: Literal::Int(n),
-                ..
-            } => *n as i64,
-            _ => 0,
-        };
-        (extract(start), extract(end))
     }
 
     /// Emit instructions that bind pattern variables from a matched value.

@@ -766,7 +766,7 @@ mod tests {
     use crate::ir::{DebugInfo, MirBody};
     use crate::ty::{Task, TypeArg};
     use acvus_ast::Span;
-    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
+    use acvus_utils::{Interner, LocalFactory};
 
     fn shared_string() -> Ty {
         Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String)))

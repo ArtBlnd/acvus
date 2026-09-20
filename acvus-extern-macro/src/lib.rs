@@ -257,6 +257,7 @@ fn generate_extern_fn(
     func: &mut ItemFn,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let is_cast = take_marker_attr(&mut func.attrs, "extern_cast");
+    let is_view = take_marker_attr(&mut func.attrs, "extern_view");
     let is_async = func.sig.asyncness.is_some();
     let mut vars = Vars::from_generics(&func.sig.generics)?;
     let declared_ident = func.sig.ident.clone();
@@ -504,17 +505,33 @@ fn generate_extern_fn(
         },
     };
 
-    if is_cast {
+    let coercion = match (is_cast, is_view) {
+        (true, true) => {
+            return Err(syn::Error::new(
+                fn_ident.span(),
+                "a declaration is either an extern_cast or an extern_view, not both",
+            ));
+        }
+        (true, false) => quote! { ::core::option::Option::Some(::acvus_extern::Coercion::Cast) },
+        (false, true) => quote! { ::core::option::Option::Some(::acvus_extern::Coercion::View) },
+        (false, false) => quote! { ::core::option::Option::None },
+    };
+    if is_cast || is_view {
+        let kind = if is_cast {
+            "extern_cast"
+        } else {
+            "extern_view"
+        };
         if params.len() != 1 {
             return Err(syn::Error::new(
                 fn_ident.span(),
-                "an extern_cast takes exactly one parameter",
+                format!("an {kind} takes exactly one parameter"),
             ));
         }
         if !matches!(&attr.effect, Some(e) if e == "pure") {
             return Err(syn::Error::new(
                 fn_ident.span(),
-                "an extern_cast declares `effect = pure`",
+                format!("an {kind} declares `effect = pure`"),
             ));
         }
     }
@@ -1047,7 +1064,7 @@ fn generate_extern_fn(
                     qref: #qref,
                     ty: #declared_ty,
                     bounds: vec![#(#bounds),*],
-                    cast: #is_cast,
+                    coercion: #coercion,
                     instance_of: #instance_of,
                     requires: vec![#(#requires),*],
                 },

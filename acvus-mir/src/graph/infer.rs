@@ -10,8 +10,8 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ty::{
-    EffectTerm, Infer, InferTy, Param, ParamTerm, PolyTy, Scheme, Solver, Sources, Ty, TyTerm,
-    TyVarBound, TypeRegistry, lift_to_poly, lift_ty,
+    EffectTerm, Infer, InferTy, MachineCoercion, Param, ParamTerm, PolyTy, Scheme, Solver, Sources,
+    Ty, TyTerm, TyVarBound, TypeRegistry, lift_to_poly, lift_ty,
 };
 
 use super::extract::{ExtractResult, ParsedSource};
@@ -526,20 +526,18 @@ pub struct Declared {
     pub instances: crate::ty::Instances,
 }
 
-/// The scheme a function's type is instantiated under: its declaration
-/// when it is an Extern, the bare type otherwise.
-/// The half of the extern declarations that only the compiler resolves:
-/// every script name is in `TypeEnv::functions`, and these are in
-/// `TypeEnv::machine`, which name resolution does not read (RFC-0047 §5).
 fn machine_signatures(
-    interner: &Interner,
+    registry: &TypeRegistry,
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
     declared: &FxHashMap<QualifiedRef, Declared>,
-) -> FxHashMap<QualifiedRef, Scheme> {
+) -> FxHashMap<QualifiedRef, MachineCoercion> {
     resolved_fn_types
         .iter()
-        .filter(|(qref, _)| crate::ty::is_machine_signature(interner, **qref))
-        .map(|(&qref, ty)| (qref, declared_scheme(declared.get(&qref), ty.clone())))
+        .filter_map(|(&qref, ty)| {
+            let viewed = registry.machine_view(qref)?;
+            let scheme = declared_scheme(declared.get(&qref), ty.clone());
+            Some((qref, MachineCoercion { viewed, scheme }))
+        })
         .collect()
 }
 
@@ -647,10 +645,10 @@ pub fn infer_scc(
         scc_fn_types.insert(func.qref, fn_ty);
     }
 
-    let machine_signatures = machine_signatures(interner, resolved_fn_types, &declared);
+    let machine_signatures = machine_signatures(registry, resolved_fn_types, declared);
     let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
         .iter()
-        .filter(|(k, _)| !crate::ty::is_machine_signature(interner, **k))
+        .filter(|(qref, _)| registry.machine_view(**qref).is_none())
         .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
         .collect();
     env_functions.extend(
@@ -880,10 +878,10 @@ pub fn infer(
             );
         }
 
-        let machine_signatures = machine_signatures(interner, &resolved_fn_types, &declared);
+        let machine_signatures = machine_signatures(registry_ref, &resolved_fn_types, &declared);
         let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
             .iter()
-            .filter(|(k, _)| !crate::ty::is_machine_signature(interner, **k))
+            .filter(|(qref, _)| registry_ref.machine_view(**qref).is_none())
             .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
             .collect();
         env_functions.extend(
@@ -1142,31 +1140,51 @@ mod tests {
     // undeclared contexts. All contexts are now passed via known_ctx; undeclared
     // context references are handled by the typechecker directly.
 
+    /// A context nothing declared is a refusal, not a parameter inference
+    /// invents for the caller to fill.
     #[test]
     fn infer_no_unknown_context_params() {
         let i = Interner::new();
-        // Undeclared contexts no longer produce InferredParam entries.
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        assert!(params(&result, only_function(&i)).is_empty());
+        let refused = refusals(&i, &result);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains('x'), "{refused:?}");
     }
 
+    /// A declared context is read at the type its declaration gave it and
+    /// is not a parameter either; the undeclared one beside it is refused.
     #[test]
     fn infer_known_context_not_in_params() {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + @y", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        assert!(params(&result, only_function(&i)).is_empty());
+        assert_eq!(
+            result.context_type(&QualifiedRef::root(i.intern("x"))),
+            Some(&Ty::I64)
+        );
+        let refused = refusals(&i, &result);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains('y'), "{refused:?}");
     }
 
     // -- Soundness: no false inferences --
 
+    /// A body that reads no context leaves the context map empty: nothing
+    /// is inferred for a caller that was never asked for anything.
     #[test]
     fn infer_no_contexts_empty() {
         let i = Interner::new();
         let graph = make_graph(&i, "1 + 2");
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        assert_eq!(refusals(&i, &result), Vec::<String>::new());
+        assert!(result.context_types.is_empty());
+        assert_eq!(tail_type(&result, only_function(&i)), Some(Ty::I64));
     }
 
     // ================================================================
@@ -1221,63 +1239,6 @@ mod tests {
             .find(|f| matches!(f.kind, FnKind::Local(_)))
             .expect("no local function")
             .qref
-    }
-
-    /// Build a multi-function CompilationGraph with builtins.
-    /// `fns`: list of `(name, source, signature, output_constraint)`.
-    fn make_multi_fn_graph(
-        interner: &Interner,
-        fns: &[(&str, &str, Option<Vec<(&str, Ty)>>, Option<PolyTy>)],
-        ctx: &[(&str, Ty)],
-    ) -> (CompilationGraph, Vec<(Astr, QualifiedRef)>) {
-        let mut pb = PolyBuilder::new();
-        let contexts: Vec<Context> = ctx
-            .iter()
-            .map(|(name, ty)| Context {
-                qref: QualifiedRef::root(interner.intern(name)),
-                ty: lift_declaration(ty, &mut pb),
-            })
-            .collect();
-
-        let mut functions = Vec::new();
-        let mut ids = Vec::new();
-
-        for (name, source, sig, output) in fns {
-            let aname = interner.intern(name);
-            let fid = QualifiedRef::root(aname);
-            ids.push((aname, fid));
-            let poly_params: Vec<PolyParam> = sig
-                .as_ref()
-                .map(|params| {
-                    params
-                        .iter()
-                        .map(|(name, ty)| {
-                            ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let ret = output.clone().unwrap_or_else(|| pb.fresh_ty_var());
-            functions.push(Function {
-                qref: fid,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
-                ty: TyTerm::Fn {
-                    params: poly_params,
-                    ret: Box::new(ret),
-                    captures: vec![],
-                    effect: crate::ty::Effect::OPAQUE.into(),
-                },
-            });
-        }
-
-        let graph = CompilationGraph {
-            functions: Freeze::new(functions),
-            contexts: Freeze::new(contexts),
-            entry: None,
-        };
-        (graph, ids)
     }
 
     /// Infer a multi-function graph, return result and ids.
@@ -1367,6 +1328,26 @@ mod tests {
     /// Get the tail type (return type) of a function from InferResult.
     /// In the old resolve pipeline, fn_type() returned the tail type.
     /// In the new pipeline, fn_type() returns the full Ty::Fn.
+    /// The refusals one graph's inference produced, rendered.
+    fn refusals(i: &Interner, result: &InferResult) -> Vec<String> {
+        let mut found: Vec<String> = result
+            .errors()
+            .into_iter()
+            .flat_map(|(_, errors)| errors.iter().map(|e| e.display(i).to_string()))
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// The parameters inference gave a function.
+    fn params(result: &InferResult, id: QualifiedRef) -> Vec<Param> {
+        result.outcomes[&id].meta().params.clone()
+    }
+
+    fn only_function(i: &Interner) -> QualifiedRef {
+        QualifiedRef::root(i.intern("test"))
+    }
+
     fn tail_type(result: &InferResult, id: QualifiedRef) -> Option<Ty> {
         result.outcomes.get(&id)?.tail_ty().cloned()
     }
@@ -2078,10 +2059,8 @@ mod tests {
             ],
             &[],
         );
-        let main_id = ids[1].1;
-        if !result.has_errors() {
-            let _ty = tail_type(&result, main_id).unwrap();
-        }
+        assert_eq!(refusals(&i, &result), Vec::<String>::new());
+        assert_eq!(tail_type(&result, ids[1].1), Some(Ty::I64));
     }
 
     /// E3: Callee defined after caller in graph order.
@@ -2435,31 +2414,42 @@ mod tests {
 
     // -- Completeness: contexts correctly extracted and typed --
 
-    /// Single context read - type inferred from usage.
+    /// A context read is seen wherever it stands, and one nothing declared
+    /// is named in the refusal.
     #[test]
     fn context_extract_single_read() {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let refused = refusals(&i, &result);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains('x'), "{refused:?}");
     }
 
-    /// Multiple contexts.
+    /// Two reads are two refusals, one per context.
     #[test]
     fn context_extract_multiple() {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + @y");
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let refused = refusals(&i, &result);
+        assert_eq!(refused.len(), 2, "{refused:?}");
+        assert!(refused.iter().any(|r| r.contains('x')), "{refused:?}");
+        assert!(refused.iter().any(|r| r.contains('y')), "{refused:?}");
     }
 
-    /// Context inside nested block - still extracted.
+    /// A block does not hide the read.
     #[test]
     fn context_extract_nested_block() {
         let i = Interner::new();
         let graph = make_graph(&i, "{ @x + 1 }");
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let refused = refusals(&i, &result);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains('x'), "{refused:?}");
     }
 
     // context_extract_in_lambda: migrated to acvus-mir-test (depends on ExternFn `map`, `collect`)

@@ -95,7 +95,6 @@ pub fn lower(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::InstKind;
     use crate::ty::ObjectTy;
     use crate::{
         graph::extract,

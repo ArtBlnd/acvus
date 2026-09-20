@@ -1124,7 +1124,7 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{ObjectTy, Param, Ty};
+    use crate::ty::{ObjectTy, Ty};
     use acvus_utils::Interner;
 
     fn compile_and_dump_ctx(
