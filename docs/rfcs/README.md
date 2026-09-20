@@ -110,5 +110,6 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0062](0062-a-string-slice-is-a-register-pair.md) | A string slice is a register pair | Accepted |
 | [RFC-0063](0063-an-if-is-a-terminator.md) | An `if` is a terminator | Accepted |
 | [RFC-0064](0064-a-references-extent-is-its-loans.md) | A reference's extent is its loans | Accepted |
-| [RFC-0065](0065-an-iterator-is-the-types-its-elements-pass-through.md) | An iterator is the types its elements pass through | Accepted |
+| [RFC-0065](0065-an-iterator-is-the-types-its-elements-pass-through.md) | An iterator is the types its elements pass through | Rejected |
 | [RFC-0066](0066-a-loop-is-analyzed-and-the-lowerer-decides.md) | A loop is analyzed, and the lowerer decides | Draft |
+| [RFC-0067](0067-a-required-instance-is-a-parameter-the-site-fills.md) | A required instance is a parameter the site fills | Draft |
