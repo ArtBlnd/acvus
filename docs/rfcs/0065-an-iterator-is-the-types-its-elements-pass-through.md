@@ -1,6 +1,46 @@
 # RFC-0065: An iterator is the types its elements pass through
 
-Status: Accepted (2026-09-20)
+Status: Rejected (2026-09-20) — built and measured, then withdrawn
+
+## Why it is rejected
+
+The design was built whole on a worktree (the uniform-per-length payload of
+§3, adaptors at eight input lengths and consumers at nine, 35 shared
+signatures with 292 registry names, `iter.rs` 622 lines and `iterator.rs`
+2613) and passed every gate but `asm_probe`. Two facts came out of that
+build. The probe's 366 refusals were not the payload: with the body boxed to
+one word the same 366 bodies failed, and the objdump names the escape as the
+`&mut Rt::Frame<'_>` slot lent per element from a drain loop LLVM inlined
+into `Op::run` — a fact about handler shape, not about this design. And the
+design specializes at the wrong layer. It puts the pipeline's shape into one
+Rust type per length so the stage dispatch becomes a `match`, which is the
+whole of what it buys per element; the cost that dominates a `map` row, the
+re-entry into the interpreter for each closure call, it cannot reach from
+Rust at all, and it pays for the `match` with a bound of eight, a length
+recursion (`Len`), a stage enum, and a declaration layer of per-length
+macro copies.
+
+What replaces it is the mechanism RFC-0019 already has. `iter::next<I, T>
+(&mut I) -> Option<T>` is a shared signature; an adaptor is an extension
+type `Map<I, U>` with a `next` instance declared at that pattern, whose body
+calls the inner `next` through the typed handle the glue fills at the site
+(`Fn1`, the same handle a lambda crosses on); a consumer is a handler over
+`I: HasInstance<next>`. That needs two extensions of RFC-0019 — an instance
+at a pattern type whose other variables are bound by matching the instance's
+signature, and a required instance callable inside the handler — and no
+length bound, no `Len`, about forty declarations. Its per-element cost is
+one call per stage, the dyn chain's; the per-element win lives above it,
+where the consumer's call site knows the whole pipeline type and the machine
+or the MIR can lower the pipeline to a loop the closure bodies inline into,
+which is RFC-0066's loop. The extensions come after the type-helper pass
+over `acvus-extern`, since they land on `Fn1`, the per-site glue and the
+registry's instance matching, which that pass reshapes.
+
+The build is kept as a patch beside the worktree
+(`.claude/worktrees/machine2/scratchpad/runA/fixed-stack.tracked.patch`)
+and nothing of it is on master; `payload_per_instantiation` (`04b79af6`)
+and `effect = E` on signatures stay, being facts of the derive and the
+macro rather than of this design.
 
 ## Problem
 
