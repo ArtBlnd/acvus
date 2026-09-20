@@ -469,7 +469,7 @@ impl World {
             // SAFETY: stored as itself.
             .map(|x| unsafe { self.rt.erase::<f64>(*x) })
             .collect();
-        words.erase(&self.rt)
+        acvus_extern::OneValue::<_>::erase(words, &self.rt)
     }
 
     fn float(&self, value: V) -> f64 {

@@ -110,7 +110,7 @@ runtime was in scope, so one name carrying the value serves both.
 - No `vec::contains`, `array::contains`, or `deque::contains`. A
   per-element comparison is a `Monomorphize` member over the element type,
   and a member's glue crosses every parameter naming the member through
-  `CrossSpecialized`; no form of a container of `Erased<Rt, T>` has one
+  `OneValue<Rt, Specialized>`; no form of a container of `Erased<Rt, T>` has one
   that reads the storage — `Vec` and `Deque` cross whole, so the payload's
   `TypeId` is the container of values; `Arr` crosses per element, which an
   erased element cannot; `Ref<C, Rt>` has none. `Iter` has, as an extension

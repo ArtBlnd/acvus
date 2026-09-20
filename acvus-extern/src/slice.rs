@@ -206,6 +206,7 @@ macro_rules! slice_cross {
             Rt: Runtime,
         {
             type Form = crate::obj::Pair;
+            type ReturnForm = crate::obj::Pair;
 
             unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
                 // SAFETY: the caller's contract: `run` is the pair a slice
@@ -222,6 +223,3 @@ macro_rules! slice_cross {
 
 slice_cross!(Slice);
 slice_cross!(SliceMut);
-
-crate::returned_as_crossed!(Slice<T, __Rt>, T: TyVar);
-crate::returned_as_crossed!(SliceMut<T, __Rt>, T: TyVar);

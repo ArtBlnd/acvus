@@ -148,7 +148,7 @@ where
     Rt: acvus_extern::Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        acvus_extern::downcast(rt, value)
+        acvus_extern::materialize_checked(rt, value)
     }
 }
 

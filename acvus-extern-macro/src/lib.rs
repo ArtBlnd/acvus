@@ -981,17 +981,16 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
 
     let qref = qref_expr_in(attr.ns.as_deref(), &name);
-    let one_value_run = one_value_run();
-    let returned_as_one_value = returned_as_one_value();
+    let one_value_run = one_value_run(returned_as_one_value());
     let payload_crossing = quote! {
         fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
-            ::acvus_extern::transparent::erase::<Self, #payload_ty, __R>(self, __rt)
+            ::acvus_extern::derive::transparent::erase::<Self, #payload_ty, __R>(self, __rt)
         }
 
         unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
             // SAFETY: the caller's contract, and `erase` is `transparent::erase`.
             unsafe {
-                ::acvus_extern::transparent::materialize::<Self, #payload_ty, __R>(__rt, __value)
+                ::acvus_extern::derive::transparent::materialize::<Self, #payload_ty, __R>(__rt, __value)
             }
         }
 
@@ -1000,7 +999,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
         ) -> &'__a Self {
             // SAFETY: the caller's contract: a live storage of the payload.
-            unsafe { ::acvus_extern::transparent::deref::<Self, #payload_ty, __R>(__rt, __reference) }
+            unsafe { ::acvus_extern::derive::transparent::deref::<Self, #payload_ty, __R>(__rt, __reference) }
         }
 
         unsafe fn deref_mut<'__a>(
@@ -1009,7 +1008,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ) -> &'__a mut Self {
             // SAFETY: as in `deref`, exclusively.
             unsafe {
-                ::acvus_extern::transparent::deref_mut::<Self, #payload_ty, __R>(__rt, __reference)
+                ::acvus_extern::derive::transparent::deref_mut::<Self, #payload_ty, __R>(__rt, __reference)
             }
         }
     };
@@ -1045,20 +1044,20 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             #payload_crossing
         }
 
-        impl<#impl_params __R> ::acvus_extern::Returned<__R> for #ident #ty_generics
-        where
-            __R: ::acvus_extern::Runtime,
-            #where_predicates
-        {
-            #returned_as_one_value
-        }
-
-        impl<#impl_params __R> ::acvus_extern::CrossSpecialized<__R> for #ident #ty_generics
+        impl<#impl_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
+            for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
             #where_predicates
         {
             #payload_crossing
+        }
+
+        impl<#impl_params __R> ::acvus_extern::BorrowableSpecialized<__R> for #ident #ty_generics
+        where
+            __R: ::acvus_extern::Runtime,
+            #where_predicates
+        {
         }
 
         // SAFETY: the struct is `#[repr(transparent)]`, checked above, with the
@@ -1187,7 +1186,7 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
         borrowing,
         returned,
     } = crossing;
-    let one_value_run = one_value_run();
+    let one_value_run = one_value_run(returned);
     let borrowable_bound = borrowing.bound();
     quote! {
         impl ::acvus_extern::TyArg for #ident {
@@ -1225,33 +1224,14 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
                 #materialize
             }
         }
-
-        impl<__R> ::acvus_extern::Returned<__R> for #ident
-        where
-            __R: ::acvus_extern::Runtime,
-        {
-            #returned
-        }
     }
 }
 
-/// A result that crosses back as the one heap value `OneValue::erase`
-/// builds: every derived type but a struct, whose components go to the
-/// caller's destination run instead.
-fn returned_as_one_value() -> proc_macro2::TokenStream {
-    quote! {
-        type Form = ::acvus_extern::One;
-
-        fn into_run(self, __rt: &__R, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
-            ::acvus_extern::one_into_run(self, __rt, __out)
-        }
-    }
-}
-
-/// The `Cross` of a one-value crossing, as the library writes it: `Form` and
-/// the two forwards to `OneValue`, with `__R` the runtime parameter both
-/// derives already name.
-fn one_value_run() -> proc_macro2::TokenStream {
+/// The `Cross` of a one-value crossing, as the library writes it: the two
+/// forms and the three forwards to `OneValue`, with `__R` the runtime
+/// parameter both derives already name. `returns` is the return half, which
+/// is this same one value for every derived type but a struct.
+fn one_value_run(returns: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     quote! {
         type Form = ::acvus_extern::One;
 
@@ -1260,12 +1240,23 @@ fn one_value_run() -> proc_macro2::TokenStream {
             __run: &[<__R as ::acvus_extern::Runtime>::Value],
         ) -> Self {
             // SAFETY: the caller's contract, at one value.
-            unsafe { ::acvus_extern::one_from_run(__rt, __run) }
+            unsafe { <Self as ::acvus_extern::OneValue<__R>>::from_run(__rt, __run) }
         }
 
         fn into_run(self, __rt: &__R, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
-            ::acvus_extern::one_into_run(self, __rt, __out)
+            <Self as ::acvus_extern::OneValue<__R>>::into_run(self, __rt, __out)
         }
+
+        #returns
+    }
+}
+
+/// A result that crosses back as the one heap value `OneValue::erase`
+/// builds: every derived type but a struct, whose components go to the
+/// caller's destination run instead.
+fn returned_as_one_value() -> proc_macro2::TokenStream {
+    quote! {
+        type ReturnForm = ::acvus_extern::One;
     }
 }
 
@@ -1334,16 +1325,16 @@ impl<'a> ObjectShape<'a> {
         }
     }
 
-    /// Erases the fields reached as `#owner.field`; `acvus_extern::object`
-    /// owns the layout they go into.
+    /// Erases the fields reached as `#owner.field`;
+    /// `acvus_extern::derive::object` owns the layout they go into.
     fn erase(&self, owner: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
         let width = syn::Index::from(idents.len());
         quote! {
-            ::acvus_extern::object::object_in_order::<__R, #width>(
+            ::acvus_extern::derive::object::object_in_order::<__R, #width>(
                 __rt,
                 [#(#names),*],
-                [#(::acvus_extern::erase_field::<#tys, __R>(__rt, #owner.#idents)),*],
+                [#(::acvus_extern::derive::erase_field::<#tys, __R>(__rt, #owner.#idents)),*],
             )
         }
     }
@@ -1359,11 +1350,15 @@ impl<'a> ObjectShape<'a> {
         let (idents, tys) = (&self.idents, &self.tys);
         let width = syn::Index::from(idents.len());
         quote! {
-            type Form = ::acvus_extern::Run<#width>;
+            type ReturnForm = ::acvus_extern::Run<#width>;
 
-            fn into_run(self, __rt: &__R, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
-                ::acvus_extern::object::fields_into_run::<__R, #width>(
-                    [#(::acvus_extern::erase_field::<#tys, __R>(__rt, self.#idents)),*],
+            fn into_return_run(
+                self,
+                __rt: &__R,
+                __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
+            ) {
+                ::acvus_extern::derive::object::fields_into_run::<__R, #width>(
+                    [#(::acvus_extern::derive::erase_field::<#tys, __R>(__rt, self.#idents)),*],
                     __out,
                 )
             }
@@ -1375,10 +1370,10 @@ impl<'a> ObjectShape<'a> {
         let (idents, names, tys) = (&self.idents, &self.names, &self.tys);
         let width = syn::Index::from(idents.len());
         quote! {
-            ::acvus_extern::object::object_in_order::<__R, #width>(
+            ::acvus_extern::derive::object::object_in_order::<__R, #width>(
                 __rt,
                 [#(#names),*],
-                [#(::acvus_extern::erase_field::<#tys, __R>(__rt, #idents)),*],
+                [#(::acvus_extern::derive::erase_field::<#tys, __R>(__rt, #idents)),*],
             )
         }
     }
@@ -1637,13 +1632,13 @@ impl<'a> ObjectShape<'a> {
             // SAFETY: the caller's contract, and `erase` built this object, so
             // its width is this table's and the destructuring is exhaustive.
             let [#(#idents),*] = unsafe {
-                ::acvus_extern::object::open_in_order::<__R, #width>(__rt, #value)
+                ::acvus_extern::derive::object::open_in_order::<__R, #width>(__rt, #value)
             };
             #path {
                 // SAFETY: the caller's contract, forwarded: `erase` erased each
                 // field from its declared type, at this position.
                 #(#idents: unsafe {
-                    ::acvus_extern::materialize_field::<#tys, __R>(__rt, #idents)
+                    ::acvus_extern::derive::materialize_field::<#tys, __R>(__rt, #idents)
                 },)*
             }
         }}
@@ -1714,7 +1709,7 @@ fn generate_enum_ty_arg(
                     #ident::#v(__payload) => (
                         #tag,
                         ::core::option::Option::Some(
-                            ::acvus_extern::erase_field::<#ty, __R>(__rt, __payload),
+                            ::acvus_extern::derive::erase_field::<#ty, __R>(__rt, __payload),
                         ),
                     )
                 });
@@ -1727,7 +1722,7 @@ fn generate_enum_ty_arg(
                     #matched => {
                         // SAFETY: the caller's contract, forwarded: `erase` erased
                         // this variant's payload from its declared type.
-                        Self::#v(unsafe { ::acvus_extern::materialize_payload::<#ty, __R>(
+                        Self::#v(unsafe { ::acvus_extern::derive::materialize_payload::<#ty, __R>(
                             __rt, __payload, #tag,
                         ) })
                     }
@@ -1748,7 +1743,7 @@ fn generate_enum_ty_arg(
                 let ty = shape.written_poly_ty();
                 let erase = shape.erase_bound();
                 let materialize = shape.materialize(
-                    quote! { ::acvus_extern::take_payload(__payload, #tag).into_value() },
+                    quote! { ::acvus_extern::derive::take_payload(__payload, #tag).into_value() },
                     quote! { Self::#v },
                 );
                 variant_tys.push(quote! {
@@ -1775,12 +1770,12 @@ fn generate_enum_ty_arg(
     };
     let erase = quote! {{
         let (__tag, __payload) = match self { #(#erase_arms,)* };
-        ::acvus_extern::variant::erase(__rt, __tag, __payload)
+        ::acvus_extern::derive::variant::erase(__rt, __tag, __payload)
     }};
     let materialize = quote! {{
         // SAFETY: the caller's contract, and `erase` wrote this variant.
-        let ::acvus_extern::variant::Opened { at: __at, payload: __payload } = unsafe {
-            ::acvus_extern::variant::opened::<__R>(__rt, __value, #name, &[#(#tags),*])
+        let ::acvus_extern::derive::variant::Opened { at: __at, payload: __payload } = unsafe {
+            ::acvus_extern::derive::variant::opened::<__R>(__rt, __value, #name, &[#(#tags),*])
         };
         match __at { #(#materialize_arms,)* }
     }};
@@ -1982,7 +1977,7 @@ fn enum_projection(
                     <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
                 };
                 let __payload = __variant.payload();
-                match ::acvus_extern::variant::arm_of(__tag, &__table.tags, #name) {
+                match ::acvus_extern::derive::variant::arm_of(__tag, &__table.tags, #name) {
                     #(#read_arms,)*
                 }
             }
@@ -2004,7 +1999,7 @@ fn enum_projection(
                 let __tag = unsafe {
                     <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
                 };
-                let __at = ::acvus_extern::variant::arm_of(__tag, &__table.tags, #name);
+                let __at = ::acvus_extern::derive::variant::arm_of(__tag, &__table.tags, #name);
                 let __payload = __variant.payload_mut();
                 match __at {
                     #(#write_arms,)*
@@ -2036,7 +2031,7 @@ fn enum_projection(
             pub fn set(&mut self, __value: #owner) {
                 let __rt = self.rt;
                 let (__tag, __payload) = match __value { #(#erase_arms,)* };
-                *self.variant = ::acvus_extern::variant::words(__rt, __tag, __payload);
+                *self.variant = ::acvus_extern::derive::variant::words(__rt, __tag, __payload);
             }
         }
 

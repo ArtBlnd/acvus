@@ -1151,7 +1151,7 @@ mod tests {
         let laid = layout(&ty, &i);
         assert_eq!(
             usize::from(laid.len()),
-            acvus_extern::VARIANT_WIDTH,
+            acvus_extern::Variant::<()>::WIDTH,
             "a run of an enum is the registers a heap variant holds"
         );
         assert_eq!(
@@ -1191,7 +1191,7 @@ mod tests {
         let laid = layout(&ty, &i);
         assert_eq!(
             usize::from(laid.len()),
-            acvus_extern::VARIANT_WIDTH,
+            acvus_extern::Variant::<()>::WIDTH,
             "a run of a Result is the registers a heap variant holds"
         );
         assert_eq!(usize::from(laid.payload()), 1);

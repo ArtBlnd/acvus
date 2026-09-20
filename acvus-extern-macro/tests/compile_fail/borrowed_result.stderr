@@ -31,14 +31,14 @@ error[E0277]: `std::result::Result<i64, std::string::String>` has no storage of 
    = note: a Result crosses a member by value: a crossed `Result` is the language's flat variant, not Rust's `Result<Owned, Owned>`, so nothing behind a reference is shaped like a `Result<T, E>` (RFC-0050 rule 8).
    = note: an Option crosses a member by value: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>` (RFC-0039).
    = help: the following other types implement trait `BorrowableSpecialized<Rt>`:
-             ()
-             Vec<T>
-             bool
-             char
-             f64
-             i16
-             i32
-             i64
+             `()` implements `BorrowableSpecialized<__Rt>`
+             `Vec<T>` implements `BorrowableSpecialized<Rt>`
+             `bool` implements `BorrowableSpecialized<__Rt>`
+             `char` implements `BorrowableSpecialized<__Rt>`
+             `f64` implements `BorrowableSpecialized<__Rt>`
+             `i16` implements `BorrowableSpecialized<__Rt>`
+             `i32` implements `BorrowableSpecialized<__Rt>`
+             `i64` implements `BorrowableSpecialized<__Rt>`
            and $N others
    = note: required for `ByRef<std::result::Result<i64, std::string::String>, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
@@ -53,14 +53,14 @@ error[E0277]: `std::result::Result<std::string::String, std::string::String>` ha
    = note: a Result crosses a member by value: a crossed `Result` is the language's flat variant, not Rust's `Result<Owned, Owned>`, so nothing behind a reference is shaped like a `Result<T, E>` (RFC-0050 rule 8).
    = note: an Option crosses a member by value: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>` (RFC-0039).
    = help: the following other types implement trait `BorrowableSpecialized<Rt>`:
-             ()
-             Vec<T>
-             bool
-             char
-             f64
-             i16
-             i32
-             i64
+             `()` implements `BorrowableSpecialized<__Rt>`
+             `Vec<T>` implements `BorrowableSpecialized<Rt>`
+             `bool` implements `BorrowableSpecialized<__Rt>`
+             `char` implements `BorrowableSpecialized<__Rt>`
+             `f64` implements `BorrowableSpecialized<__Rt>`
+             `i16` implements `BorrowableSpecialized<__Rt>`
+             `i32` implements `BorrowableSpecialized<__Rt>`
+             `i64` implements `BorrowableSpecialized<__Rt>`
            and $N others
    = note: required for `ByRef<std::result::Result<std::string::String, std::string::String>, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

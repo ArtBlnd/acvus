@@ -60,10 +60,11 @@ or an associated type of the crossing.
    blanket `impl<T: OneValue> Cross for T`: coherence cannot admit one beside
    `impl Cross for Slice`, so each one-value type states both impls, the
    `Cross` half through one macro (`cross_one_value!`) or, inside the proc
-   macro, the same two forwards. The bodies of those forwards live once, in
-   `one_from_run` and `one_into_run`. `CrossSpecialized<Rt>` is not split: a
-   `Monomorphize` member is one of the runtime's values at every impl, so its
-   run is its value and its width is 1 where the two `Arg`/`Ret` impls read
+   macro, the same two forwards. The bodies of those forwards are
+   `OneValue`'s defaulted `from_run`/`into_run`. The specialized crossing is
+   the same trait at `Rep = Specialized`: a `Monomorphize` member is one of
+   the runtime's values at every impl, so its run is its value and its width
+   is 1 where the two `Arg`/`Ret` impls read
    it.
 
 3. **Argument modes are one trait.** `Arg<'a, Rt>` carries `type Out`,
@@ -314,15 +315,15 @@ or an associated type of the crossing.
   `#[derive(TyArg)]` counts the struct's fields and emits `Run<3>`. No
   operation carries the width as a field either: `CallRun*` reads
   `H::WIDTH.ret`, a constant of its own type parameter.
-- A type's return crossing is `Returned<Rt>` and not `Cross<Rt>`, because a
-  `#[derive(TyArg)]` struct has two: one heap object as a field, a
-  container's element and a by-value parameter, and its own components as a
-  result. There is no blanket impl over `OneValue` for the reason rule 2
-  gives `Cross` none — coherence cannot admit one beside the derive's — so
-  every one-value type states it through `cross_one_value!`, and the
-  hand-written crossings (`StrView`, `Slice`, `SliceMut`) through
-  `returned_as_crossed!`. The proc macro is unchanged in the return position:
-  it still writes `Val<T, Uniform>`, whose `Ret::Form` is now `T`'s answer.
+- A type's return crossing is `Cross<Rt>` itself, at `Cross::ReturnForm`
+  and `into_return_run`, which default to the argument form. The one type
+  whose two differ is a `#[derive(TyArg)]` struct — one heap object as a
+  field, a container's element and a by-value parameter, and its own
+  components as a result — and the derive overrides the return half on its
+  own `Cross` impl. (An earlier form kept a second trait, `Returned<Rt>`,
+  for this; the type-helper pass of 2026-09-20 folded it.) The proc macro is
+  unchanged in the return position: it writes `Val<T, Uniform>`, whose
+  `Ret::Form` is `T`'s `ReturnForm`.
 - `Borrowable<Rt>` admits exactly the set today's `names_option` admitted: a
   `#[derive(TyArg)]` struct is admitted, because `decl.rs`'s `eq_point`
   declares `&Point` as an instance of the shared signature

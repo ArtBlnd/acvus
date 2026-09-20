@@ -13,7 +13,7 @@ use acvus_mir::ty::{PolyTy, Task, Ty};
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
-use crate::obj::{Cross, CrossSpecialized, Form, FormKind, One, OneValue, Pair, Returned, Run};
+use crate::obj::{Cross, Form, FormKind, One, OneValue, Pair, Run};
 use crate::runtime::Runtime;
 
 /// One argument of one call site as the host settled it: the type the
@@ -138,7 +138,7 @@ where
 
 impl<T, Rt> Sited<Rt> for ByValue<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
     type Site = ();
@@ -202,7 +202,7 @@ where
 
 impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
     type Out = T;
@@ -210,7 +210,7 @@ where
 
     unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T {
         // SAFETY: as the uniform impl's.
-        unsafe { <T as CrossSpecialized<Rt>>::from_run(rt, run) }
+        unsafe { <T as OneValue<Rt, Specialized>>::from_run(rt, run) }
     }
 }
 
@@ -253,7 +253,7 @@ where
 
     unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a T {
         // SAFETY: as the uniform impl's, at the specialized representation.
-        unsafe { <T as CrossSpecialized<Rt>>::deref(rt, &run[0]) }
+        unsafe { <T as OneValue<Rt, Specialized>>::deref(rt, &run[0]) }
     }
 }
 
@@ -267,7 +267,7 @@ where
 
     unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a mut T {
         // SAFETY: as the uniform impl's, at the specialized representation.
-        unsafe { <T as CrossSpecialized<Rt>>::deref_mut(rt, &run[0]) }
+        unsafe { <T as OneValue<Rt, Specialized>>::deref_mut(rt, &run[0]) }
     }
 }
 
@@ -289,16 +289,14 @@ where
 
 /// A type a parameter of a `Monomorphize` member may take by reference: one
 /// whose specialized crossing writes a `Self` into the storage the caller
-/// lends, which is what `CrossSpecialized::deref` reads back. `cross_whole!`'s
-/// specialized arm is where the impls come from, and it writes that `deref`
-/// in the same invocation.
+/// lends, which is what `OneValue<_, Specialized>::deref` reads back.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no storage of its own type at a monomorphized member, so a parameter cannot borrow one",
     label = "this parameter of a monomorphized member is taken by reference",
     note = "a Result crosses a member by value: a crossed `Result` is the language's flat variant, not Rust's `Result<Owned, Owned>`, so nothing behind a reference is shaped like a `Result<T, E>` (RFC-0050 rule 8).",
     note = "an Option crosses a member by value: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>` (RFC-0039)."
 )]
-pub trait BorrowableSpecialized<Rt>: CrossSpecialized<Rt>
+pub trait BorrowableSpecialized<Rt>: OneValue<Rt, Specialized>
 where
     Rt: Runtime,
 {
@@ -378,27 +376,27 @@ pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
 impl<T, Rt> Ret<Rt> for Val<T, Uniform>
 where
-    T: Returned<Rt>,
+    T: Cross<Rt>,
     Rt: Runtime,
 {
     type Of<'a> = T;
-    type Form = <T as Returned<Rt>>::Form;
+    type Form = <T as Cross<Rt>>::ReturnForm;
 
     fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
-        <T as Returned<Rt>>::into_run(value, rt, out)
+        <T as Cross<Rt>>::into_return_run(value, rt, out)
     }
 }
 
 impl<T, Rt> Ret<Rt> for Val<T, Specialized>
 where
-    T: CrossSpecialized<Rt>,
+    T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
     type Of<'a> = T;
     type Form = One;
 
     fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
-        <T as CrossSpecialized<Rt>>::into_run(value, rt, out)
+        <T as OneValue<Rt, Specialized>>::into_run(value, rt, out)
     }
 }
 

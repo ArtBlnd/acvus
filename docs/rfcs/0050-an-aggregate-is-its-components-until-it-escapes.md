@@ -407,12 +407,13 @@ Each crossing carries the refusal in a marker of its own: `Borrowable` for
 `ByRefMut<_, Specialized>`. `Result` implements neither, because a crossed
 `Result` is the flat variant and no storage anywhere is shaped like Rust's
 `Result<T, E>` for a reference to name; what `&Result<T, E>` used to reach was
-the `NO_STORAGE` panic on `CrossSpecialized::deref` rather than a refusal.
-`BorrowableSpecialized` is implemented by `cross_whole!`'s specialized arm
-alone — the leaves stored as themselves and `Vec<T>` — which is also where the
-`deref` the marker promises is written. `CrossSpecialized for Result` therefore
-stands, by value: it shares `erase_result` and `materialize_result` with the
-uniform crossing, one function a direction, so a member fn declared
+the `NO_STORAGE` panic on the specialized `deref` rather than a refusal.
+`BorrowableSpecialized` is stated where the `deref` it promises is written:
+`cross_as_stored!` for the leaves, `vec.rs` for `Vec<T>`, and the
+`#[extern_type]` derive for an extension type. `Result`'s specialized crossing
+therefore stands, by value: it shares `erase_result` and `materialize_result`
+with the uniform crossing — one impl over the representation tag, one function
+a direction — so a member fn declared
 `fn f<A: Monomorphize<…>>(r: Result<A, String>) -> Result<A, String>` compiles
 and crosses both arms.
 

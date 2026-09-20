@@ -79,6 +79,7 @@ where
     Rt: Runtime,
 {
     type Form = Pair;
+    type ReturnForm = Pair;
 
     unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract: `run` is the pair a view was
@@ -90,8 +91,6 @@ where
         rt.slice_into_run(self.words(), out)
     }
 }
-
-crate::returned_as_crossed!(StrView);
 
 /// The macro emits this where `Val` would stand for an owned result, for a
 /// result written `&str` in Rust.

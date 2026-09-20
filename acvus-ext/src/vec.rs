@@ -224,7 +224,7 @@ where
 
 // There is no `vec::contains` (nor `array::` or `deque::contains`) beside
 // `iter::contains`: a `Monomorphize` member's glue crosses every parameter
-// naming the member through `CrossSpecialized`, and no form of a container
+// naming the member at its specialized representation, and no form of a container
 // of `Erased<Rt, T>` has one that reads the storage — `Vec` and `Deque`
 // cross whole, so the payload's `TypeId` is the container of values, not
 // of `Erased`; `Arr` crosses per element, which `Erased` is not; `Ref<C,

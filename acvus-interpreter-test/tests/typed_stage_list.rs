@@ -10,7 +10,7 @@
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    ClosureFn, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, Never, OneValue,
+    ClosureFn, Cross, EffectVar, Erased, ExternType, Fn1, FromValue, IdentityVar, Never, OneValue,
     Registry, Runtime, TyVar, Typeck, extern_fn, extern_registry,
 };
 use acvus_interpreter::AcvusRuntime;
@@ -87,7 +87,7 @@ where
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt>,
+        O: TyVar + OneValue<Rt> + Cross<Rt>,
         E: EffectVar;
 }
 
@@ -105,7 +105,7 @@ where
 
     fn pull<O, E>(body: &mut Source<O, Rt>, _: &Rt, _: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt>,
+        O: TyVar + OneValue<Rt> + Cross<Rt>,
         E: EffectVar,
     {
         body.pull()
@@ -114,7 +114,7 @@ where
 
 impl<T, Ts, Rt> TypeList<Rt> for (T, Ts)
 where
-    T: TyVar + OneValue<Rt>,
+    T: TyVar + OneValue<Rt> + Cross<Rt>,
     Ts: TypeList<Rt>,
     Rt: Runtime,
 {
@@ -128,7 +128,7 @@ where
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt>,
+        O: TyVar + OneValue<Rt> + Cross<Rt>,
         E: EffectVar,
     {
         let Stages { stage, rest } = body;
@@ -162,7 +162,7 @@ where
 
     fn pull<O, E>(body: &mut Never, _: &Rt, _: &mut Rt::Frame<'_>) -> Option<O>
     where
-        O: TyVar + OneValue<Rt>,
+        O: TyVar + OneValue<Rt> + Cross<Rt>,
         E: EffectVar,
     {
         match *body {}
@@ -183,7 +183,7 @@ where
 impl<Ts, O, E, I, Rt> Pipe<Ts, O, E, I, Rt>
 where
     Ts: TyVar + TypeList<Rt>,
-    O: TyVar + OneValue<Rt>,
+    O: TyVar + OneValue<Rt> + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -273,8 +273,8 @@ macro_rules! adaptor_instances {
             f: Fn1<T, U, E, Rt>,
         ) -> Pipe<(T, $ts), U, E, I, Rt>
         where
-            $($v: TyVar + OneValue<Rt>,)*
-            T: TyVar + OneValue<Rt>,
+            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
+            T: TyVar + OneValue<Rt> + Cross<Rt>,
             U: TyVar,
             E: EffectVar,
             I: IdentityVar,
@@ -289,8 +289,8 @@ macro_rules! adaptor_instances {
             n: u64,
         ) -> Pipe<(T, $ts), T, E, I, Rt>
         where
-            $($v: TyVar + OneValue<Rt>,)*
-            T: TyVar + OneValue<Rt>,
+            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
+            T: TyVar + OneValue<Rt> + Cross<Rt>,
             E: EffectVar,
             I: IdentityVar,
             Rt: Runtime,
@@ -312,8 +312,8 @@ macro_rules! total_instance {
             it: Pipe<$ts, O, E, I, Rt>,
         ) -> i64
         where
-            $($v: TyVar + OneValue<Rt>,)*
-            O: TyVar + OneValue<Rt>,
+            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
+            O: TyVar + OneValue<Rt> + Cross<Rt>,
             E: EffectVar,
             I: IdentityVar,
             Rt: Runtime,
@@ -331,8 +331,8 @@ macro_rules! total_instance {
             it: Pipe<$ts, O, E, I, Rt>,
         ) -> i64
         where
-            $($v: TyVar + OneValue<Rt>,)*
-            O: TyVar + OneValue<Rt>,
+            $($v: TyVar + OneValue<Rt> + Cross<Rt>,)*
+            O: TyVar + OneValue<Rt> + Cross<Rt>,
             E: EffectVar,
             I: IdentityVar,
             Rt: Runtime,

@@ -14,7 +14,7 @@ use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
 use crate::effect::{EffectArg, EffectVar};
-use crate::obj::OneValue;
+use crate::obj::{Cross, OneValue};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, TyVar};
@@ -213,7 +213,7 @@ where
 
 impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
 where
-    A: OneValue<Rt>,
+    A: OneValue<Rt> + Cross<Rt>,
     R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,
@@ -247,8 +247,8 @@ where
 
 impl<A, B, R, E, Rt> ClosureFn<Rt> for Fn2<A, B, R, E, Rt>
 where
-    A: OneValue<Rt>,
-    B: OneValue<Rt>,
+    A: OneValue<Rt> + Cross<Rt>,
+    B: OneValue<Rt> + Cross<Rt>,
     R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,
@@ -282,9 +282,9 @@ where
 
 impl<A, B, C, R, E, Rt> ClosureFn<Rt> for Fn3<A, B, C, R, E, Rt>
 where
-    A: OneValue<Rt>,
-    B: OneValue<Rt>,
-    C: OneValue<Rt>,
+    A: OneValue<Rt> + Cross<Rt>,
+    B: OneValue<Rt> + Cross<Rt>,
+    C: OneValue<Rt> + Cross<Rt>,
     R: OneValue<Rt>,
     E: EffectVar,
     Rt: Runtime,

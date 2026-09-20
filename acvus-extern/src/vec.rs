@@ -112,7 +112,14 @@ where
 /// of a `repr(transparent)` element is a promised view of it.
 const NO_VEC_STORAGE: &str = "a Vec whose element is not the runtime's value has no Vec of its own type to read through; a transparent element is read as a slice by `Ref::as_slice`";
 
-crate::cross_whole!(CrossSpecialized, Vec<T>, T: Send + Sync + 'static);
+crate::cross_whole!(crate::Specialized, Vec<T>, T: Send + Sync + 'static);
+
+impl<T, Rt> crate::BorrowableSpecialized<Rt> for Vec<T>
+where
+    T: Send + Sync + 'static,
+    Rt: Runtime,
+{
+}
 
 impl<T> TyArg for Vec<T>
 where

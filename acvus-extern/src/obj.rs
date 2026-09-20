@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use acvus_utils::{Astr, Interner};
 
+use crate::handler::Uniform;
 use crate::len::{Arr, LenVar};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
@@ -153,9 +154,6 @@ impl<V> Obj<V> {
     }
 }
 
-/// The registers rule 8 gives every enum: the tag and one payload.
-pub const VARIANT_WIDTH: usize = 2;
-
 /// A variant as the runtime holds it (RFC-0050 rules 4 and 8).
 ///
 /// These two registers are the same two that `interpreter::prepare::runs::
@@ -170,11 +168,14 @@ pub const VARIANT_WIDTH: usize = 2;
 /// `ObjectShape`; a tag word carries the interned name it stands for, so a
 /// reader — a printer with no `Ty`, a crossing, a `Switch` — resolves it alone.
 pub struct Variant<V> {
-    pub values: [V; VARIANT_WIDTH],
+    pub values: [V; 2],
 }
 
 impl<V> Variant<V> {
-    pub fn of(tag: V, payload: V) -> Variant<V> {
+    /// The registers rule 8 gives every enum, read off the layout above.
+    pub const WIDTH: usize = Variant::of((), ()).values.len();
+
+    pub const fn of(tag: V, payload: V) -> Variant<V> {
         Variant {
             values: [tag, payload],
         }
@@ -283,6 +284,12 @@ where
 {
     type Form: Form;
 
+    /// The run the same type occupies at the return position, which is not
+    /// always `Form`: a `#[derive(TyArg)]` struct is one heap object as a
+    /// field, a container's element and a by-value parameter, and its own
+    /// components as a result (RFC-0050 rules 5 and 6).
+    type ReturnForm: Form;
+
     /// How many of the runtime's values one `Self` occupies. A declaration's
     /// slot count is the sum of its parameters' widths, and the library adds
     /// them from these constants (RFC-0050 rule 6).
@@ -296,18 +303,33 @@ where
 
     /// `Self` written into a run of `WIDTH` values.
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
+
+    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+        self.into_run(rt, out)
+    }
 }
 
-/// The crossing of a type that is one of the runtime's values: `erase` hands
-/// the runtime that value, `materialize` takes it back, and `deref` reads a
-/// `Self` through a reference the runtime holds, which only a type stored as
-/// itself can do. Every bound that needs a value — a parameter, an object's
-/// field, a container's element — says this and not `Cross`.
+/// The crossing of a type that is one of the runtime's values, at one of the
+/// two representations a slot can take (`Uniform`, `Specialized` — RFC-0040):
+/// `erase` hands the runtime that value, `materialize` takes it back, and
+/// `deref` reads a `Self` through a reference the runtime holds, which only a
+/// type stored as itself can do. Every bound that needs a value — a
+/// parameter, an object's field, a container's element — says this and not
+/// `Cross`.
+///
+/// A member of a `Monomorphize` family is one of the runtime's values, so the
+/// specialized representation needs no split into a run and a value the way
+/// `Cross` does: the run is the value, here and at every impl.
+///
+/// `Cross` is not a supertrait, and that is forced. `Option<T>` crosses at
+/// both representations, and its `Cross` impl holds only where `T` crosses
+/// uniformly; a supertrait would demand that of the specialized impl too,
+/// where the element is specialized and nothing says it is also uniform.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not cross the boundary as one of the runtime's values",
     note = "a slice crosses as the two registers it occupies and is no value of the language: it is an argument and a result, never a field, a container's element, or a parameter taken by reference (RFC-0047 rule 6)."
 )]
-pub trait OneValue<Rt>: Cross<Rt, Form = One>
+pub trait OneValue<Rt, Rep = Uniform>: Sized + Send + Sync + 'static
 where
     Rt: Runtime,
 {
@@ -315,166 +337,6 @@ where
     /// a container of `Self` is a container of values in place.
     const STORED_AS_VALUE: bool = false;
 
-    fn erase(self, rt: &Rt) -> Rt::Value;
-
-    /// # Safety
-    /// `value` was erased from `Self` (by the runtime's `erase::<Self>` or
-    /// `Self::erase`).
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self;
-
-    /// # Safety
-    /// `reference` names a live storage of `Self`, exclusively for the
-    /// duration when `deref_mut`.
-    unsafe fn deref<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a Self {
-        panic!("{}", NO_STORAGE)
-    }
-
-    /// # Safety
-    /// As `deref`.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn deref_mut<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a mut Self {
-        panic!("{}", NO_STORAGE)
-    }
-}
-
-/// The `Cross` of a one-value crossing, whose run is that one value: written
-/// here so that every such impl is these two calls and no third form of the
-/// same sentence.
-///
-/// # Safety
-/// As `Cross::from_run`.
-pub unsafe fn one_from_run<T, Rt>(rt: &Rt, run: &[Rt::Value]) -> T
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract, at one value.
-    unsafe { T::materialize(rt, run[0]) }
-}
-
-/// The other half of `one_from_run`.
-pub fn one_into_run<T, Rt>(value: T, rt: &Rt, out: &mut [Rt::Value])
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    out[0] = value.erase(rt);
-}
-
-/// How a type crosses back at the return position, which is not always the
-/// run `Cross` names: a `#[derive(TyArg)]` struct is one heap object as a
-/// field, a container's element and a by-value parameter, and its own
-/// components as a result (RFC-0050 rules 5 and 6).
-///
-/// There is no blanket impl over `OneValue` for the reason `Cross` has none:
-/// coherence cannot admit one beside the derive's. Every one-value type
-/// states this through `cross_one_value!`.
-pub trait Returned<Rt>: Sized
-where
-    Rt: Runtime,
-{
-    type Form: Form;
-
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
-}
-
-/// The `Cross` and `Returned` impls of a type whose crossing is one value:
-/// its run is that value, so both directions are `OneValue`'s and a result
-/// is written where a result of one value goes.
-#[macro_export]
-macro_rules! cross_one_value {
-    ($t:ty, at $rt:ty) => {
-        impl $crate::Cross<$rt> for $t {
-            type Form = $crate::One;
-
-            unsafe fn from_run(rt: &$rt, run: &[<$rt as $crate::Runtime>::Value]) -> Self {
-                // SAFETY: the caller's contract, at one value.
-                unsafe { $crate::one_from_run(rt, run) }
-            }
-
-            fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
-                $crate::one_into_run(self, rt, out)
-            }
-        }
-
-        impl $crate::Returned<$rt> for $t {
-            type Form = $crate::One;
-
-            fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
-                $crate::one_into_run(self, rt, out)
-            }
-        }
-    };
-    ($t:ty $(, $($g:tt)*)?) => {
-        impl<$($($g)*,)? __Rt> $crate::Cross<__Rt> for $t
-        where
-            __Rt: $crate::Runtime,
-        {
-            type Form = $crate::One;
-
-            unsafe fn from_run(
-                rt: &__Rt,
-                run: &[<__Rt as $crate::Runtime>::Value],
-            ) -> Self {
-                // SAFETY: the caller's contract, at one value.
-                unsafe { $crate::one_from_run(rt, run) }
-            }
-
-            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
-                $crate::one_into_run(self, rt, out)
-            }
-        }
-
-        impl<$($($g)*,)? __Rt> $crate::Returned<__Rt> for $t
-        where
-            __Rt: $crate::Runtime,
-        {
-            type Form = $crate::One;
-
-            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
-                $crate::one_into_run(self, rt, out)
-            }
-        }
-    };
-}
-
-/// The `Returned` impl of a type that crosses back exactly as `Cross` names,
-/// for the crossings written by hand rather than through `cross_one_value!`.
-#[macro_export]
-macro_rules! returned_as_crossed {
-    ($t:ty $(, $($g:tt)*)?) => {
-        impl<$($($g)*,)? __Rt> $crate::Returned<__Rt> for $t
-        where
-            __Rt: $crate::Runtime,
-            $t: $crate::Cross<__Rt>,
-        {
-            type Form = <$t as $crate::Cross<__Rt>>::Form;
-
-            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
-                <$t as $crate::Cross<__Rt>>::into_run(self, rt, out)
-            }
-        }
-    };
-}
-
-/// The message a converted type gives when read through a reference: it
-/// has no storage of its own type (RFC-0032).
-const NO_STORAGE: &str =
-    "a value converted at the boundary has no storage of its own type to read through";
-
-/// How the type of a `#` slot crosses (both.md, Revision): a family
-/// (`Vec<T>`, `Deque<T>`) is one box holding the whole Rust value, a leaf
-/// is stored as itself, and `Option`/`Result`/`Arr` forward to their
-/// payloads. The glue of a `Monomorphize` member instance calls this for
-/// every parameter and return whose type names the member.
-///
-/// A member of a `Monomorphize` family is one of the runtime's values, so
-/// this trait needs no split into a run and a value the way `Cross` does:
-/// the run is the value, here and at every impl.
-pub trait CrossSpecialized<Rt>: Sized + Send + Sync + 'static
-where
-    Rt: Runtime,
-{
     fn erase(self, rt: &Rt) -> Rt::Value;
 
     /// # Safety
@@ -494,31 +356,75 @@ where
         out[0] = self.erase(rt);
     }
 
-    // The two defaults below are not deleted, and that is a decision. No
-    // signature reaches one: `handler.rs` bounds `ByRef<_, Specialized>` and
-    // `ByRefMut<_, Specialized>` by `BorrowableSpecialized`, which only
-    // `cross_whole!`'s specialized arm implements, and that arm overrides both
-    // methods. What keeps them declared here is the `#[extern_type]` derive in
-    // `acvus-extern-macro`, which writes its own `deref` and `deref_mut` inside
-    // this trait's impl; deleting the pair means moving them onto the marker
-    // there in the same change.
-
     /// # Safety
-    /// As `Cross::deref`.
+    /// `reference` names a live storage of `Self`, exclusively for the
+    /// duration when `deref_mut`.
     unsafe fn deref<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a Self {
         panic!("{}", NO_STORAGE)
     }
 
     /// # Safety
-    /// As `Cross::deref_mut`.
+    /// As `deref`.
     #[allow(clippy::mut_from_ref)]
     unsafe fn deref_mut<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a mut Self {
         panic!("{}", NO_STORAGE)
     }
 }
 
+/// The `Cross` of a type whose crossing is one value: its run is that value,
+/// in both directions and at the return position.
+#[macro_export]
+macro_rules! cross_one_value {
+    ($t:ty, at $rt:ty) => {
+        impl $crate::Cross<$rt> for $t {
+            type Form = $crate::One;
+            type ReturnForm = $crate::One;
+
+            unsafe fn from_run(rt: &$rt, run: &[<$rt as $crate::Runtime>::Value]) -> Self {
+                // SAFETY: the caller's contract, at one value.
+                unsafe { <Self as $crate::OneValue<$rt>>::from_run(rt, run) }
+            }
+
+            fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
+                <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
+            }
+        }
+    };
+    ($t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::Cross<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+            type Form = $crate::One;
+            type ReturnForm = $crate::One;
+
+            unsafe fn from_run(
+                rt: &__Rt,
+                run: &[<__Rt as $crate::Runtime>::Value],
+            ) -> Self {
+                // SAFETY: the caller's contract, at one value.
+                unsafe { <Self as $crate::OneValue<__Rt>>::from_run(rt, run) }
+            }
+
+            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+                <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
+            }
+        }
+    };
+}
+
+/// The message a converted type gives when read through a reference: it
+/// has no storage of its own type (RFC-0032).
+const NO_STORAGE: &str =
+    "a value converted at the boundary has no storage of its own type to read through";
+
 /// A type the runtime stores as itself: its `erase` is `rt.erase::<Self>`,
 /// so the runtime reads a value erased from it back as a `Self` in place.
+///
+/// This is what `OneValue` does not say. `Option<T>::erase` is `rt.some(..)`
+/// and a derived struct's is a heap object, so `Runtime::value_as_ref::<T>`
+/// — which `Erased::as_ref` calls and `Erased::deref` reads out of the value
+/// word — is sound for a `Stored` type and for no other.
 pub trait Stored<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
@@ -538,10 +444,16 @@ where
 }
 
 /// The `Value -> Self` step a body takes outside the glue: identity for the
-/// runtime's own value, otherwise a downcast checked against
-/// `Runtime::type_of`. There is no impl for a bare scalar: a scalar comes
+/// runtime's own value, otherwise a recursion that ends in
+/// `materialize_checked`. There is no impl for a bare scalar: a scalar comes
 /// out as `Erased<Rt, T>`, whose `from_value` checks the value's record of
 /// its type like any other.
+///
+/// This is not `materialize_checked` under another name, and the two do not
+/// merge. The impl for the runtime's own value is the identity — there is no
+/// Rust type to check a raw value against — and the impl for `Vec<E>` calls
+/// `materialize_checked` for the buffer and then its own element step, so the
+/// function is what the trait is written on top of.
 ///
 /// # Panics
 /// When the value was not erased from `Self`.
@@ -577,7 +489,9 @@ where
     }
 }
 
-pub fn downcast<T, Rt>(rt: &Rt, value: Rt::Value) -> T
+/// # Panics
+/// When the value was not erased from `T`.
+pub fn materialize_checked<T, Rt>(rt: &Rt, value: Rt::Value) -> T
 where
     T: Send + Sync + 'static,
     Rt: Runtime,
@@ -637,45 +551,36 @@ macro_rules! cross_as_stored {
         {
         }
 
-        $crate::cross_one_value!($t $(, $($g)*)?);
-        $crate::borrowed_as_self!($t $(, $($g)*)?);
-        $crate::cross_whole!(OneValue, $t $(, $($g)*)?);
-        $crate::cross_whole!(CrossSpecialized, $t $(, $($g)*)?);
-    };
-}
-
-/// One crossing trait implemented as the whole Rust value in one runtime
-/// box. The specialized arm states `BorrowableSpecialized` from the same
-/// invocation that writes the `deref` that marker promises.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! cross_whole {
-    (OneValue, $t:ty $(, $($g:tt)*)?) => {
-        impl<$($($g)*,)? __Rt> $crate::OneValue<__Rt> for $t
-        where
-            __Rt: $crate::Runtime,
-        {
-            $crate::whole_box!($t, __Rt);
-        }
-    };
-    (CrossSpecialized, $t:ty $(, $($g:tt)*)?) => {
-        impl<$($($g)*,)? __Rt> $crate::CrossSpecialized<__Rt> for $t
-        where
-            __Rt: $crate::Runtime,
-        {
-            $crate::whole_box!($t, __Rt);
-        }
-
         impl<$($($g)*,)? __Rt> $crate::BorrowableSpecialized<__Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
         }
+
+        $crate::cross_one_value!($t $(, $($g)*)?);
+        $crate::borrowed_as_self!($t $(, $($g)*)?);
+        $crate::cross_whole!($crate::Uniform, $t $(, $($g)*)?);
+        $crate::cross_whole!($crate::Specialized, $t $(, $($g)*)?);
     };
 }
 
-/// The four methods `OneValue` and `CrossSpecialized` declare alike, at a
-/// crossing whose runtime box holds the whole Rust value.
+/// The crossing of one representation as the whole Rust value in one runtime
+/// box.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! cross_whole {
+    ($rep:ty, $t:ty $(, $($g:tt)*)?) => {
+        impl<$($($g)*,)? __Rt> $crate::OneValue<__Rt, $rep> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+            $crate::whole_box!($t, __Rt);
+        }
+    };
+}
+
+/// The four methods of a crossing whose runtime box holds the whole Rust
+/// value.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! whole_box {
@@ -721,20 +626,7 @@ cross_as_stored!(());
 
 crate::cross_one_value!(Never);
 
-impl<Rt> OneValue<Rt> for Never
-where
-    Rt: Runtime,
-{
-    fn erase(self, _: &Rt) -> Rt::Value {
-        match self {}
-    }
-
-    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
-        panic!("a value of type `!` was materialized")
-    }
-}
-
-impl<Rt> CrossSpecialized<Rt> for Never
+impl<Rep, Rt> OneValue<Rt, Rep> for Never
 where
     Rt: Runtime,
 {
@@ -780,9 +672,9 @@ where
 
 crate::cross_one_value!(Option<T>, T: OneValue<__Rt>);
 
-impl<T, Rt> OneValue<Rt> for Option<T>
+impl<T, Rep, Rt> OneValue<Rt, Rep> for Option<T>
 where
-    T: OneValue<Rt>,
+    T: OneValue<Rt, Rep>,
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
@@ -850,18 +742,18 @@ where
     }
 }
 
-impl<T, E, Rt> OneValue<Rt> for Result<T, E>
+impl<T, E, Rep, Rt> OneValue<Rt, Rep> for Result<T, E>
 where
-    T: OneValue<Rt>,
-    E: OneValue<Rt>,
+    T: OneValue<Rt, Rep>,
+    E: OneValue<Rt, Rep>,
     Rt: Runtime,
 {
     fn erase(self, rt: &Rt) -> Rt::Value {
         erase_result(
             self,
             rt,
-            <T as OneValue<Rt>>::erase,
-            <E as OneValue<Rt>>::erase,
+            <T as OneValue<Rt, Rep>>::erase,
+            <E as OneValue<Rt, Rep>>::erase,
         )
     }
 
@@ -872,59 +764,8 @@ where
             materialize_result(
                 rt,
                 value,
-                <T as OneValue<Rt>>::materialize,
-                <E as OneValue<Rt>>::materialize,
-            )
-        }
-    }
-}
-
-impl<T, Rt> CrossSpecialized<Rt> for Option<T>
-where
-    T: CrossSpecialized<Rt>,
-    Rt: Runtime,
-{
-    fn erase(self, rt: &Rt) -> Rt::Value {
-        match self {
-            Some(v) => rt.some(v.erase(rt)),
-            None => rt.none(),
-        }
-    }
-
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        if rt.is_none(&value) {
-            return None;
-        }
-        // SAFETY: the caller's contract, forwarded: `erase` put a `T`'s
-        // value under the `some`.
-        Some(unsafe { T::materialize(rt, rt.unwrap_some(value)) })
-    }
-}
-
-impl<T, E, Rt> CrossSpecialized<Rt> for Result<T, E>
-where
-    T: CrossSpecialized<Rt>,
-    E: CrossSpecialized<Rt>,
-    Rt: Runtime,
-{
-    fn erase(self, rt: &Rt) -> Rt::Value {
-        erase_result(
-            self,
-            rt,
-            <T as CrossSpecialized<Rt>>::erase,
-            <E as CrossSpecialized<Rt>>::erase,
-        )
-    }
-
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and the two steps are the inverses of
-        // the ones `erase` gave.
-        unsafe {
-            materialize_result(
-                rt,
-                value,
-                <T as CrossSpecialized<Rt>>::materialize,
-                <E as CrossSpecialized<Rt>>::materialize,
+                <T as OneValue<Rt, Rep>>::materialize,
+                <E as OneValue<Rt, Rep>>::materialize,
             )
         }
     }
@@ -937,44 +778,11 @@ where
 // crossings, the concrete one through `Borrowable` and the monomorphized one
 // through the marker; adding either impl makes a case there pass silently.
 
-impl<T, N, Rt> CrossSpecialized<Rt> for Arr<T, N>
-where
-    T: CrossSpecialized<Rt>,
-    N: LenVar,
-    Rt: Runtime,
-{
-    fn erase(self, rt: &Rt) -> Rt::Value {
-        let items: Vec<Owned<Rt>> = self
-            .0
-            .into_iter()
-            .map(|v| Owned::from_value(v.erase(rt)))
-            .collect();
-        // SAFETY: the language's array is `Arr<Owned<Rt>, ()>` (RFC-0022,
-        // RFC-0048 §7).
-        unsafe { rt.erase::<Arr<Owned<Rt>, ()>>(Arr::new(items)) }
-    }
-
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-        // SAFETY: the caller's contract, and `erase` boxes an
-        // `Arr<Owned<Rt>, ()>`.
-        let items = unsafe { rt.materialize::<Arr<Owned<Rt>, ()>>(value) };
-        // SAFETY: the caller's contract, forwarded: `erase` erased every
-        // element from a `T`.
-        Arr::new(
-            items
-                .0
-                .into_iter()
-                .map(|v| unsafe { T::materialize(rt, v.into_value()) })
-                .collect(),
-        )
-    }
-}
-
 crate::cross_one_value!(Arr<T, N>, T: OneValue<__Rt>, N: LenVar);
 
-impl<T, N, Rt> OneValue<Rt> for Arr<T, N>
+impl<T, N, Rep, Rt> OneValue<Rt, Rep> for Arr<T, N>
 where
-    T: OneValue<Rt>,
+    T: OneValue<Rt, Rep>,
     N: LenVar,
     Rt: Runtime,
 {
@@ -1064,7 +872,7 @@ where
     Rt: Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        let items = downcast::<Vec<Owned<Rt>>, Rt>(rt, value);
+        let items = materialize_checked::<Vec<Owned<Rt>>, Rt>(rt, value);
         elements_from_values(rt, items)
     }
 }
@@ -1076,55 +884,7 @@ where
     Rt: Runtime,
 {
     fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        let items = downcast::<Arr<Owned<Rt>, ()>, Rt>(rt, value);
+        let items = materialize_checked::<Arr<Owned<Rt>, ()>, Rt>(rt, value);
         Arr::new(elements_from_values(rt, items.0))
     }
-}
-
-/// The field of a derived object, crossed by its own type; what the derive
-/// calls for each field.
-pub fn erase_field<T, Rt>(rt: &Rt, value: T) -> Owned<Rt>
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    Owned::from_value(value.erase(rt))
-}
-
-/// The field of a derived object read back out of its own position.
-///
-/// # Safety
-/// The value held there was erased from a `T`.
-pub unsafe fn materialize_field<T, Rt>(rt: &Rt, field: Owned<Rt>) -> T
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, field.into_value()) }
-}
-
-/// # Panics
-/// When the variant has no payload: the checker admits only variants of
-/// the declared enum.
-pub fn take_payload<V>(payload: Option<V>, tag: &str) -> V {
-    let Some(payload) = payload else {
-        panic!(
-            "variant `{tag}` has no payload: the checker admits only variants of the declared enum"
-        )
-    };
-    payload
-}
-
-/// The payload of a derived variant, crossed by its own type.
-///
-/// # Safety
-/// The payload of variant `tag` was erased from a `T`.
-pub unsafe fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Owned<Rt>>, tag: &str) -> T
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, take_payload(payload, tag).into_value()) }
 }

@@ -931,9 +931,9 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     ]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]);
     // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
-    let Boxed::<V, Pure, Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, boxed) };
+    let Boxed::<V, Pure, Tiny>(items, _) = unsafe { OneValue::<Tiny>::materialize(&Tiny, boxed) };
     assert_eq!(items.len(), 2);
-    let boxed = Boxed::<V, (), Tiny>(items, PhantomData).erase(&Tiny);
+    let boxed = OneValue::<Tiny>::erase(Boxed::<V, (), Tiny>(items, PhantomData), &Tiny);
 
     let double = V::Closure(Closure::new(|args| {
         let [n] = <[V; 1]>::try_from(args)
@@ -942,7 +942,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     }));
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double]).await;
     // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
-    let Boxed::<V, (), Tiny>(items, _) = unsafe { Boxed::materialize(&Tiny, out) };
+    let Boxed::<V, (), Tiny>(items, _) = unsafe { OneValue::<Tiny>::materialize(&Tiny, out) };
     let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
     assert_eq!(doubled, vec![2, 4]);
 
@@ -1139,6 +1139,19 @@ where
     v.unwrap_or(fallback)
 }
 
+/// A derived extension type read through a reference at a monomorphized
+/// member. The parameter names the member, so the crossing is the
+/// specialized one, and `&` at it needs the marker the `#[extern_type]`
+/// derive states beside the `deref` it writes.
+#[extern_fn(effect = pure)]
+fn box_width<A, Rt>(v: &Boxed<A, Pure, Rt>) -> i64
+where
+    A: acvus_extern::Monomorphize<(i64, String)>,
+    Rt: Runtime,
+{
+    v.0.len() as i64
+}
+
 /// The member type appears only inside an extension type here.
 #[extern_fn(effect = pure)]
 fn box_count<A, Rt>(v: Boxed<A, Pure, Rt>) -> i64
@@ -1160,7 +1173,7 @@ where
 fn mono_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "t",
-        fns: [double, first_or, box_count, twice_ok],
+        fns: [double, first_or, box_count, box_width, twice_ok],
     }
 }
 
@@ -1233,20 +1246,22 @@ fn a_result_of_the_member_type_crosses_a_member_by_value() {
 /// A `Result` of a member type on its way into a member's argument slot.
 fn crossing<A>(r: Result<A, String>) -> V
 where
-    A: acvus_extern::CrossSpecialized<Tiny>,
+    A: acvus_extern::OneValue<Tiny, acvus_extern::Specialized>,
 {
-    <Result<A, String> as acvus_extern::CrossSpecialized<Tiny>>::erase(r, &Tiny)
+    <Result<A, String> as acvus_extern::OneValue<Tiny, acvus_extern::Specialized>>::erase(r, &Tiny)
 }
 
 /// The `Result` a member wrote into its result slot.
 fn crossed<A>(value: V) -> Result<A, String>
 where
-    A: acvus_extern::CrossSpecialized<Tiny>,
+    A: acvus_extern::OneValue<Tiny, acvus_extern::Specialized>,
 {
     // SAFETY: the value is what the member's glue wrote through the same
     // crossing.
     unsafe {
-        <Result<A, String> as acvus_extern::CrossSpecialized<Tiny>>::materialize(&Tiny, value)
+        <Result<A, String> as acvus_extern::OneValue<Tiny, acvus_extern::Specialized>>::materialize(
+            &Tiny, value,
+        )
     }
 }
 
@@ -1312,11 +1327,13 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         &i,
     );
     let h = instance_for(&reg, &i, "box_count", &ty).unwrap();
-    let payload = Boxed::<String, Pure, Tiny>(
-        vec![erased(String::from("a")), erased(String::from("b"))],
-        PhantomData,
-    )
-    .erase(&Tiny);
+    let payload = OneValue::<Tiny>::erase(
+        Boxed::<String, Pure, Tiny>(
+            vec![erased(String::from("a")), erased(String::from("b"))],
+            PhantomData,
+        ),
+        &Tiny,
+    );
     assert_eq!(open::<i64>(call_sync(h, vec![payload])), 2);
     let ty = call_type(
         vec![boxed_of(acvus_extern::Ty::Float)],
@@ -1324,12 +1341,42 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         &i,
     );
     let fallback = instance_for(&reg, &i, "box_count", &ty).unwrap();
-    let payload = Boxed::<V, Pure, Tiny>(
-        vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
-        PhantomData,
-    )
-    .erase(&Tiny);
+    let payload = OneValue::<Tiny>::erase(
+        Boxed::<V, Pure, Tiny>(
+            vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
+            PhantomData,
+        ),
+        &Tiny,
+    );
     assert_eq!(open::<i64>(call_sync(fallback, vec![payload])), 3);
+}
+
+#[test]
+fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![mono_registry::<Tiny>()], &i).expect("registries combine");
+    let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
+        id: acvus_extern::QualifiedRef::root(i.intern("Box")),
+        type_args: vec![TypeArg::uniform(t)],
+        effect_args: vec![EffectTerm::Known(Effect::PURE)],
+        identity_args: vec![],
+    };
+    let ty = call_type(
+        vec![acvus_extern::Ty::Ref(
+            acvus_extern::Mutability::Shared,
+            Box::new(TypeArg::uniform(boxed_of(acvus_extern::Ty::I64))),
+        )],
+        acvus_extern::Ty::I64,
+        &i,
+    );
+    let h = instance_for(&reg, &i, "box_width", &ty).expect("an instance on i64");
+    let place = OneValue::<Tiny>::erase(
+        Boxed::<i64, Pure, Tiny>(vec![erased(1i64), erased(2i64), erased(3i64)], PhantomData),
+        &Tiny,
+    );
+    // SAFETY: `place` outlives the call.
+    let r = call_sync(h, vec![unsafe { Tiny.reference(&place) }]);
+    assert_eq!(open::<i64>(r), 3);
 }
 
 // -- Polymorphic instances (RFC-0027) ---------------------------------

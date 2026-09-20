@@ -7,6 +7,7 @@
 extern crate self as acvus_extern;
 
 pub mod core;
+pub mod derive;
 mod effect;
 mod erased;
 mod func;
@@ -14,7 +15,6 @@ mod handler;
 mod identity;
 mod len;
 mod obj;
-pub mod object;
 mod owned;
 mod projection;
 mod reference;
@@ -23,11 +23,10 @@ mod runtime;
 mod slice;
 mod space;
 mod str;
-pub mod transparent;
 mod ty_arg;
-pub mod variant;
 mod vec;
 
+pub use derive::transparent::Transparent;
 pub use effect::{Eff, EffectArg, EffectVar, Idempotent, Opaque, Pure};
 pub use erased::Erased;
 pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
@@ -43,10 +42,8 @@ pub use handler::{
 pub use identity::{IdentityArg, IdentityVar, Idn};
 pub use len::{Arr, Len, LenArg, LenVar};
 pub use obj::{
-    Cross, CrossSpecialized, FieldAt, Form, FormKind, FromValue, Inline, Obj, ObjectShape, One,
-    OneValue, Pair, Returned, Run, Stored, TransparentOver, VARIANT_WIDTH, Variant, downcast,
-    erase_field, expect_type, materialize_field, materialize_payload, one_from_run, one_into_run,
-    take_payload,
+    Cross, FieldAt, Form, FormKind, FromValue, Inline, Obj, ObjectShape, One, OneValue, Pair, Run,
+    Stored, TransparentOver, Variant, expect_type, materialize_checked,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{
@@ -63,7 +60,6 @@ pub use runtime::{Runtime, TypesOnly};
 pub use slice::{Elements, Slice, SliceMut, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
-pub use transparent::Transparent;
 pub use ty_arg::{Monomorphize, Never, PolyVars, SlotRepr, Spec, TyArg, TyVar, Typeck, VarCounts};
 pub use vec::vec_ty;
 

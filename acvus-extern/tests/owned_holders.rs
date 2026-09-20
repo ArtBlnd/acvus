@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{
     Arr, Astr, CallToken, Erased, Fn1, FromValue, FxHashMap, Interner, OneValue, Opaque, Owned,
-    Ref, Release, Runtime, cross_as_stored, materialize_field, materialize_payload,
+    Ref, Release, Runtime, cross_as_stored,
 };
 
 // -- A payload that counts its own drops --------------------------------
@@ -452,7 +452,7 @@ fn a_closure_carrier_that_gave_its_value_back_releases_nothing() {
 fn a_vec_releases_its_elements_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = vec![drops.payload(), drops.payload(), drops.payload()].erase(&rt);
+    let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload(), drops.payload()], &rt);
     assert_eq!(drops.count(), 0, "the elements are in the store");
     stored.release();
     assert_eq!(drops.count(), 3, "each element was released once");
@@ -462,7 +462,7 @@ fn a_vec_releases_its_elements_once() {
 fn a_vec_materialized_back_is_released_by_its_receiver() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = vec![drops.payload(), drops.payload()].erase(&rt);
+    let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], &rt);
     // SAFETY: `stored` was erased from this same `Vec<Tracked>`.
     let items = unsafe { <Vec<Tracked> as OneValue<Counted>>::materialize(&rt, stored) };
     assert_eq!(drops.count(), 0, "the elements are out of the store");
@@ -476,7 +476,10 @@ fn a_vec_materialized_back_is_released_by_its_receiver() {
 fn an_array_releases_its_elements_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]).erase(&rt);
+    let stored = OneValue::<_>::erase(
+        Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]),
+        &rt,
+    );
     assert_eq!(drops.count(), 0, "the elements are in the store");
     stored.release();
     assert_eq!(drops.count(), 2, "each element was released once");
@@ -486,7 +489,10 @@ fn an_array_releases_its_elements_once() {
 fn an_array_materialized_back_is_released_by_its_receiver() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]).erase(&rt);
+    let stored = OneValue::<_>::erase(
+        Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]),
+        &rt,
+    );
     // SAFETY: `stored` was erased from this same `Arr<Tracked, ()>`.
     let items = unsafe { <Arr<Tracked, ()> as OneValue<Counted>>::materialize(&rt, stored) };
     assert_eq!(drops.count(), 0, "the elements are out of the store");
@@ -500,7 +506,7 @@ fn an_array_materialized_back_is_released_by_its_receiver() {
 fn a_result_releases_its_ok_payload_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = Ok::<Tracked, Tracked>(drops.payload()).erase(&rt);
+    let stored = OneValue::<_>::erase(Ok::<Tracked, Tracked>(drops.payload()), &rt);
     assert_eq!(drops.count(), 0, "the payload is in the store");
     stored.release();
     assert_eq!(drops.count(), 1, "the ok payload was released once");
@@ -510,7 +516,7 @@ fn a_result_releases_its_ok_payload_once() {
 fn a_result_releases_its_err_payload_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = Err::<Tracked, Tracked>(drops.payload()).erase(&rt);
+    let stored = OneValue::<_>::erase(Err::<Tracked, Tracked>(drops.payload()), &rt);
     assert_eq!(drops.count(), 0, "the payload is in the store");
     stored.release();
     assert_eq!(drops.count(), 1, "the err payload was released once");
@@ -522,7 +528,7 @@ fn a_result_releases_its_err_payload_once() {
 fn an_option_releases_its_payload_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = Some(drops.payload()).erase(&rt);
+    let stored = OneValue::<_>::erase(Some(drops.payload()), &rt);
     assert_eq!(drops.count(), 0, "the payload is in the store");
     stored.release();
     assert_eq!(drops.count(), 1, "the payload was released once");
@@ -557,7 +563,8 @@ fn an_object_field_taken_out_is_released_by_its_receiver() {
         *<Box<[Owned<Counted>]> as TryInto<Box<[Owned<Counted>; 1]>>>::try_into(fields.values)
             .expect("one field");
     // SAFETY: the field was erased from a `Tracked`.
-    let taken = unsafe { materialize_field::<Tracked, Counted>(&rt, payload) };
+    let taken =
+        unsafe { acvus_extern::derive::materialize_field::<Tracked, Counted>(&rt, payload) };
     assert_eq!(drops.count(), 0, "the field is out of the object");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
@@ -593,7 +600,8 @@ fn a_variants_payload_taken_out_is_released_by_its_receiver() {
     let payload = carrying(&rt, &drops).into_payload();
     assert_eq!(drops.count(), 0, "the payload is out of the variant");
     // SAFETY: the payload was erased from a `Tracked`.
-    let taken = unsafe { materialize_field::<Tracked, Counted>(&rt, payload) };
+    let taken =
+        unsafe { acvus_extern::derive::materialize_field::<Tracked, Counted>(&rt, payload) };
     assert_eq!(drops.count(), 0, "the payload is in its receiver");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
@@ -648,8 +656,8 @@ fn a_derived_structs_field_table_is_the_shape_order() {
     // SAFETY: the derive erased each field from its declared `i64`.
     let (alpha, zed) = unsafe {
         (
-            materialize_field::<i64, Counted>(&rt, alpha),
-            materialize_field::<i64, Counted>(&rt, zed),
+            acvus_extern::derive::materialize_field::<i64, Counted>(&rt, alpha),
+            acvus_extern::derive::materialize_field::<i64, Counted>(&rt, zed),
         )
     };
     assert_eq!((alpha, zed), (2, 1), "each value at its own field's offset");
@@ -678,7 +686,9 @@ fn a_variant_payload_taken_out_is_released_by_its_receiver() {
     let drops = Drops::default();
     let payload = one_payload(&rt, &drops);
     // SAFETY: the payload was erased from a `Tracked`.
-    let taken = unsafe { materialize_payload::<Tracked, Counted>(&rt, payload, "Tag") };
+    let taken = unsafe {
+        acvus_extern::derive::materialize_payload::<Tracked, Counted>(&rt, payload, "Tag")
+    };
     assert_eq!(drops.count(), 0, "the payload is out of the variant");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
@@ -690,7 +700,7 @@ fn a_variant_payload_taken_out_is_released_by_its_receiver() {
 fn a_borrow_releases_nothing_and_its_storage_still_releases_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let storage = vec![drops.payload(), drops.payload()].erase(&rt);
+    let storage = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], &rt);
     {
         let lent = Ref::<Vec<Tracked>, Counted>::lend(&rt, &storage);
         assert_eq!(
@@ -1130,7 +1140,7 @@ fn set_releases_the_payload_it_writes_over() {
     let rt = Counted;
     let drops = Drops::default();
     let table = shape_table();
-    let value = acvus_extern::variant::erase(
+    let value = acvus_extern::derive::variant::erase(
         &rt,
         "Count",
         Some(Owned::from_value(tracked_value(&rt, &drops))),

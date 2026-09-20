@@ -113,7 +113,7 @@ unsafe impl<R> Sync for Owned<R> where R: Runtime {}
 
 crate::cross_one_value!(Owned<__Rt>);
 
-impl<R> crate::OneValue<R> for Owned<R>
+impl<Rep, R> crate::OneValue<R, Rep> for Owned<R>
 where
     R: Runtime,
 {
@@ -136,19 +136,6 @@ where
     unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
         // SAFETY: as `deref`, with the caller's exclusive loan.
         unsafe { &mut *(rt.deref_mut::<R::Value>(reference) as *mut R::Value).cast::<Self>() }
-    }
-}
-
-impl<R> crate::CrossSpecialized<R> for Owned<R>
-where
-    R: Runtime,
-{
-    fn erase(self, _: &R) -> R::Value {
-        self.into_value()
-    }
-
-    unsafe fn materialize(_: &R, value: R::Value) -> Self {
-        Self::from_value(value)
     }
 }
 

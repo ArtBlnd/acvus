@@ -452,11 +452,13 @@ fn vec_from_value_refuses_a_deque() {
 #[test]
 fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
     let rt = Counting::default();
-    let strings = vec![
-        erased_from(&rt, "a".to_owned()),
-        erased_from(&rt, "b".to_owned()),
-    ]
-    .erase(&rt);
+    let strings = OneValue::<_>::erase(
+        vec![
+            erased_from(&rt, "a".to_owned()),
+            erased_from(&rt, "b".to_owned()),
+        ],
+        &rt,
+    );
     let start = rt.counts();
     let parts = Vec::<Erased<Counting, String>>::from_value(&rt, strings);
     assert_eq!(
@@ -506,7 +508,7 @@ fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
 #[test]
 fn a_ref_to_a_vec_of_erased_ints_sees_the_elements_and_an_edit_through_a_mutable_one() {
     let rt = Counting::default();
-    let storage = vec![int(&rt, 1), int(&rt, 2)].erase(&rt);
+    let storage = OneValue::<_>::erase(vec![int(&rt, 1), int(&rt, 2)], &rt);
     let start = rt.counts();
 
     let lent = Ref::<Vec<Erased<Counting, i64>>, Counting>::lend(&rt, &storage);
@@ -594,7 +596,7 @@ fn flat_map_skips_an_empty_inner_sequence() {
         } else {
             vec![int(rt, x), int(rt, x)]
         };
-        inner.erase(rt)
+        OneValue::<_>::erase(inner, rt)
     });
     let it = items(&rt, [1, 2, 3]).flat_map::<Vec<V>, V>(Fn1::new(&rt, twice_unless_two));
     assert_eq!(drain(&rt, it), [1, 1, 3, 3]);

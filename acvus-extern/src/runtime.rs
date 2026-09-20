@@ -13,7 +13,12 @@ use crate::func::CallToken;
 /// `materialize`/`erase` are the whole extraction/construction pair; `call_*`
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
-    type Value: crate::OneValue<Self> + crate::FromValue<Self> + crate::Release + Copy + Default;
+    type Value: crate::Cross<Self, Form = crate::One>
+        + crate::OneValue<Self>
+        + crate::FromValue<Self>
+        + crate::Release
+        + Copy
+        + Default;
     /// The frame a handler calls a closure on: the window above the calling
     /// frame, lent for the call's duration (RFC-0050 rule 6).
     type Frame<'a>: Send

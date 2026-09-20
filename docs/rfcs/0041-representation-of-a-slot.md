@@ -23,7 +23,7 @@ bound, the generic instance `Vec<ρT> -> Vec<ρT>`, where `ρ` is the one
 representation variable of the signature. A plain concrete signature
 (`-> Vec<String>`) stays uniform. The compiler
 chooses the instance by type (RFC-0040); a member's glue crosses the
-family whole (`CrossSpecialized`: one box, O(1)); every family a member
+family whole (`OneValue<Rt, Specialized>`: one box, O(1)); every family a member
 names declares its two casts `F<#m> -> F<m>` (erase) and `F<m> -> F<#m>`
 (materialize), one generic fn each with concrete instances, merged
 across registries by type.
@@ -110,7 +110,7 @@ one place a wrong source could have been paired with a closure.
   `ConversionSite` kinds `Store | Return | Pattern`; `Unsettled::
   ConversionNeedsPlace`; display `#` / `#?`.
 - `acvus-extern`: `TyArg::slot` / `SlotRepr`, `Spec<T>`,
-  `CrossSpecialized`, family casts from the macro, `Erased`, `Inline`,
+  `OneValue<Rt, Specialized>`, family casts from the macro, `Erased`, `Inline`,
   `FromValue`, `TransparentOver`, `Runtime::{value_as_ref, value_as_mut,
   inline_ref, inline_mut, type_of, type_name_of}`, `Arr`
   `repr(transparent)`, `Cross::materialize` unsafe.

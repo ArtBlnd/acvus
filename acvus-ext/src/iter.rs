@@ -771,7 +771,7 @@ where
             };
             chunk.push(T::from_value(rt, value));
         }
-        (!chunk.is_empty()).then(|| chunk.erase(rt))
+        (!chunk.is_empty()).then(|| <Vec<T> as OneValue<Rt>>::erase(chunk, rt))
     }
 }
 
@@ -794,7 +794,7 @@ where
                 };
                 chunk.push(T::from_value(rt, value));
             }
-            (!chunk.is_empty()).then(|| chunk.erase(rt))
+            (!chunk.is_empty()).then(|| <Vec<T> as OneValue<Rt>>::erase(chunk, rt))
         })
     }
 }

@@ -22,12 +22,13 @@
 //! `TyArg` only); `repeat` needs a clone of a runtime value, which
 //! `Runtime` does not offer; `min_by_key`/`max_by_key` take an `i64` key
 //! and not a `Monomorphize<(i64, f64)>` member, because a member fn's glue
-//! crosses every parameter naming the member through `CrossSpecialized`,
-//! which `Fn1` does not implement.
+//! crosses every parameter naming the member at its specialized
+//! representation, which `Fn1` does not have.
 
 use acvus_extern::{
-    Arr, ClosureFn, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar, Monomorphize,
-    OneValue, Ref, Registry, Runtime, Stored, TransparentOver, TyVar, extern_fn, extern_registry,
+    Arr, ClosureFn, Cross, EffectVar, Erased, Fn1, Fn2, FromValue, IdentityVar, LenVar,
+    Monomorphize, OneValue, Ref, Registry, Runtime, Stored, TransparentOver, TyVar, extern_fn,
+    extern_registry,
 };
 
 use crate::iter::{Iter, drain, drain_now};
@@ -498,7 +499,7 @@ fn reduce_now<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -519,7 +520,7 @@ async fn reduce<T, E, I, Rt>(
     f: Fn2<T, T, T, E, Rt>,
 ) -> Option<T>
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
+    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -540,8 +541,8 @@ fn fold_now<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> U
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    U: TyVar + OneValue<Rt>,
+    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
+    U: TyVar + OneValue<Rt> + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,
@@ -563,8 +564,8 @@ async fn fold<T, U, E, I, Rt>(
     f: Fn2<U, T, U, E, Rt>,
 ) -> U
 where
-    T: TyVar + OneValue<Rt> + FromValue<Rt>,
-    U: TyVar + OneValue<Rt>,
+    T: TyVar + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
+    U: TyVar + OneValue<Rt> + Cross<Rt>,
     E: EffectVar,
     I: IdentityVar,
     Rt: Runtime,

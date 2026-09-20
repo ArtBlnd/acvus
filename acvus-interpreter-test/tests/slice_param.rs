@@ -45,7 +45,7 @@ where
         // SAFETY: `at` is below the length, and a `SliceMut` is an exclusive
         // take of its container, so no other name of the element is live
         // (RFC-0047 §2).
-        unsafe { *dst.at_mut(at) = sum.erase(rt) };
+        unsafe { *dst.at_mut(at) = OneValue::<_>::erase(sum, rt) };
     }
     i64::try_from(dst.len()).expect("a view's length is an i64")
 }
