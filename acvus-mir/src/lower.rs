@@ -2988,6 +2988,16 @@ impl<'a> Lowerer<'a> {
 
             Expr::Try { id, inner, span } => self.lower_try(*id, inner, *span),
 
+            // No scope-stack drop belongs here: `optimize::drop_insertion`
+            // owns the return edge, as it does the one `?` leaves by.
+            Expr::Return { id, value, span } => {
+                let val = self.lower_expr(value);
+                self.emit_return(*span, val);
+                let unreachable = self.alloc_label();
+                self.emit_label(*span, unreachable);
+                self.alloc_expr(*id)
+            }
+
             Expr::List {
                 id,
                 head,

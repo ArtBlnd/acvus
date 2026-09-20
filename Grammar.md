@@ -133,6 +133,42 @@ A `for` over an array whose element owns something cannot `break`: how many
 elements the loop had taken is a run-time number, and the elements it had
 not taken would have no release.
 
+### `return`
+
+```
+Return       = "return" Expr                            ← return e
+```
+
+`return e` leaves the enclosing body -- a script or a lambda -- with `e`,
+from any depth, loops included. It is an expression and not a statement:
+its type is `!`, so `let x = if c { return 1 } else { 2 };` reads the other
+branch's type and `return e;` is the expression-statement rule. There is no
+`return;`, because every body returns a value (RFC-0054):
+
+```
+expected an expression, found `;`
+```
+
+The value meets the body's return type the way the tail does -- the host's
+declaration for a script, the inferred return for a lambda -- and a `return`
+in a template, which returns nothing, is refused as a `?` there is:
+
+```
+`return` needs a function to return from; a template has none
+```
+
+A `return` leaves every enclosing loop at once, so the array traversal that
+cannot `break` cannot `return` either:
+
+```
+a `for` over an array of `String` cannot `return`: the elements the loop has not taken would have no release
+```
+
+What the source wrote after a `return` lands in a block no jump reaches,
+as it does after `break`, `continue` or an expression typed `!`. It is
+still checked: this language has no warnings, and an unreachable statement
+meets the body's return type like any other.
+
 ### `match`
 
 ```
@@ -238,6 +274,7 @@ TagContent   = Expr "=" Expr        ← binding / pattern matching
              | Expr                  ← inline expression
 
 Expr         = LambdaExpr
+             | "return" Expr                ← leaves the body; type `!`
 
 LambdaExpr   = "|" CommaSep<Ident> "|" "->" Expr    ← right-associative
              | PipeExpr
@@ -438,6 +475,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `==` `!=` `<` `>` `<=` `>=` | comparison operators |
 | `=` | assignment (a statement), pattern match (a tag / a template) |
 | `in` | iteration |
+| `return` | leaves the enclosing body with the expression that follows |
 | `->` | lambda arrow |
 | `..` `..=` `=..` | range operators |
 | `.` | field access |

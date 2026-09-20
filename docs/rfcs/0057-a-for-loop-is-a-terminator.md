@@ -203,6 +203,14 @@ latch and every `continue`. What it costs against the region is a load of
 the counter and a read of the bound per iteration, and one `ret` and one
 dispatch per iteration; what it buys is `break` and `continue`.
 
+`return e` is the third exit edge, beside `break` and `continue`: it leaves
+the enclosing body from any depth, so a loop holding one takes the joints
+path for the reason a `break` puts a loop there -- the return's drop block
+stands between the terminator and the body, which is not one straight run.
+The lowering is the `?`'s without the test: the value, `emit_return`, and
+then the unreachable label `break`'s jump also leaves behind. Nothing in
+this decision changes for it, `recognize_for` included.
+
 The counter's register is the body block's counter parameter, and liveness
 has to be told about it: the terminator writes that parameter and the
 terminator is its only reader, so `inst_info` reports no use and

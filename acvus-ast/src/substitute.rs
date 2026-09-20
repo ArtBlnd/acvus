@@ -245,6 +245,11 @@ fn sub_expr(expr: Expr, subs: &FxHashMap<Astr, SubstValue>) -> Expr {
             inner: Box::new(sub_expr(*inner, subs)),
             span,
         },
+        Expr::Return { value, span, .. } => Expr::Return {
+            id: AstId::alloc(),
+            value: Box::new(sub_expr(*value, subs)),
+            span,
+        },
         Expr::Cast {
             expr,
             target,
@@ -730,6 +735,7 @@ fn validate_splice_expr(
         }
         Expr::Paren { inner, .. }
         | Expr::Try { inner, .. }
+        | Expr::Return { value: inner, .. }
         | Expr::Cast { expr: inner, .. }
         | Expr::Borrow { place: inner, .. } => {
             validate_splice_expr(inner, false, splice_names, errors);

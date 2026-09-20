@@ -183,6 +183,8 @@ pub enum MirErrorKind {
     },
     /// `?` where nothing returns: a template body (RFC-0038).
     TryOutsideFunction,
+    /// `return` where nothing returns: a template body.
+    ReturnOutsideFunction,
     /// `?` on a value that is neither a `Result` nor an `Option`.
     TryOnNonResult(Ty),
     /// `?` would leave with a type the function does not return.
@@ -743,6 +745,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "`?` needs a function to return from; a template has none"
+                )
+            }
+            MirErrorKind::ReturnOutsideFunction => {
+                write!(
+                    f,
+                    "`return` needs a function to return from; a template has none"
                 )
             }
             MirErrorKind::TryOnNonResult(ty) => write!(

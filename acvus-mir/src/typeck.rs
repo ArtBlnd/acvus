@@ -4689,20 +4689,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// `?` returns from the body, so it leaves every enclosing loop at once:
-    /// a `for x in a` among them whose element owns something is refused for
-    /// the reason `break` is.
-    fn check_try_leaves_loops(&mut self, span: Span) {
+    /// `?` and `return` leave the body, so they leave every enclosing loop at
+    /// once: a `for x in a` among them whose element owns something is refused
+    /// for the reason `break` is.
+    fn check_body_exit(&mut self, keyword: &'static str, span: Span) {
         let Some(element) = self.loops.iter().rev().find_map(|loop_| loop_.clone()) else {
             return;
         };
-        self.error(
-            MirErrorKind::ArrayLoopLeftEarly {
-                keyword: "?",
-                element,
-            },
-            span,
-        );
+        self.error(MirErrorKind::ArrayLoopLeftEarly { keyword, element }, span);
     }
 
     fn check_match_block(&mut self, mb: &MatchBlock) {
@@ -5313,13 +5307,39 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
 
             Expr::Try { id, inner, span } => {
-                self.check_try_leaves_loops(*span);
+                self.check_body_exit("?", *span);
                 let ty = self.check_try(inner, *span);
                 if !Self::is_error(&ty) {
                     let ret = self.return_ty.clone().expect("check_try admitted a return");
                     self.try_sites.insert(*id, ret);
                 }
                 self.record_ret(*id, ty)
+            }
+
+            Expr::Return { id, value, span } => {
+                self.check_body_exit("return", *span);
+                let ty = self.check_expr(value);
+                let Some(return_ty) = self.return_ty.clone() else {
+                    self.error(MirErrorKind::ReturnOutsideFunction, *span);
+                    return self.record_ret(*id, Self::infer_error());
+                };
+                let site = ConversionSite {
+                    id: value.id(),
+                    span: value.span(),
+                    report: ConversionReport::Return,
+                };
+                if self.flow(&ty, &return_ty, site).is_err() {
+                    let got = self.solver.resolve_ty(&ty);
+                    let expected = self.solver.resolve_ty(&return_ty);
+                    self.error(
+                        MirErrorKind::UnificationFailure {
+                            expected: self.type_as_written(&expected),
+                            got: self.type_as_written(&got),
+                        },
+                        value.span(),
+                    );
+                }
+                self.record_ret(*id, TyTerm::Never)
             }
 
             Expr::List {

@@ -320,6 +320,7 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::In
         | Token::Break
         | Token::Continue
+        | Token::Return
         | Token::Anyorder
         | Token::Match
         | Token::Mut

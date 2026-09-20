@@ -40,6 +40,7 @@ extern {
         "in" => Token::In,
         "break" => Token::Break,
         "continue" => Token::Continue,
+        "return" => Token::Return,
         "anyorder" => Token::Anyorder,
         "match" => Token::Match,
         "mut" => Token::Mut,
@@ -225,6 +226,11 @@ pub Expr: Expr = {
             body: Box::new(body),
             span: Span::new(l, r),
         },
+    // An expression and not a statement, so that it stands where a value is
+    // read; `return e;` is then the expression-statement rule. There is no
+    // `return;`: every body returns a value (RFC-0054).
+    <l:@L> "return" <e:Expr> <r:@R> =>
+        Expr::Return { id: AstId::alloc(), value: Box::new(e), span: Span::new(l, r) },
     PipeExpr,
 };
 

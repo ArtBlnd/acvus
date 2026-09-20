@@ -61,6 +61,8 @@ pub enum Token {
     Break,
     #[token("continue", priority = 3)]
     Continue,
+    #[token("return", priority = 3)]
+    Return,
     #[token("anyorder", priority = 3)]
     Anyorder,
     #[token("match", priority = 3)]
@@ -215,6 +217,7 @@ impl fmt::Display for Token {
             Token::In => write!(f, "in"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::Return => write!(f, "return"),
             Token::Anyorder => write!(f, "anyorder"),
             Token::Match => write!(f, "match"),
             Token::Mut => write!(f, "mut"),

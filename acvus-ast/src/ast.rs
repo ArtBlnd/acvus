@@ -489,6 +489,13 @@ pub enum Expr {
         inner: Box<Expr>,
         span: Span,
     },
+    /// `return value`: leave the enclosing body -- a script or a lambda --
+    /// with `value`, from any depth. Its own type is `!`.
+    Return {
+        id: AstId,
+        value: Box<Expr>,
+        span: Span,
+    },
 
     // -- Script mode expressions -------------------------------------
     /// `if cond { body; tail } else { ... }` - conditional expression (Script mode).
@@ -568,6 +575,7 @@ impl Expr {
             | Expr::Paren { id, .. }
             | Expr::Cast { id, .. }
             | Expr::Try { id, .. }
+            | Expr::Return { id, .. }
             | Expr::Borrow { id, .. }
             | Expr::List { id, .. }
             | Expr::Group { id, .. }
@@ -597,6 +605,7 @@ impl Expr {
             | Expr::Paren { span, .. }
             | Expr::Cast { span, .. }
             | Expr::Try { span, .. }
+            | Expr::Return { span, .. }
             | Expr::Borrow { span, .. }
             | Expr::List { span, .. }
             | Expr::Group { span, .. }
@@ -1009,6 +1018,7 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
         | Expr::Paren { inner: operand, .. }
         | Expr::Cast { expr: operand, .. }
         | Expr::Try { inner: operand, .. }
+        | Expr::Return { value: operand, .. }
         | Expr::Borrow { place: operand, .. } => {
             walk_expr(operand, refs);
         }

@@ -203,18 +203,23 @@ impl Coverage {
             if covers(STATEMENT_KEYWORDS) {
                 return Some(Self {
                     nonterminal: Nonterminal::Statement,
-                    opening: [OPERAND_START, STATEMENT_KEYWORDS, LAMBDA_START].concat(),
+                    opening: [OPERAND_START, STATEMENT_KEYWORDS, EXPRESSION_ONLY_START].concat(),
                 });
             }
             if set.contains(&Terminal::Underscore) {
                 return Some(Self {
                     nonterminal: Nonterminal::Pattern,
-                    opening: [OPERAND_START, &[Terminal::Underscore], LAMBDA_START].concat(),
+                    opening: [
+                        OPERAND_START,
+                        &[Terminal::Underscore],
+                        EXPRESSION_ONLY_START,
+                    ]
+                    .concat(),
                 });
             }
             return Some(Self {
                 nonterminal: Nonterminal::Expression,
-                opening: [OPERAND_START, LAMBDA_START].concat(),
+                opening: [OPERAND_START, EXPRESSION_ONLY_START].concat(),
             });
         }
         match set == LITERALS {
@@ -299,6 +304,7 @@ pub enum Terminal {
     In,
     Break,
     Continue,
+    Return,
     Anyorder,
     Match,
     Mut,
@@ -370,7 +376,9 @@ const OPERAND_START: &[Terminal] = &[
     Terminal::FmtStart,
 ];
 
-const LAMBDA_START: &[Terminal] = &[Terminal::Pipe];
+/// Every terminal an expression can begin with that no operand can: a
+/// lambda's `|` and a `return`.
+const EXPRESSION_ONLY_START: &[Terminal] = &[Terminal::Pipe, Terminal::Return];
 
 const STATEMENT_KEYWORDS: &[Terminal] = &[
     Terminal::Let,
@@ -392,7 +400,7 @@ const LITERALS: [Terminal; 7] = [
 ];
 
 impl Terminal {
-    pub const ALL: [Terminal; 64] = [
+    pub const ALL: [Terminal; 65] = [
         Terminal::Int,
         Terminal::IntOf,
         Terminal::Char,
@@ -418,6 +426,7 @@ impl Terminal {
         Terminal::In,
         Terminal::Break,
         Terminal::Continue,
+        Terminal::Return,
         Terminal::Anyorder,
         Terminal::Match,
         Terminal::Mut,
@@ -486,6 +495,7 @@ impl Terminal {
             Token::In => Terminal::In,
             Token::Break => Terminal::Break,
             Token::Continue => Terminal::Continue,
+            Token::Return => Terminal::Return,
             Token::Anyorder => Terminal::Anyorder,
             Token::Match => Terminal::Match,
             Token::Mut => Terminal::Mut,
@@ -559,6 +569,7 @@ impl Terminal {
             Terminal::In => "in",
             Terminal::Break => "break",
             Terminal::Continue => "continue",
+            Terminal::Return => "return",
             Terminal::Anyorder => "anyorder",
             Terminal::Match => "match",
             Terminal::Mut => "mut",
@@ -693,6 +704,7 @@ mod tests {
             Token::In,
             Token::Break,
             Token::Continue,
+            Token::Return,
             Token::Anyorder,
             Token::Match,
             Token::Mut,
