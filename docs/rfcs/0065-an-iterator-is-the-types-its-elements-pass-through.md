@@ -1,6 +1,6 @@
 # RFC-0065: An iterator is the types its elements pass through
 
-Status: Draft (2026-09-20)
+Status: Accepted (2026-09-20)
 
 ## Problem
 
@@ -34,10 +34,15 @@ collections.
        -> Iter<(T, ..Ts), U, E, I, Rt>
    ```
 
-   `(T, ..Ts)` is a type-level cons over a tuple of type variables. The
-   checker infers every element of the tuple while typing the pipeline
-   (it already names each intermediate type); no syntax reaches the
-   author.
+   `(T, ..Ts)` is a type-level cons over a tuple of type variables,
+   spelled as **nested pairs**: the empty list is `()`, one element is
+   `(A, ())`, two are `(B, (A, ()))`. A 2-tuple is already a `TyArg` and
+   the checker already unifies a tuple type argument structurally and
+   selects an `instance_of` instance by that structure (probed on
+   `d22cb966`: four `depth` instances at lengths 0–3 answer by length; a
+   destructuring parameter `(T, Ts)` binds the head; two lists of one
+   length run one Rust instance). The checker infers every element of the
+   tuple while typing the pipeline; no syntax reaches the author.
 
 2. **Length, not shape, is what Rust sees.** Every `T` in the tuple is a
    `TyVar`, which the extern crate erases to the runtime's value; two
@@ -87,10 +92,11 @@ collections.
 
 ## What it costs
 
-- `acvus-extern` gains a type-level tuple of type variables with a cons
-  (`(T, ..Ts)` in `extern_signature!`/`#[extern_fn]`), and the checker
-  gains the corresponding unification of a tuple type argument with a
-  cons pattern. `Ty::Tuple` exists; what is new is the pattern.
+- No checker change and no `acvus-extern` change: nested pairs are
+  plain 2-tuples, which both already carry. The ninth adaptor is refused
+  today by the instance list ("outside the declared bound one of …");
+  naming the bound of 8 in that message is a diagnostics change in
+  `acvus-mir/src/error.rs` (`NoInstance` / the `OneOf` display).
 - `acvus-ext/src/{iter.rs, iterator.rs}` are rewritten: one `Stage` enum,
   one `Iter` struct, consumers as push loops, `next` as pull over the
   same array; the trait pair `SyncStage`/`AsyncStage` goes.
