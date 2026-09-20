@@ -5,11 +5,7 @@
 // by the word's bytes ascending -- `string::lt` is that order, Rust's
 // `Ord for str`, because the `<` operator does not reach text.
 
-let bare = |w| -> {
-    let no_stop = w.strip_suffix(".").unwrap_or(w);
-    let no_comma = no_stop.strip_suffix(",").unwrap_or(no_stop);
-    no_comma
-};
+let bare = |w| -> w.strip_suffix(".").or_else(| | -> w.strip_suffix(",")).unwrap_or(w);
 
 let words = vec([]);
 let tally = vec([]);
