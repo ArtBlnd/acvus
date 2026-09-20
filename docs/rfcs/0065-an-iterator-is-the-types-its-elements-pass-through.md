@@ -72,23 +72,36 @@ collections.
    O, E, I, Rt>)` and its `E` is the pipeline's. One macro in
    `acvus-ext` emits the instances.
 
-3. **A stage is typed, and the pipeline is a typed list of stages.**
-   `Stage<In, Out>` is one enum: `Map(Fn1<In, Out>)` calls the closure
-   **typed** (`call_now(rt, frame, (x,))` with `x: In`); `Filter`,
-   `Take`, `Skip`, `StepBy`, `TakeWhile`, `SkipWhile`, `Dedup` carry a
-   `Same<In, Out>` — a type-equality witness constructible only at
-   `Same<T, T>`, the identity as a value, which is how "specialize when
-   `In = Out`" is written without specialization; `Flatten` and `Chunks`
-   carry the witness for `Out = Vec<In>`'s inverse and `Vec<In>`. The
-   pipeline holds `Stages<Ts, O>`: for `Ts = (T, Ts')`, `(Stage<T, O>,
-   Stages<Ts', T>)`, recursion by one trait over the list. At the glue
-   every leaf is `Owned`, so a length is one Rust instantiation and the
-   kind stays in the enum. **No raw-value closure entry exists**: a
-   closure receives what its type says, or nothing; `Fn1::call_value_now`
-   and `call_value` are removed. The pipeline's internals hold no
-   `unsafe`; the one trust point is the `ExternType` materialize every
-   extern value already has (the checker selects the instance whose
-   length matches the value's Rust type).
+3. **The payload is uniform per length; the element types live in the
+   acvus type.** At the glue every type variable erases to `Owned<Rt>`
+   (`runtime_stand_in`), and an `instance_of` instance is selected by the
+   list's length, so the pipeline's Rust payload must be one type per
+   length: `Stages<Stage<Rt>, Stages<…, Source<Rt>>>` with `Owned<Rt>` at
+   every element position — a fixed-size stage stack, no `dyn`, no box
+   per stage. The element types `T_k … T_1` and `O` are carried by the
+   acvus type `Iter<(T, Ts), O, …>` alone; a consumer whose declared
+   element is ground (`sum` over `Erased<Rt, i64>`, a producer's `char`)
+   reads it through `FromValue` — identity for `Owned`, a checked
+   downcast for `Erased` — as today's stages do. `Stage<Rt>` is one enum
+   (`Map(Fn1<Owned, Owned, E, Rt>)`, `Filter`, `Take`, `Skip`, `StepBy`,
+   `TakeWhile`, `SkipWhile`, `Dedup`, `Flatten`, `Chunks`, `FlatMap`), a
+   stage step that needs the element's Rust type (`Dedup`'s equality,
+   `Flatten`/`Chunks`' container) a function pointer the adaptor's
+   instance supplies over `Erased`. A closure is called through the typed
+   `Fn1::call_now(rt, frame, (x,))` with `x: Owned<Rt>` — safe Rust: the
+   raw-value entries `call_value_now`/`call_value` are removed, and a
+   handler author's generic `Fn1<T, U>` cannot be fed a `V` because `T`
+   and `U` are the author's own type variables. No `unsafe` in the
+   pipeline's code; the one trust point is the `ExternType` materialize
+   every extern value has (`payload_per_instantiation`: the checker
+   selects the instance whose length matches the value's Rust type).
+
+   Measured on the way (2026-09-20): a payload whose Rust type is a
+   function of the element types (`TypeList::Body<O, E>` threading `O`)
+   crosses only where every element type in a declaration is a bare
+   variable — 18 of 41 iterator declarations name a ground or container
+   element, and a per-element `Stage<In, Out>` with a `Same<In, Out>`
+   witness is inert because every leaf is `Owned` at every instantiation.
 
 4. **A consumer pulls through the typed stack.** `collect`, `sum`, `count`,
    `fold`, `any`, `all`, `find`, `join`, `contains`, `reduce` and `next`
@@ -105,18 +118,16 @@ collections.
    every other shape runs the generic pull. The shapes are values, so an
    unnamed shape is the generic loop and never a refusal.
 
-5. **Two sources are a source, not a stage.** `chain(a, b)`, `chain_all`
-   (and `zip`, if it is ever declared) combine pipelines; the result is a
-   new source (`Iter<(), T>`) and stages after it prepend as usual. The
-   parts have list lengths of their own, which no source variant can hold
-   without putting the list under its own recursion, so a chained part is
-   held as **one `Pull<T, Rt>` trait object** (a sync and an async arm) —
-   one `dyn` per part, at the part boundary, never per stage. `flatten`
-   over a pipeline of containers is a stage (`FlatMap` with the identity).
-   A stage whose step needs a bound the enum cannot carry (`Dedup`'s
-   `PartialEq + Clone`, `Flatten`'s and `Chunks`' container relation)
-   receives that step as a function pointer the adaptor's instance
-   supplies, monomorphized where the type is known.
+5. **Two sources are a source, not a stage.** `chain(a, b)` combines
+   pipelines; the result is a new source (`Iter<(), T>`) and stages after
+   it prepend as usual. An `instance_of` instance is keyed by the first
+   variable's type, so `chain` has one instance per length of `a`, and
+   **`b` is a source: `Iter<(), T>`** — a right operand with stages is
+   finished first (`b.collect()` and a fresh source). No script or example
+   calls `chain` today; `chain_all`/`pchain` follow the same rule. A
+   chained part is held as one `Pull<T, Rt>` trait object (a sync and an
+   async arm) — one `dyn` per part, never per stage. `flatten` over a
+   pipeline of containers is a stage.
 
 6. **Effects and identity are unchanged.** `E` and `I` ride on `Iter` as
    today; a stage whose closure is `Async` makes the consumer's loop
@@ -178,8 +189,8 @@ collections.
   today, with no `dyn` and no `unsafe`. Zero allocations per adaptor
   would need an in-place fixed buffer and `unsafe`; `unsafe`-free is the
   choice (decided 2026-09-20).
-- Instances: (13 adaptors × 8) + (consumers × 9), one Rust instantiation
-  each at `Owned` leaves; the `.text` delta is stated at merge.
+- Instances: 13 adaptors × 8 + 19 consumers × 9 = 275, one Rust
+  instantiation each; the `.text` delta is stated at merge.
 - `acvus-ext/src/{iter.rs, iterator.rs}` are rewritten: one `Stage` enum,
   one `Iter` struct, consumers as push loops, `next` as pull over the
   same array; the trait pair `SyncStage`/`AsyncStage` goes.
@@ -200,11 +211,14 @@ collections.
 - **Fusing closures into one stage** (extern fn fusion): a different
   lever, kept as such; this RFC leaves the closure call per stage per
   element as the one remaining cost.
-- **An erased stage array** (`[Stage<Owned, Owned>; 8]` with the list only
-  in the acvus type): one allocation per pipeline, but every closure call
-  inside is `Fn1<Owned, Owned>` on a raw value — a lambda typed `T → U`
-  can be handed any value, and the only fence is `unsafe` discharged by
-  citing the checker. Rejected for the typed list (decided 2026-09-20).
+- **A per-element typed stage stack** (`Stage<In, Out>` with a `Same<In,
+  Out>` witness, the payload a function of the element types): measured
+  inert — every leaf is `Owned` at every instantiation — and unable to
+  carry a declaration whose element is ground or a container, because the
+  instance is selected by length while the payload type would be selected
+  by element type. The list carries length; the element types are the
+  acvus type's, and the guarantee against a handler author is the
+  removal of the raw-value closure entry, not a Rust-level witness.
 - **Keeping the dyn chain and only flattening it** into a `Vec<Box<dyn
   Stage>>`: removes the nesting, keeps a box and a virtual call per stage
   and the `Option` per boundary.
