@@ -601,6 +601,76 @@ pub enum Code {
     Expr(Arc<Expr>),
 }
 
+/// Which of the two prepared shapes a closure's word names. `prepare`
+/// decides it once, where the closure site is laid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum CodeShape {
+    Body,
+    Expr,
+}
+
+/// What a closure runs: the prepared `Body` or `Expr` itself, borrowed.
+pub enum Runs<'a> {
+    Body(&'a Body),
+    Expr(&'a Expr),
+}
+
+/// The address of a prepared body, with the shape that says which it is.
+///
+/// It names the `Body` or `Expr` and not the `Code` around them, so a call
+/// reads no line the closure's own record did not already bring in.
+///
+/// Obligation across artifacts: the `Prepared` that owns the body is held by
+/// `InterpreterContext::functions`, a `Freeze` — an `Arc` with no
+/// `DerefMut` — for the whole run, and a closure value cannot outlive the
+/// run whose `Prepared` it names. So the word carries no refcount.
+#[derive(Clone, Copy)]
+pub struct CodeRef {
+    at: *const (),
+    shape: CodeShape,
+}
+
+// SAFETY: the pointee is a `Body` or an `Expr` behind an `Arc`, both
+// `Send + Sync`, and a `CodeRef` hands out only shared borrows of one.
+unsafe impl Send for CodeRef {}
+// SAFETY: as `Send`.
+unsafe impl Sync for CodeRef {}
+
+impl CodeRef {
+    pub fn of(code: &Arc<Code>) -> CodeRef {
+        match code.as_ref() {
+            Code::Body(body) => CodeRef {
+                at: Arc::as_ptr(body).cast::<()>(),
+                shape: CodeShape::Body,
+            },
+            Code::Expr(expr) => CodeRef {
+                at: Arc::as_ptr(expr).cast::<()>(),
+                shape: CodeShape::Expr,
+            },
+        }
+    }
+
+    pub fn parts(self) -> (*const (), CodeShape) {
+        (self.at, self.shape)
+    }
+
+    /// # Safety
+    /// The `Prepared` holding this body is live, and `'a` does not outlive
+    /// it.
+    #[inline(always)]
+    pub unsafe fn runs<'a>(at: *const (), shape: CodeShape) -> Runs<'a> {
+        match shape {
+            // SAFETY: `of` is the only writer of the pair, and it wrote the
+            // shape of the body it took the address of; the caller's
+            // contract is that the body is live.
+            CodeShape::Body => Runs::Body(unsafe { &*at.cast::<Body>() }),
+            // SAFETY: as above.
+            CodeShape::Expr => Runs::Expr(unsafe { &*at.cast::<Expr>() }),
+        }
+    }
+}
+
 impl Code {
     pub fn may_suspend(&self) -> bool {
         match self {

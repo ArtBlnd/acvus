@@ -28,7 +28,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::code::{
-    Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
+    Arith, BlockId, Body, ChainBounds, Code, CodeRef, Compare, ConcatPart, Deref, EntryKonst, Expr,
     ExprBody, ExprChain, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared, Root, Shape,
     SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
 };
@@ -3895,17 +3895,17 @@ impl<'a> Prepare<'a> {
                 body,
                 captures,
             } => {
-                let entry = self
-                    .closures
-                    .get(body)
-                    .unwrap_or_else(|| panic!("closure body not found: {body:?}"))
-                    .callable();
+                let code = CodeRef::of(
+                    self.closures
+                        .get(body)
+                        .unwrap_or_else(|| panic!("closure body not found: {body:?}")),
+                );
                 let Operands { slots, takes } = self.taken(captures);
                 {
                     let dst = self.marked(*dst);
                     node(move |next| call::MakeClosure {
                         dst,
-                        entry,
+                        code,
                         captures: slots,
                         takes,
                         next,

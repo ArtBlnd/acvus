@@ -2,18 +2,21 @@
 //! `Value`'s `Kind` says what Rust type it was erased from; the MIR type
 //! the interpreter carries beside it says what the program reads it as.
 
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::any::TypeId;
 use std::fmt;
 use std::mem::{self, MaybeUninit};
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
+use std::slice;
 use std::sync::Arc;
 
 use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
 
-use crate::interpreter::InterpreterContext;
+use crate::code::{CodeRef, CodeShape, Runs};
+use crate::regs::MAX_FRAME_SLOTS;
 use crate::runtime::AcvusRuntime;
 use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
 
@@ -523,42 +526,92 @@ pub type Object = acvus_extern::Obj<Owned<AcvusRuntime>>;
 /// `V = Owned<AcvusRuntime>`, under the same obligation as `Array`.
 pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 
-/// A self-contained callable: execution context, prepared body, captures.
+/// The head of a closure record, whose tail is the captures.
 ///
-/// Created at `MakeClosure` time. It shares the run's live page: a
-/// context read in its body sees the store that precedes the call, as
-/// any call does (RFC-0014). Only captures are taken by value.
+/// A closure is one box: `Slot<FnValue>` is the head and `[Value; len]`
+/// follows it in the same allocation. A call reaches the record through the
+/// `Value`'s word — a borrow of the box, never a copy of its contents — and
+/// everything else a call needs comes through `ctx`.
+///
+/// Obligation across artifacts: `code` names a `Code` the run's `Prepared`
+/// owns; `CodeRef::get` states the term.
+#[repr(C)]
 pub struct FnValue {
-    pub shared: Arc<InterpreterContext>,
-    pub page: Arc<dyn crate::journal::RuntimeContext>,
-    pub entry: Arc<dyn crate::machine::Callable>,
-    pub captures: Arc<[Owned<AcvusRuntime>]>,
+    at: *const (),
+    shape: CodeShape,
+    /// A `u16` because it counts capture registers, which `prepare` colours
+    /// out of one frame: the width is what makes `closure_layout`'s size
+    /// arithmetic total.
+    len: u16,
 }
 
-impl Clone for FnValue {
-    fn clone(&self) -> Self {
-        Self {
-            shared: Arc::clone(&self.shared),
-            page: Arc::clone(&self.page),
-            entry: Arc::clone(&self.entry),
-            captures: Arc::clone(&self.captures),
+const _: () = assert!(
+    mem::size_of::<Slot<FnValue>>() == 24,
+    "a closure record's captures begin at offset 24, after its header and head"
+);
+const _: () = assert!(
+    mem::align_of::<Slot<FnValue>>() == mem::align_of::<Value>(),
+    "a closure record's tail is laid at the head's own alignment"
+);
+const _: () = assert!(
+    mem::size_of::<Slot<FnValue>>() + (u16::MAX as usize) * mem::size_of::<Value>()
+        < isize::MAX as usize,
+    "a closure record of the widest capture count the head can name is a valid layout"
+);
+
+/// The one layout a closure record is allocated, read and freed with.
+#[inline]
+fn closure_layout(len: u16) -> Layout {
+    // SAFETY: the alignment is `Slot<FnValue>`'s, which `repr(C)` makes a
+    // non-zero power of two; the const assert above is that the size of the
+    // widest record `len` can name is a valid layout size.
+    unsafe {
+        Layout::from_size_align_unchecked(
+            mem::size_of::<Slot<FnValue>>() + usize::from(len) * mem::size_of::<Value>(),
+            mem::align_of::<Slot<FnValue>>(),
+        )
+    }
+}
+
+/// # Safety
+/// `p` is the header of a live closure record, and it is not used again.
+unsafe fn drop_closure(p: NonNull<Header>) {
+    // SAFETY: the caller's contract.
+    let head = &unsafe { p.cast::<Slot<FnValue>>().as_ref() }.value;
+    let len = head.len;
+    for capture in head.captures() {
+        capture.release();
+    }
+    // SAFETY: the same layout `Value::closure` allocated this record with.
+    unsafe { dealloc(p.as_ptr().cast::<u8>(), closure_layout(len)) }
+}
+
+impl FnValue {
+    /// The prepared body this closure runs, and which of the two it is.
+    #[inline(always)]
+    pub fn runs(&self) -> Runs<'_> {
+        // SAFETY: `CodeRef::runs`'s term — the run's `Prepared` is live for
+        // as long as any value of the run, this one included.
+        unsafe { CodeRef::runs(self.at, self.shape) }
+    }
+
+    /// The captures, in the record's own tail.
+    #[inline(always)]
+    pub fn captures(&self) -> &[Value] {
+        // SAFETY: `Value::closure` is the only writer of a record, and it
+        // wrote `self.len` captures immediately after this head.
+        unsafe {
+            slice::from_raw_parts(
+                ptr::from_ref(self).add(1).cast::<Value>(),
+                usize::from(self.len),
+            )
         }
     }
 }
 
 impl fmt::Debug for FnValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<fn {:?}>", Arc::as_ptr(&self.entry).cast::<()>())
-    }
-}
-
-impl FnValue {
-    pub async fn call(&self, arg: Value) -> Value {
-        crate::machine::fn_value_call(self, &mut [arg]).await
-    }
-
-    pub async fn call2(&self, arg1: Value, arg2: Value) -> Value {
-        crate::machine::fn_value_call(self, &mut [arg1, arg2]).await
+        write!(f, "<fn {:?}>", self.at)
     }
 }
 
@@ -637,7 +690,7 @@ typed_debug_fn! { VariantValue;
         }
     };
 }
-typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
+typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures().len()); }
 
 static STRING: Vtable = vtable::<String>(|| "String", Composite::String, Some(dbg_string));
 static ARRAY: Vtable = vtable::<Array>(|| "Array", Composite::Array, Some(dbg_array));
@@ -645,7 +698,15 @@ static TUPLE: Vtable = vtable::<Tuple>(|| "Tuple", Composite::Tuple, Some(dbg_tu
 static OBJECT: Vtable = vtable::<Object>(|| "Object", Composite::Object, Some(dbg_object));
 static VARIANT: Vtable =
     vtable::<VariantValue>(|| "Variant", Composite::Variant, Some(dbg_variant));
-static FN: Vtable = vtable::<FnValue>(|| "Fn", Composite::Fn, Some(dbg_fn));
+/// The one vtable whose `drop` is not `drop_slot`: a closure record is one
+/// allocation with a tail, so it is freed by `drop_closure`.
+static FN: Vtable = Vtable {
+    type_id: TypeId::of::<FnValue>(),
+    name: || "Fn",
+    composite: Some(Composite::Fn),
+    drop: drop_closure,
+    debug: Some(dbg_fn),
+};
 static HANDLE: Vtable = vtable::<HandleValue>(|| "Handle", Composite::Handle, None);
 
 /// The vtable `T` is erased through: a composite's own static, else the
@@ -808,8 +869,42 @@ impl Value {
         }
     }
 
-    pub fn closure(fv: FnValue) -> Self {
-        large(&FN, fv)
+    /// A closure record, written once into one allocation. The record owns
+    /// the captures it is given.
+    pub fn closure<I>(code: CodeRef, captures: I) -> Self
+    where
+        I: IntoIterator<Item = Value>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let captures = captures.into_iter();
+        let len = captures.len();
+        debug_assert!(
+            len <= usize::from(MAX_FRAME_SLOTS),
+            "a closure captures registers `prepare` coloured out of one frame"
+        );
+        let len = len as u16;
+        let (at, shape) = code.parts();
+        let layout = closure_layout(len);
+        // SAFETY: the layout's size is the head's at least, so never zero.
+        let Some(record) = NonNull::new(unsafe { alloc(layout) }.cast::<Slot<FnValue>>()) else {
+            handle_alloc_error(layout)
+        };
+        // SAFETY: the allocation is fresh, named by nothing else, and sized
+        // by `closure_layout(len)` — the head, then `len` capture slots.
+        unsafe {
+            record.write(Slot {
+                header: Header { vtable: &FN },
+                value: FnValue { at, shape, len },
+            });
+            let tail = record.add(1).cast::<Value>();
+            for (at, capture) in captures.enumerate() {
+                tail.add(at).write(capture);
+            }
+        }
+        Value {
+            kind: Kind::Large,
+            word: record.as_ptr() as u64,
+        }
     }
     pub fn handle(h: HandleValue) -> Self {
         large(&HANDLE, h)

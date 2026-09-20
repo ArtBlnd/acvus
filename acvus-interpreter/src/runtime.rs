@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use acvus_extern::{Ctx, Owned, Runtime, Variant};
 
+use crate::code::Runs;
 use crate::interpreter::InterpreterContext;
 use crate::ops::call;
 use crate::regs::{FrameState, RootCells, RootFrame};
@@ -15,17 +16,25 @@ use crate::value::{Kind, Value, VariantValue};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
+/// One run, as a `Runtime`: the state its functions read, and the page its
+/// contexts live on (RFC-0014).
+///
+/// The two are one pair per run — `Interpreter` makes them together and a
+/// spawned child is handed the parent's — so a closure value carries
+/// neither. Every crossing already holds a `&AcvusRuntime`, and that is
+/// where a closure call reads both.
 #[derive(Clone)]
-#[repr(transparent)]
-pub struct AcvusRuntime(pub Arc<InterpreterContext>);
+pub struct AcvusRuntime {
+    pub shared: Arc<InterpreterContext>,
+    pub page: Arc<dyn crate::journal::RuntimeContext>,
+}
 
 impl AcvusRuntime {
-    /// The runtime a context already is: `AcvusRuntime` is that context
-    /// and nothing else, so a caller holding one borrows a runtime from it
-    /// rather than sharing the `Arc` again.
-    pub fn of(shared: &Arc<InterpreterContext>) -> &AcvusRuntime {
-        // SAFETY: `#[repr(transparent)]` over `Arc<InterpreterContext>`.
-        unsafe { &*(shared as *const Arc<InterpreterContext>).cast::<AcvusRuntime>() }
+    pub fn new(
+        shared: Arc<InterpreterContext>,
+        page: Arc<dyn crate::journal::RuntimeContext>,
+    ) -> AcvusRuntime {
+        AcvusRuntime { shared, page }
     }
 }
 
@@ -43,7 +52,7 @@ impl AcvusRuntime {
             Ok(v) => ("Ok", v),
             Err(e) => ("Err", e),
         };
-        Value::variant(self.0.interner.intern(tag), Some(payload))
+        Value::variant(self.shared.interner.intern(tag), Some(payload))
     }
 
     /// # Panics
@@ -58,13 +67,13 @@ impl AcvusRuntime {
         } = held;
         // SAFETY: the first register of a variant this runtime wrote is its tag.
         let tag = unsafe { tag.into_value().as_tag() };
-        if tag == self.0.interner.intern("Ok") {
+        if tag == self.shared.interner.intern("Ok") {
             return Ok(payload);
         }
         assert!(
-            tag == self.0.interner.intern("Err"),
+            tag == self.shared.interner.intern("Err"),
             "a Result crossed back holding the tag `{}`",
-            tag.display(&self.0.interner)
+            tag.display(&self.shared.interner)
         );
         Err(payload)
     }
@@ -384,11 +393,11 @@ impl Runtime for AcvusRuntime {
     }
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
-        self.0.interner.intern(name)
+        self.shared.interner.intern(name)
     }
 
     fn variant_tag(&self, name: &str) -> Value {
-        Value::tag(self.0.interner.intern(name))
+        Value::tag(self.shared.interner.intern(name))
     }
 
     unsafe fn tag_symbol(&self, tag: &Value) -> acvus_utils::Astr {
@@ -418,21 +427,27 @@ impl Runtime for AcvusRuntime {
 
     fn call_is_sync(&self, f: &Value) -> bool {
         // SAFETY: the type checker admits only a closure value here.
-        !unsafe { f.as_fn() }.entry.may_suspend()
+        match unsafe { f.as_fn() }.runs() {
+            Runs::Body(body) => !body.may_suspend,
+            Runs::Expr(_) => true,
+        }
     }
 
     unsafe fn call_now<A>(&self, f: &Value, ctx: &mut acvus_extern::Ctx<'_, Self>, args: A) -> Value
     where
         A: acvus_extern::IntoRun<Self>,
     {
-        debug_assert!(
-            A::WIDTH <= usize::from(u16::MAX),
-            "a closure takes at most one cell of arguments"
-        );
+        const {
+            assert!(
+                A::WIDTH <= u16::MAX as usize,
+                "a closure takes at most one cell of arguments"
+            )
+        };
+        let rt = ctx.rt;
         args.into_run(self, ctx.frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        crate::machine::fn_value_call_in_window(closure, &mut ctx.frame, A::WIDTH as u16)
+        crate::machine::fn_value_call_in_window(closure, rt, &mut ctx.frame, A::WIDTH as u16)
     }
 
     unsafe fn call_0<'a>(&'a self, f: &'a Value) -> Self::CallFuture<'a> {
@@ -504,7 +519,7 @@ impl AcvusRuntime {
     fn run<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> <Self as Runtime>::CallFuture<'a> {
         // SAFETY: the type checker admits only a closure value here.
         let closure = unsafe { f.as_fn() };
-        Box::pin(crate::machine::fn_value_call(closure, args))
+        Box::pin(crate::machine::fn_value_call(closure, self, args))
     }
 }
 

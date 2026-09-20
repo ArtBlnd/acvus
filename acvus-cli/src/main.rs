@@ -629,7 +629,7 @@ async fn run(
                     (k, (ty, v))
                 })
                 .collect();
-            let page = match SpacePage::new(Arc::clone(space), shared.runtime(), seed) {
+            let page = match SpacePage::new(Arc::clone(space), seed) {
                 Ok(p) => Arc::new(p),
                 Err(e) => {
                     eprintln!("error: {e}");
@@ -652,7 +652,7 @@ async fn run(
     }
 
     if let Some(page) = &page {
-        match page.commit() {
+        match page.commit(interp.runtime()) {
             Ok(heads) => {
                 for (id, head) in heads {
                     eprintln!("commit @{id} = {}", hex(&head));

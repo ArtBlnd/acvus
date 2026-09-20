@@ -26,10 +26,10 @@ fn hooks_of<'a>(
     ty: &Ty,
     id: &QualifiedRef,
 ) -> SpaceResult<&'a SpaceHooks<AcvusRuntime>> {
-    rt.0.space.get(id).ok_or_else(|| {
+    rt.shared.space.get(id).ok_or_else(|| {
         SpaceError::new(format!(
             "{} declares no space hooks",
-            ty.display(&rt.0.interner)
+            ty.display(&rt.shared.interner)
         ))
     })
 }
@@ -37,7 +37,7 @@ fn hooks_of<'a>(
 fn not_held(rt: &AcvusRuntime, ty: &Ty) -> SpaceError {
     SpaceError::new(format!(
         "a value of type {} is not held by a space",
-        ty.display(&rt.0.interner)
+        ty.display(&rt.shared.interner)
     ))
 }
 
@@ -77,15 +77,15 @@ pub fn result_side<'t>(
     ok: &'t Ty,
     err: &'t Ty,
 ) -> SpaceResult<(u8, &'t Ty)> {
-    if tag == rt.0.interner.intern("Ok") {
+    if tag == rt.shared.interner.intern("Ok") {
         return Ok((0, ok));
     }
-    if tag == rt.0.interner.intern("Err") {
+    if tag == rt.shared.interner.intern("Err") {
         return Ok((1, err));
     }
     Err(SpaceError::new(format!(
         "a Result holds the tag `{}`",
-        tag.display(&rt.0.interner)
+        tag.display(&rt.shared.interner)
     )))
 }
 
@@ -123,13 +123,13 @@ pub fn encode(
             }
         }
         Ty::Object(fields) => {
-            let laid = sorted_fields(&rt.0.interner, fields);
+            let laid = sorted_fields(&rt.shared.interner, fields);
             let values = unsafe { value.as_object() };
             if values.len() != laid.len() {
                 return Err(SpaceError::new(format!(
                     "an object of {} fields committed as {}, which lays {}",
                     values.len(),
-                    ty.display(&rt.0.interner),
+                    ty.display(&rt.shared.interner),
                     laid.len()
                 )));
             }
@@ -156,7 +156,7 @@ pub fn encode(
             let variant = unsafe { value.as_variant() };
             // SAFETY: the same witness — a variant's first register is its tag.
             let tag = unsafe { variant.tag().as_tag() };
-            let sorted = sorted_variants(&rt.0.interner, variants);
+            let sorted = sorted_variants(&rt.shared.interner, variants);
             let index = sorted
                 .iter()
                 .position(|(k, _)| **k == tag)
@@ -237,7 +237,7 @@ pub fn decode(
             {
                 return Err(SpaceError::new(format!(
                     "expected {n} elements for {}, got {count}",
-                    ty.display(&rt.0.interner)
+                    ty.display(&rt.shared.interner)
                 )));
             }
             Value::array(
@@ -253,7 +253,7 @@ pub fn decode(
                 .collect::<SpaceResult<_>>()?,
         ),
         Ty::Object(fields) => {
-            let laid = sorted_fields(&rt.0.interner, fields);
+            let laid = sorted_fields(&rt.shared.interner, fields);
             let shape = ObjectShape::in_order(laid.iter().map(|(name, _)| **name).collect());
             let values: Box<[Owned<AcvusRuntime>]> = laid
                 .iter()
@@ -273,10 +273,10 @@ pub fn decode(
                 other => return Err(SpaceError::new(format!("Result: tag {other}"))),
             };
             let payload = Owned::from_value(decode(rt, nested, held, input)?);
-            Value::variant(rt.0.interner.intern(tag), Some(payload))
+            Value::variant(rt.shared.interner.intern(tag), Some(payload))
         }
         Ty::Enum { variants, .. } => {
-            let sorted = sorted_variants(&rt.0.interner, variants);
+            let sorted = sorted_variants(&rt.shared.interner, variants);
             let index = take_u64(input)? as usize;
             let (tag, payload_ty) = sorted
                 .get(index)
@@ -330,13 +330,13 @@ pub fn extension<'a>(
     let Ty::UserDefined { id, type_args, .. } = ty else {
         return Err(SpaceError::new(format!(
             "{} is not an extension type",
-            ty.display(&rt.0.interner)
+            ty.display(&rt.shared.interner)
         )));
     };
     if type_args.iter().any(|a| a.repr == Repr::Specialized) {
         return Err(SpaceError::new(format!(
             "{} has a specialized slot, which has no space layout",
-            ty.display(&rt.0.interner)
+            ty.display(&rt.shared.interner)
         )));
     }
     let args = type_args.iter().map(|a| a.ty.clone()).collect();

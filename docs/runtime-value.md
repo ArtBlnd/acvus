@@ -208,10 +208,18 @@ allocator. `Store::bind(body)` is the only way to a frame: it sizes the
 `Vec` once per binding, writes the body's `param_marks`, and answers whether
 the frame already carries that body's slot kinds and entry constants.
 
-A closure value holds its entry rather than its code: `FnValue.entry` is an
-`Arc<dyn Callable>` projected out of the `Code` when the closure was made,
-so a synchronous closure call reads a pointer and jumps instead of asking
-whether the code is a `Body` or an `Expr`.
+A closure is one box. The `Value`'s word is the address of one allocation
+laid `[header, code, len, captures…]`: the header every `Large` carries, the
+`*const Code` `prepare` fixed at the `MakeClosure` site, how many captures
+follow, and the captures themselves. There is no `Arc` in it — a
+`MakeClosure` is one allocation and no atomic — and a closure `Value` is
+copied, never cloned.
+
+What a call needs beyond the record comes through `ctx`: `ctx.rt` is the
+run, and the run carries both the shared context and the page its contexts
+live on. Those two are one pair per run, so a closure value carries neither.
+A call reads `code`, tells `Body` from `Expr` on the prepared enum, and
+binds the captures the record already holds.
 
 A register whose type is a word — an integer, a float, a `Bool`, a `Unit` —
 is opened once with its kind when the frame is made (`Body::slot_kinds`),

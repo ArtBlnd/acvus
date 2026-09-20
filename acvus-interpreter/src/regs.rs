@@ -146,9 +146,6 @@ impl Store {
     /// Binding is what sizes the `Vec`, so no caller can borrow a frame
     /// narrower than the body it runs.
     ///
-    /// # Panics
-    /// `body.frame_len` is above `MAX_FRAME_SLOTS`, which `prepare` must not
-    /// emit.
     #[inline]
     pub fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
         let same = self.root.bound.rebind(body);
@@ -162,7 +159,7 @@ impl Store {
     /// once per binding and never given back.
     #[cold]
     fn widen(&mut self, slots: u16) {
-        assert!(
+        debug_assert!(
             slots <= MAX_FRAME_SLOTS,
             "a body of {slots} registers was prepared past the {MAX_FRAME_SLOTS} one frame holds"
         );
