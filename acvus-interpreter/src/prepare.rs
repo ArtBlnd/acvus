@@ -3197,6 +3197,22 @@ impl<'a> Prepare<'a> {
                 self.lay_variant(*dst, *tag, *payload)
             }
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
+            InstKind::TestVariant { dst, src, tag } if self.run_tag(*src).is_some() => {
+                let run = self.run_tag(*src).expect("the guard read the same run");
+                let src = Off::of(run.base);
+                let word = run
+                    .layout
+                    .tags()
+                    .word(*tag)
+                    .unwrap_or_else(|| panic!("the run's type names no variant {tag:?}"));
+                let dst = self.off(*dst);
+                node(move |next| run_ops::TestRun {
+                    dst,
+                    src,
+                    tag: word,
+                    next,
+                })
+            }
             InstKind::TestVariant { dst, src, tag } => {
                 let slots = Unary {
                     dst: self.marked(*dst),
@@ -3220,6 +3236,16 @@ impl<'a> Prepare<'a> {
                         let tag = Value::tag(tag).bits();
                         node(move |next| variant::TestVariant::<false> { slots, tag, next })
                     }
+                }
+            }
+            InstKind::UnwrapVariant { dst, src } if self.run_tag(*src).is_some() => {
+                let run = self.run_tag(*src).expect("the guard read the same run");
+                let src = Marked::of(Off::of(run.base + run.layout.payload()));
+                let owns = self.owns(*dst);
+                let dst = self.marked(*dst);
+                match owns {
+                    true => node(move |next| control::Mov::<true, false> { dst, src, next }),
+                    false => node(move |next| control::Mov::<false, false> { dst, src, next }),
                 }
             }
             InstKind::UnwrapVariant { dst, src } => {

@@ -483,6 +483,7 @@ struct Sites<'a> {
     projected: &'a FxHashMap<ValueId, usize>,
     written_by_a_call: &'a FxHashSet<ValueId>,
     refused: FxHashSet<usize>,
+    read: FxHashSet<usize>,
 }
 
 impl Sites<'_> {
@@ -508,6 +509,15 @@ impl Sites<'_> {
         if let RefTarget::Through(through) = target {
             self.refuse(*through);
         }
+    }
+
+    /// The web a tag test or a payload unwrap reads out of the run's own
+    /// registers: the one `value` is a member of, or the one it projects onto.
+    /// This is `prepare::Prepare::run_tag`'s question, asked of the web before
+    /// the run is placed.
+    fn reads_a_register(&self, value: ValueId) -> Option<usize> {
+        self.web_of(value)
+            .or_else(|| self.projected.get(&value).copied())
     }
 
     /// The web a place reaches: the storage it names, or the one the
@@ -567,8 +577,14 @@ impl Sites<'_> {
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
             | InstKind::BlockLabel { .. } => {}
-            InstKind::TestVariant { src, .. } | InstKind::UnwrapVariant { src, .. } => {
-                self.refuse(*src);
+            InstKind::TestVariant { dst, src, .. } | InstKind::UnwrapVariant { dst, src } => {
+                match self.reads_a_register(*src) {
+                    Some(root) => {
+                        self.read.insert(root);
+                    }
+                    None => self.refuse(*src),
+                }
+                self.refuse(*dst);
             }
             InstKind::FunctionCall { dst, .. } if self.written_by_a_call.contains(dst) => {
                 for value in inst_info::uses(kind) {
@@ -674,6 +690,7 @@ fn candidates(
         projected: &projected,
         written_by_a_call: written_by_a_call,
         refused: FxHashSet::default(),
+        read: projected.values().copied().collect(),
     };
     for inst in &body.insts {
         sites.observe(&inst.kind);
@@ -681,7 +698,7 @@ fn candidates(
     for id in &entry {
         sites.refuse(*id);
     }
-    let refused = sites.refused;
+    let (refused, read) = (sites.refused, sites.read);
 
     let mut out: Vec<Candidate> = Vec::new();
     for (root, mut held) in members {
@@ -694,7 +711,7 @@ fn candidates(
             .map(|(dst, _)| *dst)
             .collect();
         let lands_from_a_call = held.iter().any(|id| written_by_a_call.contains(id));
-        if projections.is_empty() && !lands_from_a_call {
+        if !read.contains(&root) && !lands_from_a_call {
             continue;
         }
         held.sort_by_key(|id| id.to_raw());
@@ -721,11 +738,11 @@ fn candidates(
 }
 
 /// Whether rule 8 lays this type as a run of its own. A nested aggregate is
-/// laid inline inside one, and a `Tuple`, an `Option` and a `Result` are laid
-/// as fields; only an enum and a structural object are a run's own type, because
-/// only those two have the construction and the dispatch this pass lowers.
+/// laid inline inside one, and a `Tuple` and an `Option` are laid as fields;
+/// an enum, a `Result` and a structural object are a run's own type, because
+/// those three have the construction and the dispatch this pass lowers.
 fn laid_whole(ty: &Ty) -> bool {
-    matches!(ty, Ty::Enum { .. } | Ty::Object(_))
+    matches!(ty, Ty::Enum { .. } | Ty::Result(..) | Ty::Object(_))
 }
 
 /// RFC-0050 rule 2's placement order: deepest loop first, then live-range start.

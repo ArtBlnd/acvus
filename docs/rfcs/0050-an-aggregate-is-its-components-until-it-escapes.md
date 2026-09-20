@@ -347,7 +347,8 @@ calls that same function, so a committed object's canonical bytes and a run's
 registers cannot disagree. A test lays and encodes a field set interned in the
 reverse of its string order and pins the two orders equal.
 
-Rules 2 and 3 are landed for an addressed enum whose web the emitter lowers
+Rules 2 and 3 are landed for an addressed enum, `Result` or structural object
+whose web the emitter lowers
 whole, and the unit rule 3 places is the **SSA web**, not the value: the
 values joined by an `Assign`, by a block argument reaching its parameter, and
 by the construction that writes them take one run and one base. Reading rule 3
@@ -407,6 +408,49 @@ panic behind it rather than a refusal. Dropping the impl also refuses a
 reference; narrowing that back to the reference alone needs a bound of its own
 on `ByRef<_, Specialized>` in `handler.rs`, and no handler in the workspace
 wants it yet.
+
+A `Result` takes a run. `prepare/runs.rs::laid_whole` admits `Ty::Result`
+beside `Ty::Enum` and `Ty::Object`, and that is the whole of the admission:
+`Layout::of` already gave `Ty::Result` the tags `Ok` and `Err`, `variant_form`
+already sent it into the enum arm and `payload_step` already gave it
+`Step::VariantPayload`, so no arm that reads a run's registers had to widen and
+the admission raised no compile error. Measured on `benches/shapes.rs`'s new
+`result match` row — `enum match held`'s body at a `Result` — three alternating
+pinned reps of each binary at n = 1,000,000: **19.6 ns an iteration on the heap
+against 17.3 in a run, −11.7 %, base 19.6, 20.6, 19.8 and tree 17.4, 17.4,
+17.3, ranges disjoint**. The row runs `LayRun`, `Project`, `SwitchRunRegion`,
+`Mov` and `DropRun` where it ran `MakeVariant`, `MakeRef`, `Switch`,
+`ReadStep<VariantPayload, Copied<false>>` and `DropValue`. A `Result` built and
+matched in one body allocates **1.000 heap values an iteration at base and
+0.000 on the tree**, counted by a global allocator as the difference between
+two loop lengths; `result match heaped`, whose `Result` escapes into an array,
+does not move.
+
+`?` is what the admission needed built. `lower_try` reads its operand with
+`TestVariant` and `UnwrapVariant`, which the web predicate refused, so a
+`Result` reaching `?` went to the heap whole however local it was. Both are
+register forms now: `ops::run::TestRun` compares the run's tag register against
+the word `Tags::word` gives the tested name, and the unwrap is the
+`control::Mov` out of the payload register that a `Take` of `[Payload]` already
+emitted. The `Result` a body returns through `?` is a second value, it escapes,
+and rule 4 still realizes it as the heap `Variant`. What decides whether a web
+is worth a run widened with them: a web is a candidate where this pass has an
+operation that reaches its registers — a projection, a call that writes its
+components, or a tag test or a payload unwrap on a member — where before only
+the first two counted, because no third existed.
+
+A run whose payload register is `large` by `widest` releases by the mark the
+construction set, not by the layout's word. `LayRun` assigns the payload with
+the ownership of the value it moves, so `Result<i64, String>` clears the bit on
+the `Ok` side and sets it on the `Err` side, and `Regs::assign` releases only a
+register the frame holds a claim in. There is no conditional drop to encode.
+
+A `Result` crossing from an extern still lands as the heap `Variant`, because a
+handler writes one value: `prepare`'s `results_written_as_components` names only
+the handlers whose result form is `Components`, and a `Result`'s is not one.
+Admitting an extern's `Result` to a run through `Out` would mean a handler
+writing the tag register and the payload register as two components, which is
+rule 5's multi-value return and is not built.
 
 Rule 4's heap realization is flat. A heap object is its type's field names in
 rule 8's order, shared by every object of the type through one `ObjectShape`,

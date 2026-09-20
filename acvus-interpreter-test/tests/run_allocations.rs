@@ -46,6 +46,15 @@ let j = 0; while j < 1 { match e { E::A(v) => { acc = acc + v; }, \
 E::B(v) => { acc = acc + v; }, E::C(v) => { acc = acc + v; } }; j = j + 1; } \
 i = i + 1; } acc";
 
+/// `RUN_RESIDENT`'s shape at the one variant type whose tags the language names
+/// rather than a declaration.
+const RESULT_RUN_RESIDENT: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+let r = if i % 2 == 0 { Ok(i) } else { Err(i + 1) }; \
+let j = 0; while j < 1 { match r { Ok(v) => { acc = acc + v; }, \
+Err(v) => { acc = acc + v; } }; j = j + 1; } \
+i = i + 1; } acc";
+
 /// The same three-armed construction with one member crossing into an array,
 /// which `prepare::runs::Sites` refuses, so every iteration realizes a variant
 /// on the heap (RFC-0050 rule 4) and reads its tag and payload there.
@@ -87,6 +96,16 @@ async fn a_run_resident_variant_allocates_nothing_per_iteration() {
     assert!(
         run < 0.01,
         "a run-resident variant allocates {run} per iteration"
+    );
+}
+
+#[tokio::test]
+async fn a_run_resident_result_allocates_nothing_per_iteration() {
+    let run = per_iteration(RESULT_RUN_RESIDENT).await;
+    println!("allocations per iteration: {run:.3}");
+    assert!(
+        run < 0.01,
+        "a run-resident Result allocates {run} per iteration"
     );
 }
 

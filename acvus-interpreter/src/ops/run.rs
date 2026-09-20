@@ -85,6 +85,24 @@ impl Op for DropRun {
     }
 }
 
+pub struct TestRun {
+    pub dst: Off,
+    pub src: Off,
+    pub tag: u64,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for TestRun {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let matches = regs.word(self.src) == self.tag;
+        regs.set_word(self.dst, matches as u64);
+        self.next.run(m, r0)
+    }
+}
+
 /// One tested arm: the tag word `prepare::runs::Tags::word` gives its name, and
 /// the block the machine enters for it.
 pub struct RunArm {
