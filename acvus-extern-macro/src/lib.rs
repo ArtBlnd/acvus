@@ -1129,7 +1129,10 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             let projection = projected.then(|| shape.projection(ident));
             Ok(quote! { #cross #projection })
         }
-        syn::Data::Enum(data) => generate_enum_ty_arg(ident, data),
+        syn::Data::Enum(data) => {
+            let projected = input.attrs.iter().any(|a| a.path().is_ident("projection"));
+            generate_enum_ty_arg(ident, data, projected)
+        }
         syn::Data::Union(_) => Err(syn::Error::new(
             ident.span(),
             "TyArg is derived on a struct or an enum",
@@ -1642,6 +1645,7 @@ impl<'a> ObjectShape<'a> {
 fn generate_enum_ty_arg(
     ident: &Ident,
     data: &syn::DataEnum,
+    projected: bool,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let name = ident.to_string();
     let Some(last) = data.variants.len().checked_sub(1) else {
@@ -1654,6 +1658,7 @@ fn generate_enum_ty_arg(
     let mut variant_tys = Vec::new();
     let mut erase_arms = Vec::new();
     let mut materialize_arms = Vec::new();
+    let mut borrowed = Vec::new();
     for (at, variant) in data.variants.iter().enumerate() {
         let v = &variant.ident;
         let tag = v.to_string();
@@ -1670,8 +1675,13 @@ fn generate_enum_ty_arg(
         match &variant.fields {
             syn::Fields::Unit => {
                 variant_tys.push(quote! { (__i.intern(#tag), ::core::option::Option::None) });
-                erase_arms.push(quote! { Self::#v => (#tag, ::core::option::Option::None) });
+                erase_arms.push(quote! { #ident::#v => (#tag, ::core::option::Option::None) });
                 materialize_arms.push(quote! { #matched => Self::#v });
+                borrowed.push(BorrowedVariant {
+                    ident: v,
+                    tag: tag.clone(),
+                    payload: None,
+                });
             }
             syn::Fields::Unnamed(fields) => {
                 let mut tys = fields.unnamed.iter().map(|f| &f.ty);
@@ -1690,12 +1700,17 @@ fn generate_enum_ty_arg(
                     )
                 });
                 erase_arms.push(quote! {
-                    Self::#v(__payload) => (
+                    #ident::#v(__payload) => (
                         #tag,
                         ::core::option::Option::Some(
                             ::acvus_extern::erase_field::<#ty, __R>(__rt, __payload),
                         ),
                     )
+                });
+                borrowed.push(BorrowedVariant {
+                    ident: v,
+                    tag: tag.clone(),
+                    payload: Some(ty),
                 });
                 materialize_arms.push(quote! {
                     #matched => {
@@ -1708,6 +1723,15 @@ fn generate_enum_ty_arg(
                 });
             }
             syn::Fields::Named(fields) => {
+                if projected {
+                    return Err(syn::Error::new_spanned(
+                        &variant.fields,
+                        "a struct variant has no projection: its payload is an object the enum \
+                         writes and no Rust type names, so there is nothing to borrow it as. \
+                         Give the variant one payload type deriving `#[derive(TyArg)] \
+                         #[projection]`",
+                    ));
+                }
                 let shape = ObjectShape::of(fields);
                 let idents = &shape.idents;
                 let ty = shape.written_poly_ty();
@@ -1720,7 +1744,7 @@ fn generate_enum_ty_arg(
                     (__i.intern(#tag), ::core::option::Option::Some(::std::boxed::Box::new(#ty)))
                 });
                 erase_arms.push(quote! {
-                    Self::#v { #(#idents),* } => (
+                    #ident::#v { #(#idents),* } => (
                         #tag,
                         ::core::option::Option::Some(
                             ::acvus_extern::Owned::from_value(#erase),
@@ -1749,16 +1773,373 @@ fn generate_enum_ty_arg(
         };
         match __at { #(#materialize_arms,)* }
     }};
-    Ok(cross_impl(
+    let borrowing = match projected {
+        true => Borrowing::AsProjection,
+        false => Borrowing::Whole,
+    };
+    let cross = cross_impl(
         ident,
         Crossing {
-            ty,
+            ty: ty.clone(),
             erase,
             materialize,
-            borrowing: Borrowing::Whole,
+            borrowing,
             returned: returned_as_one_value(),
         },
-    ))
+    );
+    let projection = projected.then(|| enum_projection(ident, &borrowed, &erase_arms, &ty));
+    Ok(quote! { #cross #projection })
+}
+
+struct BorrowedVariant<'a> {
+    ident: &'a Ident,
+    tag: String,
+    payload: Option<&'a Type>,
+}
+
+/// `ERef<'a>`, `EArms<'a>` and `EMut<'a, Rt>`: the enum half of RFC-0050
+/// rule 6.
+///
+/// The shape of the exclusive side is a decision. A Rust enum whose arms hold
+/// the payload's `&mut` cannot also hold the whole variant to write both of
+/// its words, so the two are two types: `EArms<'a>` is the enum of payload
+/// borrows, and `EMut<'a, Rt>` is a struct over the variant that hands one
+/// out per exclusive borrow of itself and rewrites `[tag, payload]` through
+/// `set`. `EMut` names the runtime because a write erases a Rust value into
+/// the runtime's words; `ERef` and `EArms` name none, which is what lets
+/// `Borrowed` — a trait with no runtime parameter — carry them and an enum
+/// nest inside another projection.
+///
+/// `EMut` holds the runtime it was built from, and `arms` and `set` both
+/// read it there: a handler that declares no `&Rt` parameter has none to
+/// hand them, and a second runtime passed to `set` could only disagree
+/// with the one the words belong to.
+fn enum_projection(
+    owner: &Ident,
+    variants: &[BorrowedVariant<'_>],
+    erase_arms: &[proc_macro2::TokenStream],
+    enum_ty: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let name = owner.to_string();
+    let shared = format_ident!("{owner}Ref");
+    let arms_ty = format_ident!("{owner}Arms");
+    let exclusive = format_ident!("{owner}Mut");
+    let doc_shared = format!("A shared projection of [`{owner}`] (RFC-0050 rule 6).");
+    let doc_arms = format!("The payload [`{owner}Mut`] lends, one arm per variant.");
+    let doc_exclusive = format!("An exclusive projection of [`{owner}`] (RFC-0050 rule 6).");
+
+    let width = syn::Index::from(variants.len());
+    let last = variants.len() - 1;
+    let tags: Vec<&String> = variants.iter().map(|v| &v.tag).collect();
+    let holders: Vec<Ident> = (0..variants.len())
+        .map(|at| format_ident!("__at{at}"))
+        .collect();
+    let payload_tys: Vec<&Type> = variants.iter().filter_map(|v| v.payload).collect();
+    let payload_holders: Vec<&Ident> = variants
+        .iter()
+        .zip(&holders)
+        .filter(|(v, _)| v.payload.is_some())
+        .map(|(_, holder)| holder)
+        .collect();
+    let payload_tags: Vec<&String> = variants
+        .iter()
+        .filter(|v| v.payload.is_some())
+        .map(|v| &v.tag)
+        .collect();
+
+    let table_ty = quote! {
+        ::acvus_extern::VariantAt<
+            #width,
+            (#(<#payload_tys as ::acvus_extern::Project<__R>>::Table,)*),
+        >
+    };
+    let table_of = quote! {
+        let [#(#holders),*] = ::acvus_extern::variant_tags_at(__at, [#(#tags),*]);
+        ::acvus_extern::VariantAt {
+            tags: [#(#holders.0),*],
+            payloads: (#(
+                <#payload_tys as ::acvus_extern::Project<__R>>::table(
+                    ::acvus_extern::payload_at(#payload_holders.1, #payload_tags),
+                ),
+            )*),
+        }
+    };
+
+    // The last arm absorbs the index, which `variant::arm_of` already proved
+    // to be one of the tags.
+    let matched = |at: usize| match at == last {
+        true => quote! { _ },
+        false => {
+            let at = proc_macro2::Literal::usize_unsuffixed(at);
+            quote! { #at }
+        }
+    };
+    let mut declared_ref = Vec::new();
+    let mut declared_arms = Vec::new();
+    let mut read_arms = Vec::new();
+    let mut write_arms = Vec::new();
+    let mut payload_at = 0usize;
+    for (at, variant) in variants.iter().enumerate() {
+        let v = variant.ident;
+        let matched = matched(at);
+        match variant.payload {
+            None => {
+                declared_ref.push(quote! { #v });
+                declared_arms.push(quote! { #v });
+                read_arms.push(quote! { #matched => Self::#v });
+                write_arms.push(quote! { #matched => Self::#v });
+            }
+            Some(ty) => {
+                let held = syn::Index::from(payload_at);
+                payload_at += 1;
+                declared_ref.push(quote! {
+                    #v(<#ty as ::acvus_extern::Borrowed>::Ref<'__a>)
+                });
+                declared_arms.push(quote! {
+                    #v(<#ty as ::acvus_extern::Borrowed>::Mut<'__a>)
+                });
+                read_arms.push(quote! {
+                    #matched => Self::#v({
+                        // SAFETY: the caller's contract, and this variant's
+                        // payload register holds what its own crossing wrote.
+                        unsafe {
+                            <#ty as ::acvus_extern::Project<__R>>::project(
+                                __rt,
+                                __payload,
+                                &__table.payloads.#held,
+                            )
+                        }
+                    })
+                });
+                write_arms.push(quote! {
+                    #matched => Self::#v({
+                        // SAFETY: as the shared projection's, exclusively.
+                        unsafe {
+                            <#ty as ::acvus_extern::Project<__R>>::project_mut(
+                                __rt,
+                                __payload,
+                                &__table.payloads.#held,
+                            )
+                        }
+                    })
+                });
+            }
+        }
+    }
+
+    quote! {
+        #[doc = #doc_shared]
+        pub enum #shared<'__a> {
+            #(#declared_ref,)*
+        }
+
+        #[doc = #doc_arms]
+        pub enum #arms_ty<'__a> {
+            #(#declared_arms,)*
+        }
+
+        #[doc = #doc_exclusive]
+        pub struct #exclusive<'__a, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            rt: &'__a __R,
+            variant: &'__a mut ::acvus_extern::Variant<::acvus_extern::Owned<__R>>,
+            table: #table_ty,
+        }
+
+        impl ::acvus_extern::Borrowed for #owner {
+            type Ref<'__a> = #shared<'__a> where Self: '__a;
+            type Mut<'__a> = #arms_ty<'__a> where Self: '__a;
+        }
+
+        impl<'__a> #shared<'__a> {
+            /// # Safety
+            /// `variant` holds what the owner's crossing wrote and is live
+            /// for `'__a`.
+            pub unsafe fn over<__R>(
+                __rt: &'__a __R,
+                __variant: &'__a ::acvus_extern::Variant<::acvus_extern::Owned<__R>>,
+                __table: &#table_ty,
+            ) -> Self
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                // SAFETY: the caller's contract: the crossing wrote the tag
+                // register.
+                let __tag = unsafe {
+                    <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
+                };
+                let __payload = __variant.payload();
+                match ::acvus_extern::variant::arm_of(__tag, &__table.tags, #name) {
+                    #(#read_arms,)*
+                }
+            }
+        }
+
+        impl<'__a> #arms_ty<'__a> {
+            /// # Safety
+            /// As the shared projection's `over`, and `variant` is
+            /// exclusively named for `'__a`.
+            pub unsafe fn over<__R>(
+                __rt: &'__a __R,
+                __variant: &'__a mut ::acvus_extern::Variant<::acvus_extern::Owned<__R>>,
+                __table: &#table_ty,
+            ) -> Self
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                // SAFETY: as the shared projection's.
+                let __tag = unsafe {
+                    <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
+                };
+                let __at = ::acvus_extern::variant::arm_of(__tag, &__table.tags, #name);
+                let __payload = __variant.payload_mut();
+                match __at {
+                    #(#write_arms,)*
+                }
+            }
+        }
+
+        impl<'__a, __R> #exclusive<'__a, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            /// # Safety
+            /// As the shared projection's `over`, and `variant` is
+            /// exclusively named for `'__a`.
+            pub unsafe fn over(
+                __rt: &'__a __R,
+                __variant: &'__a mut ::acvus_extern::Variant<::acvus_extern::Owned<__R>>,
+                __table: &#table_ty,
+            ) -> Self {
+                Self { rt: __rt, variant: __variant, table: ::core::clone::Clone::clone(__table) }
+            }
+
+            pub fn arms(&mut self) -> #arms_ty<'_> {
+                // SAFETY: `over`'s contract, reborrowed for this borrow of
+                // `self` and no longer.
+                unsafe { #arms_ty::over(self.rt, self.variant, &self.table) }
+            }
+
+            pub fn set(&mut self, __value: #owner) {
+                let __rt = self.rt;
+                let (__tag, __payload) = match __value { #(#erase_arms,)* };
+                *self.variant = ::acvus_extern::variant::words(__rt, __tag, __payload);
+            }
+        }
+
+        impl<__R> ::acvus_extern::Project<__R> for #owner
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            type Table = #table_ty;
+
+            fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                #table_of
+            }
+
+            unsafe fn project<'__a>(
+                __rt: &'__a __R,
+                __value: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                __table: &Self::Table,
+            ) -> #shared<'__a> {
+                // SAFETY: the caller's contract: a nested enum payload holds
+                // its own variant.
+                unsafe {
+                    #shared::over(__rt, ::acvus_extern::variant_in(__rt, __value), __table)
+                }
+            }
+
+            unsafe fn project_mut<'__a>(
+                __rt: &'__a __R,
+                __value: &'__a mut <__R as ::acvus_extern::Runtime>::Value,
+                __table: &Self::Table,
+            ) -> #arms_ty<'__a> {
+                // SAFETY: as `project`, with the caller's exclusive loan.
+                unsafe {
+                    #arms_ty::over(__rt, ::acvus_extern::variant_in_mut(__rt, __value), __table)
+                }
+            }
+        }
+
+        impl<'__x, __R> ::acvus_extern::Projected<__R> for #shared<'__x>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            type At<'__a> = #shared<'__a>;
+            type Table = #table_ty;
+
+            fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                #table_of
+            }
+
+            unsafe fn of<'__a>(
+                __rt: &'__a __R,
+                __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                __table: &Self::Table,
+            ) -> #shared<'__a> {
+                // SAFETY: the caller's contract: a live variant storage.
+                unsafe {
+                    #shared::over(__rt, ::acvus_extern::variant_of(__rt, __reference), __table)
+                }
+            }
+        }
+
+        impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            type At<'__a> = #exclusive<'__a, __R>;
+            type Table = #table_ty;
+
+            fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                #table_of
+            }
+
+            unsafe fn of<'__a>(
+                __rt: &'__a __R,
+                __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                __table: &Self::Table,
+            ) -> #exclusive<'__a, __R> {
+                // SAFETY: as the shared projection's, exclusively.
+                unsafe {
+                    #exclusive::over(
+                        __rt,
+                        ::acvus_extern::variant_of_mut(__rt, __reference),
+                        __table,
+                    )
+                }
+            }
+        }
+
+        impl ::acvus_extern::TyArg for #shared<'static> {
+            fn poly_ty(
+                __i: &::acvus_extern::Interner,
+                __vars: &::acvus_extern::PolyVars,
+            ) -> ::acvus_extern::PolyTy {
+                ::acvus_extern::PolyTy::Ref(
+                    ::acvus_extern::Mutability::Shared,
+                    ::std::boxed::Box::new(::acvus_extern::TypeArg::uniform(#enum_ty)),
+                )
+            }
+        }
+
+        impl<__R> ::acvus_extern::TyArg for #exclusive<'static, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            fn poly_ty(
+                __i: &::acvus_extern::Interner,
+                __vars: &::acvus_extern::PolyVars,
+            ) -> ::acvus_extern::PolyTy {
+                ::acvus_extern::PolyTy::Ref(
+                    ::acvus_extern::Mutability::Mut,
+                    ::std::boxed::Box::new(::acvus_extern::TypeArg::uniform(#enum_ty)),
+                )
+            }
+        }
+    }
 }
 
 // -- extern_registry! ------------------------------------------------

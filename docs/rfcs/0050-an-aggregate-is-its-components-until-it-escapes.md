@@ -554,10 +554,8 @@ see, so `f(OMut { a: &mut o.a })` beside `g(&o.b)` is not admitted where
 `&mut o` would conflict. Per-field loans are a change in the loan machinery
 keyed on the parameter's field set.
 
-Rules 7 and 9 remain unbuilt in the machine, and rule 6's enum half and
-`Rt::Object<'a>` with them. `ERef`/`EMut` wait on the heap `Variant` becoming
-`[tag, payload…]`, which the flat-heap build recorded as deliberately not
-done. Rule 5's multi-value return from a body has
+Rules 7 and 9 remain unbuilt in the machine, and `Rt::Object<'a>` with them.
+Rule 5's multi-value return from a body has
 no emission site under rule 3's own predicate: a web with a member that
 escapes is placed on the heap whole, so nothing takes a whole aggregate out of
 a run. Rule 3's one projection family over a run and a heap `Large` alike is
@@ -703,5 +701,39 @@ and `layout.rs::sorted_fields` lay the same object in. A parameter that needs
 nothing says `Site = ()`, so a declaration of plain parameters carries a
 zero-sized table.
 
-The enum half of rule 6 is still unbuilt: `ERef`/`EMut` do not exist, so a
-handler that reads a derived enum takes it by value.
+The enum half of rule 6 is built on the same table. `#[derive(TyArg)]
+#[projection]` on an enum emits `ERef<'a>`, a Rust enum whose payload arms
+hold `<T as Borrowed>::Ref<'a>`; `EArms<'a>`, the same at `Mut`; and
+`EMut<'a, Rt>`, a struct over the variant the caller lent whose `arms` lends
+one `EArms` per exclusive borrow of itself and whose `set` rewrites both
+words through `variant::words`. The exclusive side is two types because a
+Rust enum whose arms hold the payload's `&mut` has nowhere to also hold the
+whole variant, and only the writer names a runtime — erasing a Rust value
+into the runtime's words is what needs one. That keeps `Borrowed`, which has
+no runtime parameter, able to carry `ERef`/`EArms`, so an enum nests inside
+another projection as a payload or a field.
+
+An enum projection's site datum is the variants' tag words in declaration
+order, `[u64; K]` of `Astr::bits` interned at `prepare`, so the dispatch is
+one `u64` compare per arm and `Runtime::symbol` leaves the call path:
+`grep -n "symbol(" acvus-extern/src/projection.rs` is 0. The by-value
+crossing still calls it once per arm per call — `variant::opened` is handed
+the declared names and no site. This makes one interner an obligation across
+the compiler and the runtime, which `Astr` already carries the evidence for:
+a name's bits hold its interner's id, so a site datum built from a second
+interner matches no tag and `variant::arm_of` panics rather than naming the
+wrong arm.
+
+A struct variant has no projection and the derive refuses one, named: its
+payload is an object the enum writes and no Rust type names, so there is
+nothing to borrow it as. A payload type needs `Borrowed` and `Project` —
+exactly what a projected struct's fields need — and one that has neither is
+refused at the derive by the unsatisfied bound, which names the payload type.
+Both refusals are goldens in `acvus-extern-macro/tests/compile_fail`.
+
+An enum reaches a projection as a heap `Variant` and never as a run.
+`prepare::runs::Sites` maps the reference an `InstKind::Ref` makes onto the
+web it projects, and refuses that web at every mention it has no register
+form for; an extern call using the reference is such a mention. So the two
+storages rule 6 names meet in one at the boundary, and the shared builder is
+over the heap variant's two words.

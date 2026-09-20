@@ -3,6 +3,8 @@
 //! As in `object`, the layout — RFC-0050 rule 8's flat `[tag, payload]` — lives
 //! in this file alone.
 
+use acvus_utils::Astr;
+
 use crate::obj::Variant;
 use crate::owned::Owned;
 use crate::runtime::Runtime;
@@ -17,15 +19,42 @@ where
     pub payload: Option<Owned<Rt>>,
 }
 
-pub fn erase<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Rt::Value
+pub fn words<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Variant<Owned<Rt>>
 where
     Rt: Runtime,
 {
     let payload = payload.unwrap_or_else(|| Owned::from_value(rt.undef()));
-    let variant = Variant::of(Owned::from_value(rt.variant_tag(tag)), payload);
+    Variant::of(Owned::from_value(rt.variant_tag(tag)), payload)
+}
+
+pub fn erase<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Rt::Value
+where
+    Rt: Runtime,
+{
     // SAFETY: the language's variant is `Variant<Owned<Rt>>`, and `opened` is
     // the only reader.
-    unsafe { rt.erase::<Variant<Owned<Rt>>>(variant) }
+    unsafe { rt.erase::<Variant<Owned<Rt>>>(words(rt, tag, payload)) }
+}
+
+/// Decision not to resolve a name here. `opened`, the by-value crossing,
+/// calls `Runtime::symbol` once per arm per call because it is handed the
+/// declared names and no site; a projection is built per call site, so its
+/// names are interned once at `prepare` and the call compares words.
+///
+/// # Panics
+/// The tag is none of `tags`: the checker settles the declared enum's own
+/// type on a projection's argument, so every variant reaching one is
+/// declared.
+pub fn arm_of<const K: usize>(tag: Astr, tags: &[u64; K], name: &str) -> usize {
+    let bits = tag.bits();
+    tags.iter()
+        .position(|declared| *declared == bits)
+        .unwrap_or_else(|| {
+            panic!(
+                "a variant not in enum `{name}`: the checker admits only variants of the \
+                 declared enum"
+            )
+        })
 }
 
 /// # Safety

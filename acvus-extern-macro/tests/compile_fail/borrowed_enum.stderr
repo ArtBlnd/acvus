@@ -1,15 +1,15 @@
-error[E0277]: `Point` has no storage of its own type, so a parameter cannot borrow one
-  --> tests/compile_fail/borrowed_aggregate.rs:13:1
+error[E0277]: `Shape` has no storage of its own type, so a parameter cannot borrow one
+  --> tests/compile_fail/borrowed_enum.rs:13:1
    |
 13 | #[extern_fn(effect = pure)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
    |
-help: the trait `BorrowedWhole<__R>` is not implemented for `Point`
-  --> tests/compile_fail/borrowed_aggregate.rs:8:1
+help: the trait `BorrowedWhole<__R>` is not implemented for `Shape`
+  --> tests/compile_fail/borrowed_enum.rs:8:1
    |
- 8 | pub struct Point {
-   | ^^^^^^^^^^^^^^^^
-   = note: a borrowed aggregate crosses as its projection: where `Point` is a `#[derive(TyArg)] #[projection]` aggregate, write `PointRef<'_>`, or `PointMut<'_>` for a struct and `PointMut<'_, Rt>` for an enum (RFC-0050 rule 6).
+ 8 | pub enum Shape {
+   | ^^^^^^^^^^^^^^
+   = note: a borrowed aggregate crosses as its projection: where `Shape` is a `#[derive(TyArg)] #[projection]` aggregate, write `ShapeRef<'_>`, or `ShapeMut<'_>` for a struct and `ShapeMut<'_, Rt>` for an enum (RFC-0050 rule 6).
    = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
    = note: a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047).
 help: the following other types implement trait `Arg<'a, Rt>`
@@ -26,14 +26,14 @@ help: the following other types implement trait `Arg<'a, Rt>`
    | |     T: CrossSpecialized<Rt>,
    | |     Rt: Runtime,
    | |________________^ `ByRef<T, acvus_extern::Specialized>`
-note: required for `Point` to implement `Borrowable<__R>`
-  --> tests/compile_fail/borrowed_aggregate.rs:8:12
+note: required for `Shape` to implement `Borrowable<__R>`
+  --> tests/compile_fail/borrowed_enum.rs:8:10
    |
  6 | #[derive(TyArg)]
    |          ----- type parameter would need to implement `Borrowable<__R>`
  7 | #[projection]
- 8 | pub struct Point {
-   |            ^^^^^
+ 8 | pub enum Shape {
+   |          ^^^^^
    = help: consider manually implementing `Borrowable<__R>` to avoid undesired bounds
-   = note: required for `ByRef<Point>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Shape>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

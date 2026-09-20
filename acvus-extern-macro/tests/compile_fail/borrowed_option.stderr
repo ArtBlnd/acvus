@@ -5,7 +5,7 @@ error[E0277]: `std::option::Option<i64>` has no storage of its own type, so a pa
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
   |
   = help: the trait `Borrowable<__R>` is not implemented for `std::option::Option<i64>`
-  = note: a borrowed aggregate crosses as its projection: where `std::option::Option<i64>` is a `#[derive(TyArg)] #[projection]` struct, write `std::option::Option<i64>Ref<'_>` or `std::option::Option<i64>Mut<'_>` (RFC-0050 rule 6).
+  = note: a borrowed aggregate crosses as its projection: where `std::option::Option<i64>` is a `#[derive(TyArg)] #[projection]` aggregate, write `std::option::Option<i64>Ref<'_>`, or `std::option::Option<i64>Mut<'_>` for a struct and `std::option::Option<i64>Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
   = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
   = note: a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047).
   = help: the following other types implement trait `Borrowable<Rt>`:

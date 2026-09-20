@@ -1,0 +1,5 @@
+error: a struct variant has no projection: its payload is an object the enum writes and no Rust type names, so there is nothing to borrow it as. Give the variant one payload type deriving `#[derive(TyArg)] #[projection]`
+  --> tests/compile_fail/projected_struct_variant.rs:10:8
+   |
+10 |     At { x: i64 },
+   |        ^^^^^^^^^^

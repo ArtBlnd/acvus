@@ -294,7 +294,11 @@ or an associated type of the crossing.
   whose table was never filled, and `Unsited` is what the module table holds.
   `HandlerFactory::arity` counts the parameters, which `Width::args` does not:
   a `&str` or slice parameter is two of the runtime's values and one settled
-  type.
+  type. A projection parameter's datum is the one thing a site carries today:
+  an object's is the position of each field it names, an enum's is the
+  variants' tag words. A test whose declaration has no projection parameter
+  builds its sites from `SitesNoParameterReads`, whose name is the condition
+  under which passing `Ty::Unit` per argument is honest.
 - RFC-0050's flat layout changes `acvus-extern/src/object.rs` and
   `variant.rs` only. The third `Form` beside `One` and `Pair` is built, and
   it is a result form: `Run<W>` is an aggregate's `W` components, written

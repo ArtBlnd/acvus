@@ -728,7 +728,7 @@ where
 /// refusal's golden.
 #[derive(acvus_extern::TyArg)]
 #[projection]
-struct Point {
+pub struct Point {
     x: i64,
     label: String,
 }
@@ -737,7 +737,7 @@ struct Point {
 /// 6 admits and `ObjectTy::meet` types as an at-least field set.
 #[derive(acvus_extern::TyArg)]
 #[projection]
-struct JustLabel {
+pub struct JustLabel {
     label: String,
 }
 
@@ -745,7 +745,7 @@ struct JustLabel {
 /// its site table names differs from its own field table index.
 #[derive(acvus_extern::TyArg)]
 #[projection]
-struct JustX {
+pub struct JustX {
     x: i64,
 }
 
@@ -962,4 +962,238 @@ fn a_partial_projections_table_names_the_objects_position_and_not_its_own() {
     assert_eq!(whole.at.map(acvus_extern::FieldAt::index), [0, 1]);
     assert_eq!(label_only.at.map(acvus_extern::FieldAt::index), [0]);
     assert_eq!(x_only.at.map(acvus_extern::FieldAt::index), [1]);
+}
+
+// -- RFC-0050 rule 6, the enum half -------------------------------------
+
+/// Three variants: one unit, one scalar payload, and one whose payload is a
+/// nested object borrowed as its own projection.
+#[derive(acvus_extern::TyArg)]
+#[projection]
+pub enum Shape {
+    Empty,
+    Count(i64),
+    At(Point),
+}
+
+/// The type the checker settles for a `Shape` at a call site. Obligation
+/// across artifacts: the interner here is the one the runtime's `symbol`
+/// reads, because a site datum is a name's `Astr::bits` at `prepare` and a
+/// tag register is the same name's bits at run time. `Astr` carries its
+/// interner's id in those bits, so two interners cannot be mistaken for one:
+/// `variant::arm_of` finds no arm and panics.
+fn shape_ty(i: &Interner) -> acvus_extern::Ty {
+    acvus_extern::Ty::Enum {
+        name: i.intern("Shape"),
+        variants: [
+            (i.intern("Empty"), None),
+            (
+                i.intern("Count"),
+                Some(Box::new(acvus_extern::Ty::Int(acvus_mir::ty::IntTy::I64))),
+            ),
+            (i.intern("At"), Some(Box::new(point_ty(i)))),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+fn shape_table() -> acvus_extern::VariantAt<3, ((), acvus_extern::ObjectAt<2, ((), ())>)> {
+    let settled = shape_ty(&SYMBOLS);
+    <ShapeRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+        interner: &SYMBOLS,
+        ty: &settled,
+    })
+}
+
+#[test]
+fn an_enum_projections_site_datum_is_the_tag_words_the_runtime_writes() {
+    let rt = Counted;
+    let table = shape_table();
+    let written: Vec<u64> = ["Empty", "Count", "At"]
+        .map(|name| {
+            let tag = rt.variant_tag(name);
+            // SAFETY: `variant_tag` wrote this register.
+            unsafe { rt.tag_symbol(&tag) }.bits()
+        })
+        .to_vec();
+    assert_eq!(table.tags.to_vec(), written);
+}
+
+#[test]
+fn a_shared_enum_projection_names_the_arm_its_tag_names() {
+    let rt = Counted;
+    let table = shape_table();
+    for (value, expected) in [
+        (Shape::Empty.erase(&rt), "Empty"),
+        (Shape::Count(7).erase(&rt), "Count(7)"),
+    ] {
+        // SAFETY: `value` is live for the borrow below.
+        let reference = unsafe { rt.reference(&value) };
+        // SAFETY: `reference` names the live variant `erase` just wrote.
+        let shape = unsafe {
+            <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        };
+        let read = match shape {
+            ShapeRef::Empty => "Empty".to_owned(),
+            ShapeRef::Count(n) => format!("Count({n})"),
+            ShapeRef::At(_) => "At".to_owned(),
+        };
+        assert_eq!(read, expected);
+    }
+}
+
+/// A nested aggregate payload keeps its own heap object, so the projection of
+/// it borrows the very `String` that object holds rather than a copy.
+#[test]
+fn an_enum_projections_nested_payload_borrows_the_objects_own_value() {
+    let rt = Counted;
+    let table = shape_table();
+    let value = Shape::At(Point {
+        x: 7,
+        label: "seven".to_owned(),
+    })
+    .erase(&rt);
+    // SAFETY: `value` is live for the borrow below.
+    let reference = unsafe { rt.reference(&value) };
+    // SAFETY: `reference` names the live variant `erase` just wrote.
+    let shape = unsafe {
+        <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+    };
+    let ShapeRef::At(point) = shape else {
+        panic!("the tag names the `At` arm")
+    };
+    assert_eq!(*point.x, 7);
+
+    // SAFETY: `erase` wrote a `Variant<Owned<Counted>>` and nothing moved it.
+    let variant = unsafe { rt.value_as_ref::<acvus_extern::Variant<Owned<Counted>>>(&value) };
+    // SAFETY: the payload register holds the nested object's own `Large`.
+    let obj = unsafe { rt.value_as_ref::<acvus_extern::Obj<Owned<Counted>>>(variant.payload()) };
+    // SAFETY: rule 8 puts `label` before `x`, and that field holds a `String`.
+    let stored = unsafe { rt.value_as_ref::<String>(&obj.values[0]) };
+    assert!(
+        std::ptr::eq(point.label, stored),
+        "the projection borrows the nested object's own String"
+    );
+}
+
+#[test]
+fn an_exclusive_enum_projection_writes_through_its_arm() {
+    let rt = Counted;
+    let table = shape_table();
+    let value = Shape::Count(7).erase(&rt);
+    {
+        // SAFETY: `value` is live and named by nothing else for the borrow.
+        let reference = unsafe { rt.reference(&value) };
+        // SAFETY: `reference` exclusively names the live variant.
+        let mut shape = unsafe {
+            <ShapeMut<'static, Counted> as acvus_extern::Projected<Counted>>::of(
+                &rt, &reference, &table,
+            )
+        };
+        let ShapeArms::Count(n) = shape.arms() else {
+            panic!("the tag names the `Count` arm")
+        };
+        *n = 9;
+    }
+    // SAFETY: `erase` wrote this variant and nothing moved it.
+    let read = unsafe { Shape::materialize(&rt, value) };
+    let Shape::Count(n) = read else {
+        panic!("the tag still names the `Count` arm")
+    };
+    assert_eq!(n, 9);
+}
+
+#[test]
+fn set_rewrites_both_words_of_the_variant_it_was_lent() {
+    let rt = Counted;
+    let table = shape_table();
+    let value = Shape::Count(7).erase(&rt);
+    {
+        // SAFETY: `value` is live and named by nothing else for the borrow.
+        let reference = unsafe { rt.reference(&value) };
+        // SAFETY: `reference` exclusively names the live variant.
+        let mut shape = unsafe {
+            <ShapeMut<'static, Counted> as acvus_extern::Projected<Counted>>::of(
+                &rt, &reference, &table,
+            )
+        };
+        shape.set(Shape::Empty);
+    }
+    // SAFETY: as above; `set` wrote a variant of the same enum.
+    let read = unsafe { Shape::materialize(&rt, value) };
+    assert!(matches!(read, Shape::Empty), "the tag word moved too");
+}
+
+#[test]
+fn set_releases_the_payload_it_writes_over() {
+    let rt = Counted;
+    let drops = Drops::default();
+    let table = shape_table();
+    let value = acvus_extern::variant::erase(
+        &rt,
+        "Count",
+        Some(Owned::from_value(tracked_value(&rt, &drops))),
+    );
+    {
+        // SAFETY: `value` is live and named by nothing else for the borrow.
+        let reference = unsafe { rt.reference(&value) };
+        // SAFETY: `reference` exclusively names the live variant.
+        let mut shape = unsafe {
+            <ShapeMut<'static, Counted> as acvus_extern::Projected<Counted>>::of(
+                &rt, &reference, &table,
+            )
+        };
+        assert_eq!(drops.count(), 0, "the lent payload is still the storage's");
+        shape.set(Shape::Empty);
+    }
+    assert_eq!(
+        drops.count(),
+        1,
+        "the payload it wrote over was released once"
+    );
+}
+
+#[test]
+fn an_enum_projection_allocates_nothing_and_a_by_value_crossing_does() {
+    let rt = Counted;
+    let table = shape_table();
+    let value = Shape::At(Point {
+        x: 7,
+        label: "seven".to_owned(),
+    })
+    .erase(&rt);
+    // SAFETY: `value` is live for both crossings below.
+    let reference = unsafe { rt.reference(&value) };
+
+    let borrowed = allocations_of(|| {
+        // SAFETY: `reference` names the live variant.
+        let shape = unsafe {
+            <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        };
+        match shape {
+            ShapeRef::At(point) => *point.x,
+            ShapeRef::Count(n) => *n,
+            ShapeRef::Empty => 0,
+        }
+    });
+    assert_eq!(
+        borrowed, 0,
+        "an enum projection names the caller's two words in place"
+    );
+
+    let by_value = allocations_of(|| {
+        // SAFETY: `reference` names the live variant.
+        let shape = unsafe {
+            <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        };
+        match shape {
+            ShapeRef::At(point) => point.label.clone(),
+            ShapeRef::Count(_) | ShapeRef::Empty => String::new(),
+        }
+    });
+    assert!(
+        by_value > 0,
+        "materializing the nested payload's String allocates, which is what the projection avoids"
+    );
 }

@@ -4901,7 +4901,7 @@ mod call_form_tests {
         let arity = factory.arity();
         assert_eq!(arity, 1, "`len(s: &str)` is one parameter, two values wide");
 
-        let site = acvus_extern::PlainSite::default();
+        let site = acvus_extern::SitesNoParameterReads::default();
         let op = factory
             .at_site(&site.args(arity))
             .into_op(call::CallShape::Registers2 {

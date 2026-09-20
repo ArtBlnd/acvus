@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::Ty;
 
 use crate::handler::{Arg, ArgAt, Sited};
-use crate::obj::{FieldAt, Obj, ObjectShape, One};
+use crate::obj::{FieldAt, Obj, ObjectShape, One, Variant};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 
@@ -67,6 +67,20 @@ where
 pub struct ObjectAt<const K: usize, F> {
     pub at: [FieldAt; K],
     pub fields: F,
+}
+
+/// The tag word of each variant an enum projection names, in the enum's
+/// declaration order, and what each payload's own crossing needs from the
+/// site.
+///
+/// Obligation across artifacts: a tag word is the interned name's
+/// `Astr::bits`, which is what `interpreter::value::Value::tag` writes into a
+/// heap variant's tag register and what `interpreter::prepare::runs::Tags::
+/// word` writes into a run's. A change to that spelling moves all three.
+#[derive(Clone, Copy)]
+pub struct VariantAt<const K: usize, P> {
+    pub tags: [u64; K],
+    pub payloads: P,
 }
 
 /// A projection type a handler names in its signature.
@@ -142,6 +156,119 @@ pub fn object_fields_at<'a, const K: usize>(
             },
         )
     })
+}
+
+/// The tag word of each variant an enum projection names, in its own
+/// declaration order, beside the settled type of that variant's payload.
+///
+/// A tag word is the interned name's `Astr::bits` and needs no type to
+/// resolve it. The settled type is read all the same, so that a payload's own
+/// crossing has a site to build its table from and so that an argument typed
+/// as something other than the declared enum is refused here, at `prepare`,
+/// rather than at the first call.
+///
+/// # Panics
+/// The settled type names no enum, or the enum lacks a variant the
+/// projection names. The checker settles the declared enum's own type on a
+/// projection's argument.
+pub fn variant_tags_at<'a, const K: usize>(
+    at: ArgAt<'a>,
+    names: [&str; K],
+) -> [(u64, Option<ArgAt<'a>>); K] {
+    let declared = match at.ty {
+        Ty::Ref(_, inner) => &inner.ty,
+        other => other,
+    };
+    let Ty::Enum { variants, .. } = declared else {
+        panic!(
+            "an enum projection parameter's argument is typed {declared:?}, which names no enum \
+             (RFC-0050 rule 6)"
+        )
+    };
+    names.map(|name| {
+        let key = at.interner.intern(name);
+        let Some(payload) = variants.get(&key) else {
+            panic!(
+                "an enum crossing into a projection has no variant `{name}`: the checker settles \
+                 the declared enum's own type on the argument (RFC-0050 rule 6)"
+            )
+        };
+        let payload = payload.as_deref().map(|ty| ArgAt {
+            interner: at.interner,
+            ty,
+        });
+        (key.bits(), payload)
+    })
+}
+
+/// # Panics
+/// The variant carries no payload at this site, where the projection
+/// declares one.
+pub fn payload_at<'a>(at: Option<ArgAt<'a>>, name: &str) -> ArgAt<'a> {
+    let Some(at) = at else {
+        panic!(
+            "the variant `{name}` carries no payload at this call site, and the projection \
+             borrows one (RFC-0050 rule 6)"
+        )
+    };
+    at
+}
+
+/// The variant a reference the caller lent names.
+///
+/// # Safety
+/// `reference` names a live storage holding what an enum's crossing wrote,
+/// live for `'a`.
+pub unsafe fn variant_of<'a, Rt>(rt: &'a Rt, reference: &'a Rt::Value) -> &'a Variant<Owned<Rt>>
+where
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract.
+    unsafe { rt.deref::<Variant<Owned<Rt>>>(reference) }
+}
+
+/// As `variant_of`, for an exclusive projection.
+///
+/// # Safety
+/// As `variant_of`, and the storage is exclusively named for `'a`.
+#[allow(clippy::mut_from_ref)]
+pub unsafe fn variant_of_mut<'a, Rt>(
+    rt: &'a Rt,
+    reference: &'a Rt::Value,
+) -> &'a mut Variant<Owned<Rt>>
+where
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract, exclusively.
+    unsafe { rt.deref_mut::<Variant<Owned<Rt>>>(reference) }
+}
+
+/// The variant a nested enum field or payload holds, which is that field's
+/// own `Large`.
+///
+/// # Safety
+/// `value` is what the nested enum's crossing wrote, live for `'a`.
+pub unsafe fn variant_in<'a, Rt>(rt: &'a Rt, value: &'a Rt::Value) -> &'a Variant<Owned<Rt>>
+where
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract.
+    unsafe { rt.value_as_ref::<Variant<Owned<Rt>>>(value) }
+}
+
+/// As `variant_in`, exclusively.
+///
+/// # Safety
+/// As `variant_in`, and `value` is exclusively named for `'a`.
+pub unsafe fn variant_in_mut<'a, Rt>(
+    rt: &'a Rt,
+    value: &'a mut Rt::Value,
+) -> &'a mut Variant<Owned<Rt>>
+where
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract, exclusively.
+    unsafe { rt.value_as_mut::<Variant<Owned<Rt>>>(value) }
 }
 
 pub struct Fields<'a, Rt>
@@ -354,7 +481,7 @@ where
 #[diagnostic::on_unimplemented(
     message = "a borrowed aggregate crosses as its projection: write `{Self}Ref<'_>`",
     label = "this parameter borrows an aggregate",
-    note = "`#[derive(TyArg)]` emits `{Self}Ref<'_>` and `{Self}Mut<'_>` beside `{Self}`, one field per declared field, each a borrow of the value in the object's own storage. Write the projection in the signature instead of `&{Self}`.",
+    note = "`#[derive(TyArg)] #[projection]` emits `{Self}Ref<'_>` beside `{Self}`, one component per declared field or variant, each a borrow of the value in the aggregate's own storage. The exclusive form is `{Self}Mut<'_>` for a struct and `{Self}Mut<'_, Rt>` for an enum. Write the projection in the signature instead of `&{Self}`.",
     note = "`{Self}` by value is admitted as well, and materializes the fields."
 )]
 pub trait BorrowedWhole<Rt>

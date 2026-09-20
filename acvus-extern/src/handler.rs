@@ -24,24 +24,30 @@ pub struct ArgAt<'a> {
     pub ty: &'a Ty,
 }
 
-/// A call site of `n` arguments whose types no parameter reads. Every `Arg`
-/// but `ByProjection` ignores the settled type, so a caller that knows its
-/// declaration has no projection parameter has nothing to look up.
-pub struct PlainSite {
+/// A call site of `n` arguments typed `Unit`. Obligation across artifacts: a
+/// projection parameter reaching one panics in
+/// `projection::object_fields_at` or `projection::variant_tags_at`, which are
+/// the two readers of a settled type.
+///
+/// Decision not to gate this on `cfg(test)`: the callers are the integration
+/// tests of three crates — `acvus-extern`, `acvus-ext` and
+/// `acvus-interpreter` — and `cfg(test)` in this crate does not reach them.
+#[doc(hidden)]
+pub struct SitesNoParameterReads {
     interner: Interner,
     ty: Ty,
 }
 
-impl Default for PlainSite {
+impl Default for SitesNoParameterReads {
     fn default() -> Self {
-        PlainSite {
+        SitesNoParameterReads {
             interner: Interner::new(),
             ty: Ty::Unit,
         }
     }
 }
 
-impl PlainSite {
+impl SitesNoParameterReads {
     pub fn args(&self, n: usize) -> Vec<ArgAt<'_>> {
         vec![
             ArgAt {
@@ -271,7 +277,7 @@ where
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no storage of its own type, so a parameter cannot borrow one",
     label = "this parameter is taken by reference",
-    note = "a borrowed aggregate crosses as its projection: where `{Self}` is a `#[derive(TyArg)] #[projection]` struct, write `{Self}Ref<'_>` or `{Self}Mut<'_>` (RFC-0050 rule 6).",
+    note = "a borrowed aggregate crosses as its projection: where `{Self}` is a `#[derive(TyArg)] #[projection]` aggregate, write `{Self}Ref<'_>`, or `{Self}Mut<'_>` for a struct and `{Self}Mut<'_, Rt>` for an enum (RFC-0050 rule 6).",
     note = "an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.",
     note = "a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047)."
 )]
@@ -1166,6 +1172,8 @@ macro_rules! arity {
             type Run = run_of!(Rt, InRegisters<0> $(, $arg)*);
             type Sites = ($(<$arg as Sited<Rt>>::Site,)*);
 
+            const ARITY: usize = 0 $(+ one_per!($arg))*;
+
             #[allow(unused_variables)]
             fn sites(args: &[ArgAt<'_>]) -> Self::Sites {
                 assert_eq!(
@@ -1178,8 +1186,6 @@ macro_rules! arity {
                 );
                 ($(<$arg as Sited<Rt>>::site(args[$at]),)*)
             }
-
-            const ARITY: usize = 0 $(+ one_per!($arg))*;
         }
 
         impl<Rt, F, $($arg,)* R> HandlerFactory<Rt> for Glue<Rt, F, ($($arg,)*), R>

@@ -729,7 +729,7 @@ fn types_and_casts_reach_the_type_registry() {
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         ExternHandler::Sync(f) => {
-            let site = acvus_extern::PlainSite::default();
+            let site = acvus_extern::SitesNoParameterReads::default();
             let f = f.clone().at_site(&site.args(f.arity()));
             // SAFETY: the caller passes the declaration's own arguments.
             unsafe { f.into_op(()).call_run(&Tiny, &args) }
@@ -797,7 +797,7 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     unsafe {
         entry
             .clone()
-            .at_site(&acvus_extern::PlainSite::default().args(entry.arity()))
+            .at_site(&acvus_extern::SitesNoParameterReads::default().args(entry.arity()))
             .into_op(())
             .call(&Tiny, &[container()], &mut pair)
     };
@@ -851,7 +851,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
     unsafe {
         entry
             .clone()
-            .at_site(&acvus_extern::PlainSite::default().args(entry.arity()))
+            .at_site(&acvus_extern::SitesNoParameterReads::default().args(entry.arity()))
             .into_op(())
             .call(&Tiny, &run, &mut out)
     };
@@ -862,7 +862,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
 async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         ExternHandler::Async(f) => {
-            let site = acvus_extern::PlainSite::default();
+            let site = acvus_extern::SitesNoParameterReads::default();
             let f = f.clone().at_site(&site.args(f.arity()));
             // SAFETY: as `call_sync`'s; the future owns `args`.
             unsafe { f.into_op(()).call_async(Tiny, &args) }.await
@@ -1503,9 +1503,9 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
 #[test]
 fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     use acvus_extern::FormKind;
-    use acvus_extern::{ByRef, ByValue, Handler, PlainSite, Val, Width};
+    use acvus_extern::{ByRef, ByValue, Handler, SitesNoParameterReads, Val, Width};
 
-    let site = PlainSite::default();
+    let site = SitesNoParameterReads::default();
 
     fn answered<H>(handler: H, expected: Width, args: Vec<V>) -> i64
     where
@@ -1639,7 +1639,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
             result: FormKind::Value,
         }
     );
-    let site = acvus_extern::PlainSite::default();
+    let site = acvus_extern::SitesNoParameterReads::default();
     let glue = glue.at(&site.args(1));
     // SAFETY: the width says one argument in and one value out, at each of
     // the three names of this one handler.
@@ -1695,9 +1695,9 @@ where
 /// per-site glue is the closure and nothing else (RFC-0050 rule 6).
 #[test]
 fn a_plain_declarations_site_table_is_zero_sized() {
-    use acvus_extern::{ByValue, PlainSite, Val};
+    use acvus_extern::{ByValue, SitesNoParameterReads, Val};
 
-    let site = PlainSite::default();
+    let site = SitesNoParameterReads::default();
     let closure = |_: &Tiny, _: (), a: i64, b: i64| a + b;
     let unsited = acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(closure);
     let sited = unsited.at(&site.args(2));

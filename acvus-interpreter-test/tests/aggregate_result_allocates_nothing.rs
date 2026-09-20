@@ -3,6 +3,10 @@
 //! placed and allocates nothing for it, and the same call whose result
 //! crosses back into a handler by value is realized on the heap.
 //!
+//! Rule 6's count is here for the same reason: a call whose parameter is a
+//! projection borrows the caller's aggregate in place, so its count does not
+//! grow with the number of calls.
+//!
 //! The test lives here rather than beside the declaration because the
 //! measurement needs the prepared program separated from its run: a global
 //! allocator counts every allocation in the binary, and compiling and
@@ -75,6 +79,23 @@ fn sum_point(p: Point) -> i64 {
     p.x + p.y
 }
 
+/// Borrowed by a projection rather than taken by value, so the call reads the
+/// caller's two words where they lie (RFC-0050 rule 6).
+#[derive(TyArg)]
+#[projection]
+pub enum Step {
+    Done,
+    Left(i64),
+}
+
+#[extern_fn(effect = pure)]
+fn left_of(s: StepRef<'_>) -> i64 {
+    match s {
+        StepRef::Done => 0,
+        StepRef::Left(n) => *n,
+    }
+}
+
 #[extern_fn(effect = pure)]
 fn tagged(n: i64) -> Tagged {
     Tagged {
@@ -87,7 +108,7 @@ fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
         types: [],
-        fns: [point_of, sum_point, tagged],
+        fns: [point_of, sum_point, tagged, left_of],
     }
 }
 
@@ -187,4 +208,27 @@ fn a_large_component_of_a_frame_resident_result_is_released_once_per_call() {
     );
     assert_eq!(least_left_behind(&large_component(64)), 0);
     assert_eq!(least_left_behind(&large_component(512)), 0);
+}
+
+/// The enum is built once and lent on every iteration, so a call that names
+/// the caller's two words where they lie leaves the count flat in the number
+/// of calls.
+fn borrowed_enum(iterations: i64) -> String {
+    format!(
+        "let e = if 0 < 1 {{ Step::Left(7) }} else {{ Step::Done }}; \
+         let acc = 0; let i = 0; while i < {iterations} {{ \
+         acc = acc + left_of(&e); i = i + 1; }} acc"
+    )
+}
+
+#[test]
+fn an_enum_projection_call_allocates_nothing_however_often_it_is_made() {
+    assert_eq!(measure(&borrowed_enum(64)).answer.as_int(), 7 * 64);
+    assert_eq!(measure(&borrowed_enum(512)).answer.as_int(), 7 * 512);
+    assert_eq!(
+        least_of_three(&borrowed_enum(64)),
+        least_of_three(&borrowed_enum(512)),
+        "an enum projection names the caller's two words, so 64 calls and 512 allocate alike"
+    );
+    assert_eq!(least_left_behind(&borrowed_enum(512)), 0);
 }

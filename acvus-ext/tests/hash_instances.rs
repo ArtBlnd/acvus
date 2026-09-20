@@ -433,7 +433,7 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[instance] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        let site = acvus_extern::PlainSite::default();
+        let site = acvus_extern::SitesNoParameterReads::default();
         let op = handler
             .clone()
             .at_site(&site.args(handler.arity()))

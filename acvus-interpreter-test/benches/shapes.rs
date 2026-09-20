@@ -49,6 +49,50 @@ fn sum_made(m: Made) -> i64 {
     m.x + m.y
 }
 
+/// The aggregate a handler borrows, and the projection RFC-0050 rule 6 gives
+/// it. Three fields, so the row measures a table of three positions against
+/// the same three field reads in Rust.
+#[derive(acvus_extern::TyArg)]
+#[projection]
+pub struct Row {
+    a: i64,
+    b: i64,
+    c: i64,
+}
+
+#[extern_fn(effect = pure)]
+fn sum_row(r: RowRef<'_>) -> i64 {
+    *r.a + *r.b + *r.c
+}
+
+/// The enum a handler borrows: the dispatch is one `u64` compare per arm
+/// against the site datum, where `sum_row`'s is three positions read off it.
+#[derive(acvus_extern::TyArg)]
+#[projection]
+pub enum Tagged {
+    Zero,
+    One(i64),
+    Two(i64),
+}
+
+#[extern_fn(effect = pure)]
+fn tagged_of(t: TaggedRef<'_>) -> i64 {
+    match t {
+        TaggedRef::Zero => 0,
+        TaggedRef::One(n) => *n,
+        TaggedRef::Two(n) => *n,
+    }
+}
+
+fn with_projections() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = std_only();
+    regs.push(extern_registry! {
+        ns: "bench",
+        fns: [sum_row, tagged_of],
+    });
+    regs
+}
+
 fn std_only() -> Vec<Registry<AcvusRuntime>> {
     acvus_ext::std_registries::<AcvusRuntime>()
 }
@@ -132,11 +176,28 @@ let p = made_of(i, i + 1); acc = acc + p.x + p.y; i = i + 1; } acc";
 const CONSTRUCT_VIA_EXTERN_HEAPED: &str = "let acc = 0; let i = 0; while i < @n { \
 let p = made_of(i, i + 1); acc = acc + sum_made(p); i = i + 1; } acc";
 
+/// The object is lent, so `prepare::runs::Sites` refuses its web and it is a
+/// heap object the handler borrows in place. The Rust reference reads the
+/// same three fields behind a reference.
+const PROJECT_VIA_EXTERN: &str = "let acc = 0; let i = 0; while i < @n { \
+let p = { a: i, b: i + 1, c: i + 2, }; acc = acc + sum_row(&p); i = i + 1; } acc";
+/// The enum half of the row above: three variants meeting at the `if`, lent
+/// to a handler that dispatches on the tag.
+const SWITCH_VIA_EXTERN: &str = "let acc = 0; let i = 0; while i < @n { \
+let e = if i % 3 == 0 { Tagged::Zero } else { if i % 3 == 1 { Tagged::One(i) } else { Tagged::Two(i + 1) } }; \
+acc = acc + tagged_of(&e); i = i + 1; } acc";
+
 const VEC_OF_OBJECTS: &str = "let v = range(0, 1000) | map(|k| -> { x: k, y: k + 1, }) | collect; let m = len(&v); let one = m / m; let acc = 0; let r = 0; while r < @n / 1000 { let i = m - m; while i < m { acc = acc + v[i].x; i = i + one; } r = r + 1; } acc";
 
 struct Point {
     x: i64,
     y: i64,
+}
+
+struct Row3 {
+    a: i64,
+    b: i64,
+    c: i64,
 }
 
 enum E {
@@ -308,6 +369,22 @@ fn rust_result_match(n: i64) -> f64 {
     acc as f64
 }
 
+fn rust_project_via_extern(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let p = Row3 {
+            a: i,
+            b: i + 1,
+            c: i + 2,
+        };
+        let p = black_box(&p);
+        acc += p.a + p.b + p.c;
+        i += 1;
+    }
+    acc as f64
+}
+
 fn rust_result_match_heaped(n: i64) -> f64 {
     let mut acc = 0i64;
     let mut i = 0i64;
@@ -321,6 +398,25 @@ fn rust_result_match_heaped(n: i64) -> f64 {
             Ok(w) => acc += *w,
             Err(w) => acc += *w,
         }
+        i += 1;
+    }
+    acc as f64
+}
+
+fn rust_switch_via_extern(n: i64) -> f64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let e = match black_box(i) % 3 {
+            0 => E3::A(0),
+            1 => E3::B(i),
+            _ => E3::C(i + 1),
+        };
+        acc += match &e {
+            E3::A(_) => 0,
+            E3::B(v) => *v,
+            E3::C(v) => *v,
+        };
         i += 1;
     }
     acc as f64
@@ -561,6 +657,22 @@ fn main() {
             source: CONSTRUCT_VIA_EXTERN_HEAPED,
             registries: with_made,
             rust: rust_construct_via_extern,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "project via extern",
+            source: PROJECT_VIA_EXTERN,
+            registries: with_projections,
+            rust: rust_project_via_extern,
+            read: |v| v.as_int() as f64,
+            ret: Ty::I64,
+        },
+        Case {
+            name: "switch via extern",
+            source: SWITCH_VIA_EXTERN,
+            registries: with_projections,
+            rust: rust_switch_via_extern,
             read: |v| v.as_int() as f64,
             ret: Ty::I64,
         },
