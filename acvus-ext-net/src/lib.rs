@@ -2,4 +2,7 @@
 
 mod http;
 
-pub use http::http_registry;
+pub use http::{
+    Client, ClientSettings, Field, Header, HttpError, IdempotentRequest, Request, Response,
+    http_registry,
+};
