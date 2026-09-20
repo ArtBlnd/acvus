@@ -57,7 +57,7 @@ fn prepare(script: &Script, opt: Opt) -> Reach {
             opt,
         })
     };
-    match corpus::attempt_within(&script.source, opt, Stage::Prepare, LIMIT) {
+    match acvus_interpreter_test::attempt_within!(&script.source, opt, Stage::Prepare, LIMIT) {
         Ok(Outcome::Refused(_)) => Reach::Refused,
         Ok(Outcome::Prepared) => Reach::Prepared,
         Ok(Outcome::PreparePanicked(message)) => held(message),

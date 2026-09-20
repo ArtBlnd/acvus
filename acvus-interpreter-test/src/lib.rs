@@ -690,6 +690,21 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
+/// [`corpus::attempt_within`] for the `corpus_child` of the module that
+/// writes this call.
+#[macro_export]
+macro_rules! attempt_within {
+    ($source:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
+        $crate::corpus::attempt_within(
+            $source,
+            $opt,
+            $stage,
+            $limit,
+            $crate::corpus::Caller(::core::module_path!()),
+        )
+    };
+}
+
 /// The corpus: every script the workspace's tests hand a harness, and one
 /// way to compile, prepare and run each of them.
 ///
@@ -1396,18 +1411,44 @@ pub mod corpus {
         }
     }
 
+    /// The module that asks for an attempt, as `module_path!` writes it.
+    /// [`attempt_within!`](crate::attempt_within) is the only thing that
+    /// makes one.
+    pub struct Caller(#[doc(hidden)] pub &'static str);
+
+    impl Caller {
+        /// libtest names a test by its path below the test binary's crate
+        /// root and `--exact` matches that whole path; `module_path!` is that
+        /// path with the crate root still on the front. A file that is its
+        /// own test target is the root, and has no segment to drop.
+        fn child_test(&self) -> String {
+            match self.0.split_once("::") {
+                Some((_root, below)) => format!("{below}::corpus_child"),
+                None => "corpus_child".to_string(),
+            }
+        }
+    }
+
     /// [`attempt`] in a process of its own, so that a program which does not
     /// finish costs the sweep `limit`, and one which takes its process down
-    /// costs it one outcome.
+    /// costs it one outcome. The process is this binary again, running the
+    /// caller's own `corpus_child`.
     pub fn attempt_within(
         source: &str,
         opt: Opt,
         stage: Stage,
         limit: Duration,
+        caller: Caller,
     ) -> Result<Outcome, Lapse> {
+        let child_test = caller.child_test();
         let exe = std::env::current_exe().expect("the test binary knows its own path");
         let mut child = std::process::Command::new(exe)
-            .args(["corpus_child", "--exact", "--nocapture", "--test-threads=1"])
+            .args([
+                child_test.as_str(),
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env(SOURCE, source)
             .env(
                 LEVEL,

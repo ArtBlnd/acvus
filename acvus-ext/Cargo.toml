@@ -2,6 +2,16 @@
 name = "acvus-ext"
 version = "0.1.0"
 edition = "2024"
+# `tests/all.rs` names every file under `tests/` as a module, so this crate
+# links one test binary instead of one per file. Linking, not compiling, is
+# the cost a workspace test run is made of: sccache caches compilation, and
+# the 203 binaries of the run before this one held 25 GB of `debug/deps`
+# (measured 2026-09-21).
+autotests = false
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
 
 [dependencies]
 acvus-extern = { path = "../acvus-extern" }

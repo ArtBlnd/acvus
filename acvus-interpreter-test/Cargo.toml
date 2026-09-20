@@ -2,6 +2,16 @@
 name = "acvus-interpreter-test"
 version = "0.1.0"
 edition = "2024"
+# `tests/all.rs` names every file under `tests/` as a module, so this crate
+# links one test binary instead of one per file. Linking, not compiling, is
+# the cost a workspace test run is made of: sccache caches compilation, and
+# the 203 binaries of the run before this one held 25 GB of `debug/deps`
+# (measured 2026-09-21).
+autotests = false
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
 
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
@@ -19,6 +29,21 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
 libtest-mimic = "0.8"
 glob = "0.3"
+
+# A process has one global allocator, and these three count through it:
+# a run's allocations are what they assert. Sharing a binary with tests
+# that allocate on other threads would make the count somebody else's.
+[[test]]
+name = "aggregate_result_allocates_nothing"
+path = "tests/aggregate_result_allocates_nothing.rs"
+
+[[test]]
+name = "run_allocations"
+path = "tests/run_allocations.rs"
+
+[[test]]
+name = "view_allocates_nothing"
+path = "tests/view_allocates_nothing.rs"
 
 [[test]]
 name = "fixtures"

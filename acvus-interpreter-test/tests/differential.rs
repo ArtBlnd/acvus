@@ -43,7 +43,7 @@ enum Verdict {
 const LIMIT: Duration = Duration::from_secs(30);
 
 fn outcome(source: &str, opt: Opt) -> Result<Outcome, Lapse> {
-    corpus::attempt_within(source, opt, Stage::Run, LIMIT)
+    acvus_interpreter_test::attempt_within!(source, opt, Stage::Run, LIMIT)
 }
 
 fn verdict(source: &str) -> Verdict {
