@@ -61,7 +61,12 @@ collections.
    stage boundary, no virtual `next`. `next` (the `while let` pull) is
    the one pull consumer: the `Iter` holds a cursor into its source and a
    buffer for a many-out stage, and pulls one output through the same
-   stage array.
+   stage array. **A consumer matches the stage array once**, on entry, and
+   runs a fused loop for the shapes it names (`map → collect`, `filter →
+   collect`, `filter → count`, `map → sum`, `filter → any`, and the others
+   the scripts use); every other shape runs the generic loop, which
+   matches each stage per element. The shapes are values, so an unnamed
+   shape is the generic loop and never a refusal.
 
 5. **Two sources are a source, not a stage.** `chain(a, b)`, `chain_all`,
    `zip` combine pipelines; the result is a new source (`Iter<(), T>`)
