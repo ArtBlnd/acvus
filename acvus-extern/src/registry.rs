@@ -6,12 +6,13 @@ use std::fmt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
     CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Task,
-    TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, matches_pattern, unify_patterns,
+    Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, matches_pattern,
+    unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::handler::{DeclaredInstance, ExternHandler, Instances};
+use crate::handler::{DeclaredInstance, Entry, ExternHandler, InstanceEntries, Instances};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -28,6 +29,20 @@ pub struct FnDecl {
     pub cast: bool,
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
+    /// What each type variable is required to have an instance of
+    /// (RFC-0067 Decision 1), in the order `#[extern_fn]` read the bounds.
+    pub requires: Vec<Requirement>,
+}
+
+/// One `Instance<sig::S<..>>` bound of a declaration: which of the
+/// declaration's type variables carries it, and which signature it names.
+/// The order of these on a `FnDecl` is the order of the entries in the
+/// carrier `#[extern_fn]` writes for that variable.
+pub struct Requirement {
+    /// The variable's position among the declaration's type variables,
+    /// which is its position in `FnDecl::bounds`.
+    pub var: usize,
+    pub signature: QualifiedRef,
 }
 
 /// A shared signature: a name with a polymorphic type and no body.
@@ -147,6 +162,7 @@ where
             bounds: vec![TyVarBound::Any; ty_vars.len()],
             cast: true,
             instance_of: None,
+            requires: Vec::new(),
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -266,6 +282,12 @@ pub enum CombineError {
         function: QualifiedRef,
         reason: &'static str,
     },
+    /// A declaration requiring a signature no registry declares
+    /// (RFC-0067 Decision 1).
+    RequiredSignatureUnknown {
+        function: QualifiedRef,
+        signature: QualifiedRef,
+    },
     /// A handler that runs above the task its declaration names (RFC-0046).
     HandlerTask {
         function: String,
@@ -293,6 +315,13 @@ impl fmt::Display for CombineError {
                 write!(f, "{signature:?} has two instances for {ty:?}")
             }
             Self::CastShape { function, reason } => write!(f, "cast {function:?}: {reason}"),
+            Self::RequiredSignatureUnknown {
+                function,
+                signature,
+            } => write!(
+                f,
+                "{function:?} requires an instance of {signature:?}, which no registry declares"
+            ),
             Self::HandlerTask {
                 function,
                 declared,
@@ -361,6 +390,68 @@ pub struct Externs<R: Runtime> {
     pub types: TypeRegistry,
     pub handlers: Handlers<R>,
     pub space: FxHashMap<QualifiedRef, SpaceHooks<R>>,
+    /// What a call site resolves a required instance through (RFC-0067
+    /// Decision 3).
+    pub instances: InstanceTable<R>,
+}
+
+/// One instance of one shared signature as a site table needs it: the
+/// ground type it stands at, and the plain function that runs it.
+pub struct InstanceAt<R>
+where
+    R: Runtime,
+{
+    pub ty: PolyTy,
+    /// `None` where the instance has no entry — it holds a `#[state]`
+    /// value, takes a projection parameter, or is reached only by the glue
+    /// that suspends the caller (RFC-0067, the entry's refusal list).
+    pub entry: Option<Entry<R>>,
+}
+
+/// Every shared signature's instances, in the order `Externs::combine`
+/// collected them. This is the registry half of `InstanceEntries`; the
+/// site table is filled from it once, before the first call.
+pub struct InstanceTable<R>
+where
+    R: Runtime,
+{
+    by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt<R>>>,
+}
+
+impl<R> Default for InstanceTable<R>
+where
+    R: Runtime,
+{
+    fn default() -> Self {
+        Self {
+            by_signature: FxHashMap::default(),
+        }
+    }
+}
+
+impl<R> InstanceEntries<R> for InstanceTable<R>
+where
+    R: Runtime,
+{
+    fn entry_at(&self, signature: QualifiedRef, ty: &Ty) -> Entry<R> {
+        let Some(instances) = self.by_signature.get(&signature) else {
+            panic!("{signature:?} is required but no registry declares it")
+        };
+        let Some(found) = instances.iter().find(|at| matches_pattern(ty, &at.ty)) else {
+            panic!(
+                "{signature:?} has no instance at {ty:?}, so the OneOf bound the requirement \
+                 was met with admitted a type it does not hold (RFC-0067 Decision 3)"
+            )
+        };
+        let Some(entry) = found.entry else {
+            panic!(
+                "the instance of {signature:?} at {ty:?} has no entry, so nothing can require \
+                 it; an instance holding a `#[state]` value, taking a projection parameter, or \
+                 reached only by the glue that suspends the caller is written without one"
+            )
+        };
+        entry
+    }
 }
 
 /// The instances collected for one signature.
@@ -368,6 +459,9 @@ struct Collected<R: Runtime> {
     decl: SignatureDecl,
     instance_types: Vec<PolyTy>,
     instances: Vec<DeclaredInstance<R>>,
+    /// One per declared instance, which `instances` is not: a declaration
+    /// with a `sync =` companion contributes two handlers and one type.
+    entries: Vec<InstanceAt<R>>,
     casts: Vec<CastRule>,
 }
 
@@ -412,6 +506,7 @@ impl<R: Runtime> Externs<R> {
                         decl: sig,
                         instance_types: Vec::new(),
                         instances: Vec::new(),
+                        entries: Vec::new(),
                         casts: Vec::new(),
                     },
                 );
@@ -445,7 +540,21 @@ impl<R: Runtime> Externs<R> {
 
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
-        for ExternFn { decl, instances } in plain {
+        for ExternFn {
+            mut decl,
+            instances,
+        } in plain
+        {
+            for required in &decl.requires {
+                let collected = signatures.get(&required.signature).ok_or(
+                    CombineError::RequiredSignatureUnknown {
+                        function: decl.qref,
+                        signature: required.signature,
+                    },
+                )?;
+                decl.bounds[required.var] =
+                    meet(&decl.bounds[required.var], &collected.instance_types);
+            }
             if decl.cast {
                 types.register_cast(cast_rule(&decl)?);
             }
@@ -467,7 +576,9 @@ impl<R: Runtime> Externs<R> {
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
+        let mut by_signature: FxHashMap<QualifiedRef, Vec<InstanceAt<R>>> = FxHashMap::default();
         for c in collected {
+            by_signature.insert(c.decl.qref, c.entries);
             let mut bounds = c.decl.bounds;
             if let Some(first) = bounds.first_mut() {
                 *first = meet(first, &c.instance_types);
@@ -494,6 +605,7 @@ impl<R: Runtime> Externs<R> {
             types,
             handlers,
             space,
+            instances: InstanceTable { by_signature },
         })
     }
 }
@@ -543,6 +655,10 @@ fn add_instance<R: Runtime>(
         rule.fn_ref = sig;
         collected.casts.push(rule);
     }
+    collected.entries.push(InstanceAt {
+        ty: ty.clone(),
+        entry: admitted.iter().find_map(|i| i.handler.entry()),
+    });
     collected.instance_types.push(ty);
     collected.instances.extend(admitted);
     Ok(())

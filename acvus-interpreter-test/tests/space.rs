@@ -360,6 +360,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         interner: &i,
         externs: &functions,
         context_names: &compiled.context_names,
+        instances: &acvus_extern::NoInstances,
     };
     let prepared: Vec<(
         acvus_mir::graph::QualifiedRef,

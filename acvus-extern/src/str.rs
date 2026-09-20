@@ -122,7 +122,7 @@ where
 {
     type Site = ();
 
-    fn site(_: crate::handler::ArgAt<'_>) {}
+    fn site(_: crate::handler::ArgAt<'_, Rt>) {}
 }
 
 impl<'a, Rt> Arg<'a, Rt> for ByStr

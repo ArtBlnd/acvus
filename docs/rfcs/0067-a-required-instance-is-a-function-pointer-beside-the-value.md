@@ -218,43 +218,170 @@ with an instance of `next`.
 
 ## Consequences
 
-Step 2 landed its first half: the entry and the word. What a requirement is
-— the bound, the appended argument, the carrier — is not built, so nothing
-yet requires an instance and nothing yet passes one.
+Step 2 is built: an instance has an entry, a declaration records what it
+requires, the checker's bound is met with the instance types, and the
+pointer is placed in the call site's table. Nothing was added to the IR, to
+typeck's call resolution, or to lowering.
 
-### The entry
+### The requirement is a bound of the declaration
+
+A handler writes the requirement at its own variables:
+
+```rust
+#[extern_fn(effect = pure)]
+fn same<T, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: T, b: T) -> bool
+where
+    T: Var<kind::Type> + Carrier<Rt> + Instance<sig::eq<T, Rt>, Rt>,
+    Rt: Runtime,
+{
+    T::call(&a, rt, frame, (&b,))
+}
+```
+
+`extern_signature!` gives each marker the signature's own declared
+variables, with the runtime appended as `__Rt` where the signature declares
+none, and every parameter defaulted so that `instance_of = sig::eq` still
+resolves. `#[extern_fn]` reads each variable's `Instance<…>` bounds in
+order and records them on `FnDecl::requires` as `Requirement { var,
+signature }`; two bounds on one variable naming one signature are refused
+at the macro, since a type has at most one instance of a signature
+(RFC-0019) and the second could only select the first's entry.
+
+`Carrier<Rt>` stands in the bound beside `Instance` and is not redundant.
+What a call takes and gives is the signature's, read through `<sig::eq<T,
+Rt> as Signature<Rt>>`, and that projection normalizes only where the
+impl applies — which is where `T` is a carrier. Without it the handler
+would have to restate `Rest` and `Ret`, which is the restatement the whole
+decision exists to avoid.
+
+### The check is the `OneOf` meet RFC-0019 defined
+
+`Externs::combine` meets each required variable's bound with
+`OneOf(every type with an instance of the signature)`. Typeck's existing
+`OneOf` check refuses a call outside it with the sentence it already has:
+no new error kind, no new decision, no new pass. A requirement naming a
+signature no registry declares is `CombineError::RequiredSignatureUnknown`.
+
+### The pointer lives in the site table
+
+`ArgAt` gains one field, `instances: &dyn InstanceEntries<Rt>`, and so
+gains the runtime as a type parameter. `Externs::combine` builds the
+`InstanceTable` behind it — per signature, the ground type each instance
+stands at and that instance's entry — and `PrepareCtx` carries a reference
+to it into `arg_sites`. A parameter whose type is a bounded variable is
+`ByBound<C>`, whose `Sited::Site` is `[Entry<Rt>; n]`, one per bound in
+bound order; a `()`-sited parameter ignores the new field entirely. The
+MIR does not change, the argument run does not widen, and no value flows:
+the fact is static at the site, which is why it is neither a MIR value nor
+an argument word.
+
+### The carrier is a struct the macro writes
+
+Per bounded variable, `#[extern_fn]` writes a struct holding `Owned<Rt>`
+and one `Entry<Rt>` field per bound, with `Var<kind::Type>`, `TyArg` (the
+variable's own acvus type), `Carrier<Rt>`, and one `impl Instance<S, Rt>`
+per field. `Arg::take` builds it from the argument's value and the site's
+entries. There is no `frunk` index and no bundle: the fields are named
+where they are written, and each impl names its own.
+
+**A bounded variable stands only where a parameter takes one whole value.**
+A carrier is the value plus `n` pointers, and the machine's storage holds
+the value alone, so there is nothing behind `&T` shaped like a carrier and
+no room for one in a `Vec<T>`'s buffer — `Vec<T>` crosses as
+`Vec<Owned<Rt>>`, and reading it back as a `Vec<carrier>` would reinterpret
+a one-word element as an `n + 1`-word one. `#[extern_fn]` refuses every
+other position with that sentence. The consequence is that a container
+handler cannot require a signature of its element while the element is read
+through the container: `index_of(xs: &Vec<T>, x: &T)` is not writable, and
+nor is any by-value form of it. Requiring an instance of a container's
+element waits for a crossing that carries the site, which is a decision for
+step 5 and not this one.
+
+### One frame convention
+
+`Entry<Rt>`, `AtEntry` and the generated entry `fn`s take
+`frame: &mut Rt::Frame<'_>`; a handler already names the frame that way,
+so an entry passes its own straight through. `Handler`'s closure keeps the
+window by value, and the one owned window → `&mut` in the crate is the glue
+closure `#[extern_fn]` writes, once per declaration.
+
+Taking the window by borrow in that closure as well was built first and
+withdrawn on the measurement. `Handler::call` then has to give the moved
+window a stack slot to lend it, the address escapes into the closure, and
+`benches/asm_probe.rs` counted sixteen `Op::run` bodies that ended in a
+cleanup landing pad instead of the tail jump — six `CallExtern1` and two
+`CallWindow` over `flatten`, four more of the same pair over `vec_deque`,
+two `CallExtern2` over `skip`, and four `CallExtern2` over `filter` and
+`map` that kept the jump and gained a `ret` beside it. With the convention
+above the figure is unmoved: 2741 tail jumps, 46 chain ends, 28 listed
+stack addresses. No `Runtime::reborrow` exists and none is added; one
+method on every host buys one word.
+
+### The customer
+
+`acvus-extern/tests/decl.rs` declares `same<T, Rt>` above and runs it
+through `Tiny` at `i64`, both instances of `t::eq` being in the combined
+registry, and asserts that `same`'s variable is bounded by
+`OneOf([i64, Point])` — so a call at `String` is refused by the checker's
+own sentence.
+
+It does not run at `Point`, and the reason is `Point`'s and not the
+requirement's: an object converts at the boundary, so a `&Point` argument
+names no storage shaped like a `Point`, and `t::eq @ Point` is unreachable
+through the values ABI whether a call site or a requirement reaches for it.
+`an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi`
+pins that on the entry itself. An instance of a signature whose parameters
+are `&T` is therefore usable as a requirement only at types that keep
+storage of their own — the scalars, `String`, and the extension types.
+
+### What waits
+
+- **A `Monomorphize` member's impls.** `impl Instance<sig::S<Concrete,
+  Rt>, Rt> for Concrete` needs `sig::S<Concrete, Rt>: Signature<Rt>`,
+  whose `This` is a `Carrier<Rt>`, and a member is a Rust type rather than
+  a carrier. Either `Instance` grows items of its own again — which puts
+  `Rest` and `Ret` back in the requiring handler's bound — or `Signature`
+  splits into the shape and the receiver. It is a design decision and not a
+  transcription, so it is not written here.
+- **A requirement of a container's element**, per the paragraph above.
+- **Pattern instances and the solver's deferred requirement** (step 3),
+  unchanged from the order of work.
+
+An instance whose parameter list is not `&V` at the signature's first
+variable, or whose result is not one of the runtime's values, gets no
+`Signature` impl, and the missing impl is the refusal: `std::vec`,
+`vec::filled` and `iter::next` cannot be required as bounds today.
+
+### The entry, unchanged from the first half
 
 ```rust
 pub type Entry<Rt> = for<'a, 'w> unsafe fn(
     &'a Rt,
-    <Rt as Runtime>::Frame<'w>,
+    &'a mut <Rt as Runtime>::Frame<'w>,
     &'a [<Rt as Runtime>::Value],
     &'a mut [<Rt as Runtime>::Value],
 );
 ```
 
-`Handler::call`'s shape without the `&self`. `#[extern_fn]` writes one `fn`
-item per instance beside the Rust body and names it through a zero-sized
-type implementing `AtEntry`, which the glue carries as a type parameter
-rather than a field — a glue stays the closure and nothing else.
-`HandlerFactory::entry` and `ExternHandler::entry` read it.
+`#[extern_fn]` writes one `fn` item per instance beside the Rust body and
+names it through a zero-sized type implementing `AtEntry`, which the glue
+carries as a type parameter rather than a field.
 
 An entry is written for an instance of a shared signature and for nothing
-else: a requirement resolves to an instance, and a plain declaration is
-reached only through its call site. An instance still has none if it holds
-a `#[state]` value, takes a projection parameter, or is reached only by the
-glue that suspends the caller (`heavy`, and an `async fn` without a
-`sync =` companion). Of the standard registries' synchronous instances,
-**none** is in that set: `acvus-interpreter-test/tests/instance_entry.rs`
-asserts it over the fifteen declared signatures, so rule 3's refusal list is
-empty and the refusal is a path no registered instance reaches today.
+else. An instance still has none if it holds a `#[state]` value, takes a
+projection parameter, or is reached only by the glue that suspends the
+caller (`heavy`, and an `async fn` without a `sync =` companion). Of the
+standard registries' synchronous instances, **none** is in that set:
+`acvus-interpreter-test/tests/instance_entry.rs` asserts it over the
+fifteen declared signatures, so the refusal list is empty and the refusal
+is a path no registered instance reaches today. An intrinsic such as
+`StringClone` is not a registry instance, so the `OneOf` meet excludes it
+before the entry is ever asked for.
 
-### The word
-
-`acvus-interpreter`'s `Kind::Entry`: the value's word is the address of an
-`Entry<AcvusRuntime>`. The `Runtime` contract gains `entry_value` and
-`entry_of`; a runtime that carries no entry says so, as it does for every
-other shape it does not hold.
+`acvus-interpreter`'s `Kind::Entry` and the `Runtime` contract's
+`entry_value`/`entry_of` carry an entry as one of the runtime's values.
+Nothing requires them yet: a requirement resolves at the site table, in
+Rust, and the entry never becomes a machine value on that path.
 
 ### What it cost
 
@@ -263,9 +390,8 @@ longer inlined into the operation holding it, and the operation ends in
 `call`/`ret` instead of the tail jump `benches/asm_probe.rs` asserts.
 Measured on the release machine: written for every declaration, 89
 operations lose the tail jump — 20 `CallExtern2`, 10 `CallWindow`, 3
-`CallExtern1`, 2 `CallExtern3` among them — against 2734/39/28 with no
-entry written at all. Written for instances alone, the figure is unchanged
-at 2734/39/28. That is why the entry is per instance and not per
+`CallExtern1`, 2 `CallExtern3` among them. Written for instances alone, the
+figure is unchanged. That is why the entry is per instance and not per
 declaration, and it is the ceiling on how far entries may spread: a body
 that both an operation and an entry reach is a body the operation calls.
 
@@ -273,28 +399,3 @@ The same second caller doubles an author's parameter refusal, because the
 entry `fn` restates the declaration's parameter markers and the trait
 obligation then fails at two spans. Per instance, no `compile_fail`
 expectation moves.
-
-### What waits
-
-`Instance<S>`, the bundle carrier `Bound<Rt, P>`, the macro reading
-`Instance<…>` bounds onto the declaration, the check and the appended
-argument in typeck and lowering, the `Monomorphize` member's impls, and
-both customers.
-
-Coherence is the open question the carrier meets first. The two impls the
-bundle wants —
-
-```rust
-impl<Rt, S, Rest> Instance<S> for Bound<Rt, (Ptr<S>, Rest)>
-impl<Rt, S, Head, Rest> Instance<S> for Bound<Rt, (Head, Rest)>
-    where Bound<Rt, Rest>: Instance<S>
-```
-
-— overlap at `Head = Ptr<S>`, and so does any fixed-arity set of them
-(`(Ptr<A>, Ptr<S>)` and `(Ptr<S>, Ptr<B>)` meet at `A = B = S`). That two
-requirements of one variable never name one signature at one type is true
-of every declaration and is not a fact coherence can use. The slot must
-therefore be selected by an index the trait itself carries, as `frunk`'s
-`Selector<T, Index>` does; the bound a handler writes stays
-`Instance<sig::clone<T, Rt>>`, with the macro supplying the index when it
-rewrites the handler's generics.

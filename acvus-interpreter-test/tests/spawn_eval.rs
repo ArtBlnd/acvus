@@ -150,6 +150,7 @@ async fn spawn_eval_basic() {
         interner: &interner,
         externs: &no_externs,
         context_names: &no_contexts,
+        instances: &acvus_extern::NoInstances,
     };
     let prepare = |module| {
         Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
@@ -278,6 +279,7 @@ async fn spawn_eval_multi_args() {
         interner: &interner,
         externs: &no_externs,
         context_names: &no_contexts,
+        instances: &acvus_extern::NoInstances,
     };
     let prepare = |module| {
         Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(

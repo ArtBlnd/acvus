@@ -65,6 +65,9 @@ pub struct CompileResult {
     pub context_names: FxHashMap<QualifiedRef, Astr>,
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
+    /// What a bounded parameter's site table resolves its entries through
+    /// (RFC-0067 Decision 3).
+    pub instances: acvus_extern::InstanceTable<AcvusRuntime>,
 }
 
 fn compile(
@@ -259,6 +262,7 @@ where
         functions: extern_fns,
         types: mut type_registry,
         handlers,
+        instances,
         ..
     } = Externs::combine(extern_registries, interner).expect("registries combine");
     declare_types(&mut type_registry);
@@ -352,6 +356,7 @@ where
         context_names,
         fn_types,
         extern_executables,
+        instances,
     })
 }
 
@@ -367,6 +372,7 @@ pub fn execute_compiled(
         interner,
         externs: &functions,
         context_names: &cr.context_names,
+        instances: &cr.instances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = cr
         .modules
@@ -1297,6 +1303,7 @@ pub mod corpus {
                 interner: &interner,
                 externs: &functions,
                 context_names: &cr.context_names,
+                instances: &cr.instances,
             };
             catch_unwind(AssertUnwindSafe(|| {
                 cr.modules

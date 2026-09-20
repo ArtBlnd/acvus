@@ -13,6 +13,7 @@ mod erased;
 mod func;
 mod handler;
 mod identity;
+mod instance;
 mod len;
 mod loan;
 mod obj;
@@ -33,12 +34,13 @@ pub use erased::Erased;
 pub use func::{ArgTypes, Args, CallArgs, CallToken, Closure, ClosureFn};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtEntry, AtSite,
-    Borrowable, BorrowableSpecialized, ByRef, ByValue, DeclaredInstance, DirectOp, Entry,
-    ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, Instances, IntoRun,
-    NoEntry, NoSites, Parameters, REGISTER_FORM, Ret, Sited, SitesNoParameterReads, Specialized,
-    TakenForm, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, glue,
-    glue_at_entry,
+    Borrowable, BorrowableSpecialized, ByBound, ByRef, ByValue, DeclaredInstance, DirectOp, Entry,
+    ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries,
+    Instances, IntoRun, NoEntry, NoInstances, NoSites, Parameters, REGISTER_FORM, Ret, Sited,
+    SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
+    ValuesOnly, Width, async_glue, glue, glue_at_entry,
 };
+pub use instance::{Carrier, Instance, Signature};
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{
@@ -52,8 +54,9 @@ pub use projection::{
 };
 pub use reference::Ref;
 pub use registry::{
-    CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, Manifest,
-    MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
+    CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, InstanceAt,
+    InstanceTable, Manifest, MemberType, Registry, Requirement, SharedSignature, SignatureDecl,
+    family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
 pub use slice::{Elements, Slice, Words};

@@ -11,19 +11,65 @@ use std::sync::Arc;
 
 use acvus_mir::ty::{PolyTy, Task, Ty};
 use acvus_utils::Interner;
+use acvus_utils::QualifiedRef;
 use futures::future::BoxFuture;
 
 use crate::loan::Loan;
 use crate::obj::{Cross, Form, FormKind, One, OneValue, Pair, Run};
 use crate::runtime::Runtime;
 
+/// Where a site table finds the instance a declaration's bound requires:
+/// the combined registry's entries, keyed by signature and by the ground
+/// type an instance stands at (RFC-0067 Decision 3).
+pub trait InstanceEntries<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
+    /// # Panics
+    /// No instance of `signature` stands at `ty`. The checker admits a call
+    /// only at a type inside the `OneOf` bound `Externs::combine` met the
+    /// requirement with, so reaching this is a defect in that meet and not
+    /// a program error.
+    fn entry_at(&self, signature: QualifiedRef, ty: &Ty) -> Entry<Rt>;
+}
+
+/// The registry of a site built where no declaration requires an instance:
+/// every test fixture that fills a table by hand, and `TypesOnly`.
+pub struct NoInstances;
+
+impl<Rt> InstanceEntries<Rt> for NoInstances
+where
+    Rt: Runtime,
+{
+    fn entry_at(&self, _: QualifiedRef, _: &Ty) -> Entry<Rt> {
+        panic!(
+            "this call site was built with no registry, so a required instance cannot be resolved (RFC-0067 Decision 3)"
+        )
+    }
+}
+
 /// One argument of one call site as the host settled it: the type the
-/// checker gave it, and the interner that resolves the names in that type.
-#[derive(Clone, Copy)]
-pub struct ArgAt<'a> {
+/// checker gave it, the interner that resolves the names in that type, and
+/// the registry a bounded parameter resolves its entries from.
+pub struct ArgAt<'a, Rt>
+where
+    Rt: Runtime,
+{
     pub interner: &'a Interner,
     pub ty: &'a Ty,
+    pub instances: &'a dyn InstanceEntries<Rt>,
 }
+
+impl<Rt> Clone for ArgAt<'_, Rt>
+where
+    Rt: Runtime,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Rt> Copy for ArgAt<'_, Rt> where Rt: Runtime {}
 
 /// A call site of `n` arguments typed `Unit`. Obligation across artifacts: a
 /// projection parameter reaching one panics in
@@ -37,6 +83,7 @@ pub struct ArgAt<'a> {
 pub struct SitesNoParameterReads {
     interner: Interner,
     ty: Ty,
+    instances: NoInstances,
 }
 
 impl Default for SitesNoParameterReads {
@@ -44,16 +91,21 @@ impl Default for SitesNoParameterReads {
         SitesNoParameterReads {
             interner: Interner::new(),
             ty: Ty::Unit,
+            instances: NoInstances,
         }
     }
 }
 
 impl SitesNoParameterReads {
-    pub fn args(&self, n: usize) -> Vec<ArgAt<'_>> {
+    pub fn args<Rt>(&self, n: usize) -> Vec<ArgAt<'_, Rt>>
+    where
+        Rt: Runtime,
+    {
         vec![
             ArgAt {
                 interner: &self.interner,
                 ty: &self.ty,
+                instances: &self.instances,
             };
             n
         ]
@@ -86,7 +138,7 @@ where
     /// closure and nothing else.
     type Site: Clone + Send + Sync + 'static;
 
-    fn site(at: ArgAt<'_>) -> Self::Site;
+    fn site(at: ArgAt<'_, Rt>) -> Self::Site;
 }
 
 /// How one Rust parameter takes its argument out of a call's argument run.
@@ -132,7 +184,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_>) {}
+    fn site(_: ArgAt<'_, Rt>) {}
 }
 
 impl<T, Rt> Sited<Rt> for ByValue<T, Specialized>
@@ -142,7 +194,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_>) {}
+    fn site(_: ArgAt<'_, Rt>) {}
 }
 
 impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Uniform>
@@ -153,7 +205,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_>) {}
+    fn site(_: ArgAt<'_, Rt>) {}
 }
 
 impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Specialized>
@@ -164,7 +216,7 @@ where
 {
     type Site = ();
 
-    fn site(_: ArgAt<'_>) {}
+    fn site(_: ArgAt<'_, Rt>) {}
 }
 
 impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
@@ -223,6 +275,41 @@ where
     unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T> {
         // SAFETY: as the uniform impl's, at the specialized representation.
         unsafe { M::borrow::<T, Specialized, Rt>(rt, &run[0]) }
+    }
+}
+
+/// A parameter whose type is a bounded variable's carrier: the call passes
+/// one of the runtime's values, and the site table holds the entries beside
+/// it (RFC-0067 Decision 4). The argument run is no wider than it would be
+/// without the bound.
+pub struct ByBound<C>(PhantomData<fn() -> C>);
+
+impl<C, Rt> Sited<Rt> for ByBound<C>
+where
+    C: crate::instance::Carrier<Rt>,
+    Rt: Runtime,
+{
+    type Site = <C as crate::instance::Carrier<Rt>>::Entries;
+
+    fn site(at: ArgAt<'_, Rt>) -> Self::Site {
+        <C as crate::instance::Carrier<Rt>>::entries(at)
+    }
+}
+
+impl<'a, C, Rt> Arg<'a, Rt> for ByBound<C>
+where
+    C: crate::instance::Carrier<Rt>,
+    Rt: Runtime,
+{
+    type Out = C;
+    type Form = One;
+
+    unsafe fn take<'s>(
+        _: &'a Rt,
+        run: &'a [Rt::Value],
+        site: &'s <C as crate::instance::Carrier<Rt>>::Entries,
+    ) -> C {
+        <C as crate::instance::Carrier<Rt>>::of(run[0], site)
     }
 }
 
@@ -708,7 +795,7 @@ where
     /// How many of the runtime's values the whole argument run is.
     const WIDTH: usize;
 
-    fn sites(args: &[ArgAt<'_>]) -> Self::Sites;
+    fn sites(args: &[ArgAt<'_, Rt>]) -> Self::Sites;
 
     /// # Safety
     /// As `Arg::take`, for each parameter over its own values of `run`.
@@ -738,10 +825,23 @@ where
 }
 
 /// A resolved instance's handler as a plain function: the values ABI of
-/// `Handler::call` without the `&self` (RFC-0067 Decision 3).
+/// `Handler::call` without the `&self` and with the window lent rather than
+/// moved (RFC-0067 Decision 3).
+///
+/// The window is lent because an entry's caller is another handler, which
+/// was handed the window by value and keeps it for its own further calls.
+/// There is no `Runtime::reborrow` for it to make a second handle with, and
+/// that absence is a decision: one method on every host buys one word.
+///
+/// Letting `Handler`'s own closure take the window this way too was built
+/// and withdrawn. `Handler::call` then has to give the moved window a stack
+/// slot to lend, the address escapes into the closure, and
+/// `benches/asm_probe.rs` counted sixteen `Op::run` bodies that ended in the
+/// cleanup landing pad instead of the tail jump — `flatten`, `vec_deque`,
+/// `skip`, `filter` and `map`.
 pub type Entry<Rt> = for<'a, 'w> unsafe fn(
     &'a Rt,
-    <Rt as Runtime>::Frame<'w>,
+    &'a mut <Rt as Runtime>::Frame<'w>,
     &'a [<Rt as Runtime>::Value],
     &'a mut [<Rt as Runtime>::Value],
 );
@@ -924,7 +1024,7 @@ where
     /// types `at_site` reads. `Width::args` counts the runtime's values
     /// instead, and a `&str` or a slice parameter is two of them.
     fn arity(&self) -> usize;
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AtSite<Rt>>;
+    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AtSite<Rt>>;
     /// This handler as a plain function (RFC-0067 Decision 3), for the
     /// declarations that have one.
     fn entry(&self) -> Option<Entry<Rt>>;
@@ -993,7 +1093,7 @@ where
     fn width(&self) -> Width;
     /// As `HandlerFactory::arity`.
     fn arity(&self) -> usize;
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AsyncAtSite<Rt>>;
+    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>>;
 }
 
 /// As `AtSite`, for a declaration whose Rust body is an `async fn`.
@@ -1170,7 +1270,7 @@ macro_rules! parameters {
             const WIDTH: usize = 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*;
 
             #[allow(unused_variables)]
-            fn sites(args: &[ArgAt<'_>]) -> Self::Sites {
+            fn sites(args: &[ArgAt<'_, Rt>]) -> Self::Sites {
                 assert_eq!(
                     args.len(),
                     <Self as Parameters<Rt>>::ARITY,
@@ -1341,7 +1441,7 @@ where
         <A as Parameters<Rt>>::ARITY
     }
 
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AtSite<Rt>> {
+    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AtSite<Rt>> {
         Box::new(self.at(args))
     }
 
@@ -1355,7 +1455,7 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
 {
-    pub fn at(self, args: &[ArgAt<'_>]) -> Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E> {
+    pub fn at(self, args: &[ArgAt<'_, Rt>]) -> Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E> {
         Glue {
             f: self.f,
             sites: <A as Parameters<Rt>>::sites(args),
@@ -1457,7 +1557,7 @@ where
         <A as Parameters<Rt>>::ARITY
     }
 
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AsyncAtSite<Rt>> {
+    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>> {
         Box::new(self.at(args))
     }
 }
@@ -1467,7 +1567,7 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
 {
-    pub fn at(self, args: &[ArgAt<'_>]) -> AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites> {
+    pub fn at(self, args: &[ArgAt<'_, Rt>]) -> AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites> {
         AsyncGlue {
             f: self.f,
             sites: <A as Parameters<Rt>>::sites(args),

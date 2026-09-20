@@ -809,6 +809,7 @@ fn a_shared_projection_reads_every_field_where_it_lies() {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
+            instances: &acvus_extern::NoInstances,
         });
     let point = unsafe {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -842,6 +843,7 @@ fn an_exclusive_projection_writes_through_to_the_object() {
             <PointMut<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
                 interner: &interner,
                 ty: &settled,
+                instances: &acvus_extern::NoInstances,
             });
         let point = unsafe {
             <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -870,6 +872,7 @@ fn a_partial_projection_borrows_the_field_it_names() {
         <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
+            instances: &acvus_extern::NoInstances,
         });
     let only = unsafe {
         <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
@@ -932,6 +935,7 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
         <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
+            instances: &acvus_extern::NoInstances,
         });
 
     let borrowed = allocations_of(|| {
@@ -975,6 +979,7 @@ fn a_partial_projections_table_names_the_objects_position_and_not_its_own() {
     let at = acvus_extern::ArgAt {
         interner: &interner,
         ty: &settled,
+        instances: &acvus_extern::NoInstances,
     };
 
     let whole = <PointRef<'static> as acvus_extern::Projected<Counted>>::table(at);
@@ -1025,6 +1030,7 @@ fn shape_table() -> acvus_extern::VariantAt<3, ((), acvus_extern::ObjectAt<2, ((
     <ShapeRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
         interner: &SYMBOLS,
         ty: &settled,
+        instances: &acvus_extern::NoInstances,
     })
 }
 

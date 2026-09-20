@@ -19,7 +19,7 @@ use syn::{
 mod generics;
 mod subst;
 
-use generics::{VarKind, Vars};
+use generics::{VarKind, Vars, signature_path};
 
 // -- #[extern_fn] ----------------------------------------------------
 
@@ -235,7 +235,14 @@ fn generate_extern_fn(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let is_cast = take_marker_attr(&mut func.attrs, "extern_cast");
     let is_async = func.sig.asyncness.is_some();
-    let vars = Vars::from_generics(&func.sig.generics)?;
+    let mut vars = Vars::from_generics(&func.sig.generics)?;
+    let declared_ident = func.sig.ident.clone();
+    let carrier_ident = move |var: &Ident| format_ident!("__ExternBound{declared_ident}{var}");
+    vars.set_carriers(&|var| {
+        let ident = carrier_ident(var);
+        syn::parse_quote! { #ident<__R> }
+    });
+    let vars = vars;
     let Signature {
         takes_runtime,
         takes_frame,
@@ -276,6 +283,52 @@ fn generate_extern_fn(
                  Return `String`, or declare this at `Sync`.",
             ));
         }
+    }
+
+    for bounded in vars.bounded() {
+        let stands = |ty: &Type| Vars::is_exactly(ty, &bounded.ident);
+        let elsewhere = params
+            .iter()
+            .filter(|p| !(p.mode == Mode::Value && stands(&p.ty)))
+            .map(|p| &p.ty)
+            .chain(std::iter::once(&ret))
+            .any(|ty| Vars::mentions(ty, &bounded.ident));
+        if elsewhere {
+            return Err(syn::Error::new(
+                bounded.ident.span(),
+                format!(
+                    "`{}` requires an instance, so it is filled by a carrier: the value with \
+                     one entry beside it per bound (RFC-0067 Decision 4). A carrier is wider \
+                     than one of the runtime's values, so it stands only where a parameter \
+                     takes one whole value — `x: {0}` — and nowhere else. Behind `&{0}` the \
+                     storage the caller lent holds the value alone, inside `Vec<{0}>` the \
+                     container's buffer does, and a result carries no site. Take the bounded \
+                     variable by value.",
+                    bounded.ident
+                ),
+            ));
+        }
+        if !params
+            .iter()
+            .any(|p| p.mode == Mode::Value && stands(&p.ty))
+        {
+            return Err(syn::Error::new(
+                bounded.ident.span(),
+                format!(
+                    "`{}` requires an instance and no parameter takes it, so the call site \
+                     has nothing to resolve the entry at (RFC-0067 Decision 3).",
+                    bounded.ident
+                ),
+            ));
+        }
+    }
+    if vars.bounded().count() > 0 && attr.instance_of.is_some() {
+        return Err(syn::Error::new(
+            func.sig.ident.span(),
+            "an instance of a shared signature requires none of its own: its type is the \
+             signature's at one concrete type, and a signature's variables carry no bounds \
+             (RFC-0019)",
+        ));
     }
 
     let fn_ident = &func.sig.ident;
@@ -453,6 +506,9 @@ fn generate_extern_fn(
             .map(|(p, ty)| {
                 let c = crossing(&p.ty, member);
                 match p.mode {
+                    Mode::Value if vars.bounded().any(|b| Vars::is_exactly(&p.ty, &b.ident)) => {
+                        quote! { ::acvus_extern::ByBound<#ty> }
+                    }
                     Mode::Value => quote! { ::acvus_extern::ByValue<#ty, #c> },
                     Mode::Borrow => {
                         quote! { ::acvus_extern::ByRef<#ty, ::acvus_extern::Shared, #c> }
@@ -491,7 +547,8 @@ fn generate_extern_fn(
         let rt_arg = takes_runtime.then(|| quote! { __rt, });
         // A synchronous handler is handed the window by value and lends it
         // onward; an `async` one is handed a borrow, because the future it
-        // returns is what holds that borrow.
+        // returns is what holds that borrow. An entry is handed a borrow
+        // too: its caller is another handler, which already has one.
         let frame_arg = takes_frame.then(|| match awaits {
             true => quote! { __frame, },
             false => quote! { &mut __frame, },
@@ -500,7 +557,9 @@ fn generate_extern_fn(
             (true, false) => quote! { mut __frame },
             _ => quote! { __frame },
         };
+        let entry_frame_arg = takes_frame.then(|| quote! { __frame, });
         let call = quote! { #callee #turbofish (#rt_arg #frame_arg #(#passed),*) };
+        let entry_call = quote! { #callee #turbofish (#rt_arg #entry_frame_arg #(#passed),*) };
         if awaits {
             quote! {
                 ::acvus_extern::ExternHandler::awaited({
@@ -524,7 +583,7 @@ fn generate_extern_fn(
                 #[doc(hidden)]
                 unsafe fn #entry_ident<__R>(
                     __rt: &__R,
-                    mut __frame: <__R as ::acvus_extern::Runtime>::Frame<'_>,
+                    __frame: &mut <__R as ::acvus_extern::Runtime>::Frame<'_>,
                     __run: &[<__R as ::acvus_extern::Runtime>::Value],
                     __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
                 )
@@ -542,7 +601,7 @@ fn generate_extern_fn(
                             &<(#(#arg_markers,)*) as ::acvus_extern::NoSites<__R>>::SITES,
                         )
                     };
-                    <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(#call, __rt, __out);
+                    <#ret_marker as ::acvus_extern::Ret<__R>>::into_run(#entry_call, __rt, __out);
                 }
 
                 #[doc(hidden)]
@@ -697,6 +756,131 @@ fn generate_extern_fn(
         }
     };
     let bounds = vars.bound_exprs();
+    let requires: Vec<proc_macro2::TokenStream> = vars
+        .bounded()
+        .flat_map(|v| {
+            let at = v.index;
+            v.requires.iter().map(move |sig| {
+                let path = signature_path(sig).expect("a required signature is a path");
+                quote! {
+                    ::acvus_extern::Requirement {
+                        var: #at,
+                        signature: <#path as ::acvus_extern::SharedSignature>::qref(__i),
+                    }
+                }
+            })
+        })
+        .collect();
+    let carriers: Vec<proc_macro2::TokenStream> = vars
+        .bounded()
+        .map(|v| {
+            let name = carrier_ident(&v.ident);
+            let at = v.index;
+            let count = v.requires.len();
+            let fields: Vec<Ident> = (0..count).map(|n| format_ident!("__b{n}")).collect();
+            let slots: Vec<proc_macro2::Literal> = (0..count)
+                .map(proc_macro2::Literal::usize_unsuffixed)
+                .collect();
+            let paths: Vec<Path> = v
+                .requires
+                .iter()
+                .map(|sig| signature_path(sig).expect("a required signature is a path"))
+                .collect();
+            let at_runtime: Vec<Type> = v
+                .requires
+                .iter()
+                .map(|sig| vars.to_runtime_instance(sig, None))
+                .collect();
+            let instance_impls = at_runtime.iter().zip(&fields).map(|(sig, field)| {
+                quote! {
+                    impl<__R> ::acvus_extern::Instance<#sig, __R> for #name<__R>
+                    where
+                        __R: ::acvus_extern::Runtime,
+                        #sig: ::acvus_extern::Signature<__R, This = Self>,
+                    {
+                        fn call(
+                            __this: &Self,
+                            __rt: &__R,
+                            __frame: &mut <__R as ::acvus_extern::Runtime>::Frame<'_>,
+                            __rest: <#sig as ::acvus_extern::Signature<__R>>::Rest<'_>,
+                        ) -> <#sig as ::acvus_extern::Signature<__R>>::Ret {
+                            // SAFETY: the field holds what
+                            // `Carrier::entries` resolved for this
+                            // signature at this site's ground type, which
+                            // is the type `__this`'s value stands at.
+                            unsafe {
+                                <#sig as ::acvus_extern::Signature<__R>>::call_entry(
+                                    __this.#field, __rt, __frame, __this, __rest,
+                                )
+                            }
+                        }
+                    }
+                }
+            });
+            quote! {
+                #[doc(hidden)]
+                #[allow(non_camel_case_types)]
+                #vis struct #name<__R>
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    __value: ::acvus_extern::Owned<__R>,
+                    #(#fields: ::acvus_extern::Entry<__R>,)*
+                }
+
+                impl<__R> ::acvus_extern::Var<::acvus_extern::kind::Type> for #name<__R> where
+                    __R: ::acvus_extern::Runtime
+                {
+                }
+
+                impl<__R> ::acvus_extern::TyArg for #name<__R>
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    const SLOT: ::acvus_extern::SlotRepr = ::acvus_extern::SlotRepr::Var;
+
+                    fn poly_ty(
+                        _: &::acvus_extern::Interner,
+                        __vars: &::acvus_extern::PolyVars,
+                    ) -> ::acvus_extern::PolyTy {
+                        __vars.tys[#at].clone()
+                    }
+                }
+
+                impl<__R> ::acvus_extern::Carrier<__R> for #name<__R>
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    type Entries = [::acvus_extern::Entry<__R>; #count];
+
+                    fn entries(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Entries {
+                        [#(
+                            __at.instances.entry_at(
+                                <#paths as ::acvus_extern::SharedSignature>::qref(__at.interner),
+                                __at.ty,
+                            )
+                        ),*]
+                    }
+
+                    fn of(
+                        __v: <__R as ::acvus_extern::Runtime>::Value,
+                        __e: &Self::Entries,
+                    ) -> Self {
+                        Self {
+                            __value: ::acvus_extern::Owned::from_value(__v),
+                            #(#fields: __e[#slots],)*
+                        }
+                    }
+
+                    fn value(&self) -> &<__R as ::acvus_extern::Runtime>::Value {
+                        ::core::ops::Deref::deref(&self.__value)
+                    }
+                }
+
+                #(#instance_impls)*
+            }
+        })
+        .collect();
     let declared_ty = signature(None);
 
     let fresh_vars = vars.fresh_vars_expr();
@@ -711,6 +895,8 @@ fn generate_extern_fn(
     let entries = entries.into_inner();
     Ok(quote! {
         #func
+
+        #(#carriers)*
 
         #(#entries)*
 
@@ -735,6 +921,7 @@ fn generate_extern_fn(
                     bounds: vec![#(#bounds),*],
                     cast: #is_cast,
                     instance_of: #instance_of,
+                    requires: vec![#(#requires),*],
                 },
                 instances: #instances,
             };
@@ -1568,7 +1755,7 @@ impl<'a> ObjectShape<'a> {
             {
                 type Table = #table_ty;
 
-                fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                fn table(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Table {
                     #table_of
                 }
 
@@ -1611,7 +1798,7 @@ impl<'a> ObjectShape<'a> {
                 type At<'__a> = #shared<'__a>;
                 type Table = #table_ty;
 
-                fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                fn table(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Table {
                     #table_of
                 }
 
@@ -1638,7 +1825,7 @@ impl<'a> ObjectShape<'a> {
                 type At<'__a> = #exclusive<'__a>;
                 type Table = #table_ty;
 
-                fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                fn table(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Table {
                     #table_of
                 }
 
@@ -2109,7 +2296,7 @@ fn enum_projection(
         {
             type Table = #table_ty;
 
-            fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+            fn table(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Table {
                 #table_of
             }
 
@@ -2144,7 +2331,7 @@ fn enum_projection(
             type At<'__a> = #shared<'__a>;
             type Table = #table_ty;
 
-            fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+            fn table(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Table {
                 #table_of
             }
 
@@ -2167,7 +2354,7 @@ fn enum_projection(
             type At<'__a> = #exclusive<'__a, __R>;
             type Table = #table_ty;
 
-            fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+            fn table(__at: ::acvus_extern::ArgAt<'_, __R>) -> Self::Table {
                 #table_of
             }
 
@@ -2462,11 +2649,39 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             }
         },
     };
+    // The marker names the signature's own variables, so that a handler
+    // writes the requirement at its own: `Instance<sig::eq<T, Rt>>`. Every
+    // parameter is defaulted, so the bare `eq` an `instance_of` attribute
+    // names still resolves.
+    let declared: Vec<&Ident> = vars.idents();
+    let runtime: Ident = match vars.runtime_ident() {
+        Some(rt) => rt.clone(),
+        None => format_ident!("__Rt"),
+    };
+    let marker_params: Vec<Ident> = match vars.runtime_ident() {
+        Some(_) => declared.iter().map(|&i| i.clone()).collect(),
+        None => declared
+            .iter()
+            .map(|&i| i.clone())
+            .chain(std::iter::once(runtime.clone()))
+            .collect(),
+    };
+    let signature_impl = signature_call(
+        &input.ns,
+        &ident,
+        &vars,
+        &marker_params,
+        &runtime,
+        &params,
+        &ret,
+    );
     Ok(quote! {
         #[allow(non_camel_case_types)]
-        pub struct #ident;
+        pub struct #ident<#(#marker_params = (),)*>(
+            ::core::marker::PhantomData<fn() -> (#(#marker_params,)*)>,
+        );
 
-        impl ::acvus_extern::SharedSignature for #ident {
+        impl<#(#marker_params,)*> ::acvus_extern::SharedSignature for #ident<#(#marker_params,)*> {
             fn qref(__i: &::acvus_extern::Interner) -> ::acvus_extern::QualifiedRef {
                 #qref
             }
@@ -2484,6 +2699,8 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                 }
             }
         }
+
+        #signature_impl
     })
 }
 
@@ -2501,5 +2718,93 @@ fn span_of(param: &GenericParam) -> Span {
         GenericParam::Type(t) => t.ident.span(),
         GenericParam::Lifetime(l) => l.lifetime.span(),
         GenericParam::Const(c) => c.ident.span(),
+    }
+}
+
+/// The `Signature` impl of a shared signature every one of whose parameters
+/// is `&V` at the signature's first type variable, and whose result is one
+/// of the runtime's values: `core::eq`, `core::ord`, and every comparison
+/// shaped like them.
+///
+/// A signature outside that shape gets no impl, and the missing impl is the
+/// refusal: a handler that writes `Instance<sig::vec<C, T, Rt>>` is told
+/// that `vec` is not a signature a bound can call, because no run of
+/// references is what its arguments are (RFC-0067 Decision 1).
+fn signature_call(
+    ns: &LitStr,
+    ident: &Ident,
+    vars: &Vars,
+    marker_params: &[Ident],
+    runtime: &Ident,
+    params: &[ExternParam],
+    ret: &Type,
+) -> proc_macro2::TokenStream {
+    let _ = ns;
+    let Some(first) = vars.first_ty() else {
+        return proc_macro2::TokenStream::new();
+    };
+    let borrows_the_variable =
+        |p: &ExternParam| p.mode == Mode::Borrow && Vars::is_exactly(&p.ty, first);
+    if params.is_empty() || !params.iter().all(borrows_the_variable) {
+        return proc_macro2::TokenStream::new();
+    }
+    if vars.mentions_var(ret) {
+        return proc_macro2::TokenStream::new();
+    }
+    let width = params.len();
+    let rest: Vec<proc_macro2::TokenStream> = (1..width).map(|_| quote! { &'__a #first }).collect();
+    let rest_at: Vec<proc_macro2::Literal> = (0..width - 1)
+        .map(proc_macro2::Literal::usize_unsuffixed)
+        .collect();
+    quote! {
+        impl<#(#marker_params,)*> ::acvus_extern::Signature<#runtime>
+            for #ident<#(#marker_params,)*>
+        where
+            #first: ::acvus_extern::Carrier<#runtime>,
+            #runtime: ::acvus_extern::Runtime,
+            #ret: ::acvus_extern::Cross<#runtime, Form = ::acvus_extern::One>,
+        {
+            type This = #first;
+            type Rest<'__a> = (#(#rest,)*);
+            type Ret = #ret;
+
+            unsafe fn call_entry(
+                __entry: ::acvus_extern::Entry<#runtime>,
+                __rt: &#runtime,
+                __frame: &mut <#runtime as ::acvus_extern::Runtime>::Frame<'_>,
+                __this: &#first,
+                __rest: Self::Rest<'_>,
+            ) -> #ret {
+                let __run = [
+                    // SAFETY: each storage is a carrier's own field, which
+                    // lives for this call and longer.
+                    unsafe {
+                        ::acvus_extern::Runtime::reference(
+                            __rt,
+                            <#first as ::acvus_extern::Carrier<#runtime>>::value(__this),
+                        )
+                    },
+                    #(unsafe {
+                        ::acvus_extern::Runtime::reference(
+                            __rt,
+                            <#first as ::acvus_extern::Carrier<#runtime>>::value(__rest.#rest_at),
+                        )
+                    },)*
+                ];
+                let mut __out = [
+                    <<#runtime as ::acvus_extern::Runtime>::Value as ::core::default::Default>
+                        ::default(),
+                ];
+                // SAFETY: the caller's contract — `__entry` is this
+                // signature's instance at the type `__this` stands at — and
+                // the run above is that instance's whole argument run, one
+                // reference per declared `&` parameter.
+                unsafe { __entry(__rt, __frame, &__run, &mut __out) };
+                // SAFETY: the instance wrote its result into `__out` through
+                // `Ret::into_run`, which for a one-value result is what
+                // `Cross::from_run` reads back.
+                unsafe { <#ret as ::acvus_extern::Cross<#runtime>>::from_run(__rt, &__out) }
+            }
+        }
     }
 }

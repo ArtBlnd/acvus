@@ -127,6 +127,7 @@ async fn run_with(
             interner,
             externs: &functions,
             context_names: &context_names,
+            instances: &acvus_extern::NoInstances,
         },
     );
     functions.insert(entry, Executable::Module(Arc::new(prepared)));

@@ -563,6 +563,18 @@ fn eq_point(a: &Point, b: &Point) -> bool {
     a == b
 }
 
+/// A handler that requires `t::eq` of its type variable and calls it: the
+/// bound is the requirement, and the entry beside the value is what the
+/// call runs (RFC-0067 Decisions 1 and 4).
+#[extern_fn(effect = pure)]
+fn same<T, Rt>(rt: &Rt, frame: &mut Rt::Frame<'_>, a: T, b: T) -> bool
+where
+    T: Var<kind::Type> + acvus_extern::Carrier<Rt> + acvus_extern::Instance<eq<T, Rt>, Rt>,
+    Rt: Runtime,
+{
+    T::call(&a, rt, frame, (&b,))
+}
+
 /// A greeting held by the handler: what a `#[state]` parameter carries.
 struct Greeting(String);
 
@@ -580,7 +592,7 @@ where
         types: [Boxed<_, _, R>, Token<_>],
         signatures: [eq],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, eq_int, eq_point,
+              sum_slice, eq_int, eq_point, same,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -746,7 +758,7 @@ fn call_entry(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     // SAFETY: the values ABI's contract, which is `Handler::call`'s: `args`
     // is the declaration's whole argument run and `out` has room for its
     // one-value result.
-    unsafe { entry(&Tiny, (), &args, &mut out) };
+    unsafe { entry(&Tiny, &mut (), &args, &mut out) };
     out[0]
 }
 
@@ -770,6 +782,139 @@ fn an_entry_runs_the_instance_the_glue_runs() {
     let args = || unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
     assert!(open::<bool>(call_sync(h, args())));
     assert!(open::<bool>(call_entry(h, args())));
+}
+
+/// `same` at one ground type: the site table holds the entry of `t::eq`'s
+/// instance at that type, and every call of the site runs it.
+fn call_same(reg: &Externs<Tiny>, i: &Interner, ty: &acvus_extern::Ty, args: Vec<V>) -> V {
+    let ExternHandler::Sync(f) = handler(reg, i, "same") else {
+        panic!("`same` is declared with a plain `fn`")
+    };
+    let at = acvus_extern::ArgAt {
+        interner: i,
+        ty,
+        instances: &reg.instances,
+    };
+    let f = f.clone().at_site(&[at, at]);
+    // SAFETY: two arguments of the declaration's own type, as the site says.
+    unsafe { f.into_op(()).call_run(&Tiny, &args) }
+}
+
+#[test]
+fn a_required_instance_is_the_bound_and_the_entry_beside_the_value() {
+    let (i, reg) = combined::<Tiny>();
+    let on_int = |a: i64, b: i64| {
+        open::<bool>(call_same(
+            &reg,
+            &i,
+            &acvus_extern::Ty::I64,
+            vec![erased(a), erased(b)],
+        ))
+    };
+    assert!(on_int(7, 7), "t::eq at i64 says 7 == 7");
+    assert!(!on_int(7, 8), "t::eq at i64 says 7 != 8");
+}
+
+/// The declared type of `Point` at this test's registry.
+fn point_ty(i: &Interner) -> acvus_extern::Ty {
+    acvus_extern::Ty::Object(acvus_extern::ObjectTy::declared(
+        i.intern("Point"),
+        [
+            (i.intern("x"), acvus_extern::Ty::I64),
+            (i.intern("label"), acvus_extern::Ty::String),
+        ]
+        .into_iter()
+        .collect(),
+    ))
+}
+
+fn a_point(x: i64) -> V {
+    erased(acvus_extern::Obj::new(
+        acvus_extern::ObjectShape::of(&SYMBOLS, [Tiny.symbol("label"), Tiny.symbol("x")]),
+        Box::new([
+            Owned::<Tiny>::from_value(erased("p".to_owned())),
+            Owned::from_value(erased(x)),
+        ]),
+    ))
+}
+
+/// `t::eq` at `Point` is declared and has an entry, and no caller of the
+/// values ABI can reach it: an object converts at the boundary, so a `&Point`
+/// argument names no storage shaped like a `Point` (RFC-0032). This holds of
+/// the entry itself, so a handler requiring `t::eq` meets it for the same
+/// reason a call site does, and the requirement adds nothing to it.
+#[test]
+#[should_panic(expected = "has no storage of its own type to read through")]
+fn an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi() {
+    let (i, reg) = combined::<Tiny>();
+    let on_point = call_type(
+        vec![
+            acvus_extern::Ty::Ref(
+                acvus_extern::Mutability::Shared,
+                Box::new(TypeArg::uniform(point_ty(&i))),
+            );
+            2
+        ],
+        acvus_extern::Ty::Bool,
+        &i,
+    );
+    let h = instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
+    let (left, right) = (a_point(1), a_point(1));
+    // SAFETY: both places outlive the call.
+    let args = unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
+    let _ = call_entry(h, args);
+}
+
+/// The requirement's own half of RFC-0019: the variable's bound is met with
+/// `OneOf(every type with an instance of the signature)`, which is the
+/// refusal a call at any other type meets in the checker.
+#[test]
+fn a_requirement_meets_the_variables_bound_with_the_instance_types() {
+    let (i, reg) = combined::<TypesOnly>();
+    let same = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(&i, "same"))
+        .expect("same is declared");
+    let acvus_extern::FnKind::Extern { bounds, .. } = &same.kind else {
+        panic!("same is extern")
+    };
+    let acvus_extern::TyVarBound::OneOf(admitted) = &bounds[0] else {
+        panic!(
+            "a variable requiring an instance is bounded by OneOf, not {:?}",
+            bounds[0]
+        )
+    };
+    assert!(
+        admitted.contains(&PolyTy::I64),
+        "t::eq has an instance at i64, so i64 is admitted: {admitted:?}"
+    );
+    assert_eq!(
+        admitted.len(),
+        2,
+        "t::eq has two instances — i64 and Point — and no other type is admitted: {admitted:?}"
+    );
+    assert!(
+        !admitted.contains(&PolyTy::String),
+        "t::eq has no instance at String, so a call of `same` at String is refused: {admitted:?}"
+    );
+}
+
+/// The marker `extern_signature!` writes names the signature's own
+/// variables, so a handler writes the requirement at its own: `eq<T, Rt>`.
+/// Every parameter is defaulted, so the bare `eq` an `instance_of`
+/// attribute names still resolves.
+#[test]
+fn a_marker_names_its_variables() {
+    let i = Interner::new();
+    fn qref_of<S>(i: &Interner) -> acvus_extern::QualifiedRef
+    where
+        S: acvus_extern::SharedSignature,
+    {
+        S::qref(i)
+    }
+    assert_eq!(qref_of::<eq>(&i), qref_of::<eq<i64, Tiny>>(&i));
+    assert_eq!(i.resolve(qref_of::<eq>(&i).name), "eq");
 }
 
 #[test]
@@ -1914,6 +2059,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     bounds: Vec::new(),
                     cast: false,
                     instance_of: None,
+                    requires: Vec::new(),
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(

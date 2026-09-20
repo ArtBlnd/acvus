@@ -81,6 +81,13 @@ pub struct Var {
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
+    /// The `S` of each `Instance<S>` bound, in the order it was written
+    /// (RFC-0067 Decision 1).
+    pub requires: Vec<Type>,
+    /// What fills this variable when the handler runs: the carrier
+    /// `#[extern_fn]` writes where the variable is bounded, and the
+    /// runtime's own value where it is not.
+    pub carrier: Option<Type>,
 }
 
 pub struct Vars(Vec<Var>);
@@ -104,6 +111,75 @@ fn bounds_of<'a>(
         })
         .flat_map(|pt| pt.bounds.iter());
     tp.bounds.iter().chain(from_where)
+}
+
+/// The signature of every `Instance<S>` bound, in written order. Two bounds
+/// naming one signature are refused here: a type has at most one instance of
+/// a signature (RFC-0019), so the second could only select the same entry.
+fn required_signatures<'a>(
+    ident: &Ident,
+    bounds: impl Iterator<Item = &'a TypeParamBound>,
+) -> syn::Result<Vec<Type>> {
+    let mut found: Vec<Type> = Vec::new();
+    let mut named: Vec<String> = Vec::new();
+    for bound in bounds {
+        let TypeParamBound::Trait(t) = bound else {
+            continue;
+        };
+        let Some(seg) = t.path.segments.last() else {
+            continue;
+        };
+        if seg.ident != "Instance" {
+            continue;
+        }
+        let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+            return Err(syn::Error::new_spanned(
+                seg,
+                "Instance takes the signature it requires, at this declaration's own \
+                 variables: `Instance<sig::eq<T, Rt>>`",
+            ));
+        };
+        let Some(syn::GenericArgument::Type(sig)) = args.args.first() else {
+            return Err(syn::Error::new_spanned(
+                seg,
+                "Instance takes the signature it requires, at this declaration's own \
+                 variables: `Instance<sig::eq<T, Rt>>`",
+            ));
+        };
+        let name = signature_head(sig)?;
+        if named.contains(&name) {
+            return Err(syn::Error::new_spanned(
+                seg,
+                format!(
+                    "`{ident}` requires `{name}` twice: a type has at most one instance of a \
+                     signature (RFC-0019), so the second bound names the same entry as the \
+                     first. Write one."
+                ),
+            ));
+        }
+        named.push(name);
+        found.push(sig.clone());
+    }
+    Ok(found)
+}
+
+/// The signature a required instance names, as a path with its arguments
+/// dropped: `sig::eq<T, Rt>` is `sig::eq`, whose defaulted parameters make
+/// it the same marker type the `instance_of` attribute names.
+pub fn signature_path(sig: &Type) -> syn::Result<syn::Path> {
+    let Type::Path(p) = sig else {
+        return Err(syn::Error::new_spanned(sig, "a signature is a path"));
+    };
+    let mut path = p.path.clone();
+    for segment in &mut path.segments {
+        segment.arguments = syn::PathArguments::None;
+    }
+    Ok(path)
+}
+
+fn signature_head(sig: &Type) -> syn::Result<String> {
+    let path = signature_path(sig)?;
+    Ok(quote! { #path }.to_string())
 }
 
 /// The member types of a `Monomorphize<(T0, T1, ..)>` bound, if present.
@@ -167,6 +243,7 @@ impl Vars {
                 .filter_map(kind_of)
                 .collect::<syn::Result<_>>()?;
             let mono = mono_members(bounds_of(generics, tp))?;
+            let requires = required_signatures(&tp.ident, bounds_of(generics, tp))?;
             let has_extra_bounds = bounds_of(generics, tp).any(|b| {
                 matches!(b, TypeParamBound::Trait(_))
                     && kind_of(b).is_none()
@@ -175,6 +252,7 @@ impl Vars {
             let kind = match (kinds.as_slice(), &mono) {
                 ([kind], _) => *kind,
                 ([], Some(_)) => VarKind::Ty,
+                ([], None) if !requires.is_empty() => VarKind::Ty,
                 _ => {
                     return Err(syn::Error::new(
                         tp.ident.span(),
@@ -196,6 +274,8 @@ impl Vars {
                 index: counts[slot],
                 mono,
                 mono_fallback,
+                requires,
+                carrier: None,
             });
             counts[slot] += 1;
         }
@@ -212,6 +292,20 @@ impl Vars {
             ));
         }
         Ok(Self(vars))
+    }
+
+    /// Every generic parameter, in declaration order.
+    pub fn idents(&self) -> Vec<&Ident> {
+        self.0.iter().map(|v| &v.ident).collect()
+    }
+
+    /// The first type variable, which is the one an instance of a signature
+    /// is matched by (RFC-0019).
+    pub fn first_ty(&self) -> Option<&Ident> {
+        self.0
+            .iter()
+            .find(|v| v.kind == VarKind::Ty)
+            .map(|v| &v.ident)
     }
 
     /// The generic parameter bounded by `Runtime`, when the declaration has one.
@@ -286,7 +380,10 @@ impl Vars {
     /// other must follow; both compile either way.
     fn runtime_stand_in(v: &Var) -> Type {
         match v.kind {
-            VarKind::Ty => syn::parse_quote! { ::acvus_extern::Owned<__R> },
+            VarKind::Ty => match &v.carrier {
+                Some(carrier) => carrier.clone(),
+                None => syn::parse_quote! { ::acvus_extern::Owned<__R> },
+            },
             VarKind::Effect | VarKind::Len | VarKind::Identity => syn::parse_quote! { () },
             VarKind::Runtime => syn::parse_quote! { __R },
         }
@@ -337,6 +434,40 @@ impl Vars {
                 _ => Some(Self::runtime_stand_in(v)),
             }
         })
+    }
+
+    /// Every type variable with at least one `Instance` bound.
+    pub fn bounded(&self) -> impl Iterator<Item = &Var> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Ty && !v.requires.is_empty())
+    }
+
+    /// Names the carrier that fills each bounded variable when the handler
+    /// runs. Called before any substitution reads `runtime_stand_in`.
+    pub fn set_carriers(&mut self, carrier_of: &dyn Fn(&Ident) -> Type) {
+        for v in &mut self.0 {
+            if v.kind == VarKind::Ty && !v.requires.is_empty() {
+                v.carrier = Some(carrier_of(&v.ident));
+            }
+        }
+    }
+
+    /// Whether `ty` is exactly the variable `ident` and nothing else.
+    pub fn is_exactly(ty: &Type, ident: &Ident) -> bool {
+        matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident(ident))
+    }
+
+    /// Whether `ty` mentions `ident` anywhere.
+    pub fn mentions(ty: &Type, ident: &Ident) -> bool {
+        let found = std::cell::Cell::new(false);
+        subst::substitute(ty, &|at| {
+            if at == ident {
+                found.set(true);
+            }
+            None
+        });
+        found.get()
     }
 
     /// The Monomorphize variable, if any.

@@ -185,6 +185,7 @@ fn main() {
         interner: &interner,
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
+        instances: &acvus_extern::NoInstances,
     };
     for (qref, module) in &cr.modules {
         let prepared = prepare_module(module, &ctx);

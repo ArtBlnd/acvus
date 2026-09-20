@@ -21,6 +21,7 @@ async fn run(interner: &Interner, source: &str) -> Value {
         mut functions,
         types: type_registry,
         handlers,
+        instances,
         ..
     } = Externs::combine(registries, interner).expect("registries combine");
 
@@ -88,6 +89,7 @@ async fn run(interner: &Interner, source: &str) -> Value {
         interner,
         externs: &exec_fns,
         context_names: &context_names,
+        instances: &instances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules
