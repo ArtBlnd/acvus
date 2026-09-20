@@ -18,8 +18,8 @@ use crate::solver::{
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, Param,
-    ParamTerm, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
+    CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm,
+    Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -556,8 +556,8 @@ fn is_view(ty: &InferTy) -> bool {
     }
 }
 
-/// A `$name` the body reads. A parameter a Signature declared arrives with
-/// its type already closed and no place in this body; one the body
+/// A `$name` the body may read. A parameter the declaration named arrives
+/// before the body is checked and has no place in it; one the body
 /// discovered carries the place it was first read, which is where a type
 /// that does not close is refused.
 struct ExternParam {
@@ -822,12 +822,15 @@ struct PendingConversion {
     place: Option<AstId>,
 }
 
-/// State only active in analysis mode (partial inference for unknown params).
-struct AnalysisState {
-    /// Declared parameter types from Signature, consumed in order as $params are discovered.
-    declared_param_types: Vec<Ty>,
-    /// Next index into declared_param_types.
-    next_declared_param: usize,
+/// What a `$name` the body has not already bound means here.
+#[derive(Clone, Copy)]
+enum FreeParam {
+    /// The parameters are the ones bound before the body was checked, and a
+    /// `$name` outside them names nothing.
+    Bound,
+    /// No parameter list is declared, so the body's `$` uses are its
+    /// parameters, in the order it reads them, at types the solve closes.
+    Discovered,
 }
 
 pub struct TypeChecker<'a, 's, 'src> {
@@ -913,8 +916,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
-    /// Analysis mode state. `None` = normal mode, `Some` = partial inference enabled.
-    analysis: Option<AnalysisState>,
+    free_param: FreeParam,
     lambda_stack: Vec<LambdaScope>,
     lambda_captures: FxHashMap<AstId, Vec<(Astr, CaptureSource)>>,
     capture_moves: Vec<CaptureMove>,
@@ -959,7 +961,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             decision_sites: FxHashMap::default(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
-            analysis: None,
+            free_param: FreeParam::Bound,
             lambda_stack: Vec::new(),
             lambda_captures: FxHashMap::default(),
             capture_moves: Vec::new(),
@@ -991,41 +993,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.solver.freeze_effect(&self.body_effect)
     }
 
-    /// Pre-bind function parameters as local variables.
-    /// Called before typecheck to inject parameter names+types from Signature.
-    pub fn with_params(mut self, params: &[Param]) -> Self {
-        for param in params {
-            self.param_types.push(ExternParam {
-                name: param.name,
-                ty: lift_ty(&param.ty),
-                first_read: None,
-            });
-        }
-        self
-    }
-
     /// Set the namespace for context lookups.
     pub fn with_namespace(mut self, namespace: Option<Astr>) -> Self {
         self.namespace = namespace;
         self
     }
 
-    /// Enable analysis mode: unknown `$param`s produce fresh type variables
-    /// instead of errors, allowing partial type inference.
-    pub fn with_analysis_mode(mut self) -> Self {
-        self.analysis = Some(AnalysisState {
-            declared_param_types: Vec::new(),
-            next_declared_param: 0,
-        });
-        self
-    }
-
-    /// Provide declared parameter types from Signature.
-    /// In analysis mode, these are consumed in order as free params are discovered.
-    pub fn with_declared_param_types(mut self, types: Vec<Ty>) -> Self {
-        if let Some(ref mut state) = self.analysis {
-            state.declared_param_types = types;
-        }
+    /// Bind the parameters the function's declaration names: a `$name` in the
+    /// body names the declared parameter of that name, and the declared order
+    /// is the order the call passes its arguments in. A declaration naming no
+    /// parameter leaves the body's `$` uses to be its parameters instead.
+    pub fn with_declared_params(mut self, declared: Vec<ParamTerm<Infer>>) -> Self {
+        self.free_param = match declared.is_empty() {
+            true => FreeParam::Discovered,
+            false => FreeParam::Bound,
+        };
+        self.param_types
+            .extend(declared.into_iter().map(|param| ExternParam {
+                name: param.name,
+                ty: param.ty,
+                first_read: None,
+            }));
         self
     }
 
@@ -4497,28 +4485,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     RefKind::ExternParam => {
                         let ty = match self.param_types.iter().find(|p| p.name == name.name) {
                             Some(param) => param.ty.clone(),
-                            None => {
-                                if let Some(ref mut state) = self.analysis {
-                                    // In analysis mode, unknown $params are inferred.
-                                    // Use declared type from Signature if available.
-                                    let ty = if state.next_declared_param
-                                        < state.declared_param_types.len()
-                                    {
-                                        let t =
-                                            &state.declared_param_types[state.next_declared_param];
-                                        let lifted = lift_ty(t);
-                                        state.next_declared_param += 1;
-                                        lifted
-                                    } else {
-                                        self.solver.fresh_ty_var()
-                                    };
+                            None => match self.free_param {
+                                FreeParam::Discovered => {
+                                    let ty = self.solver.fresh_ty_var();
                                     self.param_types.push(ExternParam {
                                         name: name.name,
                                         ty: ty.clone(),
                                         first_read: Some(*span),
                                     });
                                     ty
-                                } else {
+                                }
+                                FreeParam::Bound => {
                                     self.error(
                                         MirErrorKind::UndefinedVariable(format!(
                                             "${}",
@@ -4528,7 +4505,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                     );
                                     Self::infer_error()
                                 }
-                            }
+                            },
                         };
                         let capturing: Vec<usize> = (0..self.lambda_stack.len()).collect();
                         self.captured_by(name.name, &ty, &capturing);
@@ -6105,7 +6082,7 @@ fn op_str(op: BinOp) -> &'static str {
 mod tests {
     use super::*;
     use crate::graph::types::QualifiedRef;
-    use crate::ty::TypeRegistry;
+    use crate::ty::{Param, TypeRegistry};
 
     /// Test helper: create a `Param` with name "_".
     fn p(i: &Interner, ty: Ty) -> Param {

@@ -10,8 +10,8 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ty::{
-    EffectTerm, Infer, InferTy, Param, PolyTy, Scheme, Solver, Sources, Ty, TyTerm, TyVarBound,
-    TypeRegistry, lift_to_poly, lift_ty,
+    EffectTerm, Infer, InferTy, Param, ParamTerm, PolyTy, Scheme, Solver, Sources, Ty, TyTerm,
+    TyVarBound, TypeRegistry, lift_to_poly, lift_ty,
 };
 
 use super::extract::{ExtractResult, ParsedSource};
@@ -24,7 +24,9 @@ use super::types::*;
 pub struct FunctionMeta {
     /// Fully resolved Ty::Fn for this function.
     pub ty: Ty,
-    /// Named parameters (free_params from source zipped with signature types).
+    /// The parameters the declaration named, in declared order, at the types
+    /// the solve closed them to; where it named none, the body's `$` uses in
+    /// the order it read them.
     pub params: Vec<Param>,
 }
 
@@ -551,6 +553,32 @@ fn declared_scheme(declared: Option<&Declared>, ty: PolyTy) -> Scheme {
     }
 }
 
+/// The parameters a declaration names, each at a solver variable the body is
+/// then checked against.
+fn instantiate_params(
+    solver: &mut Solver,
+    declared: &[crate::ty::PolyParam],
+) -> Vec<ParamTerm<Infer>> {
+    declared
+        .iter()
+        .map(|p| p.retyped(solver.instantiate_poly(&p.ty)))
+        .collect()
+}
+
+/// What a function takes when its body did not check: the parameters its
+/// declaration names, so a call is measured against the arity it was written
+/// for. A declared type the failed solve left open is `error`, as the return
+/// type of the same function is.
+fn settled_params(solver: &Solver, declared: &[ParamTerm<Infer>]) -> Vec<Param> {
+    declared
+        .iter()
+        .map(|p| {
+            let settled = solver.resolve_ty(&p.ty);
+            p.retyped(solver.freeze_ty(&settled).unwrap_or_else(|_| Ty::error()))
+        })
+        .collect()
+}
+
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
@@ -570,6 +598,8 @@ pub fn infer_scc(
         .map(|(&k, v)| (k, solver.instantiate_poly(v)))
         .collect();
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
+    let mut fn_declared_params: FxHashMap<QualifiedRef, Vec<ParamTerm<Infer>>> =
+        FxHashMap::default();
     let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
     let mut fn_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
     let mut fn_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> = FxHashMap::default();
@@ -597,6 +627,7 @@ pub fn infer_scc(
         fn_ret_vars.insert(fid, ret_var.clone());
         let effect_var = solver.fresh_effect_var();
         fn_effect_vars.insert(fid, effect_var);
+        fn_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
 
         let fn_ty: PolyTy = TyTerm::Fn {
             params: fn_params.clone(),
@@ -632,11 +663,8 @@ pub fn infer_scc(
             machine: machine_signatures.clone(),
         };
 
-        // Extract ret and params from func.ty.
         let TyTerm::Fn {
-            ret: ref fn_ret,
-            params: ref fn_params,
-            ..
+            ret: ref fn_ret, ..
         } = func.ty
         else {
             unreachable!("local function ty must be Fn");
@@ -646,17 +674,8 @@ pub fn infer_scc(
             let infer = solver.instantiate_poly(fn_ret);
             solver.freeze_ty(&infer).ok()
         };
-        let declared_types: Vec<Ty> = fn_params
-            .iter()
-            .filter_map(|p| {
-                let infer = solver.instantiate_poly(&p.ty);
-                solver.freeze_ty(&infer).ok()
-            })
-            .collect();
-
         let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
-            .with_analysis_mode()
-            .with_declared_param_types(declared_types)
+            .with_declared_params(fn_declared_params[&fid].clone())
             .with_body_effect(fn_effect_vars[&fid].clone());
         let result = match parsed {
             ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
@@ -704,7 +723,10 @@ pub fn infer_scc(
             .get(&fid)
             .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
             .unwrap_or_else(Ty::error);
-        let bind: Vec<Param> = fn_bind_params.get(&fid).cloned().unwrap_or_default();
+        let bind: Vec<Param> = match fn_bind_params.get(&fid) {
+            Some(checked) => checked.clone(),
+            None => settled_params(&solver, &fn_declared_params[&fid]),
+        };
 
         let effect = EffectTerm::Known(solver.freeze_effect(&fn_effect_vars[&fid]));
 
@@ -811,6 +833,8 @@ pub fn infer(
         let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
         let mut scc_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
         let mut scc_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
+        let mut scc_declared_params: FxHashMap<QualifiedRef, Vec<ParamTerm<Infer>>> =
+            FxHashMap::default();
 
         for &fid in scc {
             let func = fn_by_id[&fid];
@@ -832,6 +856,7 @@ pub fn infer(
             let ret_var: InferTy = solver.instantiate_poly(fn_ret);
             scc_ret_vars.insert(fid, ret_var.clone());
             scc_effect_vars.insert(fid, solver.fresh_effect_var());
+            scc_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
 
             scc_fn_types.insert(
                 func.qref,
@@ -868,11 +893,8 @@ pub fn infer(
                 machine: machine_signatures.clone(),
             };
 
-            // Extract ret and params from func.ty.
             let TyTerm::Fn {
-                ret: ref fn_ret,
-                params: ref fn_params,
-                ..
+                ret: ref fn_ret, ..
             } = func.ty
             else {
                 unreachable!("local function ty must be Fn");
@@ -884,17 +906,9 @@ pub fn infer(
                 let infer = solver.instantiate_poly(fn_ret);
                 solver.freeze_ty(&infer).ok()
             };
-            let declared_types: Vec<Ty> = fn_params
-                .iter()
-                .filter_map(|p| {
-                    let infer = solver.instantiate_poly(&p.ty);
-                    solver.freeze_ty(&infer).ok()
-                })
-                .collect();
 
             let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
-                .with_analysis_mode()
-                .with_declared_param_types(declared_types)
+                .with_declared_params(scc_declared_params[&fid].clone())
                 .with_body_effect(scc_effect_vars[&fid].clone());
             let result = match parsed {
                 ParsedSource::Script(script) => {
@@ -941,7 +955,10 @@ pub fn infer(
                 .get(&fid)
                 .and_then(|r| solver.freeze_ty(&solver.resolve_ty(r)).ok())
                 .unwrap_or_else(Ty::error);
-            let bind: Vec<Param> = fn_bind_params.get(&fid).cloned().unwrap_or_default();
+            let bind: Vec<Param> = match fn_bind_params.get(&fid) {
+                Some(checked) => checked.clone(),
+                None => settled_params(&solver, &scc_declared_params[&fid]),
+            };
 
             let effect = EffectTerm::Known(solver.freeze_effect(&scc_effect_vars[&fid]));
 

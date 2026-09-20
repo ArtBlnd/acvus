@@ -60,13 +60,15 @@ fn compile_and_run(
 /// the differential's own contract, so it fails here rather than being
 /// reported as one number.
 fn integer_at_both_levels(main: &str) -> i64 {
-    integer_at_both_levels_with(&[], main)
+    integer_at_both_levels_with(&Interner::new(), &[], main)
 }
 
-fn integer_at_both_levels_with(helpers: &[Helper<'_>], main: &str) -> i64 {
-    let i = Interner::new();
+/// A helper's declared parameter names are `Astr`s of `i`, which is why the
+/// interner the program compiles in is the caller's rather than one minted
+/// here.
+fn integer_at_both_levels_with(i: &Interner, helpers: &[Helper<'_>], main: &str) -> i64 {
     let at = |opt| {
-        compile_and_run(&i, helpers, main, Ty::I64, opt)
+        compile_and_run(i, helpers, main, Ty::I64, opt)
             .unwrap_or_else(|r| panic!("{opt:?} refused:\n  {}", r.messages.join("\n  ")))
             .as_int()
     };
@@ -76,9 +78,8 @@ fn integer_at_both_levels_with(helpers: &[Helper<'_>], main: &str) -> i64 {
     full
 }
 
-fn refusal(helpers: &[Helper<'_>], main: &str) -> String {
-    let i = Interner::new();
-    match compile_and_run(&i, helpers, main, Ty::I64, Opt::Full) {
+fn refusal(i: &Interner, helpers: &[Helper<'_>], main: &str) -> String {
+    match compile_and_run(i, helpers, main, Ty::I64, Opt::Full) {
         Ok(value) => panic!("expected a refusal, ran to {value:?}"),
         Err(r) => r.messages.join("\n"),
     }
@@ -148,6 +149,7 @@ fn a_lambda_returning_a_reference_to_its_parameter_is_read_by_the_caller() {
 #[test]
 fn a_lambda_returning_a_reference_into_its_own_capture_is_refused() {
     let refused = refusal(
+        &Interner::new(),
         &[],
         "let s = \"ab\".to_string();\nlet f = |y| -> s;\n(f(1).len() as i64)\n",
     );
@@ -164,6 +166,7 @@ fn a_lambda_returning_a_reference_into_its_own_capture_is_refused() {
 fn a_lambda_returned_from_a_body_capturing_nothing_is_called_by_the_caller() {
     assert_eq!(
         integer_at_both_levels_with(
+            &Interner::new(),
             std::slice::from_ref(&Helper {
                 name: "make",
                 source: "|k| -> k + 1\n",
@@ -187,6 +190,7 @@ fn a_lambda_returned_from_a_body_keeps_the_parameter_it_captured() {
     };
     assert_eq!(
         integer_at_both_levels_with(
+            &i,
             std::slice::from_ref(&helper),
             "let v = [1, 2, 3];\nlet g = make(&v);\ng(1) as i64\n"
         ),
@@ -200,7 +204,11 @@ fn a_lambda_returned_from_a_body_keeps_the_parameter_it_captured() {
 /// capture and the write.
 #[test]
 fn writing_the_borrowed_storage_while_the_lambda_is_live_is_refused() {
-    let refused = refusal(&[], &format!("{CAPTURING}v = [4, 5, 6];\nf(1) as i64\n"));
+    let refused = refusal(
+        &Interner::new(),
+        &[],
+        &format!("{CAPTURING}v = [4, 5, 6];\nf(1) as i64\n"),
+    );
     assert!(
         refused.contains("`v` is written here while a reference to it is live"),
         "{refused}"
@@ -210,6 +218,7 @@ fn writing_the_borrowed_storage_while_the_lambda_is_live_is_refused() {
 #[test]
 fn a_lambda_whose_result_borrows_its_own_local_is_refused_at_the_local() {
     let refused = refusal(
+        &Interner::new(),
         &[],
         "let f = |k| -> { let l = [k, k, k]; &l[0] };\n*f(1) + 1\n",
     );
@@ -225,6 +234,7 @@ fn a_lambda_whose_result_borrows_its_own_local_is_refused_at_the_local() {
 fn a_lambda_returned_from_a_body_may_not_hold_a_local_of_it() {
     let i = Interner::new();
     let refused = refusal(
+        &i,
         std::slice::from_ref(&Helper {
             name: "make",
             source: "let l = [$xs[0], $xs[1], $xs[2]];\nlet p = &l;\n|k| -> len(p) + k\n",
@@ -240,7 +250,11 @@ fn a_lambda_returned_from_a_body_may_not_hold_a_local_of_it() {
 
 #[test]
 fn a_capturing_lambda_is_not_stored_in_a_list() {
-    let refused = refusal(&[], &format!("{CAPTURING}let l = [f];\nlen(&l) as i64\n"));
+    let refused = refusal(
+        &Interner::new(),
+        &[],
+        &format!("{CAPTURING}let l = [f];\nlen(&l) as i64\n"),
+    );
     assert!(
         refused.contains("a reference cannot be stored in a list, object, or tuple"),
         "{refused}"
@@ -252,6 +266,7 @@ fn a_capturing_lambda_is_not_stored_in_a_list() {
 #[test]
 fn a_lambda_capturing_a_view_is_refused() {
     let refused = refusal(
+        &Interner::new(),
         &[],
         "let s = \"abc\";\nlet f = |k| -> (s.len() as i64) + k;\nf(1)\n",
     );
