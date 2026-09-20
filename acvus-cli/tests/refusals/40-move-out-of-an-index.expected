@@ -1,0 +1,6 @@
+error: cannot move out of index of `Vec<String>`
+  --> 40-move-out-of-an-index.acvus:2:9
+  |
+2 | let s = v[0u64];
+  |         ^^^^^^^
+  = help: the element is String, which moves; take a reference with `&a[i]`

@@ -1,0 +1,7 @@
+error: `a` is used here after it was moved
+  --> 16-a-moved-value-used-again.acvus:3:1
+  |
+2 | let b = a;
+  |         - moved here
+3 | a.len()
+  | ^ `a` is used here after it was moved

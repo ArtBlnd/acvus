@@ -1,0 +1,5 @@
+error: type mismatch: expected &mut Vec<i64>, got &Vec<i64>; write `&mut` where the `&` is
+  --> 15-a-mut-parameter-given-a-shared-reference.acvus:2:6
+  |
+2 | push(&v, 3);
+  |      ^^

@@ -1,0 +1,5 @@
+error: type mismatch in `==`: i64 vs str
+  --> 28-equality-between-incomparable-types.acvus:1:1
+  |
+1 | 1 == "a"
+  | ^^^^^^^^

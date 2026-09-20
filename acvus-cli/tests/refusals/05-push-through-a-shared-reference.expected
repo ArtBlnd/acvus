@@ -1,0 +1,5 @@
+error: `r` is a shared reference and cannot be borrowed mutably; bind it with `&mut`
+  --> 05-push-through-a-shared-reference.acvus:3:1
+  |
+3 | r.push(2);
+  | ^

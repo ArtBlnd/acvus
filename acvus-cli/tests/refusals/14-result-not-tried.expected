@@ -1,0 +1,5 @@
+error: type mismatch in `+`: Result<i64, ParseIntError{Invalid(String), OutOfRange(String)}> vs i64; a Result is not its payload -- write `?`, `.unwrap()` or match it
+  --> 14-result-not-tried.acvus:2:1
+  |
+2 | n + 1
+  | ^^^^^

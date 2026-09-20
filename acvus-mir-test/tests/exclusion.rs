@@ -32,7 +32,7 @@ fn a_borrow_of_a_reference_is_a_reborrow() {
 fn a_shared_reference_is_not_borrowed_mutably() {
     let err = check("let x = 1; let r = &x; let m = &mut r; *m").expect_err("`&mut` of a `&`");
     assert!(
-        err.contains("shared reference cannot be borrowed mutably"),
+        err.contains("`r` is a shared reference and cannot be borrowed mutably"),
         "{err}"
     );
 }

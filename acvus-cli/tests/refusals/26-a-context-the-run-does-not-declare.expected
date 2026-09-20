@@ -1,0 +1,5 @@
+error: `@missing` is not a declared context
+  --> 26-a-context-the-run-does-not-declare.acvus:1:1
+  |
+1 | @missing + 1
+  | ^^^^^^^^

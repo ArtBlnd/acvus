@@ -1,0 +1,4 @@
+let text = "42".to_string();
+let total = 0;
+total = i64::from_str(text);
+total

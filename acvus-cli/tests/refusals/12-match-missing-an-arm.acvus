@@ -1,0 +1,5 @@
+let shape = Shape::Circle(1.0);
+match shape {
+    Shape::Circle(r) => r,
+    Shape::Square(s) => s,
+}

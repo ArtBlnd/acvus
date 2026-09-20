@@ -1,0 +1,2 @@
+let s = "7".to_string();
+s.pad_start("0", 2)

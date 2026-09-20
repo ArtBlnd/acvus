@@ -14,7 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::cfg::CfgBody;
-use crate::error::{MirError, MirErrorKind, ShownValue};
+use crate::error::{DidYouMean, MirError, MirErrorKind, ShownValue};
 use crate::ir::{Callee, Inst, InstKind, PathSeg, RefTarget, ValOrigin, ValueId};
 use crate::ty::Ty;
 use acvus_ast::Span;
@@ -55,6 +55,9 @@ pub struct UninitError {
     pub span: Span,
     pub subject: UninitSubject,
     pub uninit_fields: Vec<Astr>,
+    /// The field names the subject does carry, so a refusal over a
+    /// misspelling can offer the one that was meant.
+    pub stored_fields: Vec<Astr>,
 }
 
 /// What lacked the fields: a named storage, or a value built in place and
@@ -237,6 +240,22 @@ impl DataflowAnalysis for InitCheckAnalysis {
 
 // -- Public API ------------------------------------------------------
 
+fn stored_of(var_fields: &FxHashMap<RefTarget, FxHashSet<Astr>>, target: &RefTarget) -> Vec<Astr> {
+    var_fields
+        .get(target)
+        .map(|fields| sorted(fields.iter().copied()))
+        .unwrap_or_default()
+}
+
+fn sorted<I>(names: I) -> Vec<Astr>
+where
+    I: Iterator<Item = Astr>,
+{
+    let mut names: Vec<Astr> = names.collect();
+    names.sort();
+    names
+}
+
 /// Run field-level definite-assignment check on a CfgBody.
 pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
     let value_fields = build_value_fields(cfg);
@@ -282,6 +301,7 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
                             span: inst.span,
                             subject: UninitSubject::Storage(*target),
                             uninit_fields: vec![*field],
+                            stored_fields: stored_of(&var_fields, target),
                         });
                     }
                 }
@@ -301,6 +321,7 @@ pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
                         &state,
                         cfg,
                         &analysis.value_fields,
+                        &var_fields,
                         callee,
                         callee_ty,
                         args,
@@ -325,6 +346,7 @@ fn check_call_args(
     state: &DataflowState<(RefTarget, Astr), FieldInit>,
     cfg: &CfgBody,
     value_fields: &ValueFields,
+    var_fields: &FxHashMap<RefTarget, FxHashSet<Astr>>,
     callee: &Callee,
     callee_ty: &Ty,
     args: &[ValueId],
@@ -348,7 +370,7 @@ fn check_call_args(
         if required_fields.is_empty() {
             continue;
         }
-        let (subject, uninit_fields): (UninitSubject, Vec<Astr>) =
+        let (subject, uninit_fields, stored_fields): (UninitSubject, Vec<Astr>, Vec<Astr>) =
             match (find_arg_source(arg, cfg), value_fields.get(arg)) {
                 (Some(target), _) => (
                     UninitSubject::Storage(target),
@@ -356,6 +378,7 @@ fn check_call_args(
                         .into_iter()
                         .filter(|f| state.get((target, *f)) == FieldInit::Uninit)
                         .collect(),
+                    stored_of(var_fields, &target),
                 ),
                 (None, Some(built)) => (
                     UninitSubject::Value(*arg),
@@ -363,6 +386,7 @@ fn check_call_args(
                         .into_iter()
                         .filter(|f| !built.contains(f))
                         .collect(),
+                    sorted(built.iter().copied()),
                 ),
                 (None, None) => continue,
             };
@@ -371,6 +395,7 @@ fn check_call_args(
                 span,
                 subject,
                 uninit_fields,
+                stored_fields,
             });
         }
     }
@@ -424,6 +449,20 @@ mod tests {
     }
 }
 
+fn near_stored(interner: &Interner, error: &UninitError) -> DidYouMean {
+    let [wanted] = error.uninit_fields.as_slice() else {
+        return DidYouMean::default();
+    };
+    DidYouMean::of(
+        interner.resolve(*wanted),
+        error
+            .stored_fields
+            .iter()
+            .map(|field| interner.resolve(*field).to_string())
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// The definite-assignment refusals of a body, in the words a reader of the
 /// source knows it by.
 pub fn refusals(interner: &Interner, cfg: &CfgBody) -> Vec<MirError> {
@@ -432,6 +471,7 @@ pub fn refusals(interner: &Interner, cfg: &CfgBody) -> Vec<MirError> {
         .map(|error| MirError {
             kind: MirErrorKind::FieldNotStored {
                 subject: subject_of(interner, cfg, &error.subject),
+                near: near_stored(interner, &error),
                 fields: error
                     .uninit_fields
                     .iter()

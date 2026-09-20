@@ -1,0 +1,5 @@
+error: no instance of the signature has the call type Fn(Array<String, 1>) -> Vec<&str>; write `.to_string()` for the owned text
+  --> 07-str-where-string-is-stored.acvus:1:9
+  |
+1 | let v = vec(["a".to_string()]);
+  |         ^^^^^^^^^^^^^^^^^^^^^^

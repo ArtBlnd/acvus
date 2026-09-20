@@ -1,0 +1,10 @@
+error: type mismatch: expected i64, got &str
+  --> 23-wrong-argument-order.acvus:2:13
+  |
+2 | s.pad_start("0", 2)
+  |             ^^^
+error: type mismatch: expected &str, got i64
+  --> 23-wrong-argument-order.acvus:2:18
+  |
+2 | s.pad_start("0", 2)
+  |                  ^

@@ -1,0 +1,9 @@
+error: `v` is written here while a reference to it is live
+  --> 06-a-mutable-borrow-while-a-shared-one-is-live.acvus:3:9
+  |
+2 | let r = &v;
+  |         -- borrowed here
+3 | let m = &mut v;
+  |         ^^^^^^ `v` is written here while a reference to it is live
+4 | r[0u64] + m[0u64]
+  | - the reference is used here

@@ -1,0 +1,5 @@
+error: `as` converts to i8, i16, i32, i64, u8, u16, u32, u64, f64 or char, not to `Integer`
+  --> 34-cast-to-a-type-as-does-not-reach.acvus:1:6
+  |
+1 | 1 as Integer
+  |      ^^^^^^^

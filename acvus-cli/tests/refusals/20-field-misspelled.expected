@@ -1,0 +1,5 @@
+error: `p` has no `nmae` stored on every path that reaches here; did you mean `name`?
+  --> 20-field-misspelled.acvus:2:1
+  |
+2 | p.nmae
+  | ^^^^^^

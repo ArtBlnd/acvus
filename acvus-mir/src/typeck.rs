@@ -6,7 +6,7 @@ use acvus_ast::{
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::error::{DataShape, MirError, MirErrorKind, ShownValue};
+use crate::error::{DataShape, DidYouMean, MirError, MirErrorKind, ShownValue};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::solver::{
@@ -159,6 +159,31 @@ struct IndexSite<'a> {
 }
 
 /// What a `&C` names, and `C` itself where the type is not a reference.
+/// A call's arguments as the source wrote them, with the receiver of a
+/// method call counted but not written: `recv.f(a)` has one argument at
+/// offset one, because the receiver's own spelling is not in `args`.
+struct CallAsWritten<'a> {
+    args: &'a [Expr],
+    offset: usize,
+}
+
+fn written_place(interner: &Interner, expr: &Expr) -> ShownValue {
+    match expr {
+        Expr::Ident { name, .. } => ShownValue::Named(interner.resolve(name.name).to_string()),
+        Expr::ContextRef { name, .. } => {
+            ShownValue::Named(format!("@{}", interner.resolve(name.name)))
+        }
+        _ => ShownValue::Anonymous,
+    }
+}
+
+fn behind_a_reference(ty: &Ty) -> &Ty {
+    match ty {
+        TyTerm::Ref(_, referent) => &referent.ty,
+        other => other,
+    }
+}
+
 fn referent_of(ty: &InferTy) -> &InferTy {
     match ty {
         TyTerm::Ref(_, referent) => &referent.ty,
@@ -1093,7 +1118,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
-            return Err(self.errors);
+            return Err(self.reported());
         }
         let resolved: TypeMap = self.freeze_type_map();
         let extern_params = self.frozen_extern_params(template.span);
@@ -1107,7 +1132,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         // solve left open is found only where it is closed, and every such
         // type is closed above.
         if !self.errors.is_empty() {
-            return Err(self.errors);
+            return Err(self.reported());
         }
         Ok(Freeze::new(TypeResolution::new(
             resolved,
@@ -1193,7 +1218,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
-            return Err(self.errors);
+            return Err(self.reported());
         }
         let resolved: TypeMap = self.freeze_type_map();
         let extern_params = self.frozen_extern_params(script.span);
@@ -1210,7 +1235,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         // solve left open is found only where it is closed, and every such
         // type is closed above.
         if !self.errors.is_empty() {
-            return Err(self.errors);
+            return Err(self.reported());
         }
         Ok(Freeze::new(TypeResolution::new(
             resolved,
@@ -1992,16 +2017,39 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A reference is never data (RFC-0018), and neither is a lambda that
     /// holds one (RFC-0064 Decision 5).
-    fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span, shape: DataShape) {
-        let kind = match self.solver.resolve_ty(ty) {
+    fn reference_in_data(&self, ty: &InferTy, shape: DataShape) -> Option<MirErrorKind> {
+        match self.solver.resolve_ty(ty) {
             TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => {
-                MirErrorKind::ViewInData(shape)
+                Some(MirErrorKind::ViewInData(shape))
             }
-            TyTerm::Ref(..) => MirErrorKind::ReferenceInData(shape),
-            resolved if holds_a_loan(&resolved) => MirErrorKind::ReferenceInData(shape),
-            _ => return,
+            TyTerm::Ref(..) => Some(MirErrorKind::ReferenceInData(shape)),
+            resolved if holds_a_loan(&resolved) => Some(MirErrorKind::ReferenceInData(shape)),
+            _ => None,
+        }
+    }
+
+    /// For a component whose type is fixed elsewhere -- a list's element,
+    /// a variant's type parameter, both unified into a variable the
+    /// aggregate's type already holds. Poison there would leave that
+    /// variable open, because the solver never binds a variable to poison
+    /// (`solver.rs::take_other`), and an open variable refuses in its own
+    /// words.
+    fn reject_reference_in_data(&mut self, ty: &InferTy, span: Span, shape: DataShape) {
+        if let Some(kind) = self.reference_in_data(ty, shape) {
+            self.error(kind, span);
+        }
+    }
+
+    /// For a component the aggregate's type is built out of -- an object's
+    /// field, a tuple's element. A refused one is poison, so the aggregate
+    /// does not carry the reference on to a second refusal at the body's
+    /// result.
+    fn as_data(&mut self, ty: InferTy, span: Span, shape: DataShape) -> InferTy {
+        let Some(kind) = self.reference_in_data(&ty, shape) else {
+            return ty;
         };
         self.error(kind, span);
+        Self::infer_error()
     }
 
     /// Walk a field path on a type, resolving each step.
@@ -2092,19 +2140,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 root: acvus_ast::Root::Local(name),
                 ..
             }) => {
-                let var_ty = self.lookup_var(*name).unwrap_or_else(|| {
-                    self.error(
-                        MirErrorKind::UndefinedVariable(self.interner.resolve(*name).to_string()),
-                        span,
-                    );
-                    Self::infer_error()
-                });
+                let var_ty = match self.lookup_var(*name) {
+                    Some(ty) => ty,
+                    None => {
+                        let near = self.near_bindings(*name);
+                        self.error(
+                            MirErrorKind::UndefinedVariable {
+                                name: self.interner.resolve(*name).to_string(),
+                                near,
+                            },
+                            span,
+                        );
+                        Self::infer_error()
+                    }
+                };
                 self.record(*id, var_ty.clone());
                 match self.solver.shallow_resolve_ty(&var_ty) {
                     TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
                     TyTerm::Ref(Mutability::Shared, _) => {
                         let shown = self.type_as_written(&var_ty);
-                        self.error(MirErrorKind::StoreThroughSharedReference(shown), span);
+                        let subject = ShownValue::Named(self.interner.resolve(*name).to_string());
+                        self.error(
+                            MirErrorKind::StoreThroughSharedReference { subject, ty: shown },
+                            span,
+                        );
                         Self::infer_error()
                     }
                     _ => var_ty,
@@ -2136,6 +2195,120 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn labeled_error(&mut self, kind: MirErrorKind, span: Span, labels: Vec<Label>) {
         self.errors.push(MirError { kind, span, labels });
+    }
+
+    /// The refusals a reader is shown. A refusal on a poisoned operand is
+    /// not raised at all -- that is the poison contract on `Ty::Error`
+    /// (`ty.rs`), held at each site. What is left here is the one
+    /// consequence a type cannot carry: an unbound name assigned to is
+    /// afterwards read as an undefined variable, and the two refusals are
+    /// the same fact told twice under different kinds.
+    ///
+    /// A deferred decision settles after the text that follows it was read,
+    /// so raise order is not an order a reader has: what is left is sorted
+    /// by span, stably.
+    fn reported(&mut self) -> Vec<MirError> {
+        let raised = std::mem::take(&mut self.errors);
+        let mut shown: Vec<MirError> = Vec::with_capacity(raised.len());
+        for error in raised {
+            let consequence = shown.iter().any(|earlier| match &error.kind {
+                MirErrorKind::UndefinedVariable { name, .. } => {
+                    matches!(&earlier.kind, MirErrorKind::AssignToUnbound(unbound) if unbound == name)
+                }
+                _ => false,
+            });
+            if !consequence {
+                shown.push(error);
+            }
+        }
+        shown.sort_by_key(|error| (error.span.start, error.span.end));
+        shown
+    }
+
+    /// The candidate set mirrors `TypeEnv::resolve_fn`: a bare name reaches
+    /// every namespace's declaration of it, a qualified one only its own
+    /// namespace's. Change that rule in `ty.rs` and this offers names the
+    /// call could not have resolved to.
+    fn near_functions(&self, wanted: QualifiedRef) -> DidYouMean {
+        let known = self
+            .env
+            .functions
+            .keys()
+            .filter_map(|q| match wanted.namespace {
+                Some(ns) => {
+                    (q.namespace == Some(ns)).then(|| self.interner.resolve(q.name).to_string())
+                }
+                None => Some(self.interner.resolve(q.name).to_string()),
+            });
+        let bound = self
+            .scopes
+            .iter()
+            .flat_map(|scope| scope.keys())
+            .map(|name| self.interner.resolve(*name).to_string());
+        DidYouMean::of(
+            self.interner.resolve(wanted.name),
+            known.chain(bound).collect::<Vec<_>>(),
+        )
+    }
+
+    fn near_namespaces(&self, wanted: Astr, of: Astr) -> DidYouMean {
+        let declaring = self.env.functions.keys().filter_map(|q| {
+            (q.name == of)
+                .then(|| q.namespace)
+                .flatten()
+                .map(|ns| self.interner.resolve(ns).to_string())
+        });
+        DidYouMean::of(self.interner.resolve(wanted), declaring.collect::<Vec<_>>())
+    }
+
+    fn near_bindings(&self, wanted: Astr) -> DidYouMean {
+        let bound = self
+            .scopes
+            .iter()
+            .flat_map(|scope| scope.keys())
+            .map(|name| self.interner.resolve(*name).to_string());
+        DidYouMean::of(self.interner.resolve(wanted), bound.collect::<Vec<_>>())
+    }
+
+    fn near_fields(&self, object_ty: &Ty, wanted: &str) -> DidYouMean {
+        let TyTerm::Object(object) = behind_a_reference(object_ty) else {
+            return DidYouMean::default();
+        };
+        DidYouMean::of(
+            wanted,
+            object
+                .keys()
+                .map(|name| self.interner.resolve(*name).to_string())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn near_variants(
+        &self,
+        scrutinee_ty: &Ty,
+        enum_name: Option<Astr>,
+        wanted: Astr,
+    ) -> DidYouMean {
+        let TyTerm::Enum { name, variants } = behind_a_reference(scrutinee_ty) else {
+            return DidYouMean::default();
+        };
+        let qualified = |tag: &Astr| match enum_name {
+            Some(_) => format!(
+                "{}::{}",
+                self.interner.resolve(*name),
+                self.interner.resolve(*tag)
+            ),
+            None => self.interner.resolve(*tag).to_string(),
+        };
+        let written = match enum_name {
+            Some(ns) => format!(
+                "{}::{}",
+                self.interner.resolve(ns),
+                self.interner.resolve(wanted)
+            ),
+            None => self.interner.resolve(wanted).to_string(),
+        };
+        DidYouMean::of(&written, variants.keys().map(qualified).collect::<Vec<_>>())
     }
 
     fn one_type_two_sources(&self, expected: &Ty, got: &Ty) -> Option<Refusal> {
@@ -2801,7 +2974,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     candidates: self.shown_candidates(name, candidates.iter().copied()),
                 },
                 Unsettled::ViewCaptured { .. } => MirErrorKind::ViewCaptured,
-                Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared,
+                Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared {
+                    subject: ShownValue::Anonymous,
+                },
                 Unsettled::LendMismatch { expected, got, .. }
                 | Unsettled::MatchMismatch { expected, got, .. } => {
                     MirErrorKind::UnificationFailure {
@@ -3166,7 +3341,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let referent = match self.solver.lend(of, mutability) {
             LendOutcome::Names { referent, .. } => referent,
             LendOutcome::MutableBorrowOfShared { referent } => {
-                self.error(MirErrorKind::MutableBorrowOfShared, span);
+                let subject = written_place(self.interner, place);
+                self.error(MirErrorKind::MutableBorrowOfShared { subject }, span);
                 referent
             }
             LendOutcome::HeadOpen => {
@@ -3253,7 +3429,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 );
             }
         }
-        self.error(MirErrorKind::UndefinedFunction(name_str), call_span);
+        let near = self.near_functions(QualifiedRef::root(name));
+        self.error(
+            MirErrorKind::UndefinedFunction {
+                name: name_str,
+                near,
+            },
+            call_span,
+        );
         Self::infer_error()
     }
 
@@ -3470,7 +3653,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             [] => {
                 let types =
                     self.check_args_in_order(&Self::infer_error(), first.as_ref(), args, call_span);
-                return self.no_matching_function(&name_str, types, call_span);
+                return self.no_matching_function(
+                    &name_str,
+                    types,
+                    CallAsWritten {
+                        args,
+                        offset: usize::from(first.is_some()),
+                    },
+                    call_span,
+                );
             }
             [SignatureCandidate::Named { qref, scheme }] => {
                 let (qref, scheme) = (*qref, scheme.clone());
@@ -3486,7 +3677,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let admitted = match self.admit_args(candidates, first.as_ref(), args, call_span) {
             Ok(admitted) => admitted,
             Err(ArgumentsRefused { types }) => {
-                return self.no_matching_function(&name_str, types, call_span);
+                return self.no_matching_function(
+                    &name_str,
+                    types,
+                    CallAsWritten {
+                        args,
+                        offset: usize::from(first.is_some()),
+                    },
+                    call_span,
+                );
             }
         };
         let Admitted {
@@ -3535,6 +3734,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         name: &str,
         types: Vec<InferTy>,
+        written: CallAsWritten<'_>,
         call_span: Span,
     ) -> InferTy {
         let call = CallShape {
@@ -3545,14 +3745,83 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .collect(),
             ret: self.solver.fresh_ty_var(),
         };
-        self.error(
+        let labels = self
+            .borrow_that_would_fit(name, written)
+            .into_iter()
+            .collect();
+        self.labeled_error(
             MirErrorKind::NoMatchingFunction {
                 name: name.to_string(),
                 ty: self.call_type_as_written(&call),
             },
             call_span,
+            labels,
         );
         Self::infer_error()
+    }
+
+    /// The call rewritten with the borrow every declaration of the name
+    /// asks for at one argument, where the argument is a plain name and so
+    /// has a spelling to put it in front of.
+    ///
+    /// The mode comes from the scheme's parameter, whose type is a
+    /// `PolyTy`. Its variables have no reader-facing spelling, so the note
+    /// says the mode rather than printing the parameter.
+    fn borrow_that_would_fit(&self, name: &str, written: CallAsWritten<'_>) -> Option<Label> {
+        let CallAsWritten { args, offset } = written;
+        let spelled: Option<Vec<&str>> = args
+            .iter()
+            .map(|arg| match arg {
+                Expr::Ident {
+                    name,
+                    ref_kind: RefKind::Value,
+                    ..
+                } => Some(self.interner.resolve(name.name)),
+                _ => None,
+            })
+            .collect();
+        let spelled = spelled?;
+        let wanted = self.interner.intern(name);
+        let arity = args.len() + offset;
+        let declarations: Vec<&crate::ty::Scheme> = self
+            .env
+            .functions
+            .iter()
+            .filter(|(qref, scheme)| qref.name == wanted && scheme.params().len() == arity)
+            .map(|(_, scheme)| scheme)
+            .collect();
+        if declarations.is_empty() {
+            return None;
+        }
+        let (borrowed, mode) = (offset..arity).find_map(|index| {
+            let mut modes = declarations
+                .iter()
+                .map(|scheme| match scheme.params()[index].ty {
+                    TyTerm::Ref(mutability, _) => Some(mutability),
+                    _ => None,
+                });
+            let first = modes.next()??;
+            modes
+                .all(|mode| mode == Some(first))
+                .then_some((index, first))
+        })?;
+        let borrow = match mode {
+            Mutability::Shared => "&",
+            Mutability::Mut => "&mut ",
+        };
+        let call: Vec<String> = spelled
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| match i + offset == borrowed {
+                true => format!("{borrow}{arg}"),
+                false => (*arg).to_string(),
+            })
+            .collect();
+        Some(Label::note(format!(
+            "the parameter is a `{}`; write `{name}({})`",
+            borrow.trim_end(),
+            call.join(", ")
+        )))
     }
 
     /// The function type the call was written as. A call that matched no
@@ -3757,7 +4026,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 effect,
                 ..
             } => {
-                if !self.check_arity(name_str, arg_types.len(), param_tys.len(), call_span) {
+                if !self.check_arity(
+                    ShownValue::Named(name_str.to_string()),
+                    arg_types.len(),
+                    param_tys.len(),
+                    call_span,
+                ) {
                     return Self::infer_error();
                 }
                 let effect = effect.clone();
@@ -3774,7 +4048,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             _ => {
                 self.error(
-                    MirErrorKind::UndefinedFunction(name_str.to_string()),
+                    MirErrorKind::UndefinedFunction {
+                        name: name_str.to_string(),
+                        near: DidYouMean::default(),
+                    },
                     call_span,
                 );
                 Self::infer_error()
@@ -3793,12 +4070,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> InferTy {
         let [payload] = args else {
+            let near = self.near_namespaces(enum_name, tag);
             self.error(
-                MirErrorKind::UndefinedFunction(format!(
-                    "{}::{}",
-                    self.interner.resolve(enum_name),
-                    self.interner.resolve(tag)
-                )),
+                MirErrorKind::UndefinedFunction {
+                    name: format!(
+                        "{}::{}",
+                        self.interner.resolve(enum_name),
+                        self.interner.resolve(tag)
+                    ),
+                    near,
+                },
                 span,
             );
             return Self::infer_error();
@@ -3827,7 +4108,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("eq"));
         let Some(scheme) = self.env.functions.get(&qref).cloned() else {
             self.error(
-                MirErrorKind::UndefinedFunction(format!("core::eq for {op}")),
+                MirErrorKind::UndefinedFunction {
+                    name: format!("core::eq for {op}"),
+                    near: DidYouMean::default(),
+                },
                 span,
             );
             return;
@@ -3931,13 +4215,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         );
     }
 
-    fn check_arity(&mut self, func: &str, got: usize, expected: usize, call_span: Span) -> bool {
+    fn check_arity(
+        &mut self,
+        func: ShownValue,
+        got: usize,
+        expected: usize,
+        call_span: Span,
+    ) -> bool {
         if got == expected {
             return true;
         }
         self.error(
             MirErrorKind::ArityMismatch {
-                func: func.to_string(),
+                func,
                 expected,
                 got,
             },
@@ -4029,7 +4319,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     TyTerm::Error(_) => Self::infer_error(),
                     other => {
                         let shown = self.type_as_written(&other);
-                        self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
+                        let subject = written_place(self.interner, target);
+                        self.error(
+                            MirErrorKind::StoreThroughSharedReference { subject, ty: shown },
+                            *span,
+                        );
                         Self::infer_error()
                     }
                 };
@@ -4526,10 +4820,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 }
                                 FreeParam::Bound => {
                                     self.error(
-                                        MirErrorKind::UndefinedVariable(format!(
-                                            "${}",
-                                            self.interner.resolve(name.name)
-                                        )),
+                                        MirErrorKind::UndefinedVariable {
+                                            name: format!("${}", self.interner.resolve(name.name)),
+                                            near: DidYouMean::default(),
+                                        },
                                         *span,
                                     );
                                     Self::infer_error()
@@ -4543,12 +4837,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     RefKind::Value => match self.lookup_var(name.name) {
                         Some(ty) => ty,
                         None => {
-                            // Undefined local variable - always an error.
-                            // Use $name for extern params, @name for context.
+                            let near = self.near_bindings(name.name);
                             self.error(
-                                MirErrorKind::UndefinedVariable(
-                                    self.interner.resolve(name.name).to_string(),
-                                ),
+                                MirErrorKind::UndefinedVariable {
+                                    name: self.interner.resolve(name.name).to_string(),
+                                    near,
+                                },
                                 *span,
                             );
                             Self::infer_error()
@@ -4815,7 +5109,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     && let TyTerm::Ref(Mutability::Shared, _) = &ot
                 {
                     let shown = self.type_as_written(&ot_raw);
-                    self.error(MirErrorKind::StoreThroughSharedReference(shown), *span);
+                    let subject = written_place(self.interner, object);
+                    self.error(
+                        MirErrorKind::StoreThroughSharedReference { subject, ty: shown },
+                        *span,
+                    );
                     return self.record_ret(*id, Self::infer_error());
                 }
                 let field_key = *field;
@@ -4834,6 +5132,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             if self.solver.unify(&inner.ty, &partial).is_err() {
                                 self.error(
                                     MirErrorKind::UndefinedField {
+                                        near: self
+                                            .near_fields(&self.type_as_written(&ot), &field_str()),
                                         object_ty: self.type_as_written(&ot),
                                         field: field_str(),
                                     },
@@ -4846,6 +5146,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         _ => {
                             self.error(
                                 MirErrorKind::UndefinedField {
+                                    near: self
+                                        .near_fields(&self.type_as_written(&ot), &field_str()),
                                     object_ty: self.type_as_written(&ot),
                                     field: field_str(),
                                 },
@@ -4874,6 +5176,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         if self.solver.unify(&ot_raw, &partial_obj).is_err() {
                             self.error(
                                 MirErrorKind::UndefinedField {
+                                    near: self
+                                        .near_fields(&self.type_as_written(&ot), &field_str()),
                                     object_ty: self.type_as_written(&ot),
                                     field: field_str(),
                                 },
@@ -4885,6 +5189,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     _ => {
                         self.error(
                             MirErrorKind::UndefinedField {
+                                near: self.near_fields(&self.type_as_written(&ot), &field_str()),
                                 object_ty: self.type_as_written(&ot),
                                 field: field_str(),
                             },
@@ -5034,7 +5339,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
                     let ft = self.check_expr(value);
-                    self.reject_reference_in_data(&ft, value.span(), DataShape::Aggregate);
+                    let ft = self.as_data(ft, value.span(), DataShape::Aggregate);
                     field_types.insert(*key, ft);
                 }
                 let ty = TyTerm::Object(ObjectTy::written(field_types));
@@ -5051,8 +5356,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .map(|elem| match elem {
                         TupleElem::Expr(e) => {
                             let et = self.check_expr(e);
-                            self.reject_reference_in_data(&et, e.span(), DataShape::Aggregate);
-                            et
+                            self.as_data(et, e.span(), DataShape::Aggregate)
                         }
                         TupleElem::Wildcard(_) => self.solver.fresh_ty_var(),
                     })
@@ -5128,10 +5432,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 // Structural enum: requires qualified name (A::B).
                 let Some(enum_name) = ast_enum_name else {
                     self.error(
-                        MirErrorKind::UndefinedFunction(format!(
-                            "unknown variant: {}",
-                            self.interner.resolve(*tag)
-                        )),
+                        MirErrorKind::UndefinedFunction {
+                            name: format!("unknown variant: {}", self.interner.resolve(*tag)),
+                            near: DidYouMean::default(),
+                        },
                         *span,
                     );
                     return Self::infer_error();
@@ -5276,11 +5580,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let resolved = self.solver.resolve_ty(&source_ty);
         let mut joined: Option<Branch> = None;
         for arm in arms {
-            self.check_arm_is_reachable(&arm.pattern, &resolved, arm.span);
+            let arm_source = self.reachable_arm_source(&arm.pattern, &resolved, arm.span);
             self.push_scope();
             self.check_pattern(
                 &arm.pattern,
-                &resolved,
+                &arm_source,
                 PatternSource::Expr(scrutinee.id()),
                 arm.span,
             );
@@ -5320,15 +5624,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// language has no warning axis, so it is refused. The question is
     /// asked only where the answer is written down: a scrutinee whose head
     /// is still open says nothing, and no arm is refused on it.
-    fn check_arm_is_reachable(&mut self, pattern: &Pattern, source_ty: &InferTy, span: Span) {
+    ///
+    /// An arm this refused is read against poison, so the tag that is not
+    /// there is not unified against a second time and the payload name
+    /// still binds.
+    fn reachable_arm_source(
+        &mut self,
+        pattern: &Pattern,
+        source_ty: &InferTy,
+        span: Span,
+    ) -> InferTy {
         let Pattern::Variant { tag, payload, .. } = pattern else {
-            return;
+            return source_ty.clone();
         };
         let TyTerm::Enum { name, variants } = self.solver.shallow_resolve_ty(source_ty) else {
-            return;
+            return source_ty.clone();
         };
         if variants.contains_key(tag) {
-            return;
+            return source_ty.clone();
         }
         let written = match payload {
             Some(_) => format!(
@@ -5343,13 +5656,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             ),
         };
         let scrutinee_ty = self.type_as_written(source_ty);
+        let near = self.near_variants(&scrutinee_ty, Some(name), *tag);
         self.error(
             MirErrorKind::UnreachablePattern {
                 pattern: written,
                 scrutinee_ty,
+                near,
             },
             span,
         );
+        Self::infer_error()
     }
 
     fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch) -> Branch {
@@ -5446,8 +5762,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if let Some(ns) = name.namespace {
             return self.check_structural_variant(call_id, ns, name.name, args, call_span);
         }
+        let near = self.near_functions(*name);
         self.error(
-            MirErrorKind::UndefinedFunction(name_str.to_string()),
+            MirErrorKind::UndefinedFunction {
+                name: name_str.to_string(),
+                near,
+            },
             call_span,
         );
         Self::infer_error()
@@ -5485,7 +5805,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             _ => {
                 self.error(
-                    MirErrorKind::UndefinedFunction("<not callable>".to_string()),
+                    MirErrorKind::UndefinedFunction {
+                        name: "<not callable>".to_string(),
+                        near: DidYouMean::default(),
+                    },
                     call_span,
                 );
                 return Self::infer_error();
@@ -5501,7 +5824,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 effect,
                 ..
             } => {
-                if !self.check_arity("<closure>", arg_types.len(), params.len(), call_span) {
+                if !self.check_arity(
+                    ShownValue::Anonymous,
+                    arg_types.len(),
+                    params.len(),
+                    call_span,
+                ) {
                     return Self::infer_error();
                 }
                 let effect = effect.clone();
@@ -5524,7 +5852,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.note_call_effect(&effect, call_span);
                 if self.solver.unify(func_ty, &fn_ty).is_err() {
                     self.error(
-                        MirErrorKind::UndefinedFunction("<expr>".to_string()),
+                        MirErrorKind::UndefinedFunction {
+                            name: "<expr>".to_string(),
+                            near: DidYouMean::default(),
+                        },
                         call_span,
                     );
                     return Self::infer_error();
@@ -5788,6 +6119,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let Some(field_ty) = obj_fields.get(key) else {
                         self.error(
                             MirErrorKind::UndefinedField {
+                                near: self.near_fields(
+                                    &self.type_as_written(&source_resolved),
+                                    self.interner.resolve(*key),
+                                ),
                                 object_ty: self.type_as_written(&source_resolved),
                                 field: self.interner.resolve(*key).to_string(),
                             },
@@ -5876,10 +6211,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 // Structural enum: requires qualified name.
                 let Some(enum_name) = ast_enum_name else {
                     self.error(
-                        MirErrorKind::UndefinedFunction(format!(
-                            "unknown variant: {}",
-                            self.interner.resolve(*tag)
-                        )),
+                        MirErrorKind::UndefinedFunction {
+                            name: format!("unknown variant: {}", self.interner.resolve(*tag)),
+                            near: DidYouMean::default(),
+                        },
                         span,
                     );
                     return;

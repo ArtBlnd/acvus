@@ -1,0 +1,5 @@
+error: Take takes Ref and got i64
+  --> 35-deref-of-a-non-reference.acvus:2:1
+  |
+2 | *x
+  | ^^

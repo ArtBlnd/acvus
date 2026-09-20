@@ -1,0 +1,5 @@
+error: type mismatch in `+`: String vs i64
+  --> 27-string-plus-a-number.acvus:2:1
+  |
+2 | s + 1
+  | ^^^^^

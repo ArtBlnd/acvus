@@ -1,0 +1,5 @@
+error: `break` is only inside a loop
+  --> 09-break-outside-a-loop.acvus:2:1
+  |
+2 | break;
+  | ^^^^^^

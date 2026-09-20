@@ -1,0 +1,5 @@
+error: a lambda cannot capture a string or slice view; write `.to_string()` for the owned text
+  --> 30-a-lambda-that-captures-a-view.acvus:3:16
+  |
+3 | let f = |k| -> len(v);
+  |                ^^^^^^

@@ -1,0 +1,6 @@
+error: cannot assign to `x`: it is captured by the lambda, not bound in it
+  --> 33-assignment-to-a-capture.acvus:2:18
+  |
+2 | let f = |k| -> { x = vec([3]); 0 };
+  |                ------------------- captured here
+  |                  ^^^^^^^^^^^^^ cannot assign to `x`: it is captured by the lambda, not bound in it

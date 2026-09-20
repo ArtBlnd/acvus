@@ -1,0 +1,5 @@
+error: no `as_slice` takes a call of type Fn(&i64) -> &[_]
+  --> 36-index-into-what-has-no-slice.acvus:2:1
+  |
+2 | x[0u64]
+  | ^^^^^^^

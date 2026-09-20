@@ -1,0 +1,5 @@
+error: undefined function `frobnicate`
+  --> 32-a-function-no-name-is-near.acvus:1:1
+  |
+1 | frobnicate(1)
+  | ^^^^^^^^^^^^^

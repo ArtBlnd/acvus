@@ -23,6 +23,87 @@ impl fmt::Display for ShownValue {
     }
 }
 
+/// The names a refusal offers in place of the one it did not find. A
+/// candidate is within an edit distance of two of what was written, or has
+/// it as a prefix; the nearest three are kept, and an empty list prints
+/// nothing, so a refusal with no near name keeps the sentence it had.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DidYouMean(Vec<String>);
+
+impl DidYouMean {
+    /// At most this many names, so the sentence stays one line.
+    pub const SHOWN: usize = 3;
+
+    /// The names near `wanted` among `known`, nearest first and then
+    /// alphabetically, with `wanted` itself never among them.
+    pub fn of<I>(wanted: &str, known: I) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut near: Vec<(usize, String)> = known
+            .into_iter()
+            .filter(|name| name != wanted)
+            .filter_map(|name| near(wanted, &name).map(|d| (d, name)))
+            .collect();
+        near.sort();
+        near.dedup_by(|a, b| a.1 == b.1);
+        near.truncate(Self::SHOWN);
+        Self(near.into_iter().map(|(_, name)| name).collect())
+    }
+}
+
+impl fmt::Display for DidYouMean {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [first, rest @ ..] = self.0.as_slice() else {
+            return Ok(());
+        };
+        write!(f, "; did you mean `{first}`")?;
+        for (i, name) in rest.iter().enumerate() {
+            match i + 2 == self.0.len() {
+                true => write!(f, " or `{name}`")?,
+                false => write!(f, ", `{name}`")?,
+            }
+        }
+        write!(f, "?")
+    }
+}
+
+/// How far `name` is from `wanted`, where near enough to offer: an edit
+/// distance of at most two, or `wanted` written as a prefix of it. A name
+/// of one or two characters is near everything of its length, so only a
+/// prefix counts there.
+fn near(wanted: &str, name: &str) -> Option<usize> {
+    if wanted.len() >= 3 && name.starts_with(wanted) {
+        return Some(0);
+    }
+    if wanted.len() < 3 {
+        return None;
+    }
+    match edit_distance(wanted, name) {
+        d @ 0..=2 => Some(d),
+        _ => None,
+    }
+}
+
+/// The Levenshtein distance, over characters.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = match ca == *cb {
+                true => diagonal,
+                false => 1 + diagonal.min(row[j]).min(row[j + 1]),
+            };
+            diagonal = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataShape {
     Aggregate,
@@ -123,13 +204,19 @@ pub enum MirErrorKind {
     RestInArrayLiteral,
 
     // Name errors
-    UndefinedVariable(String),
+    UndefinedVariable {
+        name: String,
+        near: DidYouMean,
+    },
     /// `x = e;` where no `x` is bound in this body (RFC-0045).
     AssignToUnbound(String),
     /// `x = e;` inside a lambda, where `x` is bound outside it. A capture is
     /// by value, so the store would write the lambda's copy (RFC-0045).
     AssignToCapture(String),
-    UndefinedFunction(String),
+    UndefinedFunction {
+        name: String,
+        near: DidYouMean,
+    },
     NoOperatorInstance {
         op: &'static str,
         ty: Ty,
@@ -146,12 +233,18 @@ pub enum MirErrorKind {
     NoInstance {
         ty: Ty,
     },
-    StoreThroughSharedReference(Ty),
+    StoreThroughSharedReference {
+        subject: ShownValue,
+        ty: Ty,
+    },
     /// `&mut r` where `r: &T` (RFC-0029).
-    MutableBorrowOfShared,
+    MutableBorrowOfShared {
+        subject: ShownValue,
+    },
     UndefinedField {
         object_ty: Ty,
         field: String,
+        near: DidYouMean,
     },
     /// An object at a parameter of a declared struct's type lacks a field
     /// the struct declares (RFC-0042).
@@ -177,6 +270,7 @@ pub enum MirErrorKind {
     FieldNotStored {
         subject: ShownValue,
         fields: Vec<String>,
+        near: DidYouMean,
     },
 
     // Pattern errors
@@ -196,6 +290,7 @@ pub enum MirErrorKind {
     UnreachablePattern {
         pattern: String,
         scrutinee_ty: Ty,
+        near: DidYouMean,
     },
     PatternTypeMismatch {
         pattern_ty: Ty,
@@ -214,7 +309,7 @@ pub enum MirErrorKind {
 
     // Lowering errors
     ArityMismatch {
-        func: String,
+        func: ShownValue,
         expected: usize,
         got: usize,
     },
@@ -339,8 +434,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     left.shown(interner),
                     right.shown(interner),
                     match (holds_text(left), holds_text(right)) {
-                        (true, true) => COPY_OF_A_VIEW,
-                        _ => "",
+                        (true, true) => COPY_OF_A_VIEW.to_string(),
+                        _ => open_payload(left)
+                            .or_else(|| open_payload(right))
+                            .unwrap_or_default(),
                     }
                 )
             }
@@ -380,10 +477,11 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::UnificationFailure { expected, got } => {
                 write!(
                     f,
-                    "type mismatch: expected {}, got {}{}",
+                    "type mismatch: expected {}, got {}{}{}",
                     expected.shown(interner),
                     got.shown(interner),
-                    copy_of_a_view(expected, got)
+                    copy_of_a_view(expected, got),
+                    borrow_mode(expected, got)
                 )
             }
             MirErrorKind::EffectExceeded(c) => {
@@ -413,8 +511,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::RestInArrayLiteral => {
                 write!(f, "`..` is a pattern, not an array element")
             }
-            MirErrorKind::UndefinedVariable(name) => {
-                write!(f, "undefined variable `{name}`")
+            MirErrorKind::UndefinedVariable { name, near } => {
+                write!(f, "undefined variable `{name}`{near}")
             }
             MirErrorKind::AssignToUnbound(name) => {
                 write!(
@@ -512,7 +610,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::ViewCaptured => {
-                write!(f, "a lambda cannot capture a string or slice view")
+                write!(
+                    f,
+                    "a lambda cannot capture a string or slice view{COPY_OF_A_VIEW}"
+                )
             }
             MirErrorKind::ReferenceInData(shape) => {
                 write!(f, "a reference cannot be stored in {shape}")
@@ -538,29 +639,38 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "`{name}` is declared by {}", candidates.join(" and "))
             }
             MirErrorKind::NoMatchingFunction { name, ty } => {
-                write!(f, "no `{name}` takes a call of type {}", ty.shown(interner))
+                write!(
+                    f,
+                    "no `{name}` takes a call of type {}{}",
+                    ty.shown(interner),
+                    view_in(ty)
+                )
             }
             MirErrorKind::PlaceNamedTwice(place) => {
                 write!(f, "`{place}` is named twice in one call")
             }
-            MirErrorKind::UndefinedFunction(name) => {
-                write!(f, "undefined function `{name}`")
+            MirErrorKind::UndefinedFunction { name, near } => {
+                write!(f, "undefined function `{name}`{near}")
             }
-            MirErrorKind::StoreThroughSharedReference(ty) => {
+            MirErrorKind::StoreThroughSharedReference { subject, ty } => {
                 write!(
                     f,
-                    "cannot store through {}: not a `&mut`",
+                    "cannot store through {subject}, of type {}: not a `&mut`; bind it with `&mut`",
                     ty.shown(interner)
                 )
             }
-            MirErrorKind::MutableBorrowOfShared => {
-                write!(f, "a shared reference cannot be borrowed mutably")
+            MirErrorKind::MutableBorrowOfShared { subject } => {
+                write!(
+                    f,
+                    "{subject} is a shared reference and cannot be borrowed mutably; bind it with `&mut`"
+                )
             }
             MirErrorKind::NoInstance { ty } => {
                 write!(
                     f,
-                    "no instance of the signature has the call type {}",
-                    ty.shown(interner)
+                    "no instance of the signature has the call type {}{}",
+                    ty.shown(interner),
+                    view_in(ty)
                 )
             }
             MirErrorKind::NoOperatorInstance { op, ty } => {
@@ -654,10 +764,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 leaves.shown(interner),
                 returns.shown(interner)
             ),
-            MirErrorKind::UndefinedField { object_ty, field } => {
+            MirErrorKind::UndefinedField {
+                object_ty,
+                field,
+                near,
+            } => {
                 write!(
                     f,
-                    "no field `{field}` on type {}",
+                    "no field `{field}` on type {}{near}",
                     object_ty.shown(interner)
                 )
             }
@@ -679,11 +793,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::UndefinedContext(name) => {
                 write!(f, "`@{name}` is not a declared context")
             }
-            MirErrorKind::FieldNotStored { subject, fields } => {
+            MirErrorKind::FieldNotStored {
+                subject,
+                fields,
+                near,
+            } => {
                 let named: Vec<String> = fields.iter().map(|f| format!("`{f}`")).collect();
                 write!(
                     f,
-                    "{subject} has no {} stored on every path that reaches here",
+                    "{subject} has no {} stored on every path that reaches here{near}",
                     named.join(", ")
                 )
             }
@@ -703,10 +821,11 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::UnreachablePattern {
                 pattern,
                 scrutinee_ty,
+                near,
             } => {
                 write!(
                     f,
-                    "unreachable pattern: `{pattern}` is not a variant of `{}`",
+                    "unreachable pattern: `{pattern}` is not a variant of `{}`{near}",
                     scrutinee_ty.shown(interner)
                 )
             }
@@ -748,12 +867,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 func,
                 expected,
                 got,
-            } => {
-                write!(
+            } => match func {
+                ShownValue::Named(name) => write!(
                     f,
-                    "function `{func}` expects {expected} arguments, got {got}"
-                )
-            }
+                    "function `{name}` expects {expected} arguments, got {got}"
+                ),
+                ShownValue::Anonymous => {
+                    write!(f, "this closure expects {expected} arguments, got {got}")
+                }
+            },
             MirErrorKind::ParseError(msg) => {
                 write!(f, "parse error: {msg}")
             }
@@ -784,6 +906,55 @@ fn holds_text(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
         Ty::Ref(_, inner) => holds_text(&inner.ty),
+        _ => false,
+    }
+}
+
+/// A payload still in its wrapper where a plain value was wanted: the
+/// spelling that opens it.
+fn open_payload(ty: &Ty) -> Option<String> {
+    match ty {
+        Ty::Option(_) => {
+            Some("; an Option is not its payload -- write `.unwrap()`, `?` or match it".to_string())
+        }
+        Ty::Result(..) => {
+            Some("; a Result is not its payload -- write `?`, `.unwrap()` or match it".to_string())
+        }
+        Ty::Ref(_, inner) => open_payload(&inner.ty),
+        _ => None,
+    }
+}
+
+/// A `&` where a `&mut` was wanted is the one mismatch the argument's own
+/// spelling settles.
+fn borrow_mode(expected: &Ty, got: &Ty) -> &'static str {
+    match (expected, got) {
+        (Ty::Ref(crate::ty::Mutability::Mut, _), Ty::Ref(crate::ty::Mutability::Shared, _)) => {
+            "; write `&mut` where the `&` is"
+        }
+        _ => "",
+    }
+}
+
+/// A call type that carries a view where the owned text was wanted.
+fn view_in(ty: &Ty) -> &'static str {
+    match ty {
+        Ty::Fn { params, ret, .. } => {
+            match params.iter().any(|p| mentions_view(&p.ty)) || mentions_view(ret) {
+                true => COPY_OF_A_VIEW,
+                false => "",
+            }
+        }
+        _ => "",
+    }
+}
+
+fn mentions_view(ty: &Ty) -> bool {
+    match ty {
+        Ty::Str => true,
+        Ty::Ref(_, inner) => mentions_view(&inner.ty),
+        Ty::Option(inner) | Ty::Array(inner, _) | Ty::Slice(inner) => mentions_view(inner),
+        Ty::UserDefined { type_args, .. } => type_args.iter().any(|arg| mentions_view(&arg.ty)),
         _ => false,
     }
 }

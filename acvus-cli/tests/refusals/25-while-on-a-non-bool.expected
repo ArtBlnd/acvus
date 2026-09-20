@@ -1,0 +1,5 @@
+error: type mismatch: expected Bool, got i64
+  --> 25-while-on-a-non-bool.acvus:2:1
+  |
+2 | while n {
+  | ^^^^^^^^^

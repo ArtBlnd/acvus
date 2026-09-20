@@ -1,0 +1,4 @@
+let s = "abc".to_string();
+let v = s.trim();
+let f = |k| -> len(v);
+f(1)

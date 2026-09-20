@@ -101,7 +101,7 @@ fn an_object_pattern_on_an_argument_names_the_field_it_asked_for() {
 fn a_store_through_a_shared_reference_names_the_reference() {
     reports_as_written(
         "let q = 1; let r = &q; *r = 2; 0",
-        "cannot store through &_: not a `&mut`",
+        "cannot store through `r`, of type &_: not a `&mut`; bind it with `&mut`",
     );
 }
 

@@ -1,0 +1,5 @@
+error: unreachable pattern: `Shape::Square(_)` is not a variant of `Shape{Circle(Float)}`
+  --> 12-match-missing-an-arm.acvus:4:5
+  |
+4 |     Shape::Square(s) => s,
+  |     ^^^^^^^^^^^^^^^^^^^^^

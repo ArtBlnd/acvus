@@ -1,0 +1,5 @@
+error: undefined variable `totl`; did you mean `total`?
+  --> 31-variable-misspelled.acvus:2:1
+  |
+2 | totl + 1
+  | ^^^^

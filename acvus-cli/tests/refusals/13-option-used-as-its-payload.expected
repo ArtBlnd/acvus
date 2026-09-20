@@ -1,0 +1,5 @@
+error: type mismatch in `+`: Option<&_> vs i64; an Option is not its payload -- write `.unwrap()`, `?` or match it
+  --> 13-option-used-as-its-payload.acvus:3:1
+  |
+3 | x + 1
+  | ^^^^^

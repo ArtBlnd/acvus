@@ -1,0 +1,5 @@
+error: cannot assign to `total`: no binding named `total` is in scope; `let total = ...;` binds it
+  --> 10-assign-to-an-unbound-name.acvus:1:1
+  |
+1 | total = 1;
+  | ^^^^^^^^^^

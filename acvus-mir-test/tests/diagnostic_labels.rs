@@ -210,11 +210,15 @@ fn a_write_while_two_references_are_live_is_one_refusal_naming_both() {
 }
 
 /// `Solver::lend` answers that the referent is shared without saying where
-/// the shared reference was taken, so the refusal names one place.
+/// the shared reference was taken, so the refusal names the reference the
+/// borrow was written on and the spelling that would admit it.
 #[test]
 fn a_mutable_borrow_of_a_shared_reference_names_one_place() {
     let (message, labels) = only("let a = [1, 2]; let r = &a; let m = &mut r; 0", &nothing);
-    assert_eq!(message, "a shared reference cannot be borrowed mutably");
+    assert_eq!(
+        message,
+        "`r` is a shared reference and cannot be borrowed mutably; bind it with `&mut`"
+    );
     assert_eq!(labels, []);
 }
 
@@ -439,4 +443,89 @@ fn a_type_the_solve_leaves_open_is_refused_where_it_is_closed() {
         "cannot infer type: resolved to _ which contains unresolved type variables"
     );
     assert_eq!(labels, []);
+}
+
+/// A refusal over a name the environment does not have offers the names it
+/// does: the functions a call of that spelling could have reached, the
+/// bindings in scope, an object's fields, a type's variants.
+mod did_you_mean {
+    use super::*;
+
+    #[test]
+    fn a_misspelled_function_offers_the_one_that_is_near() {
+        let (message, _) = only("let v = vec([1, 2]); v.pushh(2); v.len()", &nothing);
+        assert_eq!(message, "undefined function `pushh`; did you mean `push`?");
+    }
+
+    #[test]
+    fn a_name_with_nothing_near_it_keeps_the_sentence_it_had() {
+        let (message, _) = only("frobnicate(1)", &nothing);
+        assert_eq!(message, "undefined function `frobnicate`");
+    }
+
+    #[test]
+    fn a_misspelled_binding_offers_the_binding() {
+        let (message, _) = only("let total = 1; totl + 1", &nothing);
+        assert_eq!(message, "undefined variable `totl`; did you mean `total`?");
+    }
+
+    #[test]
+    fn a_misspelled_field_offers_the_field() {
+        let (message, _) = only("let p = { name: 1, age: 3, }; p.nmae", &nothing);
+        assert_eq!(
+            message,
+            "`p` has no `nmae` stored on every path that reaches here; did you mean `name`?"
+        );
+    }
+
+    #[test]
+    fn a_misspelled_variant_offers_the_variant() {
+        let (message, _) = only(
+            "let s = Shape::Circle(1); match s { Shape::Circl(r) => r, _ => 0, }",
+            &nothing,
+        );
+        assert_eq!(
+            message,
+            "unreachable pattern: `Shape::Circl(_)` is not a variant of `Shape{Circle(i64)}`; \
+             did you mean `Shape::Circle`?"
+        );
+    }
+}
+
+/// A parameter declared as a reference, given the value itself, carries the
+/// call as it should have been written (RFC-0064's holder labels are what
+/// names the places; this names the spelling).
+#[test]
+fn a_value_at_a_reference_parameter_carries_the_call_to_write() {
+    let (_, labels) = only("let v = vec([1, 2]); len(v)", &nothing);
+    assert_eq!(labels, [note("the parameter is a `&`; write `len(&v)`")]);
+}
+
+/// A rule is broken once. What the error type it leaves reaches refuses
+/// again at a smaller piece of the same source, and that second refusal is
+/// the first one's consequence.
+mod a_consequence_is_not_reported {
+    use super::*;
+
+    #[test]
+    fn an_arm_that_is_not_a_variant_refuses_once() {
+        let (message, _) = only(
+            "let s = Shape::Circle(1); match s { Shape::Circle(r) => r, Shape::Square(q) => q, }",
+            &nothing,
+        );
+        assert_eq!(
+            message,
+            "unreachable pattern: `Shape::Square(_)` is not a variant of `Shape{Circle(i64)}`"
+        );
+    }
+
+    #[test]
+    fn a_store_to_a_name_no_binding_has_refuses_once() {
+        let (message, _) = only("total = 1; total", &nothing);
+        assert_eq!(
+            message,
+            "cannot assign to `total`: no binding named `total` is in scope; \
+             `let total = ...;` binds it"
+        );
+    }
 }

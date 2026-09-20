@@ -1,0 +1,5 @@
+error: function `concat` expects 2 arguments, got 1
+  --> 22-wrong-argument-count.acvus:1:1
+  |
+1 | concat("a")
+  | ^^^^^^^^^^^

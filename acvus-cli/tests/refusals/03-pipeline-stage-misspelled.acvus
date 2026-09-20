@@ -1,0 +1,2 @@
+let v = vec([1, 2]);
+v.into_iter() | map(|x| -> x + 1) | colect

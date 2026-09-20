@@ -1,0 +1,6 @@
+let v = vec([1, 2]);
+let total = 0;
+for x in v {
+    total = total + x;
+}
+total

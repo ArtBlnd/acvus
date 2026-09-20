@@ -1,0 +1,3 @@
+let v = vec(["a".to_string()]);
+v.push("b");
+v.len()

@@ -1,0 +1,5 @@
+error: heterogeneous list: expected i64, got &str
+  --> 38-a-heterogeneous-list.acvus:1:1
+  |
+1 | [1, "a"]
+  | ^^^^^^^^

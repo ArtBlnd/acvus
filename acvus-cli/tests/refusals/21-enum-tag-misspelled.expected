@@ -1,0 +1,5 @@
+error: unreachable pattern: `Shape::Circl(_)` is not a variant of `Shape{Circle(Float)}`; did you mean `Shape::Circle`?
+  --> 21-enum-tag-misspelled.acvus:3:5
+  |
+3 |     Shape::Circl(r) => r,
+  |     ^^^^^^^^^^^^^^^^^^^^

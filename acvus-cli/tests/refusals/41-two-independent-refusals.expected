@@ -1,0 +1,10 @@
+error: type mismatch: expected i64, got Result<i64, ParseIntError{Invalid(String), OutOfRange(String)}>
+  --> 41-two-independent-refusals.acvus:3:1
+  |
+3 | total = i64::from_str(text);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+error: type mismatch: expected &str, got String
+  --> 41-two-independent-refusals.acvus:3:23
+  |
+3 | total = i64::from_str(text);
+  |                       ^^^^

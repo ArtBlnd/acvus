@@ -1,0 +1,2 @@
+let p = { name: "x".to_string(), age: 3, };
+p.nmae

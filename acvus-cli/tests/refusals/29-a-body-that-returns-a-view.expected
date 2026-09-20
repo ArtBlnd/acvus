@@ -1,0 +1,5 @@
+error: a body does not return a reference; write `.to_string()` for the owned text
+  --> 29-a-body-that-returns-a-view.acvus:2:1
+  |
+2 | s.trim()
+  | ^^^^^^^^

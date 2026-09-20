@@ -1,0 +1,3 @@
+let v = vec(["a".to_string(), "b".to_string()]);
+let s = v[0u64];
+s

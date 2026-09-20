@@ -1,0 +1,5 @@
+error: a container is not consumed by a loop; write `&v` or `&mut v`
+  --> 24-for-over-a-container-by-value.acvus:3:10
+  |
+3 | for x in v {
+  |          ^

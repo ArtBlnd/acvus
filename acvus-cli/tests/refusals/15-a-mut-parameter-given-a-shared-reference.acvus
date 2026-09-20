@@ -1,0 +1,3 @@
+let v = vec([1, 2]);
+push(&v, 3);
+v.len()

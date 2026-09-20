@@ -112,7 +112,8 @@ fn a_store_through_a_field_takes_every_container_below_it_mutably() {
 
 #[test]
 fn a_mutable_reach_through_a_field_of_a_shared_reference_is_refused() {
-    let through_a_shared_reference = "cannot store through &{g: Array<i64, 2>}: not a `&mut`";
+    let through_a_shared_reference =
+        "cannot store through `r`, of type &{g: Array<i64, 2>}: not a `&mut`; bind it with `&mut`";
     assert_eq!(
         refusal("let o = { g: [1, 2, ], }; let r = &o; r.g[0u64] = 5; o.g[0u64]"),
         through_a_shared_reference

@@ -1,0 +1,5 @@
+error: a reference cannot be stored in a list, object, or tuple
+  --> 37-a-reference-stored-in-an-object.acvus:3:10
+  |
+3 | { inner: r, }
+  |          ^

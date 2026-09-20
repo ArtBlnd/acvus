@@ -1,0 +1,2 @@
+let n = i64::from_str("7");
+n + 1

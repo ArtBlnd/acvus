@@ -1,0 +1,2 @@
+let s = "a".to_string();
+s.uper()

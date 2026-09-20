@@ -164,7 +164,7 @@ fn a_value_that_is_no_container_is_refused_at_the_argument() {
 fn a_shared_borrow_does_not_reach_an_exclusive_slice_parameter() {
     assert_eq!(
         refusal("let v = vec([1, 2, 3]); clear(&v)"),
-        "type mismatch: expected &mut [i64], got &Vec<i64>"
+        "type mismatch: expected &mut [i64], got &Vec<i64>; write `&mut` where the `&` is"
     );
 }
 
