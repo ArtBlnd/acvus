@@ -131,6 +131,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            entry: None,
         }
     }
 

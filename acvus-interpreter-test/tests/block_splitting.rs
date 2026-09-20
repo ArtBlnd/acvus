@@ -48,7 +48,7 @@ fn loop_of(source: &str) -> Vec<BlockListing> {
     let blocks = script_listing(&interner, source, Context::default(), Ty::I64);
     assert_eq!(
         ends(&blocks),
-        ["Goto", "Return<true>"],
+        ["Goto", "Return<true, false>"],
         "the whole `while` is an operation of the entry block; the block after it \
          is where the join of the loop's exit edge lands, and it returns"
     );
@@ -142,7 +142,7 @@ async fn a_while_that_returns_is_not_a_region() {
     );
     assert!(
         ends(&blocks).iter().any(|end| end.starts_with("JumpIf"))
-            && ends(&blocks).contains(&"Return<false>"),
+            && ends(&blocks).contains(&"Return<false, false>"),
         "the loop is blocks: its test is a `JumpIf` terminator and the `?` a \
          `Return` one — {:?}",
         ends(&blocks)

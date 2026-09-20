@@ -579,9 +579,17 @@ fn settled_params(solver: &Solver, declared: &[ParamTerm<Infer>]) -> Vec<Param> 
         .collect()
 }
 
+fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck::ResultCrossing {
+    match entry == Some(body) {
+        true => crate::typeck::ResultCrossing::OneValue,
+        false => crate::typeck::ResultCrossing::Registers,
+    }
+}
+
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
+    entry: Option<QualifiedRef>,
     fn_by_id: &FxHashMap<QualifiedRef, &Function>,
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
     known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
@@ -678,7 +686,9 @@ pub fn infer_scc(
             .with_declared_params(fn_declared_params[&fid].clone())
             .with_body_effect(fn_effect_vars[&fid].clone());
         let result = match parsed {
-            ParsedSource::Script(script) => checker.check_script(script, expected_tail_ty.as_ref()),
+            ParsedSource::Script(script) => {
+                checker.check_script(script, expected_tail_ty.as_ref(), crossing_of(entry, fid))
+            }
             ParsedSource::Template(template) => checker.check_template(template),
         };
 
@@ -911,9 +921,11 @@ pub fn infer(
                 .with_declared_params(scc_declared_params[&fid].clone())
                 .with_body_effect(scc_effect_vars[&fid].clone());
             let result = match parsed {
-                ParsedSource::Script(script) => {
-                    checker.check_script(script, expected_tail_ty.as_ref())
-                }
+                ParsedSource::Script(script) => checker.check_script(
+                    script,
+                    expected_tail_ty.as_ref(),
+                    crossing_of(graph.entry, fid),
+                ),
                 ParsedSource::Template(template) => checker.check_template(template),
             };
 
@@ -1087,6 +1099,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            entry: None,
         }
     }
 
@@ -1118,6 +1131,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            entry: None,
         }
     }
 
@@ -1190,6 +1204,7 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            entry: None,
         }
     }
 
@@ -1259,6 +1274,7 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            entry: None,
         };
         (graph, ids)
     }
@@ -1325,6 +1341,7 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            entry: None,
         };
         let ext = extract::extract(interner, &graph);
         let result = infer(
@@ -2487,6 +2504,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            entry: None,
         };
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());

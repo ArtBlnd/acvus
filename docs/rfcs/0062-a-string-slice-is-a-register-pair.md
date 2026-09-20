@@ -127,15 +127,49 @@ exist, so `|k| -> k + "a"` fixes nothing and is refused.
 
 `core::to_string` takes `T = Str` as an instance, and `"x".to_string()` is
 the spelling wherever an owned string is wanted: at a `String` parameter, in
-a list, an object, a tuple or a context, at a capture, and as a body's
-result. A body does not return a view: the result leaves in the one register
-a caller reads, a host that declares `!` reads it by kind (RFC-0054), which
-a pair has none of. `MirErrorKind::ReferenceReturnedFromBody` is that
-refusal, and it is what makes an extern call the only site where a call's
-destination can be the two registers a view occupies. A body does return a
-bare reference, which is one register: RFC-0064 gives its result a summary
-saying which parameters it borrows, and `validate::borrow_check` refuses one
-naming a place the run is about to leave.
+a list, an object, a tuple or a context, and at a capture. A body's result is
+no longer one of them. A direct call's destination is the two adjacent
+registers `assign_slots` gives every value of `SlotClass::Slice`, and
+`control::Return<WORD, PAIR>` writes both words of the view into the exit the
+caller reads, which is the same two-`Value` run an extern's pair result lands
+in. `CallDirect<LARGE, WORD, PAIR>` and `CallDirectAsync<LARGE, PAIR>` carry
+it; the asynchronous form suspends with `Pending::Pair`, whose future the
+driver stores as two words. `fn my_trim(s: &str) -> &str { trim(s) }` and `fn
+head(xs: &[i64]) -> &[i64] { xs }` compile and run at both optimization
+levels, a view crosses two body calls and stands as an extern's argument
+where it is produced, and `let v = my_trim(&@text); len(&v)` allocates 15 —
+the same count `trim(&@text)` allocates with no body between.
+
+Two readers still take one `Value`, and a view is refused where they are what
+reads the result. `typeck::ResultCrossing` is the distinction: `Registers`
+admits the pair, `OneValue` refuses it, and `check_script` takes which one
+applies rather than deciding it. A lambda's result crosses as one at every
+call (`acvus_extern::Runtime::call_now`,
+`machine::Callable::call_in_window`), and the entry's crosses as one to the
+host, which reads it by kind (RFC-0054) and a pair has none. Both raise
+`MirErrorKind::ReferenceReturnedFromBody` at compile time.
+
+Which body is the entry is a fact of the graph: `CompilationGraph::entry`
+holds its `QualifiedRef`, every builder of a graph states it, and `None` says
+the graph has no host. `infer` compares that qref to the body it is checking,
+so no name is compared and an entry not called `main` is checked the same
+way. `Interpreter::execute` keeps its assert as the machine's own statement
+of the contract — reaching it means a program arrived without passing the
+checker.
+
+A reference *to* a view — `&&str` — is not the pair and stays refused:
+`typeck::is_pair` is the predicate, one level of reference over `Str` or
+`Slice`, and it is `prepare::is_slice` on a frozen `Ty`. `is_view` recurses
+through a reference and `is_pair` does not, which is the whole difference
+between a result the machine lays in two registers and one it lays in a
+`Kind::Ref` word that reaches half a pair.
+
+A body does return a bare reference, which is one register: RFC-0064 gives
+its result a summary saying which parameters it borrows, and
+`validate::borrow_check` refuses one naming a place the run is about to
+leave. A body returning a view has the same summary and needed no change
+there: writing the argument while the view is live is one conflict, and a
+view of the body's own local is `ReferenceToLocalLeavesBody` at the local.
 
 The `string` module's reading half takes `&str`. A producer whose result is
 a run of its argument's own bytes returns `&str` — `trim`, `trim_start`,
@@ -240,6 +274,8 @@ what is wrong.
 RFC-0043 → the literal as a pair constant → the rest of the `string` module
 on `&str` → the machine (`SlicePair` for `&str`, `is_char_boundary` at
 `substring`) → the extern crossing (`Arg`/`Ret` at `Form = Pair` for `&str`)
-→ regex on `&str`. All of it is landed. What is not: `Option<&str>` above,
-and a result wider than two values, which is what an aggregate returned by
-an extern would need.
+→ regex on `&str`. All of it is landed, and so is the pair destination for a body's result.
+What is not: `Option<&str>` above, a result wider than two values, which is
+what an aggregate returned by an extern would need, and the checker's refusal
+of a view result at the entry, which waits on the graph saying which function
+the host calls.

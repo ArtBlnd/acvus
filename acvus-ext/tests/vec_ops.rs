@@ -42,6 +42,7 @@ async fn run(interner: &Interner, source: &str) -> Value {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: Some(entry_qref),
     };
 
     let ext = extract::extract(interner, &graph);

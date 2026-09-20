@@ -1063,10 +1063,15 @@ where
 fn land_pair(m: &mut Machine<'_>, dst: SlicePair, out: [Value; 2]) {
     // SAFETY: `out` is what the handler's `Ret::into_run` wrote at
     // `Form = Pair`, which is `slice_into_run`'s own output.
-    let Words { ptr, len } = unsafe { m.rt.slice_from_run(&out) };
+    let words = unsafe { m.rt.slice_from_run(&out) };
+    land_words(m, dst, words);
+}
+
+#[inline]
+fn land_words(m: &mut Machine<'_>, dst: SlicePair, words: Words) {
     let regs = m.regs();
-    regs.set_word(dst.ptr, ptr);
-    regs.set_word(dst.len, len);
+    regs.set_word(dst.ptr, words.ptr);
+    regs.set_word(dst.len, words.len);
 }
 
 pub struct CallPair1<H> {
@@ -1744,7 +1749,7 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
 /// reached through the module table at run time, as it always was, and run to
 /// its value on the window above this frame (RFC-0052 rule 7). Whether the
 /// callee *may* suspend is not asked — the checker settled it.
-pub struct CallDirect<const LARGE: bool, const WORD: bool> {
+pub struct CallDirect<const LARGE: bool, const WORD: bool, const PAIR: bool> {
     pub dst: Marked,
     pub callee: QualifiedRef,
     pub arity: u16,
@@ -1752,15 +1757,29 @@ pub struct CallDirect<const LARGE: bool, const WORD: bool> {
     pub next: Box<dyn Op>,
 }
 
-impl<const LARGE: bool, const WORD: bool> Op for CallDirect<LARGE, WORD> {
+impl<const LARGE: bool, const WORD: bool, const PAIR: bool> Op for CallDirect<LARGE, WORD, PAIR> {
     successor!();
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        const {
+            assert!(
+                !(PAIR && (LARGE || WORD)),
+                "a view's two registers hold neither a Large nor a kind the frame opened"
+            )
+        }
         m.regs().take_mask(self.takes);
         let prepared = Arc::clone(lookup_module(m.shared(), &self.callee));
-        let value = call_module_sync(m, &prepared, self.callee, self.arity);
-        m.regs().store::<LARGE, WORD>(self.dst, value);
+        match PAIR {
+            true => {
+                let out: Words = call_module_sync(m, &prepared, self.callee, self.arity);
+                land_words(m, SlicePair::at(self.dst.at), out);
+            }
+            false => {
+                let value: Value = call_module_sync(m, &prepared, self.callee, self.arity);
+                m.regs().store::<LARGE, WORD>(self.dst, value);
+            }
+        }
         self.next.run(m, r0)
     }
 }
@@ -1768,7 +1787,7 @@ impl<const LARGE: bool, const WORD: bool> Op for CallDirect<LARGE, WORD> {
 /// The same call where the callee's task is above `Sync`: it hands the driver
 /// a future and leaves the block, which is why this one is a terminator and
 /// `CallDirect` is not.
-pub struct CallDirectAsync<const LARGE: bool> {
+pub struct CallDirectAsync<const LARGE: bool, const PAIR: bool> {
     pub dst: Marked,
     pub callee: QualifiedRef,
     pub args: Box<[Off]>,
@@ -1776,13 +1795,27 @@ pub struct CallDirectAsync<const LARGE: bool> {
     pub next: BlockId,
 }
 
-impl<const LARGE: bool> Op for CallDirectAsync<LARGE> {
+impl<const LARGE: bool, const PAIR: bool> Op for CallDirectAsync<LARGE, PAIR> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        const {
+            assert!(
+                !(PAIR && LARGE),
+                "a view's two registers hold no Large the frame owns"
+            )
+        }
         let args = staged(m, &self.args, self.takes);
         let shared = Arc::clone(m.shared());
         let page = Arc::clone(m.page);
-        let fut = Box::pin(call_module(shared, page, self.callee, args));
-        m.suspend::<LARGE>(self.dst, self.next, fut);
+        match PAIR {
+            true => {
+                let fut = Box::pin(call_module::<Words>(shared, page, self.callee, args));
+                m.suspend_pair(SlicePair::at(self.dst.at), self.next, fut);
+            }
+            false => {
+                let fut = Box::pin(call_module::<Value>(shared, page, self.callee, args));
+                m.suspend::<LARGE>(self.dst, self.next, fut);
+            }
+        }
         SUSPEND
     }
 }

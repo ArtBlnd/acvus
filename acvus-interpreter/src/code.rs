@@ -379,10 +379,16 @@ where
 /// field because the driver that stores the result is one `async fn` for every
 /// suspension in the program. It costs one branch per suspension, and RFC-0052
 /// rule 4 keeps every suspension out of a fused body.
-pub struct Pending {
-    pub dst: Marked,
-    pub owns_large: bool,
-    pub fut: BoxFuture<'static, Value>,
+pub enum Pending {
+    Word {
+        dst: Marked,
+        owns_large: bool,
+        fut: BoxFuture<'static, Value>,
+    },
+    Pair {
+        dst: SlicePair,
+        fut: BoxFuture<'static, Words>,
+    },
 }
 
 pub enum Konst {
@@ -654,6 +660,9 @@ pub struct Body {
     pub literals: Arc<Literals>,
     pub slot_kinds: Box<[SlotKind]>,
     pub may_suspend: bool,
+    /// The result is the register pair of RFC-0062 Decision 1, which only a
+    /// call's pair destination receives.
+    pub returns_a_view: bool,
     pub params: Box<[Off]>,
     /// The parameter slots whose type owns a `Large`: what the caller gave up
     /// with its own `take_mask`, claimed here in one store.

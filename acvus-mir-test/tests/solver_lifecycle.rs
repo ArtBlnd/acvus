@@ -176,6 +176,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: None,
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(
@@ -398,6 +399,7 @@ fn s6_a_field_store_grows_the_object_for_every_use() {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![fab, script]),
         contexts: Freeze::new(vec![]),
+        entry: None,
     };
     let ext = extract::extract(&i, &graph);
     let inf = infer::infer(

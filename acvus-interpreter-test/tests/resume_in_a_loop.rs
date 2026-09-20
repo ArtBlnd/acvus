@@ -63,7 +63,13 @@ async fn a_while_around_an_await_is_not_a_loop() {
     );
     assert_eq!(
         ends,
-        ["Goto", "JumpIf<R0>", "Eval<false>", "Goto", "Return<true>"],
+        [
+            "Goto",
+            "JumpIf<R0>",
+            "Eval<false>",
+            "Goto",
+            "Return<true, false>"
+        ],
         "entry, the head's compare, the call's block ending at the suspend, \
          the block after it, and the return"
     );

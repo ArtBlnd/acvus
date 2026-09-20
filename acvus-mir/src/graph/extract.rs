@@ -79,6 +79,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            entry: None,
         };
         (graph, fn_qref)
     }
@@ -114,6 +115,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            entry: None,
         };
         let result = extract(&i, &graph);
         assert!(result.parsed.is_empty());

@@ -40,6 +40,7 @@ fn compile_script(interner: &Interner, source: &str) -> MirModule {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(Vec::new()),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);

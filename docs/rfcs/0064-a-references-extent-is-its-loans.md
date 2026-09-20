@@ -151,14 +151,29 @@ constructor from the body's `params`, so no site can disagree about which
 parameter a loan names. A body's summary is the `Param` loans of its result
 with their mutability.
 
-What a body may now return is a bare reference — `Ty::Ref` over anything but
-`Slice` or `Str`. That bound is the machine's, not the checker's: a bare
-reference is the one `Kind::Ref` word `control::Return` writes and a direct
-call's destination receives, while a view is the register pair only an
-extern call's `CallShape::Pair*` opens. `-> &str` and `-> Slice<T>` from a
-body stay refused by `MirErrorKind::ReferenceReturnedFromBody` until the
-machine has a pair destination for a body's result; `substring` and `trim`
-still wait on that, as RFC-0062 said.
+What a body may now return is a reference: the bare one, which is the single
+`Kind::Ref` word `control::Return` writes and a direct call's destination
+receives, and the view, which is the register pair both carry under `PAIR`
+(RFC-0062's waiting item, landed). `-> &str` and `-> Slice<T>` from a body
+compile and run; `substring` and `trim` wrappers no longer wait.
+
+Two results still cross as one `Value` and refuse a view there, and both
+refusals are the checker's. A lambda's result is one wherever it is called —
+`acvus_extern::Runtime::call_now` hands a handler one and
+`Callable::call_in_window` is that signature. The entry's is one too, which a
+host reads by kind (RFC-0054). `typeck::ResultCrossing::OneValue` is the
+crossing both take and `MirErrorKind::ReferenceReturnedFromBody` is what it
+raises; a body that is neither takes `ResultCrossing::Registers` and the pair
+leaves it. The entry is named by `CompilationGraph::entry`, which every
+builder of a graph states and `infer` reads, so nothing in the checker
+compares a name. `Interpreter::execute` keeps its assert as the machine's
+statement of the same contract: it fires only where the checker was bypassed.
+
+Two bounds on a view remain, and neither waits on the machine. The capture
+list holds one word per capture, so `MirErrorKind::ViewCaptured` refuses a
+view there. The one-value crossing refuses a view at a lambda's result and at
+the entry's. Everywhere else a body's result is the register pair, and
+RFC-0062's waiting item is closed.
 
 The refusal splits across two phases because the two facts are known in
 different ones. Whether the result's type can leave at all is a type fact,
@@ -175,13 +190,15 @@ already did to every capture, so the machine needed no change.
 Two refusals narrow and one disappears. The capture refusal narrows to a
 view: a `&str` or `&Slice<T>` is the two adjacent registers of RFC-0062
 Decision 1 and a capture list holds one word per capture, so
-`MirErrorKind::ViewCaptured` stays for exactly that case — the same machine
-bound that keeps `-> &str` out of a body's result. `Solver::captured_shape`
-is the predicate, and `typeck::is_view` must name the same types. A
+`MirErrorKind::ViewCaptured` stays for exactly that case. It is a bound of
+its own and no longer the one that kept `-> &str` out of a body's result: a
+capture list holds one word per capture, while a call's destination now holds
+two. `Solver::captured_shape` is the predicate, and `typeck::is_view` must
+name the same types. A
 reference whose target the program has not fixed yet waits on the
 `Decision::Capture` the solver already had, and one that never closes takes
 the word. `MirErrorKind::ReferenceReturned` is gone: a lambda is a body, so
-its result goes through `unreturnable_reference` like any body's, and a
+its result goes through `ResultCrossing::unreturnable` like any body's, and a
 lambda returning a reference to one of its own locals is
 `ReferenceToLocalLeavesBody` at the region phase.
 
@@ -290,6 +307,4 @@ that lends two parameters and returns a projection of one, and none is
 declared. It would also rest on a rule the macro states rather than one Rust
 checks, since `Ref<T, Rt>` and `Slice<T, Rt>` carry no lifetime, where the
 union is sound by construction. Such a summary enters with its first
-declaration and not before. What still waits is not this step: a body
-returning `-> &str` needs the machine's pair destination for a body's
-result, which RFC-0062 names.
+declaration and not before.

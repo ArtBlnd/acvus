@@ -282,6 +282,9 @@ pub fn prepare_body(
     let order_param = body.order_param.map(|id| prep.off(id));
     let entry_konsts = prep.entry_konsts();
     let slot_kinds = prep.slot_kinds(frame_len, prep.param_run());
+    let returns_a_view = body.insts.iter().any(
+        |inst| matches!(&inst.kind, InstKind::Return { value, .. } if is_slice(prep.ty(*value))),
+    );
 
     Code::Body(Arc::new(Body {
         heads: blocks,
@@ -294,6 +297,7 @@ pub fn prepare_body(
         literals: Arc::clone(literals),
         slot_kinds,
         may_suspend,
+        returns_a_view,
         params,
         param_marks,
         captures,
@@ -2676,9 +2680,12 @@ impl<'a> Prepare<'a> {
             }
             InstKind::Return { value, .. } => {
                 let slot = self.marked(*value);
-                return Some(match word_kind(self.ty(*value)).is_some() {
-                    true => Box::new(control::Return::<true> { slot }) as Box<dyn Op>,
-                    false => Box::new(control::Return::<false> { slot }),
+                return Some(match SlotClass::of(self.ty(*value)) {
+                    SlotClass::Slice => {
+                        Box::new(control::Return::<false, true> { slot }) as Box<dyn Op>
+                    }
+                    SlotClass::Word(_) => Box::new(control::Return::<true, false> { slot }),
+                    SlotClass::Whole => Box::new(control::Return::<false, false> { slot }),
                 });
             }
             InstKind::Diverge => return Some(Box::new(control::Diverge)),
@@ -3338,6 +3345,7 @@ impl<'a> Prepare<'a> {
             slot,
             large,
             word: _,
+            pair,
         } = into;
         match callee {
             Callee::Direct(id) => {
@@ -3349,15 +3357,24 @@ impl<'a> Prepare<'a> {
                 }
                 let resume = next.block();
                 let Operands { slots, takes } = self.taken(args);
+                if pair {
+                    return Some(Box::new(call::CallDirectAsync::<false, true> {
+                        dst: slot,
+                        callee: id,
+                        args: slots,
+                        takes,
+                        next: resume,
+                    }));
+                }
                 Some(match large {
-                    true => Box::new(call::CallDirectAsync::<true> {
+                    true => Box::new(call::CallDirectAsync::<true, false> {
                         dst: slot,
                         callee: id,
                         args: slots,
                         takes,
                         next: resume,
                     }),
-                    false => Box::new(call::CallDirectAsync::<false> {
+                    false => Box::new(call::CallDirectAsync::<false, false> {
                         dst: slot,
                         callee: id,
                         args: slots,
@@ -3487,6 +3504,7 @@ impl<'a> Prepare<'a> {
             slot: dst,
             large,
             word,
+            pair: _,
         } = self.dest(result);
         match form {
             CallForm::Registers(0) => {
@@ -3892,6 +3910,7 @@ impl<'a> Prepare<'a> {
             slot: self.marked(dst),
             large: self.owns(dst),
             word: word_kind(self.ty(dst)).is_some(),
+            pair: is_slice(self.ty(dst)),
         }
     }
 
@@ -4912,7 +4931,7 @@ mod call_form_tests {
                 b: Off::of(1),
                 takes: 0,
                 large: false,
-                next: Box::new(crate::ops::control::Return::<false> {
+                next: Box::new(crate::ops::control::Return::<false, false> {
                     slot: Marked::of(Off::of(2)),
                 }),
             });
@@ -7322,6 +7341,7 @@ struct Dest {
     large: bool,
     /// `word_kind`, the same predicate `slot_kinds` opened the register by.
     word: bool,
+    pair: bool,
 }
 
 /// A place under a register: the register the walk starts at, and the
@@ -7645,24 +7665,34 @@ fn direct_call(into: Dest, callee: QualifiedRef, laid: Laid) -> Node {
         slot: dst,
         large,
         word,
+        pair,
     } = into;
     let Laid { arity, takes } = laid;
+    if pair {
+        return node(move |next| call::CallDirect::<false, false, true> {
+            dst,
+            callee,
+            arity,
+            takes,
+            next,
+        });
+    }
     match (large, word) {
-        (true, _) => node(move |next| call::CallDirect::<true, false> {
+        (true, _) => node(move |next| call::CallDirect::<true, false, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, true) => node(move |next| call::CallDirect::<false, true> {
+        (false, true) => node(move |next| call::CallDirect::<false, true, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, false) => node(move |next| call::CallDirect::<false, false> {
+        (false, false) => node(move |next| call::CallDirect::<false, false, false> {
             dst,
             callee,
             arity,
@@ -7677,7 +7707,13 @@ fn indirect_call(into: Dest, through: bool, callee: Marked, laid: Laid) -> Node 
         slot: dst,
         large,
         word,
+        pair,
     } = into;
+    assert!(
+        !pair,
+        "a closure's result crosses as one value, which a view is not \
+         (typeck::ResultCrossing::OneValue)"
+    );
     let Laid { arity, takes } = laid;
     match (large, word, through) {
         (true, _, false) => node(move |next| call::CallIndirect::<true, false, false> {
@@ -7736,7 +7772,13 @@ fn indirect_call_async(
         slot: dst,
         large,
         word: _,
+        pair,
     } = into;
+    assert!(
+        !pair,
+        "a closure's result crosses as one value, which a view is not \
+         (typeck::ResultCrossing::OneValue)"
+    );
     let Operands { slots: args, takes } = operands;
     match (large, through) {
         (false, false) => Box::new(call::CallIndirectAsync::<false, false> {

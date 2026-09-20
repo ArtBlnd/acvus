@@ -112,6 +112,9 @@ pub fn lower_namespace(
         graph: CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            // A namespace's blocks are each called by name; no one of them
+            // is the body a host starts.
+            entry: None,
         },
         span_map,
         field_errors,

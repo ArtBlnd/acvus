@@ -248,6 +248,7 @@ pub fn check(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(entry),
     };
 
     let watch = Stopwatch::start(timed);

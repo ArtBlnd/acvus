@@ -203,3 +203,15 @@ extra check on the tail. A branch for the entry would have left `?` unheld.
 - `acvus-cli` reads its result by kind, so a value whose type the printer
   could not name — a closure, an extern handle — prints as its Rust type name
   rather than as its `Ty`.
+- Reading one `Value` by kind is what the entry's result must be, and a
+  string view is a register pair with no kind. The checker refuses it:
+  `CompilationGraph::entry` names the body the host starts, `infer` gives
+  that body `typeck::ResultCrossing::OneValue`, and the tail raises
+  `MirErrorKind::ReferenceReturnedFromBody` with the sentence that names
+  `.to_string()`. Every other body keeps `ResultCrossing::Registers` and may
+  return the pair (RFC-0062, RFC-0064).
+- The entry is a `QualifiedRef` the graph carries, not the name `main`. Every
+  builder of a `CompilationGraph` states it — the CLI, the interpreter and
+  MIR test harnesses, the orchestration lowerer, `kovac-interpreter` — and
+  `None` says the graph has no host, which is what a graph compiled only to
+  be lowered, printed or diagnosed says.

@@ -41,6 +41,9 @@ pub struct IncrementalGraph {
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
     contexts: FxHashMap<QualifiedRef, Context>,
+    /// The same fact `CompilationGraph::entry` carries, for a graph built by
+    /// accumulation: unset until a host says which body it starts.
+    entry: Option<QualifiedRef>,
 
     // -- Phase 0: Extract cache --
     extract_cache: FxHashMap<QualifiedRef, ExtractEntry>,
@@ -70,6 +73,7 @@ impl IncrementalGraph {
             type_registry,
             functions: FxHashMap::default(),
             contexts: FxHashMap::default(),
+            entry: None,
             extract_cache: FxHashMap::default(),
             call_edges: FxHashMap::default(),
             reverse_edges: FxHashMap::default(),
@@ -105,6 +109,11 @@ impl IncrementalGraph {
     }
 
     // -- Registration ------------------------------------------------
+
+    pub fn set_entry(&mut self, qref: QualifiedRef) {
+        self.entry = Some(qref);
+        self.infer_cache.iter_mut().for_each(|slot| *slot = None);
+    }
 
     pub fn add_function(&mut self, func: Function) {
         let qref = func.qref;
@@ -374,6 +383,7 @@ impl IncrementalGraph {
             let result = infer_scc(
                 &self.interner,
                 scc,
+                self.entry,
                 &fn_by_id,
                 &parsed_owned,
                 &known_ctx,
@@ -470,6 +480,7 @@ impl IncrementalGraph {
             let result = infer_scc(
                 &self.interner,
                 scc,
+                self.entry,
                 &fn_by_id,
                 &parsed_for_scc,
                 &known_ctx,

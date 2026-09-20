@@ -74,4 +74,9 @@ pub struct Context {
 pub struct CompilationGraph {
     pub functions: Freeze<Vec<Function>>,
     pub contexts: Freeze<Vec<Context>>,
+    /// Obligation across artifacts: this body's result crosses to the host
+    /// as one `Value` read by kind, which `acvus_interpreter::Interpreter::
+    /// execute` reads and RFC-0054 fixes. `None` is a graph no host starts,
+    /// compiled to be lowered, printed or diagnosed.
+    pub entry: Option<QualifiedRef>,
 }

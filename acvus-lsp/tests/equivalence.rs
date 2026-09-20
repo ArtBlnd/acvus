@@ -42,6 +42,7 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: None,
     };
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(

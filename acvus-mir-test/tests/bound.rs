@@ -53,6 +53,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![add_fn(i), f]),
         contexts: Freeze::new(vec![]),
+        entry: None,
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(

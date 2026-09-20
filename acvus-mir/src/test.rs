@@ -49,6 +49,7 @@ pub(crate) fn make_graph(
             to_string(interner),
         ]),
         contexts: Freeze::new(contexts),
+        entry: None,
     };
     (graph, test_qref)
 }

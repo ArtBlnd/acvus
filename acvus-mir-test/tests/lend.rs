@@ -41,6 +41,7 @@ fn recorded_types(i: &Interner, source: &str) -> Result<Vec<Ty>, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: None,
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(i, &graph, &ext, &FxHashMap::default(), Freeze::new(types));

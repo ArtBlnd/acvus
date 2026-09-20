@@ -133,22 +133,42 @@ where
 
 /// The body's result, read at the width its register was written at
 /// (RFC-0052 rule 5).
-pub struct Return<const WORD: bool> {
+///
+/// Obligation across artifacts: under `PAIR`, `prepare::assign_slots` placed
+/// the result in the two adjacent registers `SlicePair::at` derives, and the
+/// caller's destination is a pair of the same shape (RFC-0062 Decision 1).
+pub struct Return<const WORD: bool, const PAIR: bool> {
     pub slot: Marked,
 }
 
-impl<const WORD: bool> Op for Return<WORD> {
+impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
-        let value = match WORD {
+        const {
+            assert!(
+                !(WORD && PAIR),
+                "a view's two registers hold no kind the frame opened"
+            )
+        }
+        match PAIR {
             true => {
+                let pair = SlicePair::at(self.slot.at);
                 let regs = m.regs();
-                let kind = regs.peek(self.slot.at).kind();
-                Value::inline(kind, regs.take_word(self.slot))
+                let (ptr, len) = (regs.word(pair.ptr), regs.word(pair.len));
+                m.finish_pair(ptr, len);
             }
-            false => m.regs().take::<true>(self.slot),
-        };
-        m.finish(value);
+            false => {
+                let value = match WORD {
+                    true => {
+                        let regs = m.regs();
+                        let kind = regs.peek(self.slot.at).kind();
+                        Value::inline(kind, regs.take_word(self.slot))
+                    }
+                    false => m.regs().take::<true>(self.slot),
+                };
+                m.finish(value);
+            }
+        }
         RETURN
     }
 }

@@ -276,6 +276,7 @@ where
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(entry_qref),
     };
 
     let ext = extract::extract(interner, &graph);

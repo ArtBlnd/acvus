@@ -14,13 +14,14 @@ use std::slice;
 use std::sync::Arc;
 
 use acvus_ast::Span;
+use acvus_extern::Words;
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
     BlockId, Body, Code, EntryKonst, Exit, Expr, ExprBody, ExprChain, Marked, Off, Op, Pending,
-    Prepared, RETURN, SENTINEL, SUSPEND,
+    Prepared, RETURN, SENTINEL, SUSPEND, SlicePair,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
@@ -46,12 +47,37 @@ pub struct LentCall<'r> {
     pub window: &'r mut FrameState,
 }
 
+/// Obligation across artifacts: the two-`Value` run a `Words` is read out of
+/// here is the one `acvus_extern`'s `Ret::into_run` writes and
+/// `Runtime::slice_from_run` reads, so a view crossing a body call and a view
+/// crossing an extern call are one representation (RFC-0062 Decision 1).
+pub trait Returned {
+    fn of(exit: [Value; 2]) -> Self;
+}
+
+impl Returned for Value {
+    #[inline(always)]
+    fn of(exit: [Value; 2]) -> Value {
+        exit[0]
+    }
+}
+
+impl Returned for Words {
+    #[inline(always)]
+    fn of(exit: [Value; 2]) -> Words {
+        Words {
+            ptr: exit[0].bits(),
+            len: exit[1].bits(),
+        }
+    }
+}
+
 pub struct Machine<'c> {
     body: &'c Body,
     regs: Regs<'c>,
     pub rt: &'c AcvusRuntime,
     pub page: &'c Arc<dyn RuntimeContext>,
-    exit: Value,
+    exit: [Value; 2],
     /// The block `run` enters at. A suspension writes the block after
     /// itself here, so the driver's next `run` resumes rather than
     /// re-entering the body.
@@ -73,7 +99,7 @@ impl<'c> Machine<'c> {
             regs,
             rt,
             page,
-            exit: Value::unit(),
+            exit: [Value::unit(); 2],
             at: body.entry,
             pending: None,
             above,
@@ -122,7 +148,12 @@ impl<'c> Machine<'c> {
     /// The body returns this value; the `Return` terminator leaves the loop.
     #[inline]
     pub fn finish(&mut self, value: Value) {
-        self.exit = value;
+        self.exit[0] = value;
+    }
+
+    #[inline]
+    pub fn finish_pair(&mut self, ptr: u64, len: u64) {
+        self.exit = [crate::runtime::word(ptr), crate::runtime::word(len)];
     }
 
     /// The future the driver awaits, the slot its result lands in, and the
@@ -135,11 +166,22 @@ impl<'c> Machine<'c> {
         fut: BoxFuture<'static, Value>,
     ) {
         self.at = resume;
-        self.pending = Some(Pending {
+        self.pending = Some(Pending::Word {
             dst,
             owns_large: LARGE,
             fut,
         });
+    }
+
+    #[inline]
+    pub fn suspend_pair(
+        &mut self,
+        dst: SlicePair,
+        resume: BlockId,
+        fut: BoxFuture<'static, Words>,
+    ) {
+        self.at = resume;
+        self.pending = Some(Pending::Pair { dst, fut });
     }
 
     /// The cells a call out of this frame takes its callee's frame from, and
@@ -200,9 +242,10 @@ impl<'c> Machine<'c> {
     /// rule 7): no allocation, one mask store to enter and one sweep to leave.
     /// The arguments are already in the window's first registers, where the
     /// call's `LayArg` operations put them.
-    pub fn call_sync<F>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> Value
+    pub fn call_sync<F, R>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> R
     where
         F: FnOnce(&mut Machine<'_>),
+        R: Returned,
     {
         let rt = self.rt;
         let page = self.page;
@@ -222,7 +265,7 @@ impl<'c> Machine<'c> {
 /// A `Store` of the callee's own, the argument run copied into it.
 #[cold]
 #[inline(never)]
-fn run_rooted<F>(
+fn run_rooted<F, R>(
     window: &mut FrameState,
     callee: &Body,
     named: &dyn Debug,
@@ -230,9 +273,10 @@ fn run_rooted<F>(
     rt: &AcvusRuntime,
     page: &Arc<dyn RuntimeContext>,
     fill: F,
-) -> Value
+) -> R
 where
     F: FnOnce(&mut Machine<'_>),
+    R: Returned,
 {
     let mut store = Store::new();
     let (mut regs, _) = store.bind(callee);
@@ -262,7 +306,7 @@ fn open_frame(body: &Body, regs: &mut Regs<'_>) {
 /// `body` is typed pure and its prepared body can suspend, which is a
 /// disagreement between the effect the checker read and the body `prepare`
 /// produced.
-fn run_frame<F>(
+fn run_frame<F, R>(
     body: &Body,
     named: &dyn Debug,
     mut regs: Regs<'_>,
@@ -270,9 +314,10 @@ fn run_frame<F>(
     page: &Arc<dyn RuntimeContext>,
     opened: bool,
     fill: F,
-) -> Value
+) -> R
 where
     F: FnOnce(&mut Machine<'_>),
+    R: Returned,
 {
     assert!(
         !body.may_suspend,
@@ -288,43 +333,58 @@ where
         stop, RETURN,
         "{named:?} is typed pure, and its body left the machine at {stop}"
     );
-    let value = machine.exit;
+    let exit = machine.exit;
     machine.regs.sweep(body.mark_words);
-    value
+    R::of(exit)
 }
 
-async fn drive(mut machine: Machine<'_>) -> Value {
+async fn drive<R>(mut machine: Machine<'_>) -> R
+where
+    R: Returned,
+{
     loop {
         let stop = machine.run();
         if stop == RETURN {
-            let value = machine.exit;
+            let exit = machine.exit;
             machine.regs.sweep(machine.body.mark_words);
-            return value;
+            return R::of(exit);
         }
         debug_assert_eq!(stop, SUSPEND, "a body left the machine at {stop}");
-        let Pending {
-            dst,
-            owns_large,
-            fut,
-        } = machine
+        let pending = machine
             .pending
             .take()
             .expect("a Suspend terminator left no future for the driver");
-        let value = fut.await;
-        match owns_large {
-            true => machine.regs.define::<true>(dst, value),
-            false => machine.regs.put(dst.at, value),
+        match pending {
+            Pending::Word {
+                dst,
+                owns_large,
+                fut,
+            } => {
+                let value = fut.await;
+                match owns_large {
+                    true => machine.regs.define::<true>(dst, value),
+                    false => machine.regs.put(dst.at, value),
+                }
+            }
+            Pending::Pair { dst, fut } => {
+                let Words { ptr, len } = fut.await;
+                machine.regs.set_word(dst.ptr, ptr);
+                machine.regs.set_word(dst.len, len);
+            }
         }
     }
 }
 
 /// Run the entry body of the module `id` names.
-pub async fn call_module(
+pub async fn call_module<R>(
     shared: Arc<InterpreterContext>,
     page: Arc<dyn RuntimeContext>,
     id: QualifiedRef,
     args: Vec<Value>,
-) -> Value {
+) -> R
+where
+    R: Returned,
+{
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
     let rt = AcvusRuntime(shared);
     let Code::Body(body) = prepared.main.as_ref() else {
@@ -342,12 +402,15 @@ pub async fn call_module(
     drive(Machine::new(body, regs, &rt, &page)).await
 }
 
-pub fn call_module_sync(
+pub fn call_module_sync<R>(
     machine: &mut Machine<'_>,
     prepared: &Prepared,
     id: QualifiedRef,
     arity: u16,
-) -> Value {
+) -> R
+where
+    R: Returned,
+{
     let Code::Body(body) = prepared.main.as_ref() else {
         panic!("a module's entry body is one chain, which no call into a module can be")
     };
@@ -423,9 +486,9 @@ impl Callable for Body {
             "{:?} is typed pure, and its body left the machine at {stop}",
             self.span
         );
-        let value = machine.exit;
+        let exit = machine.exit;
         machine.regs.sweep(self.mark_words);
-        value
+        Value::of(exit)
     }
 
     fn call_in(&self, f: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value {

@@ -44,6 +44,7 @@ fn infer_effects(i: &Interner, functions: Vec<Function>) -> FxHashMap<String, Ef
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: None,
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(

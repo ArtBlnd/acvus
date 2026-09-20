@@ -63,6 +63,7 @@ fn graph_of(functions: Vec<Function>) -> CompilationGraph {
     CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: None,
     }
 }
 

@@ -9,7 +9,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::code::Prepared;
+use crate::code::{Code, Prepared};
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
@@ -144,7 +144,22 @@ impl Interpreter {
 
     /// Execute the entry module and return its value. The page keeps every
     /// context the run assigned; `take_writes` hands them out.
+    ///
+    /// # Panics
+    /// The entry's result is a view: a host reads one `Value` by kind
+    /// (RFC-0054), which a register pair has none of. `CompilationGraph::
+    /// entry` carries which body this is and `typeck::ResultCrossing::
+    /// OneValue` refuses it there, so reaching this assert means a program
+    /// arrived without passing the checker.
     pub async fn execute(&mut self) -> Value {
+        let Code::Body(entry) = lookup_module(&self.shared, &self.entry).main.as_ref() else {
+            panic!("a module's entry body is one chain, which no call into a module can be")
+        };
+        assert!(
+            !entry.returns_a_view,
+            "the entry's result is a view, and a host reads one value by kind (RFC-0054); \
+             typeck refuses this at `CompilationGraph::entry`, so the checker was bypassed"
+        );
         let args = std::mem::take(&mut self.spawn_args);
         call_module(
             Arc::clone(&self.shared),

@@ -69,6 +69,7 @@ fn compile_analysis(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: None,
     };
 
     let ext = extract::extract(interner, &graph);

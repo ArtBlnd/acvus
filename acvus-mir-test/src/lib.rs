@@ -178,6 +178,7 @@ pub fn compile_to_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(test_qref),
     };
     let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
     Ok(dump_with(interner, &module))
@@ -259,6 +260,7 @@ pub fn compile_script_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(test_qref),
     };
     let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
     Ok(dump_with(interner, &module))
@@ -292,6 +294,7 @@ pub fn compile_script_raw(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -395,6 +398,7 @@ pub fn refuse_script_mode_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -496,6 +500,7 @@ fn lower_script_returning(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -552,6 +557,7 @@ pub fn optimized_script_module(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -628,6 +634,7 @@ pub fn compile_script_optimized(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -760,6 +767,7 @@ pub fn refuse_script_mode_optimized(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -906,6 +914,7 @@ pub fn compile_inline_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        entry: None,
     };
 
     // Run extract -> infer -> lower (full pipeline).
@@ -1001,6 +1010,7 @@ pub fn compile_multi_fn_raw(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        entry: None,
     };
 
     let ext = extract::extract(interner, &graph);
@@ -1113,6 +1123,7 @@ fn compile_multi_fn_at(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        entry: None,
     };
 
     let ext = extract::extract(interner, &graph);
