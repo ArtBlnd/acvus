@@ -113,6 +113,15 @@ where
 /// for a parameter written `&str` in Rust.
 pub struct ByStr;
 
+impl<Rt> crate::handler::Sited<Rt> for ByStr
+where
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: crate::handler::ArgAt<'_>) {}
+}
+
 impl<'a, Rt> Arg<'a, Rt> for ByStr
 where
     Rt: Runtime,
@@ -120,7 +129,7 @@ where
     type Out = &'a str;
     type Form = Pair;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a str {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a str {
         // SAFETY: the caller's contract: `run` is this parameter's pair and
         // the bytes it names are live for `'a`.
         unsafe { StrView::from_run(rt, run).as_str() }

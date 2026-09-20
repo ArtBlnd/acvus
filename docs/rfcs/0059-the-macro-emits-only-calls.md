@@ -287,6 +287,14 @@ or an associated type of the crossing.
   `call_out0` through `call_out4`, each taking the destination run rather
   than handing a value back, and the window form of the family is
   `Handler::call` itself, which already takes a run and a destination.
+- A handler is a per-call-site value, and the site is a step of its own:
+  `HandlerFactory::at_site` takes the settled type of each argument and hands
+  back an `AtSite`, which is what builds the operation. `Handler` is
+  implemented for the sited glue alone, so an operation cannot hold a glue
+  whose table was never filled, and `Unsited` is what the module table holds.
+  `HandlerFactory::arity` counts the parameters, which `Width::args` does not:
+  a `&str` or slice parameter is two of the runtime's values and one settled
+  type.
 - RFC-0050's flat layout changes `acvus-extern/src/object.rs` and
   `variant.rs` only. The third `Form` beside `One` and `Pair` is built, and
   it is a result form: `Run<W>` is an aggregate's `W` components, written

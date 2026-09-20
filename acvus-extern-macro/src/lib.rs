@@ -1399,6 +1399,22 @@ impl<'a> ObjectShape<'a> {
         let at_least = quote! {
             ::acvus_extern::PolyTy::Object(::acvus_extern::ObjectTy::at_least(#fields))
         };
+        let ats: Vec<syn::Index> = (0..idents.len()).map(syn::Index::from).collect();
+        let table_ty = quote! {
+            ::acvus_extern::ObjectAt<
+                #width,
+                (#(<#tys as ::acvus_extern::Project<__R>>::Table,)*),
+            >
+        };
+        let table_of = quote! {
+            let [#(#idents),*] = ::acvus_extern::object_fields_at(__at, [#(#names),*]);
+            ::acvus_extern::ObjectAt {
+                at: [#(#idents.0),*],
+                fields: (#(
+                    <#tys as ::acvus_extern::Project<__R>>::table(#idents.1),
+                )*),
+            }
+        };
         quote! {
             #[doc = #doc_shared]
             pub struct #shared<'__a> {
@@ -1422,21 +1438,23 @@ impl<'a> ObjectShape<'a> {
                 pub unsafe fn over<__R>(
                     __rt: &'__a __R,
                     __obj: &'__a ::acvus_extern::Obj<::acvus_extern::Owned<__R>>,
+                    __table: &#table_ty,
                 ) -> Self
                 where
                     __R: ::acvus_extern::Runtime,
                 {
                     let __fields = ::acvus_extern::Fields::of(__rt, __obj);
+                    let [#(#idents),*] = __table.at;
                     Self {
                         #(#idents: {
-                            let __at = __fields.at(#names);
                             // SAFETY: the caller's contract, and the field
                             // at that position holds what this field's own
                             // crossing wrote.
                             unsafe {
                                 <#tys as ::acvus_extern::Project<__R>>::project(
                                     __rt,
-                                    __fields.field(__at),
+                                    __fields.field(#idents),
+                                    &__table.fields.#ats,
                                 )
                             }
                         },)*
@@ -1451,17 +1469,21 @@ impl<'a> ObjectShape<'a> {
                 pub unsafe fn over<__R>(
                     __rt: &'__a __R,
                     __obj: &'__a mut ::acvus_extern::Obj<::acvus_extern::Owned<__R>>,
+                    __table: &#table_ty,
                 ) -> Self
                 where
                     __R: ::acvus_extern::Runtime,
                 {
                     let __fields = ::acvus_extern::FieldsMut::of(__rt, __obj);
-                    let __at = [#(__fields.at(#names)),*];
-                    let [#(#idents),*] = __fields.disjoint::<#width>(__at);
+                    let [#(#idents),*] = __fields.disjoint::<#width>(__table.at);
                     Self {
                         // SAFETY: as the shared projection's, exclusively.
                         #(#idents: unsafe {
-                            <#tys as ::acvus_extern::Project<__R>>::project_mut(__rt, #idents)
+                            <#tys as ::acvus_extern::Project<__R>>::project_mut(
+                                __rt,
+                                #idents,
+                                &__table.fields.#ats,
+                            )
                         },)*
                     }
                 }
@@ -1471,24 +1493,40 @@ impl<'a> ObjectShape<'a> {
             where
                 __R: ::acvus_extern::Runtime,
             {
+                type Table = #table_ty;
+
+                fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                    #table_of
+                }
+
                 unsafe fn project<'__a>(
                     __rt: &'__a __R,
                     __value: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                    __table: &Self::Table,
                 ) -> #shared<'__a> {
                     // SAFETY: the caller's contract: a nested aggregate field
                     // holds its own object.
                     unsafe {
-                        #shared::over(__rt, ::acvus_extern::object_in(__rt, __value))
+                        #shared::over(
+                            __rt,
+                            ::acvus_extern::object_in(__rt, __value),
+                            __table,
+                        )
                     }
                 }
 
                 unsafe fn project_mut<'__a>(
                     __rt: &'__a __R,
                     __value: &'__a mut <__R as ::acvus_extern::Runtime>::Value,
+                    __table: &Self::Table,
                 ) -> #exclusive<'__a> {
                     // SAFETY: as `project`, with the caller's exclusive loan.
                     unsafe {
-                        #exclusive::over(__rt, ::acvus_extern::object_in_mut(__rt, __value))
+                        #exclusive::over(
+                            __rt,
+                            ::acvus_extern::object_in_mut(__rt, __value),
+                            __table,
+                        )
                     }
                 }
             }
@@ -1498,14 +1536,24 @@ impl<'a> ObjectShape<'a> {
                 __R: ::acvus_extern::Runtime,
             {
                 type At<'__a> = #shared<'__a>;
+                type Table = #table_ty;
+
+                fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                    #table_of
+                }
 
                 unsafe fn of<'__a>(
                     __rt: &'__a __R,
                     __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                    __table: &Self::Table,
                 ) -> #shared<'__a> {
                     // SAFETY: the caller's contract: a live object storage.
                     unsafe {
-                        #shared::over(__rt, ::acvus_extern::object_of(__rt, __reference))
+                        #shared::over(
+                            __rt,
+                            ::acvus_extern::object_of(__rt, __reference),
+                            __table,
+                        )
                     }
                 }
             }
@@ -1515,14 +1563,24 @@ impl<'a> ObjectShape<'a> {
                 __R: ::acvus_extern::Runtime,
             {
                 type At<'__a> = #exclusive<'__a>;
+                type Table = #table_ty;
+
+                fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
+                    #table_of
+                }
 
                 unsafe fn of<'__a>(
                     __rt: &'__a __R,
                     __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                    __table: &Self::Table,
                 ) -> #exclusive<'__a> {
                     // SAFETY: as the shared projection's, exclusively.
                     unsafe {
-                        #exclusive::over(__rt, ::acvus_extern::object_of_mut(__rt, __reference))
+                        #exclusive::over(
+                            __rt,
+                            ::acvus_extern::object_of_mut(__rt, __reference),
+                            __table,
+                        )
                     }
                 }
             }

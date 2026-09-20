@@ -9,22 +9,84 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_mir::ty::{PolyTy, Task};
+use acvus_mir::ty::{PolyTy, Task, Ty};
+use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::obj::{Cross, CrossSpecialized, Form, FormKind, One, OneValue, Pair, Returned, Run};
 use crate::runtime::Runtime;
+
+/// One argument of one call site as the host settled it: the type the
+/// checker gave it, and the interner that resolves the names in that type.
+#[derive(Clone, Copy)]
+pub struct ArgAt<'a> {
+    pub interner: &'a Interner,
+    pub ty: &'a Ty,
+}
+
+/// A call site of `n` arguments whose types no parameter reads. Every `Arg`
+/// but `ByProjection` ignores the settled type, so a caller that knows its
+/// declaration has no projection parameter has nothing to look up.
+pub struct PlainSite {
+    interner: Interner,
+    ty: Ty,
+}
+
+impl Default for PlainSite {
+    fn default() -> Self {
+        PlainSite {
+            interner: Interner::new(),
+            ty: Ty::Unit,
+        }
+    }
+}
+
+impl PlainSite {
+    pub fn args(&self, n: usize) -> Vec<ArgAt<'_>> {
+        vec![
+            ArgAt {
+                interner: &self.interner,
+                ty: &self.ty,
+            };
+            n
+        ]
+    }
+}
 
 /// Which crossing a parameter or a result takes (RFC-0040).
 pub struct Uniform;
 /// The crossing of a `Monomorphize` member instance.
 pub struct Specialized;
 
+/// What a parameter's crossing needs from the call site, which the glue
+/// holds and every call of that site reads.
+///
+/// This is not an associated type of `Arg`, and the separate trait is a
+/// decision. `Arg` is parameterized by the call's own lifetime, associated
+/// type projections are invariant, and the table a glue holds is built once
+/// and outlives every call — so passing `&<Self as Arg<'a, Rt>>::Site` from
+/// a `'static` table would unify `'a` with `'static` and the borrow checker
+/// would then demand that the runtime and the argument run outlive the
+/// call. Carrying the datum on a lifetime-free trait is what keeps a site
+/// table one type per parameter instead of one per lifetime the parameter
+/// is read at.
+pub trait Sited<Rt>: Sized
+where
+    Rt: Runtime,
+{
+    /// A parameter that needs nothing says `()`, which is zero-sized, so
+    /// the per-site glue of a declaration of plain parameters is the
+    /// closure and nothing else.
+    type Site: Clone + Send + Sync + 'static;
+
+    fn site(at: ArgAt<'_>) -> Self::Site;
+}
+
 /// How one Rust parameter takes its argument out of a call's argument run.
 /// The mode — by value, by shared reference, by exclusive reference — is
 /// written in Rust and read by the macro (RFC-0015); the width is the
 /// type's.
-pub trait Arg<'a, Rt>: Sized
+pub trait Arg<'a, Rt>: Sited<Rt>
 where
     Rt: Runtime,
 {
@@ -43,7 +105,11 @@ where
     /// `run` is this parameter's own `WIDTH` values of a call's argument
     /// run, and any storage a reference it yields names is live and unmoved
     /// for `'a` — exclusively so for an exclusive reference (RFC-0018).
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> Self::Out;
+    unsafe fn take<'s>(
+        rt: &'a Rt,
+        run: &'a [Rt::Value],
+        site: &'s <Self as Sited<Rt>>::Site,
+    ) -> Self::Out;
 }
 
 /// A parameter taken by value: the crossing builds the Rust value.
@@ -54,6 +120,66 @@ pub struct ByRef<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 /// As `ByRef`, exclusively.
 pub struct ByRefMut<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
+impl<T, Rt> Sited<Rt> for ByValue<T, Uniform>
+where
+    T: Cross<Rt>,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: ArgAt<'_>) {}
+}
+
+impl<T, Rt> Sited<Rt> for ByValue<T, Specialized>
+where
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: ArgAt<'_>) {}
+}
+
+impl<T, Rt> Sited<Rt> for ByRef<T, Uniform>
+where
+    T: Borrowable<Rt>,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: ArgAt<'_>) {}
+}
+
+impl<T, Rt> Sited<Rt> for ByRefMut<T, Uniform>
+where
+    T: Borrowable<Rt>,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: ArgAt<'_>) {}
+}
+
+impl<T, Rt> Sited<Rt> for ByRef<T, Specialized>
+where
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: ArgAt<'_>) {}
+}
+
+impl<T, Rt> Sited<Rt> for ByRefMut<T, Specialized>
+where
+    T: CrossSpecialized<Rt>,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: ArgAt<'_>) {}
+}
+
 impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
 where
     T: Cross<Rt>,
@@ -62,7 +188,7 @@ where
     type Out = T;
     type Form = <T as Cross<Rt>>::Form;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T {
         // SAFETY: the caller's contract, which is `Cross::from_run`'s.
         unsafe { <T as Cross<Rt>>::from_run(rt, run) }
     }
@@ -76,7 +202,7 @@ where
     type Out = T;
     type Form = One;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T {
         // SAFETY: as the uniform impl's.
         unsafe { <T as CrossSpecialized<Rt>>::from_run(rt, run) }
     }
@@ -90,7 +216,7 @@ where
     type Out = &'a T;
     type Form = One;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a T {
         // SAFETY: the caller's contract: a live storage of `T` (RFC-0018).
         unsafe { <T as OneValue<Rt>>::deref(rt, &run[0]) }
     }
@@ -104,7 +230,7 @@ where
     type Out = &'a mut T;
     type Form = One;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a mut T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a mut T {
         // SAFETY: the caller's contract: a live storage of `T`, exclusively
         // named (RFC-0018).
         unsafe { <T as OneValue<Rt>>::deref_mut(rt, &run[0]) }
@@ -119,7 +245,7 @@ where
     type Out = &'a T;
     type Form = One;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a T {
         // SAFETY: as the uniform impl's, at the specialized representation.
         unsafe { <T as CrossSpecialized<Rt>>::deref(rt, &run[0]) }
     }
@@ -133,7 +259,7 @@ where
     type Out = &'a mut T;
     type Form = One;
 
-    unsafe fn take(rt: &'a Rt, run: &'a [Rt::Value]) -> &'a mut T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a mut T {
         // SAFETY: as the uniform impl's, at the specialized representation.
         unsafe { <T as CrossSpecialized<Rt>>::deref_mut(rt, &run[0]) }
     }
@@ -585,12 +711,17 @@ const _: () = assert!(
     "the ArgRun chain covers REGISTER_FORM of the runtime's values and no other number"
 );
 
-/// The run a declaration's parameters make, as the form its call takes.
+/// The run a declaration's parameters make, as the form its call takes, and
+/// the site table they make, one `Arg::Site` per parameter.
 pub trait Parameters<Rt>
 where
     Rt: Runtime,
 {
     type Run;
+    type Sites: Clone + Send + Sync + 'static;
+    const ARITY: usize;
+
+    fn sites(args: &[ArgAt<'_>]) -> Self::Sites;
 }
 
 /// The call form a run of this shape and a result of form `R` take: which
@@ -747,6 +878,20 @@ where
 {
     fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>>;
     fn width(&self) -> Width;
+    /// How many parameters the declaration has, which is how many settled
+    /// types `at_site` reads. `Width::args` counts the runtime's values
+    /// instead, and a `&str` or a slice parameter is two of them.
+    fn arity(&self) -> usize;
+    fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AtSite<Rt>>;
+}
+
+/// One declared instance with its site table filled: the handler of one call
+/// site and of no other. `at_site` is the only way to reach one, so an
+/// operation cannot hold a handler whose table was never filled.
+pub trait AtSite<Rt>: Send + Sync
+where
+    Rt: Runtime,
+{
     fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op;
     fn into_fused(self: Box<Self>, shape: Rt::FusedShape) -> Rt::FusedCall;
 }
@@ -765,7 +910,7 @@ where
 /// runs. Such a call is awaited, and a slice is a borrow of the frame the
 /// call laid its arguments on, whose loan is gone by the time the caller
 /// resumes (RFC-0047 §3, rule 6).
-pub trait ValuesOnly<Rt>: Handler<Rt>
+pub trait ValuesOnly<Rt>: HandlerFactory<Rt>
 where
     Rt: Runtime,
 {
@@ -801,25 +946,17 @@ where
 {
     fn clone_box(&self) -> Box<dyn AsyncFactory<Rt>>;
     fn width(&self) -> Width;
-    fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op;
+    /// As `HandlerFactory::arity`.
+    fn arity(&self) -> usize;
+    fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AsyncAtSite<Rt>>;
 }
 
-impl<Rt, H> AsyncFactory<Rt> for H
+/// As `AtSite`, for a declaration whose Rust body is an `async fn`.
+pub trait AsyncAtSite<Rt>: Send + Sync
 where
     Rt: Runtime,
-    H: AsyncCall<Rt> + Clone,
 {
-    fn clone_box(&self) -> Box<dyn AsyncFactory<Rt>> {
-        Box::new(self.clone())
-    }
-
-    fn width(&self) -> Width {
-        <H as AsyncCall<Rt>>::WIDTH
-    }
-
-    fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op {
-        Rt::async_extern_op::<H>(*self, shape)
-    }
+    fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op;
 }
 
 impl<Rt> Clone for Box<dyn AsyncFactory<Rt>>
@@ -859,53 +996,99 @@ where
     )
 }
 
+/// The site table of a glue the module table holds, which is at no site: one
+/// declared instance is reached from every call site the checker settled on
+/// it, and `at_site` is where a site is known.
+#[derive(Clone, Copy)]
+pub struct Unsited;
+
 /// A Rust closure with the crossing on both sides of it: `A` is the tuple of
 /// the declaration's parameter modes, in the order the machine lays a call's
-/// arguments (RFC-0052 §7), and `R` its result.
-pub struct Glue<Rt, F, A, R> {
+/// arguments (RFC-0052 §7), `R` its result, and `S` the site table — one
+/// `Arg::Site` per parameter, or `Unsited` before `at_site` has filled it.
+///
+/// `Handler` is implemented for the sited glue alone, so an operation cannot
+/// hold a glue whose table was never filled.
+pub struct Glue<Rt, F, A, R, S = Unsited> {
     f: F,
+    sites: S,
     shape: PhantomData<fn() -> (Rt, A, R)>,
 }
 
-impl<Rt, F, A, R> Clone for Glue<Rt, F, A, R>
+impl<Rt, F, A, R, S> Clone for Glue<Rt, F, A, R, S>
 where
     F: Clone,
+    S: Clone,
 {
     fn clone(&self) -> Self {
         Glue {
             f: self.f.clone(),
+            sites: self.sites.clone(),
             shape: PhantomData,
         }
     }
 }
 
-// SAFETY: a `Glue` holds the closure and nothing else; the `PhantomData` is
-// over `fn() -> _` and carries no value.
-unsafe impl<Rt, F, A, R> Send for Glue<Rt, F, A, R> where F: Send {}
+// SAFETY: a `Glue` holds the closure and the site table and nothing else;
+// the `PhantomData` is over `fn() -> _` and carries no value.
+unsafe impl<Rt, F, A, R, S> Send for Glue<Rt, F, A, R, S>
+where
+    F: Send,
+    S: Send,
+{
+}
 // SAFETY: as `Send`.
-unsafe impl<Rt, F, A, R> Sync for Glue<Rt, F, A, R> where F: Sync {}
+unsafe impl<Rt, F, A, R, S> Sync for Glue<Rt, F, A, R, S>
+where
+    F: Sync,
+    S: Sync,
+{
+}
 
 /// As `Glue`, for a body that awaits. The closure is shared because the
 /// future it returns outlives the call that made it, so the call clones the
 /// closure into the future rather than borrowing it.
-pub struct AsyncGlue<Rt, F, A> {
+pub struct AsyncGlue<Rt, F, A, S = Unsited> {
     f: Arc<F>,
+    sites: S,
     shape: PhantomData<fn() -> (Rt, A)>,
 }
 
-impl<Rt, F, A> Clone for AsyncGlue<Rt, F, A> {
+impl<Rt, F, A, S> Clone for AsyncGlue<Rt, F, A, S>
+where
+    S: Clone,
+{
     fn clone(&self) -> Self {
         AsyncGlue {
             f: Arc::clone(&self.f),
+            sites: self.sites.clone(),
             shape: PhantomData,
         }
     }
 }
 
 // SAFETY: as `Glue`'s, the closure being behind a shared pointer.
-unsafe impl<Rt, F, A> Send for AsyncGlue<Rt, F, A> where F: Send + Sync {}
+unsafe impl<Rt, F, A, S> Send for AsyncGlue<Rt, F, A, S>
+where
+    F: Send + Sync,
+    S: Send,
+{
+}
 // SAFETY: as `Send`.
-unsafe impl<Rt, F, A> Sync for AsyncGlue<Rt, F, A> where F: Send + Sync {}
+unsafe impl<Rt, F, A, S> Sync for AsyncGlue<Rt, F, A, S>
+where
+    F: Send + Sync,
+    S: Sync,
+{
+}
+
+/// One per parameter, whatever the parameter's type is: the fold that counts
+/// a declaration's arity.
+macro_rules! one_per {
+    ($arg:ident) => {
+        1usize
+    };
+}
 
 /// The run of `InRegisters<0>` widened by each parameter in turn: the fold
 /// whose answer `TakenForm` reads.
@@ -923,7 +1106,7 @@ macro_rules! run_of {
 macro_rules! arity {
     (
         $glue:ident, $async_glue:ident, [$($result:tt)*]
-        $(, $arg:ident: $out:ident)*
+        $(, $arg:ident: $out:ident: $at:tt)*
     ) => {
         pub fn $glue<Rt, F, $($arg,)* R>(f: F) -> Glue<Rt, F, ($($arg,)*), R>
         where
@@ -933,10 +1116,11 @@ macro_rules! arity {
             $($arg: for<'a> Arg<'a, Rt>,)*
             R: $($result)*,
         {
-            Glue { f, shape: PhantomData }
+            Glue { f, sites: Unsited, shape: PhantomData }
         }
 
-        impl<Rt, F, $($arg,)* R> Handler<Rt> for Glue<Rt, F, ($($arg,)*), R>
+        impl<Rt, F, $($arg,)* R> Handler<Rt>
+            for Glue<Rt, F, ($($arg,)*), R, ($(<$arg as Sited<Rt>>::Site,)*)>
         where
             Rt: Runtime,
             F: Clone + Send + Sync + 'static,
@@ -965,7 +1149,9 @@ macro_rules! arity {
                     // SAFETY: the caller's contract: `run` is this
                     // declaration's whole argument run, so each parameter's
                     // own values are the next `WIDTH` of it.
-                    let $out = unsafe { $arg::take(rt, &run[_at.._at + _width]) };
+                    let $out = unsafe {
+                        $arg::take(rt, &run[_at.._at + _width], &self.sites.$at)
+                    };
                     _at += _width;
                 )*
                 <R as Ret<Rt>>::into_run((self.f)(rt, frame $(, $out)*), rt, out)
@@ -978,6 +1164,22 @@ macro_rules! arity {
             $($arg: for<'a> Arg<'a, Rt>,)*
         {
             type Run = run_of!(Rt, InRegisters<0> $(, $arg)*);
+            type Sites = ($(<$arg as Sited<Rt>>::Site,)*);
+
+            #[allow(unused_variables)]
+            fn sites(args: &[ArgAt<'_>]) -> Self::Sites {
+                assert_eq!(
+                    args.len(),
+                    <Self as Parameters<Rt>>::ARITY,
+                    "a call site hands {} settled argument types to a declaration of {} \
+                     parameters (RFC-0059 rule 7)",
+                    args.len(),
+                    <Self as Parameters<Rt>>::ARITY
+                );
+                ($(<$arg as Sited<Rt>>::site(args[$at]),)*)
+            }
+
+            const ARITY: usize = 0 $(+ one_per!($arg))*;
         }
 
         impl<Rt, F, $($arg,)* R> HandlerFactory<Rt> for Glue<Rt, F, ($($arg,)*), R>
@@ -995,9 +1197,50 @@ macro_rules! arity {
             }
 
             fn width(&self) -> Width {
-                <Self as Handler<Rt>>::WIDTH
+                Width {
+                    args: 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*,
+                    ret: <R as Ret<Rt>>::WIDTH,
+                    result: <<R as Ret<Rt>>::Form as Form>::KIND,
+                }
             }
 
+            fn arity(&self) -> usize {
+                <($($arg,)*) as Parameters<Rt>>::ARITY
+            }
+
+            fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AtSite<Rt>> {
+                Box::new(self.at(args))
+            }
+        }
+
+        impl<Rt, F, $($arg,)* R> Glue<Rt, F, ($($arg,)*), R>
+        where
+            Rt: Runtime,
+            $($arg: for<'a> Arg<'a, Rt>,)*
+        {
+            pub fn at(
+                self,
+                args: &[ArgAt<'_>],
+            ) -> Glue<Rt, F, ($($arg,)*), R, <($($arg,)*) as Parameters<Rt>>::Sites> {
+                Glue {
+                    f: self.f,
+                    sites: <($($arg,)*) as Parameters<Rt>>::sites(args),
+                    shape: PhantomData,
+                }
+            }
+        }
+
+        impl<Rt, F, $($arg,)* R> AtSite<Rt>
+            for Glue<Rt, F, ($($arg,)*), R, ($(<$arg as Sited<Rt>>::Site,)*)>
+        where
+            Rt: Runtime,
+            F: Clone + Send + Sync + 'static,
+            F: for<'a, 'w> Fn(&'a Rt, Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> R::Of<'a>,
+            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            R: Ret<Rt> + 'static,
+            <($($arg,)*) as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
+        {
             fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op {
                 <<($($arg,)*) as Parameters<Rt>>::Run as TakenForm<
                     <R as Ret<Rt>>::Form,
@@ -1019,6 +1262,7 @@ macro_rules! arity {
                 -> R::Of<'a>,
             $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
             R: Ret<Rt, Form = One> + 'static,
+            <($($arg,)*) as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
         {
         }
 
@@ -1029,10 +1273,11 @@ macro_rules! arity {
                 -> BoxFuture<'a, Rt::Value>,
             $($arg: for<'a> Arg<'a, Rt>,)*
         {
-            AsyncGlue { f: Arc::new(f), shape: PhantomData }
+            AsyncGlue { f: Arc::new(f), sites: Unsited, shape: PhantomData }
         }
 
-        impl<Rt, F, $($arg,)*> AsyncCall<Rt> for AsyncGlue<Rt, F, ($($arg,)*)>
+        impl<Rt, F, $($arg,)*> AsyncCall<Rt>
+            for AsyncGlue<Rt, F, ($($arg,)*), ($(<$arg as Sited<Rt>>::Site,)*)>
         where
             Rt: Runtime,
             F: Send + Sync + 'static,
@@ -1050,6 +1295,7 @@ macro_rules! arity {
             unsafe fn call(&self, rt: Rt, run: &[Rt::Value]) -> BoxFuture<'static, Rt::Value> {
                 let held: Vec<Rt::Value> = run.to_vec();
                 let f = Arc::clone(&self.f);
+                let sites = self.sites.clone();
                 Box::pin(async move {
                     let mut rooted = rt.rooted();
                     let mut frame = Rt::frame_of(&mut rooted);
@@ -1058,39 +1304,138 @@ macro_rules! arity {
                         let _width = <$arg as Arg<'_, Rt>>::WIDTH;
                         // SAFETY: as the synchronous impl's, over the run
                         // the future owns.
-                        let $out = unsafe { $arg::take(&rt, &held[_at.._at + _width]) };
+                        let $out = unsafe {
+                            $arg::take(&rt, &held[_at.._at + _width], &sites.$at)
+                        };
                         _at += _width;
                     )*
                     f(&rt, &mut frame $(, $out)*).await
                 })
             }
         }
+
+        impl<Rt, F, $($arg,)*> AsyncFactory<Rt> for AsyncGlue<Rt, F, ($($arg,)*)>
+        where
+            Rt: Runtime,
+            F: Send + Sync + 'static,
+            F: for<'a, 'w> Fn(&'a Rt, &'a mut Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> BoxFuture<'a, Rt::Value>,
+            $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
+        {
+            fn clone_box(&self) -> Box<dyn AsyncFactory<Rt>> {
+                Box::new(self.clone())
+            }
+
+            fn width(&self) -> Width {
+                Width {
+                    args: 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*,
+                    ret: 1,
+                    result: FormKind::Value,
+                }
+            }
+
+            fn arity(&self) -> usize {
+                <($($arg,)*) as Parameters<Rt>>::ARITY
+            }
+
+            fn at_site(self: Box<Self>, args: &[ArgAt<'_>]) -> Box<dyn AsyncAtSite<Rt>> {
+                Box::new(self.at(args))
+            }
+        }
+
+        impl<Rt, F, $($arg,)*> AsyncGlue<Rt, F, ($($arg,)*)>
+        where
+            Rt: Runtime,
+            $($arg: for<'a> Arg<'a, Rt>,)*
+        {
+            pub fn at(
+                self,
+                args: &[ArgAt<'_>],
+            ) -> AsyncGlue<Rt, F, ($($arg,)*), <($($arg,)*) as Parameters<Rt>>::Sites> {
+                AsyncGlue {
+                    f: self.f,
+                    sites: <($($arg,)*) as Parameters<Rt>>::sites(args),
+                    shape: PhantomData,
+                }
+            }
+        }
+
+        impl<Rt, F, $($arg,)*> AsyncAtSite<Rt>
+            for AsyncGlue<Rt, F, ($($arg,)*), ($(<$arg as Sited<Rt>>::Site,)*)>
+        where
+            Rt: Runtime,
+            F: Send + Sync + 'static,
+            F: for<'a, 'w> Fn(&'a Rt, &'a mut Rt::Frame<'w> $(, <$arg as Arg<'a, Rt>>::Out)*)
+                -> BoxFuture<'a, Rt::Value>,
+            $($arg: for<'a> Arg<'a, Rt, Form = One> + 'static,)*
+        {
+            fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op {
+                Rt::async_extern_op(*self, shape)
+            }
+        }
     };
 }
 
 arity!(glue0, async_glue0, [Ret<Rt>]);
-arity!(glue1, async_glue1, [Ret<Rt>], A0: a0);
-arity!(glue2, async_glue2, [Ret<Rt>], A0: a0, A1: a1);
-arity!(glue3, async_glue3, [Ret<Rt>], A0: a0, A1: a1, A2: a2);
+arity!(
+    glue1, async_glue1, [Ret<Rt>],
+    A0: a0: 0
+);
+arity!(
+    glue2, async_glue2, [Ret<Rt>],
+    A0: a0: 0,
+    A1: a1: 1
+);
+arity!(
+    glue3, async_glue3, [Ret<Rt>],
+    A0: a0: 0,
+    A1: a1: 1,
+    A2: a2: 2
+);
 arity!(
     glue4, async_glue4, [Ret<Rt>],
-    A0: a0, A1: a1, A2: a2, A3: a3
+    A0: a0: 0,
+    A1: a1: 1,
+    A2: a2: 2,
+    A3: a3: 3
 );
 arity!(
     glue5, async_glue5, [Ret<Rt>],
-    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4
+    A0: a0: 0,
+    A1: a1: 1,
+    A2: a2: 2,
+    A3: a3: 3,
+    A4: a4: 4
 );
 arity!(
     glue6, async_glue6, [Ret<Rt>],
-    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5
+    A0: a0: 0,
+    A1: a1: 1,
+    A2: a2: 2,
+    A3: a3: 3,
+    A4: a4: 4,
+    A5: a5: 5
 );
 arity!(
     glue7, async_glue7, [Ret<Rt>],
-    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5, A6: a6
+    A0: a0: 0,
+    A1: a1: 1,
+    A2: a2: 2,
+    A3: a3: 3,
+    A4: a4: 4,
+    A5: a5: 5,
+    A6: a6: 6
 );
 arity!(
     glue8, async_glue8, [Ret<Rt>],
-    A0: a0, A1: a1, A2: a2, A3: a3, A4: a4, A5: a5, A6: a6, A7: a7
+    A0: a0: 0,
+    A1: a1: 1,
+    A2: a2: 2,
+    A3: a3: 3,
+    A4: a4: 4,
+    A5: a5: 5,
+    A6: a6: 6,
+    A7: a7: 7
 );
 
 /// One handler per rung of `Task` (RFC-0046). `Sync` runs to its result in

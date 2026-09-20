@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::{FieldAt, FormKind, ObjectShape, Width};
+use acvus_extern::{ArgAt, FieldAt, FormKind, ObjectShape, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -1043,6 +1043,17 @@ impl<'a> Prepare<'a> {
             .val_types
             .get(&id)
             .unwrap_or_else(|| panic!("no type for value {id:?}"))
+    }
+
+    /// The settled type of each argument of a call site, which the
+    /// handler's site table is filled from (RFC-0050 rule 6).
+    fn arg_sites(&self, args: &[ValueId]) -> Vec<ArgAt<'_>> {
+        args.iter()
+            .map(|id| ArgAt {
+                interner: self.ctx.interner,
+                ty: self.ty(*id),
+            })
+            .collect()
     }
 
     fn is_ref(&self, id: ValueId) -> bool {
@@ -3001,6 +3012,7 @@ impl<'a> Prepare<'a> {
                     Callee::Extern { id, instance } => {
                         let handler = self.ctx.handler(id, *instance);
                         let window = self.window(at, args, ops);
+                        let sites = self.arg_sites(args);
                         assert_eq!(
                             handler.width().ret,
                             1,
@@ -3008,12 +3020,18 @@ impl<'a> Prepare<'a> {
                              outlive the frame that lent it (RFC-0047 §3)"
                         );
                         match handler {
-                            ExternHandler::Sync(f) | ExternHandler::Heavy(f) => made(move |next| {
-                                f.into_op(call::CallShape::Spawn { dst, window, next })
-                            }),
-                            ExternHandler::Async(f) => made(move |next| {
-                                f.into_op(call::AsyncShape::Spawn { dst, window, next })
-                            }),
+                            ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
+                                let f = f.at_site(&sites);
+                                made(move |next| {
+                                    f.into_op(call::CallShape::Spawn { dst, window, next })
+                                })
+                            }
+                            ExternHandler::Async(f) => {
+                                let f = f.at_site(&sites);
+                                made(move |next| {
+                                    f.into_op(call::AsyncShape::Spawn { dst, window, next })
+                                })
+                            }
                         }
                     }
                     Callee::Indirect(_) => panic!("spawn: indirect callee not supported"),
@@ -3128,6 +3146,10 @@ impl<'a> Prepare<'a> {
                      and the two words of a run out, which is `Handler::call_pair1`'s \
                      contract (RFC-0047 amended, rule 2)"
                 );
+                let f = {
+                    let sites = self.arg_sites(args);
+                    f.at_site(&sites)
+                };
                 made(move |next| {
                     f.into_op(call::CallShape::Pair1 {
                         dst,
@@ -3375,6 +3397,10 @@ impl<'a> Prepare<'a> {
                         None
                     }
                     ExternHandler::Heavy(f) => {
+                        let f = {
+                            let sites = self.arg_sites(args);
+                            f.at_site(&sites)
+                        };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
                         Some(f.into_op(call::CallShape::Heavy {
@@ -3385,6 +3411,10 @@ impl<'a> Prepare<'a> {
                         }))
                     }
                     ExternHandler::Async(f) => {
+                        let f = {
+                            let sites = self.arg_sites(args);
+                            f.at_site(&sites)
+                        };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
                         Some(f.into_op(call::AsyncShape::Await {
@@ -3412,6 +3442,10 @@ impl<'a> Prepare<'a> {
         ops: &mut Vec<Node>,
     ) -> Node {
         let width = f.width();
+        let f = {
+            let sites = self.arg_sites(args);
+            f.at_site(&sites)
+        };
         let takes = self.take_mask(args);
         let slots = self.argument_words(args);
         assert_eq!(
@@ -3439,7 +3473,7 @@ impl<'a> Prepare<'a> {
                 self.call_into_pair(at, result, args, f, form, slots, takes, ops)
             }
             FormKind::Components => {
-                self.call_into_run(at, result, args, f, form, slots, takes, ops)
+                self.call_into_run(at, result, args, f, width.ret, form, slots, takes, ops)
             }
         }
     }
@@ -3450,7 +3484,7 @@ impl<'a> Prepare<'a> {
         at: usize,
         result: ValueId,
         args: &[ValueId],
-        f: call::Handler,
+        f: call::Sited,
         form: CallForm,
         slots: Vec<Off>,
         takes: u64,
@@ -3549,7 +3583,7 @@ impl<'a> Prepare<'a> {
         at: usize,
         result: ValueId,
         args: &[ValueId],
-        f: call::Handler,
+        f: call::Sited,
         form: CallForm,
         slots: Vec<Off>,
         takes: u64,
@@ -3687,13 +3721,14 @@ impl<'a> Prepare<'a> {
         at: usize,
         result: ValueId,
         args: &[ValueId],
-        f: call::Handler,
+        f: call::Sited,
+        ret: usize,
         form: CallForm,
         slots: Vec<Off>,
         takes: u64,
         ops: &mut Vec<Node>,
     ) -> Node {
-        let dst = self.run_dest(result, f.width().ret);
+        let dst = self.run_dest(result, ret);
         match form {
             CallForm::Registers(0) => {
                 made(move |next| f.into_op(call::CallShape::Run0 { dst, next }))
@@ -4911,16 +4946,22 @@ mod call_form_tests {
         );
         assert_eq!(CallForm::of(&width), CallForm::Registers(2));
 
-        let op = factory.into_op(call::CallShape::Registers2 {
-            dst: Marked::of(Off::of(2)),
-            a: Off::of(0),
-            b: Off::of(1),
-            takes: 0,
-            large: false,
-            next: Box::new(crate::ops::control::Return::<false> {
-                slot: Marked::of(Off::of(2)),
-            }),
-        });
+        let arity = factory.arity();
+        assert_eq!(arity, 1, "`len(s: &str)` is one parameter, two values wide");
+
+        let site = acvus_extern::PlainSite::default();
+        let op = factory
+            .at_site(&site.args(arity))
+            .into_op(call::CallShape::Registers2 {
+                dst: Marked::of(Off::of(2)),
+                a: Off::of(0),
+                b: Off::of(1),
+                takes: 0,
+                large: false,
+                next: Box::new(crate::ops::control::Return::<false> {
+                    slot: Marked::of(Off::of(2)),
+                }),
+            });
         let built = crate::listing::last_path_segment(&*op);
         assert!(
             built.starts_with("CallExtern2"),
@@ -6985,6 +7026,7 @@ impl<'a> Prepare<'a> {
                 };
             }
             previous = Some(found.dst);
+            let sites = self.arg_sites(found.args);
             let f = found.handler;
             let shape = match f.width().args {
                 0 => call::FusedShape::Nullary,
@@ -6998,7 +7040,7 @@ impl<'a> Prepare<'a> {
                      shape for"
                 ),
             };
-            calls.push(f.into_fused(shape));
+            calls.push(f.at_site(&sites).into_fused(shape));
         }
         let last = previous.expect("a recognized run holds at least one call");
 

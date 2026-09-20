@@ -32,6 +32,10 @@ use crate::value::{FnValue, HandleValue, Value};
 /// holds the handler by value and calls its body statically.
 pub type Handler = Box<dyn acvus_extern::HandlerFactory<AcvusRuntime>>;
 
+/// The same instance with its site table filled from the settled types of
+/// this site's arguments, which is what builds the operation.
+pub type Sited = Box<dyn acvus_extern::AtSite<AcvusRuntime>>;
+
 /// Where a synchronous call site's result goes, where its arguments are, and
 /// what runs after it — everything `prepare` settles before the handler's
 /// type is known (RFC-0059 rule 4 amended).

@@ -613,10 +613,21 @@ aggregate_result_allocates_nothing.rs` counts 10 allocations for the
 frame-resident result, which is the run's own fixed cost, and 138 for the
 escaping one — two an iteration and none.
 
-An enum keeps its one-value crossing. `ERef`/`EMut` and the flat heap
-`Variant` are unbuilt, so a `-> E` for a derived enum is one heap value as it
-was, and the derive emits the component form for a struct alone.
+An enum keeps its one-value crossing. `ERef`/`EMut` are unbuilt, so a `-> E`
+for a derived enum is one heap value as it was, and the derive emits the
+component form for a struct alone.
 
-Rule 6's "no name lookup at call time" is still not true, and it is
-independent of `Out`: `projection::position_of` is reached per field per call,
-because no extern call form carries an offset table.
+Rule 6's "no name lookup at call time" is true of an object projection. The
+table is a field of the per-site glue, not of the call form: `Prepare::handler`
+already clones the registry's `ExternHandler` per site, and
+`HandlerFactory::at_site` consumes that clone into a glue holding one
+`Arg::Site` per parameter, filled from the settled type of each argument.
+`Handler::call`'s signature does not move, and no `Runtime::op_*` entry gains
+a field. An object projection's datum is the position of each field it names,
+read out of `ObjectShape` — rule 8's order, the one `prepare/runs.rs::Layout`
+and `layout.rs::sorted_fields` lay the same object in. A parameter that needs
+nothing says `Site = ()`, so a declaration of plain parameters carries a
+zero-sized table.
+
+The enum half of rule 6 is still unbuilt: `ERef`/`EMut` do not exist, so a
+handler that reads a derived enum takes it by value.

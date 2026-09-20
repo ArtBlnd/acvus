@@ -741,6 +741,31 @@ struct JustLabel {
     label: String,
 }
 
+/// A partial projection over the field rule 8 puts second, so the position
+/// its site table names differs from its own field table index.
+#[derive(acvus_extern::TyArg)]
+#[projection]
+struct JustX {
+    x: i64,
+}
+
+/// The type the checker settles for a `Point` at a call site, which is what
+/// a projection's site table is built from.
+fn point_ty(i: &Interner) -> acvus_extern::Ty {
+    acvus_extern::Ty::Object(acvus_extern::ObjectTy::declared(
+        i.intern("Point"),
+        [
+            (
+                i.intern("x"),
+                acvus_extern::Ty::Int(acvus_mir::ty::IntTy::I64),
+            ),
+            (i.intern("label"), acvus_extern::Ty::String),
+        ]
+        .into_iter()
+        .collect(),
+    ))
+}
+
 fn a_point(rt: &Counted) -> V {
     Point {
         x: 7,
@@ -756,8 +781,16 @@ fn a_shared_projection_reads_every_field_where_it_lies() {
     // SAFETY: `object` is live for the borrow below.
     let reference = unsafe { rt.reference(&object) };
     // SAFETY: `reference` names the live object `a_point` just wrote.
-    let point =
-        unsafe { <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+    let interner = Interner::new();
+    let settled = point_ty(&interner);
+    let table =
+        <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+            interner: &interner,
+            ty: &settled,
+        });
+    let point = unsafe {
+        <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+    };
 
     assert_eq!(*point.x, 7);
     assert_eq!(point.label, "seven");
@@ -781,8 +814,16 @@ fn an_exclusive_projection_writes_through_to_the_object() {
     let reference = unsafe { rt.reference(&object) };
     {
         // SAFETY: `reference` exclusively names the live object.
-        let point =
-            unsafe { <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+        let interner = Interner::new();
+        let settled = point_ty(&interner);
+        let table =
+            <PointMut<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+                interner: &interner,
+                ty: &settled,
+            });
+        let point = unsafe {
+            <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        };
         *point.x = 9;
         point.label.push_str("teen");
     }
@@ -801,8 +842,16 @@ fn a_partial_projection_borrows_the_field_it_names() {
     // SAFETY: `reference` names a live object that has every field
     // `JustLabel` names, which is what the checker admits at an at-least
     // parameter.
-    let only =
-        unsafe { <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+    let interner = Interner::new();
+    let settled = point_ty(&interner);
+    let table =
+        <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+            interner: &interner,
+            ty: &settled,
+        });
+    let only = unsafe {
+        <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+    };
     assert_eq!(only.label, "seven");
 }
 
@@ -855,11 +904,19 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
     let object = a_point(&rt);
     // SAFETY: `object` is live for both crossings below.
     let reference = unsafe { rt.reference(&object) };
+    let interner = Interner::new();
+    let settled = point_ty(&interner);
+    let table =
+        <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+            interner: &interner,
+            ty: &settled,
+        });
 
     let borrowed = allocations_of(|| {
         // SAFETY: `reference` names the live object.
-        let point =
-            unsafe { <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+        let point = unsafe {
+            <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        };
         *point.x
     });
     assert_eq!(
@@ -873,12 +930,36 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
         // reads the field count and nothing takes ownership twice.
         let reference = unsafe { rt.reference(&object) };
         // SAFETY: as above.
-        let point =
-            unsafe { <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference) };
+        let point = unsafe {
+            <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        };
         point.label.clone()
     });
     assert!(
         by_value > 0,
         "materializing a field's String allocates, which is what the projection avoids"
     );
+}
+
+/// The site table names the position each field holds in rule 8's order —
+/// the field names ascending as strings — and not the position it holds in
+/// the projection's own field list. `Point` is `{label, x}` in that order, so
+/// a projection naming `x` alone reads position 1 while its own field table
+/// has one entry at index 0.
+#[test]
+fn a_partial_projections_table_names_the_objects_position_and_not_its_own() {
+    let interner = Interner::new();
+    let settled = point_ty(&interner);
+    let at = acvus_extern::ArgAt {
+        interner: &interner,
+        ty: &settled,
+    };
+
+    let whole = <PointRef<'static> as acvus_extern::Projected<Counted>>::table(at);
+    let label_only = <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(at);
+    let x_only = <JustXRef<'static> as acvus_extern::Projected<Counted>>::table(at);
+
+    assert_eq!(whole.at.map(acvus_extern::FieldAt::index), [0, 1]);
+    assert_eq!(label_only.at.map(acvus_extern::FieldAt::index), [0]);
+    assert_eq!(x_only.at.map(acvus_extern::FieldAt::index), [1]);
 }

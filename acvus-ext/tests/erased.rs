@@ -389,7 +389,11 @@ impl World {
         let ExternHandler::Sync(handler) = &handlers[0] else {
             panic!("{ns}::{name} is not a sync handler")
         };
-        let op = handler.clone().into_op(());
+        let site = acvus_extern::PlainSite::default();
+        let op = handler
+            .clone()
+            .at_site(&site.args(handler.arity()))
+            .into_op(());
         // SAFETY: the caller passes the declaration's own arguments.
         unsafe { op.call_run(&self.rt, &args) }
     }

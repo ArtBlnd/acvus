@@ -728,8 +728,12 @@ fn types_and_casts_reach_the_type_registry() {
 
 fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
-        // SAFETY: the caller passes the declaration's own arguments.
-        ExternHandler::Sync(f) => unsafe { f.clone().into_op(()).call_run(&Tiny, &args) },
+        ExternHandler::Sync(f) => {
+            let site = acvus_extern::PlainSite::default();
+            let f = f.clone().at_site(&site.args(f.arity()));
+            // SAFETY: the caller passes the declaration's own arguments.
+            unsafe { f.into_op(()).call_run(&Tiny, &args) }
+        }
         ExternHandler::Heavy(_) => panic!("expected a sync handler, found a heavy one"),
         ExternHandler::Async(_) => panic!("expected a sync handler, found an async one"),
     }
@@ -793,6 +797,7 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     unsafe {
         entry
             .clone()
+            .at_site(&acvus_extern::PlainSite::default().args(entry.arity()))
             .into_op(())
             .call(&Tiny, &[container()], &mut pair)
     };
@@ -843,15 +848,25 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
     let mut out = [V::default(); 1];
     // SAFETY: `run` is the pair `slice_into_run` just wrote, `storage` is
     // live and unmoved, and `out` has room for the one value the width names.
-    unsafe { entry.clone().into_op(()).call(&Tiny, &run, &mut out) };
+    unsafe {
+        entry
+            .clone()
+            .at_site(&acvus_extern::PlainSite::default().args(entry.arity()))
+            .into_op(())
+            .call(&Tiny, &run, &mut out)
+    };
 
     assert_eq!(peek::<i64>(&out[0]), 15);
 }
 
 async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
-        // SAFETY: as `call_sync`'s; the future owns `args`.
-        ExternHandler::Async(f) => unsafe { f.clone().into_op(()).call_async(Tiny, &args) }.await,
+        ExternHandler::Async(f) => {
+            let site = acvus_extern::PlainSite::default();
+            let f = f.clone().at_site(&site.args(f.arity()));
+            // SAFETY: as `call_sync`'s; the future owns `args`.
+            unsafe { f.into_op(()).call_async(Tiny, &args) }.await
+        }
         ExternHandler::Sync(_) => panic!("expected an async handler, found a sync one"),
         ExternHandler::Heavy(_) => panic!("expected an async handler, found a heavy one"),
     }
@@ -1488,9 +1503,11 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
 #[test]
 fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     use acvus_extern::FormKind;
-    use acvus_extern::{ByRef, ByValue, Handler, Val, Width};
+    use acvus_extern::{ByRef, ByValue, Handler, PlainSite, Val, Width};
 
-    fn answered<H>(handler: &H, expected: Width, args: Vec<V>) -> i64
+    let site = PlainSite::default();
+
+    fn answered<H>(handler: H, expected: Width, args: Vec<V>) -> i64
     where
         H: Handler<Tiny>,
     {
@@ -1501,7 +1518,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     assert_eq!(
         answered(
-            &acvus_extern::glue0::<Tiny, _, Val<i64>>(|_, _| 0),
+            acvus_extern::glue0::<Tiny, _, Val<i64>>(|_, _| 0).at(&site.args(0)),
             Width {
                 args: 0,
                 ret: 1,
@@ -1513,7 +1530,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            &acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a),
+            acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a).at(&site.args(1)),
             Width {
                 args: 1,
                 ret: 1,
@@ -1525,9 +1542,9 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            &acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(
+            acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(
                 |_, _, a, b| a + b
-            ),
+            ).at(&site.args(2)),
             Width {
                 args: 2,
                 ret: 1,
@@ -1543,9 +1560,10 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     let lent = unsafe { Tiny.reference(&place) };
     assert_eq!(
         answered(
-            &acvus_extern::glue3::<Tiny, _, ByValue<i64>, ByRef<i64>, ByValue<i64>, Val<i64>>(
+            acvus_extern::glue3::<Tiny, _, ByValue<i64>, ByRef<i64>, ByValue<i64>, Val<i64>>(
                 |_, _, a, b, c| a + *b + c
-            ),
+            )
+            .at(&site.args(3)),
             Width {
                 args: 3,
                 ret: 1,
@@ -1559,7 +1577,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     assert_eq!(
         answered(
-            &acvus_extern::glue4::<
+            acvus_extern::glue4::<
                 Tiny,
                 _,
                 ByValue<i64>,
@@ -1567,7 +1585,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 ByValue<i64>,
                 ByValue<i64>,
                 Val<i64>,
-            >(|_, _, a, b, c, d| a + b + c + d),
+            >(|_, _, a, b, c, d| a + b + c + d)
+            .at(&site.args(4)),
             Width {
                 args: 4,
                 ret: 1,
@@ -1581,7 +1600,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     let two_wide =
         acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, _, a, b| {
             a * 10 + b
-        });
+        })
+        .at(&site.args(2));
     // SAFETY: the width says two arguments in and one value out.
     let by_register = unsafe { two_wide.call2(&Tiny, (), erased(1i64), erased(2i64)) };
     assert_eq!(
@@ -1619,13 +1639,21 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
             result: FormKind::Value,
         }
     );
+    let site = acvus_extern::PlainSite::default();
+    let glue = glue.at(&site.args(1));
     // SAFETY: the width says one argument in and one value out, at each of
     // the three names of this one handler.
     let answers = unsafe {
         [
             glue.call1(&Tiny, (), erased(7i64)),
-            boxed.into_op(()).call_run(&Tiny, &[erased(7i64)]),
-            again.into_op(()).call_run(&Tiny, &[erased(7i64)]),
+            boxed
+                .at_site(&site.args(1))
+                .into_op(())
+                .call_run(&Tiny, &[erased(7i64)]),
+            again
+                .at_site(&site.args(1))
+                .into_op(())
+                .call_run(&Tiny, &[erased(7i64)]),
         ]
     };
     assert_eq!(answers.map(open::<i64>), [21, 21, 21]);
@@ -1660,4 +1688,20 @@ where
     let mut run = vec![Rt::Value::default(); A::WIDTH];
     args.into_run(rt, &mut run);
     run
+}
+
+/// A parameter that needs nothing from the call site says `Site = ()`, so a
+/// declaration of plain parameters carries a site table of zero size and the
+/// per-site glue is the closure and nothing else (RFC-0050 rule 6).
+#[test]
+fn a_plain_declarations_site_table_is_zero_sized() {
+    use acvus_extern::{ByValue, PlainSite, Val};
+
+    let site = PlainSite::default();
+    let closure = |_: &Tiny, _: (), a: i64, b: i64| a + b;
+    let unsited = acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(closure);
+    let sited = unsited.at(&site.args(2));
+
+    assert_eq!(size_of_val(&closure), 0);
+    assert_eq!(size_of_val(&sited), 0);
 }
