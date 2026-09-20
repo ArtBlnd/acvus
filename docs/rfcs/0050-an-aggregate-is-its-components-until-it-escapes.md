@@ -403,8 +403,9 @@ value (RFC-0038): `runtime.rs`'s `erase` and `materialize` translate at that
 boundary. A handler that borrows one no longer compiles, and a handler that takes one by
 value still does — at a concrete parameter and at a monomorphized one alike.
 Each crossing carries the refusal in a marker of its own: `Borrowable` for
-`ByRef<_, Uniform>` and `BorrowableSpecialized` for `ByRef<_, Specialized>` and
-`ByRefMut<_, Specialized>`. `Result` implements neither, because a crossed
+`ByRef<_, _, Uniform>` and `BorrowableSpecialized` for
+`ByRef<_, _, Specialized>`, at either loan. `Result` implements neither,
+because a crossed
 `Result` is the flat variant and no storage anywhere is shaped like Rust's
 `Result<T, E>` for a reference to name; what `&Result<T, E>` used to reach was
 the `NO_STORAGE` panic on the specialized `deref` rather than a refusal.

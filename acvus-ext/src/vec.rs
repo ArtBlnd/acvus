@@ -4,7 +4,7 @@
 //! the element is in use (RFC-0028).
 
 use acvus_extern::{
-    Arr, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TransparentOver, Var, extern_fn,
+    Arr, Mut, Ref, Registry, Runtime, Shared, Slice, TransparentOver, Var, extern_fn,
     extern_registry, extern_signature, kind,
 };
 
@@ -101,7 +101,7 @@ where
 /// indexes this and nothing else. No copy — the slice is a pointer and a
 /// length into the container's own storage.
 #[extern_fn(effect = pure)]
-fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Slice<T, Rt>
+fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
@@ -110,16 +110,16 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn as_slice_mut<T, Rt>(rt: &Rt, c: RefMut<Vec<T>, Rt>) -> SliceMut<T, Rt>
+fn as_slice_mut<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Mut, Rt>) -> Slice<T, Mut, Rt>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
-    SliceMut::of(c.elements_mut(rt))
+    Slice::of(c.elements(rt))
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
+fn first<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
@@ -128,7 +128,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Option<Ref<T, Rt>>
+fn last<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
@@ -227,8 +227,7 @@ where
 // naming the member at its specialized representation, and no form of a container
 // of `Erased<Rt, T>` has one that reads the storage — `Vec` and `Deque`
 // cross whole, so the payload's `TypeId` is the container of values, not
-// of `Erased`; `Arr` crosses per element, which `Erased` is not; `Ref<C,
-// Rt>` has no implementation. `Iter` has, as an extension type stored as
+// of `Erased`; `Arr` crosses per element, which `Erased` is not; `Ref<C, Shared, // Rt>` has no implementation. `Iter` has, as an extension type stored as
 // its payload. Until `acvus-extern` gives a container of an erased element
 // a crossing, a container is searched as `into_iter(xs) | contains(x)`,
 // which the checker settles through the declared cast (RFC-0043).

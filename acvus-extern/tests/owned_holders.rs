@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{
-    Arr, Astr, CallToken, Erased, Fn1, FromValue, FxHashMap, Interner, OneValue, Opaque, Owned,
-    Ref, Release, Runtime, cross_as_stored,
+    Arr, Astr, CallToken, Closure, Erased, FromValue, FxHashMap, Interner, OneValue, Opaque, Owned,
+    Ref, Release, Runtime, Shared, cross_as_stored,
 };
 
 // -- A payload that counts its own drops --------------------------------
@@ -85,7 +85,7 @@ const NO_SLICES: &str = "this runtime holds no slices";
 
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
-/// The shape `Fn1` and the `Iter` stages carry as a closure value.
+/// The shape `Closure` and the `Iter` stages carry as a closure value.
 type UnaryClosure = Box<dyn Fn(&Counted, V) -> V + Send + Sync>;
 
 fn cell_ref(value: &V) -> &(dyn Any + Send + Sync) {
@@ -420,15 +420,17 @@ fn an_erased_that_gave_its_value_back_releases_nothing() {
     assert_eq!(drops.count(), 1, "its new owner released it once");
 }
 
-// -- The `Fn*` carriers --------------------------------------------------
+// -- The `Closure` carrier -----------------------------------------------
 
 #[test]
 fn a_closure_carrier_releases_its_closure_once() {
     let rt = Counted;
     let drops = Drops::default();
     {
-        let _held =
-            Fn1::<V, V, Opaque, Counted>::new(&rt, closure_owning_a_tracked_capture(&rt, &drops));
+        let _held = Closure::<(V,), V, Opaque, Counted>::new(
+            &rt,
+            closure_owning_a_tracked_capture(&rt, &drops),
+        );
         assert_eq!(drops.count(), 0, "the holder has not been let go of yet");
     }
     assert_eq!(drops.count(), 1, "the carrier released its closure once");
@@ -438,9 +440,11 @@ fn a_closure_carrier_releases_its_closure_once() {
 fn a_closure_carrier_that_gave_its_value_back_releases_nothing() {
     let rt = Counted;
     let drops = Drops::default();
-    let value =
-        Fn1::<V, V, Opaque, Counted>::new(&rt, closure_owning_a_tracked_capture(&rt, &drops))
-            .into_value();
+    let value = Closure::<(V,), V, Opaque, Counted>::new(
+        &rt,
+        closure_owning_a_tracked_capture(&rt, &drops),
+    )
+    .into_value();
     assert_eq!(drops.count(), 0, "the closure is out of the carrier");
     value.release();
     assert_eq!(drops.count(), 1, "its new owner released it once");
@@ -702,7 +706,7 @@ fn a_borrow_releases_nothing_and_its_storage_still_releases_once() {
     let drops = Drops::default();
     let storage = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], &rt);
     {
-        let lent = Ref::<Vec<Tracked>, Counted>::lend(&rt, &storage);
+        let lent = Ref::<Vec<Tracked>, Shared, Counted>::lend(&rt, &storage);
         assert_eq!(
             lent.elements(&rt).len(),
             2,

@@ -1,7 +1,7 @@
 //! A `&[T]` parameter reaches the Rust body as the container the script
 //! lent (RFC-0047 rule 6), at the contract: the number the script returns.
 
-use acvus_extern::{OneValue, Registry, Runtime, Slice, SliceMut, extern_fn, extern_registry};
+use acvus_extern::{Mut, OneValue, Registry, Runtime, Shared, Slice, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -18,7 +18,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn dot<Rt>(rt: &Rt, a: Slice<i64, Rt>, b: Slice<i64, Rt>) -> i64
+fn dot<Rt>(rt: &Rt, a: Slice<i64, Shared, Rt>, b: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
@@ -30,7 +30,7 @@ where
 }
 
 #[extern_fn(effect = opaque)]
-fn add_into<Rt>(rt: &Rt, dst: SliceMut<i64, Rt>, src: Slice<i64, Rt>) -> i64
+fn add_into<Rt>(rt: &Rt, dst: Slice<i64, Mut, Rt>, src: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
@@ -42,7 +42,7 @@ where
     );
     for at in 0..dst.len() {
         let sum = element_of(rt, &dst, at) + element_of(rt, &src, at);
-        // SAFETY: `at` is below the length, and a `SliceMut` is an exclusive
+        // SAFETY: `at` is below the length, and a `Mut` slice is an exclusive
         // take of its container, so no other name of the element is live
         // (RFC-0047 §2).
         unsafe { *dst.at_mut(at) = OneValue::<_>::erase(sum, rt) };
@@ -52,7 +52,7 @@ where
 
 /// The sum of a view.
 #[extern_fn(effect = pure)]
-fn total<Rt>(rt: &Rt, a: Slice<i64, Rt>) -> i64
+fn total<Rt>(rt: &Rt, a: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {

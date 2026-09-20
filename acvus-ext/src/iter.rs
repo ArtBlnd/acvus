@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    BoxFuture, ClosureFn, Erased, ExternType, Fn1, FromValue, OneValue, Ref, Runtime, Stored, Var,
-    kind,
+    BoxFuture, Closure, ClosureFn, Erased, ExternType, FromValue, OneValue, Owned, Ref, Runtime,
+    Shared, Stored, Var, kind,
 };
 use sync_wrapper::SyncWrapper;
 
@@ -188,12 +188,14 @@ where
         Self::sealed(Generate(SyncWrapper::new(f)))
     }
 
-    pub fn map<U>(self, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+    pub fn map<U>(self, f: Closure<(T,), U, E, Rt>) -> Iter<U, E, I, Rt>
     where
         U: Var<kind::Type>,
     {
+        let sync = f.is_sync();
+        let f = f.erased();
         match self.0 {
-            Stages::Sync(source) if f.is_sync() => Iter::sealed(Map { source, f }),
+            Stages::Sync(source) if sync => Iter::sealed(Map { source, f }),
             source => Iter::suspending(Map {
                 source: source.into_async(),
                 f,
@@ -201,7 +203,7 @@ where
         }
     }
 
-    pub fn filter(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+    pub fn filter(self, f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>) -> Self {
         match self.0 {
             Stages::Sync(source) if f.is_sync() => Self::sealed(Filter { source, f }),
             source => Self::suspending(Filter {
@@ -254,7 +256,7 @@ where
         }
     }
 
-    pub fn take_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+    pub fn take_while(self, f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>) -> Self {
         match self.0 {
             Stages::Sync(source) if f.is_sync() => Self::sealed(TakeWhile {
                 source,
@@ -269,7 +271,7 @@ where
         }
     }
 
-    pub fn skip_while(self, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Self {
+    pub fn skip_while(self, f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>) -> Self {
         match self.0 {
             Stages::Sync(source) if f.is_sync() => Self::sealed(SkipWhile {
                 source,
@@ -356,7 +358,7 @@ where
         }
     }
 
-    pub fn flat_map<S, U>(self, f: Fn1<T, S, E, Rt>) -> Iter<U, E, I, Rt>
+    pub fn flat_map<S, U>(self, f: Closure<(T,), S, E, Rt>) -> Iter<U, E, I, Rt>
     where
         S: Var<kind::Type> + FromValue<Rt> + IntoIterator<Item = U>,
         S::IntoIter: Send + Sync,
@@ -420,36 +422,34 @@ where
     }
 }
 
-struct Map<S, T, U, E, Rt>
+/// The closure of a `map` stage, held at the types the elements have once the
+/// stage is built: a closure is called at its declared types, and what this
+/// stage hands it is one erased element (RFC-0039).
+struct Map<S, E, Rt>
 where
-    T: Var<kind::Type>,
-    U: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
     source: S,
-    f: Fn1<T, U, E, Rt>,
+    f: Closure<(Owned<Rt>,), Owned<Rt>, E, Rt>,
 }
 
-impl<S, T, U, E, Rt> SyncStage<Rt> for Map<S, T, U, E, Rt>
+impl<S, E, Rt> SyncStage<Rt> for Map<S, E, Rt>
 where
     S: SyncStage<Rt>,
-    T: Var<kind::Type>,
-    U: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
     fn next(&mut self, rt: &Rt, frame: &mut Rt::Frame<'_>) -> Option<Rt::Value> {
         let item = self.source.next(rt, frame)?;
-        Some(self.f.call_value_now(rt, frame, item))
+        let out = self.f.call_now(rt, frame, (Owned::from_value(item),));
+        Some(out.into_value())
     }
 }
 
-impl<S, T, U, E, Rt> AsyncStage<Rt> for Map<S, T, U, E, Rt>
+impl<S, E, Rt> AsyncStage<Rt> for Map<S, E, Rt>
 where
     S: AsyncStage<Rt>,
-    T: Var<kind::Type>,
-    U: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -461,7 +461,8 @@ where
         Box::pin(async move {
             let Map { source, f } = self;
             let item = source.next(rt, frame).await?;
-            Some(f.call_value(rt, frame, item).await)
+            let out = f.call(rt, frame, (Owned::from_value(item),)).await;
+            Some(out.into_value())
         })
     }
 }
@@ -473,7 +474,7 @@ where
     Rt: Runtime,
 {
     source: S,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 }
 
 impl<S, T, E, Rt> SyncStage<Rt> for Filter<S, T, E, Rt>
@@ -640,7 +641,7 @@ where
     Rt: Runtime,
 {
     source: S,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
     done: bool,
 }
 
@@ -698,7 +699,7 @@ where
     Rt: Runtime,
 {
     source: S,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
     skipping: bool,
 }
 

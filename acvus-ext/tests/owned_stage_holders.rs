@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{Deque, Iter};
 use acvus_extern::{
-    Astr, CallToken, Fn1, FromValue, Interner, OneValue, Owned, Ref, Release, Runtime,
+    Astr, CallToken, Closure, FromValue, Interner, OneValue, Owned, Ref, Release, Runtime, Shared,
     cross_as_stored,
 };
 
@@ -84,7 +84,7 @@ const NO_VARIANTS: &str = "this runtime holds no variants";
 
 static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interner::new);
 
-/// The shape `Fn1` and the `Iter` stages carry as a closure value.
+/// The shape `Closure` and the `Iter` stages carry as a closure value.
 type UnaryClosure = Box<dyn Fn(&Counted, V) -> V + Send + Sync>;
 
 fn cell_ref(value: &V) -> &(dyn Any + Send + Sync) {
@@ -375,8 +375,8 @@ fn predicate_closure_owning_a_tracked_capture(rt: &Counted, drops: &Drops) -> V 
 }
 
 type Elements = Iter<Owned<Counted>, (), (), Counted>;
-type Mapping = Fn1<Owned<Counted>, Owned<Counted>, (), Counted>;
-type Predicate = Fn1<Ref<Owned<Counted>, Counted>, bool, (), Counted>;
+type Mapping = Closure<(Owned<Counted>,), Owned<Counted>, (), Counted>;
+type Predicate = Closure<(Ref<Owned<Counted>, Shared, Counted>,), bool, (), Counted>;
 
 fn drain(rt: &Counted, mut it: Elements) -> Vec<V> {
     futures::executor::block_on(async {

@@ -9,7 +9,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_extern::{ExternType, Fn1, Registry, Runtime, Var, extern_fn, extern_registry, kind};
+use acvus_extern::{Closure, ExternType, Registry, Runtime, Var, extern_fn, extern_registry, kind};
 use acvus_interpreter::code::Code;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
 use acvus_interpreter_test::*;
@@ -60,13 +60,13 @@ fn seen(x: i64) -> i64 {
 }
 
 mod sig {
-    use acvus_extern::{Fn1, extern_signature};
+    use acvus_extern::{Closure, extern_signature};
 
     use super::Pipe;
 
     extern_signature! {
         ns: "q",
-        fn step<S, R, T, U, E, Rt>(it: S, f: Fn1<T, U, E, Rt>) -> R
+        fn step<S, R, T, U, E, Rt>(it: S, f: Closure<(T,), U, E, Rt>) -> R
         where
             S: Var<kind::Type>,
             R: Var<kind::Type>,
@@ -79,7 +79,7 @@ mod sig {
     extern_signature! {
         ns: "q",
         effect = E,
-        fn drain<S, T, U, E, I, Rt>(it: S, f: Fn1<T, U, E, Rt>) -> i64
+        fn drain<S, T, U, E, I, Rt>(it: S, f: Closure<(T,), U, E, Rt>) -> i64
         where
             S: Var<kind::Type>,
             T: Var<kind::Type>,
@@ -121,7 +121,7 @@ macro_rules! step_instance {
         #[extern_fn(instance_of = sig::step, effect = pure)]
         fn $name<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$ts, T, E, I, Rt>,
-            f: Fn1<T, U, E, Rt>,
+            f: Closure<(T,), U, E, Rt>,
         ) -> Pipe<(T, $ts), U, E, I, Rt>
         where
             $($v: Var<kind::Type>,)*
@@ -145,7 +145,7 @@ macro_rules! drain_instance {
     ($name:ident, $now:ident, [$($v:ident),*], $ts:tt) => {
         fn $now<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$ts, T, E, I, Rt>,
-            f: Fn1<T, U, E, Rt>,
+            f: Closure<(T,), U, E, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type>,)*
@@ -162,7 +162,7 @@ macro_rules! drain_instance {
         #[extern_fn(instance_of = sig::drain, effect = E, sync = $now)]
         async fn $name<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$ts, T, E, I, Rt>,
-            f: Fn1<T, U, E, Rt>,
+            f: Closure<(T,), U, E, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type>,)*
@@ -182,7 +182,10 @@ drain_instance!(drain_0, drain_0_now, [], ());
 drain_instance!(drain_1, drain_1_now, [A], (A, ()));
 
 #[extern_fn(instance_of = sig::drain, effect = pure)]
-fn drain_2<A, B, T, U, E, I, Rt>(it: Pipe<(A, (B, ())), T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> i64
+fn drain_2<A, B, T, U, E, I, Rt>(
+    it: Pipe<(A, (B, ())), T, E, I, Rt>,
+    f: Closure<(T,), U, E, Rt>,
+) -> i64
 where
     A: Var<kind::Type>,
     B: Var<kind::Type>,

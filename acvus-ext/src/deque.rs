@@ -7,8 +7,8 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
-    QualifiedRef, Ref, RefMut, Registry, Runtime, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
+    Decode, Encode, ExternTypeDecl, Interner, Journaled, Mut, NodeHash, Owned, PolyTy, PolyVars,
+    QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
     TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn, extern_registry,
     kind,
 };
@@ -404,7 +404,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_deque<T, E, I, Rt>(d: Ref<Deque<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_deque<T, E, I, Rt>(d: Ref<Deque<T>, Shared, Rt>) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -440,7 +440,7 @@ fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>, index: i64) -> Ref<T, Rt>
+fn get<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Shared, Rt>, index: i64) -> Ref<T, Shared, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
@@ -450,17 +450,17 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn get_mut<T, Rt>(rt: &Rt, d: RefMut<Deque<T>, Rt>, index: i64) -> RefMut<T, Rt>
+fn get_mut<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Mut, Rt>, index: i64) -> Ref<T, Mut, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let i = d.with_mut(rt, |d| checked_index("get_mut", d.len(), index));
-    d.map_mut(rt, |d| &mut d.items[i])
+    let i = d.with(rt, |d| checked_index("get_mut", d.len(), index));
+    d.map(rt, |d| &mut d.items[i])
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
+fn first<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
@@ -469,7 +469,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Rt>) -> Option<Ref<T, Rt>>
+fn last<T, Rt>(rt: &Rt, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,

@@ -38,7 +38,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Elements, Owned, Registry, Slice, extern_fn, extern_registry, vec_ty};
+use acvus_extern::{Elements, Owned, Registry, Shared, Slice, extern_fn, extern_registry, vec_ty};
 use acvus_interpreter::{
     AcvusRuntime, Executor, Interpreter, InterpreterContext, SequentialExecutor, TokioExecutor,
     Value,
@@ -345,7 +345,7 @@ fn match_sync(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
 /// The same matcher in the caller's frame, over the pattern and the line the
 /// script lends it rather than a corpus of its own.
 #[extern_fn(effect = pure)]
-fn glob_match<Rt>(rt: &Rt, pat: Slice<i64, Rt>, line: Slice<i64, Rt>) -> bool
+fn glob_match<Rt>(rt: &Rt, pat: Slice<i64, Shared, Rt>, line: Slice<i64, Shared, Rt>) -> bool
 where
     Rt: acvus_extern::Runtime,
 {

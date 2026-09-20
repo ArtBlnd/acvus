@@ -17,7 +17,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Elements, Owned, Registry, Slice, extern_fn, extern_registry};
+use acvus_extern::{Elements, Owned, Registry, Shared, Slice, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
 use acvus_interpreter_test::listing::{regions_named, script_listing_with_externs};
 use acvus_interpreter_test::scripts::{ATTENTION, ATTENTION_VEC};
@@ -42,7 +42,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn dot<Rt>(rt: &Rt, a: Slice<f64, Rt>, b: Slice<f64, Rt>) -> f64
+fn dot<Rt>(rt: &Rt, a: Slice<f64, Shared, Rt>, b: Slice<f64, Shared, Rt>) -> f64
 where
     Rt: acvus_extern::Runtime,
 {

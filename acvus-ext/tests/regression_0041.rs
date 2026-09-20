@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use acvus_ext::{Deque, Iter, vec_registry};
 use acvus_extern::{
-    Arr, CallToken, Erased, Externs, Fn1, FnKind, FromValue, Interner, Monomorphize, OneValue,
-    Owned, QualifiedRef, Ref, RefMut, Registry, Release, Runtime, extern_fn, extern_registry,
+    Arr, CallToken, Closure, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, Mut,
+    OneValue, Owned, QualifiedRef, Ref, Registry, Release, Runtime, Shared, extern_fn,
+    extern_registry,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -517,19 +518,19 @@ fn a_ref_to_a_vec_of_erased_ints_sees_the_elements_and_an_edit_through_a_mutable
     let storage = OneValue::<_>::erase(vec![int(&rt, 1), int(&rt, 2)], &rt);
     let start = rt.counts();
 
-    let lent = Ref::<Vec<Erased<Counting, i64>>, Counting>::lend(&rt, &storage);
+    let lent = Ref::<Vec<Erased<Counting, i64>>, Shared, Counting>::lend(&rt, &storage);
     let seen: Vec<i64> = lent.as_slice(&rt).iter().map(|x| x.get()).collect();
     assert_eq!(seen, [1, 2]);
 
     // SAFETY: `storage` is live and unmoved; no other name reads it during
     // the edit.
-    let mut lent_mut =
-        RefMut::<Vec<Erased<Counting, i64>>, Counting>::new(unsafe { rt.reference(&storage) });
-    for x in lent_mut.as_mut_slice(&rt) {
+    let lent_mut =
+        Ref::<Vec<Erased<Counting, i64>>, Mut, Counting>::new(unsafe { rt.reference(&storage) });
+    for x in lent_mut.as_slice(&rt) {
         **x += 1;
     }
 
-    let again = Ref::<Vec<Erased<Counting, i64>>, Counting>::lend(&rt, &storage);
+    let again = Ref::<Vec<Erased<Counting, i64>>, Shared, Counting>::lend(&rt, &storage);
     let seen: Vec<i64> = again.as_slice(&rt).iter().map(|x| x.get()).collect();
     assert_eq!(seen, [2, 3]);
     assert_eq!(
@@ -556,7 +557,7 @@ fn map_then_take_two_calls_the_closure_exactly_twice() {
         })
     };
     let it = items(&rt, [1, 2, 3])
-        .map::<Owned<Counting>>(Fn1::new(&rt, f))
+        .map::<Owned<Counting>>(Closure::new(&rt, f))
         .take(2);
     assert_eq!(drain(&rt, it), [10, 20]);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -584,8 +585,8 @@ fn filter_then_map_interleave_per_element() {
         })
     };
     let it = items(&rt, [1, 2, 3])
-        .filter(Fn1::new(&rt, keep_odd))
-        .map::<Owned<Counting>>(Fn1::new(&rt, times_ten));
+        .filter(Closure::new(&rt, keep_odd))
+        .map::<Owned<Counting>>(Closure::new(&rt, times_ten));
     assert_eq!(drain(&rt, it), [10, 30]);
     assert_eq!(
         *log.lock().unwrap(),
@@ -607,7 +608,7 @@ fn flat_map_skips_an_empty_inner_sequence() {
         OneValue::<_>::erase(inner, rt)
     });
     let it = items(&rt, [1, 2, 3])
-        .flat_map::<Vec<Owned<Counting>>, Owned<Counting>>(Fn1::new(&rt, twice_unless_two));
+        .flat_map::<Vec<Owned<Counting>>, Owned<Counting>>(Closure::new(&rt, twice_unless_two));
     assert_eq!(drain(&rt, it), [1, 1, 3, 3]);
 }
 

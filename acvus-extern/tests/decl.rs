@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use acvus_extern::{
     Arr, CallToken, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs,
-    Fn1, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Slice,
+    Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared, Slice,
     Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature,
     kind,
 };
@@ -450,7 +450,7 @@ async fn apply<T, U, E, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     v: Boxed<T, E, Rt>,
-    f: Fn1<T, U, E, Rt>,
+    f: acvus_extern::Closure<(T,), U, E, Rt>,
 ) -> Boxed<U, E, Rt>
 where
     T: Var<kind::Type>,
@@ -461,7 +461,8 @@ where
     let f = f.erased();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
-        out.push(f.call(rt, frame, (item,)).await);
+        let crossed = f.call(rt, frame, (Owned::from_value(item),)).await;
+        out.push(crossed.into_value());
     }
     Boxed(out, PhantomData)
 }
@@ -515,7 +516,7 @@ fn bump(n: &mut i64, by: i64) -> i64 {
 }
 
 #[extern_fn(effect = pure)]
-fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Rt>) -> Slice<T, Rt>
+fn as_slice<T, Rt>(rt: &Rt, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
     Rt: Runtime,
@@ -527,7 +528,7 @@ where
 /// elements through the view the caller lent, and the pair it was handed is
 /// the only thing it was handed.
 #[extern_fn(effect = pure)]
-fn sum_slice<Rt>(rt: &Rt, s: Slice<i64, Rt>) -> i64
+fn sum_slice<Rt>(rt: &Rt, s: Slice<i64, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {
@@ -832,7 +833,9 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
 
     let mut run = [V::default(); 2];
     Tiny.slice_into_run(
-        Slice::<i64, Tiny>::of(&storage).into_elements().words(),
+        Slice::<i64, Shared, Tiny>::of(&storage)
+            .into_elements()
+            .words(),
         &mut run,
     );
     let mut out = [V::default(); 1];
@@ -1032,6 +1035,44 @@ fn stand_ins_name_their_positions() {
     assert_eq!(
         <Arr<Nth<kind::Type, 0>, Nth<kind::Length, 0>> as TyArg>::poly_ty(&i, &vars),
         PolyTy::Array(Box::new(PolyTy::Var(0)), LenTerm::Var(0))
+    );
+}
+
+/// A closure's acvus type is read off the parameter tuple, and it is the type
+/// the per-arity carriers printed: the slot names are the positions `_0`,
+/// `_1`, … in tuple order, and the effect and the return follow them.
+#[test]
+fn a_closure_type_is_its_parameter_tuple_in_order() {
+    let i = Interner::new();
+    let vars = acvus_extern::PolyVars::fresh(0, 0, 0, 0);
+
+    assert_eq!(
+        <acvus_extern::Closure<(i64, bool), String, Pure, TypesOnly> as TyArg>::poly_ty(&i, &vars),
+        PolyTy::Fn {
+            params: vec![
+                acvus_extern::ParamTerm::<acvus_extern::Poly>::new(
+                    i.intern("_0"),
+                    <i64 as TyArg>::poly_ty(&i, &vars)
+                ),
+                acvus_extern::ParamTerm::<acvus_extern::Poly>::new(
+                    i.intern("_1"),
+                    <bool as TyArg>::poly_ty(&i, &vars)
+                ),
+            ],
+            ret: Box::new(<String as TyArg>::poly_ty(&i, &vars)),
+            captures: vec![],
+            effect: <Pure as acvus_extern::Term<kind::Effect>>::poly(&vars),
+        }
+    );
+
+    assert_eq!(
+        <acvus_extern::Closure<(), i64, Pure, TypesOnly> as TyArg>::poly_ty(&i, &vars),
+        PolyTy::Fn {
+            params: vec![],
+            ret: Box::new(<i64 as TyArg>::poly_ty(&i, &vars)),
+            captures: vec![],
+            effect: <Pure as acvus_extern::Term<kind::Effect>>::poly(&vars),
+        }
     );
 }
 
@@ -1807,8 +1848,8 @@ fn an_option_crosses_as_the_host_shaped_it() {
 fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
     Registry::new(|i: &Interner| {
         let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("blocking"));
-        let heavy = ExternHandler::heavy(acvus_extern::glue0::<Tiny, _, acvus_extern::Val<V>>(
-            |_, _| V::Taken,
+        let heavy = ExternHandler::heavy(acvus_extern::glue::<Tiny, _, (), acvus_extern::Val<V>>(
+            |_, _, ()| V::Taken,
         ));
         acvus_extern::Contribution {
             manifest: acvus_extern::Manifest {
@@ -1883,7 +1924,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     assert_eq!(
         answered(
-            acvus_extern::glue0::<Tiny, _, Val<i64>>(|_, _| 0).at(&site.args(0)),
+            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, _, ()| 0).at(&site.args(0)),
             Width {
                 args: 0,
                 ret: 1,
@@ -1895,7 +1936,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a).at(&site.args(1)),
+            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, _, (a,)| a)
+                .at(&site.args(1)),
             Width {
                 args: 1,
                 ret: 1,
@@ -1907,9 +1949,10 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(
-                |_, _, a, b| a + b
-            ).at(&site.args(2)),
+            acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(
+                |_, _, (a, b)| a + b
+            )
+            .at(&site.args(2)),
             Width {
                 args: 2,
                 ret: 1,
@@ -1925,9 +1968,12 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     let lent = unsafe { Tiny.reference(&place) };
     assert_eq!(
         answered(
-            acvus_extern::glue3::<Tiny, _, ByValue<i64>, ByRef<i64>, ByValue<i64>, Val<i64>>(
-                |_, _, a, b, c| a + *b + c
-            )
+            acvus_extern::glue::<
+                Tiny,
+                _,
+                (ByValue<i64>, ByRef<i64, Shared>, ByValue<i64>),
+                Val<i64>,
+            >(|_, _, (a, b, c)| a + *b + c)
             .at(&site.args(3)),
             Width {
                 args: 3,
@@ -1942,15 +1988,12 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     assert_eq!(
         answered(
-            acvus_extern::glue4::<
+            acvus_extern::glue::<
                 Tiny,
                 _,
-                ByValue<i64>,
-                ByValue<i64>,
-                ByValue<i64>,
-                ByValue<i64>,
+                (ByValue<i64>, ByValue<i64>, ByValue<i64>, ByValue<i64>,),
                 Val<i64>,
-            >(|_, _, a, b, c, d| a + b + c + d)
+            >(|_, _, (a, b, c, d)| a + b + c + d)
             .at(&site.args(4)),
             Width {
                 args: 4,
@@ -1963,7 +2006,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
 
     let two_wide =
-        acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(|_, _, a, b| {
+        acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(|_, _, (a, b)| {
             a * 10 + b
         })
         .at(&site.args(2));
@@ -1984,7 +2027,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     use acvus_extern::FormKind;
     use acvus_extern::{ByValue, Handler, HandlerFactory, Val, Width};
 
-    let glue = acvus_extern::glue1::<Tiny, _, ByValue<i64>, Val<i64>>(|_, _, a| a * 3);
+    let glue = acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, _, (a,)| a * 3);
     let boxed: Box<dyn HandlerFactory<Tiny>> = Box::new(glue.clone());
     let again = boxed.clone();
 
@@ -2063,8 +2106,8 @@ fn a_plain_declarations_site_table_is_zero_sized() {
     use acvus_extern::{ByValue, SitesNoParameterReads, Val};
 
     let site = SitesNoParameterReads::default();
-    let closure = |_: &Tiny, _: (), a: i64, b: i64| a + b;
-    let unsited = acvus_extern::glue2::<Tiny, _, ByValue<i64>, ByValue<i64>, Val<i64>>(closure);
+    let closure = |_: &Tiny, _: (), (a, b): (i64, i64)| a + b;
+    let unsited = acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(closure);
     let sited = unsited.at(&site.args(2));
 
     assert_eq!(size_of_val(&closure), 0);

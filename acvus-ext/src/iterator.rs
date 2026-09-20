@@ -23,11 +23,11 @@
 //! `Runtime` does not offer; `min_by_key`/`max_by_key` take an `i64` key
 //! and not a `Monomorphize<(i64, f64)>` member, because a member fn's glue
 //! crosses every parameter naming the member at its specialized
-//! representation, which `Fn1` does not have.
+//! representation, which `Closure` does not have.
 
 use acvus_extern::{
-    Arr, ClosureFn, Cross, Erased, Fn1, Fn2, FromValue, Monomorphize, OneValue, Ref, Registry,
-    Runtime, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
+    Arr, Closure, ClosureFn, Cross, Erased, FromValue, Monomorphize, OneValue, Ref, Registry,
+    Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 
 use crate::iter::{Iter, drain, drain_now};
@@ -91,7 +91,7 @@ impl Num for f64 {
 
 /// The shared signatures every container declares instances of (RFC-0027).
 pub mod sig {
-    use acvus_extern::{Ref, extern_signature};
+    use acvus_extern::{Ref, Shared, extern_signature};
 
     use crate::iter::Iter;
 
@@ -108,7 +108,7 @@ pub mod sig {
 
     extern_signature! {
         ns: "iter",
-        fn as_iter<C, T, E, I, Rt>(items: &C) -> Iter<Ref<T, Rt>, E, I, Rt>
+        fn as_iter<C, T, E, I, Rt>(items: &C) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
         where
             C: Var<kind::Type>,
             T: Var<kind::Type>,
@@ -120,9 +120,9 @@ pub mod sig {
 
 /// An iterator over references into a borrowed container, read by `at`.
 pub(crate) fn lent_iter<C, T, E, I, Rt>(
-    items: Ref<C, Rt>,
+    items: Ref<C, Shared, Rt>,
     at: impl Fn(&C, usize) -> Option<&T> + Send + Sync + 'static,
-) -> Iter<Ref<T, Rt>, E, I, Rt>
+) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
 where
     C: Var<kind::Type>,
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -164,7 +164,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_vec<T, E, I, Rt>(items: Ref<Vec<T>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_vec<T, E, I, Rt>(items: Ref<Vec<T>, Shared, Rt>) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -175,7 +175,9 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_array<T, N, E, I, Rt>(items: Ref<Arr<T, N>, Rt>) -> Iter<Ref<T, Rt>, E, I, Rt>
+fn as_iter_array<T, N, E, I, Rt>(
+    items: Ref<Arr<T, N>, Shared, Rt>,
+) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
@@ -200,7 +202,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+fn map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Closure<(T,), U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: Var<kind::Type>,
     U: Var<kind::Type>,
@@ -212,7 +214,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn pmap<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, U, E, Rt>) -> Iter<U, E, I, Rt>
+fn pmap<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Closure<(T,), U, E, Rt>) -> Iter<U, E, I, Rt>
 where
     T: Var<kind::Type>,
     U: Var<kind::Type>,
@@ -224,7 +226,10 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<Ref<T, Rt>, bool, E, Rt>) -> Iter<T, E, I, Rt>
+fn filter<T, E, I, Rt>(
+    it: Iter<T, E, I, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+) -> Iter<T, E, I, Rt>
 where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -305,7 +310,10 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flat_map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Fn1<T, Vec<U>, E, Rt>) -> Iter<U, E, I, Rt>
+fn flat_map<T, U, E, I, Rt>(
+    it: Iter<T, E, I, Rt>,
+    f: Closure<(T,), Vec<U>, E, Rt>,
+) -> Iter<U, E, I, Rt>
 where
     T: Var<kind::Type>,
     U: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
@@ -464,7 +472,7 @@ fn find_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
@@ -480,7 +488,7 @@ async fn find<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
@@ -495,7 +503,7 @@ fn reduce_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn2<T, T, T, E, Rt>,
+    f: Closure<(T, T), T, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
@@ -516,7 +524,7 @@ async fn reduce<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn2<T, T, T, E, Rt>,
+    f: Closure<(T, T), T, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
@@ -537,7 +545,7 @@ fn fold_now<T, U, E, I, Rt>(
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
     init: U,
-    f: Fn2<U, T, U, E, Rt>,
+    f: Closure<(U, T), U, E, Rt>,
 ) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
@@ -560,7 +568,7 @@ async fn fold<T, U, E, I, Rt>(
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
     init: U,
-    f: Fn2<U, T, U, E, Rt>,
+    f: Closure<(U, T), U, E, Rt>,
 ) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
@@ -581,7 +589,7 @@ fn any_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + OneValue<Rt>,
@@ -604,7 +612,7 @@ async fn any<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + OneValue<Rt>,
@@ -626,7 +634,7 @@ fn all_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + OneValue<Rt>,
@@ -649,7 +657,7 @@ async fn all<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + OneValue<Rt>,
@@ -727,7 +735,7 @@ where
 #[extern_fn(effect = pure)]
 fn take_while<T, E, I, Rt>(
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Iter<T, E, I, Rt>
 where
     T: Var<kind::Type>,
@@ -741,7 +749,7 @@ where
 #[extern_fn(effect = pure)]
 fn skip_while<T, E, I, Rt>(
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Iter<T, E, I, Rt>
 where
     T: Var<kind::Type>,
@@ -872,7 +880,7 @@ fn position_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<i64>
 where
     T: Var<kind::Type>,
@@ -897,7 +905,7 @@ async fn position<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, bool, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
 ) -> Option<i64>
 where
     T: Var<kind::Type>,
@@ -1109,7 +1117,7 @@ async fn extreme_by_key<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
     extreme: Extreme,
 ) -> Option<T>
 where
@@ -1136,7 +1144,7 @@ fn min_by_key_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
@@ -1151,7 +1159,7 @@ fn extreme_by_key_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     mut it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
     extreme: Extreme,
 ) -> Option<T>
 where
@@ -1179,7 +1187,7 @@ async fn min_by_key<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
@@ -1194,7 +1202,7 @@ fn max_by_key_now<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
@@ -1210,7 +1218,7 @@ async fn max_by_key<T, E, I, Rt>(
     rt: &Rt,
     frame: &mut Rt::Frame<'_>,
     it: Iter<T, E, I, Rt>,
-    f: Fn1<Ref<T, Rt>, i64, E, Rt>,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
 ) -> Option<T>
 where
     T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,

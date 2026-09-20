@@ -21,6 +21,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
         + Default;
     /// The frame a handler calls a closure on: the window above the calling
     /// frame, lent for the call's duration (RFC-0050 rule 6).
+    ///
+    /// A `Frame` is a lent handle, and a handler therefore names it as
+    /// `&mut Rt::Frame<'_>` — a double reference for a host whose handle is
+    /// itself a reference. Making `Frame` the state itself, so that one
+    /// reference reached it, was built and does not compile: the frame below
+    /// owns the state (`acvus-interpreter`'s `Machine::above` and
+    /// `Store::root`) and keeps it for its next call, so `Machine::window`
+    /// and `Store::root_window` can only lend it, and `frame_of`, which
+    /// returns `Frame<'_>` by value, would have to move it out of its owner.
+    /// A second handle to the same cells is what `Regs::take_window` exists
+    /// to prevent. Reborrowing a `Rt::Frame<'_>` in a generic body would need
+    /// a `reborrow` on this trait, which buys one word for one more method
+    /// every host implements.
     type Frame<'a>: Send
     where
         Self: 'a;
@@ -240,7 +253,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
     /// Whether running `f` reaches its result without suspending.
-    /// `Fn0`/`Fn1`/… ask once, when they are built, and a runtime whose
+    /// `Closure` asks once, when it is built, and a runtime whose
     /// closures can always suspend answers `false`.
     fn call_is_sync(&self, f: &Self::Value) -> bool;
     /// Run `f` to its result now, reached only where `call_is_sync`
@@ -257,7 +270,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
         A: crate::IntoRun<Self>;
 
     /// Run the closure `f`; each argument moves into the callee's
-    /// parameter. Only `Fn0`/`Fn1`/… reach these: the token is theirs to
+    /// parameter. Only `Closure` reaches these: the token is its to
     /// mint.
     fn call_0<'a>(&'a self, f: &'a Self::Value, token: CallToken) -> Self::CallFuture<'a>;
     fn call_1<'a>(

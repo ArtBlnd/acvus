@@ -133,8 +133,8 @@ impl Mode {
     fn acvus_ty(self, ty: &Type, rt: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         match self {
             Mode::Value => quote! { #ty },
-            Mode::Borrow => quote! { ::acvus_extern::Ref<#ty, #rt> },
-            Mode::BorrowMut => quote! { ::acvus_extern::RefMut<#ty, #rt> },
+            Mode::Borrow => quote! { ::acvus_extern::Ref<#ty, ::acvus_extern::Shared, #rt> },
+            Mode::BorrowMut => quote! { ::acvus_extern::Ref<#ty, ::acvus_extern::Mut, #rt> },
             Mode::Str => quote! { ::acvus_extern::StrView },
             Mode::Projection => {
                 let at_static = at_static(ty);
@@ -431,7 +431,6 @@ fn generate_extern_fn(
     } else {
         quote! { sync }
     };
-    let arity = params.len();
     let state_tys: Vec<&Type> = states.iter().map(|st| &st.ty).collect();
     let glue = |member: Option<&Type>, callee: &Ident, awaits: bool| -> proc_macro2::TokenStream {
         let rt_tys: Vec<Type> = params
@@ -450,8 +449,12 @@ fn generate_extern_fn(
                 let c = crossing(&p.ty, member);
                 match p.mode {
                     Mode::Value => quote! { ::acvus_extern::ByValue<#ty, #c> },
-                    Mode::Borrow => quote! { ::acvus_extern::ByRef<#ty, #c> },
-                    Mode::BorrowMut => quote! { ::acvus_extern::ByRefMut<#ty, #c> },
+                    Mode::Borrow => {
+                        quote! { ::acvus_extern::ByRef<#ty, ::acvus_extern::Shared, #c> }
+                    }
+                    Mode::BorrowMut => {
+                        quote! { ::acvus_extern::ByRef<#ty, ::acvus_extern::Mut, #c> }
+                    }
                     Mode::Str => quote! { ::acvus_extern::ByStr },
                     Mode::Projection => {
                         let at_static = at_static(ty);
@@ -494,12 +497,11 @@ fn generate_extern_fn(
         };
         let call = quote! { #callee #turbofish (#rt_arg #frame_arg #(#passed),*) };
         if awaits {
-            let builder = format_ident!("async_glue{arity}");
             quote! {
                 ::acvus_extern::ExternHandler::awaited({
                     #capture_state
-                    ::acvus_extern::#builder::<__R, _, #(#arg_markers,)*>(
-                        move |__rt: &__R, #frame_param #(, #arg_idents)*| {
+                    ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)*)>(
+                        move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| {
                             #capture_state
                             ::std::boxed::Box::pin(async move {
                                 let __r = (#call).await;
@@ -510,12 +512,11 @@ fn generate_extern_fn(
                 })
             }
         } else {
-            let builder = format_ident!("glue{arity}");
             quote! {
                 ::acvus_extern::ExternHandler::#sync_variant({
                     #capture_state
-                    ::acvus_extern::#builder::<__R, _, #(#arg_markers,)* #ret_marker>(
-                        move |__rt: &__R, #frame_param #(, #arg_idents)*| #call
+                    ::acvus_extern::glue::<__R, _, (#(#arg_markers,)*), #ret_marker>(
+                        move |__rt: &__R, #frame_param, (#(#arg_idents,)*)| #call
                     )
                 })
             }
@@ -539,12 +540,12 @@ fn generate_extern_fn(
                  -> proc_macro2::TokenStream {
                     quote! {
                         ::acvus_extern::ExternHandler::sync(
-                            ::acvus_extern::glue1::<
+                            ::acvus_extern::glue::<
                                 __R,
                                 _,
-                                ::acvus_extern::ByValue<#rt_ty, #from>,
+                                (::acvus_extern::ByValue<#rt_ty, #from>,),
                                 ::acvus_extern::Val<#rt_ty, #into>,
-                            >(|_, _, __v| __v)
+                            >(|_, _, (__v,)| __v)
                         )
                     }
                 };
@@ -1455,7 +1456,7 @@ impl<'a> ObjectShape<'a> {
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    let __fields = ::acvus_extern::Fields::of(__rt, __obj);
+                    let __fields = ::acvus_extern::Fields::<::acvus_extern::Shared, __R>::of(__rt, __obj);
                     let [#(#idents),*] = __table.at;
                     Self {
                         #(#idents: {
@@ -1486,7 +1487,7 @@ impl<'a> ObjectShape<'a> {
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    let __fields = ::acvus_extern::FieldsMut::of(__rt, __obj);
+                    let __fields = ::acvus_extern::Fields::<::acvus_extern::Mut, __R>::of(__rt, __obj);
                     let [#(#idents),*] = __fields.disjoint::<#width>(__table.at);
                     Self {
                         // SAFETY: as the shared projection's, exclusively.
@@ -1521,7 +1522,7 @@ impl<'a> ObjectShape<'a> {
                     unsafe {
                         #shared::over(
                             __rt,
-                            ::acvus_extern::object_in(__rt, __value),
+                            ::acvus_extern::object::<::acvus_extern::Nested, ::acvus_extern::Shared, __R>(__rt, __value),
                             __table,
                         )
                     }
@@ -1536,7 +1537,7 @@ impl<'a> ObjectShape<'a> {
                     unsafe {
                         #exclusive::over(
                             __rt,
-                            ::acvus_extern::object_in_mut(__rt, __value),
+                            ::acvus_extern::object::<::acvus_extern::Nested, ::acvus_extern::Mut, __R>(__rt, __value),
                             __table,
                         )
                     }
@@ -1563,7 +1564,7 @@ impl<'a> ObjectShape<'a> {
                     unsafe {
                         #shared::over(
                             __rt,
-                            ::acvus_extern::object_of(__rt, __reference),
+                            ::acvus_extern::object::<::acvus_extern::Lent, ::acvus_extern::Shared, __R>(__rt, __reference),
                             __table,
                         )
                     }
@@ -1590,7 +1591,7 @@ impl<'a> ObjectShape<'a> {
                     unsafe {
                         #exclusive::over(
                             __rt,
-                            ::acvus_extern::object_of_mut(__rt, __reference),
+                            ::acvus_extern::object::<::acvus_extern::Lent, ::acvus_extern::Mut, __R>(__rt, __reference),
                             __table,
                         )
                     }
@@ -2060,7 +2061,7 @@ fn enum_projection(
                 // SAFETY: the caller's contract: a nested enum payload holds
                 // its own variant.
                 unsafe {
-                    #shared::over(__rt, ::acvus_extern::variant_in(__rt, __value), __table)
+                    #shared::over(__rt, ::acvus_extern::variant::<::acvus_extern::Nested, ::acvus_extern::Shared, __R>(__rt, __value), __table)
                 }
             }
 
@@ -2071,7 +2072,7 @@ fn enum_projection(
             ) -> #arms_ty<'__a> {
                 // SAFETY: as `project`, with the caller's exclusive loan.
                 unsafe {
-                    #arms_ty::over(__rt, ::acvus_extern::variant_in_mut(__rt, __value), __table)
+                    #arms_ty::over(__rt, ::acvus_extern::variant::<::acvus_extern::Nested, ::acvus_extern::Mut, __R>(__rt, __value), __table)
                 }
             }
         }
@@ -2094,7 +2095,7 @@ fn enum_projection(
             ) -> #shared<'__a> {
                 // SAFETY: the caller's contract: a live variant storage.
                 unsafe {
-                    #shared::over(__rt, ::acvus_extern::variant_of(__rt, __reference), __table)
+                    #shared::over(__rt, ::acvus_extern::variant::<::acvus_extern::Lent, ::acvus_extern::Shared, __R>(__rt, __reference), __table)
                 }
             }
         }
@@ -2119,7 +2120,7 @@ fn enum_projection(
                 unsafe {
                     #exclusive::over(
                         __rt,
-                        ::acvus_extern::variant_of_mut(__rt, __reference),
+                        ::acvus_extern::variant::<::acvus_extern::Lent, ::acvus_extern::Mut, __R>(__rt, __reference),
                         __table,
                     )
                 }

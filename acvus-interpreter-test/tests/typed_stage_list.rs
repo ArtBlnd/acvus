@@ -10,8 +10,8 @@
 use std::marker::PhantomData;
 
 use acvus_extern::{
-    ClosureFn, Cross, Erased, ExternType, Fn1, FromValue, Never, Nth, OneValue, Registry, Runtime,
-    Var, extern_fn, extern_registry, kind,
+    Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, Nth, OneValue, Registry,
+    Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -42,7 +42,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    Map(Fn1<In, Out, E, Rt>),
+    Map(Closure<(In,), Out, E, Rt>),
     Take { remaining: u64, same: Same<In, Out> },
 }
 
@@ -222,7 +222,7 @@ where
 }
 
 mod sig {
-    use acvus_extern::{Fn1, extern_signature};
+    use acvus_extern::{Closure, extern_signature};
 
     use super::Pipe;
 
@@ -230,7 +230,7 @@ mod sig {
         ns: "p",
         fn step<Ts, T, U, E, I, Rt>(
             it: Pipe<Ts, T, E, I, Rt>,
-            f: Fn1<T, U, E, Rt>,
+            f: Closure<(T,), U, E, Rt>,
         ) -> Pipe<(T, Ts), U, E, I, Rt>
         where
             Ts: Var<kind::Type>,
@@ -270,7 +270,7 @@ macro_rules! adaptor_instances {
         #[extern_fn(instance_of = sig::step, effect = pure)]
         fn $step<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$ts, T, E, I, Rt>,
-            f: Fn1<T, U, E, Rt>,
+            f: Closure<(T,), U, E, Rt>,
         ) -> Pipe<(T, $ts), U, E, I, Rt>
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*

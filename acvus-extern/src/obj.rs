@@ -2,7 +2,7 @@
 //! returns implements `Cross`, and the glue calls it and nothing else. A
 //! scalar and an extension type are stored as themselves; a derived struct
 //! or enum is rebuilt field by field (RFC-0032, RFC-0036); a container
-//! crosses each element; a carrier (`Ref`, `Fn1`) is the runtime value it
+//! crosses each element; a carrier (`Ref`, `Closure`) is the runtime value it
 //! holds. `Obj<V>` and `Variant<V>` are the runtime's own object and
 //! variant shapes.
 

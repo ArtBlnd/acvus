@@ -12,8 +12,8 @@
 //! borrow.
 
 use acvus_extern::{
-    ClosureFn, ExternType, Fn1, Pure, Registry, Runtime, TyArg, Var, extern_fn, extern_registry,
-    kind,
+    Closure, ClosureFn, ExternType, Pure, Registry, Runtime, TyArg, Var, extern_fn,
+    extern_registry, kind,
 };
 
 use crate::iter::Iter;
@@ -277,7 +277,7 @@ fn replace_with_now<E, Rt>(
     frame: &mut Rt::Frame<'_>,
     re: &Regex,
     text: &String,
-    f: Fn1<Match, String, E, Rt>,
+    f: Closure<(Match,), String, E, Rt>,
 ) -> String
 where
     E: Var<kind::Effect>,
@@ -302,7 +302,7 @@ async fn replace_with<E, Rt>(
     frame: &mut Rt::Frame<'_>,
     re: &Regex,
     text: &String,
-    f: Fn1<Match, String, E, Rt>,
+    f: Closure<(Match,), String, E, Rt>,
 ) -> String
 where
     E: Var<kind::Effect>,

@@ -11,21 +11,23 @@ help: the trait `BorrowedWhole<__R>` is not implemented for `Shape`
    | ^^^^^^^^^^^^^^
    = note: a borrowed aggregate crosses as its projection: where `Shape` is a `#[derive(TyArg)] #[projection]` aggregate, write `ShapeRef<'_>`, or `ShapeMut<'_>` for a struct and `ShapeMut<'_, Rt>` for an enum (RFC-0050 rule 6).
    = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
-   = note: a Rust slice is not one of the language's types: take `Slice<T, Rt>`, the language's `&[T]` (RFC-0047).
+   = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
 help: the following other types implement trait `Arg<'a, Rt>`
   --> $WORKSPACE/acvus-extern/src/handler.rs
    |
-   | / impl<'a, T, Rt> Arg<'a, Rt> for ByRef<T, Uniform>
+   | / impl<'a, T, M, Rt> Arg<'a, Rt> for ByRef<T, M, Uniform>
    | | where
    | |     T: Borrowable<Rt>,
+   | |     M: Loan,
    | |     Rt: Runtime,
-   | |________________^ `ByRef<T>`
+   | |________________^ `ByRef<T, M>`
 ...
-   | / impl<'a, T, Rt> Arg<'a, Rt> for ByRef<T, Specialized>
+   | / impl<'a, T, M, Rt> Arg<'a, Rt> for ByRef<T, M, Specialized>
    | | where
    | |     T: BorrowableSpecialized<Rt>,
+   | |     M: Loan,
    | |     Rt: Runtime,
-   | |________________^ `ByRef<T, acvus_extern::Specialized>`
+   | |________________^ `ByRef<T, M, acvus_extern::Specialized>`
 note: required for `Shape` to implement `Borrowable<__R>`
   --> tests/compile_fail/borrowed_enum.rs:8:10
    |
@@ -35,5 +37,5 @@ note: required for `Shape` to implement `Borrowable<__R>`
  8 | pub enum Shape {
    |          ^^^^^
    = help: consider manually implementing `Borrowable<__R>` to avoid undesired bounds
-   = note: required for `ByRef<Shape>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Shape, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

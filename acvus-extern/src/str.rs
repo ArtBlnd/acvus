@@ -110,8 +110,10 @@ where
     }
 }
 
-/// The macro emits this where `ByRef` would stand for a `&T` parameter,
-/// for a parameter written `&str` in Rust.
+/// The macro emits this where `ByRef` would stand for a `&T` parameter, for a
+/// parameter written `&str` in Rust. It stays its own `Arg` rather than a loan
+/// of `str`: its `Form` is the `Pair` a view occupies, where every `ByRef` is
+/// one value, and there is no exclusive twin to fold it with.
 pub struct ByStr;
 
 impl<Rt> crate::handler::Sited<Rt> for ByStr

@@ -4842,11 +4842,7 @@ impl CallForm {
 fn refuses_to_run(
     _: &crate::runtime::AcvusRuntime,
     _: &mut crate::regs::FrameState,
-    a: Value,
-    _: Value,
-    _: Value,
-    _: Value,
-    _: Value,
+    (a, _, _, _, _): (Value, Value, Value, Value, Value),
 ) -> Value {
     let _ = a;
     panic!("the preparation must not run a handler")
@@ -4854,25 +4850,28 @@ fn refuses_to_run(
 
 #[cfg(test)]
 fn nullary_handler() -> ExternHandler {
-    ExternHandler::sync(acvus_extern::glue0::<
+    ExternHandler::sync(acvus_extern::glue::<
         crate::runtime::AcvusRuntime,
         _,
+        (),
         acvus_extern::Val<Value>,
-    >(|_, _| Value::default()))
+    >(|_, _, ()| Value::default()))
 }
 
 /// An extern lent its window: five of the runtime's values is past the
 /// register forms, which `REGISTER_FORM` cuts at four.
 #[cfg(test)]
 fn window_handler() -> ExternHandler {
-    ExternHandler::sync(acvus_extern::glue5::<
+    ExternHandler::sync(acvus_extern::glue::<
         crate::runtime::AcvusRuntime,
         _,
-        acvus_extern::ByValue<Value>,
-        acvus_extern::ByValue<Value>,
-        acvus_extern::ByValue<Value>,
-        acvus_extern::ByValue<Value>,
-        acvus_extern::ByValue<Value>,
+        (
+            acvus_extern::ByValue<Value>,
+            acvus_extern::ByValue<Value>,
+            acvus_extern::ByValue<Value>,
+            acvus_extern::ByValue<Value>,
+            acvus_extern::ByValue<Value>,
+        ),
         acvus_extern::Val<Value>,
     >(refuses_to_run))
 }
@@ -4881,10 +4880,10 @@ fn window_handler() -> ExternHandler {
 /// runtime's values at one parameter.
 #[cfg(test)]
 fn str_handler() -> ExternHandler {
-    ExternHandler::sync(acvus_extern::glue1::<
+    ExternHandler::sync(acvus_extern::glue::<
         crate::runtime::AcvusRuntime,
         _,
-        acvus_extern::ByStr,
+        (acvus_extern::ByStr,),
         acvus_extern::Val<Value>,
     >(refuses_a_str))
 }
@@ -4893,7 +4892,7 @@ fn str_handler() -> ExternHandler {
 fn refuses_a_str(
     _: &crate::runtime::AcvusRuntime,
     _: &mut crate::regs::FrameState,
-    s: &str,
+    (s,): (&str,),
 ) -> Value {
     let _ = s;
     panic!("the preparation must not run a handler")
@@ -4947,6 +4946,7 @@ mod call_form_tests {
 fn never_runs_awaited<'a>(
     _: &'a crate::runtime::AcvusRuntime,
     _: &'a mut &mut crate::regs::FrameState,
+    _: (),
 ) -> acvus_extern::BoxFuture<'a, Value> {
     Box::pin(async { panic!("the recognizer must not run a handler") })
 }
@@ -5623,9 +5623,10 @@ mod recognizer_tests {
                 namespace: None,
                 name: self.interner.intern(name),
             };
-            let handler = ExternHandler::awaited(acvus_extern::async_glue0::<
+            let handler = ExternHandler::awaited(acvus_extern::async_glue::<
                 crate::runtime::AcvusRuntime,
                 _,
+                (),
             >(never_runs_awaited));
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
@@ -6127,12 +6128,12 @@ mod assignment_tests {
     /// One extern of each ABI: `by_value` takes its one argument in a
     /// register, `window` is lent a slice.
     fn externs() -> FxHashMap<QualifiedRef, Executable> {
-        let by_value = ExternHandler::sync(acvus_extern::glue1::<
+        let by_value = ExternHandler::sync(acvus_extern::glue::<
             crate::runtime::AcvusRuntime,
             _,
-            acvus_extern::ByValue<Value>,
+            (acvus_extern::ByValue<Value>,),
             acvus_extern::Val<Value>,
-        >(|_, _, v| v));
+        >(|_, _, (v,)| v));
         let window = window_handler();
         [
             (extern_ref(BY_VALUE), Executable::Extern(vec![by_value])),

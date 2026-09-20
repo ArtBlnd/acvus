@@ -13,7 +13,7 @@
 
 use acvus_ext::Iter;
 use acvus_extern::{
-    Arr, Externs, Fn1, Registry, Runtime, TypesOnly, Var, extern_fn, extern_registry, kind,
+    Arr, Closure, Externs, Registry, Runtime, TypesOnly, Var, extern_fn, extern_registry, kind,
 };
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
@@ -45,7 +45,7 @@ mod fx_a {
     }
 
     #[extern_fn(effect = pure)]
-    pub fn apply_any<A, E, Rt>(f: Fn1<A, bool, E, Rt>) -> bool
+    pub fn apply_any<A, E, Rt>(f: Closure<(A,), bool, E, Rt>) -> bool
     where
         A: Var<kind::Type>,
         E: Var<kind::Effect>,

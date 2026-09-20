@@ -1,18 +1,19 @@
-//! `Slice<T, Rt>` and `SliceMut<T, Rt>`: the acvus types `&[T]` and
-//! `&mut [T]`, the one thing the machine indexes (RFC-0047).
+//! `Slice<T, M, Rt>`: the acvus types `&[T]` and `&mut [T]`, the one thing the
+//! machine indexes (RFC-0047).
 //!
 //! A slice is a borrow of the container it was taken from: it holds that
 //! container's loan and is never stored beyond it (RFC-0018). Every
 //! sliceable container stores the runtime's own values, so the element
 //! width is the runtime's `Value` and nothing else (RFC-0047 §1); an
-//! `Elements` is therefore the only payload either type carries, and the
+//! `Elements` is therefore the only payload it carries, and the
 //! machine reads it without knowing any container's layout.
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
+use acvus_mir::ty::{PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::loan::Loan;
 use crate::obj::Cross;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
@@ -106,7 +107,7 @@ where
     /// The element at `index`, exclusively.
     ///
     /// # Safety
-    /// As `at`, and this `Elements` came from a `SliceMut::of`, whose
+    /// As `at`, and this `Elements` came from a `Slice::<_, Mut, _>::of`, whose
     /// `&mut [Rt::Value]` is the exclusivity this hands on.
     #[allow(clippy::mut_from_ref)]
     #[inline]
@@ -118,28 +119,26 @@ where
     }
 }
 
-/// `&[T]`: a shared borrow of a run of a container's elements.
-pub struct Slice<T, Rt>(Elements<Rt>, PhantomData<T>)
+/// A borrow of a run of a container's elements. Taking a `Mut` one is an
+/// exclusive take of the container, so no shared slice of it is live
+/// (RFC-0047 §2).
+pub struct Slice<T, M, Rt>(Elements<Rt>, PhantomData<(T, M)>)
 where
     T: Send + Sync + 'static,
+    M: Loan,
     Rt: Runtime;
 
-/// `&mut [T]`: `Slice`'s exclusive twin. Taking one is an exclusive take of
-/// the container, so no `Slice` of it is live (RFC-0047 §2).
-pub struct SliceMut<T, Rt>(Elements<Rt>, PhantomData<T>)
+impl<T, M, Rt> Slice<T, M, Rt>
 where
     T: Send + Sync + 'static,
-    Rt: Runtime;
-
-impl<T, Rt> Slice<T, Rt>
-where
-    T: Send + Sync + 'static,
+    M: Loan,
     Rt: Runtime,
 {
     /// The elements of a container read in place; the caller holds the
-    /// container's loan for as long as the slice.
-    pub fn of(values: &[Rt::Value]) -> Self {
-        Self(Elements::of(values), PhantomData)
+    /// container's loan, at this slice's own strength, for as long as the
+    /// slice.
+    pub fn of(values: M::Of<'_, [Rt::Value]>) -> Self {
+        Self(Elements::of(M::shared(&values)), PhantomData)
     }
 
     pub fn from_elements(elements: Elements<Rt>) -> Self {
@@ -151,82 +150,52 @@ where
     }
 }
 
-impl<T, Rt> SliceMut<T, Rt>
+impl<T, M, Rt> Var<kind::Type> for Slice<T, M, Rt>
 where
-    T: Send + Sync + 'static,
+    T: Var<kind::Type>,
+    M: Loan,
     Rt: Runtime,
 {
-    /// As `Slice::of`, for an exclusive take.
-    pub fn of(values: &mut [Rt::Value]) -> Self {
-        Self(Elements::of(values), PhantomData)
-    }
-
-    pub fn from_elements(elements: Elements<Rt>) -> Self {
-        Self(elements, PhantomData)
-    }
-
-    pub fn into_elements(self) -> Elements<Rt> {
-        self.0
-    }
 }
 
 /// The acvus type: a reference to the unsized `[T]`.
-macro_rules! slice_ty_arg {
-    ($t:ident, $m:expr) => {
-        impl<T, Rt> Var<kind::Type> for $t<T, Rt>
-        where
-            T: Var<kind::Type>,
-            Rt: Runtime,
-        {
-        }
-
-        impl<T, Rt> TyArg for $t<T, Rt>
-        where
-            T: TyArg + Send + Sync + 'static,
-            Rt: Runtime,
-        {
-            fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
-                PolyTy::Ref(
-                    $m,
-                    Box::new(TypeArg::uniform(PolyTy::Slice(Box::new(T::poly_ty(
-                        i, vars,
-                    ))))),
-                )
-            }
-        }
-    };
+impl<T, M, Rt> TyArg for Slice<T, M, Rt>
+where
+    T: TyArg + Send + Sync + 'static,
+    M: Loan,
+    Rt: Runtime,
+{
+    fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
+        PolyTy::Ref(
+            M::MUTABILITY,
+            Box::new(TypeArg::uniform(PolyTy::Slice(Box::new(T::poly_ty(
+                i, vars,
+            ))))),
+        )
+    }
 }
-
-slice_ty_arg!(Slice, Mutability::Shared);
-slice_ty_arg!(SliceMut, Mutability::Mut);
 
 /// A slice crosses as the register pair the machine keeps it in, and as
 /// nothing else: it implements `Cross` and not `OneValue`, so a parameter, a
 /// field or an element that names one is a compile error. The two words
 /// themselves are the runtime's to build and to read, because only the
 /// runtime knows what one of its values is made of.
-macro_rules! slice_cross {
-    ($t:ident) => {
-        impl<T, Rt> Cross<Rt> for $t<T, Rt>
-        where
-            T: Send + Sync + 'static,
-            Rt: Runtime,
-        {
-            type Form = crate::obj::Pair;
-            type ReturnForm = crate::obj::Pair;
+impl<T, M, Rt> Cross<Rt> for Slice<T, M, Rt>
+where
+    T: Send + Sync + 'static,
+    M: Loan,
+    Rt: Runtime,
+{
+    type Form = crate::obj::Pair;
+    type ReturnForm = crate::obj::Pair;
 
-            unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
-                // SAFETY: the caller's contract: `run` is the pair a slice
-                // was written into, and the elements it names are live.
-                Self::from_elements(unsafe { Elements::from_words(rt.slice_from_run(run)) })
-            }
+    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+        // SAFETY: the caller's contract: `run` is the pair a slice was written
+        // into, and the elements it names are live.
+        Self::from_elements(unsafe { Elements::from_words(rt.slice_from_run(run)) })
+    }
 
-            fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
-                rt.slice_into_run(self.into_elements().words(), out)
-            }
-        }
-    };
+    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+        rt.slice_into_run(self.into_elements().words(), out)
+    }
 }
-
-slice_cross!(Slice);
-slice_cross!(SliceMut);

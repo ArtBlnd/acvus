@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::Ty;
 
 use crate::handler::{Arg, ArgAt, Sited};
+use crate::loan::{Loan, Mut, Shared};
 use crate::obj::{FieldAt, Obj, ObjectShape, One, Variant};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
@@ -214,108 +215,134 @@ pub fn payload_at<'a>(at: Option<ArgAt<'a>>, name: &str) -> ArgAt<'a> {
     at
 }
 
-/// The variant a reference the caller lent names.
+/// Where a projection reaches the aggregate it borrows: `Lent` through the
+/// reference the caller handed in, `Nested` in the value a field or a payload
+/// holds, which is that field's own `Large`.
+pub trait Reach {
+    type From<'a, M, Rt>
+    where
+        M: Loan,
+        Rt: Runtime;
+
+    /// # Safety
+    /// `from` names what `T`'s crossing wrote, live for `'a`, and for a `Mut`
+    /// loan it is the only live name of it.
+    unsafe fn at<'a, T, M, Rt>(rt: &'a Rt, from: Self::From<'a, M, Rt>) -> M::Of<'a, T>
+    where
+        T: Send + Sync + 'static,
+        M: Loan,
+        Rt: Runtime;
+}
+
+pub struct Lent;
+pub struct Nested;
+
+impl Reach for Lent {
+    type From<'a, M, Rt>
+        = &'a Rt::Value
+    where
+        M: Loan,
+        Rt: Runtime;
+
+    unsafe fn at<'a, T, M, Rt>(rt: &'a Rt, from: &'a Rt::Value) -> M::Of<'a, T>
+    where
+        T: Send + Sync + 'static,
+        M: Loan,
+        Rt: Runtime,
+    {
+        // SAFETY: the caller's contract.
+        unsafe { M::deref::<T, Rt>(rt, from) }
+    }
+}
+
+impl Reach for Nested {
+    type From<'a, M, Rt>
+        = M::Of<'a, Rt::Value>
+    where
+        M: Loan,
+        Rt: Runtime;
+
+    unsafe fn at<'a, T, M, Rt>(rt: &'a Rt, from: M::Of<'a, Rt::Value>) -> M::Of<'a, T>
+    where
+        T: Send + Sync + 'static,
+        M: Loan,
+        Rt: Runtime,
+    {
+        // SAFETY: the caller's contract.
+        unsafe { M::value_as::<T, Rt>(rt, from) }
+    }
+}
+
+/// The object a projection borrows.
 ///
 /// # Safety
-/// `reference` names a live storage holding what an enum's crossing wrote,
-/// live for `'a`.
-pub unsafe fn variant_of<'a, Rt>(rt: &'a Rt, reference: &'a Rt::Value) -> &'a Variant<Owned<Rt>>
+/// As `Reach::at`.
+pub unsafe fn object<'a, S, M, Rt>(
+    rt: &'a Rt,
+    from: S::From<'a, M, Rt>,
+) -> M::Of<'a, Obj<Owned<Rt>>>
 where
+    S: Reach,
+    M: Loan,
     Rt: Runtime,
 {
     // SAFETY: the caller's contract.
-    unsafe { rt.deref::<Variant<Owned<Rt>>>(reference) }
+    unsafe { S::at::<Obj<Owned<Rt>>, M, Rt>(rt, from) }
 }
 
-/// As `variant_of`, for an exclusive projection.
+/// The variant a projection borrows.
 ///
 /// # Safety
-/// As `variant_of`, and the storage is exclusively named for `'a`.
-#[allow(clippy::mut_from_ref)]
-pub unsafe fn variant_of_mut<'a, Rt>(
+/// As `Reach::at`.
+pub unsafe fn variant<'a, S, M, Rt>(
     rt: &'a Rt,
-    reference: &'a Rt::Value,
-) -> &'a mut Variant<Owned<Rt>>
+    from: S::From<'a, M, Rt>,
+) -> M::Of<'a, Variant<Owned<Rt>>>
 where
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract, exclusively.
-    unsafe { rt.deref_mut::<Variant<Owned<Rt>>>(reference) }
-}
-
-/// The variant a nested enum field or payload holds, which is that field's
-/// own `Large`.
-///
-/// # Safety
-/// `value` is what the nested enum's crossing wrote, live for `'a`.
-pub unsafe fn variant_in<'a, Rt>(rt: &'a Rt, value: &'a Rt::Value) -> &'a Variant<Owned<Rt>>
-where
+    S: Reach,
+    M: Loan,
     Rt: Runtime,
 {
     // SAFETY: the caller's contract.
-    unsafe { rt.value_as_ref::<Variant<Owned<Rt>>>(value) }
+    unsafe { S::at::<Variant<Owned<Rt>>, M, Rt>(rt, from) }
 }
 
-/// As `variant_in`, exclusively.
-///
-/// # Safety
-/// As `variant_in`, and `value` is exclusively named for `'a`.
-pub unsafe fn variant_in_mut<'a, Rt>(
-    rt: &'a Rt,
-    value: &'a mut Rt::Value,
-) -> &'a mut Variant<Owned<Rt>>
+pub struct Fields<'a, M, Rt>
 where
+    M: Loan,
     Rt: Runtime,
 {
-    // SAFETY: the caller's contract, exclusively.
-    unsafe { rt.value_as_mut::<Variant<Owned<Rt>>>(value) }
-}
-
-pub struct Fields<'a, Rt>
-where
-    Rt: Runtime,
-{
-    obj: &'a Obj<Owned<Rt>>,
+    obj: M::Of<'a, Obj<Owned<Rt>>>,
     rt: &'a Rt,
 }
 
-pub struct FieldsMut<'a, Rt>
+impl<'a, M, Rt> Fields<'a, M, Rt>
 where
+    M: Loan,
     Rt: Runtime,
 {
-    obj: &'a mut Obj<Owned<Rt>>,
-    rt: &'a Rt,
-}
-
-impl<'a, Rt> Fields<'a, Rt>
-where
-    Rt: Runtime,
-{
-    pub fn of(rt: &'a Rt, obj: &'a Obj<Owned<Rt>>) -> Self {
+    pub fn of(rt: &'a Rt, obj: M::Of<'a, Obj<Owned<Rt>>>) -> Self {
         Fields { obj, rt }
     }
 
-    pub fn field(&self, at: FieldAt) -> &'a Rt::Value {
-        &self.obj.values[at.index()]
-    }
-
     pub fn runtime(&self) -> &'a Rt {
         self.rt
     }
 }
 
-impl<'a, Rt> FieldsMut<'a, Rt>
+impl<'a, Rt> Fields<'a, Shared, Rt>
 where
     Rt: Runtime,
 {
-    pub fn of(rt: &'a Rt, obj: &'a mut Obj<Owned<Rt>>) -> Self {
-        FieldsMut { obj, rt }
+    pub fn field(&self, at: FieldAt) -> &'a Rt::Value {
+        &self.obj.values[at.index()]
     }
+}
 
-    pub fn runtime(&self) -> &'a Rt {
-        self.rt
-    }
-
+impl<'a, Rt> Fields<'a, Mut, Rt>
+where
+    Rt: Runtime,
+{
     /// # Panics
     /// Two of `ats` are equal, or one is past the object's width.
     /// `ObjectShape` holds each name once, so two equal positions would mean
@@ -331,57 +358,6 @@ where
         };
         fields.map(|owned| &mut **owned)
     }
-}
-
-/// The object a reference the caller lent names.
-///
-/// # Safety
-/// `reference` names a live storage holding what an aggregate's crossing
-/// wrote, live for `'a`.
-pub unsafe fn object_of<'a, Rt>(rt: &'a Rt, reference: &'a Rt::Value) -> &'a Obj<Owned<Rt>>
-where
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract.
-    unsafe { rt.deref::<Obj<Owned<Rt>>>(reference) }
-}
-
-/// As `object_of`, for an exclusive projection.
-///
-/// # Safety
-/// As `object_of`, and the storage is exclusively named for `'a`.
-#[allow(clippy::mut_from_ref)]
-pub unsafe fn object_of_mut<'a, Rt>(rt: &'a Rt, reference: &'a Rt::Value) -> &'a mut Obj<Owned<Rt>>
-where
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract, exclusively.
-    unsafe { rt.deref_mut::<Obj<Owned<Rt>>>(reference) }
-}
-
-/// The object a nested aggregate field holds, which is that field's own
-/// `Large`.
-///
-/// # Safety
-/// `value` is what the nested aggregate's crossing wrote, live for `'a`.
-pub unsafe fn object_in<'a, Rt>(rt: &'a Rt, value: &'a Rt::Value) -> &'a Obj<Owned<Rt>>
-where
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract.
-    unsafe { rt.value_as_ref::<Obj<Owned<Rt>>>(value) }
-}
-
-/// As `object_in`, exclusively.
-///
-/// # Safety
-/// As `object_in`, and `value` is exclusively named for `'a`.
-pub unsafe fn object_in_mut<'a, Rt>(rt: &'a Rt, value: &'a mut Rt::Value) -> &'a mut Obj<Owned<Rt>>
-where
-    Rt: Runtime,
-{
-    // SAFETY: the caller's contract, exclusively.
-    unsafe { rt.value_as_mut::<Obj<Owned<Rt>>>(value) }
 }
 
 impl<T> Borrowed for Option<T>
@@ -436,7 +412,10 @@ where
 }
 
 /// A parameter declared as a projection: the reference the caller lent is the
-/// argument, and the projection is built inside the glue from it.
+/// argument, and the projection is built inside the glue from it. It stays its
+/// own `Arg` because the macro picks a parameter's mode from the Rust type's
+/// shape, and a projection is a type with a lifetime argument — neither a
+/// value nor a borrow of one.
 pub struct ByProjection<P>(PhantomData<fn() -> P>);
 
 impl<P, Rt> Sited<Rt> for ByProjection<P>
@@ -471,9 +450,11 @@ where
     }
 }
 
-/// Why a `&S` in a handler's signature does not compile, and what to write
-/// instead. The derive names this in the `where` clause of the `Borrowable`
-/// impl it emits for an aggregate, and it has no impl anywhere.
+/// A trait that exists to be unimplemented: its absence is the refusal, and
+/// the `on_unimplemented` text below is the whole of what it does. The derive
+/// names it in the `where` clause of the `Borrowable` impl it emits for an
+/// aggregate, so a `&S` in a handler's signature fails to compile with this
+/// message and no other.
 ///
 /// Obligation across artifacts: the message below is read back by
 /// `acvus-extern-macro/tests/compile_fail/borrowed_aggregate.stderr`, so a

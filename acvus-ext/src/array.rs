@@ -1,5 +1,5 @@
 use acvus_extern::{
-    Arr, Ref, RefMut, Registry, Runtime, Slice, SliceMut, TransparentOver, Var, extern_fn,
+    Arr, Mut, Ref, Registry, Runtime, Shared, Slice, TransparentOver, Var, extern_fn,
     extern_registry, kind,
 };
 
@@ -22,7 +22,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn as_slice<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Slice<T, Rt>
+fn as_slice<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Slice<T, Shared, Rt>
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
@@ -32,17 +32,17 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn as_slice_mut<T, N, Rt>(rt: &Rt, c: RefMut<Arr<T, N>, Rt>) -> SliceMut<T, Rt>
+fn as_slice_mut<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Mut, Rt>) -> Slice<T, Mut, Rt>
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    SliceMut::of(c.elements_mut(rt))
+    Slice::of(c.elements(rt))
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
+fn first<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
@@ -52,7 +52,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Rt>) -> Option<Ref<T, Rt>>
+fn last<T, N, Rt>(rt: &Rt, c: Ref<Arr<T, N>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,

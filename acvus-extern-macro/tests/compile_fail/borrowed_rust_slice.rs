@@ -1,4 +1,4 @@
-//! A Rust slice is not one of the language's types: `Slice<T, Rt>` is
+//! A Rust slice is not one of the language's types: `Slice<T, Shared, Rt>` is
 //! (RFC-0047). Both borrow modes are refused by the same missing impl.
 use acvus_extern::extern_fn;
 

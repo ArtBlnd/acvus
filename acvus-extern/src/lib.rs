@@ -14,6 +14,7 @@ mod func;
 mod handler;
 mod identity;
 mod len;
+mod loan;
 mod obj;
 mod owned;
 mod projection;
@@ -29,34 +30,32 @@ mod vec;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure};
 pub use erased::Erased;
-pub use func::{CallToken, ClosureFn, Fn0, Fn1, Fn2, Fn3};
+pub use func::{ArgTypes, Args, CallArgs, CallToken, Closure, ClosureFn};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtSite, Borrowable,
-    BorrowableSpecialized, ByRef, ByRefMut, ByValue, DirectOp, ExternHandler, Glue, Handler,
-    HandlerFactory, InRegisters, InWindow, Instance, Instances, IntoRun, Parameters, REGISTER_FORM,
-    Ret, Sited, SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValuesOnly,
-    Width, async_glue0, async_glue1, async_glue2, async_glue3, async_glue4, async_glue5,
-    async_glue6, async_glue7, async_glue8, glue0, glue1, glue2, glue3, glue4, glue5, glue6, glue7,
-    glue8,
+    BorrowableSpecialized, ByRef, ByValue, DirectOp, ExternHandler, Glue, Handler, HandlerFactory,
+    InRegisters, InWindow, Instance, Instances, IntoRun, Parameters, REGISTER_FORM, Ret, Sited,
+    SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
+    ValuesOnly, Width, async_glue, glue,
 };
 pub use len::Arr;
+pub use loan::{Loan, Mut, Shared};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, FromValue, Inline, Obj, ObjectShape, One, OneValue, Pair, Run,
     Stored, TransparentOver, Variant, expect_type, materialize_checked,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{
-    Borrowed, BorrowedWhole, ByProjection, Fields, FieldsMut, ObjectAt, Project, Projected,
-    VariantAt, object_fields_at, object_in, object_in_mut, object_of, object_of_mut, payload_at,
-    variant_in, variant_in_mut, variant_of, variant_of_mut, variant_tags_at,
+    Borrowed, BorrowedWhole, ByProjection, Fields, Lent, Nested, ObjectAt, Project, Projected,
+    Reach, VariantAt, object, object_fields_at, payload_at, variant, variant_tags_at,
 };
-pub use reference::{Ref, RefMut};
+pub use reference::Ref;
 pub use registry::{
     CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers, Manifest,
     MemberType, Registry, SharedSignature, SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
-pub use slice::{Elements, Slice, SliceMut, Words};
+pub use slice::{Elements, Slice, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
 pub use ty_arg::{

@@ -1,11 +1,10 @@
-//! Function-typed parameters: `Fn0<R, E, Rt>`, `Fn1<A, R, E, Rt>`,
-//! `Fn2<A, B, R, E, Rt>`, `Fn3<A, B, C, R, E, Rt>`. Each names
+//! Function-typed parameters: `Closure<A, R, E, Rt>`, where `A` is the tuple of the
+//! closure's parameter types — `()`, `(T,)`, `(T, U)`, … It names
 //! `Fn(...) -> R with E` in an extern signature — the type solver reads the
-//! closure's type from it — and holds the runtime's closure as a plain
-//! value. Calling one is the one place a generic body crosses back into the
-//! runtime: `f.call(rt, (a, b))` moves runtime values into the callee's
-//! parameters and gets one back; a parameter declared `Ref<T>` is passed
-//! `rt.reference(&a)`.
+//! closure's type from it — and holds the runtime's closure as a plain value.
+//! Calling one is the one place a generic body crosses back into the runtime:
+//! `f.call(rt, (a, b))` moves runtime values into the callee's parameters and
+//! gets one back; a parameter declared `Ref<T>` is passed `rt.reference(&a)`.
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -19,8 +18,8 @@ use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg};
 use crate::ty_arg::{Term, Var, kind};
 
-/// Proof that a call comes through `Fn0`/`Fn1`/…: only this module mints it,
-/// so a handler cannot reach the runtime's `call_*` directly.
+/// Proof that a call comes through `Closure`: only this module mints it, so a
+/// handler cannot reach the runtime's `call_*` directly.
 pub struct CallToken(());
 
 impl CallToken {
@@ -29,8 +28,36 @@ impl CallToken {
     }
 }
 
-/// A closure value called at the types its declaration names: the
-/// arguments cross in and the result crosses out here, once (RFC-0039).
+/// A closure's parameter tuple.
+pub trait Args: Send + Sync + 'static {
+    /// The same tuple with every member at the runtime's own owned value,
+    /// which is what a closure kept past its declaration is called at.
+    type Erased<Rt>: Args
+    where
+        Rt: Runtime;
+}
+
+/// The same tuple, as a call needs it.
+pub trait CallArgs<Rt>: Args + crate::IntoRun<Rt>
+where
+    Rt: Runtime,
+{
+    /// The awaited call: the runtime entry that takes this many arguments.
+    fn awaited<'a>(
+        self,
+        rt: &'a Rt,
+        f: &'a Rt::Value,
+        token: CallToken,
+    ) -> impl Future<Output = Rt::Value> + Send + 'a;
+}
+
+/// A closure's parameter tuple, as the declared acvus type needs it.
+pub trait ArgTypes: Send + Sync + 'static {
+    fn params(i: &Interner, vars: &PolyVars) -> Vec<ParamTerm<Poly>>;
+}
+
+/// A closure value called at the types its declaration names: the arguments
+/// cross in and the result crosses out here, once (RFC-0039).
 pub trait ClosureFn<Rt: Runtime> {
     type Args: Send;
     type Ret;
@@ -46,103 +73,130 @@ pub trait ClosureFn<Rt: Runtime> {
     ) -> impl Future<Output = Self::Ret> + Send + 'a;
 }
 
-macro_rules! define_fn_arg {
-    ($name:ident; $($A:ident : $slot:literal),*) => {
-        pub struct $name<$($A,)* R, E, Rt>(Owned<Rt>, bool, PhantomData<($($A,)* R, E)>)
-        where
-            $($A: Send + Sync + 'static,)*
-            R: Send + Sync + 'static,
-            E: Var<kind::Effect>,
-            Rt: Runtime;
+pub struct Closure<A, R, E, Rt>(Owned<Rt>, bool, PhantomData<(A, R, E)>)
+where
+    A: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
 
-        impl<$($A,)* R, E, Rt> $name<$($A,)* R, E, Rt>
-        where
-            $($A: Send + Sync + 'static,)*
-            R: Send + Sync + 'static,
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            pub fn new(rt: &Rt, value: Rt::Value) -> Self {
-                let sync = rt.call_is_sync(&value);
-                Self(Owned::from_value(value), sync, PhantomData)
-            }
+impl<A, R, E, Rt> Closure<A, R, E, Rt>
+where
+    A: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub fn new(rt: &Rt, value: Rt::Value) -> Self {
+        let sync = rt.call_is_sync(&value);
+        Self(Owned::from_value(value), sync, PhantomData)
+    }
 
-            pub fn into_value(self) -> Rt::Value {
-                self.0.into_value()
-            }
+    pub fn into_value(self) -> Rt::Value {
+        self.0.into_value()
+    }
 
-            /// Whether a call reaches its result without a future,
-            /// asked of the runtime once, here.
-            pub fn is_sync(&self) -> bool {
-                self.1
-            }
+    /// Whether a call reaches its result without a future, asked of the
+    /// runtime once, here.
+    pub fn is_sync(&self) -> bool {
+        self.1
+    }
+}
 
-            /// The same closure value under the erased types it has at run
-            /// time, for code that keeps closures past their declaration.
-            pub fn erased(self) -> $name<$(erased!($A),)* Rt::Value, (), Rt> {
-                $name(self.0, self.1, PhantomData)
-            }
+impl<A, R, E, Rt> Closure<A, R, E, Rt>
+where
+    A: Args,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    /// The same closure value under the erased types it has at run time, for
+    /// code that keeps closures past their declaration. The effect is kept:
+    /// it is a fact of the declaration, not of the argument types.
+    pub fn erased(self) -> Closure<A::Erased<Rt>, Owned<Rt>, E, Rt> {
+        Closure(self.0, self.1, PhantomData)
+    }
+}
+
+crate::cross_one_value!(
+    Closure<A, R, E, __Rt>,
+    A: Send + Sync + 'static, R: Send + Sync + 'static, E: Var<kind::Effect>
+);
+
+impl<A, R, E, Rt> crate::OneValue<Rt> for Closure<A, R, E, Rt>
+where
+    A: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    fn erase(self, _: &Rt) -> Rt::Value {
+        self.0.into_value()
+    }
+
+    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+        Self::new(rt, value)
+    }
+}
+
+impl<A, R, E, Rt> Var<kind::Type> for Closure<A, R, E, Rt>
+where
+    A: ArgTypes,
+    R: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+}
+
+impl<A, R, E, Rt> TyArg for Closure<A, R, E, Rt>
+where
+    A: ArgTypes,
+    R: TyArg + Send + Sync + 'static,
+    E: Term<kind::Effect> + Var<kind::Effect>,
+    Rt: Runtime,
+{
+    fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
+        PolyTy::Fn {
+            params: A::params(i, vars),
+            ret: Box::new(R::poly_ty(i, vars)),
+            captures: vec![],
+            effect: E::poly(vars),
         }
+    }
+}
 
-        crate::cross_one_value!(
-            $name<$($A,)* R, E, __Rt>,
-            $($A: Send + Sync + 'static,)* R: Send + Sync + 'static, E: Var<kind::Effect>
+impl<A, R, E, Rt> ClosureFn<Rt> for Closure<A, R, E, Rt>
+where
+    A: CallArgs<Rt>,
+    R: OneValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    type Args = A;
+    type Ret = R;
+
+    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: A) -> R {
+        debug_assert!(
+            self.is_sync(),
+            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
+        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
+    }
 
-        impl<$($A,)* R, E, Rt> crate::OneValue<Rt> for $name<$($A,)* R, E, Rt>
-        where
-            $($A: Send + Sync + 'static,)*
-            R: Send + Sync + 'static,
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            fn erase(self, _: &Rt) -> Rt::Value {
-                self.0.into_value()
+    fn call<'a>(
+        &'a self,
+        rt: &'a Rt,
+        frame: &'a mut Rt::Frame<'_>,
+        args: A,
+    ) -> impl Future<Output = R> + Send + 'a {
+        async move {
+            if self.1 {
+                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
             }
-
-            unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
-                Self::new(rt, value)
-            }
+            returned(rt, args.awaited(rt, &self.0, CallToken::mint()).await)
         }
-
-        impl<$($A,)* R, E, Rt> Var<kind::Type> for $name<$($A,)* R, E, Rt>
-        where
-            $($A: Var<kind::Type>,)*
-            R: Var<kind::Type>,
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-        }
-
-        impl<$($A,)* R, E, Rt> TyArg for $name<$($A,)* R, E, Rt>
-        where
-            $($A: TyArg + Send + Sync + 'static,)*
-            R: TyArg + Send + Sync + 'static,
-            E: Term<kind::Effect> + Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
-                PolyTy::Fn {
-                    params: vec![$(ParamTerm::<Poly>::new(i.intern($slot), $A::poly_ty(i, vars))),*],
-                    ret: Box::new(R::poly_ty(i, vars)),
-                    captures: vec![],
-                    effect: E::poly(vars),
-                }
-            }
-        }
-    };
+    }
 }
-
-macro_rules! erased {
-    ($A:ident) => {
-        Rt::Value
-    };
-}
-
-define_fn_arg!(Fn0;);
-define_fn_arg!(Fn1; A: "_0");
-define_fn_arg!(Fn2; A: "_0", B: "_1");
-define_fn_arg!(Fn3; A: "_0", B: "_1", C: "_2");
 
 /// The value a call produced, read at the closure's declared return type.
 fn returned<R, Rt>(rt: &Rt, out: Rt::Value) -> R
@@ -154,173 +208,128 @@ where
     unsafe { R::materialize(rt, out) }
 }
 
-impl<R, E, Rt> ClosureFn<Rt> for Fn0<R, E, Rt>
-where
-    R: OneValue<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    type Args = ();
-    type Ret = R;
-
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: ()) -> R {
-        debug_assert!(
-            self.is_sync(),
-            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
-        );
-        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
-    }
-
-    fn call<'a>(
-        &'a self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-        args: (),
-    ) -> impl Future<Output = R> + Send + 'a {
-        async move {
-            let out = if self.1 {
-                rt.call_now(&self.0, frame, args, CallToken::mint())
-            } else {
-                rt.call_0(&self.0, CallToken::mint()).await
-            };
-            returned(rt, out)
-        }
-    }
+impl Args for () {
+    type Erased<Rt>
+        = ()
+    where
+        Rt: Runtime;
 }
 
-impl<A, R, E, Rt> Fn1<A, R, E, Rt>
+impl<Rt> CallArgs<Rt> for ()
 where
-    A: Send + Sync + 'static,
-    R: Send + Sync + 'static,
-    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    /// The closure applied to a value the caller holds at `A`, the result
-    /// left as the runtime holds it. As `ClosureFn::call_now`.
-    pub fn call_value_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, a: Rt::Value) -> Rt::Value {
-        debug_assert!(
-            self.is_sync(),
-            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
-        );
-        rt.call_now(&self.0, frame, (a,), CallToken::mint())
-    }
-
-    pub fn call_value<'a>(
-        &'a self,
+    fn awaited<'a>(
+        self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-        a: Rt::Value,
+        f: &'a Rt::Value,
+        token: CallToken,
     ) -> impl Future<Output = Rt::Value> + Send + 'a {
-        async move {
-            if self.1 {
-                return rt.call_now(&self.0, frame, (a,), CallToken::mint());
-            }
-            rt.call_1(&self.0, a, CallToken::mint()).await
-        }
+        rt.call_0(f, token)
     }
 }
 
-impl<A, R, E, Rt> ClosureFn<Rt> for Fn1<A, R, E, Rt>
+impl ArgTypes for () {
+    fn params(_: &Interner, _: &PolyVars) -> Vec<ParamTerm<Poly>> {
+        Vec::new()
+    }
+}
+
+impl<A0> Args for (A0,)
 where
-    A: OneValue<Rt> + Cross<Rt>,
-    R: OneValue<Rt>,
-    E: Var<kind::Effect>,
+    A0: Send + Sync + 'static,
+{
+    type Erased<Rt>
+        = (Owned<Rt>,)
+    where
+        Rt: Runtime;
+}
+
+/// The one argument the runtime has an entry of its own for.
+impl<A0, Rt> CallArgs<Rt> for (A0,)
+where
+    A0: OneValue<Rt> + Cross<Rt>,
     Rt: Runtime,
 {
-    type Args = (A,);
-    type Ret = R;
-
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> R {
-        debug_assert!(
-            self.is_sync(),
-            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
-        );
-        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
-    }
-
-    fn call<'a>(
-        &'a self,
+    fn awaited<'a>(
+        self,
         rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-        args: Self::Args,
-    ) -> impl Future<Output = R> + Send + 'a {
-        async move {
-            if self.1 {
-                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
-            }
-            let a = args.0.erase(rt);
-            returned(rt, rt.call_1(&self.0, a, CallToken::mint()).await)
-        }
+        f: &'a Rt::Value,
+        token: CallToken,
+    ) -> impl Future<Output = Rt::Value> + Send + 'a {
+        let a = self.0.erase(rt);
+        rt.call_1(f, a, token)
     }
 }
 
-impl<A, B, R, E, Rt> ClosureFn<Rt> for Fn2<A, B, R, E, Rt>
-where
-    A: OneValue<Rt> + Cross<Rt>,
-    B: OneValue<Rt> + Cross<Rt>,
-    R: OneValue<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    type Args = (A, B);
-    type Ret = R;
-
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> R {
-        debug_assert!(
-            self.is_sync(),
-            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
-        );
-        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
-    }
-
-    fn call<'a>(
-        &'a self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-        args: Self::Args,
-    ) -> impl Future<Output = R> + Send + 'a {
-        async move {
-            if self.1 {
-                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
-            }
-            let mut run = [args.0.erase(rt), args.1.erase(rt)];
-            returned(rt, rt.call_n(&self.0, &mut run, CallToken::mint()).await)
+/// Every wider tuple: the arguments are erased into a run and handed to
+/// `call_n`. One more line is one more arity.
+macro_rules! args_of {
+    ($($A:ident: $at:tt),+) => {
+        impl<$($A,)+> Args for ($($A,)+)
+        where
+            $($A: Send + Sync + 'static,)+
+        {
+            type Erased<__Rt>
+                = ($(erased!($A, __Rt),)+)
+            where
+                __Rt: Runtime;
         }
-    }
+
+        impl<$($A,)+ Rt> CallArgs<Rt> for ($($A,)+)
+        where
+            $($A: OneValue<Rt> + Cross<Rt>,)+
+            Rt: Runtime,
+        {
+            fn awaited<'a>(
+                self,
+                rt: &'a Rt,
+                f: &'a Rt::Value,
+                token: CallToken,
+            ) -> impl Future<Output = Rt::Value> + Send + 'a {
+                async move {
+                    let mut run = [$(self.$at.erase(rt)),+];
+                    rt.call_n(f, &mut run, token).await
+                }
+            }
+        }
+    };
 }
 
-impl<A, B, C, R, E, Rt> ClosureFn<Rt> for Fn3<A, B, C, R, E, Rt>
-where
-    A: OneValue<Rt> + Cross<Rt>,
-    B: OneValue<Rt> + Cross<Rt>,
-    C: OneValue<Rt> + Cross<Rt>,
-    R: OneValue<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    type Args = (A, B, C);
-    type Ret = R;
-
-    fn call_now(&self, rt: &Rt, frame: &mut Rt::Frame<'_>, args: Self::Args) -> R {
-        debug_assert!(
-            self.is_sync(),
-            "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
-        );
-        returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()))
-    }
-
-    fn call<'a>(
-        &'a self,
-        rt: &'a Rt,
-        frame: &'a mut Rt::Frame<'_>,
-        args: Self::Args,
-    ) -> impl Future<Output = R> + Send + 'a {
-        async move {
-            if self.1 {
-                return returned(rt, rt.call_now(&self.0, frame, args, CallToken::mint()));
-            }
-            let mut run = [args.0.erase(rt), args.1.erase(rt), args.2.erase(rt)];
-            returned(rt, rt.call_n(&self.0, &mut run, CallToken::mint()).await)
-        }
-    }
+macro_rules! erased {
+    ($A:ident, $rt:ident) => {
+        Owned<$rt>
+    };
 }
+
+macro_rules! arg_types_of {
+    ($($A:ident: $slot:literal),*) => {
+        impl<$($A,)*> ArgTypes for ($($A,)*)
+        where
+            $($A: TyArg + Var<kind::Type> + Send + Sync + 'static,)*
+        {
+            fn params(_i: &Interner, _vars: &PolyVars) -> Vec<ParamTerm<Poly>> {
+                vec![$(ParamTerm::<Poly>::new(_i.intern($slot), $A::poly_ty(_i, _vars))),*]
+            }
+        }
+    };
+}
+
+args_of!(A0: 0, A1: 1);
+args_of!(A0: 0, A1: 1, A2: 2);
+args_of!(A0: 0, A1: 1, A2: 2, A3: 3);
+args_of!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4);
+args_of!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5);
+args_of!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6);
+args_of!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6, A7: 7);
+
+arg_types_of!(A0: "_0");
+arg_types_of!(A0: "_0", A1: "_1");
+arg_types_of!(A0: "_0", A1: "_1", A2: "_2");
+arg_types_of!(A0: "_0", A1: "_1", A2: "_2", A3: "_3");
+arg_types_of!(A0: "_0", A1: "_1", A2: "_2", A3: "_3", A4: "_4");
+arg_types_of!(A0: "_0", A1: "_1", A2: "_2", A3: "_3", A4: "_4", A5: "_5");
+arg_types_of!(A0: "_0", A1: "_1", A2: "_2", A3: "_3", A4: "_4", A5: "_5", A6: "_6");
+arg_types_of!(
+    A0: "_0", A1: "_1", A2: "_2", A3: "_3", A4: "_4", A5: "_5", A6: "_6", A7: "_7"
+);
