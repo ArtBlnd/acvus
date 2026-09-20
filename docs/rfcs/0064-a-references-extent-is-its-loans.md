@@ -140,6 +140,8 @@ has no identity the caller can read. `Param(i)` is that identity.
    then-call diagnostic. Landed.
 3. Fixpoint over recursive bodies. Landed.
 4. Extern summaries from signatures (with the pair-wide `CallShape`).
+   Closed without a mechanism: the summary a signature declares is the
+   union the call already computes (Consequences).
 
 ## Consequences
 
@@ -272,3 +274,22 @@ them to `inliner::inline` itself. The `recursive_fns` parameter every caller
 filled with an empty set is gone, and with it `acvus-mir-test`'s
 `compile_multi_fn_required`, which existed only to route a recursive callee
 around `Opt::Full`.
+
+Step 4 is closed without a mechanism, because the summary Decision 6 would
+have the macro emit is the value the call already computes. An extern call
+has no summary in the table and takes the union of its arguments' regions,
+and an argument taken by value carries no region unless its type holds a
+reference, so that union is "every parameter that lends", which is what
+RFC-0047 §3 lets a handler's returned view be a projection of. The five
+handlers that return a reference today — `trim`, `trim_start`, `trim_end`,
+`substring`, `as_slice` for arrays and vectors — each have one lending
+parameter, so the declared summary and the union name the same storage at
+every call, and `trim`'s view already reaches a body through the extern
+call's `CallShape::Pair*`. A narrower summary would matter for a handler
+that lends two parameters and returns a projection of one, and none is
+declared. It would also rest on a rule the macro states rather than one Rust
+checks, since `Ref<T, Rt>` and `Slice<T, Rt>` carry no lifetime, where the
+union is sound by construction. Such a summary enters with its first
+declaration and not before. What still waits is not this step: a body
+returning `-> &str` needs the machine's pair destination for a body's
+result, which RFC-0062 names.
