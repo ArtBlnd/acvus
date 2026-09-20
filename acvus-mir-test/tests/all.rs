@@ -37,6 +37,7 @@ mod machine_coercion;
 mod match_expr;
 mod method;
 mod moved_lend;
+mod object_width;
 mod operators;
 mod optimized;
 mod optimized_cross_fn;

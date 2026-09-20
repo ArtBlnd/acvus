@@ -309,8 +309,10 @@ fn no_values() -> ! {
     panic!("TypesOnly runtime holds no values")
 }
 
-impl crate::FromValue<TypesOnly> for () {
-    fn from_value(_: &TypesOnly, value: ()) {
+// SAFETY: `TypesOnly::Value` is `()`, the one value it has, and `()` is the
+// only type it can have been erased from.
+unsafe impl crate::FromValue<TypesOnly> for () {
+    unsafe fn from_value(_: &TypesOnly, value: ()) {
         value
     }
 }

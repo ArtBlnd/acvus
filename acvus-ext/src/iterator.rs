@@ -17,6 +17,13 @@
 //! bounded by `Monomorphize`: the element is read in place through
 //! `Erased::as_ref`, and the `Iter` slot stays uniform (RFC-0041).
 //!
+//! **The element contract** (`iter.rs`'s head states it for the stages). A
+//! consumer takes `it: Iter<T, ..>` as a declared parameter, so the checker
+//! unified `T` with the element type of the iterator the argument names: every
+//! value the stage drains was erased from `T`. That fact is what each
+//! `unsafe { ..::from_value(..) }` below names, and `FromValue`'s contract is
+//! the door it goes through.
+//!
 //! Not here, each an `acvus-extern` contract: `enumerate`, `zip`,
 //! `partition` yield a tuple, and no tuple implements `Cross` (a tuple has
 //! `TyArg` only); `repeat` needs a clone of a runtime value, which
@@ -335,7 +342,8 @@ where
     let rt = ctx.rt;
     let mut items = Vec::new();
     drain_now!(it, ctx, |value| {
-        items.push(T::from_value(rt, value));
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        items.push(unsafe { T::from_value(rt, value) });
     });
     items
 }
@@ -351,7 +359,8 @@ where
     let rt = ctx.rt;
     let mut items = Vec::new();
     drain!(it, ctx, |value| {
-        items.push(T::from_value(rt, value));
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        items.push(unsafe { T::from_value(rt, value) });
     });
     items
 }
@@ -369,7 +378,8 @@ where
     let rt = ctx.rt;
     let mut parts: Vec<String> = Vec::new();
     drain_now!(it, ctx, |value| {
-        parts.push(Erased::<Rt, String>::from_value(rt, value).into_inner(rt));
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        parts.push(unsafe { Erased::<Rt, String>::from_value(rt, value) }.into_inner(rt));
     });
     parts.join(&sep)
 }
@@ -388,7 +398,8 @@ where
     let rt = ctx.rt;
     let mut parts: Vec<String> = Vec::new();
     drain!(it, ctx, |value| {
-        parts.push(Erased::<Rt, String>::from_value(rt, value).into_inner(rt));
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        parts.push(unsafe { Erased::<Rt, String>::from_value(rt, value) }.into_inner(rt));
     });
     parts.join(&sep)
 }
@@ -407,7 +418,8 @@ where
     let rt = ctx.rt;
     let mut found = false;
     drain_now!(it, ctx, |value| {
-        if *Erased::<Rt, T>::from_value(rt, value).as_ref(rt) == needle {
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        if *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt) == needle {
             found = true;
             break;
         }
@@ -430,7 +442,8 @@ where
     let rt = ctx.rt;
     let mut found = false;
     drain!(it, ctx, |value| {
-        if *Erased::<Rt, T>::from_value(rt, value).as_ref(rt) == needle {
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        if *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt) == needle {
             found = true;
             break;
         }
@@ -502,7 +515,8 @@ where
     let rt = ctx.rt;
     let mut acc = it.next_now(ctx)?;
     drain_now!(it, ctx, |value| {
-        let item = T::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { T::from_value(rt, value) };
         acc = f.call_now(ctx, (acc, item));
     });
     Some(acc)
@@ -523,7 +537,8 @@ where
     let rt = ctx.rt;
     let mut acc = it.next(ctx).await?;
     drain!(it, ctx, |value| {
-        let item = T::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { T::from_value(rt, value) };
         acc = f.call(ctx, (acc, item)).await;
     });
     Some(acc)
@@ -545,7 +560,8 @@ where
     let rt = ctx.rt;
     let mut acc = init;
     drain_now!(it, ctx, |value| {
-        let item = T::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { T::from_value(rt, value) };
         acc = f.call_now(ctx, (acc, item));
     });
     acc
@@ -568,7 +584,8 @@ where
     let rt = ctx.rt;
     let mut acc = init;
     drain!(it, ctx, |value| {
-        let item = T::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { T::from_value(rt, value) };
         acc = f.call(ctx, (acc, item)).await;
     });
     acc
@@ -811,7 +828,8 @@ where
     let rt = ctx.rt;
     let mut last = None;
     drain_now!(it, ctx, |value| {
-        last = Some(T::from_value(rt, value));
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        last = Some(unsafe { T::from_value(rt, value) });
     });
     last
 }
@@ -827,7 +845,8 @@ where
     let rt = ctx.rt;
     let mut last = None;
     drain!(it, ctx, |value| {
-        last = Some(T::from_value(rt, value));
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        last = Some(unsafe { T::from_value(rt, value) });
     });
     last
 }
@@ -912,7 +931,8 @@ where
     let rt = ctx.rt;
     let mut acc = T::ZERO;
     drain_now!(it, ctx, |value| {
-        let item = Erased::<Rt, T>::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
         acc = acc.add(*item.as_ref(rt));
     });
     acc
@@ -929,7 +949,8 @@ where
     let rt = ctx.rt;
     let mut acc = T::ZERO;
     drain!(it, ctx, |value| {
-        let item = Erased::<Rt, T>::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
         acc = acc.add(*item.as_ref(rt));
     });
     acc
@@ -945,7 +966,8 @@ where
     let rt = ctx.rt;
     let mut acc = T::ONE;
     drain_now!(it, ctx, |value| {
-        let item = Erased::<Rt, T>::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
         acc = acc.mul(*item.as_ref(rt));
     });
     acc
@@ -962,7 +984,8 @@ where
     let rt = ctx.rt;
     let mut acc = T::ONE;
     drain!(it, ctx, |value| {
-        let item = Erased::<Rt, T>::from_value(rt, value);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
         acc = acc.mul(*item.as_ref(rt));
     });
     acc
@@ -978,7 +1001,8 @@ where
     let rt = ctx.rt;
     let mut best: Option<T> = None;
     drain_now!(it, ctx, |value| {
-        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
             None => current,
@@ -998,7 +1022,8 @@ where
     let rt = ctx.rt;
     let mut best: Option<T> = None;
     drain!(it, ctx, |value| {
-        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
             None => current,
@@ -1017,7 +1042,8 @@ where
     let rt = ctx.rt;
     let mut best: Option<T> = None;
     drain_now!(it, ctx, |value| {
-        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
             None => current,
@@ -1037,7 +1063,8 @@ where
     let rt = ctx.rt;
     let mut best: Option<T> = None;
     drain!(it, ctx, |value| {
-        let current = *Erased::<Rt, T>::from_value(rt, value).as_ref(rt);
+        // SAFETY: the element contract at this module's head, for `it`'s `T`.
+        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
             None => current,
@@ -1090,7 +1117,8 @@ where
             best = Some(Keyed { value, key });
         }
     });
-    Some(T::from_value(rt, best?.value))
+    // SAFETY: the element contract at this module's head, for `it`'s `T`.
+    Some(unsafe { T::from_value(rt, best?.value) })
 }
 
 fn min_by_key_now<T, E, I, Rt>(
@@ -1131,7 +1159,8 @@ where
             best = Some(Keyed { value, key });
         }
     });
-    Some(T::from_value(rt, best?.value))
+    // SAFETY: the element contract at this module's head, for `it`'s `T`.
+    Some(unsafe { T::from_value(rt, best?.value) })
 }
 
 #[extern_fn(effect = E, sync = min_by_key_now)]

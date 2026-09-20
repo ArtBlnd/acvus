@@ -1273,9 +1273,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         });
     }
 
-    /// How a declared struct's field set refused an object (RFC-0042), for
-    /// the join that refused it and no other.
-    fn declared_field_refusal(&self, mismatch: &Mismatch) -> Option<MirErrorKind> {
+    /// How an object type refused a join, for the join that refused it and no
+    /// other: a declared struct's field set disagreeing (RFC-0042), or a union
+    /// over `ObjectTy::MAX_FIELDS`.
+    fn object_refusal(&self, mismatch: &Mismatch) -> Option<MirErrorKind> {
         let shown = |name: Astr| self.interner.resolve(name).to_string();
         match mismatch.reason {
             MismatchReason::ObjectLacksDeclaredField { declared, field } => {
@@ -1290,6 +1291,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     field: shown(field),
                 })
             }
+            MismatchReason::ObjectTooWide { fields } => Some(MirErrorKind::ObjectTooWide {
+                fields,
+                most: ObjectTy::<Infer>::MAX_FIELDS,
+            }),
             MismatchReason::NoJoin
             | MismatchReason::UnionWithoutHome
             | MismatchReason::ReprOpen(_)
@@ -1410,7 +1415,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Err(mismatch) = self.solver.unify(param_ty, arg_ty) else {
             return false;
         };
-        let Some(kind) = self.declared_field_refusal(&mismatch) else {
+        let Some(kind) = self.object_refusal(&mismatch) else {
             return false;
         };
         self.error(kind, span);
@@ -2036,7 +2041,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 field_ty.clone(),
             )])));
             if let Err(mismatch) = self.solver.unify(&current, &partial) {
-                let kind = self.declared_field_refusal(&mismatch).unwrap_or_else(|| {
+                let kind = self.object_refusal(&mismatch).unwrap_or_else(|| {
                     MirErrorKind::UnificationFailure {
                         expected: self.type_as_written(&mismatch.got),
                         got: self.type_as_written(&mismatch.expected),
@@ -5354,16 +5359,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.record_ret(*id, ty)
             }
 
-            Expr::Object {
-                id,
-                fields,
-                span: _,
-            } => {
+            Expr::Object { id, fields, span } => {
                 let mut field_types = FxHashMap::default();
                 for ObjectExprField { key, value, .. } in fields {
                     let ft = self.check_expr(value);
                     let ft = self.as_data(ft, value.span(), DataShape::Aggregate);
                     field_types.insert(*key, ft);
+                }
+                if let Some(fields) = ObjectTy::<Infer>::too_wide(&field_types) {
+                    self.error(
+                        MirErrorKind::ObjectTooWide {
+                            fields,
+                            most: ObjectTy::<Infer>::MAX_FIELDS,
+                        },
+                        *span,
+                    );
+                    return self.record_ret(*id, Self::infer_error());
                 }
                 let ty = TyTerm::Object(ObjectTy::written(field_types));
                 self.record_ret(*id, ty)

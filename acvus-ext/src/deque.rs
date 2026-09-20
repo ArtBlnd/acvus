@@ -143,13 +143,17 @@ where
 
 acvus_extern::cross_as_stored!(Deque<T>, T: Var<kind::Type>);
 
-impl<T, Rt> acvus_extern::FromValue<Rt> for Deque<T>
+unsafe impl<T, Rt> acvus_extern::FromValue<Rt> for Deque<T>
 where
     T: Var<kind::Type>,
     Rt: acvus_extern::Runtime,
 {
-    fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        acvus_extern::materialize_checked(rt, value)
+    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
+        acvus_extern::debug_assert_erased_from!(rt, &value, Deque<T>);
+        // SAFETY: the trait's contract — a `Deque<T>` crosses as itself
+        // (`cross_as_stored!` above), so the value was erased from this `T`'s
+        // deque at the site the checker matched.
+        unsafe { rt.materialize::<Deque<T>>(value) }
     }
 }
 

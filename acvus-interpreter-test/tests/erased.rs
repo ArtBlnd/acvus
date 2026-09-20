@@ -169,24 +169,33 @@ fn type_of_reports_the_tag_of_a_small_value() {
     assert_eq!(rt.type_of(&Value::reference(&target)), None);
 }
 
+/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
+/// what a debug build shows and a release build does not look for.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "expected a value erased from `f64`, found one erased from `i64`")]
 fn from_value_on_an_int_as_a_float_panics_naming_both_types() {
     let rt = runtime(&Interner::new());
-    Erased::<AcvusRuntime, f64>::from_value(&rt, Value::int(2));
+    // SAFETY: deliberately broken — this test is what the door refuses.
+    unsafe { Erased::<AcvusRuntime, f64>::from_value(&rt, Value::int(2)) };
 }
 
 #[test]
 fn from_value_on_an_int_as_an_int_is_the_value() {
     let rt = runtime(&Interner::new());
-    let erased = Erased::<AcvusRuntime, i64>::from_value(&rt, Value::int(2));
+    // SAFETY: `Value::int` is the runtime's erasure of an `i64`.
+    let erased = unsafe { Erased::<AcvusRuntime, i64>::from_value(&rt, Value::int(2)) };
     assert_eq!(erased.get(), 2);
 }
 
+/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
+/// what a debug build shows and a release build does not look for.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "found a value no Rust type was erased into")]
 fn from_value_on_a_reference_panics_as_a_value_erased_from_no_type() {
     let rt = runtime(&Interner::new());
     let target = Value::int(2);
-    Erased::<AcvusRuntime, i64>::from_value(&rt, Value::reference(&target));
+    // SAFETY: deliberately broken — this test is what the door refuses.
+    unsafe { Erased::<AcvusRuntime, i64>::from_value(&rt, Value::reference(&target)) };
 }

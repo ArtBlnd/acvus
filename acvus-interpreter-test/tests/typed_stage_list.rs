@@ -321,7 +321,9 @@ macro_rules! total_instance {
             let rt = ctx.rt;
             it.drain(ctx)
                 .into_iter()
-                .map(|x| *Erased::<Rt, i64>::from_value(rt, x.erase(rt)).as_ref(rt))
+                // SAFETY: the pipe's element type is the `i64` the checker
+                // matched at this handler's parameter.
+                .map(|x| *unsafe { Erased::<Rt, i64>::from_value(rt, x.erase(rt)) }.as_ref(rt))
                 .sum()
         }
 
@@ -340,7 +342,9 @@ macro_rules! total_instance {
             let rt = ctx.rt;
             it.drain(ctx)
                 .into_iter()
-                .map(|x| *Erased::<Rt, i64>::from_value(rt, x.erase(rt)).as_ref(rt))
+                // SAFETY: the pipe's element type is the `i64` the checker
+                // matched at this handler's parameter.
+                .map(|x| *unsafe { Erased::<Rt, i64>::from_value(rt, x.erase(rt)) }.as_ref(rt))
                 .sum()
         }
     };

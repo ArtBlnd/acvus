@@ -139,8 +139,9 @@ impl acvus_extern::OneValue<Counting> for V {
     }
 }
 
-impl acvus_extern::FromValue<Counting> for V {
-    fn from_value(_: &Counting, value: V) -> V {
+// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
+unsafe impl acvus_extern::FromValue<Counting> for V {
+    unsafe fn from_value(_: &Counting, value: V) -> V {
         value
     }
 }
@@ -470,13 +471,17 @@ fn vec_of(elem: PolyTy, interner: &Interner) -> PolyTy {
 
 // -- The checked exit ---------------------------------------------------
 
+/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
+/// what a debug build shows and a release build does not look for.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "expected a value erased from `alloc::string::String`")]
 fn from_value_on_a_value_of_another_type_panics_naming_the_expected_type() {
     let rt = Counting::default();
     // SAFETY: stored as itself.
     let holds_an_i64 = unsafe { rt.erase::<i64>(7) };
-    Erased::<Counting, String>::from_value(&rt, holds_an_i64);
+    // SAFETY: deliberately broken — this test is what the door refuses.
+    unsafe { Erased::<Counting, String>::from_value(&rt, holds_an_i64) };
 }
 
 #[test]
@@ -484,7 +489,8 @@ fn from_value_on_a_value_of_the_type_is_the_value() {
     let rt = Counting::default();
     // SAFETY: stored as itself.
     let holds_a_string = unsafe { rt.erase::<String>("s".to_owned()) };
-    let erased = Erased::<Counting, String>::from_value(&rt, holds_a_string);
+    // SAFETY: `holds_a_string` was just erased from a `String`.
+    let erased = unsafe { Erased::<Counting, String>::from_value(&rt, holds_a_string) };
     assert_eq!(erased.as_ref(&rt), "s");
 }
 

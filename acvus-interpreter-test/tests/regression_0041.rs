@@ -174,6 +174,7 @@ fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_with_its_
     );
     assert_eq!(rt.type_of(&value), Some(TypeId::of::<Pixel>()));
     assert_eq!(rt.type_name_of(&value), Some(type_name::<Pixel>()));
-    let back = Erased::<AcvusRuntime, Pixel>::from_value(&rt, value);
+    // SAFETY: `value` is the `Erased::<_, Pixel>::new` above, read back.
+    let back = unsafe { Erased::<AcvusRuntime, Pixel>::from_value(&rt, value) };
     assert_eq!(*back.as_ref(&rt), pixel);
 }

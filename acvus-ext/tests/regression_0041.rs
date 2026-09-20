@@ -147,8 +147,9 @@ impl acvus_extern::OneValue<Counting> for V {
     }
 }
 
-impl acvus_extern::FromValue<Counting> for V {
-    fn from_value(_: &Counting, value: V) -> V {
+// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
+unsafe impl acvus_extern::FromValue<Counting> for V {
+    unsafe fn from_value(_: &Counting, value: V) -> V {
         value
     }
 }
@@ -428,7 +429,8 @@ macro_rules! inline_round_trip {
             "{} records its TypeId",
             type_name::<$t>()
         );
-        let back = Erased::<Counting, $t>::from_value(&$rt, raw);
+        // SAFETY: `raw` was just erased from a `$t`.
+        let back = unsafe { Erased::<Counting, $t>::from_value(&$rt, raw) };
         assert_eq!(back.into_inner(&$rt), value, "{} materializes", type_name::<$t>());
     } )* };
 }
@@ -453,22 +455,30 @@ fn every_inline_type_erased_records_its_type_id_and_materializes_back() {
 
 // -- R2: the checked exit names both types -------------------------------
 
+/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
+/// what a debug build shows and a release build does not look for.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "expected a value erased from `i64`, found a payload of TypeId")]
 fn from_value_on_a_bool_as_an_i64_panics_naming_both() {
     let rt = Counting::default();
     let holds_a_bool = erased_from(&rt, true);
-    Erased::<Counting, i64>::from_value(&rt, holds_a_bool);
+    // SAFETY: deliberately broken — this test is what the door refuses.
+    unsafe { Erased::<Counting, i64>::from_value(&rt, holds_a_bool) };
 }
 
 // -- R3: container downcasts ---------------------------------------------
 
+/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
+/// what a debug build shows and a release build does not look for.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "expected a value erased from `alloc::vec::Vec<")]
 fn vec_from_value_refuses_a_deque() {
     let rt = Counting::default();
     let deque = erased_from(&rt, Deque::<Owned<Counting>>::default());
-    Vec::<Erased<Counting, String>>::from_value(&rt, deque);
+    // SAFETY: deliberately broken — this test is what the door refuses.
+    unsafe { Vec::<Erased<Counting, String>>::from_value(&rt, deque) };
 }
 
 #[test]
@@ -482,7 +492,8 @@ fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
         &rt,
     );
     let start = rt.counts();
-    let parts = Vec::<Erased<Counting, String>>::from_value(&rt, strings);
+    // SAFETY: `strings` is a `Vec` of values each erased from a `String`.
+    let parts = unsafe { Vec::<Erased<Counting, String>>::from_value(&rt, strings) };
     assert_eq!(
         rt.since(start),
         Counts {
@@ -495,12 +506,16 @@ fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
     assert_eq!(read, ["a", "b"]);
 }
 
+/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
+/// what a debug build shows and a release build does not look for.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "expected a value erased from `acvus_extern::len::Arr<")]
 fn arr_from_value_refuses_a_deque() {
     let rt = Counting::default();
     let deque = erased_from(&rt, Deque::<Owned<Counting>>::default());
-    Arr::<Erased<Counting, String>, ()>::from_value(&rt, deque);
+    // SAFETY: deliberately broken — this test is what the door refuses.
+    unsafe { Arr::<Erased<Counting, String>, ()>::from_value(&rt, deque) };
 }
 
 #[test]
@@ -514,7 +529,8 @@ fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
         &rt,
     );
     let start = rt.counts();
-    let parts = Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings);
+    // SAFETY: `strings` is an `Arr` of values each erased from a `String`.
+    let parts = unsafe { Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings) };
     assert_eq!(
         rt.since(start),
         Counts {

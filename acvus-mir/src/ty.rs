@@ -2607,12 +2607,30 @@ where
     /// Two declarations: a value has the fields of one declared struct and
     /// of no other.
     TwoDeclarations { a: Astr, b: Astr },
+    /// The union has more fields than [`ObjectTy::MAX_FIELDS`].
+    TooWide { fields: usize },
 }
 
 impl<V> ObjectTy<V>
 where
     V: Phase,
 {
+    /// The most fields an object type has. A field's position crosses the
+    /// boundary as an `acvus_extern::FieldAt`, which is a `u16`, so an object
+    /// wider than this has positions the machine cannot name. The checker
+    /// refuses one where the width is made — an object literal and the union
+    /// two field sets join to — and nothing downstream converts.
+    pub const MAX_FIELDS: usize = u16::MAX as usize;
+
+    /// The field count, when it is over [`Self::MAX_FIELDS`], for the refusal
+    /// that names it. This is the one comparison the bound is made of.
+    pub fn too_wide<W>(fields: &FxHashMap<Astr, TyTerm<W>>) -> Option<usize>
+    where
+        W: Phase,
+    {
+        (fields.len() > Self::MAX_FIELDS).then_some(fields.len())
+    }
+
     /// The type of a struct `name` declares.
     pub fn declared(name: Astr, fields: FxHashMap<Astr, TyTerm<V>>) -> Self {
         Self {
@@ -2676,6 +2694,9 @@ where
         let mut fields = a.fields.clone();
         for (name, ty) in &b.fields {
             fields.entry(*name).or_insert_with(|| ty.clone());
+        }
+        if let Some(fields) = Self::too_wide(&fields) {
+            return ObjectMeet::TooWide { fields };
         }
         ObjectMeet::Joined {
             a_takes: b.only_in(a).is_some(),
@@ -3736,6 +3757,7 @@ mod tests {
             ObjectMeet::Undeclared { declared, field } => {
                 Err(format!("undeclared {}", named(declared, field)))
             }
+            ObjectMeet::TooWide { fields } => Err(format!("too wide {fields}")),
             ObjectMeet::TwoDeclarations { a, b } => {
                 Err(format!("two {} {}", i.resolve(a), i.resolve(b)))
             }

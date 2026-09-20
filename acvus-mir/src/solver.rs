@@ -184,6 +184,8 @@ pub enum MismatchReason {
     ObjectLacksDeclaredField { declared: Astr, field: Astr },
     /// A field the object has and the struct `declared` does not name.
     ObjectFieldNotDeclared { declared: Astr, field: Astr },
+    /// The union of the two field sets is wider than `ObjectTy::MAX_FIELDS`.
+    ObjectTooWide { fields: usize },
 }
 
 /// How two effects are related by a constraint.
@@ -898,6 +900,9 @@ impl Terms {
                         self,
                         MismatchReason::ObjectFieldNotDeclared { declared, field },
                     )),
+                    ObjectMeet::TooWide { fields } => {
+                        Err(mismatch_for(self, MismatchReason::ObjectTooWide { fields }))
+                    }
                     ObjectMeet::TwoDeclarations { .. } => Err(mismatch(self)),
                 }
             }

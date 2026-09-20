@@ -146,8 +146,9 @@ impl acvus_extern::OneValue<Counted> for V {
     }
 }
 
-impl FromValue<Counted> for V {
-    fn from_value(_: &Counted, value: V) -> V {
+// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
+unsafe impl FromValue<Counted> for V {
+    unsafe fn from_value(_: &Counted, value: V) -> V {
         value
     }
 }

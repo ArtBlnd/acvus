@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::PolyTy;
 use acvus_utils::Interner;
 
-use crate::obj::{FromValue, Inline, OneValue, Stored, TransparentOver, expect_type};
+use crate::obj::{FromValue, Inline, OneValue, Stored, TransparentOver};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
@@ -162,13 +162,13 @@ where
 {
 }
 
-impl<R, T> FromValue<R> for Erased<R, T>
+unsafe impl<R, T> FromValue<R> for Erased<R, T>
 where
     R: Runtime,
     T: Stored<R>,
 {
-    fn from_value(rt: &R, value: R::Value) -> Self {
-        expect_type::<T, R>(rt, &value);
+    unsafe fn from_value(rt: &R, value: R::Value) -> Self {
+        crate::debug_assert_erased_from!(rt, &value, T);
         Self(Owned::from_value(value), PhantomData)
     }
 }

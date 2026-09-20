@@ -170,11 +170,14 @@ impl<R> crate::Borrowable<R> for Owned<R> where R: Runtime {}
 // — itself `repr(transparent)` over `R::Value` — as its one field.
 unsafe impl<R> crate::TransparentOver<R> for Owned<R> where R: Runtime {}
 
-impl<R> crate::FromValue<R> for Owned<R>
+// SAFETY: the contract is about the Rust type a value was erased from, and
+// `Owned<R>` is the runtime's own value: there is no Rust type a raw value
+// disagrees with, so the identity satisfies it for every value.
+unsafe impl<R> crate::FromValue<R> for Owned<R>
 where
     R: Runtime,
 {
-    fn from_value(_: &R, value: R::Value) -> Self {
+    unsafe fn from_value(_: &R, value: R::Value) -> Self {
         Self::from_value(value)
     }
 }

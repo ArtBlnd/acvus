@@ -11,10 +11,14 @@
 //! runtime, and the extern boundary that called the consumer is what reads
 //! it back and fails the run (RFC-0044, stage 6).
 //!
-//! `T` is the declared element type and nothing more: no value is read as a
-//! `T` on its account. The exit is `FromValue`, identity for the runtime's
-//! value and a checked downcast for `Erased` and the container boxes, so the
-//! pipeline's construction is never cited as a proof.
+//! **The element contract.** `T` is the declared element type, and the
+//! checker is what makes it true: a consumer's `Iter<T, ..>` parameter was
+//! unified with the element type of the iterator its argument names, so every
+//! value the box yields was erased from `T`. The exit is `FromValue`, an
+//! `unsafe fn` whose contract is that fact — identity for the runtime's value,
+//! a downcast for `Erased` and the container boxes. A debug build restates it
+//! (`debug_assert_erased_from!`); a release build does not look, so the
+//! pipeline's construction is the proof and each `unsafe` block below names it.
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -368,7 +372,8 @@ where
         T: FromValue<Rt>,
     {
         let rt = ctx.rt;
-        Some(T::from_value(rt, self.next_value(ctx).await?))
+        // SAFETY: the element contract at this module's head, for `self`'s `T`.
+        Some(unsafe { T::from_value(rt, self.next_value(ctx).await?) })
     }
 
     /// As `next`, for a consumer the solver chose the `Task::Sync`
@@ -379,7 +384,8 @@ where
     {
         let rt = ctx.rt;
         let value = self.0.sync_mut().next(ctx)?;
-        Some(T::from_value(rt, value))
+        // SAFETY: the element contract at this module's head, for `self`'s `T`.
+        Some(unsafe { T::from_value(rt, value) })
     }
 }
 
@@ -741,7 +747,8 @@ where
             let Some(value) = self.source.next(ctx) else {
                 break;
             };
-            chunk.push(T::from_value(rt, value));
+            // SAFETY: the element contract at this module's head, for `self.source`.
+            chunk.push(unsafe { T::from_value(rt, value) });
         }
         (!chunk.is_empty()).then(|| <Vec<T> as OneValue<Rt>>::erase(chunk, rt))
     }
@@ -761,7 +768,8 @@ where
                 let Some(value) = self.source.next(ctx).await else {
                     break;
                 };
-                chunk.push(T::from_value(rt, value));
+                // SAFETY: the element contract at this module's head, for `self.source`.
+                chunk.push(unsafe { T::from_value(rt, value) });
             }
             (!chunk.is_empty()).then(|| <Vec<T> as OneValue<Rt>>::erase(chunk, rt))
         })
@@ -782,7 +790,8 @@ where
     fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
         let rt = ctx.rt;
         while let Some(value) = self.source.next(ctx) {
-            let item = Erased::<Rt, T>::from_value(rt, value);
+            // SAFETY: the element contract at this module's head, for `self.source`.
+            let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
             let current = item.as_ref(rt);
             if self.last.as_ref() == Some(current) {
                 continue;
@@ -804,7 +813,8 @@ where
         let rt = ctx.rt;
         Box::pin(async move {
             while let Some(value) = self.source.next(ctx).await {
-                let item = Erased::<Rt, T>::from_value(rt, value);
+                // SAFETY: the element contract at this module's head, for `self.source`.
+                let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
                 let current = item.as_ref(rt);
                 if self.last.as_ref() == Some(current) {
                     continue;
@@ -878,7 +888,8 @@ where
                 return Some(item.erase(rt));
             }
             let value = self.source.next(ctx)?;
-            self.pending = Some(T::from_value(rt, value).into_iter());
+            // SAFETY: the element contract at this module's head, for `self.source`.
+            self.pending = Some(unsafe { T::from_value(rt, value) }.into_iter());
         }
     }
 }
@@ -899,7 +910,8 @@ where
                     return Some(item.erase(rt));
                 }
                 let value = self.source.next(ctx).await?;
-                self.pending = Some(T::from_value(rt, value).into_iter());
+                // SAFETY: the element contract at this module's head, for `self.source`.
+                self.pending = Some(unsafe { T::from_value(rt, value) }.into_iter());
             }
         })
     }

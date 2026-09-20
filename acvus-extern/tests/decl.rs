@@ -244,8 +244,9 @@ impl acvus_extern::OneValue<Tiny> for V {
     }
 }
 
-impl acvus_extern::FromValue<Tiny> for V {
-    fn from_value(_: &Tiny, value: V) -> V {
+// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
+unsafe impl acvus_extern::FromValue<Tiny> for V {
+    unsafe fn from_value(_: &Tiny, value: V) -> V {
         value
     }
 }

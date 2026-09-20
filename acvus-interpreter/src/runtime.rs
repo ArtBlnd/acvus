@@ -521,8 +521,11 @@ impl AcvusRuntime {
     }
 }
 
-impl acvus_extern::FromValue<AcvusRuntime> for Value {
-    fn from_value(_: &AcvusRuntime, value: Value) -> Value {
+// SAFETY: the contract is about the Rust type a value was erased from, and
+// `Value` is the runtime's own value: there is no Rust type a raw value
+// disagrees with, so the identity satisfies it for every value.
+unsafe impl acvus_extern::FromValue<AcvusRuntime> for Value {
+    unsafe fn from_value(_: &AcvusRuntime, value: Value) -> Value {
         value
     }
 }

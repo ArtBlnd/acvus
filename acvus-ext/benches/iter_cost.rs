@@ -89,8 +89,9 @@ impl acvus_extern::OneValue<Words> for Word {
     }
 }
 
-impl acvus_extern::FromValue<Words> for Word {
-    fn from_value(_: &Words, value: Word) -> Word {
+// SAFETY: `Word` is this runtime's own value, which no Rust type disagrees with.
+unsafe impl acvus_extern::FromValue<Words> for Word {
+    unsafe fn from_value(_: &Words, value: Word) -> Word {
         value
     }
 }
@@ -380,8 +381,9 @@ impl acvus_extern::OneValue<Tags> for TaggedWord {
     }
 }
 
-impl acvus_extern::FromValue<Tags> for TaggedWord {
-    fn from_value(_: &Tags, value: TaggedWord) -> TaggedWord {
+// SAFETY: `TaggedWord` is this runtime's own value, which no Rust type disagrees with.
+unsafe impl acvus_extern::FromValue<Tags> for TaggedWord {
+    unsafe fn from_value(_: &Tags, value: TaggedWord) -> TaggedWord {
         value
     }
 }

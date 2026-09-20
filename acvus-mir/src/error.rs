@@ -273,6 +273,12 @@ pub enum MirErrorKind {
         declared: String,
         field: String,
     },
+    /// An object type with more fields than `ty::ObjectTy::MAX_FIELDS`, whose
+    /// positions the machine cannot name.
+    ObjectTooWide {
+        fields: usize,
+        most: usize,
+    },
     /// An object at a projection parameter lacks a field the projection
     /// borrows (RFC-0050 rule 6).
     ProjectionLacksField {
@@ -823,6 +829,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "object has field `{field}` that `{declared}` does not declare"
+                )
+            }
+            MirErrorKind::ObjectTooWide { fields, most } => {
+                write!(
+                    f,
+                    "object has {fields} fields and an object has at most {most}"
                 )
             }
             MirErrorKind::ProjectionLacksField { object, field } => {

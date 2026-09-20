@@ -27,11 +27,24 @@ use crate::ty_arg::{Never, Var, kind};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct FieldAt(u16);
 
+/// `FieldAt` names a position in a `u16`, so the checker's bound on an object
+/// type's width is that `u16`'s range. The two are one number, and this is what
+/// fails if either moves.
+const _: () = assert!(
+    acvus_mir::ty::ObjectTy::<acvus_mir::ty::Concrete>::MAX_FIELDS == u16::MAX as usize,
+    "the checker's object width bound is the range of the u16 FieldAt names a position in"
+);
+
 impl FieldAt {
-    /// # Panics
-    /// An object has more fields than a `u16` counts.
+    /// Every position a shape has fits, so this converts without asking: an
+    /// object type wider than `ObjectTy::MAX_FIELDS` is refused where its
+    /// width is made — an object literal, and the union two field sets join to.
     pub fn of(at: usize) -> FieldAt {
-        FieldAt(u16::try_from(at).expect("an object has fewer fields than a u16 counts"))
+        debug_assert!(
+            at <= acvus_mir::ty::ObjectTy::<acvus_mir::ty::Concrete>::MAX_FIELDS,
+            "an object is no wider than the checker admits"
+        );
+        FieldAt(at as u16)
     }
 
     pub fn index(self) -> usize {
@@ -469,62 +482,71 @@ where
 
 /// The `Value -> Self` step a body takes outside the glue: identity for the
 /// runtime's own value, otherwise a recursion that ends in
-/// `materialize_checked`. There is no impl for a bare scalar: a scalar comes
-/// out as `Erased<Rt, T>`, whose `from_value` checks the value's record of
-/// its type like any other.
+/// `Runtime::materialize`. There is no impl for a bare scalar: a scalar comes
+/// out as `Erased<Rt, T>`, whose `from_value` is the crossing for it like any
+/// other.
 ///
-/// This is not `materialize_checked` under another name, and the two do not
-/// merge. The impl for the runtime's own value is the identity — there is no
-/// Rust type to check a raw value against — and the impl for `Vec<E>` calls
-/// `materialize_checked` for the buffer and then its own element step, so the
-/// function is what the trait is written on top of.
+/// This is `OneValue::materialize`'s sibling for the recursion a body drives,
+/// and it carries the same contract: the crossing is the door. The impl for
+/// the runtime's own value is the identity — there is no Rust type a raw value
+/// disagrees with — and the impl for `Vec<E>` materializes the buffer and then
+/// takes its own element step.
 ///
-/// # Panics
-/// When the value was not erased from `Self`.
-pub trait FromValue<Rt>: Sized
+/// # Safety
+/// `value` was erased from `Self` at a site the checker matched to this
+/// parameter's type: the handler's declared parameter type is what `combine`
+/// unified the argument against, so the `erase::<Self>` that made this value
+/// and this `from_value` name one Rust type. A debug build restates the fact
+/// with `debug_assert_erased_from!`; a release build does not look.
+pub unsafe trait FromValue<Rt>: Sized
 where
     Rt: Runtime,
 {
-    fn from_value(rt: &Rt, value: Rt::Value) -> Self;
+    /// # Safety
+    /// The trait's contract.
+    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self;
 }
 
-pub fn expect_type<T, Rt>(rt: &Rt, value: &Rt::Value)
+/// Whether `value` records the `erase::<T>` a crossing's contract names.
+///
+/// Only `debug_assert_erased_from!` calls this, so the comparison exists on no
+/// release path.
+pub fn is_erased_from<T, Rt>(rt: &Rt, value: &Rt::Value) -> bool
 where
     T: 'static,
     Rt: Runtime,
 {
-    let expected = TypeId::of::<T>();
-    match rt.type_of(value) {
-        Some(found) if found == expected => (),
-        Some(found) => match rt.type_name_of(value) {
-            Some(name) => panic!(
-                "expected a value erased from `{}`, found one erased from `{name}`",
-                std::any::type_name::<T>()
-            ),
-            None => panic!(
-                "expected a value erased from `{}`, found a payload of {found:?}",
-                std::any::type_name::<T>()
-            ),
-        },
-        None => panic!(
-            "expected a value erased from `{}`, found a value no Rust type was erased into",
-            std::any::type_name::<T>()
-        ),
-    }
+    rt.type_of(value) == Some(TypeId::of::<T>())
 }
 
-/// # Panics
-/// When the value was not erased from `T`.
-pub fn materialize_checked<T, Rt>(rt: &Rt, value: Rt::Value) -> T
+/// States a crossing's contract where a debug build can afford to read it:
+/// `$value` was erased from `$t`. It expands to `debug_assert!` and to nothing
+/// else, so no release path compares a `TypeId`.
+#[macro_export]
+macro_rules! debug_assert_erased_from {
+    ($rt:expr, $value:expr, $t:ty) => {
+        ::core::debug_assert!(
+            $crate::is_erased_from::<$t, _>($rt, $value),
+            "expected a value erased from `{}`, found {}",
+            ::core::any::type_name::<$t>(),
+            $crate::erased_description($rt, $value)
+        )
+    };
+}
+
+/// The phrase `debug_assert_erased_from!` puts after "found".
+///
+/// Only that macro's message calls this, and only when the contract was
+/// already broken.
+pub fn erased_description<Rt>(rt: &Rt, value: &Rt::Value) -> String
 where
-    T: Send + Sync + 'static,
     Rt: Runtime,
 {
-    expect_type::<T, Rt>(rt, &value);
-    // SAFETY: `expect_type` just read `T`'s `TypeId` off this value, which
-    // `Runtime::type_of` reports only for a value erased through
-    // `erase::<T>`.
-    unsafe { rt.materialize::<T>(value) }
+    match (rt.type_of(value), rt.type_name_of(value)) {
+        (Some(_), Some(name)) => format!("one erased from `{name}`"),
+        (Some(found), None) => format!("a payload of {found:?}"),
+        (None, _) => "a value no Rust type was erased into".to_owned(),
+    }
 }
 
 /// A `Stored` type that lives in the runtime's value word itself, so
@@ -869,9 +891,14 @@ where
 {
 }
 
-/// The elements of a checked container box, each taken by its own
-/// `FromValue`; the buffer itself is reused when the element is the value.
-fn elements_from_values<E, Rt>(rt: &Rt, items: Vec<Owned<Rt>>) -> Vec<E>
+/// The elements of a container box, each taken by its own `FromValue`; the
+/// buffer itself is reused when the element is the value.
+///
+/// # Safety
+/// Each element of `items` was erased from `E`, which is `FromValue`'s
+/// contract element by element: the container the checker matched carries one
+/// element type.
+unsafe fn elements_from_values<E, Rt>(rt: &Rt, items: Vec<Owned<Rt>>) -> Vec<E>
 where
     E: FromValue<Rt> + 'static,
     Rt: Runtime,
@@ -886,29 +913,36 @@ where
     }
     items
         .into_iter()
-        .map(|item| E::from_value(rt, item.into_value()))
+        // SAFETY: this function's contract, one element at a time.
+        .map(|item| unsafe { E::from_value(rt, item.into_value()) })
         .collect()
 }
 
-impl<E, Rt> FromValue<Rt> for Vec<E>
+unsafe impl<E, Rt> FromValue<Rt> for Vec<E>
 where
     E: FromValue<Rt> + Send + Sync + 'static,
     Rt: Runtime,
 {
-    fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        let items = materialize_checked::<Vec<Owned<Rt>>, Rt>(rt, value);
-        elements_from_values(rt, items)
+    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
+        debug_assert_erased_from!(rt, &value, Vec<Owned<Rt>>);
+        // SAFETY: the trait's contract. A language list crosses as a
+        // `Vec<Owned<Rt>>` box whose elements were each erased from `E`.
+        unsafe { elements_from_values(rt, rt.materialize::<Vec<Owned<Rt>>>(value)) }
     }
 }
 
-impl<E, N, Rt> FromValue<Rt> for Arr<E, N>
+unsafe impl<E, N, Rt> FromValue<Rt> for Arr<E, N>
 where
     E: FromValue<Rt> + Send + Sync + 'static,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        let items = materialize_checked::<Arr<Owned<Rt>, ()>, Rt>(rt, value);
-        Arr::new(elements_from_values(rt, items.0))
+    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
+        debug_assert_erased_from!(rt, &value, Arr<Owned<Rt>, ()>);
+        // SAFETY: the trait's contract, as `Vec<E>`'s impl states it; a
+        // language array crosses as an `Arr<Owned<Rt>, ()>` box.
+        let items = unsafe { rt.materialize::<Arr<Owned<Rt>, ()>>(value) };
+        // SAFETY: as above, element by element.
+        Arr::new(unsafe { elements_from_values(rt, items.0) })
     }
 }
