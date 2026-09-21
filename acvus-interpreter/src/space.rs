@@ -525,7 +525,7 @@ impl Space {
                 Ok(())
             }
             Ty::Object(fields) => {
-                let laid = layout::sorted_fields(&rt.shared.interner, fields);
+                let laid = layout::sorted_fields(&rt.0.interner, fields);
                 let types: Vec<Ty> = laid.iter().map(|(_, t)| (*t).clone()).collect();
                 let values = unsafe { value.as_object_mut() };
                 for (t, v) in types.iter().zip(values.iter_mut()) {
@@ -611,11 +611,9 @@ fn unhex(text: &str) -> SpaceResult<NodeHash> {
 /// A run's page over a space (RFC-0033): a context is loaded from the
 /// space when the run first fetches it, and every context the run holds
 /// is committed when the host asks.
-/// A run's page over a space. It holds no runtime: `RuntimeContext::take`
-/// and `commit` are handed the run's own, so the page can be built before
-/// the runtime that reads it.
 pub struct SpacePage {
     space: Arc<Space>,
+    rt: AcvusRuntime,
     types: HashMap<String, Ty>,
     held: Mutex<HashMap<String, Owned<AcvusRuntime>>>,
 }
@@ -625,6 +623,7 @@ impl SpacePage {
     /// values for identities the space does not hold yet, or replaces.
     pub fn new(
         space: Arc<Space>,
+        rt: AcvusRuntime,
         seed: HashMap<String, (Ty, Owned<AcvusRuntime>)>,
     ) -> SpaceResult<Self> {
         let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
@@ -635,6 +634,7 @@ impl SpacePage {
         }
         Ok(Self {
             space,
+            rt,
             types,
             held: Mutex::new(held),
         })
@@ -646,7 +646,7 @@ impl SpacePage {
 
     /// Commit every context the page holds; the new head of each, in
     /// identity order. A context the run never fetched is not touched.
-    pub fn commit(&self, rt: &AcvusRuntime) -> SpaceResult<Vec<(String, NodeHash)>> {
+    pub fn commit(&self) -> SpaceResult<Vec<(String, NodeHash)>> {
         let mut held = std::mem::take(&mut *self.held.lock().expect("page"));
         let mut ids: Vec<String> = held.keys().cloned().collect();
         ids.sort();
@@ -657,7 +657,7 @@ impl SpacePage {
                 .get(&id)
                 .ok_or_else(|| SpaceError::new(format!("@{id}: no type")))?;
             let mut value = held.remove(&id).expect("listed");
-            let head = self.space.commit(rt, &id, ty, &mut value)?;
+            let head = self.space.commit(&self.rt, &id, ty, &mut value)?;
             out.push((id, head));
         }
         Ok(out)
@@ -665,13 +665,13 @@ impl SpacePage {
 }
 
 impl crate::journal::RuntimeContext for SpacePage {
-    fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>> {
+    fn take(&self, key: &str) -> Option<Owned<AcvusRuntime>> {
         if let Some(v) = self.held.lock().expect("page").remove(key) {
             return Some(v);
         }
         let ty = self.types.get(key)?;
         self.space
-            .load(rt, key, ty)
+            .load(&self.rt, key, ty)
             .unwrap_or_else(|e| panic!("context fetch: @{key}: {e}"))
             .map(Owned::from_value)
     }

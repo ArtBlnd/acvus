@@ -26,11 +26,7 @@ pub struct ContextWrite {
 /// Single snapshot of context state. Read/write via `&self`.
 pub trait RuntimeContext: Send + Sync {
     /// Move the whole value out; the key is unset until `set`.
-    ///
-    /// `rt` is the run this page belongs to, handed in rather than stored:
-    /// a page built before the run's runtime exists — a space's page is —
-    /// would otherwise have to hold a detached copy of it.
-    fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>>;
+    fn take(&self, key: &str) -> Option<Owned<AcvusRuntime>>;
     fn set(&self, key: &str, value: Owned<AcvusRuntime>);
     /// The final value of every key `set` since the last drain, moved out.
     fn take_writes(&self) -> Vec<ContextWrite>;
@@ -59,7 +55,7 @@ impl InMemoryContext {
 }
 
 impl RuntimeContext for InMemoryContext {
-    fn take(&self, _: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>> {
+    fn take(&self, key: &str) -> Option<Owned<AcvusRuntime>> {
         self.data.write().unwrap().remove(key)
     }
 
@@ -85,28 +81,8 @@ impl RuntimeContext for InMemoryContext {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use acvus_utils::Interner;
-    use rustc_hash::FxHashMap;
-
     use super::*;
-    use crate::executor::SequentialExecutor;
-    use crate::interpreter::InterpreterContext;
     use crate::value::Value;
-
-    /// A page is read through the run it belongs to; an `InMemoryContext`
-    /// reads nothing off it, so these tests hand it an empty run.
-    fn runtime() -> AcvusRuntime {
-        AcvusRuntime::new(
-            Arc::new(InterpreterContext::new(
-                &Interner::new(),
-                FxHashMap::default(),
-                Arc::new(SequentialExecutor),
-            )),
-            Arc::new(InMemoryContext::empty()),
-        )
-    }
 
     fn make_ctx(pairs: Vec<(&str, Value)>) -> InMemoryContext {
         let data: HashMap<String, Owned<AcvusRuntime>> = pairs
@@ -131,22 +107,22 @@ mod tests {
     #[test]
     fn take_moves_the_value_out() {
         let ctx = make_ctx(vec![("x", Value::string("hi"))]);
-        assert!(is_str(ctx.take(&runtime(), "x"), "hi"));
-        assert!(ctx.take(&runtime(), "x").is_none());
+        assert!(is_str(ctx.take("x"), "hi"));
+        assert!(ctx.take("x").is_none());
     }
 
     #[test]
     fn take_missing_returns_none() {
         let ctx = make_ctx(vec![]);
-        assert!(ctx.take(&runtime(), "x").is_none());
+        assert!(ctx.take("x").is_none());
     }
 
     #[test]
     fn set_after_take_restores_the_key() {
         let ctx = make_ctx(vec![("x", Value::int(1))]);
-        assert!(is_int(ctx.take(&runtime(), "x"), 1));
+        assert!(is_int(ctx.take("x"), 1));
         ctx.set("x", Owned::from_value(Value::int(2)));
-        assert!(is_int(ctx.take(&runtime(), "x"), 2));
+        assert!(is_int(ctx.take("x"), 2));
     }
 
     #[test]
@@ -158,14 +134,8 @@ mod tests {
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].key, "x");
         assert!(is_int(Some(writes.into_iter().next().unwrap().value), 3));
-        assert!(
-            ctx.take(&runtime(), "x").is_none(),
-            "the drained value left the page"
-        );
-        assert!(
-            is_int(ctx.take(&runtime(), "y"), 9),
-            "an unassigned key stays"
-        );
+        assert!(ctx.take("x").is_none(), "the drained value left the page");
+        assert!(is_int(ctx.take("y"), 9), "an unassigned key stays");
     }
 
     #[test]
@@ -177,7 +147,7 @@ mod tests {
                 let ctx_ref = Arc::clone(&ctx);
                 std::thread::spawn(move || {
                     ctx_ref.set("counter", Owned::from_value(Value::int(i)));
-                    let _ = ctx_ref.take(&runtime(), "counter");
+                    let _ = ctx_ref.take("counter");
                 })
             })
             .collect();

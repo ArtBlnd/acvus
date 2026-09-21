@@ -12,12 +12,12 @@
 
 use std::sync::Arc;
 
-use acvus_extern::{Ctx, ObjectShape, Owned, Release, Runtime, Words};
+use acvus_extern::{Ctx, ObjectShape, Owned, Runtime, Words};
 use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
-use crate::code::{BlockId, CodeRef, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
+use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
 use crate::interpreter::lookup_module;
 use crate::machine::{
     Lent, LentCall, LentOut, Machine, call_module, call_module_sync, fn_value_call,
@@ -1792,14 +1792,15 @@ impl<const LARGE: bool, const PAIR: bool> Op for CallDirectAsync<LARGE, PAIR> {
             )
         }
         let args = staged(m, &self.args, self.takes);
-        let rt = m.ctx.rt.clone();
+        let shared = Arc::clone(m.shared());
+        let page = Arc::clone(m.page);
         match PAIR {
             true => {
-                let fut = Box::pin(call_module::<Words>(rt, self.callee, args));
+                let fut = Box::pin(call_module::<Words>(shared, page, self.callee, args));
                 m.suspend_pair(SlicePair::at(self.dst.at), self.next, fut);
             }
             false => {
-                let fut = Box::pin(call_module::<Value>(rt, self.callee, args));
+                let fut = Box::pin(call_module::<Value>(shared, page, self.callee, args));
                 m.suspend::<LARGE>(self.dst, self.next, fut);
             }
         }
@@ -1831,18 +1832,14 @@ unsafe fn call_closure<const THROUGH: bool>(
             m.call_fn_sync(closure, arity)
         }
         false => {
-            let held = m.regs().take::<true>(callee);
-            // SAFETY: the type checker admits only a closure value here.
-            let value = m.call_fn_sync(unsafe { held.as_fn() }, arity);
-            held.release();
-            value
+            let closure = unsafe { m.regs().take::<true>(callee).materialize::<FnValue>() };
+            m.call_fn_sync(&closure, arity)
         }
     }
 }
 
 /// A closure call whose type says `Sync`: as `CallDirect`, run to its value
-/// inside the block. It asks nothing of the closure but the two words its
-/// own record's head holds.
+/// inside the block, with no test of the closure's own `Code`.
 pub struct CallIndirect<const LARGE: bool, const WORD: bool, const THROUGH: bool> {
     pub dst: Marked,
     pub callee: Marked,
@@ -1884,24 +1881,17 @@ impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THR
             // call, and the machine holding it outlives the future the driver
             // awaits.
             true => {
-                let (closure, rt): (&'static FnValue, &'static AcvusRuntime) = unsafe {
-                    let rt = &*(m.ctx.rt as *const AcvusRuntime);
+                let closure: &'static FnValue = unsafe {
                     let target = m.regs().peek(self.callee.at).target();
-                    (&*(target.as_fn() as *const FnValue), rt)
+                    &*(target.as_fn() as *const FnValue)
                 };
-                Box::pin(fn_value_call(closure, rt, &mut args))
+                Box::pin(fn_value_call(closure, &mut args))
             }
-            // SAFETY: as the `true` arm's, for the runtime; the closure value
-            // is taken out of the register and the future owns the record.
+            // SAFETY: the type checker admits only a closure value here.
             false => {
-                let rt = unsafe { &*(m.ctx.rt as *const AcvusRuntime) };
-                let held = m.regs().take::<true>(self.callee);
-                Box::pin(async move {
-                    // SAFETY: the type checker admits only a closure value here.
-                    let value = fn_value_call(unsafe { held.as_fn() }, rt, &mut args).await;
-                    held.release();
-                    value
-                })
+                let closure =
+                    unsafe { m.regs().take::<true>(self.callee).materialize::<FnValue>() };
+                Box::pin(async move { fn_value_call(&closure, &mut args).await })
             }
         };
         m.suspend::<LARGE>(self.dst, self.next, fut);
@@ -1994,18 +1984,21 @@ impl Op for SpawnModule {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = staged(m, &self.args, self.takes);
-        let child = crate::interpreter::Interpreter::spawned(m.ctx.rt.clone(), self.callee, args);
+        let child = crate::interpreter::Interpreter::spawned(
+            Arc::clone(m.shared()),
+            self.callee,
+            Arc::clone(m.page),
+            args,
+        );
         let handle = m.shared().executor.spawn_interpreter(child);
         m.regs().define::<true>(self.dst, Value::handle(handle));
         self.next.run(m, r0)
     }
 }
 
-/// One allocation and no atomic: the record is written once, with the code
-/// word `prepare` fixed and the captures read out of this frame's registers.
 pub struct MakeClosure {
     pub dst: Marked,
-    pub code: CodeRef,
+    pub entry: Arc<dyn crate::machine::Callable>,
     pub captures: Box<[Off]>,
     pub takes: u64,
     pub next: Box<dyn Op>,
@@ -2015,14 +2008,23 @@ impl Op for MakeClosure {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let closure = {
+        let captures: Arc<[Owned<AcvusRuntime>]> = {
             let regs = m.regs();
-            let closure =
-                Value::closure(self.code, self.captures.iter().map(|slot| regs.read(*slot)));
+            let captures = self
+                .captures
+                .iter()
+                .map(|slot| Owned::from_value(regs.read(*slot)))
+                .collect();
             regs.take_mask(self.takes);
-            closure
+            captures
         };
-        m.regs().define::<true>(self.dst, closure);
+        let closure = FnValue {
+            shared: Arc::clone(m.shared()),
+            page: Arc::clone(m.page),
+            entry: Arc::clone(&self.entry),
+            captures,
+        };
+        m.regs().define::<true>(self.dst, Value::closure(closure));
         self.next.run(m, r0)
     }
 }

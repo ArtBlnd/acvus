@@ -77,11 +77,8 @@ impl InterpreterContext {
         self
     }
 
-    /// This context as a runtime, over `page`. The page is a parameter
-    /// rather than a field: a run pairs one context with one page, and the
-    /// pairing is the caller's to state.
-    pub fn runtime(&self, page: Arc<dyn RuntimeContext>) -> AcvusRuntime {
-        AcvusRuntime::new(Arc::new(self.clone()), page)
+    pub fn runtime(&self) -> AcvusRuntime {
+        AcvusRuntime(Arc::new(self.clone()))
     }
 }
 
@@ -103,8 +100,9 @@ pub(crate) fn lookup_module<'a>(
 }
 
 pub struct Interpreter {
-    rt: AcvusRuntime,
+    shared: Arc<InterpreterContext>,
     entry: QualifiedRef,
+    page: Arc<dyn RuntimeContext>,
     spawn_args: Vec<Value>,
 }
 
@@ -121,24 +119,25 @@ impl Interpreter {
         page: Arc<dyn RuntimeContext>,
     ) -> Self {
         Self {
-            rt: AcvusRuntime::new(Arc::new(shared), page),
+            shared: Arc::new(shared),
             entry,
+            page,
             spawn_args: Vec::new(),
         }
     }
 
-    /// The runtime this interpreter runs on: the context it was built with,
-    /// paired with the page it was given.
-    pub fn runtime(&self) -> &AcvusRuntime {
-        &self.rt
-    }
-
     /// The deferred run a `Spawn` of a module issues: the spawning run's
     /// page, and the arguments it passed.
-    pub(crate) fn spawned(rt: AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> Self {
+    pub(crate) fn spawned(
+        shared: Arc<InterpreterContext>,
+        entry: QualifiedRef,
+        page: Arc<dyn RuntimeContext>,
+        args: Vec<Value>,
+    ) -> Self {
         Self {
-            rt,
+            shared,
             entry,
+            page,
             spawn_args: args,
         }
     }
@@ -153,17 +152,23 @@ impl Interpreter {
     /// OneValue` refuses it there, so reaching this assert means a program
     /// arrived without passing the checker.
     pub async fn execute(&mut self) -> Value {
-        let entry = lookup_module(&self.rt.shared, &self.entry).main.as_ref();
+        let entry = lookup_module(&self.shared, &self.entry).main.as_ref();
         assert!(
             !entry.returns_a_view,
             "the entry's result is a view, and a host reads one value by kind (RFC-0054); \
              typeck refuses this at `CompilationGraph::entry`, so the checker was bypassed"
         );
         let args = std::mem::take(&mut self.spawn_args);
-        call_module(self.rt.clone(), self.entry, args).await
+        call_module(
+            Arc::clone(&self.shared),
+            Arc::clone(&self.page),
+            self.entry,
+            args,
+        )
+        .await
     }
 
     pub fn take_writes(&self) -> Vec<ContextWrite> {
-        self.rt.page.take_writes()
+        self.page.take_writes()
     }
 }

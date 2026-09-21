@@ -298,9 +298,7 @@ fn runtime(i: &Interner) -> AcvusRuntime {
         rustc_hash::FxHashMap::default(),
         std::sync::Arc::new(SequentialExecutor),
     )
-    .runtime(std::sync::Arc::new(
-        acvus_interpreter::InMemoryContext::empty(),
-    ))
+    .runtime()
 }
 
 #[test]
