@@ -3078,24 +3078,28 @@ impl<'a> Lowerer<'a> {
         self.emit_assign(span, RefTarget::Through(reference), vec![], val);
     }
 
-    fn lower_intrinsic_call(
+    /// An intrinsic call over its arguments as every call lowers them.
+    fn emit_intrinsic(
         &mut self,
         intrinsic: crate::typeck::Intrinsic,
-        args: &[&Expr],
+        call: CallArgs,
         call_id: AstId,
         call_span: Span,
     ) -> ValueId {
-        match intrinsic {
-            crate::typeck::Intrinsic::StringClone => {
-                let [source] = args else {
-                    unreachable!("`clone` takes one argument, which the checker admitted")
-                };
-                let src = self.lower_expr(source);
-                let dst = self.alloc_expr(call_id);
-                self.emit_inst(call_span, InstKind::StringClone { dst, src });
-                dst
-            }
-        }
+        assert!(
+            call.restores.is_empty(),
+            "an intrinsic takes no argument through a conversion"
+        );
+        let dst = self.alloc_expr(call_id);
+        let kind = match (intrinsic, call.values.as_slice()) {
+            (crate::typeck::Intrinsic::StringClone, &[src]) => InstKind::StringClone { dst, src },
+            (crate::typeck::Intrinsic::StringClone, values) => panic!(
+                "`clone` is checked at its signature's one parameter, and got {} arguments",
+                values.len()
+            ),
+        };
+        self.emit_inst(call_span, kind);
+        dst
     }
 
     /// The arguments of a call: a `&place` argument is lent, any other is
@@ -3269,18 +3273,12 @@ impl<'a> Lowerer<'a> {
         let callee_ty = self.type_of_id(callee_id);
         let mut restores = Vec::new();
         let first = self.receiver(receiver, &mut restores);
-        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&callee_id).copied() {
-            return match intrinsic {
-                crate::typeck::Intrinsic::StringClone => {
-                    let dst = self.alloc_expr(call_id);
-                    self.emit_inst(call_span, InstKind::StringClone { dst, src: first });
-                    dst
-                }
-            };
-        }
         let mut call = self.lower_call_args(args.iter());
         call.values.insert(0, first);
         call.restores.splice(0..0, restores);
+        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&callee_id).copied() {
+            return self.emit_intrinsic(intrinsic, call, call_id, call_span);
+        }
         let dst = self.alloc_typed(call_id);
         match self.resolution.direct_calls.get(&callee_id).cloned() {
             Some(callee) => {
@@ -3339,7 +3337,8 @@ impl<'a> Lowerer<'a> {
             .chain(args)
             .collect();
         if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&func.id()).copied() {
-            return self.lower_intrinsic_call(intrinsic, &written, call_id, call_span);
+            let call = self.lower_call_args(written.iter().copied());
+            return self.emit_intrinsic(intrinsic, call, call_id, call_span);
         }
         if self.resolution.structural_variant_calls.contains(&call_id)
             && let [payload] = written.as_slice()
