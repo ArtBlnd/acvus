@@ -5475,8 +5475,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 Mutability::Shared,
                                 Box::new(TypeArg::new(self.solver.fresh_repr_var(), inner.clone())),
                             );
-                            let _ = self.solver.unify(&ot, &reference);
-                            inner
+                            if self.solver.unify(&ot, &reference).is_ok() {
+                                inner
+                            } else {
+                                let shown = self.type_as_written(&ot);
+                                self.error(MirErrorKind::DerefOfNonReference(shown), *span);
+                                Self::infer_error()
+                            }
                         }
                         TyTerm::Ref(_, inner) => {
                             let inner = self.solver.resolve_ty(&inner.ty);
@@ -5511,9 +5516,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Not => {
                         match &ot {
                             TyTerm::Bool => {}
-                            TyTerm::Var(_) => {
-                                let _ = self.solver.unify(&ot, &TyTerm::Bool);
-                            }
+                            TyTerm::Var(_) if self.solver.unify(&ot, &TyTerm::Bool).is_ok() => {}
                             _ => self.binop_error("!", ot, Self::infer_error(), *span),
                         }
                         TyTerm::Bool

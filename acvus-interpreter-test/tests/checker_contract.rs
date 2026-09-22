@@ -28,7 +28,13 @@ fn runs_to(source: &str, value: &str) {
 fn refused_with(source: &str, reason: &str) {
     for opt in [Opt::None, Opt::Full] {
         match outcome(source, opt) {
-            Outcome::Refused(why) => assert!(why.contains(reason), "at {opt:?}: {why}"),
+            Outcome::Refused(why) => {
+                assert!(
+                    !why.contains("[validate:"),
+                    "at {opt:?}, the MIR validator refused what the checker admitted: {why}"
+                );
+                assert!(why.contains(reason), "at {opt:?}: {why}");
+            }
             other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
         }
     }
@@ -82,4 +88,10 @@ fn a_string_used_twice_is_copied_at_every_level() {
         "let s = \"abc\".to_string(); let f = |x| -> x; let a = f(s); let b = f(s); a + &b",
         "\"abcabc\"",
     );
+}
+
+#[test]
+fn a_unary_operator_refuses_an_operand_it_does_not_take() {
+    refused_with("let x = !5; x", "type mismatch in `!`");
+    refused_with("let x = *5; x", "`*` needs a reference");
 }
