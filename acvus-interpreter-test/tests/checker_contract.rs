@@ -120,3 +120,9 @@ fn a_field_of_a_loop_element_by_value_is_the_element_s() {
     runs_to("let a = [{ n: 1, }]; let t = 0; for o in a { t = o.n; } t", "1");
     runs_to("let t = 0; for o in [{ n: 1, }] { t = t + o.n; } t", "1");
 }
+
+#[test]
+fn an_input_nothing_types_is_refused_where_it_is_read() {
+    refused_with("$s", "nothing that reads `$s` decides its type");
+    refused_with("let t = $s; let u = $s; t + &u", "cannot infer type");
+}

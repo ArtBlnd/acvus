@@ -1274,8 +1274,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         body: Span,
         tail_ty: Ty,
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
-        let type_map = self.freeze_type_map();
+        // A `$` input nothing typed is refused here, in its own words, so it
+        // is refused before the freezes below take every type as closed.
         let extern_params = self.frozen_extern_params(body);
+        if !self.errors.is_empty() {
+            return Err(self.reported());
+        }
+        let type_map = self.freeze_type_map();
         let try_returns = self.frozen_try_returns();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
@@ -3467,7 +3472,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .map(|param| {
                 let resolved = self.solver.resolve_ty(&param.ty);
                 let at = param.first_read.unwrap_or(body);
-                (param.name, self.closed_or_refused(&resolved, at))
+                let closed = self.closed_or_refused(&resolved, at);
+                if matches!(closed, Ty::Never) {
+                    let name = self.interner.resolve(param.name).to_string();
+                    self.error(MirErrorKind::InputTypeUndecided(name), at);
+                }
+                (param.name, closed)
             })
             .collect()
     }

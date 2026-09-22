@@ -429,6 +429,9 @@ pub enum MirErrorKind {
         source_ty: Ty,
     },
     ExternParamAssign(String),
+    /// A `$` input nothing that reads it gives a type, so no value can be
+    /// supplied for it.
+    InputTypeUndecided(String),
     BindingTypeMismatch {
         name: String,
         value: acvus_ast::Literal,
@@ -1098,6 +1101,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "`${name}` is bound to {value:?}, which is not a value of {}, the type its uses require",
                     ty.shown(interner)
+                )
+            }
+            MirErrorKind::InputTypeUndecided(name) => {
+                write!(
+                    f,
+                    "nothing that reads `${name}` decides its type; use it where its type is known"
                 )
             }
             MirErrorKind::ExternParamAssign(name) => {
