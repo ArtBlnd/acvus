@@ -2,12 +2,23 @@
 //! either refused by the checker or runs to the value its type says, at both
 //! optimization levels.
 
-use acvus_interpreter_test::corpus::{Outcome, Stage, attempt};
+use std::time::Duration;
+
+use acvus_interpreter_test::corpus::{self, Outcome, Stage};
 use acvus_mir::graph::optimize::Opt;
+
+const LIMIT: Duration = Duration::from_secs(30);
+
+/// A run that crashes the process is an outcome here, not the end of the
+/// test binary, so each program runs in a process of its own.
+fn outcome(source: &str, opt: Opt) -> Outcome {
+    acvus_interpreter_test::attempt_within!(source, opt, Stage::Run, LIMIT)
+        .unwrap_or_else(|lapse| panic!("at {opt:?}, {lapse:?}: {source}"))
+}
 
 fn runs_to(source: &str, value: &str) {
     for opt in [Opt::None, Opt::Full] {
-        match attempt(source, opt, Stage::Run) {
+        match outcome(source, opt) {
             Outcome::Value(got) => assert_eq!(got, value, "at {opt:?}: {source}"),
             other => panic!("at {opt:?}, expected {value}, got {other:?}: {source}"),
         }
@@ -16,11 +27,16 @@ fn runs_to(source: &str, value: &str) {
 
 fn refused_with(source: &str, reason: &str) {
     for opt in [Opt::None, Opt::Full] {
-        match attempt(source, opt, Stage::Run) {
+        match outcome(source, opt) {
             Outcome::Refused(why) => assert!(why.contains(reason), "at {opt:?}: {why}"),
             other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
         }
     }
+}
+
+#[test]
+fn corpus_child() {
+    corpus::child();
 }
 
 #[test]
@@ -56,4 +72,14 @@ fn a_container_that_is_a_value_is_lent_from_a_temporary() {
 #[test]
 fn a_local_closure_called_as_a_method_takes_its_receiver_as_its_parameter_does() {
     runs_to("let v = [1, 2]; let f = |x| -> x.len(); f(&v) + v.f()", "4");
+}
+
+/// A `String` copies (RFC-0018): the copy is the language's at every level.
+#[test]
+fn a_string_used_twice_is_copied_at_every_level() {
+    runs_to("let s = \"a\".to_string(); let t = s; let u = s; t + &u", "\"aa\"");
+    runs_to(
+        "let s = \"abc\".to_string(); let f = |x| -> x; let a = f(s); let b = f(s); a + &b",
+        "\"abcabc\"",
+    );
 }
