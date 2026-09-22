@@ -19,8 +19,8 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, ErrorToken, FieldSet,
-    Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm, LenVarId,
-    Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
+    Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm,
+    LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
     RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
     could_match_pattern, matches_pattern,
 };

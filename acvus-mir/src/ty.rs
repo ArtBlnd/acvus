@@ -4084,7 +4084,10 @@ mod tests {
             i.intern("b"),
             TyTerm::I64,
         )])));
-        assert!(s.unify(&copy, &store).is_ok(), "the copy grows as the construction");
+        assert!(
+            s.unify(&copy, &store).is_ok(),
+            "the copy grows as the construction"
+        );
         let TyTerm::Object(grown) = s.resolve_ty(&built) else {
             panic!("an object")
         };
