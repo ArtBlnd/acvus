@@ -168,8 +168,9 @@ and of a Rust holder that took ownership. Everything else copies.
 - An element's position is `Owned<R>`; the two holders (a container's
   elements and an iterator stage's captured closure) are what call
   `Release`, and a runtime value is `Copy` — a fixture runtime that had
-  an `impl Drop` has an `impl Release` instead (`acvus-ext/benches/
-  iter_cost.rs`). `Ref::map`'s bound is the same `Copy + Release`.
+  an `impl Drop` has an `impl Release` instead (the `iter_cost` bench,
+  since removed with the `Box<dyn>` `Iter` it measured, RFC-0067).
+  `Ref::map`'s bound is the same `Copy + Release`.
 - `use_from`, `Value::EMPTY`-after-take, `Kind::Empty`'s panic, the
   arity-N `mem::take` are gone; the glue reads `__args[i]` by copy.
 - The vtable registry is cut: a vtable is a constant of the type it
