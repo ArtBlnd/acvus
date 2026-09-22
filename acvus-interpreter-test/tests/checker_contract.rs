@@ -47,3 +47,13 @@ fn a_piped_value_is_an_argument_of_a_structural_variant() {
         "Shape::Circle",
     );
 }
+
+#[test]
+fn a_container_that_is_a_value_is_lent_from_a_temporary() {
+    runs_to("let x = [1, 2, 3][1]; x", "2");
+}
+
+#[test]
+fn a_local_closure_called_as_a_method_takes_its_receiver_as_its_parameter_does() {
+    runs_to("let v = [1, 2]; let f = |x| -> x.len(); f(&v) + v.f()", "4");
+}

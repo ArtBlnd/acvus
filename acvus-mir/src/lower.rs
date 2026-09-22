@@ -16,7 +16,7 @@ use crate::ir::{
 };
 use crate::solver::CaptureRead;
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
-use crate::typeck::{CapturedName, TypeResolution};
+use crate::typeck::{CapturedName, Passing, TypeResolution};
 
 /// The name of a template's accumulator. A source name cannot collide with
 /// it: the lexer admits no `<` in an identifier.
@@ -1751,29 +1751,12 @@ impl<'a> Lowerer<'a> {
         else {
             panic!("type checking settles an `as_slice` instance on every index expression")
         };
-        // A container that is already a reference is passed as it is
-        // (RFC-0030): reborrowing it would put a `Ref` of its own in every
-        // iteration, which the `AsSlice` could then never rise above.
-        let container = match crate::typeck::is_place(object)
-            && !matches!(self.type_of_id(object.id()), Ty::Ref(..))
-        {
-            true => {
-                let mut restores = Vec::new();
-                let lent = Lent {
-                    id: object.id(),
-                    span: object.span(),
-                    place: self.place_or_temporary(object),
-                    mutability,
-                };
-                let container = self.lend_place(lent, &mut restores);
-                debug_assert!(
-                    restores.is_empty(),
-                    "a container lent for a slice crosses no boundary, so it is not cast back"
-                );
-                container
-            }
-            false => self.lower_expr(object),
-        };
+        let mut restores = Vec::new();
+        let container = self.receiver(object, &mut restores);
+        debug_assert!(
+            restores.is_empty(),
+            "a container lent for a slice crosses no boundary, so it is not cast back"
+        );
         let dst = self.alloc_val();
         self.set_val_type(
             dst,
@@ -3329,34 +3312,8 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
     ) -> ValueId {
         let callee_ty = self.type_of_id(callee_id);
-        let lent = match &callee_ty {
-            Ty::Fn { params, .. } => match params.first().map(|p| &p.ty) {
-                Some(Ty::Ref(mutability, _)) => Some(*mutability),
-                _ => None,
-            },
-            _ => None,
-        };
         let mut restores = Vec::new();
-        let first = match lent {
-            // A receiver that is already a reference value is passed as it
-            // is (RFC-0030).
-            Some(_)
-                if !crate::typeck::is_place(receiver)
-                    && matches!(self.type_of_id(receiver.id()), Ty::Ref(..)) =>
-            {
-                self.lower_expr(receiver)
-            }
-            Some(mutability) => {
-                let lent = Lent {
-                    id: receiver.id(),
-                    span: receiver.span(),
-                    place: self.place_or_temporary(receiver),
-                    mutability,
-                };
-                self.lend_place(lent, &mut restores)
-            }
-            None => self.lower_expr(receiver),
-        };
+        let first = self.receiver(receiver, &mut restores);
         if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&callee_id).copied() {
             return match intrinsic {
                 crate::typeck::Intrinsic::StringClone => {
@@ -3390,6 +3347,36 @@ impl<'a> Lowerer<'a> {
             }
         }
         dst
+    }
+
+    /// A receiver as the checker decided it reaches its call.
+    fn receiver(&mut self, receiver: &Expr, restores: &mut Vec<PlaceRestore>) -> ValueId {
+        let passing = *self
+            .resolution
+            .receiver_passing
+            .get(&receiver.id())
+            .expect("the checker records how every receiver is passed");
+        match passing {
+            Passing::Value | Passing::AsIs => self.lower_expr(receiver),
+            // A lend of a whole place that holds a reference is that
+            // reference (RFC-0029): no reborrow is emitted, which keeps a
+            // loop's container a value the loop does not write.
+            Passing::Lent(_)
+                if crate::typeck::is_place(receiver)
+                    && matches!(self.type_of_id(receiver.id()), Ty::Ref(..)) =>
+            {
+                self.lower_expr(receiver)
+            }
+            Passing::Lent(mutability) => {
+                let lent = Lent {
+                    id: receiver.id(),
+                    span: receiver.span(),
+                    place: self.place_or_temporary(receiver),
+                    mutability,
+                };
+                self.lend_place(lent, restores)
+            }
+        }
     }
 
     fn lower_func_call(

@@ -421,14 +421,15 @@ fn takes_arity(candidate: &SignatureCandidate, arity: usize) -> bool {
 }
 
 /// RFC-0030.
-fn declared_receiver_mode(ty: &crate::ty::PolyTy) -> ReceiverMode {
-    let TyTerm::Fn { params, .. } = ty else {
-        return ReceiverMode::Value;
-    };
-    match params.first().map(|p| &p.ty) {
-        Some(TyTerm::Ref(mutability, _)) => ReceiverMode::Lent(*mutability),
-        _ => ReceiverMode::Value,
-    }
+/// How a receiver reaches the call that takes it (RFC-0030).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Passing {
+    Value,
+    /// Lent from its place, or from a temporary holding it where it names
+    /// no place.
+    Lent(Mutability),
+    /// Already a reference, passed as it is.
+    AsIs,
 }
 
 /// RFC-0020: `StringEq` and `StringConcat` lend their operand places
@@ -721,6 +722,9 @@ pub struct TypeResolution {
     pub for_kinds: FxHashMap<AstId, ForKind>,
     /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
     pub structural_variant_calls: FxHashSet<AstId>,
+    /// How each receiver, keyed by its own expression, reaches the call
+    /// that takes it.
+    pub receiver_passing: FxHashMap<AstId, Passing>,
     /// The return type of the function each `?` leaves early from (RFC-0038).
     pub try_returns: FxHashMap<AstId, Ty>,
     pub tail_ty: Ty,
@@ -735,42 +739,6 @@ pub struct TypeResolution {
     /// Join of the effects of every call in the body.
     pub effect: Effect,
     pub context_types: FxHashMap<QualifiedRef, Ty>,
-}
-
-impl TypeResolution {
-    fn new(
-        type_map: TypeMap,
-        coercion_map: CoercionMap,
-        direct_calls: DirectCallMap,
-        operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
-        intrinsic_calls: FxHashMap<AstId, Intrinsic>,
-        index_access: FxHashMap<AstId, IndexAccess>,
-        for_kinds: FxHashMap<AstId, ForKind>,
-        structural_variant_calls: FxHashSet<AstId>,
-        try_returns: FxHashMap<AstId, Ty>,
-        tail_ty: Ty,
-        extern_params: Vec<(Astr, Ty)>,
-        lambda_captures: FxHashMap<AstId, Vec<CapturedName>>,
-        effect: Effect,
-        context_types: FxHashMap<QualifiedRef, Ty>,
-    ) -> Self {
-        Self {
-            type_map,
-            coercion_map,
-            direct_calls,
-            operator_calls,
-            intrinsic_calls,
-            index_access,
-            for_kinds,
-            structural_variant_calls,
-            try_returns,
-            tail_ty,
-            extern_params,
-            lambda_captures,
-            effect,
-            context_types,
-        }
-    }
 }
 
 /// A name a closure captures and the reading its body was checked at, so
@@ -999,6 +967,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
     structural_variant_calls: FxHashSet<AstId>,
+    receiver_passing: FxHashMap<AstId, Passing>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
     /// What a settle inside the body refused, reported with the solve's own:
@@ -1064,6 +1033,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             refused_open: FxHashSet::default(),
             casts: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
+            receiver_passing: FxHashMap::default(),
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
             index_uses: Vec::new(),
@@ -1215,36 +1185,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        let resolved: TypeMap = self.freeze_type_map();
-        let extern_params = self.frozen_extern_params(template.span);
-        let effect = self.close_body_effect();
-        let context_types = self.named_context_types();
-        let operator_calls = self.frozen_operator_calls();
-        let coercion_map = self.frozen_coercions();
-        let direct_calls = self.frozen_direct_calls();
-        let lambda_captures = self.frozen_lambda_captures();
-        // A second gate, because freezing is itself a check: a type the
-        // solve left open is found only where it is closed, and every such
-        // type is closed above.
-        if !self.errors.is_empty() {
-            return Err(self.reported());
-        }
-        Ok(Freeze::new(TypeResolution::new(
-            resolved,
-            coercion_map,
-            direct_calls,
-            operator_calls,
-            self.frozen_intrinsic_calls(),
-            self.index_access.clone(),
-            self.for_kinds.clone(),
-            self.structural_variant_calls,
-            FxHashMap::default(),
-            Ty::String,
-            extern_params,
-            lambda_captures,
-            effect,
-            context_types,
-        )))
+        self.into_resolution(template.span, Ty::String)
     }
 
     /// Type check a script. Consumes self, returns TypeResolution.
@@ -1322,16 +1263,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        let resolved: TypeMap = self.freeze_type_map();
-        let extern_params = self.frozen_extern_params(script.span);
         let tail_at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
         let frozen_tail = self.closed_or_refused(&self.solver.resolve_ty(&tail_ty), tail_at);
+        self.into_resolution(script.span, frozen_tail)
+    }
+
+    /// What the lowering reads of a checked body.
+    fn into_resolution(
+        mut self,
+        body: Span,
+        tail_ty: Ty,
+    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
+        let type_map = self.freeze_type_map();
+        let extern_params = self.frozen_extern_params(body);
         let try_returns = self.frozen_try_returns();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
         let operator_calls = self.frozen_operator_calls();
         let coercion_map = self.frozen_coercions();
         let direct_calls = self.frozen_direct_calls();
+        let intrinsic_calls = self.frozen_intrinsic_calls();
         let lambda_captures = self.frozen_lambda_captures();
         // A second gate, because freezing is itself a check: a type the
         // solve left open is found only where it is closed, and every such
@@ -1339,22 +1290,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        Ok(Freeze::new(TypeResolution::new(
-            resolved,
+        Ok(Freeze::new(TypeResolution {
+            type_map,
             coercion_map,
             direct_calls,
             operator_calls,
-            self.frozen_intrinsic_calls(),
-            self.index_access.clone(),
-            self.for_kinds.clone(),
-            self.structural_variant_calls,
+            intrinsic_calls,
+            index_access: self.index_access,
+            for_kinds: self.for_kinds,
+            structural_variant_calls: self.structural_variant_calls,
+            receiver_passing: self.receiver_passing,
             try_returns,
-            frozen_tail,
+            tail_ty,
             extern_params,
             lambda_captures,
             effect,
             context_types,
-        )))
+        }))
     }
 
     /// A value flows into a position that must have its type (solver.md
@@ -3817,10 +3769,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let candidates = self.signature_set(QualifiedRef::root(name));
         match candidates.as_slice() {
             [] => {}
-            [SignatureCandidate::Named { qref, scheme }] => {
+            [candidate @ SignatureCandidate::Named { qref, scheme }] => {
                 let (qref, scheme) = (*qref, scheme.clone());
-                let first =
-                    self.receiver_arg(receiver, declared_receiver_mode(&scheme.ty), call_span);
+                let mode = self.solver.receiver_mode(candidate);
+                let first = self.receiver_arg(receiver, mode, call_span);
                 return self.check_resolved_call(
                     qref,
                     &scheme,
@@ -3834,12 +3786,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     call_span,
                 );
             }
-            [SignatureCandidate::Local { ty }] => {
+            [candidate @ SignatureCandidate::Local { ty }] => {
                 let ty = ty.clone();
-                let first = FirstArg {
-                    ty: self.check_expr(receiver),
-                    site: ArgSite::value(receiver, call_span),
-                };
+                let mode = self.solver.receiver_mode(candidate);
+                let first = self.receiver_arg(receiver, mode, call_span);
                 return self.check_local_call(callee_id, &ty, Some(&first), args, call_span);
             }
             _ => {
@@ -3882,33 +3832,47 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// receiver that is a value is bound to a temporary storage and that
     /// temporary is lent.
     fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
-        match mode {
-            ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => FirstArg {
-                ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
-                site: ArgSite::lent(receiver, taken_by),
-            },
+        let (first, passing) = match mode {
+            ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => {
+                let ty =
+                    self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span());
+                let first = FirstArg {
+                    ty,
+                    site: ArgSite::lent(receiver, taken_by),
+                };
+                (first, Passing::Lent(mutability))
+            }
             ReceiverMode::Lent(mutability) => {
                 let ty = self.check_expr(receiver);
                 if matches!(
                     self.solver.resolve_ty(&ty),
                     TyTerm::Ref(..) | TyTerm::Error(_)
                 ) {
-                    return FirstArg {
+                    let first = FirstArg {
                         ty,
                         site: ArgSite::value(receiver, taken_by),
                     };
-                }
-                FirstArg {
-                    ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
-                    site: ArgSite::lent(receiver, taken_by),
+                    (first, Passing::AsIs)
+                } else {
+                    let first = FirstArg {
+                        ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
+                        site: ArgSite::lent(receiver, taken_by),
+                    };
+                    (first, Passing::Lent(mutability))
                 }
             }
-            ReceiverMode::Value => FirstArg {
-                ty: self.check_expr(receiver),
-                site: ArgSite::value(receiver, taken_by),
-            },
-        }
+            ReceiverMode::Value => {
+                let first = FirstArg {
+                    ty: self.check_expr(receiver),
+                    site: ArgSite::value(receiver, taken_by),
+                };
+                (first, Passing::Value)
+            }
+        };
+        self.receiver_passing.insert(receiver.id(), passing);
+        first
     }
+
 
     /// The receiver of a method call whose name is still a set: one more
     /// argument, admitted per candidate in that candidate's own mode
@@ -4043,20 +4007,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         mode: ReceiverMode,
         taken_by: Span,
     ) -> FirstArg {
-        match mode {
-            ReceiverMode::Lent(mutability) => FirstArg {
-                ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
-                site: ArgSite::lent(receiver, taken_by),
-            },
+        let (first, passing) = match mode {
+            ReceiverMode::Lent(mutability) => {
+                let first = FirstArg {
+                    ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
+                    site: ArgSite::lent(receiver, taken_by),
+                };
+                (first, Passing::Lent(mutability))
+            }
             ReceiverMode::Value => {
                 let refused = self.reads_through_reference(receiver)
                     && self.refuse_deref_of_non_primitive(&owned, receiver.span());
-                FirstArg {
+                let first = FirstArg {
                     ty: if refused { Self::infer_error() } else { owned },
                     site: ArgSite::value(receiver, taken_by),
-                }
+                };
+                (first, Passing::Value)
             }
-        }
+        };
+        self.receiver_passing.insert(receiver.id(), passing);
+        first
     }
 
     /// RFC-0018: a read that takes a non-primitive out of a place named
