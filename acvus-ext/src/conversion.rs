@@ -1,6 +1,8 @@
 //! Type conversions. All pure.
 //!
-//! `core::to_string` and `core::to_int` are shared signatures (RFC-0019).
+//! `core::to_int` is a shared signature (RFC-0019); `core::to_string` is
+//! declared beside the other core signatures in `acvus_extern::core` and
+//! its instances at the language's own types are here.
 //! `to_int` converts a `Bool` and nothing else: every number-to-number
 //! conversion is `expr as T` in the language (RFC-0049), which is total,
 //! reaches every width in both directions, and is a chain leaf rather than
@@ -21,13 +23,6 @@ pub mod sig {
 
     extern_signature! {
         ns: "core",
-        fn to_string<T>(a: &T) -> String
-        where
-            T: Var<kind::Type>;
-    }
-
-    extern_signature! {
-        ns: "core",
         fn to_int<T>(a: &T) -> i64
         where
             T: Var<kind::Type>;
@@ -38,7 +33,7 @@ pub mod sig {
 
 macro_rules! to_string_ints {
     ($($name:ident: $t:ty),* $(,)?) => {$(
-        #[extern_fn(instance_of = sig::to_string, effect = pure)]
+        #[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
         fn $name(a: &$t) -> String {
             a.to_string()
         }
@@ -50,22 +45,22 @@ to_string_ints! {
     to_string_u8: u8, to_string_u16: u16, to_string_u32: u32, to_string_u64: u64,
 }
 
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
 fn to_string_float(a: &f64) -> String {
     a.to_string()
 }
 
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
 fn to_string_char(a: &char) -> String {
     a.to_string()
 }
 
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
 fn to_string_bool(a: &bool) -> String {
     a.to_string()
 }
 
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
 fn to_string_string(a: &String) -> String {
     a.clone()
 }
@@ -73,7 +68,7 @@ fn to_string_string(a: &String) -> String {
 /// The copy RFC-0062 Decision 3 names: a `&str` reaches a `String`
 /// parameter only through this, and `"x".to_string()` is how a literal is
 /// written where an owned string is wanted.
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
 fn to_string_str(a: &str) -> String {
     a.to_owned()
 }
@@ -191,7 +186,7 @@ fn int_to_char(n: i64) -> Result<char, CharError> {
 pub fn conversion_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
-        signatures: [sig::to_string, sig::to_int],
+        signatures: [sig::to_int],
         fns: [
             to_string_i8, to_string_i16, to_string_i32, to_string_int,
             to_string_u8, to_string_u16, to_string_u32, to_string_u64,
@@ -214,7 +209,7 @@ mod tests {
         let reg = Externs::combine(vec![conversion_registry::<TypesOnly>()], &i)
             .expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
-        let signatures = 2;
+        let signatures = 1;
         let plain_fns = 1;
         assert_eq!(
             reg.functions.len() - core.functions.len(),

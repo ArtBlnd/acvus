@@ -358,6 +358,7 @@ pub struct InstanceSig {
     pub ty: PolyTy,
     pub admits: Task,
     pub task: Task,
+    pub requires: Vec<RequirementSig>,
 }
 
 impl InstanceSig {
@@ -366,6 +367,7 @@ impl InstanceSig {
             ty,
             admits: Task::Heavy,
             task: Task::Sync,
+            requires: Vec::new(),
         }
     }
 }
@@ -3563,7 +3565,8 @@ mod tests {
     fn unify_same_concrete() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(s.unify(&TyTerm::I64, &TyTerm::I64).is_ok());
         assert!(s.unify(&TyTerm::Float, &TyTerm::Float).is_ok());
         assert!(s.unify(&TyTerm::String, &TyTerm::String).is_ok());
@@ -3575,7 +3578,8 @@ mod tests {
     fn unify_different_concrete_fails() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(s.unify(&TyTerm::I64, &TyTerm::Float).is_err());
         assert!(s.unify(&TyTerm::String, &TyTerm::Bool).is_err());
     }
@@ -3584,7 +3588,8 @@ mod tests {
     fn unify_var_with_concrete() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let t = s.fresh_ty_var();
         assert!(s.unify(&t, &TyTerm::I64).is_ok());
         assert_eq!(s.resolve_ty(&t), TyTerm::I64);
@@ -3594,7 +3599,8 @@ mod tests {
     fn unify_object() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let interner = Interner::new();
         let t = s.fresh_ty_var();
         let obj1 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
@@ -3613,7 +3619,8 @@ mod tests {
     fn two_objects_join_to_the_union_of_their_fields() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let interner = Interner::new();
         let obj1 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
             interner.intern("name"),
@@ -3639,7 +3646,8 @@ mod tests {
     fn transitive_resolution() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let t1 = s.fresh_ty_var();
         let t2 = s.fresh_ty_var();
         assert!(s.unify(&t1, &t2).is_ok());
@@ -3780,7 +3788,8 @@ mod tests {
         // Var -> {a} then Var -> {b} should merge to {a, b}
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let i = Interner::new();
         let v = s.fresh_ty_var();
         let obj_a = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
@@ -3809,7 +3818,8 @@ mod tests {
         // Var -> {a, b} then Var -> {b, c} should merge to {a, b, c}
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let i = Interner::new();
         let v = s.fresh_ty_var();
         let obj_ab = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([
@@ -3839,7 +3849,8 @@ mod tests {
         // {b: Int} and {b: String} via same Var should fail
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let i = Interner::new();
         let v = s.fresh_ty_var();
         let obj1 = TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
@@ -3858,7 +3869,8 @@ mod tests {
     fn fresh_param_produces_unique_ids() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let o1 = s.fresh_ty_var();
         let o2 = s.fresh_ty_var();
         let o3 = s.fresh_ty_var();
@@ -3882,7 +3894,8 @@ mod tests {
         // Var = List<Var> should fail (occurs) regardless of polarity.
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let v = s.fresh_ty_var();
         let cyclic = arr(v.clone(), 3);
         assert!(s.unify(&v, &cyclic).is_err());
@@ -3909,7 +3922,8 @@ mod tests {
         // Same concrete type: Invariant must succeed regardless of order.
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let l1 = arr(TyTerm::I64, 3);
         let l2 = arr(TyTerm::I64, 3);
         assert!(s.unify(&l1, &l2).is_ok());
@@ -3952,7 +3966,8 @@ mod tests {
     fn list_vs_tuple_fails_any_polarity() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let l = arr(TyTerm::I64, 3);
         let t = TyTerm::Tuple(vec![TyTerm::I64]);
         assert!(s.unify(&l, &t).is_err());
@@ -3994,7 +4009,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(s.unify(&ud(id, vec![]), &ud(id, vec![])).is_ok());
     }
 
@@ -4010,7 +4026,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(
             s.unify(&ud(id, vec![TyTerm::I64]), &ud(id, vec![TyTerm::I64]))
                 .is_ok()
@@ -4029,7 +4046,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let p = s.fresh_ty_var();
         assert!(
             s.unify(&ud(id, vec![p.clone()]), &ud(id, vec![TyTerm::I64]))
@@ -4051,7 +4069,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let p = s.fresh_ty_var();
         assert!(
             s.unify(
@@ -4069,7 +4088,8 @@ mod tests {
     fn user_defined_different_id_fails() {
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let id_a = fresh_qref();
         let id_b = fresh_qref();
         assert!(s.unify(&ud(id_a, vec![]), &ud(id_b, vec![])).is_err());
@@ -4087,7 +4107,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(
             s.unify(&ud(id, vec![TyTerm::I64]), &ud(id, vec![TyTerm::String]))
                 .is_err()
@@ -4106,7 +4127,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(s.unify(&ud(id, vec![]), &TyTerm::I64).is_err());
         assert!(s.unify(&TyTerm::String, &ud(id, vec![])).is_err());
     }
@@ -4125,7 +4147,8 @@ mod tests {
             identity_params: 0,
             specializable: vec![false],
         });
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
         let p = s.fresh_ty_var();
         let ty = arr(ud(id, vec![p.clone()]), 3);
         assert!(s.unify(&p, &TyTerm::I64).is_ok());
@@ -4242,7 +4265,8 @@ mod tests {
             registry,
         } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
         let mut sources = Sources::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
 
         let from = TyTerm::UserDefined {
             id,
@@ -4267,7 +4291,8 @@ mod tests {
             registry,
         } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
         let mut sources = Sources::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
 
         let from = TyTerm::UserDefined {
             id,
@@ -4294,7 +4319,8 @@ mod tests {
             registry,
         } = make_cast_registry(0, |_| TyTerm::I64);
         let mut sources = Sources::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
 
         let from = TyTerm::UserDefined {
             id,
@@ -4320,7 +4346,8 @@ mod tests {
             registry,
         } = make_cast_registry(1, |p| arr(p[0].clone(), 3));
         let mut sources = Sources::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
 
         let from = TyTerm::UserDefined {
             id,
@@ -4337,7 +4364,8 @@ mod tests {
         let id = fresh_qref();
         let mut sources = Sources::new();
         let registry = TypeRegistry::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
 
         let from = TyTerm::UserDefined {
             id,
@@ -4356,7 +4384,8 @@ mod tests {
             registry,
         } = make_cast_registry(0, |_| TyTerm::I64);
         let mut sources = Sources::new();
-        let mut s = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
 
         let from = TyTerm::UserDefined {
             id,
@@ -4415,7 +4444,8 @@ mod tests {
         });
         reg.from_rules.entry(id).or_default().push(rule_a);
         reg.from_rules.entry(id).or_default().push(rule_b);
-        let mut s = Solver::new(&mut sources, &reg);
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &reg, &signatures);
 
         let from = TyTerm::UserDefined {
             id,

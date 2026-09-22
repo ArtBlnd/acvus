@@ -25,12 +25,12 @@
 //! what an instance returns is a `T`, not a runtime value read back.
 
 use std::marker::PhantomData;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 
 use acvus_extern::{Arr, Erased, OneValue, PassedByValue};
 use acvus_extern::{
-    Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared, Stored,
-    TransparentOver, Var, extern_fn, kind,
+    Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared,
+    Stored, TransparentOver, Var, core, extern_fn, kind,
 };
 
 /// The shared signatures of the iterator surface.
@@ -733,6 +733,22 @@ where
     (!chunk.is_empty()).then_some(chunk)
 }
 
+/// The element `Dedup` has drawn and not yet yielded. The stage yields the
+/// element it holds when it meets the next one that differs, one draw
+/// behind its source, because it keeps the element itself and requires no
+/// `core::clone` to keep a copy of it.
+enum Held<T> {
+    NothingDrawn,
+    Drawn(T),
+    SourceSpent,
+}
+
+enum Step<T> {
+    DrawAgain,
+    Yield(T),
+    End,
+}
+
 pub struct DedupBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -742,13 +758,44 @@ where
 {
     pub(crate) inner: I,
     pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) last: Option<T>,
+    pub(crate) eq: Instance<core::eq<T, Rt>, T, Rt>,
+    pub(crate) held: Held<T>,
 }
 
-/// Consecutive equal elements collapsed to the first. The stage keeps a
-/// clone of the last element it yielded, so it is built by a `Monomorphize`
-/// member and holds the element as the Rust type it is, `Dedup<_, #T, _>`,
-/// with one `next` per member.
+impl<I, T, E, Rt> DedupBody<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    fn has_source(&self) -> bool {
+        !matches!(self.held, Held::SourceSpent)
+    }
+
+    fn absorb(&mut self, ctx: &mut Ctx<'_, Rt>, drawn: Option<T>) -> Step<T> {
+        match (std::mem::replace(&mut self.held, Held::SourceSpent), drawn) {
+            (Held::SourceSpent, _) | (Held::NothingDrawn, None) => Step::End,
+            (Held::NothingDrawn, Some(item)) => {
+                self.held = Held::Drawn(item);
+                Step::DrawAgain
+            }
+            (Held::Drawn(last), None) => Step::Yield(last),
+            (Held::Drawn(last), Some(item)) => {
+                if self.eq.call(ctx, &last, (&*item,)) {
+                    self.held = Held::Drawn(last);
+                    Step::DrawAgain
+                } else {
+                    self.held = Held::Drawn(item);
+                    Step::Yield(last)
+                }
+            }
+        }
+    }
+}
+
+/// Consecutive equal elements collapsed to the first, the element's own
+/// `core::eq` deciding which are equal.
 #[derive(ExternType)]
 #[extern_type(name = "Dedup")]
 #[repr(transparent)]
@@ -759,53 +806,66 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-macro_rules! next_dedup_of {
-    (element: $t:ty, now: $now:ident, later: $later:ident) => {
-        fn $now<I, E, Rt>(
-            ctx: &mut Ctx<'_, Rt>,
-            it: &mut Dedup<I, $t, E, Rt>,
-        ) -> Option<$t>
-        where
-            I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            while let Some(item) = it.0.next.call(ctx, &mut it.0.inner, ()) {
-                if it.0.last.as_ref() == Some(&item) {
-                    continue;
-                }
-                it.0.last = Some(item.clone());
-                return Some(item);
-            }
-            None
-        }
-
-        #[extern_fn(instance_of = sig::next, effect = E, sync = $now)]
-        pub(crate) async fn $later<I, E, Rt>(
-            ctx: &mut Ctx<'_, Rt>,
-            it: &mut Dedup<I, $t, E, Rt>,
-        ) -> Option<$t>
-        where
-            I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            while let Some(item) = it.0.next.call_await(ctx, &mut it.0.inner, ()).await {
-                if it.0.last.as_ref() == Some(&item) {
-                    continue;
-                }
-                it.0.last = Some(item.clone());
-                return Some(item);
-            }
-            None
-        }
-    };
+impl<I, T, E, Rt> Dedup<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) fn drawing(
+        inner: I,
+        next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+        eq: Instance<core::eq<T, Rt>, T, Rt>,
+    ) -> Self {
+        Dedup(DedupBody {
+            inner,
+            next,
+            eq,
+            held: Held::NothingDrawn,
+        })
+    }
 }
 
-next_dedup_of!(element: i64, now: next_dedup_int_now, later: next_dedup_int);
-next_dedup_of!(element: f64, now: next_dedup_float_now, later: next_dedup_float);
-next_dedup_of!(element: bool, now: next_dedup_bool_now, later: next_dedup_bool);
-next_dedup_of!(element: String, now: next_dedup_string_now, later: next_dedup_string);
+fn next_dedup_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Dedup<I, T, E, Rt>) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    while it.0.has_source() {
+        let drawn = it.0.next.call(ctx, &mut it.0.inner, ());
+        match it.0.absorb(ctx, drawn) {
+            Step::DrawAgain => {}
+            Step::Yield(item) => return Some(item),
+            Step::End => return None,
+        }
+    }
+    None
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_dedup_now)]
+pub(crate) async fn next_dedup<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Dedup<I, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    while it.0.has_source() {
+        let drawn = it.0.next.call_await(ctx, &mut it.0.inner, ()).await;
+        match it.0.absorb(ctx, drawn) {
+            Step::DrawAgain => {}
+            Step::Yield(item) => return Some(item),
+            Step::End => return None,
+        }
+    }
+    None
+}
 
 pub struct ChainBody<A, B, T, E, Rt>
 where

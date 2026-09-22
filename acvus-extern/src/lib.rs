@@ -44,8 +44,8 @@ pub use handler::{
     glue_at_instance,
 };
 pub use instance::{
-    CalledAt, Instance, InstanceRun, Later, Now, RequirementOf, RestRun, RestoreByValue,
-    RestoreExclusive, RestoreShared, Signature,
+    CalledAt, Instance, InstanceEntry, InstanceRun, Later, Now, Receiver, RequirementOf, RestRun,
+    RestoreByValue, RestoreExclusive, RestoreShared, Signature,
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
@@ -79,7 +79,7 @@ pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, exte
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{
     CastRule, Effect, EffectTerm, IdentityTerm, LenTerm, Mutability, ObjectTy, ParamTerm, Poly,
-    PolyBuilder, PolyTy, Repr, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
+    PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
     UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };
 pub use acvus_utils::{Astr, Interner, QualifiedRef};

@@ -245,11 +245,14 @@ fn a_binding_that_takes_the_argument_directly_drops_the_signature_that_converts_
 }
 
 #[test]
-fn the_conversion_that_reaches_iter_count_still_runs_with_no_binding() {
+fn an_explicit_into_iter_reaches_iter_count_with_no_binding() {
     let i = Interner::new();
-    let c = checked(&i, "let q = [1.0, 2.0]; count(q)");
+    let c = checked(&i, "let q = [1.0, 2.0]; count(into_iter(q))");
     assert_eq!(c.ret, Ty::I64);
-    assert_eq!(c.callees, vec!["iter::count".to_string()]);
+    assert_eq!(
+        c.callees,
+        vec!["iter::count".to_string(), "iter::into_iter".to_string()]
+    );
 }
 
 /// A lambda's parameter is such a binding: nothing has fixed its head

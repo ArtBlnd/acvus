@@ -101,13 +101,13 @@ impl Runtime for AcvusRuntime {
     type FusedCall = call::Call;
     type FusedShape = call::FusedShape;
 
-    fn instance_value(at: acvus_extern::InstanceRun) -> Value {
-        Value::instance(at)
+    fn instance_value(entry: &acvus_extern::InstanceEntry<Self>) -> Value {
+        Value::instance(entry)
     }
 
-    unsafe fn instance_run(value: &Value) -> acvus_extern::InstanceRun {
+    unsafe fn instance_entry<'a>(value: &'a Value) -> &'a acvus_extern::InstanceEntry<Self> {
         // SAFETY: the caller's contract: `instance_value` wrote this value.
-        unsafe { value.as_instance() }
+        unsafe { value.as_instance_entry() }
     }
 
     fn rooted(&self) -> RootedCtx<'_> {

@@ -11,7 +11,7 @@
 
 let bare = |w| -> w.strip_suffix(".").or_else(| | -> w.strip_suffix(",")).unwrap_or(w);
 
-let counts = hash_map(|k| -> hash(k), |a, b| -> a == b);
+let counts = hash_map();
 let total = 0;
 
 let raw = &@text | split_whitespace;

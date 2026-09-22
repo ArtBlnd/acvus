@@ -46,7 +46,7 @@ where
 {
     type Table: Clone + Send + Sync + 'static;
 
-    fn table(at: ArgAt<'_, Rt>) -> Self::Table;
+    fn table(at: ArgAt<'_>) -> Self::Table;
 
     /// # Safety
     /// `value` holds what `Self`'s crossing wrote, and the storage it names
@@ -99,7 +99,7 @@ where
     type At<'a>;
     type Table: Clone + Send + Sync + 'static;
 
-    fn table(at: ArgAt<'_, Rt>) -> Self::Table;
+    fn table(at: ArgAt<'_>) -> Self::Table;
 
     /// # Safety
     /// `reference` names a live object storage holding what the owner's
@@ -125,13 +125,10 @@ where
 /// projection borrows. `typeck.rs::refused_projection_parameter` refuses
 /// such an argument ahead of preparation, and the seven cases that fix it
 /// are `acvus-mir-test/tests/projection_parameter.rs`.
-pub fn object_fields_at<'a, Rt, const K: usize>(
-    at: ArgAt<'a, Rt>,
+pub fn object_fields_at<'a, const K: usize>(
+    at: ArgAt<'a>,
     names: [&str; K],
-) -> [(FieldAt, ArgAt<'a, Rt>); K]
-where
-    Rt: Runtime,
-{
+) -> [(FieldAt, ArgAt<'a>); K] {
     let object = match at.ty {
         Ty::Ref(_, inner) => &inner.ty,
         other => other,
@@ -157,7 +154,6 @@ where
             ArgAt {
                 interner: at.interner,
                 ty,
-                instances: at.instances,
             },
         )
     })
@@ -176,13 +172,10 @@ where
 /// The settled type names no enum, or the enum lacks a variant the
 /// projection names. The checker settles the declared enum's own type on a
 /// projection's argument.
-pub fn variant_tags_at<'a, Rt, const K: usize>(
-    at: ArgAt<'a, Rt>,
+pub fn variant_tags_at<'a, const K: usize>(
+    at: ArgAt<'a>,
     names: [&str; K],
-) -> [(u64, Option<ArgAt<'a, Rt>>); K]
-where
-    Rt: Runtime,
-{
+) -> [(u64, Option<ArgAt<'a>>); K] {
     let declared = match at.ty {
         Ty::Ref(_, inner) => &inner.ty,
         other => other,
@@ -204,7 +197,6 @@ where
         let payload = payload.as_deref().map(|ty| ArgAt {
             interner: at.interner,
             ty,
-            instances: at.instances,
         });
         (key.bits(), payload)
     })
@@ -213,10 +205,7 @@ where
 /// # Panics
 /// The variant carries no payload at this site, where the projection
 /// declares one.
-pub fn payload_at<'a, Rt>(at: Option<ArgAt<'a, Rt>>, name: &str) -> ArgAt<'a, Rt>
-where
-    Rt: Runtime,
-{
+pub fn payload_at<'a>(at: Option<ArgAt<'a>>, name: &str) -> ArgAt<'a> {
     let Some(at) = at else {
         panic!(
             "the variant `{name}` carries no payload at this call site, and the projection \
@@ -399,7 +388,7 @@ where
 {
     type Table = <T as Project<Rt>>::Table;
 
-    fn table(at: ArgAt<'_, Rt>) -> Self::Table {
+    fn table(at: ArgAt<'_>) -> Self::Table {
         let payload = match at.ty {
             Ty::Option(inner) => &**inner,
             other => other,
@@ -407,7 +396,6 @@ where
         <T as Project<Rt>>::table(ArgAt {
             interner: at.interner,
             ty: payload,
-            instances: at.instances,
         })
     }
 
@@ -507,7 +495,7 @@ macro_rules! borrowed_as_self {
         {
             type Table = ();
 
-            fn table(_: $crate::ArgAt<'_, __Rt>) {}
+            fn table(_: $crate::ArgAt<'_>) {}
 
             unsafe fn project<'__a>(
                 __rt: &'__a __Rt,

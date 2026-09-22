@@ -7,6 +7,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::error::OperatorSignature;
 use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess, IndexMode, Inst,
@@ -2372,19 +2373,7 @@ impl<'a> Lowerer<'a> {
     /// instruction and return the new ValueId. Otherwise return `val` as-is.
     fn maybe_cast(&mut self, id: AstId, span: Span, val: ValueId) -> ValueId {
         match self.coercion_lookup.get(&id).cloned() {
-            Some(CastKind::Extern {
-                fn_ref,
-                instance,
-                callee_ty,
-            }) => self.emit_extern_cast(
-                span,
-                &ExternCast {
-                    fn_ref,
-                    instance,
-                    callee_ty,
-                },
-                val,
-            ),
+            Some(CastKind::Extern(cast)) => self.emit_extern_cast(span, &cast, val),
             Some(CastKind::Slice {
                 mutability,
                 as_slice,
@@ -2445,6 +2434,7 @@ impl<'a> Lowerer<'a> {
             Callee::Extern {
                 id: cast.fn_ref,
                 instance: cast.instance,
+                required: cast.required.clone(),
             },
             cast.callee_ty.clone(),
             vec![val],
@@ -2621,26 +2611,58 @@ impl<'a> Lowerer<'a> {
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
                     let dst = self.alloc_expr(*id);
-                    let (call_dst, negate) = match op {
-                        BinOp::Neq => {
-                            let v = self.alloc_val();
-                            self.set_val_type(v, Ty::Bool);
-                            (v, true)
+                    return match call.signature {
+                        OperatorSignature::Eq => {
+                            let (call_dst, negate) = match op {
+                                BinOp::Neq => {
+                                    let v = self.alloc_val();
+                                    self.set_val_type(v, Ty::Bool);
+                                    (v, true)
+                                }
+                                _ => (dst, false),
+                            };
+                            self.emit_call(*span, call_dst, callee, fn_ty, vec![l, r]);
+                            if negate {
+                                self.emit_inst(
+                                    *span,
+                                    InstKind::UnaryOp {
+                                        dst,
+                                        op: UnaryOp::Not,
+                                        operand: call_dst,
+                                    },
+                                );
+                            }
+                            dst
                         }
-                        _ => (dst, false),
+                        OperatorSignature::Cmp => {
+                            let Ty::Fn { ret, .. } = &fn_ty else {
+                                panic!("a shared signature's callee_ty is not Fn: {fn_ty:?}")
+                            };
+                            let ret = (**ret).clone();
+                            let ordering = self.alloc_val();
+                            self.set_val_type(ordering, ret.clone());
+                            self.emit_call(*span, ordering, callee, fn_ty, vec![l, r]);
+                            let zero = self.alloc_val();
+                            self.set_val_type(zero, ret);
+                            self.emit_inst(
+                                *span,
+                                InstKind::Const {
+                                    dst: zero,
+                                    value: Literal::Int(0),
+                                },
+                            );
+                            self.emit_inst(
+                                *span,
+                                InstKind::BinOp {
+                                    dst,
+                                    op: *op,
+                                    left: ordering,
+                                    right: zero,
+                                },
+                            );
+                            dst
+                        }
                     };
-                    self.emit_call(*span, call_dst, callee, fn_ty, vec![l, r]);
-                    if negate {
-                        self.emit_inst(
-                            *span,
-                            InstKind::UnaryOp {
-                                dst,
-                                op: UnaryOp::Not,
-                                operand: call_dst,
-                            },
-                        );
-                    }
-                    return dst;
                 }
                 let l = self.lower_expr(left);
                 let r = self.lower_expr(right);
@@ -3272,21 +3294,9 @@ impl<'a> Lowerer<'a> {
                 });
                 self.emit_ref(span, place.target, place.path, mutability, held)
             }
-            Some(CastKind::Extern {
-                fn_ref,
-                instance,
-                callee_ty,
-            }) => {
+            Some(CastKind::Extern(cast)) => {
                 let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
-                self.emit_extern_cast(
-                    span,
-                    &ExternCast {
-                        fn_ref,
-                        instance,
-                        callee_ty,
-                    },
-                    reference,
-                )
+                self.emit_extern_cast(span, &cast, reference)
             }
             Some(CastKind::Slice {
                 mutability: sliced,

@@ -6,15 +6,17 @@ use acvus_ast::{
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::error::{DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, ShownValue};
+use crate::error::{
+    DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
+};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, CastKind, ExternCast, ForKind, IndexAccess, IndexMode};
+use crate::ir::{Callee, CastKind, Chosen, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
     Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice,
     InstanceKind, LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch, MismatchReason,
-    ReceiverMode, ReferencePair, SettledSignature, SignatureCandidate, SignatureName,
-    SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
+    ReceiverMode, ReferencePair, RequiredDecision, SettledSignature, SignatureCandidate,
+    SignatureName, SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -465,6 +467,7 @@ pub use crate::ir::Intrinsic;
 #[derive(Debug, Clone)]
 pub struct OperatorCall<C, T> {
     pub callee: C,
+    pub signature: OperatorSignature,
     pub ty: T,
     pub at: Span,
 }
@@ -621,14 +624,14 @@ struct ResolvedCallee {
     qref: QualifiedRef,
     instance: Option<InstanceChoice>,
     /// One instance decision per requirement the declaration states.
-    requirements: Vec<DecisionId>,
+    requirements: Vec<RequiredDecision>,
 }
 
 /// A scheme instantiated at a use: its type and the decisions the use opened.
 struct SchemeAt {
     ty: InferTy,
     instance: Option<InstanceChoice>,
-    requirements: Vec<DecisionId>,
+    requirements: Vec<RequiredDecision>,
 }
 
 /// RFC-0043.
@@ -976,6 +979,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
+    requirer_of: FxHashMap<DecisionId, DecisionId>,
     /// The declaration whose scheme opened each instance decision: the
     /// callee for a call's own instance, and the declaration that carries
     /// the requirement for a requirement's instance. A refusal names it.
@@ -1026,6 +1030,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
+            requirer_of: FxHashMap::default(),
             decision_callees: FxHashMap::default(),
             source_begins_by_decision: FxHashMap::default(),
             errors: Vec::new(),
@@ -1692,6 +1697,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let refused = self.solver.settle();
         self.refused_in_body.extend(refused);
         self.place_begun_sources();
+        self.place_opened_children();
+    }
+
+    fn place_opened_children(&mut self) {
+        for crate::solver::OpenedChild { parent, child } in self.solver.take_opened_children() {
+            self.requirer_of.insert(child, parent);
+        }
     }
 
     fn place_begun_sources(&mut self) {
@@ -2457,9 +2469,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.source_begins_by_decision
                 .insert(decision, site.source_begins);
         }
-        for decision in &inst.requirements {
-            self.decision_sites.insert(*decision, site.at);
-            self.decision_callees.insert(*decision, qref);
+        for required in &inst.requirements {
+            self.decision_sites.insert(required.id, site.at);
+            self.decision_callees.insert(required.id, qref);
         }
         let mut minted = Vec::new();
         inst.ty.for_each_source(&mut |id| minted.push(id));
@@ -2477,49 +2489,51 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// is too open to choose an instance, which the lowering treats as it
     /// treats any unresolved call.
     fn callee_of(&self, resolved: &ResolvedCallee) -> Option<Callee> {
-        let instance = match resolved.instance {
+        let (instance, own_requirements) = match resolved.instance {
             None => return Some(Callee::Direct(resolved.qref)),
-            Some(InstanceChoice::Fixed(instance)) => instance,
-            Some(InstanceChoice::Decided(decision)) => match self.solver.answer(decision)? {
-                Answer::Instance(InstanceKind::Extern(instance)) => instance,
-                Answer::Instance(InstanceKind::Intrinsic(_)) => return None,
-                Answer::Conversion(_)
-                | Answer::Signature { .. }
-                | Answer::Lend(_)
-                | Answer::Capture(_)
-                | Answer::Match(_) => {
-                    unreachable!("an instance decision answers with an instance")
-                }
-            },
+            Some(InstanceChoice::Fixed(instance)) => (instance, [].as_slice()),
+            Some(InstanceChoice::Decided(decision)) => (
+                self.settled_instance(decision)?,
+                self.solver.children_of(decision),
+            ),
         };
         let required = resolved
             .requirements
             .iter()
-            .map(|decision| match self.solver.answer(*decision)? {
-                Answer::Instance(InstanceKind::Extern(instance)) => Some(instance),
-                Answer::Instance(InstanceKind::Intrinsic(_)) => None,
-                Answer::Conversion(_)
-                | Answer::Signature { .. }
-                | Answer::Lend(_)
-                | Answer::Capture(_)
-                | Answer::Match(_) => {
-                    unreachable!("an instance decision answers with an instance")
-                }
-            })
+            .chain(own_requirements)
+            .map(|required| self.chosen_of(*required))
             .collect::<Option<Vec<_>>>()?;
-        let instance = match required.is_empty() {
-            true => instance,
-            false => {
-                let scheme = self.env.functions.get(&resolved.qref)?;
-                crate::ir::OverloadSpace::of(scheme).position(&crate::ir::Overload {
-                    own: instance,
-                    required,
-                })
-            }
-        };
         Some(Callee::Extern {
             id: resolved.qref,
             instance,
+            required,
+        })
+    }
+
+    fn settled_instance(&self, decision: DecisionId) -> Option<usize> {
+        match self.solver.answer(decision)? {
+            Answer::Instance(InstanceKind::Extern(instance)) => Some(instance),
+            Answer::Instance(InstanceKind::Intrinsic(_)) => None,
+            Answer::Conversion(_)
+            | Answer::Signature { .. }
+            | Answer::Lend(_)
+            | Answer::Capture(_)
+            | Answer::Match(_) => {
+                unreachable!("an instance decision answers with an instance")
+            }
+        }
+    }
+
+    fn chosen_of(&self, required: RequiredDecision) -> Option<Chosen> {
+        Some(Chosen {
+            signature: required.signature,
+            instance: self.settled_instance(required.id)?,
+            required: self
+                .solver
+                .children_of(required.id)
+                .iter()
+                .map(|child| self.chosen_of(*child))
+                .collect::<Option<Vec<_>>>()?,
         })
     }
 
@@ -2611,6 +2625,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         vec![Candidate {
             instance: InstanceKind::Intrinsic(Intrinsic::StringClone),
+            requires: Vec::new(),
             ty: TyTerm::Fn {
                 params: vec![ParamTerm::new(
                     self.interner.intern("a"),
@@ -2639,18 +2654,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .filter_map(|coercion| {
                 let kind = match &coercion.cast {
-                    PendingCast::Value(cast) => {
-                        let ExternCast {
-                            fn_ref,
-                            instance,
-                            callee_ty,
-                        } = self.frozen_cast(cast)?;
-                        CastKind::Extern {
-                            fn_ref,
-                            instance,
-                            callee_ty,
-                        }
-                    }
+                    PendingCast::Value(cast) => CastKind::Extern(self.frozen_cast(cast)?),
                     PendingCast::ThroughRef {
                         mutability,
                         cast,
@@ -2680,7 +2684,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Callee::Extern {
             id: fn_ref,
             instance,
-            ..
+            required,
         } = self.callee_of(&cast.callee)?
         else {
             unreachable!("a cast is an Extern function (RFC-0023)")
@@ -2688,6 +2692,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Some(ExternCast {
             fn_ref,
             instance,
+            required,
             callee_ty: cast.callee_ty.clone(),
         })
     }
@@ -2699,6 +2704,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let mut unsettled = std::mem::take(&mut self.refused_in_body);
         unsettled.extend(self.solver.solve());
         self.place_begun_sources();
+        self.place_opened_children();
         self.report_unsettled(unsettled);
         for BranchMismatch { then, else_, span } in std::mem::take(&mut self.branch_mismatches) {
             self.error(
@@ -2972,6 +2978,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.note_call_effect(&effect, span);
         }
         let unsettled = self.solver.settle();
+        self.place_opened_children();
         self.report_unsettled(unsettled);
         let callee_ty = self.closed_or_refused(&self.solver.resolve_ty(&inst), span);
         PendingExternCast {
@@ -2987,6 +2994,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn decision_span(&self, decision: DecisionId) -> Span {
         if let Some(span) = self.decision_sites.get(&decision) {
             return *span;
+        }
+        if let Some(parent) = self.requirer_of.get(&decision) {
+            return self.decision_span(*parent);
         }
         let Some((parent, _)) = self.opening_signature(decision) else {
             unreachable!("a decision is opened at a site or by a settled signature decision")
@@ -3014,7 +3024,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return None;
             };
             (instance == Some(InstanceChoice::Decided(decision))
-                || requirements.contains(&decision))
+                || requirements.iter().any(|required| required.id == decision))
             .then_some((*parent, qref))
         })
     }
@@ -3023,6 +3033,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn decision_callee(&self, decision: DecisionId) -> Option<QualifiedRef> {
         if let Some(qref) = self.decision_callees.get(&decision) {
             return Some(*qref);
+        }
+        if let Some(parent) = self.requirer_of.get(&decision) {
+            return self.decision_callee(*parent);
         }
         self.opening_signature(decision).map(|(_, qref)| qref)
     }
@@ -3266,6 +3279,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     *id,
                     OperatorCall {
                         callee,
+                        signature: call.signature,
                         ty,
                         at: call.at,
                     },
@@ -4316,16 +4330,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         id: AstId,
         op: &'static str,
+        signature: OperatorSignature,
         operand: &InferTy,
         operands: &[InferTy],
         span: Span,
     ) {
-        let qref =
-            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("eq"));
+        let qref = QualifiedRef::qualified(
+            self.interner.intern("core"),
+            self.interner.intern(signature.name()),
+        );
         let Some(scheme) = self.env.functions.get(&qref).cloned() else {
             self.error(
                 MirErrorKind::UndefinedFunction {
-                    name: format!("core::eq for {op}"),
+                    name: format!("{signature} for {op}"),
                     near: DidYouMean::default(),
                 },
                 span,
@@ -4355,7 +4372,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             };
             if self.solver.unify(&borrowed, param).is_err() {
                 let shown = self.type_as_written(operand);
-                self.error(MirErrorKind::NoOperatorInstance { op, ty: shown }, span);
+                self.error(
+                    MirErrorKind::NoOperatorInstance {
+                        op,
+                        signature,
+                        ty: shown,
+                    },
+                    span,
+                );
                 return;
             }
         }
@@ -4369,6 +4393,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     instance,
                     requirements,
                 },
+                signature,
                 ty: fn_ty,
                 at: span,
             },
@@ -5152,7 +5177,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         if !operand.is_primitive()
                             && !matches!(operand, TyTerm::Var(_) | TyTerm::String)
                         {
-                            self.check_operator_call(*id, op_str(*op), &operand, &[lt, rt], *span);
+                            self.check_operator_call(
+                                *id,
+                                op_str(*op),
+                                OperatorSignature::Eq,
+                                &operand,
+                                &[lt, rt],
+                                *span,
+                            );
                         }
                         TyTerm::Bool
                     }
@@ -5210,11 +5242,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             return self.record_ret(*id, TyTerm::Bool);
                         }
                         let operand = self.solver.resolve_ty(&lt);
-                        if !matches!(
-                            operand,
-                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Char | TyTerm::Var(_)
-                        ) {
-                            self.no_ordering(op_str(*op), operand, *span);
+                        match &operand {
+                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Char | TyTerm::Var(_) => {}
+                            word if word.is_primitive() => {
+                                self.no_ordering(op_str(*op), operand.clone(), *span)
+                            }
+                            _ => self.check_operator_call(
+                                *id,
+                                op_str(*op),
+                                OperatorSignature::Cmp,
+                                &operand,
+                                &[lt, rt],
+                                *span,
+                            ),
                         }
                         TyTerm::Bool
                     }
@@ -6741,7 +6781,8 @@ mod tests {
         let template = acvus_ast::parse(interner, source).expect("parse failed");
         let mut sources = crate::ty::Sources::new();
         let registry = TypeRegistry::default();
-        let mut solver = Solver::new(&mut sources, &registry);
+        let signatures = FxHashMap::default();
+        let mut solver = Solver::new(&mut sources, &registry, &signatures);
         let qref_contexts: FxHashMap<QualifiedRef, InferTy> = context
             .iter()
             .map(|(&name, ty)| (QualifiedRef::root(name), crate::ty::lift_ty(ty)))

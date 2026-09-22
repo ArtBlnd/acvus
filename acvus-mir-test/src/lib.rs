@@ -2,7 +2,7 @@ use std::fmt;
 
 use acvus_ast::Span;
 use acvus_ast::report::Label;
-use acvus_extern::{Externs, TypesOnly};
+use acvus_extern::{Externs, Registry, TypesOnly};
 use acvus_mir::cfg;
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::*;
@@ -31,14 +31,27 @@ pub fn inferred_function(qref: QualifiedRef, kind: FnKind, params: Vec<PolyParam
 /// Combine the standard registries: their functions join `functions`, and
 /// the combined type registry is returned for the checker.
 fn extend_with_std(interner: &Interner, functions: &mut Vec<Function>) -> TypeRegistry {
+    extend_with_registries(interner, functions, vec![])
+}
+
+/// `extend_with_std` with registries of the caller's own beside the standard
+/// ones. A test that declares an extension type reaches for this rather than
+/// an `extern_fns` list, because a `Function` carries no type declaration and
+/// the checker refuses a type its registry does not hold.
+fn extend_with_registries(
+    interner: &Interner,
+    functions: &mut Vec<Function>,
+    own: Vec<Registry<TypesOnly>>,
+) -> TypeRegistry {
+    let mut registries = acvus_ext::std_registries::<TypesOnly>();
+    registries.extend(own);
     let Externs {
-        functions: std_fns,
+        functions: combined,
         types,
         handlers: _,
         ..
-    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
-        .expect("standard registries combine");
-    functions.extend(std_fns);
+    } = Externs::combine(registries, interner).expect("the registries combine");
+    functions.extend(combined);
     types
 }
 
@@ -459,7 +472,19 @@ pub fn lowered_script_module(
     extern_fns: &[Function],
 ) -> Result<MirModule, String> {
     let mut pb = PolyBuilder::new();
-    lower_script_returning(interner, source, extern_fns, pb.fresh_ty_var())
+    lower_script_returning(interner, source, extern_fns, vec![], pb.fresh_ty_var())
+}
+
+/// `lowered_script_module` with registries of the caller's own beside the
+/// standard ones, so that a test can declare an extension type and the
+/// instances it holds.
+pub fn lowered_script_module_with_registries(
+    interner: &Interner,
+    source: &str,
+    own: Vec<Registry<TypesOnly>>,
+) -> Result<MirModule, String> {
+    let mut pb = PolyBuilder::new();
+    lower_script_returning(interner, source, &[], own, pb.fresh_ty_var())
 }
 
 /// `lowered_script_module` for a host that declares what the entry returns
@@ -473,13 +498,14 @@ pub fn declared_script_module(
 ) -> Result<MirModule, String> {
     let mut pb = PolyBuilder::new();
     let declared = lift_declaration(&ret, &mut pb);
-    lower_script_returning(interner, source, extern_fns, declared)
+    lower_script_returning(interner, source, extern_fns, vec![], declared)
 }
 
 fn lower_script_returning(
     interner: &Interner,
     source: &str,
     extern_fns: &[Function],
+    own: Vec<Registry<TypesOnly>>,
     ret: acvus_mir::ty::PolyTy,
 ) -> Result<MirModule, String> {
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -495,7 +521,7 @@ fn lower_script_returning(
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
     }];
-    let type_registry = extend_with_std(interner, &mut functions);
+    let type_registry = extend_with_registries(interner, &mut functions, own);
     functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),

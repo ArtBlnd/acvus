@@ -5,7 +5,7 @@
 use acvus_extern::{ExternType, Registry, Runtime, TyArg, extern_fn, extern_registry};
 use serde::{Deserialize, Serialize};
 
-use crate::conversion::sig;
+use crate::word::verdict;
 
 #[derive(ExternType, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -25,7 +25,7 @@ fn decimal(text: String) -> Result<Decimal, DecimalError> {
         .map_err(|_| DecimalError::Unparsable(text))
 }
 
-#[extern_fn(instance_of = sig::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
 fn to_string_decimal(a: &Decimal) -> String {
     a.0.to_string()
 }
@@ -53,10 +53,18 @@ fn clone_decimal(a: &Decimal) -> Decimal {
     a.clone()
 }
 
+#[extern_fn(instance_of = acvus_extern::core::cmp, effect = pure)]
+fn cmp_decimal(a: &Decimal, b: &Decimal) -> i64 {
+    verdict(a.0.cmp(&b.0))
+}
+
 pub fn decimal_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
         types: [Decimal],
-        fns: [decimal, to_string_decimal, decimal_to_float, eq_decimal, clone_decimal],
+        fns: [
+            decimal, to_string_decimal, decimal_to_float,
+            eq_decimal, clone_decimal, cmp_decimal,
+        ],
     }
 }

@@ -304,7 +304,7 @@ fn check_functions(
         .coercion_map
         .iter()
         .map(|(_, kind)| match kind {
-            CastKind::Extern { fn_ref, .. } => i.resolve(fn_ref.name).to_string(),
+            CastKind::Extern(cast) => i.resolve(cast.fn_ref.name).to_string(),
             CastKind::ThroughRef { cast, back, .. } => format!(
                 "&{}/{}",
                 i.resolve(cast.fn_ref.name),
@@ -321,7 +321,9 @@ fn check_functions(
         .direct_calls
         .values()
         .filter_map(|callee| match callee {
-            Callee::Extern { id, instance, .. } => Some((i.resolve(id.name).to_string(), *instance)),
+            Callee::Extern { id, instance, .. } => {
+                Some((i.resolve(id.name).to_string(), *instance))
+            }
             _ => None,
         })
         .collect();
@@ -513,7 +515,8 @@ fn h7_an_unregistered_type_is_refused_where_it_is_named() {
     let i = Interner::new();
     let reg = TypeRegistry::new();
     let mut sources = acvus_mir::ty::Sources::new();
-    let mut solver = acvus_mir::ty::Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut solver = acvus_mir::ty::Solver::new(&mut sources, &reg, &signatures);
     let a = vec_of(
         &i,
         TypeArg::<acvus_mir::ty::Infer>::specialized(TyTerm::String),

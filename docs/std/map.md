@@ -1,26 +1,45 @@
 # `HashMap<K, V>` and `HashSet<K>`
 
-A map holds what a key names. The key's hash and equality are passed at
-construction as two closures, the map stores them, and every operation that
-has to find a key calls them — the `BuildHasher`-and-comparator form Rust
-offers. The map's effect is the join of the two closures', so a lookup
-carries whatever they carry, and over `core::hash` and `==` that is `Pure`.
+A map holds what a key names, and every operation that has to find a key
+asks the key's hash and equality. There are two constructors, and the
+difference between them is where those two come from.
 
-A script names the two like this:
+`hash_map()` and `hash_set()` take no argument and require the key type's
+own `core::hash` and `core::eq` (RFC-0070 D5). The checker settles the key
+type at the call — in `let m = hash_map(); insert(&mut m, 1, 10);` the
+first `insert` settles it — and decides the two instances there; the map
+stores what it was handed and holds no closure. Both instances are pure, so
+a lookup carries nothing of its own:
 
 ```
-let counts = hash_map(|k| -> hash(k), |a, b| -> a == b);
+let counts = hash_map();
+let seen = hash_set();
+```
+
+The key types that reach them are the ones with instances declared:
+`Int`, `Float`, `Bool`, `Byte`, `String`, `Decimal` and a `Vec` of any of
+those. An object or an enum has none, and a script keyed by one is refused
+with `no instance of core::hash has the call type ...`.
+
+`hash_map_by(hash, eq)` and `hash_set_by(hash, eq)` take the two as
+closures, the map stores them, and a lookup carries the join of their
+effects — the `BuildHasher`-and-comparator form Rust offers. This is where
+a key with no instances goes:
+
+```
+let counts = hash_map_by(|k| -> k.x as u64, |a, b| -> a.x == b.x);
 ```
 
 The comparator is written over the two references. `*a == *b` moves a
 `String` out of the reference the comparator was lent and the checker
 refuses it; `a == b` compares what the two references name, at every key
-type. `eq(a, b)` does not work: an instance of `core::eq` is chosen where
-the lambda is written, and the key type is not known until the first
-`insert`, so the choice falls on the wrong instance.
+type. `eq(a, b)` does not work in a lambda: an instance of `core::eq` is
+chosen where the lambda is written, and the key type is not known until the
+first `insert`, so the choice falls on the wrong instance. That is the
+refusal `hash_map()` does not have, because there the requirement is
+decided at the settled key type.
 
-The constructors are `hash_map` and `hash_set` and the types are `HashMap`
-and `HashSet`, which are Rust's own names. A constructor named `map` would
+The types are `HashMap` and `HashSet`, which are Rust's own names. A constructor named `map` would
 join the overload set of `iter::map`, and the two are then ambiguous at a
 call whose lambda parameter type is still open — `examples/grades` stops
 compiling.
@@ -36,8 +55,9 @@ stage whose element fits stands there.
 
 | name | signature | Rust twin | difference |
 | --- | --- | --- | --- |
-| `hash_map` | `Fn(Fn(&K) -> i64, Fn(&K, &K) -> Bool) -> HashMap<K, V>` | `HashMap::with_hasher` | the comparator is passed too; Rust takes `Eq` from the key |
-| `with_capacity` | `Fn(u64, Fn(&K) -> i64, Fn(&K, &K) -> Bool) -> HashMap<K, V>` | `HashMap::with_capacity_and_hasher` | a capacity past the address space traps with `capacity overflow`, as `Vec::with_capacity` does |
+| `hash_map` | `Fn() -> HashMap<K, V>` where `K` has `core::hash` and `core::eq` | `HashMap::new` | the key's own instances stand where Rust's `Hash` and `Eq` bounds do; the map stores no closure |
+| `hash_map_by` | `Fn(Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashMap<K, V>` | `HashMap::with_hasher` | the comparator is passed too; Rust takes `Eq` from the key |
+| `with_capacity` | `Fn(u64, Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashMap<K, V>` | `HashMap::with_capacity_and_hasher` | the closure form, as `hash_map_by`; a capacity past the address space traps with `capacity overflow`, as `Vec::with_capacity` does |
 | `len` | `Fn(&HashMap<K, V>) -> u64` | `HashMap::len` | none |
 | `is_empty` | `Fn(&HashMap<K, V>) -> Bool` | `HashMap::is_empty` | none |
 | `clear` | `Fn(&mut HashMap<K, V>) -> ()` | `HashMap::clear` | none |
@@ -58,7 +78,8 @@ stage whose element fits stands there.
 
 | name | signature | Rust twin | difference |
 | --- | --- | --- | --- |
-| `hash_set` | `Fn(Fn(&K) -> i64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::with_hasher` | the comparator is passed too |
+| `hash_set` | `Fn() -> HashSet<K>` where `K` has `core::hash` and `core::eq` | `HashSet::new` | as `hash_map` |
+| `hash_set_by` | `Fn(Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::with_hasher` | the comparator is passed too |
 | `len` | `Fn(&HashSet<K>) -> u64` | `HashSet::len` | none |
 | `is_empty` | `Fn(&HashSet<K>) -> Bool` | `HashSet::is_empty` | none |
 | `clear` | `Fn(&mut HashSet<K>) -> ()` | `HashSet::clear` | none |
@@ -70,15 +91,9 @@ stage whose element fits stands there.
 | `intersection` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::intersection` | consumes both and answers a set; Rust borrows both and yields references, which needs a clone of a key to build a set from, and the runtime offers none. The hasher, comparator and order kept are the first set's; the second set's own hasher and comparator decide each membership |
 | `difference` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::difference` | consumes both and answers a set, as `intersection` |
 | `is_subset` | `Fn(&HashSet<K>, &HashSet<K>) -> Bool` | `HashSet::is_subset` | the second set's own hasher and comparator decide each membership |
-| `from_iter` | `Fn(I, Fn(&K) -> i64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::from_iter` | `I` is any pipeline whose element is a `K`; the hasher and comparator are passed; a repeat keeps the first key |
+| `from_iter` | `Fn(I, Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::from_iter` | `I` is any pipeline whose element is a `K`; the closure form, as `hash_set_by`; a repeat keeps the first key |
 | `as_iter` | `Fn(&HashSet<K>) -> Refs<HashSet<K>>` | `HashSet::iter` | insertion order; the name is the language's shared source signature, and the element is a `&K` |
 | `into_iter` | `Fn(HashSet<K>) -> Items<K>` | `HashSet::into_iter` | insertion order; consumes the set |
-
-## Waiting on RFC-0067
-
-| name | signature | Rust twin | difference |
-| --- | --- | --- | --- |
-| `hash_map` / `hash_set`, no arguments | `Fn() -> HashMap<K, V>` where `K: Instance<hash<K>> + Instance<eq<K>>` | `HashMap::new` | not built. The key's own `core::hash` and `core::eq` instances stand where the two closures stand now, the map stores no closure, and a map built this way is journaled — see below |
 
 ## Iteration order
 
@@ -100,9 +115,8 @@ does not, and that is a decision. `Journaled::decode_state` builds the whole
 value back from canonical bytes; a closure has no canonical bytes, which is
 `acvus-interpreter`'s layout answering that a value of a function type is not
 held by a space; and a map that lost its hasher on reload would answer every
-lookup wrongly. The map a space can hold is the one whose key operations
-come from the key's instances at each call site, which stores no closure. It
-arrives with RFC-0067.
+lookup wrongly. A map built by `hash_map()` stores no closure and is the one
+a space could hold; declaring it as a space is not built yet.
 
 ## What the boundary refuses
 

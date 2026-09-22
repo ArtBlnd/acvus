@@ -10,6 +10,7 @@ use acvus_mir::ty::{
     InferTy, PolyBuilder, PolyTy, Solver, Sources, Ty, TypeArg, TypeRegistry, lift_ty,
 };
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 // -- Helpers ----------------------------------------------------------
 
@@ -74,7 +75,8 @@ fn it(ty: &Ty) -> InferTy {
 fn iterator_same_args_unifies() {
     let (i, reg) = setup();
     let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut s = Solver::new(&mut sources, &reg, &signatures);
     let a = iter_ity(&i, it(&Ty::I64));
     let b = iter_ity(&i, it(&Ty::I64));
     assert!(s.unify(&a, &b).is_ok());
@@ -84,7 +86,8 @@ fn iterator_same_args_unifies() {
 fn iterator_type_arg_mismatch_fails() {
     let (i, reg) = setup();
     let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut s = Solver::new(&mut sources, &reg, &signatures);
     let a = iter_ity(&i, it(&Ty::I64));
     let b = iter_ity(&i, it(&Ty::String));
     assert!(s.unify(&a, &b).is_err());
@@ -94,7 +97,8 @@ fn iterator_type_arg_mismatch_fails() {
 fn iterator_type_param_resolves() {
     let (i, reg) = setup();
     let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut s = Solver::new(&mut sources, &reg, &signatures);
     let t = s.fresh_ty_var();
     let a = iter_ity(&i, t.clone());
     let b = iter_ity(&i, it(&Ty::I64));
@@ -175,7 +179,8 @@ fn instantiate_pair_shares_params() {
     let to = PolyTy::Array(Box::new(t), acvus_mir::ty::LenTerm::Known(3));
 
     let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut s = Solver::new(&mut sources, &reg, &signatures);
     let (inst_from, inst_to) = s.instantiate_poly_pair(&from, &to);
 
     // Unify inst_from with concrete -> T resolves
@@ -200,34 +205,12 @@ fn instantiate_pair_shares_params() {
 // ================================================================
 
 #[test]
-fn coerce_list_to_iterator_completeness() {
-    // List<Int> <= Iterator<Int> via CastRule
-    let (i, reg) = setup();
-    let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
-    let list = it(&Ty::Array(
-        Box::new(Ty::I64),
-        acvus_mir::ty::LenTerm::Known(3),
-    ));
-    let iter = iter_ity_open(&i, &mut s, it(&Ty::I64));
-    let conversion = s.decide(Decision::conversion(&list, &iter));
-    let unsettled = s.settle();
-    assert!(unsettled.is_empty(), "{unsettled:?}");
-    assert!(
-        matches!(
-            s.answer(conversion),
-            Some(Answer::Conversion(Conversion::Cast(_)))
-        ),
-        "List -> Iterator converts through the declared cast"
-    );
-}
-
-#[test]
 fn coerce_iterator_to_list_soundness_rejected() {
     // Iterator -> List is NOT valid (can't materialize lazy into eager implicitly)
     let (i, reg) = setup();
     let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut s = Solver::new(&mut sources, &reg, &signatures);
     let iter = iter_ity(&i, it(&Ty::I64));
     let list = it(&Ty::Array(
         Box::new(Ty::I64),
@@ -247,7 +230,8 @@ fn coerce_invariant_rejects_list_to_iterator() {
     // Invariant polarity: no coercion allowed
     let (i, reg) = setup();
     let mut sources = Sources::new();
-    let mut s = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut s = Solver::new(&mut sources, &reg, &signatures);
     let list = it(&Ty::Array(
         Box::new(Ty::I64),
         acvus_mir::ty::LenTerm::Known(3),

@@ -3,13 +3,16 @@
 //! reference into it, so the container is neither moved nor changed while
 //! the element is in use (RFC-0028).
 
+use std::ops::Deref;
+
 use acvus_extern::Ctx;
 use acvus_extern::{
-    Arr, Closure, ClosureFn, Ref, Registry, Runtime, Shared, TransparentOver, Var, extern_fn,
-    extern_registry, extern_signature, kind,
+    Arr, Borrowable, Closure, ClosureFn, Instance, PassedByValue, Ref, Registry, Runtime, Shared,
+    TransparentOver, Var, core, extern_fn, extern_registry, extern_signature, kind,
 };
 
 use crate::slice::{permute, swap_index};
+use crate::word::verdict;
 
 // A container demotes to a vec (RFC-0027).
 extern_signature! {
@@ -406,6 +409,91 @@ where
     permute(c, &order);
 }
 
+// -- The core signatures at `Vec<T>`, over the same signature at `T` -----
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+#[extern_fn(instance_of = core::eq, effect = pure)]
+fn eq_vec<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    a: &Vec<T>,
+    b: &Vec<T>,
+    elem: Instance<core::eq<T, Rt>, T, Rt>,
+) -> bool
+where
+    T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    if a.len() != b.len() {
+        return false;
+    }
+    for (x, y) in a.iter().zip(b) {
+        if !elem.call(ctx, x, (&**y,)) {
+            return false;
+        }
+    }
+    true
+}
+
+#[extern_fn(instance_of = core::clone, effect = pure)]
+fn clone_vec<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    a: &Vec<T>,
+    elem: Instance<core::clone<T, Rt>, T, Rt>,
+) -> Vec<T>
+where
+    T: Var<kind::Type>
+        + Borrowable<Rt>
+        + TransparentOver<Rt>
+        + PassedByValue<Rt>
+        + Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    let mut out = Vec::with_capacity(a.len());
+    for x in a {
+        out.push(elem.call(ctx, x, ()));
+    }
+    out
+}
+
+#[extern_fn(instance_of = core::cmp, effect = pure)]
+fn cmp_vec<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    a: &Vec<T>,
+    b: &Vec<T>,
+    elem: Instance<core::cmp<T, Rt>, T, Rt>,
+) -> i64
+where
+    T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    for (x, y) in a.iter().zip(b) {
+        let element = elem.call(ctx, x, (&**y,));
+        if element != 0 {
+            return element;
+        }
+    }
+    verdict(a.len().cmp(&b.len()))
+}
+
+#[extern_fn(instance_of = core::hash, effect = pure)]
+fn hash_vec<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    a: &Vec<T>,
+    elem: Instance<core::hash<T, Rt>, T, Rt>,
+) -> u64
+where
+    T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    let mut digest = FNV_OFFSET_BASIS;
+    for x in a {
+        digest = (digest ^ elem.call(ctx, x, ())).wrapping_mul(FNV_PRIME);
+    }
+    digest
+}
+
 pub fn vec_registry<R>() -> Registry<R>
 where
     R: Runtime,
@@ -420,7 +508,7 @@ where
             len, is_empty, as_slice, as_slice_mut, first, last,
             push, pop, insert, remove, clear, truncate, extend, swap,
             sort_by, sort_by_key, capacity, shrink_to_fit, split_off,
-            get,
+            get, eq_vec, clone_vec, cmp_vec, hash_vec,
         ],
     }
 }

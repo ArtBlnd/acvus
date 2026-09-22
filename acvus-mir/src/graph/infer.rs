@@ -532,6 +532,15 @@ pub struct Declared {
     pub requires: Vec<crate::ty::RequirementSig>,
 }
 
+pub fn declared_instances(
+    declared: &FxHashMap<QualifiedRef, Declared>,
+) -> FxHashMap<QualifiedRef, crate::ty::Instances> {
+    declared
+        .iter()
+        .map(|(&qref, own)| (qref, own.instances.clone()))
+        .collect()
+}
+
 fn machine_signatures(
     registry: &TypeRegistry,
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
@@ -627,7 +636,8 @@ pub fn infer_scc(
     sources: &mut Sources,
     registry: &TypeRegistry,
 ) -> SccInferResult {
-    let mut solver = Solver::new(sources, registry);
+    let signatures = declared_instances(declared);
+    let mut solver = Solver::new(sources, registry, &signatures);
 
     // Instantiate context types into solver-scoped InferTy.
     let known_ctx_infer: FxHashMap<QualifiedRef, InferTy> = known_ctx
@@ -811,7 +821,9 @@ pub fn infer(
 ) -> InferResult {
     let mut sources = Sources::new();
     let registry_ref: &TypeRegistry = &type_registry;
-    let mut solver = Solver::new(&mut sources, registry_ref);
+    let declared = declared_bounds(graph.functions.iter());
+    let signatures = declared_instances(&declared);
+    let mut solver = Solver::new(&mut sources, registry_ref, &signatures);
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
@@ -851,8 +863,6 @@ pub fn infer(
         .filter(|f| matches!(f.kind, FnKind::Local(_)))
         .map(|f| (f.qref, f))
         .collect();
-    let declared = declared_bounds(graph.functions.iter());
-
     // -- STEP 1: Call graph + SCCs ------------------------------------
 
     let call_graph = build_call_graph(graph, extract);

@@ -19,9 +19,9 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy,
-    ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
-    TypeBoundId, TypeRegistry, could_match_pattern, matches_pattern,
+    IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet,
+    ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty,
+    TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry, could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -1187,6 +1187,17 @@ impl Terms {
     /// names its representations, and a variable is a generic body's
     /// (hash-types.md R3).
     fn instantiate_open(&mut self, ty: &PolyTy, registry: &TypeRegistry) -> InferTy {
+        self.instantiate_open_beside(ty, &[], registry).0
+    }
+
+    /// `ty` and `beside` at one set of fresh variables: a placeholder `ty`
+    /// and a pattern in `beside` both name is one solver variable.
+    fn instantiate_open_beside(
+        &mut self,
+        ty: &PolyTy,
+        beside: &[&PolyTy],
+        registry: &TypeRegistry,
+    ) -> (InferTy, Vec<InferTy>) {
         let mut maps = PolyMaps::default();
         let Terms {
             ty_bounds,
@@ -1195,40 +1206,50 @@ impl Terms {
             identity_vars,
             ..
         } = self;
-        let instance = ty.map(
-            &mut |id: u32| {
-                TyTerm::Var(
+        let mut instantiate = |poly: &PolyTy| {
+            poly.map(
+                &mut |id: u32| {
+                    TyTerm::Var(
+                        *maps
+                            .ty
+                            .entry(id)
+                            .or_insert_with(|| alloc_ty_var(ty_bounds, TyVarBound::Any)),
+                    )
+                },
+                &mut |id: u32| {
                     *maps
-                        .ty
+                        .identity
                         .entry(id)
-                        .or_insert_with(|| alloc_ty_var(ty_bounds, TyVarBound::Any)),
-                )
-            },
-            &mut |id: u32| {
-                *maps
-                    .identity
-                    .entry(id)
-                    .or_insert_with(|| IdentityTerm::Var(alloc_identity_var(identity_vars)))
-            },
-            &mut |id: u32| {
-                EffectTerm::Var(
-                    *maps
-                        .effect
-                        .entry(id)
-                        .or_insert_with(|| alloc_effect_var(effect_vars)),
-                )
-            },
-            &mut |id: u32| {
-                LenTerm::Var(
-                    *maps
-                        .len
-                        .entry(id)
-                        .or_insert_with(|| alloc_len_var(len_vars)),
-                )
-            },
-            &mut |_: u32| Repr::Uniform,
-        );
-        uniform_slots(instance, registry)
+                        .or_insert_with(|| IdentityTerm::Var(alloc_identity_var(identity_vars)))
+                },
+                &mut |id: u32| {
+                    EffectTerm::Var(
+                        *maps
+                            .effect
+                            .entry(id)
+                            .or_insert_with(|| alloc_effect_var(effect_vars)),
+                    )
+                },
+                &mut |id: u32| {
+                    LenTerm::Var(
+                        *maps
+                            .len
+                            .entry(id)
+                            .or_insert_with(|| alloc_len_var(len_vars)),
+                    )
+                },
+                &mut |_: u32| Repr::Uniform,
+            )
+        };
+        let instance = instantiate(ty);
+        let beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
+        (
+            uniform_slots(instance, registry),
+            beside
+                .into_iter()
+                .map(|poly| uniform_slots(poly, registry))
+                .collect(),
+        )
     }
 
     /// Whether the call type would join an instance's signature, on a copy
@@ -1341,6 +1362,8 @@ pub struct Candidate {
     pub instance: InstanceKind,
     pub ty: PolyTy,
     pub admits: Task,
+    /// Written at this candidate's own variables, as `ty` is (RFC-0070 D3).
+    pub requires: Vec<RequirementSig>,
 }
 
 /// Which side of an instance's join holds the effect the other stays
@@ -1732,7 +1755,7 @@ pub enum SettledSignature {
         qref: QualifiedRef,
         instance: Option<InstanceChoice>,
         bounded: Vec<TypeBoundId>,
-        requirements: Vec<DecisionId>,
+        requirements: Vec<RequiredDecision>,
     },
     Local,
 }
@@ -1907,26 +1930,57 @@ pub struct BegunSource {
     pub source: IdentityId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequiredDecision {
+    pub signature: QualifiedRef,
+    pub id: DecisionId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OpenedChild {
+    pub parent: DecisionId,
+    pub child: DecisionId,
+}
+
+struct RequiredCall {
+    requirement: RequirementSig,
+    pattern: InferTy,
+}
+
 pub struct Solver<'src> {
     terms: Terms,
     decisions: Vec<DecisionSlot>,
     begun_by_decisions: Vec<BegunSource>,
+    children: FxHashMap<DecisionId, Vec<RequiredDecision>>,
+    opened_children: Vec<OpenedChild>,
     /// Mints a new source for every identity a declaration introduces;
     /// lent by the compilation for this solver's lifetime.
     sources: &'src mut Sources,
     /// The user-defined types and cast rules of the compilation: which
     /// slots specialize (hash-types.md R1) and which conversions exist.
     registry: &'src TypeRegistry,
+    /// The instances of every shared signature, for the requirements a
+    /// settled instance opens. They cannot be carried by the candidate:
+    /// `clone` at `Vec<T>` requires `clone`, whose instances include it
+    /// (RFC-0070 D3).
+    signatures: &'src FxHashMap<QualifiedRef, Instances>,
 }
 
 impl<'src> Solver<'src> {
-    pub fn new(sources: &'src mut Sources, registry: &'src TypeRegistry) -> Self {
+    pub fn new(
+        sources: &'src mut Sources,
+        registry: &'src TypeRegistry,
+        signatures: &'src FxHashMap<QualifiedRef, Instances>,
+    ) -> Self {
         Self {
             terms: Terms::new(),
             decisions: Vec::new(),
             begun_by_decisions: Vec::new(),
+            children: FxHashMap::default(),
+            opened_children: Vec::new(),
             sources,
             registry,
+            signatures,
         }
     }
 
@@ -3157,7 +3211,7 @@ impl<'src> Solver<'src> {
                 }
             }
             ([only], generic) if generic.is_none() || matches_pattern(&ty, &only.ty) => {
-                let instance = self.instantiate_open(&only.ty);
+                let (instance, required) = self.instantiate_candidate(only);
                 match self.settle_instance(
                     id,
                     CallOfInstance {
@@ -3168,6 +3222,7 @@ impl<'src> Solver<'src> {
                 ) {
                     Ok(()) => {
                         self.begin_unbound_sources(id, &instance);
+                        self.require_instances(id, required);
                         Progress::Settled(Answer::Instance(only.instance))
                     }
                     Err(refused) => Progress::Failed(refused),
@@ -3444,6 +3499,75 @@ impl<'src> Solver<'src> {
         std::mem::take(&mut self.begun_by_decisions)
     }
 
+    // -- Requirements of a settled instance --------------------------
+
+    /// The decisions the instance `decision` settled on requires, in the
+    /// order its declaration states them (RFC-0070 D3).
+    pub fn children_of(&self, decision: DecisionId) -> &[RequiredDecision] {
+        self.children.get(&decision).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn take_opened_children(&mut self) -> Vec<OpenedChild> {
+        std::mem::take(&mut self.opened_children)
+    }
+
+    fn instantiate_candidate(&mut self, candidate: &Candidate) -> (InferTy, Vec<RequiredCall>) {
+        let patterns: Vec<&PolyTy> = candidate.requires.iter().map(|r| &r.pattern).collect();
+        let (ty, patterns) =
+            self.terms
+                .instantiate_open_beside(&candidate.ty, &patterns, self.registry);
+        let required = candidate
+            .requires
+            .iter()
+            .cloned()
+            .zip(patterns)
+            .map(|(requirement, pattern)| RequiredCall {
+                requirement,
+                pattern,
+            })
+            .collect();
+        (ty, required)
+    }
+
+    fn require_instances(&mut self, parent: DecisionId, required: Vec<RequiredCall>) {
+        let signatures = self.signatures;
+        let mut children: Vec<RequiredDecision> = Vec::with_capacity(required.len());
+        for RequiredCall {
+            requirement,
+            pattern,
+        } in required
+        {
+            let signature = requirement.signature;
+            let instances = signatures.get(&signature).unwrap_or_else(|| {
+                panic!(
+                    "an instance requires {signature:?}, which is not a declared signature: \
+                     `Externs::combine` refuses this"
+                )
+            });
+            let id = self.decide(Decision::Instance {
+                call: called_at(pattern, requirement.calls),
+                candidates: instances
+                    .concrete
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, sig)| sig.task <= requirement.calls)
+                    .map(|(instance, sig)| Candidate {
+                        instance: InstanceKind::Extern(instance),
+                        ty: sig.ty.clone(),
+                        admits: sig.admits,
+                        requires: sig.requires.clone(),
+                    })
+                    .collect(),
+                generic: None,
+                required: Some(signature),
+                tie: InstanceTie::Types,
+            });
+            self.opened_children.push(OpenedChild { parent, child: id });
+            children.push(RequiredDecision { signature, id });
+        }
+        self.children.insert(parent, children);
+    }
+
     pub fn fresh_shape(&mut self, pattern: &PolyTy) -> InferTy {
         self.instantiate_open(pattern)
     }
@@ -3487,7 +3611,7 @@ impl<'src> Solver<'src> {
             .zip(required)
             .map(|(req, call)| {
                 let call = called_at(call, req.calls);
-                self.decide(Decision::Instance {
+                let id = self.decide(Decision::Instance {
                     call,
                     candidates: req
                         .instances
@@ -3499,18 +3623,25 @@ impl<'src> Solver<'src> {
                             instance: InstanceKind::Extern(instance),
                             ty: sig.ty.clone(),
                             admits: sig.admits,
+                            requires: sig.requires.clone(),
                         })
                         .collect(),
                     generic: None,
                     required: Some(req.signature),
                     tie: InstanceTie::Types,
-                })
+                });
+                RequiredDecision {
+                    signature: req.signature,
+                    id,
+                }
             })
             .collect();
         let instance = scheme.instances.as_ref().map(|instances| {
             if fixed_generic {
                 return InstanceChoice::Fixed(instances.generic_index());
             }
+            let shadowed_by_the_compiler: Vec<_> =
+                compiler_instances.iter().map(|c| c.ty.clone()).collect();
             let id = self.decide(Decision::Instance {
                 call: ty.clone(),
                 candidates: instances
@@ -3518,10 +3649,12 @@ impl<'src> Solver<'src> {
                     .iter()
                     .cloned()
                     .enumerate()
+                    .filter(|(_, sig)| !shadowed_by_the_compiler.contains(&sig.ty))
                     .map(|(instance, sig)| Candidate {
                         instance: InstanceKind::Extern(instance),
                         ty: sig.ty,
                         admits: sig.admits,
+                        requires: sig.requires,
                     })
                     .chain(compiler_instances)
                     .collect(),
@@ -4060,7 +4193,7 @@ pub struct Instantiated {
     pub instance: Option<InstanceChoice>,
     /// One instance decision per requirement the scheme states, in the
     /// scheme's order (RFC-0068 D1).
-    pub requirements: Vec<DecisionId>,
+    pub requirements: Vec<RequiredDecision>,
 }
 
 /// Which instance of an Extern function a call runs: fixed at the
@@ -4082,4 +4215,132 @@ enum Reprs {
     /// `Uniform`: the function's one instance is the generic one, and the
     /// generic instance is the uniform one (hash-types.md R3).
     Uniform,
+}
+
+#[cfg(test)]
+mod requirement_tests {
+    use super::*;
+    use crate::ty::{InstanceSig, Instances, Sources};
+    use acvus_utils::{Astr, Interner};
+
+    fn signature_of<P>(name: Astr, param: TyTerm<P>, ret: TyTerm<P>) -> TyTerm<P>
+    where
+        P: Phase,
+    {
+        TyTerm::Fn {
+            params: vec![ParamTerm::new(name, param)],
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::PURE.into(),
+        }
+    }
+
+    fn at(tys: impl IntoIterator<Item = PolyTy>) -> Instances {
+        Instances {
+            concrete: tys
+                .into_iter()
+                .map(|ty| InstanceSig {
+                    ty,
+                    admits: Task::Heavy,
+                    task: Task::Sync,
+                    requires: Vec::new(),
+                })
+                .collect(),
+            generic: false,
+        }
+    }
+
+    /// A candidate that requires `signature` at its own variable.
+    fn requiring(name: Astr, signature: QualifiedRef) -> Candidate {
+        let own: PolyTy = signature_of(name, TyTerm::Var(0), TyTerm::Var(0));
+        Candidate {
+            instance: InstanceKind::Extern(0),
+            ty: own.clone(),
+            admits: Task::Heavy,
+            requires: vec![RequirementSig {
+                signature,
+                pattern: own,
+                calls: Task::Sync,
+            }],
+        }
+    }
+
+    fn call_of(name: Astr, candidate: Candidate) -> Decision {
+        Decision::Instance {
+            call: signature_of(name, TyTerm::I64, TyTerm::I64),
+            candidates: vec![candidate],
+            generic: None,
+            required: None,
+            tie: InstanceTie::Types,
+        }
+    }
+
+    #[test]
+    fn a_settled_candidates_requirement_settles_at_the_type_it_was_called_with() {
+        let interner = Interner::new();
+        let name = interner.intern("a");
+        let inner = QualifiedRef::root(interner.intern("inner"));
+        let signatures = FxHashMap::from_iter([(
+            inner,
+            at([
+                signature_of(name, TyTerm::String, TyTerm::String),
+                signature_of(name, TyTerm::I64, TyTerm::I64),
+            ]),
+        )]);
+        let mut sources = Sources::new();
+        let registry = TypeRegistry::new();
+        let mut solver = Solver::new(&mut sources, &registry, &signatures);
+
+        let decision = solver.decide(call_of(name, requiring(name, inner)));
+        let unsettled = solver.settle();
+
+        assert!(unsettled.is_empty(), "{unsettled:?}");
+        assert_eq!(
+            solver.answer(decision),
+            Some(Answer::Instance(InstanceKind::Extern(0)))
+        );
+        let [child] = *solver.children_of(decision) else {
+            panic!("one requirement, one decision")
+        };
+        assert_eq!(child.signature, inner);
+        assert_eq!(
+            solver.answer(child.id),
+            Some(Answer::Instance(InstanceKind::Extern(1)))
+        );
+        assert_eq!(
+            solver
+                .take_opened_children()
+                .iter()
+                .map(|o| (o.parent, o.child))
+                .collect::<Vec<_>>(),
+            vec![(decision, child.id)]
+        );
+    }
+
+    #[test]
+    fn a_requirement_no_instance_reaches_names_the_signature_it_asked_for() {
+        let interner = Interner::new();
+        let name = interner.intern("a");
+        let inner = QualifiedRef::root(interner.intern("inner"));
+        let signatures = FxHashMap::from_iter([(
+            inner,
+            at([signature_of(name, TyTerm::String, TyTerm::String)]),
+        )]);
+        let mut sources = Sources::new();
+        let registry = TypeRegistry::new();
+        let mut solver = Solver::new(&mut sources, &registry, &signatures);
+
+        let decision = solver.decide(call_of(name, requiring(name, inner)));
+        let unsettled = solver.settle();
+
+        assert_eq!(
+            solver.answer(decision),
+            Some(Answer::Instance(InstanceKind::Extern(0)))
+        );
+        let [Unsettled::NoInstance { call, required, .. }] = unsettled.as_slice() else {
+            panic!("the requirement reaches no instance: {unsettled:?}")
+        };
+        assert_eq!(*required, Some(inner));
+        assert_eq!(*call, signature_of(name, TyTerm::I64, TyTerm::I64));
+    }
 }

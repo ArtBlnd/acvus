@@ -147,11 +147,11 @@ unsafe impl acvus_extern::FromValue<Counting> for V {
 }
 
 impl Runtime for Counting {
-    fn instance_value(_: acvus_extern::InstanceRun) -> Self::Value {
+    fn instance_value(_: &acvus_extern::InstanceEntry<Self>) -> Self::Value {
         panic!("Counting declares no instances")
     }
 
-    unsafe fn instance_run(_: &Self::Value) -> acvus_extern::InstanceRun {
+    unsafe fn instance_entry<'a>(_: &'a Self::Value) -> &'a acvus_extern::InstanceEntry<Self> {
         panic!("Counting declares no instances")
     }
 

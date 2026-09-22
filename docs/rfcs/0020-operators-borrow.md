@@ -95,12 +95,26 @@ For an extension type, comparing is a function of two references, as
 signature: `Regex` compares by its own instance. The borrow is the operator's
 rule rather than a coercion, so `f(x)` with `f: Fn(&T)` stays an error.
 
+## Amended by RFC-0070
+
+- The comparisons join `==`/`!=` in the table's second entry:
+  `<`, `<=`, `>`, `>=` on an extension type are a call of
+  `core::cmp<T>(&T, &T) -> Int`, whose result is `-1`, `0` or `1`, read
+  by its sign. The language declares no `Ordering` type; `-1`/`0`/`1` is
+  the protocol `string::cmp`, `num::total_cmp` and the `sort_by`
+  comparator already speak. The word entries of the table are unchanged.
+- An instance of a shared signature for a language-owned type is
+  declared where a requirement can reach that type (RFC-0067,
+  RFC-0070): `core::eq` at `Int` exists so that a handler requiring `eq`
+  at `T` runs at `T = Int`. The operator table does not call it — `==` on
+  two words is still the instruction — and the instance's meaning is the
+  instruction's, pinned per type by a test in the standard registry.
+
 ## Not built
 
-- No instance of a shared signature for a language-owned type.
-- No signature for ordering or arithmetic yet. When an extension type
-  needs one, a signature (`core::cmp`, `core::add`) is declared and the
-  language-owned entries of the table do not change.
+- No signature for arithmetic. When an extension type needs one, a
+  signature (`core::add`) is declared and the language-owned entries of
+  the table do not change.
 - No string view type. `&String` is the borrow; a sub-string is a new
   `String`. A fat-pointer view would change the host's value layout and
   is held until a need for it exists.
@@ -119,10 +133,14 @@ rule rather than a coercion, so `f(x)` with `f: Fn(&T)` stays an error.
   result types as `BinOp`, `String` as a string instruction, anything
   else resolves `core::eq`, instantiates it at the operand type, and
   records the call on the expression (`TypeResolution::operator_calls`).
+  At `<`/`<=`/`>`/`>=` the same, with `core::cmp` (RFC-0070); the
+  recorded call names which signature it resolved.
 - Lowering emits `BinOp` for a word pair; for `String` and for a recorded
   call, a `Ref` of each operand (a temporary first assigned to a register
   the expression owns) and the instruction or call; `!=` adds
-  `UnaryOp::Not`. A template body lowers to one `StringConcat`.
+  `UnaryOp::Not`, and a comparison adds the operator's own `BinOp`
+  between `cmp`'s answer and `0`. A template body lowers to one
+  `StringConcat`.
 - `&&` and `||` lower to the diamond `if`/`else` lowers to, the value
   being the join block's parameter, so `BinOp::And` and `BinOp::Or` reach
   no IR instruction and the interpreter has no arm for them. The same

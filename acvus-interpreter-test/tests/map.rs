@@ -1,9 +1,11 @@
 //! `HashMap<K, V>` and `HashSet<K>` at the script contract.
 //!
-//! The key's hash and equality are lambdas passed to the constructor. The
-//! comparison is written `a == b` over the two references rather than
-//! `*a == *b`: dereferencing moves a `String` out of the reference the
-//! comparator was lent, and the checker refuses that.
+//! `hash_map()` and `hash_set()` take the key type's own `core::hash` and
+//! `core::eq`; `hash_map_by` and `hash_set_by` take the two as lambdas,
+//! which is where a key with no instances goes. In a lambda the comparison
+//! is written `a == b` over the two references rather than `*a == *b`:
+//! dereferencing moves a `String` out of the reference the comparator was
+//! lent, and the checker refuses that.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::{Refusal, check_graph, execute_compiled};
@@ -86,11 +88,11 @@ fn refusal_at_both(source: &str, ret: Ty) -> String {
 const KEYING: &str = "|k| -> hash(k), |a, b| -> a == b";
 
 fn with_map(body: &str) -> String {
-    format!("let m = hash_map({KEYING}); {body}")
+    format!("let m = hash_map_by({KEYING}); {body}")
 }
 
 fn with_set(body: &str) -> String {
-    format!("let s = hash_set({KEYING}); {body}")
+    format!("let s = hash_set_by({KEYING}); {body}")
 }
 
 // -- The constructors ---------------------------------------------------
@@ -109,6 +111,67 @@ fn with_capacity_holds_the_same_map_a_bare_constructor_does() {
             "let m = with_capacity(8u64, {KEYING}); insert(&mut m, 1, 10); len(&m)"
         )),
         1
+    );
+}
+
+/// The constructors that require rather than take: `K` is settled by the
+/// first `insert`, and the requirement is decided there.
+#[test]
+fn a_map_over_the_key_s_own_instances_finds_what_it_inserted() {
+    assert_eq!(
+        int(
+            "let m = hash_map(); insert(&mut m, 1, 10); insert(&mut m, 2, 20); \
+             let q = 2; *get(&m, &q).unwrap()"
+        ),
+        20
+    );
+    assert_eq!(
+        count("let m = hash_map(); insert(&mut m, 1, 10); insert(&mut m, 1, 20); len(&m)"),
+        1
+    );
+}
+
+#[test]
+fn a_string_keyed_map_over_the_key_s_own_instances_finds_an_equal_string() {
+    assert_eq!(
+        int(
+            "let m = hash_map(); let w = \"alpha\".to_string(); insert(&mut m, w, 7); \
+             let q = \"alpha\".to_string(); *get(&m, &q).unwrap()"
+        ),
+        7
+    );
+    assert_eq!(
+        int(
+            "let m = hash_map(); let w = \"alpha\".to_string(); insert(&mut m, w, 7); \
+             let q = \"beta\".to_string(); \
+             let found = if let Some(v) = get(&m, &q) { *v } else { 0 - 1 }; found"
+        ),
+        -1
+    );
+}
+
+#[test]
+fn a_set_over_the_key_s_own_instances_keeps_one_of_each_key() {
+    assert_eq!(
+        count("let s = hash_set(); insert(&mut s, 1); insert(&mut s, 1); insert(&mut s, 2); len(&s)"),
+        2
+    );
+    assert!(boolean(
+        "let s = hash_set(); insert(&mut s, 1); let q = 1; contains(&s, &q)"
+    ));
+}
+
+/// An object has no instance of either signature, so its keying is the pair
+/// of lambdas.
+#[test]
+fn an_object_key_is_kept_by_the_lambdas_hash_map_by_takes() {
+    assert_eq!(
+        int(
+            "let m = hash_map_by(|k| -> k.x as u64, |a, b| -> a.x == b.x); \
+             insert(&mut m, { x: 1, }, 10); insert(&mut m, { x: 2, }, 20); \
+             let q = { x: 2, }; *get(&m, &q).unwrap()"
+        ),
+        20
     );
 }
 
@@ -352,16 +415,16 @@ fn into_keys_and_into_values_consume_the_map_in_insertion_order() {
 fn extend_takes_the_other_map_s_entries_and_its_values_win() {
     assert_eq!(
         count(&format!(
-            "let m = hash_map({KEYING}); insert(&mut m, 1, 10); \
-             let n = hash_map({KEYING}); insert(&mut n, 1, 11); insert(&mut n, 2, 20); \
+            "let m = hash_map_by({KEYING}); insert(&mut m, 1, 10); \
+             let n = hash_map_by({KEYING}); insert(&mut n, 1, 11); insert(&mut n, 2, 20); \
              extend(&mut m, n); len(&m)"
         )),
         2
     );
     assert_eq!(
         int(&format!(
-            "let m = hash_map({KEYING}); insert(&mut m, 1, 10); \
-             let n = hash_map({KEYING}); insert(&mut n, 1, 11); \
+            "let m = hash_map_by({KEYING}); insert(&mut m, 1, 10); \
+             let n = hash_map_by({KEYING}); insert(&mut n, 1, 11); \
              extend(&mut m, n); let q = 1; *get(&m, &q).unwrap()"
         )),
         11
@@ -512,16 +575,16 @@ fn from_iter_collects_a_sequence_into_a_set_without_its_repeats() {
 fn set_extend_takes_the_other_set_s_keys() {
     assert_eq!(
         count(&format!(
-            "let a = hash_set({KEYING}); insert(&mut a, 1); \
-             let b = hash_set({KEYING}); insert(&mut b, 1); insert(&mut b, 2); \
+            "let a = hash_set_by({KEYING}); insert(&mut a, 1); \
+             let b = hash_set_by({KEYING}); insert(&mut b, 1); insert(&mut b, 2); \
              extend(&mut a, b); len(&a)"
         )),
         2
     );
     assert_eq!(
         int(&format!(
-            "let a = hash_set({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
-             let b = hash_set({KEYING}); insert(&mut b, 3); insert(&mut b, 5); \
+            "let a = hash_set_by({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
+             let b = hash_set_by({KEYING}); insert(&mut b, 3); insert(&mut b, 5); \
              extend(&mut a, b); into_iter(a) | fold(0, |acc, k| -> acc * 10 + k)"
         )),
         735
@@ -531,8 +594,8 @@ fn set_extend_takes_the_other_set_s_keys() {
 #[test]
 fn intersection_and_difference_each_keep_the_receiver_s_order() {
     let pair = format!(
-        "let a = hash_set({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
-         let b = hash_set({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
+        "let a = hash_set_by({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
+         let b = hash_set_by({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
     );
     assert_eq!(
         int(&format!(
@@ -551,8 +614,8 @@ fn intersection_and_difference_each_keep_the_receiver_s_order() {
 #[test]
 fn is_subset_asks_the_other_set_for_every_key() {
     let pair = format!(
-        "let a = hash_set({KEYING}); insert(&mut a, 3); \
-         let b = hash_set({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
+        "let a = hash_set_by({KEYING}); insert(&mut a, 3); \
+         let b = hash_set_by({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
     );
     assert!(boolean(&format!("{pair} is_subset(&a, &b)")));
     assert!(!boolean(&format!("{pair} is_subset(&b, &a)")));
@@ -561,8 +624,8 @@ fn is_subset_asks_the_other_set_for_every_key() {
 #[test]
 fn union_takes_both_sets_and_keeps_the_receiver_s_order() {
     let pair = format!(
-        "let a = hash_set({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
-         let b = hash_set({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
+        "let a = hash_set_by({KEYING}); insert(&mut a, 7); insert(&mut a, 3); \
+         let b = hash_set_by({KEYING}); insert(&mut b, 3); insert(&mut b, 5); "
     );
     assert_eq!(
         int(&format!(
@@ -577,8 +640,8 @@ fn union_takes_both_sets_and_keeps_the_receiver_s_order() {
 fn union_refuses_a_set_of_another_key_type() {
     let messages = refusal_at_both(
         &format!(
-            "let a = hash_set({KEYING}); insert(&mut a, 7); \
-             let b = hash_set({KEYING}); insert(&mut b, \"7\".to_string()); \
+            "let a = hash_set_by({KEYING}); insert(&mut a, 7); \
+             let b = hash_set_by({KEYING}); insert(&mut b, \"7\".to_string()); \
              len(&union(a, b))"
         ),
         Ty::U64,

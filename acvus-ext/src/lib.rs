@@ -5,7 +5,6 @@ mod datetime;
 mod decimal;
 mod deque;
 mod encoding;
-mod hash;
 mod io;
 mod iter;
 mod iterator;
@@ -18,6 +17,7 @@ mod result;
 mod slice;
 mod string;
 mod vec;
+mod word;
 
 pub use array::array_registry;
 pub use char::char_registry;
@@ -26,7 +26,6 @@ pub use datetime::datetime_registry;
 pub use decimal::{Decimal, decimal_registry};
 pub use deque::{Deque, deque_registry};
 pub use encoding::encoding_registry;
-pub use hash::hash_registry;
 pub use io::io_registry;
 pub use iter::{
     Chain, Chunks, Dedup, Filter, FlatMap, Flatten, Items, Map, Range, Refs, Skip, SkipWhile,
@@ -42,6 +41,7 @@ pub use result::result_registry;
 pub use slice::slice_registry;
 pub use string::string_registry;
 pub use vec::vec_registry;
+pub use word::word_registry;
 
 use acvus_extern::{Registry, Runtime};
 
@@ -73,7 +73,7 @@ where
         panic_registry(),
         iterator_registry(),
         num_registry(),
-        hash_registry(),
+        word_registry(),
     ];
     registries.extend(from_str_registries());
     registries.extend(num_width_registries());

@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = as_iter(&@users) | map(|u| -> clone(&u.name)) | collect }}{{ x | join(\", \".to_string()) }}",
+  "template": "{{ x = as_iter(&@users) | map(|u| -> clone(&u.name)) | collect }}{{ into_iter(x) | join(\", \".to_string()) }}",
   "context": {
     "users": [
       { "name": "alice", "age": 30 },

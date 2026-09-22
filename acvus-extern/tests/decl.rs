@@ -11,7 +11,7 @@ use std::ops::DerefMut;
 use acvus_extern::{
     ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType,
     Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneRegister, OneValue, Owned, PolyTy,
-    Pure, Ref, Registry, Runtime, Shared, Slice, Task, TransparentOver, TyArg, TypeArg, TypesOnly,
+    Pure, Ref, Registry, Runtime, Shared, Task, TransparentOver, TyArg, TypeArg, TypesOnly,
     Var, Words, extern_fn, extern_registry, extern_signature, kind,
 };
 
@@ -34,7 +34,7 @@ enum V {
     Erased(*mut (dyn Any + Send + Sync)),
     Closure(Closure),
     Reference(*const V),
-    Instance(acvus_extern::InstanceRun),
+    Instance(*const acvus_extern::InstanceEntry<Tiny>),
 }
 
 // SAFETY: a `Reference` is used only while its target is live (RFC-0018).
@@ -342,15 +342,17 @@ impl Runtime for Tiny {
         }
     }
 
-    fn instance_value(at: acvus_extern::InstanceRun) -> V {
-        V::Instance(at)
+    fn instance_value(entry: &acvus_extern::InstanceEntry<Tiny>) -> V {
+        V::Instance(entry)
     }
 
-    unsafe fn instance_run(value: &V) -> acvus_extern::InstanceRun {
+    unsafe fn instance_entry<'a>(value: &'a V) -> &'a acvus_extern::InstanceEntry<Tiny> {
         let V::Instance(at) = value else {
             panic!("not an instance: {value:?}")
         };
-        *at
+        // SAFETY: the caller's contract: `instance_value` wrote this value
+        // from an entry that outlives `'a`.
+        unsafe { &**at }
     }
 
     type Value = V;
@@ -705,6 +707,37 @@ where
     step_at.call(ctx, it, ())
 }
 
+/// A requirer that holds its receiver by shared borrow alone (RFC-0070 D4).
+#[extern_fn(effect = pure)]
+fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: &T, b: &T, eq_at: Instance<eq<T, Rt>, T, Rt>) -> bool
+where
+    T: Var<kind::Type> + Borrowable<Rt> + std::ops::Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    eq_at.call(ctx, a, (&**b,))
+}
+
+extern_signature! { ns: "t", fn advance<I>(it: &mut I) -> i64 where I: Var<kind::Type>; }
+
+/// An instance that takes an `Instance` parameter, which `#[extern_fn]`
+/// refused until RFC-0070 D1. It requires `t::step` rather than `t::advance`
+/// because an instance that requires its own signature reaches only itself
+/// here: a requirement stands at a type variable, so a requiring instance
+/// is generic, and a signature admits one generic instance.
+#[extern_fn(instance_of = advance, effect = pure)]
+fn advance_twice<I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut I,
+    inner: Instance<step<I, Rt>, I, Rt>,
+) -> i64
+where
+    I: Var<kind::Type> + Borrowable<Rt> + DerefMut<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    inner.call(ctx, &mut *it, ());
+    inner.call(ctx, it, ())
+}
+
 /// A greeting held by the handler: what a `#[state]` parameter carries.
 struct Greeting(String);
 
@@ -720,10 +753,10 @@ where
     extern_registry! {
         ns: "t",
         types: [Boxed<_, _, R>, Token<_>, Held<R>],
-        signatures: [eq, step, front],
+        signatures: [eq, step, front, advance],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
               sum_slice, slice_first, at, count_where, eq_int, eq_point, step_int, drive,
-              held, front_held, first_of,
+              held, front_held, first_of, same, advance_twice,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -883,38 +916,40 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     }
 }
 
-/// One resolved instance, reached the way a site reaches it: the table
-/// answers for the signature at the receiver's settled type, and the
-/// receiver is named in `ctx` rather than passed.
+/// One resolved instance, reached the way a site reaches it: the site
+/// holds the word of the entry `prepare` built for the requirement, and
+/// the receiver is passed at the mode the signature declared.
 fn call_instance<'r, S, R>(
-    receiver: Receiver<'_>,
-    recv: &'r mut Place,
+    receiver: &Receiver<'_>,
+    recv: S::Recv<'r>,
     rest: S::Rest<'r>,
     read: impl FnOnce(S::Ret<'r>) -> R,
 ) -> R
 where
-    S: acvus_extern::Signature<Tiny> + acvus_extern::SharedSignature,
+    S: acvus_extern::Signature<Tiny>,
+    S::Recv<'r>: acvus_extern::Receiver<Tiny>,
 {
     type Site<S> = acvus_extern::Required<S, Place, acvus_extern::Now, 0>;
     let site = acvus_extern::CallSite {
         args: &[receiver.at],
-        requires: &[receiver.instance],
+        requires: &[Tiny::instance_value(&receiver.entry)],
     };
     let instance = <Site<S> as acvus_extern::Sited<Tiny>>::site(&site, 0);
     read(instance.call(&mut Ctx::new(&Tiny, ()), recv, rest))
 }
 
 /// The site a requirement over one receiver is resolved at: the receiver's
-/// settled type, and the instance the checker would have settled on.
-#[derive(Clone, Copy)]
+/// settled type, and the entry `prepare` would have built for it.
 struct Receiver<'a> {
-    at: acvus_extern::ArgAt<'a, Tiny>,
-    instance: acvus_extern::RequiredInstance,
+    at: acvus_extern::ArgAt<'a>,
+    entry: acvus_extern::InstanceEntry<Tiny>,
 }
 
 /// A storage holding one of `Tiny`'s values: what a requirer's receiver
 /// variable is filled with here, as `Owned<Rt>` fills it in a real glue.
 struct Place(V);
+
+impl Var<kind::Type> for Place {}
 
 impl std::ops::Deref for Place {
     type Target = V;
@@ -930,10 +965,12 @@ impl std::ops::DerefMut for Place {
     }
 }
 
-/// The receiver site of `call`, whose instance is the `nth` of its signature.
+/// The receiver site of a call of `signature`, whose instance is the `nth`
+/// of that signature's own.
 fn receiver_at<'a>(
     reg: &'a Externs<Tiny>,
     i: &'a Interner,
+    signature: &str,
     call: &'a acvus_extern::Ty,
     nth: usize,
 ) -> Receiver<'a> {
@@ -944,9 +981,27 @@ fn receiver_at<'a>(
         at: acvus_extern::ArgAt {
             interner: i,
             ty: &params[0].ty,
-            instances: &reg.instances,
         },
-        instance: acvus_extern::RequiredInstance(nth),
+        entry: entry_of(reg, i, signature, nth),
+    }
+}
+
+/// The entry `prepare` builds for one instance of `signature`: the glue the
+/// registry holds for it, and the words of the entries its own declaration
+/// requires.
+fn entry_of(
+    reg: &Externs<Tiny>,
+    i: &Interner,
+    signature: &str,
+    nth: usize,
+) -> acvus_extern::InstanceEntry<Tiny> {
+    acvus_extern::InstanceEntry {
+        run: <acvus_extern::InstanceTable as acvus_extern::InstanceEntries<Tiny>>::glue(
+            &reg.instances,
+            qref(i, signature),
+            acvus_extern::RequiredInstance(nth),
+        ),
+        requires: Box::new([]),
     }
 }
 
@@ -969,12 +1024,12 @@ fn a_mono_glue_runs_the_instance_the_glue_runs() {
     // SAFETY: both places outlive the two calls below.
     let args = || unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
     assert!(open::<bool>(call_sync(h, args())));
-    let mut recv = Place(left);
+    let recv = Place(left);
     let other = erased(7i64);
-    let at = receiver_at(&reg, &i, &on_int, 0);
-    assert!(call_instance::<eq<i64, Tiny>, _>(
-        at,
-        &mut recv,
+    let at = receiver_at(&reg, &i, "eq", &on_int, 0);
+    assert!(call_instance::<eq<Place, Tiny>, _>(
+        &at,
+        &recv,
         (&other,),
         |same| same
     ));
@@ -993,13 +1048,13 @@ fn a_receiver_is_named_in_ctx_and_written_through() {
     );
     instance_for(&reg, &i, "step", &on_int).expect("the i64 instance of t::step");
     let mut recv = Place(erased(7i64));
-    let at = receiver_at(&reg, &i, &on_int, 0);
+    let at = receiver_at(&reg, &i, "step", &on_int, 0);
     assert_eq!(
-        call_instance::<step<i64, Tiny>, _>(at, &mut recv, (), |n| n),
+        call_instance::<step<Place, Tiny>, _>(&at, &mut recv, (), |n| n),
         8
     );
     assert_eq!(
-        call_instance::<step<i64, Tiny>, _>(at, &mut recv, (), |n| n),
+        call_instance::<step<Place, Tiny>, _>(&at, &mut recv, (), |n| n),
         9
     );
     assert_eq!(peek::<i64>(&recv), 9);
@@ -1012,14 +1067,10 @@ fn call_requiring(reg: &Externs<Tiny>, i: &Interner, site: RequiringSite<'_>, ru
     let ExternHandler::Sync(f) = handler(reg, i, site.name) else {
         panic!("`{}` is declared with a plain `fn`", site.name)
     };
-    let at: Vec<acvus_extern::ArgAt<'_, Tiny>> = site
+    let at: Vec<acvus_extern::ArgAt<'_>> = site
         .args
         .iter()
-        .map(|ty| acvus_extern::ArgAt {
-            interner: i,
-            ty,
-            instances: &reg.instances,
-        })
+        .map(|ty| acvus_extern::ArgAt { interner: i, ty })
         .collect();
     let f = f.clone().at_site(&acvus_extern::CallSite {
         args: &at,
@@ -1035,7 +1086,7 @@ fn call_requiring(reg: &Externs<Tiny>, i: &Interner, site: RequiringSite<'_>, ru
 struct RequiringSite<'a> {
     name: &'a str,
     args: &'a [acvus_extern::Ty],
-    requires: &'a [acvus_extern::RequiredInstance],
+    requires: &'a [V],
 }
 
 /// `drive` takes the parameter its requirement stands at by `&mut`, so the
@@ -1045,7 +1096,7 @@ struct RequiringSite<'a> {
 #[test]
 fn a_required_instance_resolves_from_a_reference_parameters_target() {
     let (i, reg) = combined::<Tiny>();
-    let mut place = erased(7i64);
+    let place = erased(7i64);
     // SAFETY: `place` outlives the call below.
     let lent = unsafe { Tiny.reference(&place) };
     let out = call_requiring(
@@ -1057,7 +1108,7 @@ fn a_required_instance_resolves_from_a_reference_parameters_target() {
                 acvus_extern::Mutability::Mut,
                 Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
             )],
-            requires: &[acvus_extern::RequiredInstance(0)],
+            requires: &[Tiny::instance_value(&entry_of(&reg, &i, "step", 0))],
         },
         vec![lent],
     );
@@ -1067,6 +1118,103 @@ fn a_required_instance_resolves_from_a_reference_parameters_target() {
         "t::step at i64 bumps the place it lends"
     );
     assert_eq!(peek::<i64>(&place), 8, "and the caller sees the write");
+}
+
+/// A requirer holding a shared borrow calls the instance it requires
+/// (RFC-0070 D4).
+#[test]
+fn a_shared_receiver_reaches_the_instance_it_requires() {
+    let (i, reg) = combined::<Tiny>();
+    let (left, right) = (erased(7i64), erased(8i64));
+    // SAFETY: both places outlive the calls below.
+    let (a, b) = unsafe { (Tiny.reference(&left), Tiny.reference(&right)) };
+    let shared_i64 = acvus_extern::Ty::Ref(
+        acvus_extern::Mutability::Shared,
+        Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+    );
+    let eq_at = [Tiny::instance_value(&entry_of(&reg, &i, "eq", 0))];
+    let same = |run: Vec<V>| {
+        open::<bool>(call_requiring(
+            &reg,
+            &i,
+            RequiringSite {
+                name: "same",
+                args: &[shared_i64.clone(), shared_i64.clone()],
+                requires: &eq_at,
+            },
+            run,
+        ))
+    };
+    assert!(!same(vec![a, b]));
+    assert!(same(vec![a, a]));
+}
+
+/// An instance states what it requires on its own candidate, which is
+/// where the checker reads it (RFC-0070 D1).
+#[test]
+fn an_instance_carries_its_own_requirements_and_keeps_its_mono_glue() {
+    let (i, reg) = combined::<Tiny>();
+    let declared = reg
+        .functions
+        .iter()
+        .find(|f| f.qref == qref(&i, "advance"))
+        .expect("t::advance is declared");
+    let acvus_extern::FnKind::Extern {
+        instances,
+        requires,
+        ..
+    } = &declared.kind
+    else {
+        panic!("an extern declaration")
+    };
+    assert!(
+        requires.is_empty(),
+        "a shared signature requires nothing of its own"
+    );
+    let [advance_twice] = instances.concrete.as_slice() else {
+        panic!("t::advance has one instance")
+    };
+    assert_eq!(
+        advance_twice
+            .requires
+            .iter()
+            .map(|r| r.signature)
+            .collect::<Vec<_>>(),
+        vec![qref(&i, "step")]
+    );
+    assert!(
+        handler(&reg, &i, "advance").instance().is_some(),
+        "a requiring instance is reached through a mono glue like any other"
+    );
+
+    let mut recv = Place(erased(7i64));
+    let on_int = call_type(
+        vec![acvus_extern::Ty::Ref(
+            acvus_extern::Mutability::Mut,
+            Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+        )],
+        acvus_extern::Ty::I64,
+        &i,
+    );
+    let at = Receiver {
+        at: acvus_extern::ArgAt {
+            interner: &i,
+            ty: &on_int,
+        },
+        entry: acvus_extern::InstanceEntry {
+            run: <acvus_extern::InstanceTable as acvus_extern::InstanceEntries<Tiny>>::glue(
+                &reg.instances,
+                qref(&i, "advance"),
+                acvus_extern::RequiredInstance(0),
+            ),
+            requires: Box::new([Tiny::instance_value(&entry_of(&reg, &i, "step", 0))]),
+        },
+    };
+    assert_eq!(
+        call_instance::<advance<Place, Tiny>, _>(&at, &mut recv, (), |n| n),
+        9,
+        "the glue bound its requirement from the entry and ran it twice"
+    );
 }
 
 /// The declared type of `Point` at this test's registry.
@@ -1113,10 +1261,10 @@ fn an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi() 
         &i,
     );
     instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
-    let mut left = Place(a_point(1));
+    let left = Place(a_point(1));
     let right = a_point(1);
-    let at = receiver_at(&reg, &i, &on_point, 1);
-    let _ = call_instance::<eq<Point, Tiny>, _>(at, &mut left, (&right,), |same| same);
+    let at = receiver_at(&reg, &i, "eq", &on_point, 1);
+    let _ = call_instance::<eq<Place, Tiny>, _>(&at, &left, (&right,), |same| same);
 }
 
 /// The marker `extern_signature!` writes names the signature's own
@@ -1434,20 +1582,26 @@ fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
         effect_args: vec![],
         identity_args: vec![],
     };
-    fn first_of(args: &[acvus_extern::Ty]) -> RequiringSite<'_> {
+    let front_at = [Tiny::instance_value(&entry_of(&reg, &i, "front", 0))];
+    fn first_of<'a>(args: &'a [acvus_extern::Ty], front_at: &'a [V]) -> RequiringSite<'a> {
         RequiringSite {
             name: "first_of",
             args,
-            requires: &[acvus_extern::RequiredInstance(0)],
+            requires: front_at,
         }
     }
-    let out = call_requiring(&reg, &i, first_of(&[held_ty.clone()]), vec![held]);
+    let out = call_requiring(
+        &reg,
+        &i,
+        first_of(&[held_ty.clone()], &front_at),
+        vec![held],
+    );
     assert_eq!(open::<i64>(out), 41);
     let empty = call_sync(
         handler(&reg, &i, "held"),
         vec![erased(Vec::<Owned<Tiny>>::new())],
     );
-    let out = call_requiring(&reg, &i, first_of(&[held_ty]), vec![empty]);
+    let out = call_requiring(&reg, &i, first_of(&[held_ty], &front_at), vec![empty]);
     assert_eq!(open::<i64>(out), -1);
 }
 

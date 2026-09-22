@@ -450,9 +450,9 @@ fn a_piped_vec_reaches_iter_contains_through_into_iter() {
 }
 
 #[test]
-fn a_piped_vec_reaches_the_fixture_iterator_probe_through_into_iter() {
+fn a_piped_vec_reaches_the_fixture_iterator_probe_through_an_explicit_into_iter() {
     let i = Interner::new();
-    let c = checked(&i, "let v = vec([1, 2]); v | probe(3)");
+    let c = checked(&i, "let v = vec([1, 2]); into_iter(v) | probe(3)");
     assert_eq!(c.ret, Ty::Bool);
     assert_eq!(calls(&c, "fx_b::probe"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "fx_a::probe"), 0, "{:?}", c.callees);

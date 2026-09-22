@@ -847,6 +847,7 @@ pub struct Body {
 pub struct Prepared {
     pub main: Arc<Body>,
     pub closures: FxHashMap<Label, Arc<Code>>,
+    pub instances: crate::prepare::InstanceEntryStore,
 }
 
 #[cfg(test)]

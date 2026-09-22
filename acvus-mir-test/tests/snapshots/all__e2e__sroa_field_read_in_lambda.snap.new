@@ -1,6 +1,6 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 2669
+assertion_line: 2674
 expression: ir
 ---
 === literals ===

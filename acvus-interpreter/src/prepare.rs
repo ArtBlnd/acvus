@@ -9,18 +9,21 @@
 //! extern call reaches, the page key a context is stored under, where a
 //! label sits — is decided here.
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::{ArgAt, FieldAt, FormKind, ObjectShape, RequiredInstance, Width};
+use acvus_extern::{
+    ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width,
+};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, SwitchKey,
-    TwoWay, ValueId, two_way,
+    Callee, Chosen, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget,
+    SwitchKey, TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -156,35 +159,19 @@ impl PrepareCtx<'_> {
         self.interner.resolve(*name).into()
     }
 
-    /// The handler of the overload the IR names, with the instances that
-    /// overload runs its requirements at.
-    fn chosen(&self, id: &QualifiedRef, instance: usize) -> ChosenExtern {
+    fn handler(&self, id: &QualifiedRef, instance: usize) -> ExternHandler {
         let Some(Executable::Extern(handlers)) = self.externs.get(id) else {
             panic!("{id:?} is called as an ExternFn but is not one of the module's externs")
         };
-        let overload = self.instances.overload(*id, instance);
-        let handler = handlers
-            .get(overload.own)
+        handlers
+            .get(instance)
             .unwrap_or_else(|| {
                 panic!(
-                    "{id:?} has {} instances; the checker settled on instance {}",
+                    "{id:?} has {} instances; the checker settled on instance {instance}",
                     handlers.len(),
-                    overload.own
                 )
             })
-            .clone();
-        ChosenExtern {
-            handler,
-            requires: overload
-                .required
-                .into_iter()
-                .map(RequiredInstance)
-                .collect(),
-        }
-    }
-
-    fn handler(&self, id: &QualifiedRef, instance: usize) -> ExternHandler {
-        self.chosen(id, instance).handler
+            .clone()
     }
 
     fn extern_is_sync(&self, id: &QualifiedRef, instance: usize) -> bool {
@@ -194,7 +181,38 @@ impl PrepareCtx<'_> {
 
 struct ChosenExtern {
     handler: ExternHandler,
-    requires: Vec<RequiredInstance>,
+    requires: Vec<Value>,
+}
+
+#[derive(Default)]
+pub struct InstanceEntryStore {
+    entries: Vec<Box<InstanceEntry<crate::runtime::AcvusRuntime>>>,
+    by_choice: FxHashMap<Chosen, usize>,
+}
+
+impl InstanceEntryStore {
+    fn word(
+        &mut self,
+        glue: &dyn acvus_extern::InstanceEntries<crate::runtime::AcvusRuntime>,
+        chosen: &Chosen,
+    ) -> Value {
+        if let Some(&at) = self.by_choice.get(chosen) {
+            return Value::instance(&self.entries[at]);
+        }
+        let requires: Box<[Value]> = chosen
+            .required
+            .iter()
+            .map(|required| self.word(glue, required))
+            .collect();
+        let entry = Box::new(InstanceEntry {
+            run: glue.glue(chosen.signature, RequiredInstance(chosen.instance)),
+            requires,
+        });
+        let word = Value::instance(&entry);
+        self.by_choice.insert(chosen.clone(), self.entries.len());
+        self.entries.push(entry);
+        word
+    }
 }
 
 /// Every body of a module, prepared: the closures first, so a `MakeClosure`
@@ -202,6 +220,7 @@ struct ChosenExtern {
 pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
     let bodies = || std::iter::once(&module.main).chain(module.closures.values());
     let literals = Arc::new(Literals::of(bodies().flat_map(|body| literal_texts(body))));
+    let entries = RefCell::new(InstanceEntryStore::default());
     let mut closures: FxHashMap<Label, Arc<Code>> = FxHashMap::default();
     let mut remaining: Vec<(&Label, &MirBody)> = module.closures.iter().collect();
     remaining.sort_by_key(|(label, _)| **label);
@@ -224,14 +243,24 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
                 .collect::<Vec<_>>()
         );
         for (label, body) in ready {
-            let code = prepare_closure(body, ctx, &closures, &literals);
+            let code = prepare_closure(body, ctx, &entries, &closures, &literals);
             closures.insert(*label, Arc::new(code));
         }
         remaining.retain(|(label, _)| !closures.contains_key(label));
     }
 
-    let main = Arc::new(prepare_entry(&module.main, ctx, &closures, &literals));
-    Prepared { main, closures }
+    let main = Arc::new(prepare_entry(
+        &module.main,
+        ctx,
+        &entries,
+        &closures,
+        &literals,
+    ));
+    Prepared {
+        main,
+        closures,
+        instances: entries.into_inner(),
+    }
 }
 
 pub fn literal_texts(body: &MirBody) -> impl Iterator<Item = &str> {
@@ -258,10 +287,11 @@ pub enum BodyRole {
 pub fn prepare_entry(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
+    entries: &RefCell<InstanceEntryStore>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
 ) -> Body {
-    let mut prep = Prepare::new(body, ctx, closures, literals, label_map(body));
+    let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
     let scalars = prep.hoist_konsts();
     prep.plan_runs(scalars);
@@ -273,10 +303,11 @@ pub fn prepare_entry(
 pub fn prepare_closure(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
+    entries: &RefCell<InstanceEntryStore>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
 ) -> Code {
-    let mut prep = Prepare::new(body, ctx, closures, literals, label_map(body));
+    let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
     let scalars = prep.hoist_konsts();
     prep.plan_runs(scalars);
@@ -406,6 +437,7 @@ fn label_map(body: &MirBody) -> FxHashMap<Label, u32> {
 struct Prepare<'a> {
     body: &'a MirBody,
     ctx: &'a PrepareCtx<'a>,
+    entries: &'a RefCell<InstanceEntryStore>,
     closures: &'a FxHashMap<Label, Arc<Code>>,
     literals: &'a Literals,
     labels: FxHashMap<Label, u32>,
@@ -1042,6 +1074,7 @@ impl<'a> Prepare<'a> {
     fn new(
         body: &'a MirBody,
         ctx: &'a PrepareCtx<'a>,
+        entries: &'a RefCell<InstanceEntryStore>,
         closures: &'a FxHashMap<Label, Arc<Code>>,
         literals: &'a Literals,
         labels: FxHashMap<Label, u32>,
@@ -1061,6 +1094,7 @@ impl<'a> Prepare<'a> {
         Self {
             body,
             ctx,
+            entries,
             closures,
             literals,
             labels,
@@ -1280,14 +1314,24 @@ impl<'a> Prepare<'a> {
 
     /// The settled type of each argument of a call site, which the
     /// handler's site table is filled from (RFC-0050 rule 6).
-    fn arg_sites(&self, args: &[ValueId]) -> Vec<ArgAt<'_, crate::runtime::AcvusRuntime>> {
+    fn arg_sites(&self, args: &[ValueId]) -> Vec<ArgAt<'_>> {
         args.iter()
             .map(|id| ArgAt {
                 interner: self.ctx.interner,
                 ty: self.ty(*id),
-                instances: self.ctx.instances,
             })
             .collect()
+    }
+
+    fn chosen(&self, id: &QualifiedRef, instance: usize, required: &[Chosen]) -> ChosenExtern {
+        let mut entries = self.entries.borrow_mut();
+        ChosenExtern {
+            handler: self.ctx.handler(id, instance),
+            requires: required
+                .iter()
+                .map(|chosen| entries.word(self.ctx.instances, chosen))
+                .collect(),
+        }
     }
 
     fn is_ref(&self, id: ValueId) -> bool {
@@ -2932,7 +2976,7 @@ impl<'a> Prepare<'a> {
 
         let InstKind::FunctionCall {
             dst: result,
-            callee: Callee::Extern { id, instance },
+            callee: Callee::Extern { id, instance, .. },
             args,
             order: None,
             ..
@@ -2980,7 +3024,7 @@ impl<'a> Prepare<'a> {
             return None;
         }
 
-        let ExternHandler::Sync(f) = self.ctx.chosen(id, *instance).handler else {
+        let ExternHandler::Sync(f) = self.ctx.handler(id, *instance) else {
             return None;
         };
         let width = f.width();
@@ -3045,13 +3089,18 @@ impl<'a> Prepare<'a> {
         let body = chain(into_body, ran);
 
         let InstKind::FunctionCall {
-            callee: Callee::Extern { id, instance },
+            callee:
+                Callee::Extern {
+                    id,
+                    instance,
+                    required,
+                },
             ..
         } = &self.body.insts[head.call].kind
         else {
             panic!("`call_head` matched an instruction that is not an extern call")
         };
-        let ChosenExtern { handler, requires } = self.ctx.chosen(id, *instance);
+        let ChosenExtern { handler, requires } = self.chosen(id, *instance, required);
         let ExternHandler::Sync(f) = handler else {
             panic!("`call_head` matched a handler whose task is not `Sync`")
         };
@@ -3958,8 +4007,13 @@ impl<'a> Prepare<'a> {
                             next,
                         })
                     }
-                    Callee::Extern { id, instance } => {
-                        let ChosenExtern { handler, requires } = self.ctx.chosen(id, *instance);
+                    Callee::Extern {
+                        id,
+                        instance,
+                        required,
+                    } => {
+                        let ChosenExtern { handler, requires } =
+                            self.chosen(id, *instance, required);
                         let window = self.window(at, args, ops);
                         let sites = self.arg_sites(args);
                         let site = acvus_extern::CallSite {
@@ -4359,8 +4413,12 @@ impl<'a> Prepare<'a> {
                 let operands = self.taken(args);
                 Some(indirect_call_async(into, through, handle, operands, resume))
             }
-            Callee::Extern { id, instance } => {
-                let ChosenExtern { handler, requires } = self.ctx.chosen(id, *instance);
+            Callee::Extern {
+                id,
+                instance,
+                required,
+            } => {
+                let ChosenExtern { handler, requires } = self.chosen(id, *instance, required);
                 let requires = requires.as_slice();
                 if !handler.is_sync() {
                     self.may_suspend = true;
@@ -4419,7 +4477,7 @@ impl<'a> Prepare<'a> {
         at: usize,
         result: ValueId,
         args: &[ValueId],
-        requires: &[RequiredInstance],
+        requires: &[Value],
         f: call::Handler,
         ops: &mut Vec<Node>,
     ) -> Node {
@@ -6528,6 +6586,7 @@ mod recognizer_tests {
             callee: Callee::Extern {
                 id: callee,
                 instance: 0,
+                required: Vec::new(),
             },
             callee_ty: Ty::Unit,
             args: Vec::new(),
@@ -6712,6 +6771,7 @@ mod recognizer_tests {
             Code::body(Arc::new(prepare_entry(
                 &body,
                 &ctx,
+                &RefCell::new(InstanceEntryStore::default()),
                 &FxHashMap::default(),
                 &literals,
             )))
@@ -6728,7 +6788,8 @@ mod recognizer_tests {
             let closures = FxHashMap::default();
             let body = body_of(insts);
             let literals = Literals::of(literal_texts(&body));
-            let prep = Prepare::new(&body, &ctx, &closures, &literals, label_map(&body));
+            let entries = RefCell::new(InstanceEntryStore::default());
+            let prep = Prepare::new(&body, &ctx, &entries, &closures, &literals, label_map(&body));
             matched(&prep.regions())
         }
     }
@@ -7158,6 +7219,7 @@ mod assignment_tests {
             callee: Callee::Extern {
                 id: extern_ref(name),
                 instance: 0,
+                required: Vec::new(),
             },
             callee_ty: Ty::Unit,
             args: args.iter().copied().map(val).collect(),
@@ -7877,7 +7939,7 @@ impl Prepare<'_> {
 struct FusableCall<'a> {
     dst: ValueId,
     args: &'a [ValueId],
-    requires: Vec<RequiredInstance>,
+    requires: Vec<Value>,
     handler: call::Handler,
 }
 
@@ -7902,7 +7964,12 @@ impl<'a> Prepare<'a> {
     fn fusable_call(&self, at: usize) -> Option<FusableCall<'a>> {
         let InstKind::FunctionCall {
             dst,
-            callee: Callee::Extern { id, instance },
+            callee:
+                Callee::Extern {
+                    id,
+                    instance,
+                    required,
+                },
             args,
             order: None,
             ..
@@ -7913,7 +7980,7 @@ impl<'a> Prepare<'a> {
         let ChosenExtern {
             handler: ExternHandler::Sync(handler),
             requires,
-        } = self.ctx.chosen(id, *instance)
+        } = self.chosen(id, *instance, required)
         else {
             return None;
         };

@@ -9,7 +9,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_mir::ty::{PolyTy, Task, Ty};
+use acvus_mir::ty::{PolyTy, RequirementSig, Task, Ty};
 use acvus_utils::{Interner, QualifiedRef};
 use futures::future::BoxFuture;
 
@@ -21,13 +21,11 @@ use crate::obj::{
     Cross, Form, FormKind, Nothing, One, OneRegister, OneValue, OptionOf, Returned,
     SurvivesSuspension,
 };
-use crate::registry::SharedSignature;
 use crate::runtime::Runtime;
 
-/// What an instance itself requires is a field of its payload, laid at
-/// construction, so this lookup walks nothing (RFC-0067 Decision 1).
 /// Which instance of a required signature a call site runs: its position
-/// among that signature's own instances, as `Instances` numbers them.
+/// among that signature's own instances, as `Instances` numbers them. This
+/// is what `prepare` hands `InstanceEntries::glue` to build an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequiredInstance(pub usize);
 
@@ -37,9 +35,6 @@ where
 {
     /// The glue of the instance the checker settled on.
     fn glue(&self, signature: QualifiedRef, instance: RequiredInstance) -> InstanceRun;
-
-    /// The overload the IR names `function` at, taken apart.
-    fn overload(&self, function: QualifiedRef, position: usize) -> acvus_mir::ir::Overload;
 }
 
 pub struct NoInstances;
@@ -53,33 +48,23 @@ where
             "this call site was built with no registry, so a required instance cannot be resolved (RFC-0067 Decision 1)"
         )
     }
-
-    fn overload(&self, _: QualifiedRef, position: usize) -> acvus_mir::ir::Overload {
-        acvus_mir::ir::Overload {
-            own: position,
-            required: Vec::new(),
-        }
-    }
 }
 
-pub struct ArgAt<'a, Rt>
-where
-    Rt: Runtime,
-{
+#[derive(Clone, Copy)]
+pub struct ArgAt<'a> {
     pub interner: &'a Interner,
     pub ty: &'a Ty,
-    pub instances: &'a dyn InstanceEntries<Rt>,
 }
 
 /// One call site as `prepare` hands it to a handler: the settled type of
-/// each argument, and the instance the checker settled on for each
-/// requirement the callee states, in the declaration's order (RFC-0068 D5).
+/// each argument, and the word of the entry `prepare` chose for each
+/// requirement the callee states, in the declaration's order (RFC-0070 D2).
 pub struct CallSite<'a, Rt>
 where
     Rt: Runtime,
 {
-    pub args: &'a [ArgAt<'a, Rt>],
-    pub requires: &'a [RequiredInstance],
+    pub args: &'a [ArgAt<'a>],
+    pub requires: &'a [Rt::Value],
 }
 
 impl<'a, Rt> CallSite<'a, Rt>
@@ -87,24 +72,13 @@ where
     Rt: Runtime,
 {
     /// A site whose callee states no requirement.
-    pub fn of_args(args: &'a [ArgAt<'a, Rt>]) -> Self {
+    pub fn of_args(args: &'a [ArgAt<'a>]) -> Self {
         CallSite {
             args,
             requires: &[],
         }
     }
 }
-
-impl<Rt> Clone for ArgAt<'_, Rt>
-where
-    Rt: Runtime,
-{
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Rt> Copy for ArgAt<'_, Rt> where Rt: Runtime {}
 
 /// A call site of `n` arguments typed `Unit`. Obligation across artifacts: a
 /// projection parameter reaching one panics in
@@ -118,7 +92,6 @@ impl<Rt> Copy for ArgAt<'_, Rt> where Rt: Runtime {}
 pub struct SitesNoParameterReads {
     interner: Interner,
     ty: Ty,
-    instances: NoInstances,
 }
 
 impl Default for SitesNoParameterReads {
@@ -126,21 +99,16 @@ impl Default for SitesNoParameterReads {
         SitesNoParameterReads {
             interner: Interner::new(),
             ty: Ty::Unit,
-            instances: NoInstances,
         }
     }
 }
 
 impl SitesNoParameterReads {
-    pub fn args<Rt>(&self, n: usize) -> Vec<ArgAt<'_, Rt>>
-    where
-        Rt: Runtime,
-    {
+    pub fn args(&self, n: usize) -> Vec<ArgAt<'_>> {
         vec![
             ArgAt {
                 interner: &self.interner,
                 ty: &self.ty,
-                instances: &self.instances,
             };
             n
         ]
@@ -264,7 +232,7 @@ pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
 
 impl<S, I, T, Rt, const NTH: usize> Sited<Rt> for Required<S, I, T, NTH>
 where
-    S: Signature<Rt> + SharedSignature,
+    S: Signature<Rt>,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
@@ -274,20 +242,16 @@ where
     const ARGUMENTS: usize = 0;
 
     fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<S, I, Rt, T> {
-        let at = &site.args[0];
-        let run = at.instances.glue(
-            <S as SharedSignature>::qref(at.interner),
-            site.requires[NTH],
-        );
-        // SAFETY: the checker settled on this instance of `S` for the type
-        // the requirement's variable is filled with at this site.
-        unsafe { Instance::at(<Rt as Runtime>::instance_value(run)) }
+        // SAFETY: the word is the entry `prepare` chose for this site's
+        // `NTH` requirement, whose signature is `S` and whose type is what
+        // the requirement's variable is filled with here.
+        unsafe { Instance::at(site.requires[NTH]) }
     }
 }
 
 impl<'a, S, I, T, Rt, const NTH: usize> Arg<'a, Rt> for Required<S, I, T, NTH>
 where
-    S: Signature<Rt> + SharedSignature,
+    S: Signature<Rt>,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
@@ -1506,6 +1470,12 @@ pub struct DeclaredInstance<R: Runtime> {
     /// as `Async`, because it awaits either; the plain `fn` glue admits
     /// only `Sync`.
     pub admits: Task,
+    /// Written at this instance's own variables (RFC-0070 D1): the solver
+    /// opens one decision per entry once it settles on this candidate. A
+    /// declaration that is no signature's instance reaches the solver
+    /// through `FnKind::Extern::requires` instead, and its instances carry
+    /// none.
+    pub requires: Vec<RequirementSig>,
 }
 
 /// The number a call carries in `Callee::Extern` is an index into
@@ -1548,6 +1518,7 @@ impl<R: Runtime> Instances<R> {
                     ty: i.signature.clone(),
                     admits: i.admits,
                     task: i.handler.task(),
+                    requires: i.requires.clone(),
                 })
                 .collect(),
             generic: self.generic.is_some(),

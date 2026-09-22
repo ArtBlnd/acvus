@@ -163,7 +163,6 @@ fn check_functions(
     let script = script_fn(i, source);
     let qref = script.qref;
     functions.push(script);
-    let declared = functions.clone();
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
@@ -187,7 +186,7 @@ fn check_functions(
         .coercion_map
         .iter()
         .map(|(_, kind)| match kind {
-            CastKind::Extern { fn_ref, .. } => i.resolve(fn_ref.name).to_string(),
+            CastKind::Extern(cast) => i.resolve(cast.fn_ref.name).to_string(),
             CastKind::ThroughRef { cast, back, .. } => format!(
                 "&{}/{}",
                 i.resolve(cast.fn_ref.name),
@@ -206,8 +205,7 @@ fn check_functions(
         .filter_map(|callee| match callee {
             Callee::Extern { id, instance, .. } => Some(SettledCall {
                 callee: i.resolve(id.name).to_string(),
-                instance: acvus_mir::ir::OverloadSpace::among(*id, &declared)
-                    .map_or(*instance, |space| space.overload(*instance).own),
+                instance: *instance,
             }),
             _ => None,
         })

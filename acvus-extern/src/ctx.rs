@@ -9,14 +9,14 @@ where
 {
     pub rt: &'a Rt,
     pub frame: Rt::Frame<'a>,
-    recv: *mut Rt::Value,
+    recv: *const Rt::Value,
 }
 
 impl<'a, Rt> Ctx<'a, Rt>
 where
     Rt: Runtime,
 {
-    const NO_RECEIVER: *mut Rt::Value = std::ptr::null_mut();
+    const NO_RECEIVER: *const Rt::Value = std::ptr::null();
 
     pub fn new(rt: &'a Rt, frame: Rt::Frame<'a>) -> Self {
         Ctx {
@@ -27,7 +27,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn name_receiver(&mut self, at: &mut Rt::Value) {
+    pub(crate) fn name_receiver(&mut self, at: &Rt::Value) {
         self.recv = at;
     }
 
@@ -35,16 +35,16 @@ where
     ///
     /// # Safety
     /// An `Instance::call` named a receiver for the call now running, and
-    /// the value it named is live and exclusively named for `'r`.
+    /// the value it named is live for `'r`.
     #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn receiver<'r>(&mut self) -> &'r mut Rt::Value {
+    pub unsafe fn receiver<'r>(&mut self) -> &'r Rt::Value {
         debug_assert!(
             self.recv != Self::NO_RECEIVER,
             "a mono glue read a receiver that no Instance::call named"
         );
         // SAFETY: the caller's contract.
-        unsafe { &mut *self.recv }
+        unsafe { &*self.recv }
     }
 }
 

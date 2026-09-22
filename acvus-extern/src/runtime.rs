@@ -51,11 +51,12 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 
     /// Obligation across artifacts: `Signature::call_later` branches on
     /// the task this value carries to choose the `fn` type of the word.
-    fn instance_value(at: crate::InstanceRun) -> Self::Value;
+    fn instance_value(entry: &crate::InstanceEntry<Self>) -> Self::Value;
 
     /// # Safety
-    /// `value` was made by `instance_value`.
-    unsafe fn instance_run(value: &Self::Value) -> crate::InstanceRun;
+    /// `value` was made by `instance_value` from an entry that outlives
+    /// `'a`.
+    unsafe fn instance_entry<'a>(value: &'a Self::Value) -> &'a crate::InstanceEntry<Self>;
 
     fn rooted(&self) -> Self::Rooted<'_>;
     /// The `Ctx` the rooted cells carry, lent from its owner.
@@ -293,11 +294,11 @@ impl Runtime for TypesOnly {
     type FusedCall = crate::handler::DirectOp<TypesOnly>;
     type FusedShape = ();
 
-    fn instance_value(_: crate::InstanceRun) {
+    fn instance_value(_: &crate::InstanceEntry<TypesOnly>) {
         no_values()
     }
 
-    unsafe fn instance_run(_: &()) -> crate::InstanceRun {
+    unsafe fn instance_entry<'a>(_: &'a ()) -> &'a crate::InstanceEntry<TypesOnly> {
         no_values()
     }
 

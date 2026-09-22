@@ -76,6 +76,7 @@ fn advance_fn(i: &Interner) -> Function {
         },
         admits: Task::Sync,
         task: Task::Sync,
+        requires: vec![],
     };
     let mut inner = PolyBuilder::new();
     Function {

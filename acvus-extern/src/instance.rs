@@ -3,13 +3,14 @@
 //!
 //! A handler declares a requirement by taking an `Instance` parameter;
 //! `#[extern_fn]` reads it and records it on `FnDecl::requires`, which is
-//! what `Externs::combine` meets with the signature's instances, and the
-//! call site's site table is where the resolved word lands.
+//! what `Externs::combine` meets with the signature's instances. An
+//! ordinary handler's word lands in its call site's table, an instance's in
+//! its own entry (RFC-0070 D2).
 
 use std::future::Future;
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 
 use acvus_mir::ty::{PolyTy, Task};
 use acvus_utils::Interner;
@@ -49,6 +50,18 @@ impl InstanceRun {
     pub fn task(self) -> Task {
         self.task
     }
+}
+
+/// What a value made by `Runtime::instance_value` addresses (RFC-0070 D2).
+pub struct InstanceEntry<Rt>
+where
+    Rt: Runtime,
+{
+    pub run: InstanceRun,
+    /// One instance word per `Required` parameter of the declaration this
+    /// instance came from, in declaration order, each made by
+    /// `Runtime::instance_value` from an entry of its own.
+    pub requires: Box<[Rt::Value]>,
 }
 
 pub struct Now;
@@ -104,10 +117,11 @@ where
     );
 
     /// # Safety
-    /// `value` was made by `Runtime::instance_value` from the mono glue of
-    /// an instance of `S` standing at the type `I` is filled with.
+    /// `value` was made by `Runtime::instance_value` from an entry of an
+    /// instance of `S` standing at the type `I` is filled with.
+    #[doc(hidden)]
     #[inline(always)]
-    pub(crate) unsafe fn at(value: Rt::Value) -> Self {
+    pub unsafe fn at(value: Rt::Value) -> Self {
         let () = Self::ONE_VALUE;
         Instance {
             value,
@@ -132,13 +146,19 @@ where
     /// The result at the requirer's own types: a value as itself, a
     /// borrow at the lifetime of the receiver it was lent from.
     #[inline(always)]
-    pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: &'r mut I, rest: S::Rest<'r>) -> S::Ret<'r>
+    pub fn call<'r>(
+        self,
+        ctx: &mut Ctx<'_, Rt>,
+        recv: S::Recv<'r>,
+        rest: S::Rest<'r>,
+    ) -> S::Ret<'r>
     where
-        I: DerefMut<Target = Rt::Value>,
+        S::Recv<'r>: Receiver<Rt>,
     {
-        ctx.name_receiver(&mut *recv);
-        // SAFETY: `at`'s contract: the word is the glue of an instance of
-        // `S` at the type `I` is filled with, and `recv` is at `I`.
+        recv.name_in(ctx);
+        // SAFETY: `at`'s contract: the word addresses an entry of an
+        // instance of `S` at the type `I` is filled with, and `recv` is at
+        // `I` through `S::Recv`.
         unsafe { S::call_now(self.value, ctx, rest) }
     }
 }
@@ -152,17 +172,22 @@ where
     /// runs, and at such a site the checker settled on an instance that
     /// returns.
     #[inline(always)]
-    pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: &'r mut I, rest: S::Rest<'r>) -> S::Ret<'r>
+    pub fn call<'r>(
+        self,
+        ctx: &mut Ctx<'_, Rt>,
+        recv: S::Recv<'r>,
+        rest: S::Rest<'r>,
+    ) -> S::Ret<'r>
     where
-        I: DerefMut<Target = Rt::Value>,
+        S::Recv<'r>: Receiver<Rt>,
     {
         debug_assert_eq!(
-            // SAFETY: `at`'s contract: the word is an instance's.
-            unsafe { Rt::instance_run(&self.value) }.task(),
+            // SAFETY: `at`'s contract: the word addresses an instance's entry.
+            unsafe { Rt::instance_entry(&self.value) }.run.task(),
             Task::Sync,
             "a sync twin was handed an instance that suspends"
         );
-        ctx.name_receiver(&mut *recv);
+        recv.name_in(ctx);
         // SAFETY: as `Instance::<_, _, _, Now>::call`'s, and the task above.
         unsafe { S::call_now(self.value, ctx, rest) }
     }
@@ -171,14 +196,14 @@ where
     pub fn call_await<'a>(
         self,
         ctx: &'a mut Ctx<'_, Rt>,
-        recv: &'a mut I,
+        recv: S::Recv<'a>,
         rest: S::Rest<'a>,
     ) -> impl Future<Output = S::Ret<'a>> + Send + 'a
     where
-        I: DerefMut<Target = Rt::Value>,
+        S::Recv<'a>: Receiver<Rt>,
         S::Ret<'a>: Send,
     {
-        ctx.name_receiver(&mut *recv);
+        recv.name_in(ctx);
         // SAFETY: as `call`'s.
         unsafe { S::call_later(self.value, ctx, rest) }
     }
@@ -218,17 +243,17 @@ where
     type Ret<'r>;
 
     /// Obligation across artifacts: `extern_signature!` writes this `fn`
-    /// type from the signature's own parameter list and `#[extern_fn]`
-    /// assigns every mono glue to it before taking the address
-    /// `call_now` runs.
+    /// type from the signature's own parameter list, taking the entry
+    /// first, and `#[extern_fn]` assigns every mono glue to it before
+    /// taking the address `call_now` runs.
     type Now;
     /// As `Now`, for a glue whose body suspends.
     type Later;
 
     /// # Safety
-    /// `value` is the glue of an instance of this signature, the receiver
-    /// named in `ctx` holds a value of the type that instance stands at,
-    /// and that instance's body returns rather than suspends.
+    /// `value` addresses the entry of an instance of this signature, the
+    /// receiver named in `ctx` holds a value of the type that instance
+    /// stands at, and that instance's body returns rather than suspends.
     unsafe fn call_now<'r>(
         value: Rt::Value,
         ctx: &mut Ctx<'_, Rt>,
@@ -244,6 +269,39 @@ where
     ) -> impl Future<Output = Self::Ret<'a>> + Send + 'a
     where
         Self::Ret<'a>: Send;
+}
+
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is no receiver `Instance::call` can name",
+    note = "a required instance is called with the receiver its signature declared, `&T` or `&mut T`, where `T` derefs to the runtime's value; a signature taking its receiver by value cannot be required (RFC-0070 D4)."
+)]
+pub trait Receiver<Rt>
+where
+    Rt: Runtime,
+{
+    fn name_in(self, ctx: &mut Ctx<'_, Rt>);
+}
+
+impl<I, Rt> Receiver<Rt> for &I
+where
+    I: Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    #[inline(always)]
+    fn name_in(self, ctx: &mut Ctx<'_, Rt>) {
+        ctx.name_receiver(&**self);
+    }
+}
+
+impl<I, Rt> Receiver<Rt> for &mut I
+where
+    I: DerefMut<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    #[inline(always)]
+    fn name_in(self, ctx: &mut Ctx<'_, Rt>) {
+        ctx.name_receiver(&**self);
+    }
 }
 
 /// `Self`, named through a runtime: a signature's rest run is a type alias,

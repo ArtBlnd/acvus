@@ -81,16 +81,26 @@ it. `next(&mut it)` is that signature called directly, so
 `while let Some(x) = next(&mut it) { .. }` walks a pipeline without a
 consumer.
 
-`dedup` is declared as a stage and is not callable from a script at any
-element type: `into_iter([1, 1, 2]) | dedup` is refused because no instance
-of the constructor's signature takes the pipeline.
-`acvus-interpreter-test/tests/iter_more.rs`'s
-`dedup_collapses_consecutive_equal_elements_only` and
-`dedup_over_strings_reads_each_element_in_place` fail there.
+`dedup` is one stage over any element type that has an instance of
+`core::eq`, which it requires and the call site decides (RFC-0070 D5):
+`into_iter([1, 1, 2]) | dedup` collapses to `[1, 2]`. The stage holds the
+element it last drew rather than a copy of it, so it requires no
+`core::clone` and runs one draw behind its source; what it yields is
+unchanged by that.
 
-`pchain` is not available. A declaration requiring an instance of `I` takes
-a parameter standing at `I` itself, and a `Vec<I>` is not one (RFC-0067
-Decision 1).
+`Vec<T>` has an instance of each of `core::eq`, `core::clone`, `core::cmp`
+and `core::hash`, and each requires the same signature at `T`
+(RFC-0070 D5). So `clone(&v)` copies a `Vec<Vec<String>>` through the
+`String` instance at the bottom, `cmp` is lexicographic with the length
+deciding a tie between a prefix and what extends it, and `hash` folds the
+element digests in the order the elements are in. An element type with no
+instance of the signature refuses the call and names itself; that is what a
+`Vec` of objects meets.
+
+`pchain` is not built. It was refused by a rule that no longer holds — a
+requirement's variable had to be a parameter's own type — and nobody has
+since checked whether a `Vec<I>` of pipelines resolves, so this is an
+absence rather than a bound.
 
 ## Not here
 

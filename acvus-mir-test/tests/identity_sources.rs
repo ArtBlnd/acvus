@@ -10,6 +10,7 @@ use acvus_mir::ty::{
 };
 use acvus_mir_test::inferred_function;
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
 fn iterator_registry(i: &Interner) -> TypeRegistry {
     let mut reg = TypeRegistry::new();
@@ -49,13 +50,15 @@ fn a_source_frozen_in_one_solver_is_never_minted_by_another() {
     let mut sources = Sources::new();
 
     let frozen_y = {
-        let mut a = Solver::new(&mut sources, &reg);
+        let signatures = FxHashMap::default();
+        let mut a = Solver::new(&mut sources, &reg, &signatures);
         let mut pb = PolyBuilder::new();
         let y = a.instantiate_poly(&iter_poly(&i, pb.fresh_identity_var()));
         a.freeze_ty(&y).unwrap()
     };
 
-    let mut b = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut b = Solver::new(&mut sources, &reg, &signatures);
     let imported_y = b.instantiate_poly(&lift_to_poly(&frozen_y));
     for _ in 0..8 {
         let mut pb = PolyBuilder::new();

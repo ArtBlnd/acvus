@@ -80,4 +80,10 @@ runtime never asks a value.
 ## Open questions
 
 - Whether `eq` on structural object types is provided field-wise by the
-  standard registry. This ruling leaves it to that registry.
+  standard registry. This ruling leaves it to that registry. As of
+  RFC-0070 no registry declares one, and none is planned for now: an
+  object type is an open set, a script that wants two objects compared
+  chooses the fields and compares them, and a map over object keys takes
+  its comparator as a closure (`hash_map_by`). An enum is the easier of
+  the two; both wait on a definition of what total equality over an
+  open set means.

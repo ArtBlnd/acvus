@@ -25,6 +25,7 @@ impl Signature {
 const SIGNATURES: &[Signature] = &[
     Signature::new("core", "clone"),
     Signature::new("core", "eq"),
+    Signature::new("core", "cmp"),
     Signature::new("core", "hash"),
     Signature::new("core", "to_string"),
     Signature::new("core", "to_int"),

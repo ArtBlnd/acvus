@@ -578,7 +578,9 @@ impl IncrementalGraph {
             context_types: {
                 // PolyTy -> InferTy (instantiate) -> Ty (freeze) at the output boundary.
                 let known = self.known_context_types();
-                let mut solver = crate::ty::Solver::new(&mut self.sources, &self.type_registry);
+                let signatures = FxHashMap::default();
+                let mut solver =
+                    crate::ty::Solver::new(&mut self.sources, &self.type_registry, &signatures);
                 Freeze::new(
                     known
                         .into_iter()

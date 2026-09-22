@@ -29,6 +29,32 @@ pub enum InstanceWanted {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorSignature {
+    /// `==` and `!=`. `acvus_extern::core` declares it as
+    /// `eq<T>(a: &T, b: &T) -> bool`.
+    Eq,
+    /// `<`, `<=`, `>` and `>=`. `acvus_extern::core` declares it as
+    /// `cmp<T>(a: &T, b: &T) -> i64`, whose answer is `-1`, `0` or `1`, and
+    /// lowering reads the operator off the sign of that answer.
+    Cmp,
+}
+
+impl OperatorSignature {
+    pub fn name(self) -> &'static str {
+        match self {
+            OperatorSignature::Eq => "eq",
+            OperatorSignature::Cmp => "cmp",
+        }
+    }
+}
+
+impl fmt::Display for OperatorSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "core::{}", self.name())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShownValue {
     Named(String),
@@ -246,12 +272,14 @@ pub enum MirErrorKind {
     },
     NoOperatorInstance {
         op: &'static str,
+        signature: OperatorSignature,
         ty: Ty,
     },
-    /// A comparison operator on a type that has no ordering. Both operands
-    /// are text often enough that the refusal names the ordering functions
-    /// `string::cmp` offers, which is what a program reaching for `<` on a
-    /// `String` wants; `<` itself waits for RFC-0067's `ord<T>`.
+    /// A comparison operator on a language-owned type whose representation
+    /// carries no order. An extension type reaches `core::cmp` instead of
+    /// this refusal (RFC-0070 D5). Both operands are text often enough that
+    /// the refusal names the ordering functions `string::cmp` offers, which
+    /// is what a program reaching for `<` on a `String` wants.
     NoOrdering {
         op: &'static str,
         ty: Ty,
@@ -742,10 +770,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 }
                 Ok(())
             }
-            MirErrorKind::NoOperatorInstance { op, ty } => {
+            MirErrorKind::NoOperatorInstance { op, signature, ty } => {
                 write!(
                     f,
-                    "`{op}` has no instance of core::eq for {}",
+                    "`{op}` has no instance of {signature} for {}",
                     ty.shown(interner)
                 )
             }

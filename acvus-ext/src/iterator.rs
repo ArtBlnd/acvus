@@ -40,7 +40,7 @@ use std::ops::DerefMut;
 use acvus_extern::PassedByValue;
 use acvus_extern::{
     Arr, Closure, ClosureFn, Cross, Ctx, Erased, Monomorphize, Ref, Registry, Runtime, Shared,
-    Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
+    Stored, TransparentOver, Var, core, extern_fn, extern_registry, kind,
 };
 use acvus_extern::{Instance, Later};
 
@@ -351,18 +351,15 @@ where
 fn dedup<I, T, E, Rt>(
     it: I,
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    eq: Instance<core::eq<T, Rt>, T, Rt>,
 ) -> Dedup<I, T, E, Rt>
 where
     I: Var<kind::Type>,
-    T: Monomorphize<(i64, f64, bool, String)> + Var<kind::Type> + PassedByValue<Rt>,
+    T: Var<kind::Type> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    Dedup(DedupBody {
-        inner: it,
-        next,
-        last: None,
-    })
+    Dedup::drawing(it, next, eq)
 }
 
 #[extern_fn(effect = pure)]
@@ -1291,7 +1288,7 @@ where
             map, next_map, pmap, filter, next_filter,
             take, next_take, skip, next_skip, step_by, next_step_by,
             take_while, next_take_while, skip_while, next_skip_while,
-            chunks, next_chunks, dedup, next_dedup_int, next_dedup_float, next_dedup_bool, next_dedup_string,
+            chunks, next_chunks, dedup, next_dedup,
             chain, next_chain,
             flatten, next_flatten_vecs, flatten_arrays, next_flatten_arrays,
             flat_map, next_flat_map,

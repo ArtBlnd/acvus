@@ -203,7 +203,9 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
         .direct_calls
         .values()
         .filter_map(|callee| match callee {
-            Callee::Extern { id, instance, .. } => Some((i.resolve(id.name).to_string(), *instance)),
+            Callee::Extern { id, instance, .. } => {
+                Some((i.resolve(id.name).to_string(), *instance))
+            }
             _ => None,
         })
         .collect();
@@ -212,7 +214,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
         .coercion_map
         .iter()
         .map(|(_, kind)| match kind {
-            CastKind::Extern { fn_ref, .. } => i.resolve(fn_ref.name).to_string(),
+            CastKind::Extern(cast) => i.resolve(cast.fn_ref.name).to_string(),
             CastKind::ThroughRef { cast, back, .. } => format!(
                 "&{}/{}",
                 i.resolve(cast.fn_ref.name),
@@ -285,7 +287,8 @@ fn s3_dependent_decisions_settle_in_one_call() {
     let i = Interner::new();
     let reg = registry(&i);
     let mut sources = Sources::new();
-    let mut solver = Solver::new(&mut sources, &reg);
+    let signatures = FxHashMap::default();
+    let mut solver = Solver::new(&mut sources, &reg, &signatures);
 
     let vec_array = externs(&i)
         .into_iter()

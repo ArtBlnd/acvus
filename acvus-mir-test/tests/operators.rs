@@ -1,5 +1,7 @@
 //! Intent tests for RFC-0020.
 
+use acvus_ast::BinOp;
+use acvus_mir::ir::{Callee, InstKind, MirModule, ValueId};
 use acvus_mir::ty::Ty;
 use acvus_mir_test::*;
 use acvus_utils::Interner;
@@ -34,18 +36,28 @@ fn inequality_on_strings_is_the_negated_string_eq() {
     assert!(ir.contains("!"), "{ir}");
 }
 
+/// RFC-0020 as amended by RFC-0070: the standard registry declares `eq` at
+/// `String` for the requirement sites that reach it, and a call by name
+/// resolves to that instance, while the operator stays the instruction.
 #[test]
-fn a_string_has_no_instance_of_eq() {
+fn eq_named_on_a_string_is_a_call_and_the_operator_is_not() {
     let i = Interner::new();
-    let err = compile_script_ir(&i, "eq(&@role, &@role)", &string_context(&i, "role")).unwrap_err();
-    assert!(!err.is_empty(), "{err}");
+    let named =
+        compile_script_ir(&i, "eq(&@role, &@role)", &string_context(&i, "role")).unwrap();
+    assert!(named.contains("call"), "{named}");
+    assert!(!named.contains("string_eq"), "{named}");
+    let operator = compile_script_ir(&i, "@role == @role", &string_context(&i, "role")).unwrap();
+    assert!(operator.contains("string_eq"), "{operator}");
+    assert!(!operator.contains("call"), "{operator}");
 }
 
 #[test]
-fn a_primitive_has_no_instance_of_eq() {
+fn eq_named_on_a_word_is_a_call_and_the_operator_is_not() {
     let i = Interner::new();
-    let err = compile_script_ir(&i, "eq(&1, &2)", &FxHashMap::default()).unwrap_err();
-    assert!(!err.is_empty(), "{err}");
+    let named = compile_script_ir(&i, "eq(&1, &2)", &FxHashMap::default()).unwrap();
+    assert!(named.contains("call"), "{named}");
+    let operator = compile_script_ir(&i, "1 == 2", &FxHashMap::default()).unwrap();
+    assert!(!operator.contains("call"), "{operator}");
 }
 
 #[test]
@@ -306,4 +318,215 @@ fn a_parameter_the_body_leaves_open_takes_one_width_for_every_call() {
     let err =
         compile_script_mode_ir_with(&i, "let g = |k| -> k + 1; g(@b); g(@n)", &c, &[]).unwrap_err();
     assert!(err.contains("type mismatch: expected u8, got i64"), "{err}");
+}
+
+// -- A comparison on an extension type is `core::cmp` (RFC-0070 D5) -------
+
+mod fx_ord {
+    use acvus_extern::{ExternType, Registry, TypesOnly, extern_fn, extern_registry};
+
+    #[derive(ExternType)]
+    #[repr(transparent)]
+    pub struct Ranked(i64);
+
+    #[derive(ExternType)]
+    #[repr(transparent)]
+    pub struct Unranked(i64);
+
+    #[extern_fn(effect = pure)]
+    fn ranked(n: i64) -> Ranked {
+        Ranked(n)
+    }
+
+    #[extern_fn(effect = pure)]
+    fn unranked(n: i64) -> Unranked {
+        Unranked(n)
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::cmp, effect = pure)]
+    fn cmp_ranked(a: &Ranked, b: &Ranked) -> i64 {
+        match a.0.cmp(&b.0) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure)]
+    fn eq_ranked(a: &Ranked, b: &Ranked) -> bool {
+        a.0 == b.0
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure)]
+    fn eq_unranked(a: &Unranked, b: &Unranked) -> bool {
+        a.0 == b.0
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx",
+            types: [Ranked, Unranked],
+            fns: [ranked, unranked, cmp_ranked, eq_ranked, eq_unranked],
+        }
+    }
+}
+
+struct Comparison {
+    written: &'static str,
+    lowered: BinOp,
+}
+
+const COMPARISONS: [Comparison; 4] = [
+    Comparison {
+        written: "<",
+        lowered: BinOp::Lt,
+    },
+    Comparison {
+        written: "<=",
+        lowered: BinOp::Lte,
+    },
+    Comparison {
+        written: ">",
+        lowered: BinOp::Gt,
+    },
+    Comparison {
+        written: ">=",
+        lowered: BinOp::Gte,
+    },
+];
+
+fn ordered_script(i: &Interner, source: &str) -> Result<MirModule, String> {
+    lowered_script_module_with_registries(i, source, vec![fx_ord::registry()])
+}
+
+fn sole_call(module: &MirModule, i: &Interner, ns: &str, name: &str) -> ValueId {
+    let mut answered = module.main.insts.iter().filter_map(|inst| {
+        let InstKind::FunctionCall {
+            dst,
+            callee: Callee::Extern { id, .. },
+            ..
+        } = &inst.kind
+        else {
+            return None;
+        };
+        let called = match id.namespace {
+            Some(space) => format!("{}::{}", i.resolve(space), i.resolve(id.name)),
+            None => i.resolve(id.name).to_string(),
+        };
+        (called == format!("{ns}::{name}")).then_some(*dst)
+    });
+    let Some(dst) = answered.next() else {
+        panic!("no call of {ns}::{name} in {:?}", module.main.insts)
+    };
+    assert!(
+        answered.next().is_none(),
+        "{ns}::{name} is called more than once"
+    );
+    dst
+}
+
+fn sole_zero(module: &MirModule) -> ValueId {
+    let mut zeroes = module.main.insts.iter().filter_map(|inst| {
+        let InstKind::Const {
+            dst,
+            value: acvus_ast::Literal::Int(0),
+        } = &inst.kind
+        else {
+            return None;
+        };
+        Some(*dst)
+    });
+    let Some(dst) = zeroes.next() else {
+        panic!("no `0` in {:?}", module.main.insts)
+    };
+    assert!(zeroes.next().is_none(), "more than one `0` in this body");
+    dst
+}
+
+#[test]
+fn a_comparison_on_an_extension_type_is_the_sign_of_a_core_cmp_call() {
+    for Comparison { written, lowered } in COMPARISONS {
+        let i = Interner::new();
+        let module = ordered_script(
+            &i,
+            &format!("let a = fx::ranked(1); let b = fx::ranked(2); a {written} b"),
+        )
+        .unwrap_or_else(|e| panic!("`{written}` on Ranked lowers: {e}"));
+
+        assert_eq!(module.ret, Ty::Bool, "`{written}` answers a Bool");
+
+        let ordering = sole_call(&module, &i, "core", "cmp");
+        let zero = sole_zero(&module);
+        let sign = module.main.insts.iter().find_map(|inst| match &inst.kind {
+            InstKind::BinOp {
+                op,
+                left,
+                right,
+                dst,
+            } if *left == ordering && *right == zero => Some((*op, *dst)),
+            _ => None,
+        });
+        let Some((op, dst)) = sign else {
+            panic!(
+                "no comparison of the `core::cmp` answer against `0`: {:?}",
+                module.main.insts
+            )
+        };
+        assert_eq!(op, lowered, "`{written}` keeps its own instruction");
+        assert_eq!(
+            module.main.val_types.get(&dst),
+            Some(&Ty::Bool),
+            "`{written}` answers a Bool"
+        );
+    }
+}
+
+#[test]
+fn a_type_with_eq_and_no_cmp_refuses_a_comparison_by_naming_core_cmp() {
+    let i = Interner::new();
+    let err = ordered_script(
+        &i,
+        "let a = fx::unranked(1); let b = fx::unranked(2); a < b",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("no instance of core::cmp has the call type Fn(&Unranked, &Unranked) -> i64"),
+        "{err}"
+    );
+}
+
+#[test]
+fn equality_on_the_same_type_stays_a_core_eq_call() {
+    let i = Interner::new();
+    let module = ordered_script(
+        &i,
+        "let a = fx::unranked(1); let b = fx::unranked(2); a == b",
+    )
+    .expect("`==` on Unranked lowers");
+    sole_call(&module, &i, "core", "eq");
+    assert_eq!(module.ret, Ty::Bool);
+}
+
+#[test]
+fn a_comparison_of_two_words_is_still_one_instruction() {
+    let i = Interner::new();
+    let module = ordered_script(&i, "let a = 1; let b = 2; a < b").expect("`<` on i64 lowers");
+    assert!(
+        !module
+            .main
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::FunctionCall { .. })),
+        "{:?}",
+        module.main.insts
+    );
+    assert!(
+        module
+            .main
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Lt, .. })),
+        "{:?}",
+        module.main.insts
+    );
 }

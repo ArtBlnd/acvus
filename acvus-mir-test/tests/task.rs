@@ -173,11 +173,13 @@ fn sync_or_async(i: &Interner) -> Function {
                         ty: ty.clone(),
                         admits: Task::Sync,
                         task: Task::Sync,
+                        requires: vec![],
                     },
                     InstanceSig {
                         ty: ty.clone(),
                         admits: Task::Heavy,
                         task: Task::Async,
+                        requires: vec![],
                     },
                 ],
                 generic: false,

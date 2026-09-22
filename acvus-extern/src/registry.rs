@@ -12,8 +12,6 @@ use acvus_mir::ty::{
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use acvus_mir::ir::{Overload, OverloadSpace};
-
 use crate::handler::RequiredInstance;
 
 use crate::handler::{DeclaredInstance, ExternHandler, Instances};
@@ -65,7 +63,7 @@ pub struct Requirement {
 }
 
 impl Requirement {
-    fn signature_of(&self) -> RequirementSig {
+    pub fn signature_of(&self) -> RequirementSig {
         RequirementSig {
             signature: self.signature,
             pattern: self.pattern.clone(),
@@ -177,6 +175,7 @@ where
                 signature: instance,
                 handler,
                 admits: Task::Heavy,
+                requires: Vec::new(),
             }],
             generic: None,
         },
@@ -285,6 +284,7 @@ where
                 signature: decl.ty,
                 handler,
                 admits: Task::Heavy,
+                requires: Vec::new(),
             }],
             generic: None,
         },
@@ -444,6 +444,10 @@ pub enum CombineError {
         instance: String,
         ty: PolyTy,
     },
+    HashWithoutEq {
+        instance: String,
+        ty: PolyTy,
+    },
     /// A handler that runs above the task its declaration names (RFC-0046).
     HandlerTask {
         function: String,
@@ -481,6 +485,12 @@ impl fmt::Display for CombineError {
             } => write!(
                 f,
                 "{function:?} requires an instance of {signature:?}, which no registry declares"
+            ),
+            Self::HashWithoutEq { instance, ty } => write!(
+                f,
+                "{instance} declares core::hash at {ty:?}, and no registry declares core::eq \
+                 there: a hash is bound to the equality it agrees with, so declare core::eq at \
+                 {ty:?} beside it"
             ),
             Self::RequiredInstanceWithoutGlue {
                 signature,
@@ -567,9 +577,9 @@ pub struct Externs<R: Runtime> {
 }
 
 /// The mono glue of every instance of every required signature, numbered
-/// as the compiler numbers that signature's instances (`Instances`): a call
-/// site's requirement is the checker's answer, and this is where that
-/// answer is a word (RFC-0068 D5).
+/// as the compiler numbers that signature's instances (`Instances`): this
+/// is what `prepare` asks to build an entry for a settled requirement
+/// (RFC-0070 D2).
 ///
 /// A row is dense: a signature one of whose instances has no glue is not a
 /// row, and `Externs::combine` refuses a requirement on such a signature
@@ -577,7 +587,6 @@ pub struct Externs<R: Runtime> {
 #[derive(Default)]
 pub struct InstanceTable {
     by_signature: FxHashMap<QualifiedRef, Vec<InstanceRun>>,
-    requiring: FxHashMap<QualifiedRef, OverloadSpace>,
 }
 
 impl<R> crate::handler::InstanceEntries<R> for InstanceTable
@@ -586,16 +595,6 @@ where
 {
     fn glue(&self, signature: QualifiedRef, instance: RequiredInstance) -> InstanceRun {
         self.by_signature[&signature][instance.0]
-    }
-
-    fn overload(&self, function: QualifiedRef, position: usize) -> Overload {
-        match self.requiring.get(&function) {
-            Some(space) => space.overload(position),
-            None => Overload {
-                own: position,
-                required: Vec::new(),
-            },
-        }
     }
 }
 
@@ -674,13 +673,21 @@ impl<R: Runtime> Externs<R> {
             }
             plain_manifests.push((manifest.fns, instances));
         }
+        let mut required_signatures: FxHashSet<QualifiedRef> = FxHashSet::default();
         for (fns, mut instances) in plain_manifests {
             for decl in fns {
                 let instances = instances
                     .remove(&decl.qref)
                     .unwrap_or_else(|| panic!("no handler for declared {:?}", decl.qref));
                 match decl.instance_of {
-                    Some(sig) => add_instance(interner, &mut signatures, decl, instances, sig)?,
+                    Some(sig) => add_instance(
+                        interner,
+                        &mut signatures,
+                        &mut required_signatures,
+                        decl,
+                        instances,
+                        sig,
+                    )?,
                     None => {
                         let ExternFn { decl, instances } =
                             as_family_erase(interner, ExternFn { decl, instances });
@@ -703,24 +710,8 @@ impl<R: Runtime> Externs<R> {
 
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
-        let mut required_signatures: FxHashSet<QualifiedRef> = FxHashSet::default();
-        let mut requiring: FxHashMap<QualifiedRef, OverloadSpace> = FxHashMap::default();
         for ExternFn { decl, instances } in plain {
             let mut decl = decl;
-            if !decl.requires.is_empty() {
-                requiring.insert(
-                    decl.qref,
-                    OverloadSpace {
-                        own: instances.concrete.len() + usize::from(instances.generic.is_some()),
-                        required: decl
-                            .requires
-                            .iter()
-                            .filter_map(|r| signatures.get(&r.signature))
-                            .map(|signature| signature.instances.len())
-                            .collect(),
-                    },
-                );
-            }
             for required in &decl.requires {
                 required_signatures.insert(required.signature);
                 let Some(signature) = signatures.get(&required.signature) else {
@@ -774,9 +765,9 @@ impl<R: Runtime> Externs<R> {
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
+        hash_beside_eq(interner, &collected)?;
         let mut instance_table = InstanceTable {
             by_signature: FxHashMap::default(),
-            requiring,
         };
         for c in collected {
             if required_signatures.contains(&c.decl.qref)
@@ -828,6 +819,27 @@ impl<R: Runtime> Externs<R> {
     }
 }
 
+fn hash_beside_eq<R>(interner: &Interner, collected: &[Collected<R>]) -> Result<(), CombineError>
+where
+    R: Runtime,
+{
+    let of = |qref: QualifiedRef| collected.iter().find(|c| c.decl.qref == qref);
+    let Some(hash) = of(<crate::core::hash as SharedSignature>::qref(interner)) else {
+        return Ok(());
+    };
+    let eq_types: &[PolyTy] = of(<crate::core::eq as SharedSignature>::qref(interner))
+        .map_or(&[], |eq| eq.instance_types.as_slice());
+    for at in &hash.entries {
+        if !eq_types.iter().any(|eq| unify_patterns(eq, &at.ty).is_some()) {
+            return Err(CombineError::HashWithoutEq {
+                instance: written(interner, at.qref),
+                ty: at.ty.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The bound a signature's receiver keeps: its declared bound met with the
 /// patterns its instances stand at.
 fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
@@ -839,10 +851,25 @@ fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
 fn add_instance<R: Runtime>(
     i: &Interner,
     signatures: &mut FxHashMap<QualifiedRef, Collected<R>>,
+    required_signatures: &mut FxHashSet<QualifiedRef>,
     decl: FnDecl,
     instances: Instances<R>,
     sig: QualifiedRef,
 ) -> Result<(), CombineError> {
+    let requires: Vec<RequirementSig> = decl
+        .requires
+        .iter()
+        .map(Requirement::signature_of)
+        .collect();
+    for required in &decl.requires {
+        if !signatures.contains_key(&required.signature) {
+            return Err(CombineError::RequiredSignatureUnknown {
+                function: decl.qref,
+                signature: required.signature,
+            });
+        }
+        required_signatures.insert(required.signature);
+    }
     let collected = signatures
         .get_mut(&sig)
         .ok_or(CombineError::UnknownSignature {
@@ -864,7 +891,7 @@ fn add_instance<R: Runtime>(
     {
         return Err(CombineError::DuplicateInstance { signature: sig, ty });
     }
-    let admitted = at_declared_type(&decl.ty, instances).ok_or_else(mismatch)?;
+    let admitted = at_declared_type(&decl.ty, instances, &requires).ok_or_else(mismatch)?;
     for instance in &admitted {
         ceiling_admits(i, decl.qref, &instance.signature, &instance.handler)?;
     }
@@ -887,9 +914,14 @@ fn add_instance<R: Runtime>(
     Ok(())
 }
 
+/// The instances one declaration contributes to the signature it names.
+/// A declaration whose handler is generic has none of its own, and the one
+/// built here is where its requirements are written; `#[extern_fn]` writes
+/// them on the instances it builds itself.
 fn at_declared_type<R>(
     declared: &PolyTy,
     instances: Instances<R>,
+    requires: &[RequirementSig],
 ) -> Option<Vec<DeclaredInstance<R>>>
 where
     R: Runtime,
@@ -902,6 +934,7 @@ where
             signature: declared.clone(),
             handler,
             admits: Task::Heavy,
+            requires: requires.to_vec(),
         }]),
         Instances {
             concrete,

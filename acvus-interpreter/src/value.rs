@@ -388,31 +388,29 @@ impl Value {
     }
 
     #[inline]
-    pub fn instance(at: acvus_extern::InstanceRun) -> Value {
+    pub fn instance(entry: &acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) -> Value {
         Value {
-            kind: match at.task() {
+            kind: match entry.run.task() {
                 acvus_extern::Task::Sync => Kind::Instance,
                 _ => Kind::InstanceAwait,
             },
-            word: at.at() as u64,
+            word: entry as *const _ as u64,
         }
     }
 
     /// # Safety
-    /// The value was made by `Value::instance`.
+    /// The value was made by `Value::instance` from an entry that outlives
+    /// `'a`.
     #[inline]
-    pub unsafe fn as_instance(&self) -> acvus_extern::InstanceRun {
+    pub unsafe fn as_instance_entry<'a>(
+        &self,
+    ) -> &'a acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime> {
         debug_assert!(
             matches!(self.kind, Kind::Instance | Kind::InstanceAwait),
-            "as_instance: {self:?} is not an instance"
+            "as_instance_entry: {self:?} is not an instance"
         );
-        let task = match self.kind {
-            Kind::Instance => acvus_extern::Task::Sync,
-            _ => acvus_extern::Task::Async,
-        };
-        // SAFETY: the caller's contract: `Value::instance` wrote this word
-        // from an `InstanceRun`, whose task is its kind.
-        unsafe { acvus_extern::InstanceRun::from_glue(self.word as usize, task) }
+        // SAFETY: the caller's contract.
+        unsafe { &*(self.word as *const acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) }
     }
 
     /// A projection onto the aggregate whose flat layout begins at `base`.
