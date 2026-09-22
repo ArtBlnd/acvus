@@ -364,3 +364,36 @@ fn an_assignment_in_a_loop_body_is_the_outer_binding() {
         "the loop header takes the assigned `n` as a block parameter: {ir}"
     );
 }
+
+// -- RFC-0069 D2: a closure does not leave the run it was made in ----------
+
+#[test]
+fn a_program_whose_result_is_a_closure_is_refused() {
+    let i = Interner::new();
+    let err = compile_script_mode_raw(&i, "|x| -> x + 1", &items_ctx(&i)).unwrap_err();
+    assert!(
+        err.contains("the program's result holds a closure"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_program_whose_result_holds_a_closure_in_data_is_refused() {
+    let i = Interner::new();
+    let err = compile_script_mode_raw(&i, "Some(|x| -> x + 1)", &items_ctx(&i)).unwrap_err();
+    assert!(
+        err.contains("the program's result holds a closure"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_lambda_may_return_a_closure_and_the_program_its_value() {
+    let i = Interner::new();
+    compile_script_mode_raw(
+        &i,
+        "let add = |a| -> |b| -> a + b; let add_two = add(2); add_two(3)",
+        &items_ctx(&i),
+    )
+    .expect("a closure crosses between bodies of one run");
+}

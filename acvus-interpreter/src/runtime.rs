@@ -121,144 +121,18 @@ impl Runtime for AcvusRuntime {
         &mut rooted.ctx
     }
 
-    fn op_no_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    fn op<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
     where
         H: acvus_extern::Handler<AcvusRuntime>,
     {
-        call::op_no_argument(handler, shape)
+        call::op(handler, shape)
     }
 
-    fn op_one_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    fn fused<H>(handler: H, shape: call::FusedShape) -> call::Call
     where
         H: acvus_extern::Handler<AcvusRuntime>,
     {
-        call::op_one_argument(handler, shape)
-    }
-
-    fn op_two_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_two_arguments(handler, shape)
-    }
-
-    fn op_three_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_three_arguments(handler, shape)
-    }
-
-    fn op_four_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_four_arguments(handler, shape)
-    }
-
-    fn op_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::off_the_register_forms(handler, shape)
-    }
-
-    fn op_pair_one_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_pair_one_argument(handler, shape)
-    }
-
-    fn op_pair_two_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_pair_two_arguments(handler, shape)
-    }
-
-    fn op_pair_three_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_pair_three_arguments(handler, shape)
-    }
-
-    fn op_pair_four_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_pair_four_arguments(handler, shape)
-    }
-
-    fn op_pair_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_pair_wide(handler, shape)
-    }
-
-    fn op_run_no_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_run_no_argument(handler, shape)
-    }
-
-    fn op_run_one_argument<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_run_one_argument(handler, shape)
-    }
-
-    fn op_run_two_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_run_two_arguments(handler, shape)
-    }
-
-    fn op_run_three_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_run_three_arguments(handler, shape)
-    }
-
-    fn op_run_four_arguments<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_run_four_arguments(handler, shape)
-    }
-
-    fn op_run_wide<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::op_run_wide(handler, shape)
-    }
-
-    fn fused_no_argument<H>(handler: H, shape: call::FusedShape) -> call::Call
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::fused_no_argument(handler, shape)
-    }
-
-    fn fused_one_argument<H>(handler: H, shape: call::FusedShape) -> call::Call
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::fused_one_argument(handler, shape)
-    }
-
-    fn fused_two_arguments<H>(handler: H, shape: call::FusedShape) -> call::Call
-    where
-        H: acvus_extern::Handler<AcvusRuntime>,
-    {
-        call::fused_two_arguments(handler, shape)
+        call::fused_call(handler, shape)
     }
 
     fn async_extern_op<H>(handler: H, shape: call::AsyncShape) -> Box<dyn crate::code::Op>
@@ -421,7 +295,7 @@ impl Runtime for AcvusRuntime {
 
     fn call_is_sync(&self, f: &Value) -> bool {
         // SAFETY: the type checker admits only a closure value here.
-        !unsafe { f.as_fn() }.entry.may_suspend()
+        !unsafe { f.code_of() }.code().may_suspend()
     }
 
     unsafe fn call_now<A>(&self, f: &Value, ctx: &mut acvus_extern::Ctx<'_, Self>, args: A) -> Value
@@ -436,16 +310,7 @@ impl Runtime for AcvusRuntime {
         };
         args.into_run(self, ctx.frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here.
-        let closure = unsafe { f.as_fn() };
-        crate::machine::fn_value_call_in_window(closure, &mut ctx.frame, A::WIDTH as u16)
-    }
-
-    unsafe fn call_0<'a>(&'a self, f: &'a Value) -> Self::CallFuture<'a> {
-        self.run(f, &mut [])
-    }
-
-    unsafe fn call_1<'a>(&'a self, f: &'a Value, a: Value) -> Self::CallFuture<'a> {
-        self.run(f, &mut [a])
+        crate::machine::fn_value_call_in_window(f, ctx.rt, &mut ctx.frame, A::WIDTH as u16)
     }
 
     unsafe fn call_n<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> Self::CallFuture<'a> {
@@ -508,8 +373,7 @@ where
 impl AcvusRuntime {
     fn run<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> <Self as Runtime>::CallFuture<'a> {
         // SAFETY: the type checker admits only a closure value here.
-        let closure = unsafe { f.as_fn() };
-        Box::pin(crate::machine::fn_value_call(closure, args))
+        Box::pin(crate::machine::fn_value_call(f, self, args))
     }
 }
 

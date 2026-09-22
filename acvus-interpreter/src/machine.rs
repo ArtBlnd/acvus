@@ -13,7 +13,6 @@ use std::mem::MaybeUninit;
 use std::slice;
 use std::sync::Arc;
 
-use acvus_ast::Span;
 use acvus_extern::{Ctx, Words};
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
@@ -27,7 +26,7 @@ use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
 use crate::regs::{FrameState, Regs, Store};
 use crate::runtime::AcvusRuntime;
-use crate::value::{FnValue, Value};
+use crate::value::Value;
 
 /// What an extern call is lent of the frame it runs in: the run its arguments
 /// sit in, and the context it runs in (RFC-0050 rule 6).
@@ -76,7 +75,6 @@ pub struct Machine<'c> {
     body: &'c Body,
     regs: Regs<'c>,
     pub ctx: Ctx<'c, AcvusRuntime>,
-    pub page: &'c Arc<dyn RuntimeContext>,
     exit: [Value; 2],
     /// The block `run` enters at. A suspension writes the block after
     /// itself here, so the driver's next `run` resumes rather than
@@ -86,18 +84,12 @@ pub struct Machine<'c> {
 }
 
 impl<'c> Machine<'c> {
-    pub fn new(
-        body: &'c Body,
-        mut regs: Regs<'c>,
-        rt: &'c AcvusRuntime,
-        page: &'c Arc<dyn RuntimeContext>,
-    ) -> Machine<'c> {
+    pub fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime) -> Machine<'c> {
         let frame = regs.take_window();
         Machine {
             body,
             regs,
             ctx: Ctx::new(rt, frame),
-            page,
             exit: [Value::unit(); 2],
             at: body.entry,
             pending: None,
@@ -252,17 +244,17 @@ impl<'c> Machine<'c> {
         R: Returned,
     {
         let rt = self.ctx.rt;
-        let page = self.page;
         let window = &mut self.ctx.frame;
         if window.fits(callee) {
             let (regs, opened) = window.bind(callee);
-            return run_frame(callee, named, regs, rt, page, opened, fill);
+            return run_frame(callee, named, regs, rt, opened, fill);
         }
-        run_rooted(window, callee, named, arity, rt, page, fill)
+        run_rooted(window, callee, named, arity, rt, fill)
     }
 
-    pub fn call_fn_sync(&mut self, f: &FnValue, arity: u16) -> Value {
-        f.entry.call_in(f, arity, self)
+    pub fn call_fn_sync(&mut self, f: &Value, arity: u16) -> Value {
+        // SAFETY: the caller's contract: `f` is a closure.
+        unsafe { f.code_of() }.code().call_in(f, arity, self)
     }
 }
 
@@ -275,7 +267,6 @@ fn run_rooted<F, R>(
     named: &dyn Debug,
     arity: u16,
     rt: &AcvusRuntime,
-    page: &Arc<dyn RuntimeContext>,
     fill: F,
 ) -> R
 where
@@ -289,7 +280,7 @@ where
         let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
         regs.open(Off::of(slot), *arg);
     }
-    run_frame(callee, named, regs, rt, page, true, fill)
+    run_frame(callee, named, regs, rt, true, fill)
 }
 
 /// What a frame holds for as long as it is bound to one body: the kind byte
@@ -315,7 +306,6 @@ fn run_frame<F, R>(
     named: &dyn Debug,
     mut regs: Regs<'_>,
     rt: &AcvusRuntime,
-    page: &Arc<dyn RuntimeContext>,
     opened: bool,
     fill: F,
 ) -> R
@@ -330,7 +320,7 @@ where
     if !opened {
         open_frame(body, &mut regs);
     }
-    let mut machine = Machine::new(body, regs, rt, page);
+    let mut machine = Machine::new(body, regs, rt);
     fill(&mut machine);
     let stop = machine.run();
     debug_assert_eq!(
@@ -390,7 +380,7 @@ where
     R: Returned,
 {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
-    let rt = AcvusRuntime(shared);
+    let rt = AcvusRuntime::new(shared, page);
     let body = prepared.main.as_ref();
     let mut store = Store::new();
     let (mut regs, _) = store.bind(body);
@@ -401,7 +391,7 @@ where
     if let Some(order) = body.order_param {
         regs.put(order, Value::unit());
     }
-    drive(Machine::new(body, regs, &rt, &page)).await
+    drive(Machine::new(body, regs, &rt)).await
 }
 
 pub fn call_module_sync<R>(
@@ -421,34 +411,40 @@ where
     })
 }
 
-/// What a closure calls, chosen when the closure was made: the prepared
-/// `Body` or `Expr` its `Code` holds, behind the one vtable that knows which
-/// it is. A call reads the pointer and jumps; it never asks the shape.
-pub trait Callable: Send + Sync {
+impl Code {
     /// Run in the window a handler was lent, on the argument run the handler
-    /// laid in its first `arity` registers (RFC-0050 rule 6). The handler
-    /// holds no `Machine`, so the interpreter and the page come from the
-    /// closure value.
-    fn call_in_window(&self, f: &FnValue, window: &mut FrameState, arity: u16) -> Value;
+    /// laid in its first `arity` registers (RFC-0050 rule 6), in the run the
+    /// handler's `Ctx` names.
+    pub fn call_in_window(
+        &self,
+        f: &Value,
+        rt: &AcvusRuntime,
+        window: &mut FrameState,
+        arity: u16,
+    ) -> Value {
+        match self {
+            Code::Body(body) => body.call_in_window(f, rt, window, arity),
+            Code::Expr(expr) => expr_value(expr, window.laid(arity)),
+        }
+    }
 
     /// Run in the window above the calling frame, on the argument run the
     /// caller laid in that window's first `arity` registers (RFC-0052 rule 7).
-    fn call_in(&self, f: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value;
+    pub fn call_in(&self, f: &Value, arity: u16, m: &mut Machine<'_>) -> Value {
+        match self {
+            Code::Body(body) => m.call_sync(body, &body.span, arity, |callee| {
+                bind_captures(body, f, &mut callee.regs)
+            }),
+            Code::Expr(expr) => expr_value(expr, m.window().laid(arity)),
+        }
+    }
 
     /// The arguments read into the callee's frame before the future exists,
     /// so the caller may lend registers that die at the call.
-    fn start<'c>(&'c self, f: &FnValue, args: &mut [Value]) -> Resume<'c>;
-
-    fn may_suspend(&self) -> bool;
-    fn site(&self) -> Span;
-}
-
-impl Code {
-    /// The closure value's entry, chosen here rather than at every call.
-    pub fn callable(self: &Arc<Code>) -> Arc<dyn Callable> {
-        match self.as_ref() {
-            Code::Body(body) => Arc::clone(body) as Arc<dyn Callable>,
-            Code::Expr(expr) => Arc::clone(expr) as Arc<dyn Callable>,
+    pub fn start<'c>(&'c self, f: &Value, args: &mut [Value]) -> Resume<'c> {
+        match self {
+            Code::Body(body) => body.start(f, args),
+            Code::Expr(expr) => Resume::Done(expr_value(expr, args)),
         }
     }
 }
@@ -461,25 +457,27 @@ pub enum Resume<'c> {
     Done(Value),
 }
 
-impl Callable for Body {
-    fn call_in_window(&self, f: &FnValue, window: &mut FrameState, arity: u16) -> Value {
+impl Body {
+    /// A chain (`Code::Expr`) runs with no frame; this arm keeps its own.
+    #[inline(never)]
+    fn call_in_window(
+        &self,
+        f: &Value,
+        rt: &AcvusRuntime,
+        window: &mut FrameState,
+        arity: u16,
+    ) -> Value {
         if !window.fits(self) {
-            return run_rooted(
-                window,
-                self,
-                &self.span,
-                arity,
-                AcvusRuntime::of(&f.shared),
-                &f.page,
-                |callee| bind_captures(self, f, &mut callee.regs),
-            );
+            return run_rooted(window, self, &self.span, arity, rt, |callee| {
+                bind_captures(self, f, &mut callee.regs)
+            });
         }
         let (mut regs, bound) = window.bind(self);
         if !bound {
             open_frame(self, &mut regs);
         }
         bind_captures(self, f, &mut regs);
-        let mut machine = Machine::new(self, regs, AcvusRuntime::of(&f.shared), &f.page);
+        let mut machine = Machine::new(self, regs, rt);
         let stop = machine.run();
         debug_assert_eq!(
             stop, RETURN,
@@ -491,13 +489,7 @@ impl Callable for Body {
         Value::of(exit)
     }
 
-    fn call_in(&self, f: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value {
-        m.call_sync(self, &self.span, arity, |callee| {
-            bind_captures(self, f, &mut callee.regs)
-        })
-    }
-
-    fn start<'c>(&'c self, f: &FnValue, args: &mut [Value]) -> Resume<'c> {
+    fn start<'c>(&'c self, f: &Value, args: &mut [Value]) -> Resume<'c> {
         let mut store = Store::new();
         {
             let (mut regs, _) = store.bind(self);
@@ -506,48 +498,20 @@ impl Callable for Body {
         }
         Resume::Frame { body: self, store }
     }
-
-    fn may_suspend(&self) -> bool {
-        self.may_suspend
-    }
-
-    fn site(&self) -> Span {
-        self.span
-    }
-}
-
-impl Callable for Expr {
-    fn call_in_window(&self, _: &FnValue, window: &mut FrameState, arity: u16) -> Value {
-        expr_value(self, window.laid(arity))
-    }
-
-    fn call_in(&self, _: &FnValue, arity: u16, m: &mut Machine<'_>) -> Value {
-        expr_value(self, m.window().laid(arity))
-    }
-
-    fn start<'c>(&'c self, _: &FnValue, args: &mut [Value]) -> Resume<'c> {
-        Resume::Done(expr_value(self, args))
-    }
-
-    fn may_suspend(&self) -> bool {
-        false
-    }
-
-    fn site(&self) -> Span {
-        self.span
-    }
 }
 
 pub fn fn_value_call<'f>(
-    f: &'f FnValue,
+    f: &'f Value,
+    rt: &'f AcvusRuntime,
     args: &mut [Value],
 ) -> impl Future<Output = Value> + Send + use<'f> {
-    let resume = f.entry.start(f, args);
+    // SAFETY: the caller's contract: `f` is a closure.
+    let resume = unsafe { f.code_of() }.code().start(f, args);
     async move {
         match resume {
             Resume::Frame { body, mut store } => {
                 let (regs, _) = store.bind(body);
-                let machine = Machine::new(body, regs, AcvusRuntime::of(&f.shared), &f.page);
+                let machine = Machine::new(body, regs, rt);
                 drive(machine).await
             }
             Resume::Done(value) => value,
@@ -555,14 +519,24 @@ pub fn fn_value_call<'f>(
     }
 }
 
-pub fn fn_value_call_in_window(f: &FnValue, window: &mut FrameState, arity: u16) -> Value {
-    f.entry.call_in_window(f, window, arity)
+pub fn fn_value_call_in_window(
+    f: &Value,
+    rt: &AcvusRuntime,
+    window: &mut FrameState,
+    arity: u16,
+) -> Value {
+    // SAFETY: the caller's contract: `f` is a closure.
+    unsafe { f.code_of() }
+        .code()
+        .call_in_window(f, rt, window, arity)
 }
 
 /// The closure owns its captures; the body sees each through a reference
 /// (RFC-0018).
-fn bind_captures(body: &Body, f: &FnValue, regs: &mut Regs<'_>) {
-    for (slot, capture) in body.captures.iter().zip(f.captures.iter()) {
+fn bind_captures(body: &Body, f: &Value, regs: &mut Regs<'_>) {
+    // SAFETY: the caller's contract on every entry: `f` is a closure.
+    let captures = unsafe { f.captures_of() };
+    for (slot, capture) in body.captures.iter().zip(captures) {
         regs.put(*slot, Value::reference(capture));
     }
     if let Some(order) = body.order_param {
@@ -572,8 +546,8 @@ fn bind_captures(body: &Body, f: &FnValue, regs: &mut Regs<'_>) {
 
 /// The same, for the one path handed its arguments as values rather than as a
 /// run of the caller's registers: the frame a suspending call runs on, which
-/// exists before the future does (`Callable::start`).
-fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
+/// exists before the future does (`Code::start`).
+fn fill(body: &Body, f: &Value, args: &mut [Value], regs: &mut Regs<'_>) {
     bind_captures(body, f, regs);
     for (slot, arg) in body.params.iter().zip(args) {
         regs.put(*slot, *arg);

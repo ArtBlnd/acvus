@@ -2464,7 +2464,12 @@ fn projection_var_in_arithmetic() {
 fn projection_lambda_capture() {
     let i = Interner::new();
     let context = ctx(&i, &[("data", Ty::I64)]);
-    let ir = compile_script_ir(&i, "let x = @data; |y| -> x + y", &context).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "let x = @data; [1, 2] | into_iter | map(|y| -> x + y) | collect",
+        &context,
+    )
+    .unwrap();
     assert!(ir.contains("closure"), "should have closure: {ir}");
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }

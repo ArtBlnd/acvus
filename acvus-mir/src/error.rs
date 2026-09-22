@@ -407,6 +407,9 @@ pub enum MirErrorKind {
     ViewInData(DataShape),
     /// A script body returned a reference.
     ReferenceReturnedFromBody(Ty),
+    /// RFC-0069 D2: the entry's result reaches the host, which outlives
+    /// the run a closure belongs to.
+    ClosureReturnedToTheHost(Ty),
     /// RFC-0043.
     AmbiguousFunction {
         name: String,
@@ -651,6 +654,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "a reference cannot be stored in {shape}; \
                      write `.to_string()` to store the text"
+                )
+            }
+            MirErrorKind::ClosureReturnedToTheHost(ty) => {
+                write!(
+                    f,
+                    "the program's result holds a closure, {}, and a closure does not leave \
+                     the run it was made in",
+                    ty.display(self.interner)
                 )
             }
             MirErrorKind::ReferenceReturnedFromBody(ty) => {

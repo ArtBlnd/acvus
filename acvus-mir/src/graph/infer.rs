@@ -610,7 +610,7 @@ fn settled_params(solver: &Solver, declared: &[ParamTerm<Infer>]) -> Vec<Param> 
 
 fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck::ResultCrossing {
     match entry == Some(body) {
-        true => crate::typeck::ResultCrossing::OneValue,
+        true => crate::typeck::ResultCrossing::Host,
         false => crate::typeck::ResultCrossing::Registers,
     }
 }

@@ -3936,17 +3936,17 @@ impl<'a> Prepare<'a> {
                 body,
                 captures,
             } => {
-                let entry = self
-                    .closures
-                    .get(body)
-                    .unwrap_or_else(|| panic!("closure body not found: {body:?}"))
-                    .callable();
+                let code = crate::code::CodeRef::of(
+                    self.closures
+                        .get(body)
+                        .unwrap_or_else(|| panic!("closure body not found: {body:?}")),
+                );
                 let Operands { slots, takes } = self.taken(captures);
                 {
                     let dst = self.marked(*dst);
                     node(move |next| call::MakeClosure {
                         dst,
-                        entry,
+                        code,
                         captures: slots,
                         takes,
                         next,
@@ -4358,9 +4358,9 @@ impl<'a> Prepare<'a> {
         let dst = self.pair(result);
         match form {
             CallForm::Registers(0) => panic!(
-                "a declaration of no parameter returns a view of nothing; \
-                 `TakenForm<Pair>` has no impl for `InRegisters<0>` and the macro refuses \
-                 the declaration ahead of it (RFC-0047 §3)"
+                "a declaration of no parameter returns a view of nothing: a result that \
+                 borrows has no parameter it can be a borrow of, and `#[extern_fn]` refuses \
+                 the declaration ahead of this (RFC-0047 §3)"
             ),
             CallForm::Registers(1) => {
                 let a = nth(&slots, 0);

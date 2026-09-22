@@ -301,8 +301,15 @@ struct WrittenErase {
 
 impl WrittenErase {
     fn of(i: &Interner, decl: &FnDecl) -> Option<Self> {
-        let (Some(Coercion::Cast), PolyTy::Fn { params, ret, effect, .. }) =
-            (&decl.coercion, &decl.ty)
+        let (
+            Some(Coercion::Cast),
+            PolyTy::Fn {
+                params,
+                ret,
+                effect,
+                ..
+            },
+        ) = (&decl.coercion, &decl.ty)
         else {
             return None;
         };
@@ -755,7 +762,11 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
                     instances: instances.signatures(),
-                    requires: decl.requires.iter().map(Requirement::signature_of).collect(),
+                    requires: decl
+                        .requires
+                        .iter()
+                        .map(Requirement::signature_of)
+                        .collect(),
                 },
                 ty: decl.ty,
             });
@@ -777,8 +788,11 @@ impl<R: Runtime> Externs<R> {
                     ty: bare.ty.clone(),
                 });
             }
-            let row: Option<Vec<InstanceRun>> =
-                c.instances.iter().map(|arm| arm.handler.instance()).collect();
+            let row: Option<Vec<InstanceRun>> = c
+                .instances
+                .iter()
+                .map(|arm| arm.handler.instance())
+                .collect();
             if let Some(row) = row {
                 instance_table.by_signature.insert(c.decl.qref, row);
             }

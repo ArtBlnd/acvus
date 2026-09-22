@@ -77,8 +77,11 @@ impl InterpreterContext {
         self
     }
 
-    pub fn runtime(&self) -> AcvusRuntime {
-        AcvusRuntime(Arc::new(self.clone()))
+    pub fn runtime_over_an_empty_page(&self) -> AcvusRuntime {
+        AcvusRuntime::new(
+            Arc::new(self.clone()),
+            Arc::new(crate::journal::InMemoryContext::empty()),
+        )
     }
 }
 
@@ -140,6 +143,11 @@ impl Interpreter {
             page,
             spawn_args: args,
         }
+    }
+
+    /// The run as a `Runtime`, for a host that commits the page afterwards.
+    pub fn runtime(&self) -> AcvusRuntime {
+        AcvusRuntime::new(Arc::clone(&self.shared), Arc::clone(&self.page))
     }
 
     /// Execute the entry module and return its value. The page keeps every

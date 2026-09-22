@@ -36,12 +36,12 @@ pub use erased::Erased;
 pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByValue};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
-    Borrowable, BorrowableSpecialized, ByRef, ByValue, CallSite, DeclaredInstance, DirectOp,
-    ExternHandler,
-    Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries, Instances, IntoRun,
-    LentBack, NoInstance, NoInstances, RequiredInstance, Parameters, REGISTER_FORM, Required, Ret, RetLent, Sited,
-    SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
-    ValuesOnly, Width, async_glue, async_glue_at_instance, glue, glue_at_instance,
+    Borrowable, BorrowableSpecialized, ByRef, ByValue, CallForms, CallSite, DeclaredInstance,
+    DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries,
+    Instances, IntoRun, LentBack, NoInstance, NoInstances, Parameters, REGISTER_FORM, Required,
+    RequiredInstance, Ret, RetLent, Sited, SitesNoParameterReads, Specialized, Uniform, Unsited,
+    Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
+    glue_at_instance,
 };
 pub use instance::{
     CalledAt, Instance, InstanceRun, Later, Now, RequirementOf, RestRun, RestoreByValue,
@@ -51,8 +51,8 @@ pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, FromValue, Inline, Nothing, Obj, ObjectShape, One, OneValue,
-    Pair, Run, Stored, SurvivesSuspension, TransparentOver, Variant, erased_description,
-    is_erased_from,
+    Pair, RetForms, Returned, Run, Stored, SurvivesSuspension, TransparentOver, Variant,
+    erased_description, is_erased_from,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{

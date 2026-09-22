@@ -17,7 +17,7 @@ use crate::ctx::Ctx;
 use crate::instance::InstanceRun;
 use crate::instance::{Instance, Signature};
 use crate::loan::Loan;
-use crate::obj::{Cross, Form, FormKind, Nothing, One, OneValue, Pair, Run, SurvivesSuspension};
+use crate::obj::{Cross, Form, FormKind, Nothing, One, OneValue, Returned, SurvivesSuspension};
 use crate::registry::SharedSignature;
 use crate::runtime::Runtime;
 
@@ -406,7 +406,7 @@ where
     /// the caller can take away says `Form = One`: the `Pair` a view or a
     /// slice is borrows the caller's frame (RFC-0047 §3), and the `Run<W>` an
     /// aggregate is names the caller's destination.
-    type Form: Form;
+    type Form: Returned;
 
     /// How many of the runtime's values the result occupies.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
@@ -474,7 +474,7 @@ where
     Rt: Runtime,
 {
     type Of<'a>;
-    type Form: Form;
+    type Form: Returned;
 
     fn into_run(value: Self::Of<'_>, rt: &Rt, out: Out<'_, Rt>);
 }
@@ -588,6 +588,13 @@ pub trait Handler<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
+    /// The run this call's arguments are, as a type: which of the six forms,
+    /// and at a register form the constant length of the array the entry
+    /// takes.
+    type Args: ArgRun;
+    /// The run its result is written into, at that form's own width.
+    type Ret: Returned;
+
     const WIDTH: Width;
 
     /// `frame` is the window above the calling frame, which a handler that
@@ -595,216 +602,15 @@ where
     /// (RFC-0050 rule 6).
     ///
     /// # Safety
-    /// `run` holds `WIDTH.args` of the runtime's values in declaration
-    /// order, `out` has room for `WIDTH.ret`, and every reference the
-    /// handler takes out of `run` names storage live for the call
-    /// (RFC-0018).
-    unsafe fn call(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value], out: &mut [Rt::Value]);
-
-    /// The register forms. A declaration whose arguments are `k` values wide
-    /// and whose result is one value takes them in registers, and `prepare`
-    /// builds the operation for the one form `WIDTH` names.
-    ///
-    /// # Safety
-    /// `WIDTH` is `Width { args: k, ret: 1 }` for the `k` this form names,
-    /// and the arguments are this call's own, in declaration order.
-    #[inline]
-    unsafe fn call0(&self, ctx: &mut Ctx<'_, Rt>) -> Rt::Value {
-        // SAFETY: the caller's contract, which is `call_run`'s at no values.
-        unsafe { self.call_run(ctx, &[]) }
-    }
-
-    /// # Safety
-    /// As `call0`, at one value.
-    #[inline]
-    unsafe fn call1(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value) -> Rt::Value {
-        // SAFETY: the caller's contract, which is `call_run`'s at one value.
-        unsafe { self.call_run(ctx, &[a]) }
-    }
-
-    /// # Safety
-    /// As `call0`, at two values.
-    #[inline]
-    unsafe fn call2(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value, b: Rt::Value) -> Rt::Value {
-        // SAFETY: the caller's contract, which is `call_run`'s at two.
-        unsafe { self.call_run(ctx, &[a, b]) }
-    }
-
-    /// # Safety
-    /// As `call0`, at three values.
-    #[inline]
-    unsafe fn call3(
+    /// Every reference the handler takes out of `run` names storage live for
+    /// the call (RFC-0018). The two lengths `WIDTH` states are the two runs'
+    /// types, so neither is the caller's to get right.
+    unsafe fn call(
         &self,
         ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        c: Rt::Value,
-    ) -> Rt::Value {
-        // SAFETY: the caller's contract, which is `call_run`'s at three.
-        unsafe { self.call_run(ctx, &[a, b, c]) }
-    }
-
-    /// # Safety
-    /// As `call0`, at four values.
-    #[inline]
-    unsafe fn call4(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        c: Rt::Value,
-        d: Rt::Value,
-    ) -> Rt::Value {
-        // SAFETY: the caller's contract, which is `call_run`'s at four.
-        unsafe { self.call_run(ctx, &[a, b, c, d]) }
-    }
-
-    /// The window form: the arguments are lent as the run they already sit
-    /// in, and the result is one value.
-    ///
-    /// # Safety
-    /// As `call`, with `WIDTH.ret == 1`.
-    #[inline]
-    unsafe fn call_run(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value]) -> Rt::Value {
-        let mut out = [Rt::Value::default()];
-        // SAFETY: the caller's contract.
-        unsafe { self.call(ctx, run, &mut out) };
-        out[0]
-    }
-
-    /// The pair forms: the caller takes the result away in the two adjacent
-    /// registers `acvus-interpreter`'s `assign_slots` placed for it, rather
-    /// than lending a place to write it into.
-    ///
-    /// # Safety
-    /// `WIDTH` is `Width { args: k, ret: 2 }` for the `k` this form names,
-    /// and the arguments are this call's own, in declaration order.
-    #[inline]
-    unsafe fn call_pair1(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value) -> [Rt::Value; 2] {
-        // SAFETY: the caller's contract, which is `call_pair_run`'s at one.
-        unsafe { self.call_pair_run(ctx, &[a]) }
-    }
-
-    /// # Safety
-    /// As `call_pair1`, at two values.
-    #[inline]
-    unsafe fn call_pair2(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-    ) -> [Rt::Value; 2] {
-        // SAFETY: the caller's contract, which is `call_pair_run`'s at two.
-        unsafe { self.call_pair_run(ctx, &[a, b]) }
-    }
-
-    /// # Safety
-    /// As `call_pair1`, at three values.
-    #[inline]
-    unsafe fn call_pair3(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        c: Rt::Value,
-    ) -> [Rt::Value; 2] {
-        // SAFETY: the caller's contract, which is `call_pair_run`'s at three.
-        unsafe { self.call_pair_run(ctx, &[a, b, c]) }
-    }
-
-    /// # Safety
-    /// As `call_pair1`, at four values.
-    #[inline]
-    unsafe fn call_pair4(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        c: Rt::Value,
-        d: Rt::Value,
-    ) -> [Rt::Value; 2] {
-        // SAFETY: the caller's contract, which is `call_pair_run`'s at four.
-        unsafe { self.call_pair_run(ctx, &[a, b, c, d]) }
-    }
-
-    /// The aggregate forms: the caller lends the destination run its
-    /// placement gave the result — its own registers, or the heap object's
-    /// body — and the handler writes `WIDTH.ret` components into it
-    /// (RFC-0050 rules 5 and 6). The window form of this family is `call`
-    /// itself, which already takes the run and the destination.
-    ///
-    /// # Safety
-    /// `WIDTH` is `Width { args: k, ret: w, result: Components }` for the
-    /// `k` this form names, the arguments are this call's own in declaration
-    /// order, and `out` is `w` of the runtime's values the caller owns.
-    #[inline]
-    unsafe fn call_out0(&self, ctx: &mut Ctx<'_, Rt>, out: Out<'_, Rt>) {
-        // SAFETY: the caller's contract, which is `call`'s at no arguments.
-        unsafe { self.call(ctx, &[], out) }
-    }
-
-    /// # Safety
-    /// As `call_out0`, at one value.
-    #[inline]
-    unsafe fn call_out1(&self, ctx: &mut Ctx<'_, Rt>, a: Rt::Value, out: Out<'_, Rt>) {
-        // SAFETY: the caller's contract, which is `call`'s at one argument.
-        unsafe { self.call(ctx, &[a], out) }
-    }
-
-    /// # Safety
-    /// As `call_out0`, at two values.
-    #[inline]
-    unsafe fn call_out2(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        out: Out<'_, Rt>,
-    ) {
-        // SAFETY: the caller's contract, which is `call`'s at two arguments.
-        unsafe { self.call(ctx, &[a, b], out) }
-    }
-
-    /// # Safety
-    /// As `call_out0`, at three values.
-    #[inline]
-    unsafe fn call_out3(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        c: Rt::Value,
-        out: Out<'_, Rt>,
-    ) {
-        // SAFETY: the caller's contract, which is `call`'s at three arguments.
-        unsafe { self.call(ctx, &[a, b, c], out) }
-    }
-
-    /// # Safety
-    /// As `call_out0`, at four values.
-    #[inline]
-    unsafe fn call_out4(
-        &self,
-        ctx: &mut Ctx<'_, Rt>,
-        a: Rt::Value,
-        b: Rt::Value,
-        c: Rt::Value,
-        d: Rt::Value,
-        out: Out<'_, Rt>,
-    ) {
-        // SAFETY: the caller's contract, which is `call`'s at four arguments.
-        unsafe { self.call(ctx, &[a, b, c, d], out) }
-    }
-
-    /// # Safety
-    /// As `call`, with `WIDTH.ret == 2`.
-    #[inline]
-    unsafe fn call_pair_run(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value]) -> [Rt::Value; 2] {
-        let mut out = [Rt::Value::default(); 2];
-        // SAFETY: the caller's contract.
-        unsafe { self.call(ctx, run, &mut out) };
-        out
-    }
+        run: <Self::Args as ArgRun>::Run<'_, Rt>,
+        out: <Self::Ret as Returned>::Out<'_, Rt>,
+    );
 }
 
 /// An argument run of `N` of the runtime's values, one per parameter.
@@ -829,31 +635,140 @@ pub struct InWindow;
 pub trait ArgRun {
     type WithOne: ArgRun;
     type WithPair: ArgRun;
+
+    /// The run a call of this form is handed: the array a register form's
+    /// width names, or the window itself.
+    type Run<'a, Rt>: Copy
+    where
+        Rt: Runtime;
+
+    fn as_slice<'a, Rt>(run: Self::Run<'a, Rt>) -> &'a [Rt::Value]
+    where
+        Rt: Runtime + 'a;
+
+    /// # Safety
+    /// `run.len()` is this form's width — the dyn crossing (`DirectOp`).
+    unsafe fn from_slice<'a, Rt>(run: &'a [Rt::Value]) -> Self::Run<'a, Rt>
+    where
+        Rt: Runtime + 'a;
+
+    /// The type-level match: hands `f` to the one method of `forms` this
+    /// form names.
+    fn select<Rt, F, H>(forms: F, f: H) -> F::Out
+    where
+        Rt: Runtime,
+        F: CallForms<Rt>,
+        H: Handler<Rt, Args = Self>;
 }
 
-impl ArgRun for InRegisters<0> {
-    type WithOne = InRegisters<1>;
-    type WithPair = InRegisters<2>;
+/// The six argument runs, as methods, for a caller that builds one thing per
+/// form. `ArgRun::select` is what picks the method, so a caller writes six
+/// arms and no match.
+pub trait CallForms<Rt>
+where
+    Rt: Runtime,
+{
+    type Out;
+
+    fn registers0<H>(self, f: H) -> Self::Out
+    where
+        H: Handler<Rt, Args = InRegisters<0>>;
+    fn registers1<H>(self, f: H) -> Self::Out
+    where
+        H: Handler<Rt, Args = InRegisters<1>>;
+    fn registers2<H>(self, f: H) -> Self::Out
+    where
+        H: Handler<Rt, Args = InRegisters<2>>;
+    fn registers3<H>(self, f: H) -> Self::Out
+    where
+        H: Handler<Rt, Args = InRegisters<3>>;
+    fn registers4<H>(self, f: H) -> Self::Out
+    where
+        H: Handler<Rt, Args = InRegisters<4>>;
+    fn window<H>(self, f: H) -> Self::Out
+    where
+        H: Handler<Rt, Args = InWindow>;
 }
-impl ArgRun for InRegisters<1> {
-    type WithOne = InRegisters<2>;
-    type WithPair = InRegisters<3>;
+
+/// One register form: the next two forms a parameter widens it to, and the
+/// array of its own length that a call of it is handed.
+macro_rules! in_registers {
+    ($n:literal, $with_one:ty, $with_pair:ty, $select:ident) => {
+        impl ArgRun for InRegisters<$n> {
+            type WithOne = $with_one;
+            type WithPair = $with_pair;
+
+            type Run<'a, Rt>
+                = &'a [Rt::Value; $n]
+            where
+                Rt: Runtime;
+
+            fn as_slice<'a, Rt>(run: &'a [Rt::Value; $n]) -> &'a [Rt::Value]
+            where
+                Rt: Runtime + 'a,
+            {
+                run
+            }
+
+            unsafe fn from_slice<'a, Rt>(run: &'a [Rt::Value]) -> &'a [Rt::Value; $n]
+            where
+                Rt: Runtime + 'a,
+            {
+                debug_assert_eq!(run.len(), $n, "an argument run is this form's own width");
+                // SAFETY: the caller's contract: `run` is `$n` long, and a
+                // `[T; N]` is `N` `T`s with no other requirement.
+                unsafe { &*(run.as_ptr() as *const [Rt::Value; $n]) }
+            }
+
+            fn select<Rt, F, H>(forms: F, f: H) -> F::Out
+            where
+                Rt: Runtime,
+                F: CallForms<Rt>,
+                H: Handler<Rt, Args = Self>,
+            {
+                forms.$select(f)
+            }
+        }
+    };
 }
-impl ArgRun for InRegisters<2> {
-    type WithOne = InRegisters<3>;
-    type WithPair = InRegisters<4>;
-}
-impl ArgRun for InRegisters<3> {
-    type WithOne = InRegisters<4>;
-    type WithPair = InWindow;
-}
-impl ArgRun for InRegisters<4> {
-    type WithOne = InWindow;
-    type WithPair = InWindow;
-}
+
+in_registers!(0, InRegisters<1>, InRegisters<2>, registers0);
+in_registers!(1, InRegisters<2>, InRegisters<3>, registers1);
+in_registers!(2, InRegisters<3>, InRegisters<4>, registers2);
+in_registers!(3, InRegisters<4>, InWindow, registers3);
+in_registers!(4, InWindow, InWindow, registers4);
+
 impl ArgRun for InWindow {
     type WithOne = InWindow;
     type WithPair = InWindow;
+
+    type Run<'a, Rt>
+        = &'a [Rt::Value]
+    where
+        Rt: Runtime;
+
+    fn as_slice<'a, Rt>(run: &'a [Rt::Value]) -> &'a [Rt::Value]
+    where
+        Rt: Runtime + 'a,
+    {
+        run
+    }
+
+    unsafe fn from_slice<'a, Rt>(run: &'a [Rt::Value]) -> &'a [Rt::Value]
+    where
+        Rt: Runtime + 'a,
+    {
+        run
+    }
+
+    fn select<Rt, F, H>(forms: F, f: H) -> F::Out
+    where
+        Rt: Runtime,
+        F: CallForms<Rt>,
+        H: Handler<Rt, Args = Self>,
+    {
+        forms.window(f)
+    }
 }
 
 /// The `WithOne` chain above is as long as the widest register form, and
@@ -871,7 +786,7 @@ pub trait Parameters<Rt>
 where
     Rt: Runtime,
 {
-    type Run;
+    type Run: ArgRun;
     type Sites: Clone + Send + Sync + 'static;
     /// What the Rust body's parameters are, at the call's own lifetime.
     type Out<'a>;
@@ -919,150 +834,6 @@ where
         None
     }
 }
-
-/// The call form a run of this shape and a result of form `R` take: which
-/// `Rt::op_*` a factory names, and which `Rt::fused_*` (RFC-0059 rule 7).
-///
-/// The choice is a trait impl and not a branch on `Handler::WIDTH` because
-/// the monomorphization collector reaches every operation a branch names,
-/// whichever way the constant goes: `str`'s `len`, `find` and `concat` take
-/// their arguments as pairs since `61da3863`, the arity macro named
-/// `CallExtern1`/`CallExtern2` over them all the same, and the bodies that
-/// came out — a bounds failure and nothing else, since a pair does not fit a
-/// one-value run — are what `asm_probe` refused.
-pub trait TakenForm<R>
-where
-    R: Form,
-{
-    fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
-    where
-        Rt: Runtime,
-        H: Handler<Rt>;
-
-    fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
-    where
-        Rt: Runtime,
-        H: Handler<Rt>;
-}
-
-macro_rules! taken_form {
-    ($run:ty, result = $form:ty, op = $op:path, fused = $fused:path) => {
-        impl TakenForm<$form> for $run {
-            fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
-            where
-                Rt: Runtime,
-                H: Handler<Rt>,
-            {
-                $op(handler, shape)
-            }
-
-            fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
-            where
-                Rt: Runtime,
-                H: Handler<Rt>,
-            {
-                $fused(handler, shape)
-            }
-        }
-    };
-}
-
-taken_form!(
-    InRegisters<0>,
-    result = One,
-    op = Rt::op_no_argument,
-    fused = Rt::fused_no_argument
-);
-taken_form!(
-    InRegisters<1>,
-    result = One,
-    op = Rt::op_one_argument,
-    fused = Rt::fused_one_argument
-);
-taken_form!(
-    InRegisters<2>,
-    result = One,
-    op = Rt::op_two_arguments,
-    fused = Rt::fused_two_arguments
-);
-taken_form!(
-    InRegisters<3>,
-    result = One,
-    op = Rt::op_three_arguments,
-    fused = no_fused_run
-);
-taken_form!(
-    InRegisters<4>,
-    result = One,
-    op = Rt::op_four_arguments,
-    fused = no_fused_run
-);
-taken_form!(
-    InWindow,
-    result = One,
-    op = Rt::op_wide,
-    fused = no_fused_run
-);
-
-taken_form!(
-    InRegisters<1>,
-    result = Pair,
-    op = Rt::op_pair_one_argument,
-    fused = no_fused_pair
-);
-taken_form!(
-    InRegisters<2>,
-    result = Pair,
-    op = Rt::op_pair_two_arguments,
-    fused = no_fused_pair
-);
-taken_form!(
-    InRegisters<3>,
-    result = Pair,
-    op = Rt::op_pair_three_arguments,
-    fused = no_fused_pair
-);
-taken_form!(
-    InRegisters<4>,
-    result = Pair,
-    op = Rt::op_pair_four_arguments,
-    fused = no_fused_pair
-);
-taken_form!(
-    InWindow,
-    result = Pair,
-    op = Rt::op_pair_wide,
-    fused = no_fused_pair
-);
-
-macro_rules! taken_run_form {
-    ($run:ty, op = $op:path) => {
-        impl<const W: usize> TakenForm<Run<W>> for $run {
-            fn op<Rt, H>(handler: H, shape: Rt::CallShape) -> Rt::Op
-            where
-                Rt: Runtime,
-                H: Handler<Rt>,
-            {
-                $op(handler, shape)
-            }
-
-            fn fused<Rt, H>(handler: H, shape: Rt::FusedShape) -> Rt::FusedCall
-            where
-                Rt: Runtime,
-                H: Handler<Rt>,
-            {
-                no_fused_run_result(handler, shape)
-            }
-        }
-    };
-}
-
-taken_run_form!(InRegisters<0>, op = Rt::op_run_no_argument);
-taken_run_form!(InRegisters<1>, op = Rt::op_run_one_argument);
-taken_run_form!(InRegisters<2>, op = Rt::op_run_two_arguments);
-taken_run_form!(InRegisters<3>, op = Rt::op_run_three_arguments);
-taken_run_form!(InRegisters<4>, op = Rt::op_run_four_arguments);
-taken_run_form!(InWindow, op = Rt::op_run_wide);
 
 /// What the module table holds for one declared instance: the handler with
 /// its type erased, which `prepare` turns back into a typed operation by
@@ -1169,34 +940,6 @@ where
     }
 }
 
-fn no_fused_run<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
-where
-    Rt: Runtime,
-    H: Handler<Rt>,
-{
-    panic!("a fused run holds no call of this many arguments")
-}
-
-fn no_fused_pair<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
-where
-    Rt: Runtime,
-    H: Handler<Rt>,
-{
-    panic!(
-        "a fused run hands one value from each call to the next and holds no call whose result is a pair"
-    )
-}
-
-fn no_fused_run_result<Rt, H>(_: H, _: Rt::FusedShape) -> Rt::FusedCall
-where
-    Rt: Runtime,
-    H: Handler<Rt>,
-{
-    panic!(
-        "a fused run hands one value from each call to the next and holds no call whose result is an aggregate's components"
-    )
-}
-
 /// The site table of a glue the module table holds, which is at no site: one
 /// declared instance is reached from every call site the checker settled on
 /// it, and `at_site` is where a site is known.
@@ -1284,7 +1027,7 @@ where
 }
 
 /// The run of `InRegisters<0>` widened by each parameter in turn: the fold
-/// whose answer `TakenForm` reads.
+/// whose answer is `Parameters::Run`, and `Handler::WIDTH.args` its width.
 macro_rules! run_of {
     ($rt:ty, $run:ty) => { $run };
     ($rt:ty, $run:ty, $arg:ident $(, $rest:ident)*) => {
@@ -1456,16 +1199,27 @@ where
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
 {
+    type Args = <A as Parameters<Rt>>::Run;
+    type Ret = <R as Ret<Rt>>::Form;
+
     const WIDTH: Width = Width {
         args: <A as Parameters<Rt>>::WIDTH,
         ret: <R as Ret<Rt>>::WIDTH,
         result: <<R as Ret<Rt>>::Form as Form>::KIND,
     };
 
-    unsafe fn call(&self, ctx: &mut Ctx<'_, Rt>, run: &[Rt::Value], out: &mut [Rt::Value]) {
-        // SAFETY: the caller's contract, which is `Parameters::take`'s.
+    #[inline]
+    unsafe fn call(
+        &self,
+        ctx: &mut Ctx<'_, Rt>,
+        run: <<A as Parameters<Rt>>::Run as ArgRun>::Run<'_, Rt>,
+        out: <<R as Ret<Rt>>::Form as Returned>::Out<'_, Rt>,
+    ) {
         let rt = ctx.rt;
+        let run = <<A as Parameters<Rt>>::Run as ArgRun>::as_slice::<Rt>(run);
+        // SAFETY: the caller's contract, which is `Parameters::take`'s.
         let args = unsafe { <A as Parameters<Rt>>::take(rt, run, &self.sites) };
+        let out = <<R as Ret<Rt>>::Form as Returned>::as_mut_slice::<Rt>(out);
         <R as Ret<Rt>>::into_run((self.f)(ctx, args), rt, out)
     }
 }
@@ -1478,7 +1232,6 @@ where
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
-    <A as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
 {
     fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>> {
         Box::new(self.clone())
@@ -1527,18 +1280,13 @@ where
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
-    <A as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
 {
     fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op {
-        <<A as Parameters<Rt>>::Run as TakenForm<<R as Ret<Rt>>::Form>>::op::<Rt, Self>(
-            *self, shape,
-        )
+        Rt::op(*self, shape)
     }
 
     fn into_fused(self: Box<Self>, shape: Rt::FusedShape) -> Rt::FusedCall {
-        <<A as Parameters<Rt>>::Run as TakenForm<<R as Ret<Rt>>::Form>>::fused::<Rt, Self>(
-            *self, shape,
-        )
+        Rt::fused(*self, shape)
     }
 }
 
@@ -1550,7 +1298,6 @@ where
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
     R: Ret<Rt, Form = One> + 'static,
-    <A as Parameters<Rt>>::Run: TakenForm<<R as Ret<Rt>>::Form>,
 {
 }
 
@@ -1818,8 +1565,13 @@ where
             let mut rooted = rt.rooted();
             let ctx = Rt::ctx_of(&mut rooted);
             // SAFETY: the contract of `DirectOp::call`, which is this
-            // closure's only caller.
-            unsafe { handler.call(ctx, run, out) }
+            // closure's only caller: the two runs are the declaration's own
+            // widths, which is what each form's `from_slice` asks.
+            unsafe {
+                let run = <H::Args as ArgRun>::from_slice::<Rt>(run);
+                let out = <H::Ret as Returned>::from_slice::<Rt>(out);
+                handler.call(ctx, run, out)
+            }
         }))
     }
 
@@ -1868,48 +1620,25 @@ where
 #[macro_export]
 macro_rules! direct_call_forms {
     () => {
-        $crate::direct_call_forms!(@op op_no_argument);
-        $crate::direct_call_forms!(@op op_one_argument);
-        $crate::direct_call_forms!(@op op_two_arguments);
-        $crate::direct_call_forms!(@op op_three_arguments);
-        $crate::direct_call_forms!(@op op_four_arguments);
-        $crate::direct_call_forms!(@op op_wide);
-        $crate::direct_call_forms!(@op op_pair_one_argument);
-        $crate::direct_call_forms!(@op op_pair_two_arguments);
-        $crate::direct_call_forms!(@op op_pair_three_arguments);
-        $crate::direct_call_forms!(@op op_pair_four_arguments);
-        $crate::direct_call_forms!(@op op_pair_wide);
-        $crate::direct_call_forms!(@op op_run_no_argument);
-        $crate::direct_call_forms!(@op op_run_one_argument);
-        $crate::direct_call_forms!(@op op_run_two_arguments);
-        $crate::direct_call_forms!(@op op_run_three_arguments);
-        $crate::direct_call_forms!(@op op_run_four_arguments);
-        $crate::direct_call_forms!(@op op_run_wide);
-        $crate::direct_call_forms!(@fused fused_no_argument);
-        $crate::direct_call_forms!(@fused fused_one_argument);
-        $crate::direct_call_forms!(@fused fused_two_arguments);
+        fn op<H>(handler: H, _: Self::CallShape) -> Self::Op
+        where
+            H: $crate::Handler<Self>,
+        {
+            $crate::DirectOp::of(handler)
+        }
+
+        fn fused<H>(handler: H, _: Self::FusedShape) -> Self::FusedCall
+        where
+            H: $crate::Handler<Self>,
+        {
+            $crate::DirectOp::of(handler)
+        }
 
         fn async_extern_op<H>(handler: H, _: Self::AsyncShape) -> Self::Op
         where
             H: $crate::AsyncCall<Self>,
         {
             $crate::DirectOp::awaiting(handler)
-        }
-    };
-    (@op $name:ident) => {
-        fn $name<H>(handler: H, _: Self::CallShape) -> Self::Op
-        where
-            H: $crate::Handler<Self>,
-        {
-            $crate::DirectOp::of(handler)
-        }
-    };
-    (@fused $name:ident) => {
-        fn $name<H>(handler: H, _: Self::FusedShape) -> Self::FusedCall
-        where
-            H: $crate::Handler<Self>,
-        {
-            $crate::DirectOp::of(handler)
         }
     };
 }

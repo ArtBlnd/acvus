@@ -18,7 +18,7 @@ fn runtime(i: &Interner) -> AcvusRuntime {
     let externs = Externs::combine(acvus_ext::std_registries(), i).expect("registries combine");
     InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor))
         .with_space(externs.space)
-        .runtime()
+        .runtime_over_an_empty_page()
 }
 
 fn deque_ty(i: &Interner, elem: Ty) -> Ty {
@@ -382,7 +382,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         .with_context_names(compiled.context_names)
         .with_space(externs.space);
     let page =
-        Arc::new(SpacePage::new(Arc::clone(&space), shared.runtime(), Default::default()).unwrap());
+        Arc::new(SpacePage::new(Arc::clone(&space), Default::default()).unwrap());
     let mut interp = Interpreter::on_page(
         shared,
         compiled.entry_qref,
@@ -390,7 +390,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
     );
     let value = interp.execute().await;
     assert_eq!(value.as_int(), 2);
-    let committed = page.commit().unwrap();
+    let committed = page.commit(&interp.runtime()).unwrap();
     assert_eq!(committed.len(), 1);
     assert_eq!(committed[0].0, "d");
     assert_eq!(space.node_count(), 4, "the state and three ops");

@@ -514,24 +514,61 @@ pub enum ResultCrossing {
     /// Into the registers `control::Return` writes: one word, or the two
     /// adjacent words a view occupies (RFC-0062 Decision 1).
     Registers,
-    /// Into one `Value` read by kind. Two bodies cross this way and no
-    /// others: a lambda, whose result `acvus_extern::Runtime::call_now`
-    /// hands a handler and `machine::Callable::call_in_window` is the
-    /// signature of, and the graph's entry, whose result reaches the host
-    /// (RFC-0054).
+    /// Into one `Value` read by kind: a lambda's result, which
+    /// `acvus_extern::Runtime::call_now` hands a handler and
+    /// `machine::Callable::call_in_window` is the signature of.
     OneValue,
+    /// Into one `Value` the host reads by kind (RFC-0054): the graph's
+    /// entry. The value outlives the run, which a closure does not
+    /// (RFC-0014, RFC-0069 D2).
+    Host,
+}
+
+/// Why a body's result does not cross.
+enum Unreturnable<'t> {
+    Reference(&'t InferTy),
+    ClosureToTheHost(&'t InferTy),
 }
 
 impl ResultCrossing {
-    fn unreturnable<'t>(self, ty: &'t InferTy) -> Option<&'t InferTy> {
-        match (self, ty) {
+    fn unreturnable<'t>(self, ty: &'t InferTy) -> Option<Unreturnable<'t>> {
+        let reference = match (self, ty) {
             (Self::Registers, _) if is_pair(ty) => None,
             (_, TyTerm::Ref(_, target)) => is_view(&target.ty).then_some(ty),
             // The crossing governs the top level only: below it a reference
             // inside data is RFC-0062 Decision 5's refusal whatever its
             // shape, so no branch separates the two here.
             _ => reference_in_result(ty),
+        };
+        match (reference, self) {
+            (Some(reference), _) => Some(Unreturnable::Reference(reference)),
+            (None, Self::Host) => closure_in_result(ty).map(Unreturnable::ClosureToTheHost),
+            (None, Self::Registers | Self::OneValue) => None,
         }
+    }
+}
+
+/// A closure anywhere in a result's data, walked as `reference_in_result`
+/// walks it.
+fn closure_in_result(ty: &InferTy) -> Option<&InferTy> {
+    match ty {
+        TyTerm::Fn { .. } => Some(ty),
+        TyTerm::Array(inner, _) | TyTerm::Slice(inner) | TyTerm::Option(inner) => {
+            closure_in_result(inner)
+        }
+        TyTerm::Result(ok, err) => closure_in_result(ok).or_else(|| closure_in_result(err)),
+        TyTerm::Tuple(elems) => elems.iter().find_map(closure_in_result),
+        TyTerm::Object(object) => object
+            .iter()
+            .find_map(|(_, field)| closure_in_result(field)),
+        TyTerm::Enum { variants, .. } => variants
+            .iter()
+            .filter_map(|(_, payload)| payload.as_ref())
+            .find_map(|payload| closure_in_result(payload)),
+        TyTerm::UserDefined { type_args, .. } => {
+            type_args.iter().find_map(|arg| closure_in_result(&arg.ty))
+        }
+        _ => None,
     }
 }
 
@@ -1198,9 +1235,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.solve_body();
         if let Some(tail) = &script.tail {
             let resolved = self.solver.resolve_ty(&tail_ty);
-            if let Some(reference) = crossing.unreturnable(&resolved) {
-                let ty = self.type_as_written(reference);
-                self.error(MirErrorKind::ReferenceReturnedFromBody(ty), tail.span());
+            match crossing.unreturnable(&resolved) {
+                Some(Unreturnable::Reference(reference)) => {
+                    let ty = self.type_as_written(reference);
+                    self.error(MirErrorKind::ReferenceReturnedFromBody(ty), tail.span());
+                }
+                Some(Unreturnable::ClosureToTheHost(closure)) => {
+                    let ty = self.type_as_written(closure);
+                    self.error(MirErrorKind::ClosureReturnedToTheHost(ty), tail.span());
+                }
+                None => {}
             }
         }
         self.check_moves_out_of_captures();
@@ -1991,8 +2035,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.error(MirErrorKind::ViewCaptured, body.span());
         }
         let resolved_ret = self.solver.resolve_ty(&ret);
-        if let Some(unreturnable) = ResultCrossing::OneValue.unreturnable(&resolved_ret) {
-            let ty = self.type_as_written(unreturnable);
+        if let Some(Unreturnable::Reference(reference)) =
+            ResultCrossing::OneValue.unreturnable(&resolved_ret)
+        {
+            let ty = self.type_as_written(reference);
             self.error(MirErrorKind::ReferenceReturnedFromBody(ty), body.span());
         }
 

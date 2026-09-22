@@ -1533,6 +1533,7 @@ pub mod corpus {
             Kind::Undef => Json::from("<undef>"),
             Kind::LargeRef => Json::from("<projection>"),
             Kind::Instance | Kind::InstanceAwait => Json::from("<instance>"),
+            Kind::Code => Json::from("<fn>"),
             Kind::Large => composite(interner, value),
         }
     }

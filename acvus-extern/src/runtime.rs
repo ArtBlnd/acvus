@@ -63,68 +63,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     where
         'a: 'r;
 
-    /// One entry per call form (RFC-0044 stage 2c, RFC-0047 amended rule 2).
-    /// A declaration's arity names its entry where the glue is written, so a
-    /// runtime instantiates each handler's operation at that form alone.
-    fn op_no_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_one_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_two_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_three_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_four_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_wide<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_pair_one_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_pair_two_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_pair_three_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_pair_four_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_pair_wide<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_run_no_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_run_one_argument<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_run_two_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_run_three_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_run_four_arguments<H>(handler: H, shape: Self::CallShape) -> Self::Op
-    where
-        H: crate::handler::Handler<Self>;
-    fn op_run_wide<H>(handler: H, shape: Self::CallShape) -> Self::Op
+    /// The operation one extern call site runs as. `H::WIDTH` says which
+    /// form the call takes — how many of the runtime's values its arguments
+    /// are and where its result goes (RFC-0044 stage 2c, RFC-0047 amended
+    /// rule 2) — and a runtime that lays registers by form reads it there;
+    /// one that runs every call where it stands ignores it.
+    fn op<H>(handler: H, shape: Self::CallShape) -> Self::Op
     where
         H: crate::handler::Handler<Self>;
 
-    fn fused_no_argument<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
-    where
-        H: crate::handler::Handler<Self>;
-    fn fused_one_argument<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
-    where
-        H: crate::handler::Handler<Self>;
-    fn fused_two_arguments<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
+    /// One call of a run the host fused (RFC-0044 stage 4): a call whose
+    /// arguments are at most two of the runtime's values and whose result
+    /// is one. A runtime that fuses refuses any other form here.
+    fn fused<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
     where
         H: crate::handler::Handler<Self>;
 
@@ -258,12 +209,16 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
     /// Whether running `f` reaches its result without suspending.
-    /// `Closure` asks once, when it is built, and a runtime whose
-    /// closures can always suspend answers `false`.
-    fn call_is_sync(&self, f: &Self::Value) -> bool;
+    /// `Closure` asks once, when it is built. A runtime whose closures
+    /// can always suspend answers `false`, which is the default.
+    fn call_is_sync(&self, _f: &Self::Value) -> bool {
+        false
+    }
+
     /// Run `f` to its result now, reached only where `call_is_sync`
     /// answered true for this same value. Each argument crosses straight into
-    /// the parameter register `frame` holds for it (RFC-0052 §7).
+    /// the parameter register `frame` holds for it (RFC-0052 §7). A runtime
+    /// that answers `false` above is never asked, and keeps the default.
     ///
     /// # Safety
     /// The call comes through `Closure`, which is where a value known to be
@@ -271,22 +226,32 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// names, is the only thing that reaches here.
     unsafe fn call_now<A>(
         &self,
-        f: &Self::Value,
-        ctx: &mut crate::Ctx<'_, Self>,
-        args: A,
+        _f: &Self::Value,
+        _ctx: &mut crate::Ctx<'_, Self>,
+        _args: A,
     ) -> Self::Value
     where
-        A: crate::IntoRun<Self>;
+        A: crate::IntoRun<Self>,
+    {
+        unreachable!("`call_is_sync` answered false for every closure of this runtime")
+    }
 
     /// Run the closure `f`; each argument moves into the callee's
-    /// parameter.
+    /// parameter. The two fixed arities are `call_n` at that many values,
+    /// which a runtime overrides only where it lays them differently.
     ///
     /// # Safety
     /// As `call_now`'s.
-    unsafe fn call_0<'a>(&'a self, f: &'a Self::Value) -> Self::CallFuture<'a>;
+    unsafe fn call_0<'a>(&'a self, f: &'a Self::Value) -> Self::CallFuture<'a> {
+        // SAFETY: the caller's contract.
+        unsafe { self.call_n(f, &mut []) }
+    }
     /// # Safety
     /// As `call_now`'s.
-    unsafe fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value) -> Self::CallFuture<'a>;
+    unsafe fn call_1<'a>(&'a self, f: &'a Self::Value, a: Self::Value) -> Self::CallFuture<'a> {
+        // SAFETY: the caller's contract.
+        unsafe { self.call_n(f, &mut [a]) }
+    }
     /// # Safety
     /// As `call_now`'s.
     unsafe fn call_n<'a>(
@@ -441,21 +406,6 @@ impl Runtime for TypesOnly {
         no_values()
     }
     unsafe fn slice_from_run(&self, _: &[()]) -> crate::slice::Words {
-        no_values()
-    }
-    fn call_is_sync(&self, _: &()) -> bool {
-        false
-    }
-    unsafe fn call_now<A>(&self, _: &(), _: &mut crate::Ctx<'_, Self>, _: A)
-    where
-        A: crate::IntoRun<Self>,
-    {
-        no_values()
-    }
-    unsafe fn call_0<'a>(&'a self, _: &'a ()) -> Self::CallFuture<'a> {
-        no_values()
-    }
-    unsafe fn call_1<'a>(&'a self, _: &'a (), _: ()) -> Self::CallFuture<'a> {
         no_values()
     }
     unsafe fn call_n<'a>(&'a self, _: &'a (), _: &mut [()]) -> Self::CallFuture<'a> {

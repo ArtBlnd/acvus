@@ -193,25 +193,31 @@ fn is_char_boundary(s: &str, i: u64) -> bool {
 /// (RFC-0062 Decision 2).
 #[extern_fn(effect = pure)]
 fn substring(s: &str, start: u64, end: u64) -> &str {
-    let refuse = |what: &str| -> ! {
-        panic!(
-            "substring: {what} for the range {start}..{end} over {} bytes of {s:?}",
-            s.len()
-        )
+    let (Ok(from), Ok(to)) = (usize::try_from(start), usize::try_from(end)) else {
+        refuse_substring("an offset exceeds the address space", s, start, end)
     };
-    let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
-        refuse("an offset exceeds the address space")
-    };
-    if start > end {
-        refuse("the range is inverted")
+    if from > to {
+        refuse_substring("the range is inverted", s, start, end)
     }
-    if !s.is_char_boundary(start) {
-        refuse("start is not on a character boundary")
+    if !s.is_char_boundary(from) {
+        refuse_substring("start is not on a character boundary", s, start, end)
     }
-    if !s.is_char_boundary(end) {
-        refuse("end is not on a character boundary")
+    if !s.is_char_boundary(to) {
+        refuse_substring("end is not on a character boundary", s, start, end)
     }
-    &s[start..end]
+    &s[from..to]
+}
+
+/// Obligation across artifacts: `asm_probe` asserts the operation holding
+/// `substring` tail-calls its successor, which a refusal capturing its
+/// message's parts by reference would break.
+#[cold]
+#[inline(never)]
+fn refuse_substring(what: &str, s: &str, start: u64, end: u64) -> ! {
+    panic!(
+        "substring: {what} for the range {start}..{end} over {} bytes of {s:?}",
+        s.len()
+    )
 }
 
 #[extern_fn(effect = pure)]

@@ -9,10 +9,10 @@ use std::marker::PhantomData;
 use std::ops::DerefMut;
 
 use acvus_extern::{
-    Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType, Externs,
-    Instance, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime,
-    Shared, Slice, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn,
-    extern_registry, extern_signature, kind,
+    ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType,
+    Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneValue, Owned, PolyTy, Pure, Ref,
+    Registry, Runtime, Shared, Slice, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var, Words,
+    extern_fn, extern_registry, extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -126,6 +126,22 @@ where
 }
 
 /// The Rust value inside an `Erased`, or a panic naming the mismatch.
+/// A handler's one-value result, as an operation over registers takes it.
+///
+/// # Safety
+/// `Handler::call`'s, at `run`.
+unsafe fn one_of<H>(handler: &H, ctx: &mut Ctx<'_, Tiny>, run: &[V]) -> V
+where
+    H: Handler<Tiny, Ret = One>,
+{
+    let mut out = [V::default()];
+    // SAFETY: the caller's contract, which carries the width `from_slice`
+    // asks of `run`.
+    unsafe { handler.call(ctx, <H::Args as ArgRun>::from_slice(run), &mut out) };
+    let [value] = out;
+    value
+}
+
 fn open<T>(value: V) -> T
 where
     T: Send + Sync + 'static,
@@ -2501,11 +2517,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     fn answered<H>(handler: H, expected: Width, args: Vec<V>) -> i64
     where
-        H: Handler<Tiny>,
+        H: Handler<Tiny, Ret = One>,
     {
         assert_eq!(H::WIDTH, expected);
         // SAFETY: the arguments are the declaration's own, at its width.
-        open::<i64>(unsafe { handler.call_run(&mut Ctx::new(&Tiny, ()), &args) })
+        open::<i64>(unsafe { one_of(&handler, &mut Ctx::new(&Tiny, ()), &args) })
     }
 
     assert_eq!(
@@ -2598,8 +2614,13 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
         })
         .at(&acvus_extern::CallSite::of_args(&site.args(2)));
     // SAFETY: the width says two arguments in and one value out.
-    let by_register =
-        unsafe { two_wide.call2(&mut Ctx::new(&Tiny, ()), erased(1i64), erased(2i64)) };
+    let by_register = unsafe {
+        one_of(
+            &two_wide,
+            &mut Ctx::new(&Tiny, ()),
+            &[erased(1i64), erased(2i64)],
+        )
+    };
     assert_eq!(
         open::<i64>(by_register),
         12,
@@ -2641,7 +2662,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     // the three names of this one handler.
     let answers = unsafe {
         [
-            glue.call1(&mut Ctx::new(&Tiny, ()), erased(7i64)),
+            one_of(&glue, &mut Ctx::new(&Tiny, ()), &[erased(7i64)]),
             boxed
                 .at_site(&acvus_extern::CallSite::of_args(&site.args(1)))
                 .into_op(())

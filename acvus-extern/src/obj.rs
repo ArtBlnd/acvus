@@ -254,6 +254,146 @@ pub struct Pair;
 /// nested aggregate field.
 pub struct Run<const W: usize>;
 
+/// A form a result is written in: `One`, `Pair`, `Run<W>`. `Nothing` is a
+/// parameter form only (`Required`), and the missing impl is the refusal.
+///
+/// The destination is the run itself, at this form's own length, so a
+/// handler's entry carries the result width in its type and no call of one
+/// measures a slice (RFC-0050 rule 6).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is no form a result is written in",
+    note = "`Nothing` is the form of a parameter that takes none of the call's argument run — a required instance — and a declaration returns no such thing (RFC-0068 D5)."
+)]
+pub trait Returned: Form {
+    /// The destination run a call of this form is lent, `WIDTH` long.
+    type Out<'a, Rt>
+    where
+        Rt: Runtime;
+
+    fn as_mut_slice<'a, Rt>(out: Self::Out<'a, Rt>) -> &'a mut [Rt::Value]
+    where
+        Rt: Runtime + 'a;
+
+    /// # Safety
+    /// `out.len()` is this form's width.
+    unsafe fn from_slice<'a, Rt>(out: &'a mut [Rt::Value]) -> Self::Out<'a, Rt>
+    where
+        Rt: Runtime + 'a;
+
+    /// The type-level match: hands `f` to the one method of `forms` this
+    /// form names.
+    fn select<Rt, F, H>(forms: F, f: H) -> F::Out
+    where
+        Rt: Runtime,
+        F: RetForms<Rt>,
+        H: crate::handler::Handler<Rt, Args = F::Args, Ret = Self>;
+}
+
+/// The three result forms, as methods, for a caller that builds one thing per
+/// form. `Args` is the argument run the argument selector already settled, so
+/// the pair a caller matches on is the handler's whole width.
+pub trait RetForms<Rt>
+where
+    Rt: Runtime,
+{
+    /// The argument run `ArgRun::select` named before this one runs.
+    type Args: crate::handler::ArgRun;
+    type Out;
+
+    fn one<H>(self, f: H) -> Self::Out
+    where
+        H: crate::handler::Handler<Rt, Args = Self::Args, Ret = One>;
+
+    fn pair<H>(self, f: H) -> Self::Out
+    where
+        H: crate::handler::Handler<Rt, Args = Self::Args, Ret = Pair>;
+
+    fn run<const W: usize, H>(self, f: H) -> Self::Out
+    where
+        H: crate::handler::Handler<Rt, Args = Self::Args, Ret = Run<W>>;
+}
+
+/// The `Returned` of a form whose destination is an array of its own width.
+macro_rules! returned {
+    ($form:ty, $width:expr, $select:ident) => {
+        impl Returned for $form {
+            type Out<'a, Rt>
+                = &'a mut [Rt::Value; $width]
+            where
+                Rt: Runtime;
+
+            fn as_mut_slice<'a, Rt>(out: &'a mut [Rt::Value; $width]) -> &'a mut [Rt::Value]
+            where
+                Rt: Runtime + 'a,
+            {
+                out
+            }
+
+            unsafe fn from_slice<'a, Rt>(out: &'a mut [Rt::Value]) -> &'a mut [Rt::Value; $width]
+            where
+                Rt: Runtime + 'a,
+            {
+                debug_assert_eq!(
+                    out.len(),
+                    $width,
+                    "a destination run is this result form's own width"
+                );
+                // SAFETY: the caller's contract: `out` is `$width` long, and a
+                // `[T; N]` is `N` `T`s with no other requirement.
+                unsafe { &mut *(out.as_mut_ptr() as *mut [Rt::Value; $width]) }
+            }
+
+            fn select<Rt, F, H>(forms: F, f: H) -> F::Out
+            where
+                Rt: Runtime,
+                F: RetForms<Rt>,
+                H: crate::handler::Handler<Rt, Args = F::Args, Ret = Self>,
+            {
+                forms.$select(f)
+            }
+        }
+    };
+}
+
+returned!(One, 1, one);
+returned!(Pair, 2, pair);
+
+impl<const W: usize> Returned for Run<W> {
+    type Out<'a, Rt>
+        = &'a mut [Rt::Value; W]
+    where
+        Rt: Runtime;
+
+    fn as_mut_slice<'a, Rt>(out: &'a mut [Rt::Value; W]) -> &'a mut [Rt::Value]
+    where
+        Rt: Runtime + 'a,
+    {
+        out
+    }
+
+    unsafe fn from_slice<'a, Rt>(out: &'a mut [Rt::Value]) -> &'a mut [Rt::Value; W]
+    where
+        Rt: Runtime + 'a,
+    {
+        debug_assert_eq!(
+            out.len(),
+            W,
+            "a destination run is this result form's own width"
+        );
+        // SAFETY: as the macro's.
+        unsafe { &mut *(out.as_mut_ptr() as *mut [Rt::Value; W]) }
+    }
+
+    fn select<Rt, F, H>(forms: F, f: H) -> F::Out
+    where
+        Rt: Runtime,
+        F: RetForms<Rt>,
+        H: crate::handler::Handler<Rt, Args = F::Args, Ret = Self>,
+    {
+        forms.run::<W, H>(f)
+    }
+}
+
 /// A form whose parameter still names what it named after the caller
 /// suspends: one of the runtime's values, or nothing of the run at all. A
 /// `Pair` borrows the frame the call laid its arguments on, and that frame
@@ -325,7 +465,7 @@ where
     /// always `Form`: a `#[derive(TyArg)]` struct is one heap object as a
     /// field, a container's element and a by-value parameter, and its own
     /// components as a result (RFC-0050 rules 5 and 6).
-    type ReturnForm: Form;
+    type ReturnForm: Returned;
 
     /// How many of the runtime's values one `Self` occupies. A declaration's
     /// slot count is the sum of its parameters' widths, and the library adds

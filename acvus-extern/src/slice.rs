@@ -135,7 +135,11 @@ where
     pub fn with<'a, R>(&'a mut self, f: impl FnOnce(&'a mut [T]) -> R) -> R {
         // SAFETY: as the shared `with`'s, and an exclusive slice is the only
         // live name of its run (RFC-0047 §2), which `&'a mut self` keeps.
-        f(unsafe { std::slice::from_raw_parts_mut(self.0.ptr.cast_mut().cast::<T>(), self.0.len) })
+        f(
+            unsafe {
+                std::slice::from_raw_parts_mut(self.0.ptr.cast_mut().cast::<T>(), self.0.len)
+            },
+        )
     }
 }
 
@@ -266,7 +270,10 @@ where
     unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract: `run` is the pair a slice was written
         // into, and the elements it names are live.
-        Self(unsafe { Elements::from_words(rt.slice_from_run(run)) }, PhantomData)
+        Self(
+            unsafe { Elements::from_words(rt.slice_from_run(run)) },
+            PhantomData,
+        )
     }
 
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {

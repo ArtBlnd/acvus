@@ -683,9 +683,10 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let key = &self.key;
-        let held = m
+        let rt = m.ctx.rt;
+        let held = rt
             .page
-            .take(key)
+            .take(rt, key)
             .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
         m.regs().define::<LARGE>(self.dst, held.into_value());
         self.next.run(m, r0)
@@ -703,7 +704,7 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
-        m.page.set(&self.key, Owned::from_value(value));
+        m.ctx.rt.page.set(&self.key, Owned::from_value(value));
         self.next.run(m, r0)
     }
 }

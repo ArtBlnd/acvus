@@ -43,7 +43,6 @@ pub trait Loan: Send + Sync + 'static {
     where
         T: Send + Sync + 'static,
         Rt: Runtime;
-
 }
 
 pub struct Shared;
@@ -56,8 +55,6 @@ impl Loan for Shared {
         = &'a T
     where
         T: ?Sized + 'a;
-
-
 
     unsafe fn deref<'a, T, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a T
     where
@@ -85,7 +82,6 @@ impl Loan for Shared {
         // SAFETY: the caller's contract.
         unsafe { rt.value_as_ref::<T>(value) }
     }
-
 }
 
 impl Loan for Mut {
@@ -95,8 +91,6 @@ impl Loan for Mut {
         = &'a mut T
     where
         T: ?Sized + 'a;
-
-
 
     unsafe fn deref<'a, T, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T
     where
@@ -124,5 +118,4 @@ impl Loan for Mut {
         // SAFETY: the caller's contract, exclusive for this loan.
         unsafe { rt.value_as_mut::<T>(value) }
     }
-
 }

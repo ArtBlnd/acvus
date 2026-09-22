@@ -594,6 +594,58 @@ pub enum Code {
     Expr(Arc<Expr>),
 }
 
+/// A closure's code, named by address (RFC-0069 D2): one word, nothing
+/// counted.
+///
+/// Obligation across artifacts: the `Code` is owned by a `Prepared`, which
+/// the run's `InterpreterContext` owns, and a closure value does not outlive
+/// its run — a space refuses a `Fn` (`layout.rs`), a spawned run shares the
+/// context, and the checker refuses a closure in the entry's result
+/// (`MirErrorKind::ClosureReturnedToTheHost`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CodeRef(std::ptr::NonNull<Code>);
+
+// SAFETY: a `CodeRef` is a shared borrow of a `Code`, which is `Send + Sync`
+// (the assertion below), held for a term the obligation above states.
+unsafe impl Send for CodeRef {}
+// SAFETY: as `Send`.
+unsafe impl Sync for CodeRef {}
+
+const _: fn() = || {
+    fn shared_across_threads<T>()
+    where
+        T: Send + Sync,
+    {
+    }
+    shared_across_threads::<Code>();
+};
+
+impl CodeRef {
+    /// Minted where `prepare` holds the `Prepared`'s own `Arc`.
+    pub(crate) fn of(code: &Arc<Code>) -> CodeRef {
+        CodeRef(std::ptr::NonNull::from(code.as_ref()))
+    }
+
+    /// # Safety
+    /// `address` came from `CodeRef::address`.
+    pub unsafe fn from_address(address: usize) -> CodeRef {
+        // SAFETY: the caller's contract: an address `CodeRef::address` gave
+        // is a `NonNull<Code>`.
+        CodeRef(unsafe { std::ptr::NonNull::new_unchecked(address as *mut Code) })
+    }
+
+    /// The `Code` for as long as the type's obligation holds: the borrow is
+    /// unbounded because no value that holds a `CodeRef` outlives it.
+    pub fn code<'c>(self) -> &'c Code {
+        // SAFETY: the type's obligation.
+        unsafe { &*self.0.as_ptr() }
+    }
+
+    pub fn address(self) -> *const () {
+        self.0.as_ptr().cast()
+    }
+}
+
 impl Code {
     pub fn may_suspend(&self) -> bool {
         match self {

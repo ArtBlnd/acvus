@@ -114,7 +114,6 @@ where
             at: PhantomData,
         }
     }
-
 }
 
 impl<S, I, Rt> Instance<S, I, Rt, Now>

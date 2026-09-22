@@ -2,18 +2,19 @@
 //! `Value`'s `Kind` says what Rust type it was erased from; the MIR type
 //! the interpreter carries beside it says what the program reads it as.
 
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::any::TypeId;
 use std::fmt;
 use std::mem::{self, MaybeUninit};
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
+use std::slice;
 use std::sync::Arc;
 
 use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
 
-use crate::interpreter::InterpreterContext;
 use crate::runtime::AcvusRuntime;
 use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
 
@@ -40,6 +41,9 @@ macro_rules! kind {
             /// The word is the address of the instance's mono glue.
             Instance,
             InstanceAwait,
+            /// A closure of no captures: the word is the address of its
+            /// `Code` (RFC-0069 D3).
+            Code,
             $($name,)*
         }
 
@@ -64,7 +68,8 @@ macro_rules! kind {
                     | Kind::LargeRef
                     | Kind::None
                     | Kind::Instance
-                    | Kind::InstanceAwait => None,
+                    | Kind::InstanceAwait
+                    | Kind::Code => None,
                 }
             }
 
@@ -77,7 +82,8 @@ macro_rules! kind {
                     | Kind::LargeRef
                     | Kind::None
                     | Kind::Instance
-                    | Kind::InstanceAwait => None,
+                    | Kind::InstanceAwait
+                    | Kind::Code => None,
                 }
             }
 
@@ -90,7 +96,8 @@ macro_rules! kind {
                     | Kind::LargeRef
                     | Kind::None
                     | Kind::Instance
-                    | Kind::InstanceAwait => false,
+                    | Kind::InstanceAwait
+                    | Kind::Code => false,
                 }
             }
         }
@@ -455,6 +462,7 @@ impl fmt::Debug for Value {
             Kind::Ref => write!(f, "Ref({:p})", self.word as *const Value),
             Kind::Instance => write!(f, "Instance({:#x})", self.word),
             Kind::InstanceAwait => write!(f, "InstanceAwait({:#x})", self.word),
+            Kind::Code => write!(f, "<fn {:#x}>", self.word),
             Kind::LargeRef => write!(f, "LargeRef({:p})", self.word as *const Value),
             Kind::Large => {
                 let vtable = self.header().vtable;
@@ -523,42 +531,73 @@ pub type Object = acvus_extern::Obj<Owned<AcvusRuntime>>;
 /// `V = Owned<AcvusRuntime>`, under the same obligation as `Array`.
 pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 
-/// A self-contained callable: execution context, prepared body, captures.
-///
-/// Created at `MakeClosure` time. It shares the run's live page: a
-/// context read in its body sees the store that precedes the call, as
-/// any call does (RFC-0014). Only captures are taken by value.
+/// The head of a closure record: what it runs and how many values it
+/// captured. The captures follow the head in the same allocation, laid at
+/// `Slot<FnValue>`'s size (RFC-0069 D4); a closure of no captures has no
+/// record at all (`Kind::Code`). `code` is first so that a boxed record and
+/// an inline `Kind::Code` word are read alike (`Value::code_of`).
+#[repr(C)]
 pub struct FnValue {
-    pub shared: Arc<InterpreterContext>,
-    pub page: Arc<dyn crate::journal::RuntimeContext>,
-    pub entry: Arc<dyn crate::machine::Callable>,
-    pub captures: Arc<[Owned<AcvusRuntime>]>,
+    pub code: crate::code::CodeRef,
+    /// A `u16` because it counts capture registers, which `prepare` colours
+    /// out of one frame.
+    pub len: u16,
 }
 
-impl Clone for FnValue {
-    fn clone(&self) -> Self {
-        Self {
-            shared: Arc::clone(&self.shared),
-            page: Arc::clone(&self.page),
-            entry: Arc::clone(&self.entry),
-            captures: Arc::clone(&self.captures),
+const _: () = assert!(
+    mem::align_of::<Slot<FnValue>>() == mem::align_of::<Owned<AcvusRuntime>>(),
+    "a closure record's captures are laid at the head's own alignment"
+);
+const _: () = assert!(
+    mem::size_of::<Slot<FnValue>>() + (u16::MAX as usize) * mem::size_of::<Owned<AcvusRuntime>>()
+        < isize::MAX as usize,
+    "a closure record of the widest capture count the head can name is a valid layout"
+);
+
+/// The one layout a closure record is allocated, read and freed with.
+#[inline]
+fn closure_layout(len: u16) -> Layout {
+    // SAFETY: the alignment is `Slot<FnValue>`'s, a non-zero power of two,
+    // and the size of the widest record `len` can name is a valid layout
+    // size (the const assertion above).
+    unsafe {
+        Layout::from_size_align_unchecked(
+            mem::size_of::<Slot<FnValue>>()
+                + usize::from(len) * mem::size_of::<Owned<AcvusRuntime>>(),
+            mem::align_of::<Slot<FnValue>>(),
+        )
+    }
+}
+
+impl FnValue {
+    /// # Safety
+    /// `head` is the head of a live closure record.
+    unsafe fn captures<'a>(head: NonNull<Slot<FnValue>>) -> &'a [Owned<AcvusRuntime>] {
+        // SAFETY: the caller's contract, and `closure_layout`: `len`
+        // captures follow the head.
+        unsafe {
+            let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+            slice::from_raw_parts(first, usize::from(head.as_ref().value.len))
         }
+    }
+}
+
+/// # Safety
+/// `p` is the header of a live closure record, not used after this.
+unsafe fn drop_closure(p: NonNull<Header>) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        let head = p.cast::<Slot<FnValue>>();
+        let len = head.as_ref().value.len;
+        let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+        ptr::drop_in_place(slice::from_raw_parts_mut(first, usize::from(len)));
+        dealloc(head.as_ptr().cast::<u8>(), closure_layout(len));
     }
 }
 
 impl fmt::Debug for FnValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<fn {:?}>", Arc::as_ptr(&self.entry).cast::<()>())
-    }
-}
-
-impl FnValue {
-    pub async fn call(&self, arg: Value) -> Value {
-        crate::machine::fn_value_call(self, &mut [arg]).await
-    }
-
-    pub async fn call2(&self, arg1: Value, arg2: Value) -> Value {
-        crate::machine::fn_value_call(self, &mut [arg1, arg2]).await
+        write!(f, "<fn {:?}>", self.code.address())
     }
 }
 
@@ -634,7 +673,7 @@ typed_debug_fn! { VariantValue;
         }
     };
 }
-typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.captures.len()); }
+typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.len); }
 
 static STRING: Vtable = vtable::<String>(|| "String", Composite::String, Some(dbg_string));
 static ARRAY: Vtable = vtable::<Array>(|| "Array", Composite::Array, Some(dbg_array));
@@ -642,7 +681,13 @@ static TUPLE: Vtable = vtable::<Tuple>(|| "Tuple", Composite::Tuple, Some(dbg_tu
 static OBJECT: Vtable = vtable::<Object>(|| "Object", Composite::Object, Some(dbg_object));
 static VARIANT: Vtable =
     vtable::<VariantValue>(|| "Variant", Composite::Variant, Some(dbg_variant));
-static FN: Vtable = vtable::<FnValue>(|| "Fn", Composite::Fn, Some(dbg_fn));
+static FN: Vtable = Vtable {
+    type_id: TypeId::of::<FnValue>(),
+    name: || "Fn",
+    composite: Some(Composite::Fn),
+    drop: drop_closure,
+    debug: Some(dbg_fn),
+};
 static HANDLE: Vtable = vtable::<HandleValue>(|| "Handle", Composite::Handle, None);
 
 /// The vtable `T` is erased through: a composite's own static, else the
@@ -802,8 +847,47 @@ impl Value {
         }
     }
 
-    pub fn closure(fv: FnValue) -> Self {
-        large(&FN, fv)
+    /// A closure that captures: one block, the head and the captures
+    /// behind it (RFC-0069 D4). `captures` is not empty; a closure of no
+    /// captures is `Value::code`.
+    pub fn closure(
+        code: crate::code::CodeRef,
+        captures: &mut dyn ExactSizeIterator<Item = Owned<AcvusRuntime>>,
+    ) -> Self {
+        let len =
+            u16::try_from(captures.len()).expect("a closure captures at most u16::MAX registers");
+        debug_assert!(len > 0, "a closure of no captures is `Value::code`");
+        let layout = closure_layout(len);
+        // SAFETY: the layout has a non-zero size.
+        let block = unsafe { alloc(layout) }.cast::<Slot<FnValue>>();
+        let Some(head) = NonNull::new(block) else {
+            handle_alloc_error(layout)
+        };
+        // SAFETY: `block` is `layout` bytes, uninitialized: the head is
+        // written first, then each capture in order.
+        unsafe {
+            head.as_ptr().write(Slot {
+                header: Header { vtable: &FN },
+                value: FnValue { code, len },
+            });
+            let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+            for (at, capture) in captures.enumerate() {
+                first.add(at).write(capture);
+            }
+        }
+        Value {
+            kind: Kind::Large,
+            word: head.as_ptr() as *mut Header as u64,
+        }
+    }
+
+    /// A closure of no captures: its code, inline (RFC-0069 D3).
+    #[inline]
+    pub fn code(code: crate::code::CodeRef) -> Self {
+        Value {
+            kind: Kind::Code,
+            word: code.address() as u64,
+        }
     }
     pub fn handle(h: HandleValue) -> Self {
         large(&HANDLE, h)
@@ -928,9 +1012,30 @@ impl Value {
         Astr::of_bits(self.bits())
     }
     /// # Safety
-    /// The value is an `Fn`.
-    pub unsafe fn as_fn(&self) -> &FnValue {
-        unsafe { self.peek::<FnValue>() }
+    /// The value is a closure: `Value::code` or `Value::closure` wrote it.
+    #[inline(always)]
+    pub unsafe fn code_of(&self) -> crate::code::CodeRef {
+        let record: *const FnValue = match self.kind {
+            Kind::Code => (&raw const self.word).cast(),
+            // SAFETY: the caller's contract: a closure that is not
+            // `Kind::Code` is a boxed `FnValue`.
+            _ => unsafe { &raw const self.payload().cast::<Slot<FnValue>>().as_ref().value },
+        };
+        // SAFETY: `FnValue` is `repr(C)` with `code` first, and a `Kind::Code`
+        // word is a `CodeRef`, so both arms point at one.
+        unsafe { (*record).code }
+    }
+
+    /// # Safety
+    /// As `code_of`.
+    #[inline(always)]
+    pub unsafe fn captures_of(&self) -> &[Owned<AcvusRuntime>] {
+        match self.kind {
+            Kind::Code => &[],
+            // SAFETY: the caller's contract, as `code_of`: a boxed closure
+            // is a record `Value::closure` laid.
+            _ => unsafe { FnValue::captures(self.payload().cast::<Slot<FnValue>>()) },
+        }
     }
 }
 

@@ -97,7 +97,7 @@ fn runtime(i: &Interner) -> AcvusRuntime {
         rustc_hash::FxHashMap::default(),
         std::sync::Arc::new(SequentialExecutor),
     )
-    .runtime()
+    .runtime_over_an_empty_page()
 }
 
 fn tag_of(value: &Value) -> Astr {
