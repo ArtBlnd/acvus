@@ -3841,6 +3841,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// that is already a reference value is passed as it is (RFC-0030); a
     /// receiver that is a value is bound to a temporary storage and that
     /// temporary is lent.
+    /// A place lent whole where it holds a reference is that reference
+    /// (RFC-0029): the lend reborrows nothing, so it is passed as it is.
+    fn lent_place_passing(&self, place: AstId, mutability: Mutability) -> Passing {
+        let ty = self
+            .type_map
+            .get(&place)
+            .expect("a checked receiver has its type recorded");
+        match self.solver.shallow_resolve_ty(ty) {
+            TyTerm::Ref(..) => Passing::AsIs,
+            _ => Passing::Lent(mutability),
+        }
+    }
+
     fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
         let (first, passing) = match mode {
             ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => {
@@ -3850,7 +3863,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ty,
                     site: ArgSite::lent(receiver, taken_by),
                 };
-                (first, Passing::Lent(mutability))
+                let passing = self.lent_place_passing(receiver.id(), mutability);
+                (first, passing)
             }
             ReceiverMode::Lent(mutability) => {
                 let ty = self.check_expr(receiver);
@@ -4023,7 +4037,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
                     site: ArgSite::lent(receiver, taken_by),
                 };
-                (first, Passing::Lent(mutability))
+                let passing = self.lent_place_passing(receiver.id(), mutability);
+                (first, passing)
             }
             ReceiverMode::Value => {
                 let refused = self.reads_through_reference(receiver)
@@ -7412,7 +7427,7 @@ impl Place {
 /// The place an expression denotes, if it denotes one. An extern
 /// parameter is a value, not a place.
 /// Whether an expression denotes a place.
-pub(crate) fn is_place(expr: &Expr) -> bool {
+fn is_place(expr: &Expr) -> bool {
     place_of(expr).is_some()
 }
 

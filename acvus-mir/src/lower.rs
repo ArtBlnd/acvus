@@ -3313,15 +3313,6 @@ impl<'a> Lowerer<'a> {
             .expect("the checker records how every receiver is passed");
         match passing {
             Passing::Value | Passing::AsIs => self.lower_expr(receiver),
-            // A lend of a whole place that holds a reference is that
-            // reference (RFC-0029): no reborrow is emitted, which keeps a
-            // loop's container a value the loop does not write.
-            Passing::Lent(_)
-                if crate::typeck::is_place(receiver)
-                    && matches!(self.type_of_id(receiver.id()), Ty::Ref(..)) =>
-            {
-                self.lower_expr(receiver)
-            }
             Passing::Lent(mutability) => {
                 let lent = Lent {
                     id: receiver.id(),
