@@ -1,0 +1,3 @@
+// refuse
+// captured &mut to context, push
+let r = &mut @c.a.v; let f = |x| -> { r.push(x); 0 }; f(9); @c.a.v.len() - 2

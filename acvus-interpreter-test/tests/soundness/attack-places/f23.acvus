@@ -1,0 +1,3 @@
+// expect 13
+// lambda param with field read, arg is & of a local
+let o = { a: { b: 13, }, }; let f = |r| -> r.a.b; f(&o)

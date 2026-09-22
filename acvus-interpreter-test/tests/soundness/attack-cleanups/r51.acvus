@@ -1,2 +1,2 @@
-// expect refuse
+// refuse
 let v = vec([1, 2, 3]); let r = &mut v; let r2 = r; r.push(1); r2.push(2); v.len()

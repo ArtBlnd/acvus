@@ -1,2 +1,3 @@
-// expect 2 or refused: lambda moves a Vec out of a captured tuple by pattern and is called twice
+// 2 or refused: lambda moves a Vec out of a captured tuple by pattern and is called twice
+// lambda moves a Vec out of a captured tuple by pattern and is called twice
 let o = (vec([1]), 1); let f = |u| -> match o { (w, 1) => w.len(), _ => 0u64, }; f(0) + f(0)

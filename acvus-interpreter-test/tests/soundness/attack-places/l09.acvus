@@ -1,0 +1,3 @@
+// expect 2
+// lambda pushing through a param that is a field of an object
+let o = { v: vec([1]), }; let f = |r| -> { r.push(2); 0 }; f(&mut o.v); o.v.len()

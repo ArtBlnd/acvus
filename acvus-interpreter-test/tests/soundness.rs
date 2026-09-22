@@ -22,6 +22,65 @@ struct Known {
 }
 
 const KNOWN: &[Known] = &[
+    // A write through a `&mut` a lambda captured is lost: a wrong value.
+    Known {
+        program: "attack-cleanups/h03.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-cleanups/r46.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-cleanups/r68.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-cleanups/r69.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-places/c01.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-places/c02.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-places/c03.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-places/c06.acvus",
+        shows: "a wrong value",
+    },
+    Known {
+        program: "attack-places/l25.acvus",
+        shows: "a wrong value",
+    },
+    // A field of an element read through the element's reference: the checker admits it.
+    Known {
+        program: "attack-places/e01.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
+    Known {
+        program: "attack-places/e02.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
+    Known {
+        program: "attack-places/e03.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
+    Known {
+        program: "attack-places/p15.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
+    // Two live `&mut` aliases of one storage are admitted.
+    Known {
+        program: "attack-cleanups/r51.acvus",
+        shows: "admitted a program it should refuse",
+    },
     // An `Option` of an aggregate with a `None` element, in an array.
     Known {
         program: "attack-cleanups/h01.acvus",
@@ -204,6 +263,17 @@ fn programs(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// A `.acvus` file is a script and a `.acvt` file a template, as `acvus
+/// run` reads them; the harness would read a script that does not parse as
+/// a template's text, so such a script is left to the parser's own tests.
+fn parses_as_written(program: &Path, source: &str) -> bool {
+    let interner = acvus_utils::Interner::new();
+    match program.extension().and_then(|ext| ext.to_str()) {
+        Some("acvus") => acvus_ast::parse_script(&interner, source).is_ok(),
+        _ => acvus_ast::parse(&interner, source).is_ok(),
+    }
+}
+
 fn contexts_of(program: &Path) -> serde_json::Map<String, serde_json::Value> {
     let declared = program.with_file_name("ctx.json");
     match std::fs::read_to_string(&declared) {
@@ -222,6 +292,38 @@ fn outcome(source: &str, contexts: &serde_json::Map<String, serde_json::Value>, 
     ) {
         Ok(outcome) => outcome,
         Err(lapse) => Outcome::RunPanicked(format!("the run lapsed: {lapse:?}")),
+    }
+}
+
+/// What a program's first line says it means: `// expect <value>` or
+/// `// refuse`. A value is written as `acvus run` prints it.
+enum Expected {
+    Value(String),
+    Refused,
+}
+
+fn expected(source: &str) -> Option<Expected> {
+    let first = source.lines().next()?.trim();
+    if first == "// refuse" {
+        return Some(Expected::Refused);
+    }
+    let value = first.strip_prefix("// expect ")?;
+    Some(Expected::Value(value.trim().to_string()))
+}
+
+/// A program the checker admits runs to what it means; a program it
+/// refuses may be one it could have run, which is not a hole.
+fn contradicts(expected: &Expected, outcome: &Outcome) -> Option<String> {
+    match (expected, outcome) {
+        (Expected::Value(want), Outcome::Value(got))
+            if *got != *want && *got != serde_json::Value::String(want.clone()).to_string() =>
+        {
+            Some(format!("a wrong value: expected {want}, got {got}"))
+        }
+        (Expected::Refused, Outcome::Value(got)) => {
+            Some(format!("admitted a program it should refuse, which ran to {got}"))
+        }
+        _ => None,
     }
 }
 
@@ -278,6 +380,9 @@ fn every_program_is_refused_or_runs_to_one_value() {
                         .filter_map(|program| {
                             let source =
                                 std::fs::read_to_string(program).expect("a program is readable");
+                            if !parses_as_written(program, &source) {
+                                return None;
+                            }
                             let contexts = contexts_of(program);
                             let none = outcome(&source, &contexts, Opt::None);
                             let full = outcome(&source, &contexts, Opt::Full);
@@ -286,7 +391,12 @@ fn every_program_is_refused_or_runs_to_one_value() {
                                 .expect("a program is under the corpus")
                                 .display()
                                 .to_string();
-                            hole(&none, &full).map(|why| (name, why))
+                            hole(&none, &full)
+                                .or_else(|| {
+                                    let expected = expected(&source)?;
+                                    contradicts(&expected, &none)
+                                })
+                                .map(|why| (name, why))
                         })
                         .collect::<Vec<_>>()
                 })

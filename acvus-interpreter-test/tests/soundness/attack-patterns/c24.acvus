@@ -1,2 +1,3 @@
-// expect "ab": nested ref of tuple of Strings, compare
+// expect "ab"
+// nested ref of tuple of Strings, compare
 let o = ("a".to_string(), "b".to_string()); let r = &o; match &r { (x, y) => if x == "a" { x.to_string() + y } else { "".to_string() }, _ => "".to_string(), }

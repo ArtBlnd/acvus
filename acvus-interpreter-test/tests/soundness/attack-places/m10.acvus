@@ -1,0 +1,3 @@
+// refuse
+// two &mut of elements of the same array alive
+let a = [1, 2]; let r = &mut a[0]; let q = &mut a[1]; *r = 3; *q = 4; a[0]

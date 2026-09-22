@@ -1,2 +1,3 @@
-// expect "…it…it": Option<String> local matched twice; String payload read is a copy
+// expect "the quick brown fox jumps over itthe quick brown fox jumps over it"
+// Option<String> local matched twice; String payload read is a copy
 let o = Some("the quick brown fox jumps over it".to_string()); let t = match o { Some(s) => s, None => "".to_string(), }; match o { Some(s) => s + &t, None => t, }

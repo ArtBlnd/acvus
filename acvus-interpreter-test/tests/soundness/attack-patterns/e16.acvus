@@ -1,2 +1,3 @@
-// expect 7: structural variant through a lambda reference parameter
+// expect 7
+// structural variant through a lambda reference parameter
 let f = |r| -> match r { C::M((x, 5)) => *x, C::M((x, _)) => 0 - *x, _ => 0, }; let c = C::M((7, 5)); f(&c)

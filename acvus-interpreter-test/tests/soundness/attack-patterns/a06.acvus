@@ -1,2 +1,3 @@
-// expect 3: string literal through a reference to a local
+// expect 3
+// string literal through a reference to a local
 let s = "q".to_string(); match &s { "p" => 1, "q" => 3, _ => 0, }

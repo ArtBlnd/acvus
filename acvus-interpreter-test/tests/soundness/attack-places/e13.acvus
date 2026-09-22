@@ -1,0 +1,3 @@
+// expect 15
+// loop storing into nested element fields via &mut ref recomputed
+let a = [{ c: [0, 0], }, { c: [0, 0], }]; for i in 0u64..2u64 { for j in 0u64..2u64 { let r = &mut a[i].c[j]; *r = (i as i64) * 2 + (j as i64) + 3; } } a[0].c[0] + a[0].c[1] + a[1].c[0] + a[1].c[1] - 3

@@ -1,2 +1,3 @@
-// expect "abc": while let over an owning iterator of Large Strings with Some(s)
+// expect "abc"
+// while let over an owning iterator of Large Strings with Some(s)
 let it = into_iter(vec(["a".to_string(), "b".to_string(), "c".to_string()])); let acc = "".to_string(); while let Some(s) = next(&mut it) { acc = acc + &s; } acc

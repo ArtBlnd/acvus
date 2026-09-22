@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it1": literal test on a Large String part fails, next arm binds the whole local
+// expect "the quick brown fox jumps over it1"
+// literal test on a Large String part fails, next arm binds the whole local
 let o = ("the quick brown fox jumps over it".to_string(), vec([1])); match o { ("nope nope nope nope nope nope nope", w) => "a".to_string(), whole => match whole { (s, v) => s + &v.len().to_string(), _ => "".to_string(), }, }

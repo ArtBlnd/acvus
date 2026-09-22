@@ -1,0 +1,3 @@
+// expect 12
+// for over &mut elements then store field through ref
+let a = [{ c: { d: 1, }, }, { c: { d: 2, }, }]; for r in &mut a { r.c.d = r.c.d * 4; } a[0].c.d + a[1].c.d

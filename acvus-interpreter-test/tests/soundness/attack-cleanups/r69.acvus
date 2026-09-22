@@ -1,2 +1,2 @@
-// expect 1 (v unchanged would be wrong; expect 2)
+// expect 2
 let v = vec([1]); let r = &mut v; let c = | | -> { r.push(1); 0 }; c(); v.len()

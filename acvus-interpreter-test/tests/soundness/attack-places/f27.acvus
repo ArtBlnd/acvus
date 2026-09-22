@@ -1,0 +1,3 @@
+// expect 9
+// a[i][j] through &mut ref
+let m = [[1, 2], [3, 4]]; let r = &mut m; r[1][1] = 9; m[1][1]

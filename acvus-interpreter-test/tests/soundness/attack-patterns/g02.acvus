@@ -1,2 +1,3 @@
-// expect 4 or refused: lambda moves a Vec out of a captured Option, called twice, mutating the moved Vec
+// 4 or refused: lambda moves a Vec out of a captured Option, called twice, mutating the moved Vec
+// lambda moves a Vec out of a captured Option, called twice, mutating the moved Vec
 let o = Some(vec([1])); let f = |u| -> match o { Some(w) => { w.push(u); w.len() }, None => 0u64, }; f(5) + f(6)

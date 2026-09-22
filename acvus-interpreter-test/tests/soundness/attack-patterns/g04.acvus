@@ -1,2 +1,3 @@
-// expect 2: string switch through a reference with a binding arm
+// expect 2
+// string switch through a reference with a binding arm
 let s = "the quick brown fox jumps over it".to_string(); match &s { "a" => 1, t => if t == "the quick brown fox jumps over it" { 2 } else { 3 }, }

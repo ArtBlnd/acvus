@@ -429,6 +429,14 @@ pub enum MirErrorKind {
         source_ty: Ty,
     },
     ExternParamAssign(String),
+    /// One pattern binds a name twice.
+    NameBoundTwice(String),
+    /// An operator checked where its operand's type was still open, whose
+    /// operand settled to a type the operator on words does not take.
+    OperatorDecidedBeforeItsOperand {
+        op: String,
+        ty: Ty,
+    },
     /// A `$` input nothing that reads it gives a type, so no value can be
     /// supplied for it.
     InputTypeUndecided(String),
@@ -1108,6 +1116,16 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "nothing that reads `${name}` decides its type; use it where its type is known"
                 )
+            }
+            MirErrorKind::OperatorDecidedBeforeItsOperand { op, ty } => {
+                write!(
+                    f,
+                    "`{op}` is decided where it is written, and its operand is known to be {} only later",
+                    ty.shown(interner)
+                )
+            }
+            MirErrorKind::NameBoundTwice(name) => {
+                write!(f, "`{name}` is bound twice in one pattern")
             }
             MirErrorKind::ExternParamAssign(name) => {
                 write!(

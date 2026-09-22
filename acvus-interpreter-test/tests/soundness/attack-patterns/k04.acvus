@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it": Large String bound, source overwritten in the arm
+// expect "the quick brown fox jumps over it"
+// Large String bound, source overwritten in the arm
 let o = Some("the quick brown fox jumps over it".to_string()); match o { Some(s) => { o = Some("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string()); s }, None => "".to_string(), }

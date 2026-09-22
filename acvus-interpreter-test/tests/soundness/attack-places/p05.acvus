@@ -1,0 +1,3 @@
+// refuse
+// if let moving a String out of an element
+let xs = [Some("a".to_string())]; let t = if let Some(v) = xs[0] { v } else { "b".to_string() }; t + &xs[0].unwrap_or("z".to_string())

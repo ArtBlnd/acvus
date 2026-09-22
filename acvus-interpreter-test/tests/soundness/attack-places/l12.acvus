@@ -1,0 +1,3 @@
+// expect 3
+// nested lambdas settling late
+let v = vec([1]); let g = |r| -> { r.push(1); 0 }; let f = |r| -> { g(r); g(r); 0 }; f(&mut v); v.len()

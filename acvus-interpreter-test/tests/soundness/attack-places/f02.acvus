@@ -1,0 +1,3 @@
+// expect 5
+// store through ref in local to deep field
+let o = { a: { b: { c: 1, }, }, }; let r = &mut o.a; r.b.c = 5; o.a.b.c

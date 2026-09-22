@@ -1,2 +1,3 @@
-// expect "x": through a reference to a context
+// expect "x"
+// through a reference to a context
 match &@o { { b, } => b.to_string(), _ => "".to_string(), }

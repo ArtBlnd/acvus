@@ -1,0 +1,3 @@
+// expect x!
+// lambda param String concat through a reference arg
+let s = "x".to_string(); let f = |r| -> r + "!"; f(&s)

@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it!": if let with literal fail then else uses the local
+// expect "the quick brown fox jumps over it!"
+// if let with literal fail then else uses the local
 let s = "the quick brown fox jumps over it".to_string(); if let "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" = s { "a".to_string() } else { s + "!" }

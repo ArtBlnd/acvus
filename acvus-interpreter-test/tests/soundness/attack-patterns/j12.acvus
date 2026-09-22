@@ -1,2 +1,3 @@
-// expect 4: `?` inside an arm, Option payload bound
+// expect 4
+// `?` inside an arm, Option payload bound
 let f = |o| -> { let r = match o { (Some(a), b) => Some(a + b), _ => None, }; Some(r? * 2) }; match f((Some(1), 1)) { Some(v) => v, None => 0, }

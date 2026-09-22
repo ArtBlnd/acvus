@@ -1,2 +1,3 @@
-// expect refused: the same name bound twice in one pattern
+// refuse
+// the same name bound twice in one pattern
 match (1, 2) { (x, x) => x, _ => 0, }

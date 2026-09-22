@@ -1,0 +1,3 @@
+// expect 3
+// lambda param receives a &mut into context; push
+let v = vec([1]); let f = |r| -> r.len(); f(&@c.a.v)

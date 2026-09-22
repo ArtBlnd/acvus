@@ -1,0 +1,3 @@
+// expect 7
+// store through a reference returned by a lambda
+let o = { a: 4, }; let id = |r| -> r; let q = id(&mut o); q.a = 7; o.a

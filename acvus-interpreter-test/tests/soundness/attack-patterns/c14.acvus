@@ -1,2 +1,3 @@
-// expect "jumps over the lazy dog, again and again": Result Ok nested in Some with Large payload via if let on call
+// expect "jumps over the lazy dog, again and again"
+// Result Ok nested in Some with Large payload via if let on call
 let f = |a| -> Some(Ok(a.to_string())); if let Some(Ok(s)) = f("jumps over the lazy dog, again and again") { s } else { "n".to_string() }

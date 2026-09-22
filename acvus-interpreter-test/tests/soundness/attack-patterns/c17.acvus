@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it": lambda ref param, object with long String literal test and bind
+// expect "the quick brown fox jumps over it"
+// lambda ref param, object with long String literal test and bind
 let f = |r| -> match r { { k: "nope nope nope nope nope nope nope", } => "a".to_string(), { v, } => v.to_string(), _ => "".to_string(), }; let o = { k: "kk".to_string(), v: "the quick brown fox jumps over it".to_string(), }; f(&o)

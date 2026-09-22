@@ -1,2 +1,3 @@
-// expect 1: range pattern inside a tuple on a local
+// expect 1
+// range pattern inside a tuple on a local
 let t = (4, "a".to_string()); match t { (0..=4, "a") => 1, _ => 0, }

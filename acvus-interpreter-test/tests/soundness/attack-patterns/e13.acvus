@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it": structural variant with a tuple payload and literal
+// expect "the quick brown fox jumps over it"
+// structural variant with a tuple payload and literal
 let e = A::X((1, "the quick brown fox jumps over it".to_string())); match e { A::X((2, s)) => "no".to_string(), A::X((1, s)) => s, _ => "d".to_string(), }

@@ -1,2 +1,3 @@
-// expect "qx": context bind from a context array elements and object
+// expect "qx"
+// context bind from a context array elements and object
 if let [@str, @s] = @names { }; @s + &@o.b

@@ -1,0 +1,3 @@
+// expect 30
+// if let on context element
+if let 30 = @arr[2] { 30 } else { 0 }

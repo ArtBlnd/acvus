@@ -1,2 +1,3 @@
-// expect 12: context bind through a Some of a tuple local; bound twice
+// expect 12
+// context bind through a Some of a tuple local; bound twice
 let o = Some((12, 13)); if let Some((@n, @m)) = o { }; @n + @m - 13

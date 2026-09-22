@@ -1,0 +1,3 @@
+// expect false
+// compare element through ref with local element
+let a = [1, 2]; let r = &a; r[0] == a[1]

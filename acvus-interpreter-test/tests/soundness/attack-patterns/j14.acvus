@@ -1,2 +1,3 @@
-// expect "…it" (last duplicate wins, types agree): duplicate names in an object pattern, reordered keys, Large String second
+// refuse
+// duplicate names in an object pattern, reordered keys, Large String second
 let o = Some({ z: 1, b: "the quick brown fox jumps over it".to_string(), }); match o { Some({ z: x, b: x, }) => x, _ => "".to_string(), }

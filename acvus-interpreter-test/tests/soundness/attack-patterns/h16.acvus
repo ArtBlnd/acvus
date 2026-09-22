@@ -1,2 +1,3 @@
-// expect "xx": object context field bound into another context, the source context read after
+// expect "xx"
+// object context field bound into another context, the source context read after
 if let { b: @str, } = @o { }; @str + &@o.b

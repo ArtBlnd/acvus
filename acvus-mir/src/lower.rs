@@ -17,7 +17,7 @@ use crate::ir::{
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
 use crate::solver::{CaptureRead, MatchMode};
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
-use crate::typeck::{CapturedName, Passing, TypeResolution};
+use crate::typeck::{CallTarget, CapturedName, Passing, TypeResolution};
 
 /// The name of a template's accumulator. A source name cannot collide with
 /// it: the lexer admits no `<` in an identifier.
@@ -31,7 +31,7 @@ pub struct Lowerer<'a> {
     /// while a name is already bound shadows it: a fresh slot, and the outer
     /// binding is untouched and visible again when the scope ends.
     scopes: Vec<FxHashMap<Astr, Local>>,
-    /// Frozen type resolution from typeck. Contains type_map, coercion_map, direct_calls.
+    /// Frozen type resolution from typeck.
     resolution: Freeze<TypeResolution>,
     /// The `ret` of the graph `Function` whose body this is (RFC-0054).
     ret: Ty,
@@ -1698,9 +1698,9 @@ impl<'a> Lowerer<'a> {
         mutability: Mutability,
         span: Span,
     ) -> ValueId {
-        let Some(Callee::Extern {
+        let Some(CallTarget::Declared(Callee::Extern {
             id: qref, instance, ..
-        }) = self.resolution.direct_calls.get(&callee_id).cloned()
+        })) = self.resolution.calls.get(&callee_id).cloned()
         else {
             panic!("type checking settles an `as_slice` instance on every index expression")
         };
@@ -2418,7 +2418,7 @@ impl<'a> Lowerer<'a> {
                     }
                     return dst;
                 }
-                if let Some(call) = self.resolution.operator_calls.get(id).cloned() {
+                if let Some(CallTarget::Operator(call)) = self.resolution.calls.get(id).cloned() {
                     let (callee, fn_ty) = (call.callee, call.ty);
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
@@ -3202,16 +3202,17 @@ impl<'a> Lowerer<'a> {
         let mut call = self.lower_call_args(args.iter());
         call.values.insert(0, first);
         call.restores.splice(0..0, restores);
-        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&callee_id).copied() {
+        let target = self.resolution.calls.get(&callee_id).cloned();
+        if let Some(CallTarget::Intrinsic(intrinsic)) = target {
             return self.emit_intrinsic(intrinsic, call, call_id, call_span);
         }
         let dst = self.alloc_typed(call_id);
-        match self.resolution.direct_calls.get(&callee_id).cloned() {
-            Some(callee) => {
+        match target {
+            Some(CallTarget::Declared(callee)) => {
                 self.set_origin(dst, ValOrigin::Call(callee.id().name));
                 self.emit_call_with(call_span, dst, callee, callee_ty, call);
             }
-            None if self.is_defined(name) => {
+            Some(CallTarget::Binding) => {
                 let (closure_reg, closure_ty) = self.lent_closure(name, call_span);
                 self.emit_call_with(
                     call_span,
@@ -3221,6 +3222,11 @@ impl<'a> Lowerer<'a> {
                     call,
                 );
             }
+            Some(
+                other @ (CallTarget::Intrinsic(_)
+                | CallTarget::StructuralVariant
+                | CallTarget::Operator(_)),
+            ) => panic!("a method call is checked as a named call, never {other:?}"),
             None => {
                 self.emit_inst(call_span, InstKind::Poison { dst });
             }
@@ -3265,11 +3271,12 @@ impl<'a> Lowerer<'a> {
             .into_iter()
             .chain(args)
             .collect();
-        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&func.id()).copied() {
+        let target = self.resolution.calls.get(&func.id()).cloned();
+        if let Some(CallTarget::Intrinsic(intrinsic)) = target {
             let call = self.lower_call_args(written.iter().copied());
             return self.emit_intrinsic(intrinsic, call, call_id, call_span);
         }
-        if self.resolution.structural_variant_calls.contains(&call_id)
+        if let Some(CallTarget::StructuralVariant) = target
             && let [payload] = written.as_slice()
         {
             let Expr::Ident { name, .. } = func else {
@@ -3303,26 +3310,31 @@ impl<'a> Lowerer<'a> {
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
-                    if let Some(callee) = self.resolution.direct_calls.get(&func.id()).cloned() {
-                        let callee_ty = self.type_of_id(func.id());
-                        self.emit_call_with(call_span, dst, callee, callee_ty, call);
-                        return dst;
+                    match target {
+                        Some(CallTarget::Declared(callee)) => {
+                            let callee_ty = self.type_of_id(func.id());
+                            self.emit_call_with(call_span, dst, callee, callee_ty, call);
+                        }
+                        Some(CallTarget::Binding) => {
+                            let (closure_reg, closure_ty) =
+                                self.lent_closure(name.name, *ident_span);
+                            self.emit_call_with(
+                                call_span,
+                                dst,
+                                Callee::Indirect(closure_reg),
+                                closure_ty,
+                                call,
+                            );
+                        }
+                        Some(
+                            other @ (CallTarget::Intrinsic(_)
+                            | CallTarget::StructuralVariant
+                            | CallTarget::Operator(_)),
+                        ) => panic!("a call of a name lowers as its target above, never {other:?}"),
+                        None => {
+                            self.emit_inst(call_span, InstKind::Poison { dst });
+                        }
                     }
-
-                    if self.is_defined(name.name) {
-                        let (closure_reg, closure_ty) = self.lent_closure(name.name, *ident_span);
-                        self.emit_call_with(
-                            call_span,
-                            dst,
-                            Callee::Indirect(closure_reg),
-                            closure_ty,
-                            call,
-                        );
-                        return dst;
-                    }
-
-                    // Typechecker already reported UndefinedFunction; emit poison.
-                    self.emit_inst(call_span, InstKind::Poison { dst });
                     return dst;
                 }
                 _ => {}

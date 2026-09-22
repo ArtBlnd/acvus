@@ -1,0 +1,3 @@
+// expect true
+// compare element through ref of loop var with local
+let a = [{ c: 1, }]; let b = { c: 1, }; let t = false; for r in &a { t = r.c == b.c; } t

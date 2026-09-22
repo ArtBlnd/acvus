@@ -1,0 +1,3 @@
+// expect 11
+// &mut of temporary field then store through ref field
+let mk = |n| -> { a: { b: n, }, }; let r = &mut mk(2).a; r.b = 11; r.b

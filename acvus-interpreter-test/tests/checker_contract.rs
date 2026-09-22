@@ -140,3 +140,23 @@ fn a_receiver_whose_type_settles_after_its_call_is_passed_as_what_it_is() {
         "5",
     );
 }
+
+#[test]
+fn a_name_bound_twice_in_one_pattern_is_refused() {
+    refused_with("match (1, 2) { (x, x) => x, _ => 0, }", "`x` is bound twice in one pattern");
+    refused_with(
+        "let o = Some({ z: 1, b: 2, }); match o { Some({ z: x, b: x, }) => x, _ => 0, }",
+        "`x` is bound twice in one pattern",
+    );
+}
+
+/// An operator is decided where it is written: an operand whose type is
+/// still open there is taken as a word, and one that settles to anything
+/// else is refused rather than compared as a word.
+#[test]
+fn an_operator_on_an_operand_that_settles_late_is_refused() {
+    refused_with(
+        "let v = vec([1, 2]); let f = |r| -> r == r; f(&v)",
+        "is decided where it is written",
+    );
+}

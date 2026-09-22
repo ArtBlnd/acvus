@@ -1,2 +1,3 @@
-// expect 7: tuple with Vec part where literal on another part; moved Vec used
+// expect 7
+// tuple with Vec part where literal on another part; moved Vec used
 let f = |u| -> (vec([u, u]), u); match f(7) { (w, 8) => 0, (w, n) => w.len() as i64 * 0 + n, _ => 1, }

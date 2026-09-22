@@ -1,2 +1,3 @@
-// expect refused: arm keeps a projected reference while the &mut is stored through
+// refuse
+// arm keeps a projected reference while the &mut is stored through
 let o = Some(1); let r = &mut o; match r { Some(x) => { *r = None; *x }, None => 0, }

@@ -1,0 +1,3 @@
+// refuse
+// block expression temporary element field via borrow
+let r = &{ [{ a: 6, }] }[0].a; *r

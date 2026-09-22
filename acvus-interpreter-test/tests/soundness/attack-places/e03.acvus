@@ -1,0 +1,3 @@
+// expect 3
+// vec element field option match
+let xs = vec([{ k: Some(3), }]); match xs[0].k { Some(x) => x, None => 0, }

@@ -1,0 +1,3 @@
+// expect 7
+// lambda param index store of element field
+let xs = [{ a: 1, }]; let f = |r| -> { r[0u64].a = 7; 0 }; f(&mut xs); xs[0u64].a

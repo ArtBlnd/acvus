@@ -1,0 +1,3 @@
+// expect 12
+// lambda param ref, store field
+let o = { a: { b: 1, }, }; let f = |r| -> { r.a.b = 12; 0 }; f(&mut o); o.a.b

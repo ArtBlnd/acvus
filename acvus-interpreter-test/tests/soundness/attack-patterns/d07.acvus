@@ -1,2 +1,3 @@
-// expect refused: move a String out of an indexed Vec element via pattern
+// refuse
+// move a String out of an indexed Vec element via pattern
 let v = vec([Some("the quick brown fox jumps over it".to_string())]); match v[0u64] { Some(s) => s, None => "".to_string(), }

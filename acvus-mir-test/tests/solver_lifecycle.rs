@@ -3,6 +3,7 @@
 //! admissible answers that settles when one remains, and a body is
 //! checked, then queried, then solved once.
 
+use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -201,8 +202,12 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     };
     let resolution = outcome.resolution().expect("complete");
     let mut calls: Vec<(String, usize)> = resolution
-        .direct_calls
+        .calls
         .values()
+        .filter_map(|target| match target {
+            CallTarget::Declared(callee) => Some(callee),
+            _ => None,
+        })
         .filter_map(|callee| match callee {
             Callee::Extern { id, instance, .. } => {
                 Some((i.resolve(id.name).to_string(), *instance))

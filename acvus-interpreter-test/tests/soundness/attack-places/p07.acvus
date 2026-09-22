@@ -1,0 +1,3 @@
+// expect 9
+// match on a reference-typed call result
+let o = { a: 9, }; let id = |r| -> r; match id(&o) { { a, } => *a, _ => 0, }

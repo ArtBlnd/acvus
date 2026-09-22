@@ -1,0 +1,3 @@
+// expect 3
+// field through ref to ref of a field
+let o = { a: { b: 3, }, }; let r = &o.a; let rr = &r; rr.b

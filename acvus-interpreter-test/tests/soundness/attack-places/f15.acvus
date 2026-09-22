@@ -1,0 +1,3 @@
+// expect 4
+// context nested vec element store via &mut
+let r = &mut @c.a.v[0]; *r = 2; @c.a.v[0] + @c.a.v[1]

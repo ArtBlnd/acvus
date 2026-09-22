@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it": Some(String) tested and bound from a call, Large
+// expect "the quick brown fox jumps over it"
+// Some(String) tested and bound from a call, Large
 let f = |x| -> Some(x.to_string()); match f("the quick brown fox jumps over it") { Some("nope nope nope nope nope nope nope") => "a".to_string(), Some(t) => t, _ => "n".to_string(), }

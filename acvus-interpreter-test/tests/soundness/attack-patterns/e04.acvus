@@ -1,2 +1,3 @@
-// expect 1+"x": context binds from a context object
+// expect "1x"
+// context binds from a context object
 if let { a: @m, b: @str, } = @o { }; @m.to_string() + &@str

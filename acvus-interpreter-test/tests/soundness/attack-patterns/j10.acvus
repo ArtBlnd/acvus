@@ -1,2 +1,3 @@
-// expect refused: a binding used after its match
+// refuse
+// a binding used after its match
 let n = match (1, 2) { (x, y) => y, _ => 0, }; x

@@ -1,2 +1,3 @@
-// expect 51: context bind and a binding that reads the old context value, value source
+// expect 51
+// context bind and a binding that reads the old context value, value source
 if let (@n, x) = (1, @n) { @m = x; }; @m * 10 + @n

@@ -1,2 +1,3 @@
-// expect "q": binding through a reference, then deref-clone
+// expect "q"
+// binding through a reference, then deref-clone
 let s = "q".to_string(); let r = match &s { t => t.to_string(), }; r

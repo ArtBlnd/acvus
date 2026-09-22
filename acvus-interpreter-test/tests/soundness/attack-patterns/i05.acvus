@@ -1,2 +1,3 @@
-// expect 3: two parts through a shared reference (control)
+// expect 3
+// two parts through a shared reference (control)
 let o = (1, 2); match &o { (x, y) => *x + *y, _ => 0, }

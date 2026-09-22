@@ -1,2 +1,3 @@
-// expect "bb": binding whole local String then the binding
+// expect "bb"
+// binding whole local String then the binding
 let s = "bb".to_string(); match s { "a" => "x".to_string(), t => t, }

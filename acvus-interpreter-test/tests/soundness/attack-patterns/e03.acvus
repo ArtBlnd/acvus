@@ -1,2 +1,3 @@
-// expect 6: context bind sourced from the same context
+// expect 6
+// context bind sourced from the same context
 if let Some(@n) = Some(@n + 1) { }; @n

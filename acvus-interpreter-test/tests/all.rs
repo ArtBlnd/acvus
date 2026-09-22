@@ -7,6 +7,7 @@ mod attention_shape_overflow;
 mod block_splitting;
 mod body_result_reference;
 mod body_returns_a_view;
+mod call_forms;
 mod captured_word;
 mod cast;
 mod checker_contract;

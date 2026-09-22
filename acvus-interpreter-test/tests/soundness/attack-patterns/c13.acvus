@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it|jumps over the lazy dog, again and again": object with two Large fields from a lambda, bind both
+// expect "the quick brown fox jumps over it|jumps over the lazy dog, again and again"
+// object with two Large fields from a lambda, bind both
 let f = |a, b| -> { x: a.to_string(), y: b.to_string(), }; match f("the quick brown fox jumps over it", "jumps over the lazy dog, again and again") { { x, y, } => x + "|" + &y, _ => "".to_string(), }

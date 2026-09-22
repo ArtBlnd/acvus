@@ -1,0 +1,3 @@
+// refuse
+// match on context field chain object pattern
+match @c.a { { b: 1, v, } => v[0] + v[1] + v[2] + 4, _ => 0, }

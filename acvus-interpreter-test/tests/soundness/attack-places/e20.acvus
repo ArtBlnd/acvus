@@ -1,0 +1,3 @@
+// expect 3
+// context element via lambda param
+let f = |r| -> r[1u64].f + 1; f(&@c.xs)

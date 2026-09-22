@@ -1,2 +1,3 @@
-// expect 3: else-if-let chain
+// expect 3
+// else-if-let chain
 let o = None; let p = Some(3); if let Some(x) = o { x } else if let Some(y) = p { y } else { 0 }

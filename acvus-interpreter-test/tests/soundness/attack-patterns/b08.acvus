@@ -1,2 +1,3 @@
-// expect "q-pp": context array readable after its elements were bound by value
+// expect "q-pp"
+// context array readable after its elements were bound by value
 let t = match @names { [a, b] => b + "-" + &a, _ => "".to_string(), }; t + &@names[0]

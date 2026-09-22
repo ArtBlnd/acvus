@@ -1,2 +1,3 @@
-// expect "xy": structural variant with object payload from a context field string
+// expect "xy"
+// structural variant with object payload from a context field string
 let e = D::V({ s: "y".to_string(), }); match e { D::V({ s, }) => @o.b + &s, _ => "".to_string(), }

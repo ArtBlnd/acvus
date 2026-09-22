@@ -1,2 +1,3 @@
-// expect 11: match on a lambda capture's field, twice, ints only
+// expect 11
+// match on a lambda capture's field, twice, ints only
 let o = { p: (1, 10), }; let f = |u| -> match o.p { (a, b) => a + b, _ => 0, }; f(0)

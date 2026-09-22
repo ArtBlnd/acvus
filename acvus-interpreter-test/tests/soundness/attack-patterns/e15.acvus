@@ -1,2 +1,3 @@
-// expect 4: structural variant nested in an Option in a tuple on a local
+// expect 4
+// structural variant nested in an Option in a tuple on a local
 let t = (Some(B::K({ a: 4, })), 1); match t { (Some(B::K({ a, })), 1) => a, _ => 0, }

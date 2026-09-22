@@ -1,2 +1,3 @@
-// expect 3: nested field of context in tuple position
+// expect 3
+// nested field of context in tuple position
 match @o.t { [3, y] => y - 1, _ => 0, }

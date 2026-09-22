@@ -1,2 +1,3 @@
-// expect "the quick brown fox jumps over it1": same on a call result (spilled)
+// expect "the quick brown fox jumps over it1"
+// same on a call result (spilled)
 let f = |u| -> Some(("the quick brown fox jumps over it".to_string(), vec([u]))); match f(1) { Some(("nope nope nope nope nope nope nope", w)) => "a".to_string(), Some(whole) => match whole { (s, v) => s + &v.len().to_string(), _ => "".to_string(), }, _ => "n".to_string(), }

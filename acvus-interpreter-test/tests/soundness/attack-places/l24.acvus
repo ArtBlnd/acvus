@@ -1,0 +1,3 @@
+// expect true
+// lambda param &String compare to literal
+let s = "x".to_string(); let f = |r| -> r == "x"; f(&s)

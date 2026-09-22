@@ -1,0 +1,3 @@
+// expect 3
+// push via lambda param settled after the call, twice
+let v = vec([1]); let f = |r| -> { r.push(0); 0 }; f(&mut v); f(&mut v); v.len()

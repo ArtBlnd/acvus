@@ -1,2 +1,3 @@
-// expect "E:jumps over the lazy dog, again and again": Err arm after an Ok literal arm, Large
+// expect "E:jumps over the lazy dog, again and again"
+// Err arm after an Ok literal arm, Large
 let f = |a| -> if a > 3 { Ok(1) } else { Err("jumps over the lazy dog, again and again".to_string()) }; match f(0) { Ok(1) => "one".to_string(), Ok(n) => n.to_string(), Err(e) => "E:" + &e, _ => "".to_string(), }

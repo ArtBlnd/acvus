@@ -1,0 +1,3 @@
+// expect 3
+// field of block temporary
+{ let x = 1; { a: { b: x + 2, }, } }.a.b

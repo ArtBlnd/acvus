@@ -1,2 +1,3 @@
-// expect 3: Placed field path through a local then nested ref
+// expect 3
+// Placed field path through a local then nested ref
 let o = { p: Some(3), }; let r = &o; match &r.p { Some(x) => *x, None => 0, }

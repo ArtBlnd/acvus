@@ -1,0 +1,3 @@
+// expect 9
+// lambda param ref, then r[0u64] read after push
+let v = vec([1]); let f = |r| -> { r.push(9); r[1u64] }; f(&mut v)

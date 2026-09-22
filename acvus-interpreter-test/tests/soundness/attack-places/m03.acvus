@@ -1,0 +1,3 @@
+// expect 4
+// match on reference-typed call result of an id lambda with &mut, field bind
+let o = { a: 4, }; let id = |r| -> r; match id(&mut o) { { a, } => *a, _ => 0, }

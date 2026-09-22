@@ -1,0 +1,3 @@
+// expect 10
+// store into element field in a loop
+let a = [{ c: 0, }, { c: 0, }]; for i in 0u64..2u64 { a[i].c = a[i].c + 5; } a[0].c + a[1].c

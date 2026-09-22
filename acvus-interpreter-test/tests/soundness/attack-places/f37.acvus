@@ -1,0 +1,3 @@
+// expect 2
+// borrow element field then use the borrow in arithmetic
+let a = [{ c: 1, }]; let r = &a[0].c; *r + *r

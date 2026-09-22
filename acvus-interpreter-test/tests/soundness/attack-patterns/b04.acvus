@@ -1,2 +1,3 @@
-// expect 7: list pattern on a context array
+// expect 7
+// list pattern on a context array
 match @arr { [x, .., z] => x * 2 + z + 2, _ => 0, }

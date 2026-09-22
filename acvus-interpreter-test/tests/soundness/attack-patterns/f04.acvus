@@ -1,2 +1,3 @@
-// expect 1: single-element list pattern after an empty-length-mismatch-free arm
+// expect 1
+// single-element list pattern after an empty-length-mismatch-free arm
 let a = [1]; match a { [x] => x, _ => 2, }

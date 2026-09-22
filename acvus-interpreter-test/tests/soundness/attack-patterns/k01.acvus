@@ -1,2 +1,3 @@
-// expect 3: source local reassigned inside the arm after its parts were bound
+// expect 3
+// source local reassigned inside the arm after its parts were bound
 let o = (1, 2); match o { (a, b) => { o = (9, 9); a + b }, _ => 0, }

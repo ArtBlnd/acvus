@@ -1,0 +1,3 @@
+// expect 3
+// lambda comparing through a param with a reference arg
+let v = vec([1, 2]); let f = |r| -> r == r; if f(&v) { 3 } else { 0 }

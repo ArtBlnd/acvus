@@ -1,2 +1,3 @@
-// expect "xz": list bind moves Strings out of a local array
+// expect "xz"
+// list bind moves Strings out of a local array
 let a = ["x".to_string(), "y".to_string(), "z".to_string()]; match a { [p, .., q] => p + &q, _ => "".to_string(), }
