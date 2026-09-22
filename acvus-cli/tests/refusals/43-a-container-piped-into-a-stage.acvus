@@ -1,0 +1,2 @@
+let v = vec([1, 2]);
+v | map(|x| -> x + 1) | collect()

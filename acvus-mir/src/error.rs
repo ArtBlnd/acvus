@@ -33,18 +33,47 @@ where
     once
 }
 
+/// The shapes among `shapes` no other shape there covers: a specialized
+/// instance is of its generic instance's shape, and one of two equal shapes
+/// stays.
+fn most_general(shapes: &[crate::ty::PolyTy]) -> Vec<&crate::ty::PolyTy> {
+    shapes
+        .iter()
+        .enumerate()
+        .filter(|(i, shape)| {
+            !shapes.iter().enumerate().any(|(j, other)| {
+                j != *i
+                    && crate::ty::subsumes(other, shape)
+                    && (!crate::ty::subsumes(shape, other) || j < *i)
+            })
+        })
+        .map(|(_, shape)| shape)
+        .collect()
+}
+
+/// How many alternatives a listing shows before it says how many more
+/// there are: past this many, a reader is looking at a catalogue, not at
+/// the one they meant.
+const LISTED: usize = 12;
+
 /// The alternatives a refusal enumerates, one per line under the sentence
 /// that introduces them: the instances a call could reach, the shapes a
-/// bound admits, the declarations sharing a name.
+/// bound admits, the declarations sharing a name. The first `LISTED` are
+/// shown and the rest counted.
 fn listed<I>(f: &mut fmt::Formatter<'_>, items: I) -> fmt::Result
 where
     I: IntoIterator,
     I::Item: fmt::Display,
 {
-    for item in items {
+    let items: Vec<I::Item> = items.into_iter().collect();
+    for item in items.iter().take(LISTED) {
         write!(f, "\n  {item}")?;
     }
-    Ok(())
+    match items.len().saturating_sub(LISTED) {
+        0 => Ok(()),
+        1 => write!(f, "\n  and 1 other"),
+        more => write!(f, "\n  and {more} others"),
+    }
 }
 
 /// Whose instance a refused instance decision was looking for.
@@ -146,11 +175,13 @@ impl fmt::Display for DidYouMean {
 }
 
 /// How far `name` is from `wanted`, where near enough to offer: an edit
-/// distance of at most two, or `wanted` written as a prefix of it. A name
-/// of one or two characters is near everything of its length, so only a
-/// prefix counts there.
+/// distance of at most two, or `wanted` written as a prefix of it or as
+/// one of its `_`-separated words (`iter` names `as_iter` and `into_iter`,
+/// not `filter`). A name of one or two characters is near everything of
+/// its length, so only a prefix or a word counts there.
 fn near(wanted: &str, name: &str) -> Option<usize> {
-    if wanted.len() >= 3 && name.starts_with(wanted) {
+    if wanted.len() >= 3 && (name.starts_with(wanted) || name.split('_').any(|word| word == wanted))
+    {
         return Some(0);
     }
     if wanted.len() < 3 {
@@ -300,6 +331,8 @@ pub enum MirErrorKind {
         name: String,
         near: DidYouMean,
     },
+    /// A call of a value that is not a function.
+    NotCallable(Ty),
     NoOperatorInstance {
         op: &'static str,
         signature: OperatorSignature,
@@ -808,6 +841,9 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::UndefinedFunction { name, near } => {
                 write!(f, "undefined function `{name}`{near}")
             }
+            MirErrorKind::NotCallable(ty) => {
+                write!(f, "cannot call a value of type {}", ty.shown(interner))
+            }
             MirErrorKind::StoreThroughSharedReference { subject, ty } => {
                 write!(
                     f,
@@ -844,7 +880,11 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     ty.shown(interner),
                     view_in(ty)
                 )?;
-                let spelled = spelled_once(instances.iter().map(|t| t.shown(interner).to_string()));
+                let spelled = spelled_once(
+                    most_general(instances)
+                        .into_iter()
+                        .map(|t| t.shown(interner).to_string()),
+                );
                 if spelled.is_empty() {
                     return Ok(());
                 }
@@ -879,7 +919,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     crate::ty::TyVarBound::Any => write!(f, " (any)"),
                     crate::ty::TyVarBound::OneOf { shapes, .. } => {
                         write!(f, ", one of")?;
-                        listed(f, shapes.iter().map(|t| t.shown(interner)))
+                        listed(
+                            f,
+                            most_general(shapes).into_iter().map(|t| t.shown(interner)),
+                        )
                     }
                     crate::ty::TyVarBound::Integer { signed, among } => {
                         if among.len() == crate::ty::IntTy::ALL.len() {

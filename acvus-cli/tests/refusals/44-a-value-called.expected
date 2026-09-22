@@ -1,0 +1,5 @@
+error: cannot call a value of type i64
+  --> 44-a-value-called.acvus:2:1
+  |
+2 | x()
+  | ^^^

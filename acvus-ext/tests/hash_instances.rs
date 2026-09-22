@@ -446,7 +446,7 @@ impl World {
 
     /// Calls instance `instance` of `ns::name`, as the compiler's
     /// `Callee::Extern` numbers them (RFC-0040).
-    fn call(&self, ns: &str, name: &str, instance: usize, mut args: Vec<V>) -> V {
+    fn call(&self, ns: &str, name: &str, instance: usize, args: Vec<V>) -> V {
         let handlers = &self.externs.handlers[&self.qref(ns, name)];
         let ExternHandler::Sync(handler) = &handlers[instance] else {
             panic!("{ns}::{name} is not a sync handler")
@@ -576,13 +576,13 @@ fn a_family_in_a_member_signature_declares_its_two_casts_once() {
         vec![
             (
                 "erase".to_string(),
-                "Vec<#'0>".to_string(),
-                "Vec<'0>".to_string()
+                "Vec<#T>".to_string(),
+                "Vec<T>".to_string()
             ),
             (
                 "materialize".to_string(),
-                "Vec<'0>".to_string(),
-                "Vec<#'0>".to_string()
+                "Vec<T>".to_string(),
+                "Vec<#T>".to_string()
             ),
         ]
     );

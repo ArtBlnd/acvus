@@ -1,0 +1,5 @@
+error: cannot index into a value of type `String`
+  --> 45-text-indexed.acvus:2:1
+  |
+2 | s[0u64]
+  | ^^^^^^^

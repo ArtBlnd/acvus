@@ -512,7 +512,15 @@ pub fn matches_pattern<P>(ty: &TyTerm<P>, pattern: &PolyTy) -> bool
 where
     P: Phase + PartialEq,
 {
-    matches_pattern_with(ty, pattern, Unknowns::Fixed)
+    matches_pattern_with(ty, pattern, Unknowns::Fixed, Reprs::Exact)
+}
+
+/// Whether every type of `special`'s shape is of `general`'s, the
+/// representation of an argument aside: `Items<#i64>` is of the shape
+/// `Items<T>`. A refusal lists shapes, and a specialized instance is not a
+/// second shape to a reader.
+pub fn subsumes(general: &PolyTy, special: &PolyTy) -> bool {
+    matches_pattern_with(special, general, Unknowns::Fixed, Reprs::Alike)
 }
 
 /// Whether a type whose variables are still open could have the shape of
@@ -521,7 +529,7 @@ pub fn could_match_pattern<P>(ty: &TyTerm<P>, pattern: &PolyTy) -> bool
 where
     P: Phase + PartialEq,
 {
-    matches_pattern_with(ty, pattern, Unknowns::Open)
+    matches_pattern_with(ty, pattern, Unknowns::Open, Reprs::Exact)
 }
 
 /// What a variable of the matched type stands for.
@@ -533,7 +541,21 @@ enum Unknowns {
     Open,
 }
 
-fn matches_pattern_with<P>(ty: &TyTerm<P>, pattern: &PolyTy, unknowns: Unknowns) -> bool
+/// Whether an argument's representation takes part in the match.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reprs {
+    /// A fixed representation matches itself (hash-types.md, R3).
+    Exact,
+    /// Any representation matches any: the shape alone is compared.
+    Alike,
+}
+
+fn matches_pattern_with<P>(
+    ty: &TyTerm<P>,
+    pattern: &PolyTy,
+    unknowns: Unknowns,
+    reprs: Reprs,
+) -> bool
 where
     P: Phase + PartialEq,
 {
@@ -561,11 +583,13 @@ where
         pat: &TypeArg<Poly>,
         seen: &mut FxHashMap<u32, TyTerm<P>>,
         unknowns: Unknowns,
+        reprs: Reprs,
     ) -> bool
     where
         P: Phase + PartialEq,
     {
         let repr_ok = match (&arg.repr, &pat.repr) {
+            _ if reprs == Reprs::Alike => true,
             (Repr::Var(_), Repr::Var(_)) => true,
             (Repr::Var(_), _) => unknowns == Unknowns::Open,
             (Repr::Uniform, Repr::Var(_)) => true,
@@ -573,13 +597,14 @@ where
             (Repr::Uniform, Repr::Uniform) | (Repr::Specialized, Repr::Specialized) => true,
             (Repr::Uniform, Repr::Specialized) | (Repr::Specialized, Repr::Uniform) => false,
         };
-        repr_ok && go(&arg.ty, &pat.ty, seen, unknowns)
+        repr_ok && go(&arg.ty, &pat.ty, seen, unknowns, reprs)
     }
     fn go<P>(
         ty: &TyTerm<P>,
         pat: &PolyTy,
         seen: &mut FxHashMap<u32, TyTerm<P>>,
         unknowns: Unknowns,
+        reprs: Reprs,
     ) -> bool
     where
         P: Phase + PartialEq,
@@ -609,27 +634,32 @@ where
                     (LenTerm::Var(_), _) => unknowns == Unknowns::Open,
                     (LenTerm::Known(n), LenTerm::Known(k)) => n == k,
                 };
-                len_ok && go(e, pe, seen, unknowns)
+                len_ok && go(e, pe, seen, unknowns, reprs)
             }
-            (TyTerm::Option(i), TyTerm::Option(pi)) => go(i, pi, seen, unknowns),
+            (TyTerm::Option(i), TyTerm::Option(pi)) => go(i, pi, seen, unknowns, reprs),
             (TyTerm::Result(t, e), TyTerm::Result(pt, pe)) => {
-                go(t, pt, seen, unknowns) && go(e, pe, seen, unknowns)
+                go(t, pt, seen, unknowns, reprs) && go(e, pe, seen, unknowns, reprs)
             }
             (TyTerm::Handle(i), TyTerm::Handle(pi)) | (TyTerm::Slice(i), TyTerm::Slice(pi)) => {
-                go(i, pi, seen, unknowns)
+                go(i, pi, seen, unknowns, reprs)
             }
             (TyTerm::Ref(m, i), TyTerm::Ref(pm, pi)) => {
-                m == pm && arg_matches(i, pi, seen, unknowns)
+                m == pm && arg_matches(i, pi, seen, unknowns, reprs)
             }
             (TyTerm::Tuple(es), TyTerm::Tuple(ps)) => {
-                es.len() == ps.len() && es.iter().zip(ps).all(|(e, p)| go(e, p, seen, unknowns))
+                es.len() == ps.len()
+                    && es
+                        .iter()
+                        .zip(ps)
+                        .all(|(e, p)| go(e, p, seen, unknowns, reprs))
             }
             (TyTerm::Object(fs), TyTerm::Object(pfs)) => {
                 fs.declaration() == pfs.declaration()
                     && fs.len() == pfs.len()
-                    && fs
-                        .iter()
-                        .all(|(k, v)| pfs.get(k).is_some_and(|pv| go(v, pv, seen, unknowns)))
+                    && fs.iter().all(|(k, v)| {
+                        pfs.get(k)
+                            .is_some_and(|pv| go(v, pv, seen, unknowns, reprs))
+                    })
             }
             (
                 TyTerm::Fn {
@@ -650,8 +680,8 @@ where
                     && params
                         .iter()
                         .zip(pp)
-                        .all(|(a, b)| go(&a.ty, &b.ty, seen, unknowns))
-                    && go(ret, pr, seen, unknowns)
+                        .all(|(a, b)| go(&a.ty, &b.ty, seen, unknowns, reprs))
+                    && go(ret, pr, seen, unknowns, reprs)
             }
             (
                 TyTerm::UserDefined {
@@ -686,7 +716,7 @@ where
                     && type_args
                         .iter()
                         .zip(pargs)
-                        .all(|(a, b)| arg_matches(a, b, seen, unknowns))
+                        .all(|(a, b)| arg_matches(a, b, seen, unknowns, reprs))
             }
             (
                 TyTerm::Enum { name, variants },
@@ -698,7 +728,7 @@ where
                 name == pn
                     && variants.len() == pv.len()
                     && variants.iter().all(|(k, v)| match (v, pv.get(k)) {
-                        (Some(v), Some(Some(p))) => go(v, p, seen, unknowns),
+                        (Some(v), Some(Some(p))) => go(v, p, seen, unknowns, reprs),
                         (None, Some(None)) => true,
                         _ => false,
                     })
@@ -706,7 +736,7 @@ where
             _ => false,
         }
     }
-    go(ty, pattern, &mut FxHashMap::default(), unknowns)
+    go(ty, pattern, &mut FxHashMap::default(), unknowns, reprs)
 }
 
 // -- Pattern unification ----------------------------------------------

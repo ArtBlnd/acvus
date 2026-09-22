@@ -122,6 +122,9 @@ struct FirstArg {
 /// One `a[i]` whose refusal waits for the solve (RFC-0047).
 struct IndexUse {
     id: AstId,
+    /// The `as_slice` call the index is; a refusal of that call is
+    /// reported as the index's own (`MirErrorKind::CannotIndex`).
+    callee_id: AstId,
     span: Span,
     container: InferTy,
     element: InferTy,
@@ -212,6 +215,27 @@ fn takes_container(candidates: &[SignatureCandidate], container: &InferTy) -> bo
             _ => false,
         }
     })
+}
+
+/// Whether a declared type says what it is, as against a bare variable
+/// that takes or yields anything: `dedup<I>(it: I)` takes anything, and
+/// `unwrap` yields anything.
+fn names_a_shape<V>(ty: &TyTerm<V>) -> bool
+where
+    V: crate::ty::Phase,
+{
+    !matches!(ty, TyTerm::Var(_))
+}
+
+/// The type behind a reference, or the type itself.
+fn strip_ref<V>(ty: &TyTerm<V>) -> &TyTerm<V>
+where
+    V: crate::ty::Phase,
+{
+    match ty {
+        TyTerm::Ref(_, inner) => &inner.ty,
+        _ => ty,
+    }
 }
 
 /// A container the machine can slice is named by its head alone: two
@@ -976,6 +1000,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Every `a[i]`, kept for the refusals that can only name their type
     /// once the body is solved (RFC-0047 §2, §5).
     index_uses: Vec<IndexUse>,
+    /// The `as_slice` calls that are an index: a refusal of one is the
+    /// index's, `CannotIndex`, and not a refusal of `as_slice`.
+    index_callees: FxHashSet<AstId>,
     /// RFC-0047 rule 6, drained by `settle_slice_args`.
     slice_args: Vec<SliceArg>,
     /// The places the calls being checked have consumed, innermost last.
@@ -1031,6 +1058,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
             index_uses: Vec::new(),
+            index_callees: FxHashSet::default(),
             slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
@@ -3112,9 +3140,97 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// Whether the call at `callee` was decided and refused.
+    fn call_refused(&self, callee: AstId) -> bool {
+        match self.direct_calls.get(&callee) {
+            Some(CalleeChoice::Decided(decision)) => self.solver.answer(*decision).is_none(),
+            Some(CalleeChoice::Resolved(_)) | None => false,
+        }
+    }
+
+    /// The decisions of the `as_slice` calls an index is lowered to: their
+    /// refusal is the index's, `CannotIndex`, in `settle_index_uses`.
+    fn index_decisions(&self) -> FxHashSet<DecisionId> {
+        self.index_uses
+            .iter()
+            .filter_map(|index| match self.direct_calls.get(&index.callee_id) {
+                Some(CalleeChoice::Decided(decision)) => Some(*decision),
+                Some(CalleeChoice::Resolved(_)) | None => None,
+            })
+            .collect()
+    }
+
+    /// The signatures one call of which takes `arg`, or a borrow of it,
+    /// and yields what an instance among `takes` takes: the call a reader
+    /// writes before the refused one. `Vec<i64>` is not what `iter::next`
+    /// takes, and `into_iter` yields `Items<T>` of it, which is.
+    fn a_call_that_reaches(&self, arg: &Ty, takes: &[crate::ty::PolyTy]) -> Vec<String> {
+        let taken: Vec<&crate::ty::PolyTy> = takes
+            .iter()
+            .filter_map(|t| match t {
+                TyTerm::Fn { params, .. } => params.first().map(|p| strip_ref(&p.ty)),
+                _ => None,
+            })
+            .collect();
+        let borrowed =
+            |mutability: Mutability| Ty::Ref(mutability, Box::new(TypeArg::uniform(arg.clone())));
+        let spellings = [
+            arg.clone(),
+            borrowed(Mutability::Shared),
+            borrowed(Mutability::Mut),
+        ];
+        let mut reaches: Vec<(String, String)> = Vec::new();
+        for (qref, scheme) in &self.env.functions {
+            let Some(instances) = &scheme.instances else {
+                continue;
+            };
+            let concrete = instances.concrete.iter().map(|c| &c.ty);
+            let generic = instances.generic.then_some(&scheme.ty);
+            for instance in concrete.chain(generic) {
+                let TyTerm::Fn { params, ret, .. } = instance else {
+                    continue;
+                };
+                let [param] = params.as_slice() else {
+                    continue;
+                };
+                let yielded = strip_ref(ret);
+                if !names_a_shape(strip_ref(&param.ty)) || !names_a_shape(yielded) {
+                    continue;
+                }
+                if !taken
+                    .iter()
+                    .any(|t| crate::ty::could_match_pattern(yielded, t))
+                {
+                    continue;
+                }
+                let Some(spelled) = spellings
+                    .iter()
+                    .find(|spelling| crate::ty::matches_pattern(spelling, &param.ty))
+                else {
+                    continue;
+                };
+                let name = self.interner.resolve(qref.name).to_string();
+                let spelled = spelled.shown(self.interner).to_string();
+                if !reaches.iter().any(|(n, _)| *n == name) {
+                    reaches.push((name, spelled));
+                }
+            }
+        }
+        reaches.sort();
+        reaches
+            .into_iter()
+            .map(|(name, spelled)| format!("what `{name}` yields of {spelled}"))
+            .collect()
+    }
+
     fn report_unsettled(&mut self, unsettled: Vec<Unsettled>) {
+        let index_decisions = self.index_decisions();
         for failure in unsettled {
             let decision = failure.decision();
+            if index_decisions.contains(&decision) {
+                continue;
+            }
+            let mut labels: Vec<Label> = Vec::new();
             let span = self.decision_span(decision);
             let report = self
                 .conversions
@@ -3129,6 +3245,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ..
                 } => {
                     let opened_by = self.decision_callee(decision);
+                    if let (Some(signature), TyTerm::Fn { params, .. }) = (required, &call)
+                        && let Some(first) = params.first()
+                    {
+                        let arg = self.type_as_written(&first.ty);
+                        let reaches = self.a_call_that_reaches(strip_ref(&arg), &instances);
+                        if !reaches.is_empty() {
+                            labels.push(Label::note(format!(
+                                "{} takes {}",
+                                self.shown_name(signature),
+                                reaches.join(", or ")
+                            )));
+                        }
+                    }
                     MirErrorKind::NoInstance {
                         ty: self.type_as_written(&call),
                         instances,
@@ -3234,7 +3363,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     }
                 }
             };
-            self.error(kind, span);
+            match labels.is_empty() {
+                true => self.error(kind, span),
+                false => self.labeled_error(kind, span, labels),
+            }
         }
     }
 
@@ -3489,6 +3621,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ) {
             self.index_uses.push(IndexUse {
                 id,
+                callee_id,
                 span,
                 container,
                 element: Self::infer_error(),
@@ -3496,6 +3629,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             });
             return self.record_ret(id, Self::infer_error());
         }
+        self.index_callees.insert(callee_id);
         let slice = self.check_overloaded_call(
             candidates,
             CalleeSite {
@@ -3516,6 +3650,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         self.index_uses.push(IndexUse {
             id,
+            callee_id,
             span,
             container,
             element: element.clone(),
@@ -3531,6 +3666,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let uses = std::mem::take(&mut self.index_uses);
         for IndexUse {
             id,
+            callee_id,
             span,
             container,
             element,
@@ -3538,7 +3674,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         } in uses
         {
             let referent = self.solver.resolve_ty(referent_of(&container));
-            if Self::is_error(&element) {
+            if Self::is_error(&element) || self.call_refused(callee_id) {
                 let ty = self.type_as_written(&referent);
                 self.error(MirErrorKind::CannotIndex { ty }, span);
                 continue;
@@ -3918,6 +4054,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             [] => {
                 let types =
                     self.check_args_in_order(&Self::infer_error(), first.as_ref(), args, call_span);
+                if self.index_callees.contains(&callee.id) {
+                    return Self::infer_error();
+                }
                 return self.no_matching_function(
                     &name_str,
                     types,
@@ -3942,6 +4081,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let admitted = match self.admit_args(candidates, first.as_ref(), args, call_span) {
             Ok(admitted) => admitted,
             Err(ArgumentsRefused { types }) => {
+                if self.index_callees.contains(&callee.id) {
+                    return Self::infer_error();
+                }
                 return self.no_matching_function(
                     &name_str,
                     types,
@@ -6102,13 +6244,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return Self::infer_error();
             }
             _ => {
-                self.error(
-                    MirErrorKind::UndefinedFunction {
-                        name: "<not callable>".to_string(),
-                        near: DidYouMean::default(),
-                    },
-                    call_span,
-                );
+                let ty = self.type_as_written(func_ty);
+                self.error(MirErrorKind::NotCallable(ty), call_span);
                 return Self::infer_error();
             }
         }
@@ -6149,13 +6286,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 };
                 self.note_call_effect(&effect, call_span);
                 if self.solver.unify(func_ty, &fn_ty).is_err() {
-                    self.error(
-                        MirErrorKind::UndefinedFunction {
-                            name: "<expr>".to_string(),
-                            near: DidYouMean::default(),
-                        },
-                        call_span,
-                    );
+                    let ty = self.type_as_written(func_ty);
+                    self.error(MirErrorKind::NotCallable(ty), call_span);
                     return Self::infer_error();
                 }
                 ret

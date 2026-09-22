@@ -16,8 +16,22 @@ a type outside it is not reported again after the instances are.
 
 What a refusal enumerates — the instances a call could reach, the shapes a
 bound admits, the declarations that share a name — is one alternative per
-line under the sentence that introduces them, indented two spaces. A clause
-that offers at most three names, `did you mean`, stays in the sentence.
+line under the sentence that introduces them, indented two spaces; the
+first twelve are shown and the rest are counted (`and 9 others`). A
+specialized instance is of its generic instance's shape, so `Items<#i64>`
+is not listed beside `Items<T>`. A clause that offers at most three names,
+`did you mean`, stays in the sentence.
+
+A requirement a call's argument does not meet — `v | map(…)` asks
+`iter::next` of a `Vec<i64>` — carries a help note naming the calls one of
+which makes the argument into what the requirement takes: `iter::next
+takes what `as_iter` yields of &Vec<i64>, or what `into_iter` yields of
+Vec<i64>`. The calls are found by shape, not by name: any signature whose
+instance takes the argument (or a borrow of it) and yields what an
+instance of the requirement takes.
+
+An index `a[i]` is refused once, as an index (`cannot index into a value of
+type `String``), not as the `as_slice` call it is lowered to.
 
 A pipeline stage `a | f(b)` is a call of `f`, and a refusal of it marks
 `f(b)`, not the pipeline that feeds it.
@@ -69,6 +83,7 @@ them — a deferred decision settles after the text after it was read.
 | program | what it says |
 | --- | --- |
 | `let v = vec([1, 2]); v.pushh(2); v.len()` | undefined function `pushh`; did you mean `push`? |
+| `let v = vec([1, 2]); v.iter()` | undefined function `iter`; did you mean `as_iter`, `from_iter` or `into_iter`? |
 | `let s = "a".to_string(); s.uper()` | undefined function `uper`; did you mean `upper`? |
 | `v.into_iter() \| map(\|x\| -> x + 1) \| colect` | undefined function `colect`; did you mean `collect`? |
 | `frobnicate(1)` | undefined function `frobnicate` |
@@ -80,8 +95,9 @@ them — a deferred decision settles after the text after it was read.
 | `@missing + 1` | `@missing` is not a declared context |
 
 A candidate is within an edit distance of two of what was written, or has
-it as a prefix; the three nearest are offered, and a name with nothing near
-it keeps the sentence it had.
+it as a prefix or as one of its `_`-separated words (`iter` names `as_iter`
+and `into_iter`); the three nearest are offered, and a name with nothing
+near it keeps the sentence it had.
 
 ## Borrows
 
@@ -120,7 +136,10 @@ it keeps the sentence it had.
 | `range(1, 100) \| into_iter() \| sum()` | no instance of iter::into_iter has the call type Fn(Range) -> _; the instances it could reach are<br>&nbsp;&nbsp;Fn(Deque\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(HashSet\<T, E>) -> Items\<T><br>&nbsp;&nbsp;Fn(Option\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(Result\<T, U>) -> Items\<T><br>&nbsp;&nbsp;Fn(Vec\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(Array\<T, N>) -> Items\<T> |
 | `let x = 1; x.len()` | no `len` takes a call of type Fn(_) -> u64 |
 | `1 as Integer` | `as` converts to i8, i16, i32, i64, u8, u16, u32, u64, f64 or char, not to `Integer` |
-| `let x = 1; x[0u64]` | no `as_slice` takes a call of type Fn(&i64) -> &[_] |
+| `let x = 1; x[0u64]` | cannot index into a value of type `i64` |
+| `let s = "abc".to_string(); s[0u64]` | cannot index into a value of type `String` |
+| `let x = 1; x()` | cannot call a value of type i64 |
+| `let v = vec([1, 2]); v \| map(\|x\| -> x + 1) \| collect()` | no instance of iter::next required by iter::map has the call type Fn(&mut Vec\<i64>) -> Option\<i64>; the instances it could reach are<br>&nbsp;&nbsp;Fn(&mut Refs\<Deque\<T>>) -> Option\<&T><br>&nbsp;&nbsp;… and 9 others<br>`= help:` iter::next takes what `as_iter` yields of &Vec\<i64>, or what `into_iter` yields of Vec\<i64>, or what `rev_iter` yields of Vec\<i64> |
 
 ## Arity and shape
 

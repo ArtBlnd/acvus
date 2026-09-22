@@ -1,0 +1,5 @@
+error: undefined function `iter`; did you mean `as_iter`, `from_iter` or `into_iter`?
+  --> 46-iter-misspelled.acvus:2:1
+  |
+2 | v.iter()
+  | ^^^^^^^^

@@ -17,7 +17,7 @@ use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_ext::{Deque, vec_registry};
+use acvus_ext::vec_registry;
 use acvus_extern::{
     Arr, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, OneValue, Owned, QualifiedRef,
     Registry, Release, Runtime, extern_fn, extern_registry,
@@ -623,13 +623,13 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
         vec![
             DisplayedCast {
                 name: "erase".to_string(),
-                from: "Vec<#'0>".to_string(),
-                to: "Vec<'0>".to_string(),
+                from: "Vec<#T>".to_string(),
+                to: "Vec<T>".to_string(),
             },
             DisplayedCast {
                 name: "materialize".to_string(),
-                from: "Vec<'0>".to_string(),
-                to: "Vec<#'0>".to_string(),
+                from: "Vec<T>".to_string(),
+                to: "Vec<#T>".to_string(),
             },
         ],
         "the family Vec declares its two casts once"
