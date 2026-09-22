@@ -9,6 +9,7 @@ mod body_result_reference;
 mod body_returns_a_view;
 mod captured_word;
 mod cast;
+mod checker_contract;
 mod classify;
 mod closure_nesting;
 mod container;

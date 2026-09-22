@@ -3143,13 +3143,16 @@ impl<'a> Lowerer<'a> {
     fn lower_intrinsic_call(
         &mut self,
         intrinsic: crate::typeck::Intrinsic,
-        args: &[Expr],
+        args: &[&Expr],
         call_id: AstId,
         call_span: Span,
     ) -> ValueId {
         match intrinsic {
             crate::typeck::Intrinsic::StringClone => {
-                let src = self.lower_expr(&args[0]);
+                let [source] = args else {
+                    unreachable!("`clone` takes one argument, which the checker admitted")
+                };
+                let src = self.lower_expr(source);
                 let dst = self.alloc_expr(call_id);
                 self.emit_inst(call_span, InstKind::StringClone { dst, src });
                 dst
@@ -3397,11 +3400,16 @@ impl<'a> Lowerer<'a> {
         call_id: AstId,
         call_span: Span,
     ) -> ValueId {
+        let written: Vec<&Expr> = pipe_left
+            .map(|left| &**left)
+            .into_iter()
+            .chain(args)
+            .collect();
         if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&func.id()).copied() {
-            return self.lower_intrinsic_call(intrinsic, args, call_id, call_span);
+            return self.lower_intrinsic_call(intrinsic, &written, call_id, call_span);
         }
         if self.resolution.structural_variant_calls.contains(&call_id)
-            && let [payload] = args
+            && let [payload] = written.as_slice()
         {
             let Expr::Ident { name, .. } = func else {
                 unreachable!("a structural variant call is a qualified name");
@@ -3418,7 +3426,7 @@ impl<'a> Lowerer<'a> {
             );
             return dst;
         }
-        let call = self.lower_call_args(pipe_left.map(|left| &**left).into_iter().chain(args));
+        let call = self.lower_call_args(written.iter().copied());
         let dst = self.alloc_typed(call_id);
 
         // Named function call (Ident).

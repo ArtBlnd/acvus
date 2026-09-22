@@ -2136,7 +2136,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.settle_in_body();
             return self.check_lambda(arg, Some(expected));
         }
-        self.check_expr(arg)
+        let outer = std::mem::replace(&mut self.demand, PlaceDemand::Value);
+        let ty = self.check_expr(arg);
+        self.demand = outer;
+        ty
     }
 
     /// Every argument, the first (piped or a receiver) first, checked left
@@ -4534,10 +4537,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         id: AstId,
         enum_name: Astr,
         tag: Astr,
+        first: Option<&FirstArg>,
         args: &[Expr],
         span: Span,
     ) -> InferTy {
-        let [payload] = args else {
+        let payload_ty = match (first, args) {
+            (None, [payload]) => Some(self.check_expr(payload)),
+            (Some(first), []) => Some(first.ty.clone()),
+            _ => None,
+        };
+        let Some(payload_ty) = payload_ty else {
             let near = self.near_namespaces(enum_name, tag);
             self.error(
                 MirErrorKind::UndefinedFunction {
@@ -4552,7 +4561,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return Self::infer_error();
         };
-        let payload_ty = self.check_expr(payload);
         let mut variants = FxHashMap::default();
         variants.insert(tag, Some(Box::new(payload_ty)));
         self.structural_variant_calls.insert(id);
@@ -5165,7 +5173,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// A demand reaches a place and the places it projects from; any other
+    /// expression, and every operand inside it, is read as a value.
     fn check_expr(&mut self, expr: &Expr) -> InferTy {
+        if is_place(expr) {
+            return self.check_expr_at_demand(expr);
+        }
+        let outer = std::mem::replace(&mut self.demand, PlaceDemand::Value);
+        let ty = self.check_expr_at_demand(expr);
+        self.demand = outer;
+        ty
+    }
+
+    fn check_expr_at_demand(&mut self, expr: &Expr) -> InferTy {
         match expr {
             // `&place` / `&mut place`: a reference to the place's storage.
             Expr::Borrow {
@@ -6001,7 +6021,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let else_ = self.check_else_branch(eb);
                         self.join_branches(&then, &else_, *span)
                     }
-                    None => then.ty,
+                    None => TyTerm::Unit,
                 };
                 self.record_ret(*id, result_ty)
             }
@@ -6047,7 +6067,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let else_ = self.check_else_branch(eb);
                         self.join_branches(&then, &else_, *span)
                     }
-                    None => then.ty,
+                    None => TyTerm::Unit,
                 };
                 self.record_ret(*id, result_ty)
             }
@@ -6248,7 +6268,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
         if let Some(ns) = name.namespace {
-            return self.check_structural_variant(call_id, ns, name.name, args, call_span);
+            return self.check_structural_variant(
+                call_id,
+                ns,
+                name.name,
+                first.as_ref(),
+                args,
+                call_span,
+            );
         }
         let near = self.near_functions(*name);
         self.error(
