@@ -2392,7 +2392,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         enum_name: Option<Astr>,
         wanted: Astr,
     ) -> DidYouMean {
-        let TyTerm::Enum { name, variants } = behind_a_reference(scrutinee_ty) else {
+        let TyTerm::Enum { name, variants, .. } = behind_a_reference(scrutinee_ty) else {
             return DidYouMean::default();
         };
         let qualified = |tag: &Astr| match enum_name {
@@ -4537,6 +4537,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.solver.construct(TyTerm::Enum {
             name: enum_name,
             variants,
+            home: crate::ty::Home::NONE,
         })
     }
 
@@ -5937,6 +5938,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ty = self.solver.construct(TyTerm::Enum {
                     name: *enum_name,
                     variants,
+                    home: crate::ty::Home::NONE,
                 });
                 self.record_ret(*id, ty)
             }
@@ -6118,7 +6120,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Pattern::Variant { tag, payload, .. } = pattern else {
             return source_ty.clone();
         };
-        let TyTerm::Enum { name, variants } = self.solver.shallow_resolve_ty(source_ty) else {
+        let TyTerm::Enum { name, variants, .. } = self.solver.shallow_resolve_ty(source_ty) else {
             return source_ty.clone();
         };
         if variants.contains_key(tag) {
@@ -6710,6 +6712,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let enum_ty = TyTerm::Enum {
                     name: *enum_name,
                     variants,
+                    home: crate::ty::Home::NONE,
                 };
                 // Unify against the original (unresolved) source_ty so that
                 // find_leaf_var can trace the Var chain and rebind the merged type.

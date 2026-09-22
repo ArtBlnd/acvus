@@ -19,7 +19,7 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, ErrorToken, FieldSet,
-    IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm, LenVarId,
+    Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm, LenVarId,
     Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
     RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
     could_match_pattern, matches_pattern,
@@ -279,6 +279,7 @@ impl Terms {
     }
 
     fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy, growth: Growth) -> Result<(), Cyclic> {
+        let ty = self.stored(ty);
         let root = self.find_ty_root(id);
         if self.occurs_in(root, &ty) {
             return Err(Cyclic);
@@ -302,32 +303,74 @@ impl Terms {
     }
 
     /// The root variable a type is a name of, if it is a variable.
+    /// The variable a type is a name of: a variable, or a structural term
+    /// the solver resolved from one.
     fn root_var(&self, ty: &InferTy) -> Option<TypeBoundId> {
         match ty {
             TyTerm::Var(id) => Some(self.find_ty_root(*id)),
-            _ => None,
+            other => other.home().map(|home| self.find_ty_root(home)),
         }
     }
 
+    /// `ty` with every term that carries a home replaced by that home's
+    /// variable, so a resolved copy is read as what it copies and never as
+    /// the snapshot it holds.
+    fn unstale(&self, ty: &InferTy) -> InferTy {
+        let mut ty = ty.clone();
+        self.unstale_in_place(&mut ty);
+        ty
+    }
+
+    fn unstale_in_place(&self, ty: &mut InferTy) {
+        if let Some(home) = ty.home() {
+            *ty = TyTerm::Var(home);
+            return;
+        }
+        for child in ty.children_mut() {
+            self.unstale_in_place(child);
+        }
+    }
+
+    /// A term as a variable holds it: its own home is the variable it is
+    /// stored at, and every term below it that carries one is that home's
+    /// variable.
+    fn stored(&self, term: InferTy) -> InferTy {
+        let mut term = term;
+        term.set_home(Home::NONE);
+        for child in term.children_mut() {
+            self.unstale_in_place(child);
+        }
+        term
+    }
+
+    /// The term `root` is bound to, carrying `root` as its home.
+    fn bound_term(&self, root: TypeBoundId, term: InferTy) -> InferTy {
+        let mut term = term;
+        term.set_home(Home::of(root));
+        term
+    }
+
     fn shallow_resolve_ty(&self, ty: &InferTy) -> InferTy {
-        match ty {
-            TyTerm::Var(id) => {
-                let root = self.find_ty_root(*id);
-                match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved { ty: inner, .. } => self.shallow_resolve_ty(inner),
-                    _ => TyTerm::Var(root),
-                }
-            }
-            other => other.clone(),
+        let Some(root) = self.root_var(ty) else {
+            return ty.clone();
+        };
+        match &self.ty_bounds[root.0 as usize] {
+            TypeBound::Resolved { ty: inner, .. } => match inner {
+                TyTerm::Var(_) => self.shallow_resolve_ty(inner),
+                term => self.bound_term(root, term.clone()),
+            },
+            _ => TyTerm::Var(root),
         }
     }
 
     fn resolve_ty(&self, ty: &InferTy) -> InferTy {
-        ty.map(
+        self.unstale(ty).map(
             &mut |id: TypeBoundId| {
                 let root = self.find_ty_root(id);
                 match &self.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved { ty: inner, .. } => self.resolve_ty(inner),
+                    TypeBound::Resolved { ty: inner, .. } => {
+                        self.bound_term(root, self.resolve_ty(inner))
+                    }
                     _ => TyTerm::Var(root),
                 }
             },
@@ -906,10 +949,12 @@ impl Terms {
                 TyTerm::Enum {
                     name: na,
                     variants: va,
+                    ..
                 },
                 TyTerm::Enum {
                     name: nb,
                     variants: vb,
+                    ..
                 },
             ) => {
                 if na != nb {
@@ -947,6 +992,7 @@ impl Terms {
                     TyTerm::Enum {
                         name: *na,
                         variants: merged,
+                        home: crate::ty::Home::NONE,
                     },
                     kind,
                     mismatch,
@@ -1201,6 +1247,7 @@ impl Terms {
         union: InferTy,
         growth: Growth,
     ) -> Result<(), NoJoin> {
+        let union = self.stored(union);
         let (a, b) = (self.find_ty_root(a), self.find_ty_root(b));
         let bound = self.bound_of(a).meet(&self.bound_of(b)).ok_or(NoJoin)?;
         if a != b {
@@ -3547,7 +3594,7 @@ impl<'src> Solver<'src> {
     }
 
     fn freeze_ty_with(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
-        ty.try_map(
+        self.terms.unstale(ty).try_map(
             &mut |id: TypeBoundId| {
                 let root = self.terms.find_ty_root(id);
                 match &self.terms.ty_bounds[root.0 as usize] {
@@ -4304,12 +4351,13 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
                 .collect(),
             effect,
         },
-        TyTerm::Enum { name, variants } => TyTerm::Enum {
+        TyTerm::Enum { name, variants, .. } => TyTerm::Enum {
             name,
             variants: variants
                 .into_iter()
                 .map(|(k, v)| (k, v.map(|t| Box::new(uniform_slots(*t, registry)))))
                 .collect(),
+            home: crate::ty::Home::NONE,
         },
         TyTerm::Handle(inner) => TyTerm::Handle(Box::new(uniform_slots(*inner, registry))),
         leaf @ (TyTerm::Int(_)

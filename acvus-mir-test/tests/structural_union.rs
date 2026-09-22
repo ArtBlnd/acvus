@@ -42,6 +42,7 @@ fn shape(i: &Interner, variants: &[&str]) -> TyTerm<Poly> {
             .iter()
             .map(|v| (i.intern(v), Some(Box::new(TyTerm::I64))))
             .collect(),
+        home: acvus_mir::ty::Home::NONE,
     }
 }
 

@@ -2351,6 +2351,7 @@ fn generate_enum_ty_arg(
         ::acvus_extern::PolyTy::Enum {
             name: __i.intern(#name),
             variants: [#(#variant_tys),*].into_iter().collect(),
+            home: ::acvus_extern::Home::NONE,
         }
     };
     let erase = quote! {{

@@ -23,6 +23,7 @@ fn flag_and_outside_enum(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
                     (i.intern("A"), Some(Box::new(Ty::I64))),
                     (i.intern("B"), Some(Box::new(Ty::I64))),
                 ]),
+                home: acvus_mir::ty::Home::NONE,
             },
         ),
     ])

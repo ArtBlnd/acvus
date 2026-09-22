@@ -719,10 +719,11 @@ where
                         .all(|(a, b)| arg_matches(a, b, seen, unknowns, reprs))
             }
             (
-                TyTerm::Enum { name, variants },
+                TyTerm::Enum { name, variants, .. },
                 TyTerm::Enum {
                     name: pn,
                     variants: pv,
+                    ..
                 },
             ) => {
                 name == pn
@@ -990,10 +991,12 @@ impl PatternSubst {
                 TyTerm::Enum {
                     name: na,
                     variants: va,
+                    ..
                 },
                 TyTerm::Enum {
                     name: nb,
                     variants: vb,
+                    ..
                 },
             ) => {
                 na == nb
@@ -2067,7 +2070,7 @@ where
                 }
                 Ok(())
             }
-            TyTerm::Enum { name, variants } => {
+            TyTerm::Enum { name, variants, .. } => {
                 write!(f, "{}{{", self.interner.resolve(*name))?;
                 let mut sorted: Vec<_> = variants.iter().collect();
                 sorted.sort_by_key(|(tag, _)| self.interner.resolve(**tag).to_string());
@@ -2593,6 +2596,72 @@ where
 {
     set: FieldSet,
     fields: FxHashMap<Astr, TyTerm<V>>,
+    home: Home<V>,
+}
+
+/// The variable a structural term was read from, when the solver resolved
+/// it from one. A term that carries it is that variable wherever it is
+/// joined again: a resolved copy keeps the identity of what it copies
+/// (RFC-0042 rule 1). Two types are equal whatever their homes, since a
+/// home is an identity and not part of the type.
+pub struct Home<V>(Option<V::TyVar>)
+where
+    V: Phase;
+
+impl<V> Clone for Home<V>
+where
+    V: Phase,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V> Copy for Home<V> where V: Phase {}
+
+impl<V> Home<V>
+where
+    V: Phase,
+{
+    pub const NONE: Self = Home(None);
+
+    pub fn of(var: V::TyVar) -> Self {
+        Home(Some(var))
+    }
+
+    pub fn var(self) -> Option<V::TyVar> {
+        self.0
+    }
+}
+
+impl<V> fmt::Debug for Home<V>
+where
+    V: Phase,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Some(var) => write!(f, "@{var:?}"),
+            None => write!(f, "@-"),
+        }
+    }
+}
+
+impl<V> PartialEq for Home<V>
+where
+    V: Phase,
+{
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<V> Eq for Home<V> where V: Phase {}
+
+impl<V> std::hash::Hash for Home<V>
+where
+    V: Phase,
+{
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
 /// The join of two object types (RFC-0042).
@@ -2651,6 +2720,7 @@ where
         Self {
             set: FieldSet::Declared(name),
             fields,
+            home: Home::NONE,
         }
     }
 
@@ -2659,6 +2729,7 @@ where
         Self {
             set: FieldSet::Written,
             fields,
+            home: Home::NONE,
         }
     }
 
@@ -2667,6 +2738,7 @@ where
         Self {
             set: FieldSet::AtLeast,
             fields,
+            home: Home::NONE,
         }
     }
 
@@ -2690,7 +2762,16 @@ where
         ObjectTy {
             set: self.set,
             fields,
+            home: Home::NONE,
         }
+    }
+
+    pub fn home(&self) -> Home<V> {
+        self.home
+    }
+
+    pub fn with_home(self, home: Home<V>) -> Self {
+        Self { home, ..self }
     }
 
     /// A field of this object the other lacks. The one that is interned
@@ -2718,7 +2799,11 @@ where
             return ObjectMeet::TooWide { fields };
         }
         ObjectMeet::Joined {
-            ty: ObjectTy { set, fields },
+            ty: ObjectTy {
+                set,
+                fields,
+                home: Home::NONE,
+            },
         }
     }
 
@@ -2844,6 +2929,7 @@ pub enum TyTerm<V: Phase> {
     Enum {
         name: Astr,
         variants: FxHashMap<Astr, Option<Box<TyTerm<V>>>>,
+        home: Home<V>,
     },
     /// `[T]`: the run of elements a container lends. Unsized — no value
     /// has this type and no storage holds one; it appears only under a
@@ -2980,6 +3066,66 @@ impl<V: Phase> TyTerm<V> {
         }
     }
 
+    pub fn children_mut(&mut self) -> Vec<&mut TyTerm<V>> {
+        match self {
+            TyTerm::Int(_)
+            | TyTerm::Float
+            | TyTerm::Char
+            | TyTerm::String
+            | TyTerm::Bool
+            | TyTerm::Unit
+            | TyTerm::Never
+            | TyTerm::Order
+            | TyTerm::Str
+            | TyTerm::Error(_)
+            | TyTerm::Var(_) => Vec::new(),
+            TyTerm::Array(inner, _)
+            | TyTerm::Slice(inner)
+            | TyTerm::Handle(inner)
+            | TyTerm::Option(inner) => vec![&mut **inner],
+            TyTerm::Ref(_, inner) => vec![&mut inner.ty],
+            TyTerm::Result(ok, err) => vec![&mut **ok, &mut **err],
+            TyTerm::Tuple(elems) => elems.iter_mut().collect(),
+            TyTerm::Object(object) => object.fields.values_mut().collect(),
+            TyTerm::Enum { variants, .. } => variants
+                .values_mut()
+                .flatten()
+                .map(|payload| &mut **payload)
+                .collect(),
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                ..
+            } => params
+                .iter_mut()
+                .map(|param| &mut param.ty)
+                .chain(std::iter::once(&mut **ret))
+                .chain(captures.iter_mut())
+                .collect(),
+            TyTerm::UserDefined { type_args, .. } => {
+                type_args.iter_mut().map(|arg| &mut arg.ty).collect()
+            }
+        }
+    }
+
+    /// The variable a structural term was resolved from.
+    pub fn home(&self) -> Option<V::TyVar> {
+        match self {
+            TyTerm::Object(object) => object.home.var(),
+            TyTerm::Enum { home, .. } => home.var(),
+            _ => None,
+        }
+    }
+
+    pub fn set_home(&mut self, to: Home<V>) {
+        match self {
+            TyTerm::Object(object) => object.home = to,
+            TyTerm::Enum { home, .. } => *home = to,
+            _ => {}
+        }
+    }
+
     pub fn mentions_error(&self) -> bool {
         matches!(self, TyTerm::Error(_)) || self.children().into_iter().any(TyTerm::mentions_error)
     }
@@ -3112,10 +3258,12 @@ impl<V: Phase> TyTerm<V> {
                 TyTerm::Enum {
                     name: a_name,
                     variants: a,
+                    ..
                 },
                 TyTerm::Enum {
                     name: b_name,
                     variants: b,
+                    ..
                 },
             ) => {
                 a_name == b_name
@@ -3288,7 +3436,7 @@ impl<V: Phase> TyTerm<V> {
                 effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
                 identity_args: identity_args.iter().map(|i| i.map(on_identity)).collect(),
             },
-            TyTerm::Enum { name, variants } => TyTerm::Enum {
+            TyTerm::Enum { name, variants, .. } => TyTerm::Enum {
                 name: *name,
                 variants: variants
                     .iter()
@@ -3301,6 +3449,7 @@ impl<V: Phase> TyTerm<V> {
                         )
                     })
                     .collect(),
+                home: Home::NONE,
             },
             TyTerm::Handle(inner) => TyTerm::Handle(Box::new(inner.map(
                 on_var,
@@ -3415,7 +3564,7 @@ impl<V: Phase> TyTerm<V> {
                     .map(|i| i.try_map(on_identity))
                     .collect::<Result<_, _>>()?,
             }),
-            TyTerm::Enum { name, variants } => {
+            TyTerm::Enum { name, variants, .. } => {
                 let mapped: Result<FxHashMap<_, _>, E> = variants
                     .iter()
                     .map(|(tag, payload)| {
@@ -3435,6 +3584,7 @@ impl<V: Phase> TyTerm<V> {
                 Ok(TyTerm::Enum {
                     name: *name,
                     variants: mapped?,
+                    home: Home::NONE,
                 })
             }
             TyTerm::Handle(inner) => Ok(TyTerm::Handle(Box::new(inner.try_map(
@@ -3548,12 +3698,13 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                     .map(|_| builder.fresh_identity_var())
                     .collect(),
             },
-            Ty::Enum { name, variants } => TyTerm::Enum {
+            Ty::Enum { name, variants, .. } => TyTerm::Enum {
                 name: *name,
                 variants: variants
                     .iter()
                     .map(|(k, v)| (*k, v.as_ref().map(|t| Box::new(go(t, builder)))))
                     .collect(),
+                home: Home::NONE,
             },
             Ty::Handle(inner) => TyTerm::Handle(Box::new(go(inner, builder))),
             Ty::Ref(m, inner) => TyTerm::Ref(*m, Box::new(arg(inner, builder))),
@@ -3915,6 +4066,29 @@ mod tests {
             ),
             Err("two Flags Other".to_string())
         );
+    }
+
+    #[test]
+    fn a_resolved_copy_of_a_construction_is_the_construction() {
+        let mut sources = Sources::new();
+        let registry = TypeRegistry::new();
+        let signatures = FxHashMap::default();
+        let mut s = Solver::new(&mut sources, &registry, &signatures);
+        let i = Interner::new();
+        let built = s.construct(TyTerm::Object(ObjectTy::written(FxHashMap::from_iter([(
+            i.intern("a"),
+            TyTerm::I64,
+        )]))));
+        let copy = s.resolve_ty(&built);
+        let store = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter([(
+            i.intern("b"),
+            TyTerm::I64,
+        )])));
+        assert!(s.unify(&copy, &store).is_ok(), "the copy grows as the construction");
+        let TyTerm::Object(grown) = s.resolve_ty(&built) else {
+            panic!("an object")
+        };
+        assert!(grown.contains_key(&i.intern("b")), "{grown:?}");
     }
 
     #[test]

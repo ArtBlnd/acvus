@@ -1844,6 +1844,7 @@ fn structural_enum_payload_type_propagates_through_context() {
             Ty::Enum {
                 name: i.intern("R"),
                 variants,
+                home: acvus_mir::ty::Home::NONE,
             },
         )],
     )

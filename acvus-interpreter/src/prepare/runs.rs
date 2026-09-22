@@ -882,6 +882,7 @@ mod tests {
                 .iter()
                 .map(|(name, ty)| (i.intern(name), ty.clone().map(Box::new)))
                 .collect(),
+            home: acvus_mir::ty::Home::NONE,
         }
     }
 
