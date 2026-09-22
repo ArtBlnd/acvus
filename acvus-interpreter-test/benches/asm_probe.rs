@@ -1,8 +1,3 @@
-//! History: when a successor became a (box, fn pointer) pair, reading the
-//! method symbol alone left half the operations unchecked — `T::run`'s only
-//! caller is then the trampoline the pointer names, and LLVM folds it in.
-//! `run_type` is what reads both.
-//!
 //! Every `impl Op`'s `run` ends in the tail call to its successor, and a
 //! region whose body can escape ends there and in a `ret` besides.
 //!
@@ -305,22 +300,12 @@ fn disassembly() -> String {
     String::from_utf8(out.stdout).expect("objdump's disassembly is UTF-8")
 }
 
-/// The `T` a symbol holds the `Op::run` of, in its two forms: the method
-/// itself, and the `erased::<T>` trampoline a `Next` reaches it through,
-/// which is where the body lands once the address has been taken. `None`
-/// where the symbol is neither.
-fn run_type(symbol: &str) -> Option<&str> {
-    if let Some(ty) = symbol.strip_suffix(" as acvus_interpreter::code::Op>::run") {
-        return Some(ty.trim_start_matches('<'));
-    }
-    symbol
-        .strip_prefix("acvus_interpreter::code::erased::<")?
-        .strip_suffix('>')
-}
-
-/// The `module::Type` such a symbol belongs to.
+/// The `module::Type` a `<T as acvus_interpreter::code::Op>::run` symbol
+/// belongs to; `None` where the symbol is not one.
 fn op_of(symbol: &str) -> Option<String> {
-    let ty = run_type(symbol)?;
+    let ty = symbol
+        .strip_suffix(" as acvus_interpreter::code::Op>::run")?
+        .trim_start_matches('<');
     let head = match ty.find('<') {
         Some(angle) => &ty[..angle],
         None => ty,

@@ -10,11 +10,11 @@ use acvus_extern::{FieldAt, Owned, Release};
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::code::{Exit, Marked, Next, Op, Step, successor};
+use crate::code::{Exit, Marked, Op, Step, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::ops::variant::scrutinee;
-use crate::regs::{Cell, Regs};
+use crate::regs::Regs;
 use crate::value::{Kind, Place, PlaceMut, Value};
 
 // -- Segments ---------------------------------------------------------
@@ -380,18 +380,18 @@ fn write_base<const THROUGH: bool>(slot: &mut Value) -> &mut Value {
 
 pub struct MakeRef<const THROUGH: bool> {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool> Op for MakeRef<THROUGH> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let reference = Value::reference(scrutinee::<THROUGH>(frame.peek(self.slots.src.at)));
-        frame.put(self.slots.dst.at, reference);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src.at)));
+        regs.put(self.slots.dst.at, reference);
+        self.next.run(m, r0)
     }
 }
 
@@ -401,7 +401,7 @@ where
 {
     pub slots: Unary,
     pub step: S,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<S, const THROUGH: bool> Op for MakeRefStep<S, THROUGH>
@@ -410,30 +410,30 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let base = scrutinee::<THROUGH>(frame.peek(self.slots.src.at));
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         let reference = reference_to(self.step.at(base));
-        frame.put(self.slots.dst.at, reference);
-        self.next.run(m, regs, r0)
+        regs.put(self.slots.dst.at, reference);
+        self.next.run(m, r0)
     }
 }
 
 pub struct MakeRefPath<const THROUGH: bool> {
     pub slots: Unary,
     pub steps: Box<[Step]>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let base = scrutinee::<THROUGH>(frame.peek(self.slots.src.at));
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         let reference = reference_to(walk(base, &self.steps));
-        frame.put(self.slots.dst.at, reference);
-        self.next.run(m, regs, r0)
+        regs.put(self.slots.dst.at, reference);
+        self.next.run(m, r0)
     }
 }
 
@@ -443,18 +443,18 @@ impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
 /// operation under the name the clone already had.
 pub struct TakeVar<const LARGE: bool> {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for TakeVar<LARGE> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = frame.take::<LARGE>(self.slots.src);
-        frame.define::<LARGE>(self.slots.dst, value);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.src);
+        regs.define::<LARGE>(self.slots.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -462,18 +462,18 @@ impl<const LARGE: bool> Op for TakeVar<LARGE> {
 /// nothing. Its `String` form is `string::CloneString<true>`.
 pub struct TakeThrough {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for TakeThrough {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = deref_word::<false>(frame.peek(self.slots.src.at));
-        frame.put(self.slots.dst.at, value);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = deref_word::<false>(regs.peek(self.slots.src.at));
+        regs.put(self.slots.dst.at, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -485,7 +485,7 @@ where
     pub slots: Unary,
     pub step: S,
     pub mode: PhantomData<M>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<S, M> Op for ReadStep<S, M>
@@ -495,11 +495,11 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = M::at(frame.peek_mut(self.slots.src.at), &self.step);
-        M::define(frame, self.slots.dst, value);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = M::at(regs.peek_mut(self.slots.src.at), &self.step);
+        M::define(regs, self.slots.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -510,7 +510,7 @@ where
     pub slots: Unary,
     pub steps: Box<[Step]>,
     pub mode: PhantomData<M>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<M> Op for ReadPath<M>
@@ -519,11 +519,11 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = M::walked(frame.peek_mut(self.slots.src.at), &self.steps);
-        M::define(frame, self.slots.dst, value);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = M::walked(regs.peek_mut(self.slots.src.at), &self.steps);
+        M::define(regs, self.slots.dst, value);
+        self.next.run(m, r0)
     }
 }
 
@@ -537,38 +537,38 @@ pub struct Write {
 
 pub struct AssignVar<const LARGE: bool> {
     pub slots: Write,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for AssignVar<LARGE> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = frame.take::<LARGE>(self.slots.value);
-        frame.assign::<LARGE>(self.slots.target, value);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.value);
+        regs.assign::<LARGE>(self.slots.target, value);
+        self.next.run(m, r0)
     }
 }
 
 pub struct AssignThrough<const LARGE: bool> {
     pub slots: Write,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for AssignThrough<LARGE> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = frame.take::<LARGE>(self.slots.value);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.value);
         overwrite::<LARGE>(
-            write_base::<true>(frame.peek_mut(self.slots.target.at)),
+            write_base::<true>(regs.peek_mut(self.slots.target.at)),
             value,
         );
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -578,7 +578,7 @@ where
 {
     pub slots: Write,
     pub step: S,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<S, const THROUGH: bool, const LARGE: bool> Op for AssignStep<S, THROUGH, LARGE>
@@ -587,30 +587,30 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = frame.take::<LARGE>(self.slots.value);
-        let base = write_base::<THROUGH>(frame.peek_mut(self.slots.target.at));
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.value);
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
         overwrite::<LARGE>(place_mut(self.step.at_mut(base)), value);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
 pub struct AssignPath<const THROUGH: bool, const LARGE: bool> {
     pub slots: Write,
     pub steps: Box<[Step]>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let value = frame.take::<LARGE>(self.slots.value);
-        let base = write_base::<THROUGH>(frame.peek_mut(self.slots.target.at));
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let value = regs.take::<LARGE>(self.slots.value);
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
         overwrite::<LARGE>(place_mut(walk_mut(base, &self.steps)), value);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -631,7 +631,7 @@ where
 {
     pub slots: Update,
     pub step: S,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<S, const LARGE: bool> Op for SetStep<S, LARGE>
@@ -640,33 +640,33 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let mut object = frame.take::<true>(self.slots.object);
-        let value = frame.take::<LARGE>(self.slots.value);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let mut object = regs.take::<true>(self.slots.object);
+        let value = regs.take::<LARGE>(self.slots.value);
         overwrite::<LARGE>(place_mut(self.step.at_mut(&mut object)), value);
-        frame.define::<true>(self.slots.dst, object);
-        self.next.run(m, regs, r0)
+        regs.define::<true>(self.slots.dst, object);
+        self.next.run(m, r0)
     }
 }
 
 pub struct SetPath<const LARGE: bool> {
     pub slots: Update,
     pub steps: Box<[Step]>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for SetPath<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let mut object = frame.take::<true>(self.slots.object);
-        let value = frame.take::<LARGE>(self.slots.value);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let mut object = regs.take::<true>(self.slots.object);
+        let value = regs.take::<LARGE>(self.slots.value);
         let at = place_mut(walk_mut(&mut object, &self.steps));
         overwrite::<LARGE>(at, value);
-        frame.define::<true>(self.slots.dst, object);
-        self.next.run(m, regs, r0)
+        regs.define::<true>(self.slots.dst, object);
+        self.next.run(m, r0)
     }
 }
 
@@ -675,13 +675,13 @@ impl<const LARGE: bool> Op for SetPath<LARGE> {
 pub struct Fetch<const LARGE: bool> {
     pub dst: Marked,
     pub key: Box<str>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for Fetch<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let key = &self.key;
         let rt = m.ctx.rt;
         let held = rt
@@ -689,22 +689,22 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
             .take(rt, key)
             .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
         m.regs().define::<LARGE>(self.dst, held.into_value());
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
 pub struct Commit<const LARGE: bool> {
     pub src: Marked,
     pub key: Box<str>,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for Commit<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
         m.ctx.rt.page.set(&self.key, Owned::from_value(value));
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }

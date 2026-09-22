@@ -22,12 +22,12 @@ use acvus_extern::{Handler, InRegisters, One, OneRegister, OptionOf, Owned};
 use crate::runtime::AcvusRuntime;
 
 use crate::code::{
-    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Next, Off, Op, RETURN, SlicePair, successor,
+    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Off, Op, RETURN, SlicePair, successor,
 };
 use crate::machine::Machine;
 use crate::ops::arith::Int;
 use crate::ops::place::Place;
-use crate::regs::{Cell, Regs, set_word_at, word_at};
+use crate::regs::Regs;
 use crate::value::Value;
 
 /// One move of a parallel move, as an operation of the block it belongs to
@@ -42,32 +42,32 @@ use crate::value::Value;
 pub struct Mov<const LARGE: bool, const WORD: bool> {
     pub dst: Marked,
     pub src: Marked,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         const {
             assert!(
                 !(LARGE && WORD),
                 "a register whose kind the frame opened holds no Large"
             )
         }
-        let frame = m.regs();
+        let regs = m.regs();
         match WORD {
             true => {
-                let bits = frame.take_word(self.src);
-                frame.set_word(self.dst.at, bits);
+                let bits = regs.take_word(self.src);
+                regs.set_word(self.dst.at, bits);
             }
             false => {
-                let value = frame.take::<LARGE>(self.src);
-                frame.define::<LARGE>(self.dst, value);
+                let value = regs.take::<LARGE>(self.src);
+                regs.define::<LARGE>(self.dst, value);
             }
         }
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -80,20 +80,20 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
 pub struct MovWide {
     pub dst: SlicePair,
     pub src: SlicePair,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MovWide {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let ptr = frame.read(self.src.ptr);
-        let len = frame.read(self.src.len);
-        frame.put(self.dst.ptr, ptr);
-        frame.put(self.dst.len, len);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let ptr = regs.read(self.src.ptr);
+        let len = regs.read(self.src.len);
+        regs.put(self.dst.ptr, ptr);
+        regs.put(self.dst.len, len);
+        self.next.run(m, r0)
     }
 }
 
@@ -104,7 +104,7 @@ pub struct Goto {
 
 impl Op for Goto {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         self.target.into()
     }
 }
@@ -127,11 +127,8 @@ where
     C: Place,
 {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        m.debug_base(regs);
-        // SAFETY: `regs` is this frame's base, and `prepare::check_assignment`
-        // proves the condition is a register this frame has.
-        match unsafe { C::read(regs, self.cond, r0) } != 0 {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        match C::read(m.regs(), self.cond, r0) != 0 {
             true => self.on_true.into(),
             false => self.on_false.into(),
         }
@@ -150,7 +147,7 @@ pub struct Return<const WORD: bool, const PAIR: bool> {
 
 impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         const {
             assert!(
                 !(WORD && PAIR),
@@ -160,16 +157,16 @@ impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
         match PAIR {
             true => {
                 let pair = SlicePair::at(self.slot.at);
-                let frame = m.regs();
-                let (ptr, len) = (frame.word(pair.ptr), frame.word(pair.len));
+                let regs = m.regs();
+                let (ptr, len) = (regs.word(pair.ptr), regs.word(pair.len));
                 m.finish_pair(ptr, len);
             }
             false => {
                 let value = match WORD {
                     true => {
-                        let frame = m.regs();
-                        let kind = frame.peek(self.slot.at).kind();
-                        Value::inline(kind, frame.take_word(self.slot))
+                        let regs = m.regs();
+                        let kind = regs.peek(self.slot.at).kind();
+                        Value::inline(kind, regs.take_word(self.slot))
                     }
                     false => m.regs().take::<true>(self.slot),
                 };
@@ -191,7 +188,7 @@ pub struct Yield;
 
 impl Op for Yield {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, r0: u64) -> Exit {
         r0
     }
 }
@@ -200,7 +197,7 @@ pub struct Fall;
 
 impl Op for Fall {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         FALL
     }
 }
@@ -209,7 +206,7 @@ pub struct Break;
 
 impl Op for Break {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         LEAVE
     }
 }
@@ -218,7 +215,7 @@ pub struct Continue;
 
 impl Op for Continue {
     #[inline]
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         AGAIN
     }
 }
@@ -286,8 +283,8 @@ where
     C: Place,
 {
     pub cond: C::At,
-    pub arm: Next,
-    pub next: Next,
+    pub arm: Box<dyn Op>,
+    pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> C>,
 }
 
@@ -298,12 +295,10 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        m.debug_base(regs);
-        // SAFETY: as `JumpIf`'s.
-        match (unsafe { C::read(regs, self.cond, r0) } != 0) == ARM_ON {
-            true => self.arm.run(m, regs, r0),
-            false => self.next.run(m, regs, r0),
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        match (C::read(m.regs(), self.cond, r0) != 0) == ARM_ON {
+            true => self.arm.run(m, r0),
+            false => self.next.run(m, r0),
         }
     }
 
@@ -311,12 +306,12 @@ where
     fn owns(&self) -> Vec<OwnedOps<'_>> {
         vec![OwnedOps {
             part: "arm",
-            head: self.arm.op(),
+            head: self.arm.as_ref(),
         }]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.arm]
     }
 }
@@ -343,10 +338,10 @@ where
     C: Place,
     E: Ending,
 {
-    pub head: Next,
+    pub head: Box<dyn Op>,
     pub cond: C::At,
-    pub body: Next,
-    pub next: Next,
+    pub body: Box<dyn Op>,
+    pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> (C, E)>,
 }
 
@@ -358,22 +353,19 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        m.debug_base(regs);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         loop {
-            let word = self.head.run(m, regs, r0);
-            // SAFETY: as `JumpIf`'s. The head runs in this same frame, so the
-            // base it was handed is still this frame's.
-            if unsafe { C::read(regs, self.cond, word) } == 0 {
+            let word = self.head.run(m, r0);
+            if C::read(m.regs(), self.cond, word) == 0 {
                 break;
             }
-            match handed::<E>(self.body.run(m, regs, r0)) {
+            match handed::<E>(self.body.run(m, r0)) {
                 Handed::Iterate => {}
                 Handed::Leave => break,
                 Handed::Over(word) => return word,
             }
         }
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -381,17 +373,17 @@ where
         vec![
             OwnedOps {
                 part: "head",
-                head: self.head.op(),
+                head: self.head.as_ref(),
             },
             OwnedOps {
                 part: "body",
-                head: self.body.op(),
+                head: self.body.as_ref(),
             },
         ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.head, &mut self.body]
     }
 }
@@ -410,40 +402,24 @@ pub trait Source: Send + Sync + 'static {
     /// the register it is called on.
     type Cursor: Copy;
 
-    /// # Safety
-    /// As `regs::word_at`, for every method here: `regs` is the base of the
-    /// frame the loop runs in, and the registers this source names are ones
-    /// that frame has.
-    unsafe fn start(&self, m: &mut Machine<'_>, regs: *mut Cell) -> Self::Cursor;
+    fn start(&self, m: &mut Machine<'_>) -> Self::Cursor;
 
     /// Whether there is a next element, and where there is, it is laid where
     /// the body reads it. One call per iteration.
-    ///
-    /// # Safety
-    /// As `start`.
-    unsafe fn probe(&self, m: &mut Machine<'_>, regs: *mut Cell, cursor: &mut Self::Cursor)
-    -> bool;
+    fn probe(&self, m: &mut Machine<'_>, cursor: &mut Self::Cursor) -> bool;
 
     /// After the body, before the next probe.
     fn step(cursor: &mut Self::Cursor);
 
     /// The joints form keeps the counter in `counter` between blocks, and
     /// measures again there what the one register does not hold.
-    ///
-    /// # Safety
-    /// As `start`.
-    unsafe fn load(&self, m: &mut Machine<'_>, regs: *mut Cell, counter: Off) -> Self::Cursor;
+    fn load(&self, m: &mut Machine<'_>, counter: Off) -> Self::Cursor;
 
-    /// # Safety
-    /// As `start`.
-    unsafe fn store(regs: *mut Cell, counter: Off, cursor: Self::Cursor);
+    fn store(regs: &mut Regs<'_>, counter: Off, cursor: Self::Cursor);
 
     /// The counter alone, for the edge that advances it and reads nothing
     /// else (`ForStep`).
-    ///
-    /// # Safety
-    /// As `start`.
-    unsafe fn advance(regs: *mut Cell, counter: Off);
+    fn advance(regs: &mut Regs<'_>, counter: Off);
 }
 
 /// A counted source's cursor.
@@ -490,8 +466,7 @@ impl Source for Slice {
     type Cursor = Counted<u64>;
 
     #[inline(always)]
-    unsafe fn start(&self, m: &mut Machine<'_>, regs: *mut Cell) -> Counted<u64> {
-        m.debug_base(regs);
+    fn start(&self, m: &mut Machine<'_>) -> Counted<u64> {
         Counted {
             at: 0,
             bound: self.bound(m.regs()),
@@ -499,13 +474,7 @@ impl Source for Slice {
     }
 
     #[inline(always)]
-    unsafe fn probe(
-        &self,
-        m: &mut Machine<'_>,
-        regs: *mut Cell,
-        cursor: &mut Counted<u64>,
-    ) -> bool {
-        m.debug_base(regs);
+    fn probe(&self, m: &mut Machine<'_>, cursor: &mut Counted<u64>) -> bool {
         let holds = cursor.at < cursor.bound;
         if holds {
             self.lay(m.regs(), cursor.at);
@@ -519,25 +488,22 @@ impl Source for Slice {
     }
 
     #[inline(always)]
-    unsafe fn load(&self, m: &mut Machine<'_>, regs: *mut Cell, counter: Off) -> Counted<u64> {
-        m.debug_base(regs);
-        let frame = m.regs();
+    fn load(&self, m: &mut Machine<'_>, counter: Off) -> Counted<u64> {
+        let regs = m.regs();
         Counted {
-            at: frame.word(counter),
-            bound: self.bound(frame),
+            at: regs.word(counter),
+            bound: self.bound(regs),
         }
     }
 
     #[inline(always)]
-    unsafe fn store(regs: *mut Cell, counter: Off, cursor: Counted<u64>) {
-        // SAFETY: the trait's contract.
-        unsafe { set_word_at(regs, counter, cursor.at) };
+    fn store(regs: &mut Regs<'_>, counter: Off, cursor: Counted<u64>) {
+        regs.set_word(counter, cursor.at);
     }
 
     #[inline(always)]
-    unsafe fn advance(regs: *mut Cell, counter: Off) {
-        // SAFETY: the trait's contract.
-        unsafe { set_word_at(regs, counter, Self::next(word_at(regs, counter))) };
+    fn advance(regs: &mut Regs<'_>, counter: Off) {
+        regs.set_word(counter, Self::next(regs.word(counter)));
     }
 }
 
@@ -579,8 +545,7 @@ impl<const LARGE: bool, const WORD: bool> Source for Array<LARGE, WORD> {
     type Cursor = Counted<u64>;
 
     #[inline(always)]
-    unsafe fn start(&self, m: &mut Machine<'_>, regs: *mut Cell) -> Counted<u64> {
-        m.debug_base(regs);
+    fn start(&self, m: &mut Machine<'_>) -> Counted<u64> {
         Counted {
             at: 0,
             bound: self.bound(m.regs()),
@@ -588,13 +553,7 @@ impl<const LARGE: bool, const WORD: bool> Source for Array<LARGE, WORD> {
     }
 
     #[inline(always)]
-    unsafe fn probe(
-        &self,
-        m: &mut Machine<'_>,
-        regs: *mut Cell,
-        cursor: &mut Counted<u64>,
-    ) -> bool {
-        m.debug_base(regs);
+    fn probe(&self, m: &mut Machine<'_>, cursor: &mut Counted<u64>) -> bool {
         let holds = cursor.at < cursor.bound;
         if holds {
             self.lay(m.regs(), cursor.at);
@@ -608,25 +567,22 @@ impl<const LARGE: bool, const WORD: bool> Source for Array<LARGE, WORD> {
     }
 
     #[inline(always)]
-    unsafe fn load(&self, m: &mut Machine<'_>, regs: *mut Cell, counter: Off) -> Counted<u64> {
-        m.debug_base(regs);
-        let frame = m.regs();
+    fn load(&self, m: &mut Machine<'_>, counter: Off) -> Counted<u64> {
+        let regs = m.regs();
         Counted {
-            at: frame.word(counter),
-            bound: self.bound(frame),
+            at: regs.word(counter),
+            bound: self.bound(regs),
         }
     }
 
     #[inline(always)]
-    unsafe fn store(regs: *mut Cell, counter: Off, cursor: Counted<u64>) {
-        // SAFETY: the trait's contract.
-        unsafe { set_word_at(regs, counter, cursor.at) };
+    fn store(regs: &mut Regs<'_>, counter: Off, cursor: Counted<u64>) {
+        regs.set_word(counter, cursor.at);
     }
 
     #[inline(always)]
-    unsafe fn advance(regs: *mut Cell, counter: Off) {
-        // SAFETY: the trait's contract.
-        unsafe { set_word_at(regs, counter, Self::next(word_at(regs, counter))) };
+    fn advance(regs: &mut Regs<'_>, counter: Off) {
+        regs.set_word(counter, Self::next(regs.word(counter)));
     }
 }
 
@@ -644,12 +600,9 @@ impl<T> Range<T>
 where
     T: Int,
 {
-    /// # Safety
-    /// As `Source`'s.
     #[inline(always)]
-    unsafe fn bound(&self, regs: *mut Cell) -> T {
-        // SAFETY: the caller's contract.
-        T::read(unsafe { word_at(regs, self.hi) })
+    fn bound(&self, regs: &Regs<'_>) -> T {
+        T::read(regs.word(self.hi))
     }
 
     #[inline(always)]
@@ -665,23 +618,19 @@ where
     type Cursor = Counted<T>;
 
     #[inline(always)]
-    unsafe fn start(&self, m: &mut Machine<'_>, regs: *mut Cell) -> Counted<T> {
-        m.debug_base(regs);
-        // SAFETY: the trait's contract.
-        unsafe {
-            Counted {
-                at: word_at(regs, self.from),
-                bound: self.bound(regs),
-            }
+    fn start(&self, m: &mut Machine<'_>) -> Counted<T> {
+        let regs = m.regs();
+        Counted {
+            at: regs.word(self.from),
+            bound: self.bound(regs),
         }
     }
 
     #[inline(always)]
-    unsafe fn probe(&self, _m: &mut Machine<'_>, regs: *mut Cell, cursor: &mut Counted<T>) -> bool {
+    fn probe(&self, m: &mut Machine<'_>, cursor: &mut Counted<T>) -> bool {
         let holds = T::read(cursor.at) < cursor.bound;
         if holds {
-            // SAFETY: the trait's contract.
-            unsafe { set_word_at(regs, self.elem, cursor.at) };
+            m.regs().set_word(self.elem, cursor.at);
         }
         holds
     }
@@ -692,27 +641,22 @@ where
     }
 
     #[inline(always)]
-    unsafe fn load(&self, m: &mut Machine<'_>, regs: *mut Cell, counter: Off) -> Counted<T> {
-        m.debug_base(regs);
-        // SAFETY: the trait's contract.
-        unsafe {
-            Counted {
-                at: word_at(regs, counter),
-                bound: self.bound(regs),
-            }
+    fn load(&self, m: &mut Machine<'_>, counter: Off) -> Counted<T> {
+        let regs = m.regs();
+        Counted {
+            at: regs.word(counter),
+            bound: self.bound(regs),
         }
     }
 
     #[inline(always)]
-    unsafe fn store(regs: *mut Cell, counter: Off, cursor: Counted<T>) {
-        // SAFETY: the trait's contract.
-        unsafe { set_word_at(regs, counter, cursor.at) };
+    fn store(regs: &mut Regs<'_>, counter: Off, cursor: Counted<T>) {
+        regs.set_word(counter, cursor.at);
     }
 
     #[inline(always)]
-    unsafe fn advance(regs: *mut Cell, counter: Off) {
-        // SAFETY: the trait's contract.
-        unsafe { set_word_at(regs, counter, Self::next(word_at(regs, counter))) };
+    fn advance(regs: &mut Regs<'_>, counter: Off) {
+        regs.set_word(counter, Self::next(regs.word(counter)));
     }
 }
 
@@ -750,10 +694,10 @@ where
     type Cursor = ();
 
     #[inline(always)]
-    unsafe fn start(&self, _m: &mut Machine<'_>, _regs: *mut Cell) -> () {}
+    fn start(&self, _m: &mut Machine<'_>) {}
 
     #[inline(always)]
-    unsafe fn probe(&self, m: &mut Machine<'_>, _regs: *mut Cell, _cursor: &mut ()) -> bool {
+    fn probe(&self, m: &mut Machine<'_>, _cursor: &mut ()) -> bool {
         let reference = Value::reference(m.regs().peek(self.it));
         let mut out = [Value::default()];
         // SAFETY: as `CallExtern1`'s — `prepare` read this handler's width
@@ -776,13 +720,13 @@ where
     fn step(_cursor: &mut ()) {}
 
     #[inline(always)]
-    unsafe fn load(&self, _m: &mut Machine<'_>, _regs: *mut Cell, _counter: Off) -> () {}
+    fn load(&self, _m: &mut Machine<'_>, _counter: Off) {}
 
     #[inline(always)]
-    unsafe fn store(_regs: *mut Cell, _counter: Off, _cursor: ()) {}
+    fn store(_regs: &mut Regs<'_>, _counter: Off, _cursor: ()) {}
 
     #[inline(always)]
-    unsafe fn advance(_regs: *mut Cell, _counter: Off) {}
+    fn advance(_regs: &mut Regs<'_>, _counter: Off) {}
 }
 
 /// The shape `prepare::recognize_for` finds in the IR (RFC-0057 Decision 3).
@@ -794,8 +738,8 @@ where
     E: Ending,
 {
     pub src: S,
-    pub body: Next,
-    pub next: Next,
+    pub body: Box<dyn Op>,
+    pub next: Box<dyn Op>,
     pub ends: PhantomData<fn() -> E>,
 }
 
@@ -807,31 +751,29 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        // SAFETY: `regs` is this frame's base, and `prepare` placed every
-        // register the source names in this frame.
-        let mut cursor = unsafe { self.src.start(m, regs) };
-        while unsafe { self.src.probe(m, regs, &mut cursor) } {
-            match handed::<E>(self.body.run(m, regs, r0)) {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let mut cursor = self.src.start(m);
+        while self.src.probe(m, &mut cursor) {
+            match handed::<E>(self.body.run(m, r0)) {
                 Handed::Iterate => {}
                 Handed::Leave => break,
                 Handed::Over(word) => return word,
             }
             S::step(&mut cursor);
         }
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns(&self) -> Vec<OwnedOps<'_>> {
         vec![OwnedOps {
             part: "body",
-            head: self.body.op(),
+            head: self.body.as_ref(),
         }]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.body]
     }
 }
@@ -842,7 +784,7 @@ where
 {
     pub src: S,
     pub counter: Off,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<S> Op for ForStart<S>
@@ -852,13 +794,10 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        // SAFETY: as `For`'s.
-        unsafe {
-            let first = self.src.start(m, regs);
-            S::store(regs, self.counter, first);
-        }
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let first = self.src.start(m);
+        S::store(m.regs(), self.counter, first);
+        self.next.run(m, r0)
     }
 }
 
@@ -889,10 +828,9 @@ where
     S: Source,
 {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _: u64) -> Exit {
-        // SAFETY: as `For`'s.
-        let mut cursor = unsafe { self.src.load(m, regs, self.counter) };
-        match unsafe { self.src.probe(m, regs, &mut cursor) } {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        let mut cursor = self.src.load(m, self.counter);
+        match self.src.probe(m, &mut cursor) {
             true => self.body.into(),
             false => self.exit.into(),
         }
@@ -908,7 +846,7 @@ where
     S: Source,
 {
     pub counter: Off,
-    pub next: Next,
+    pub next: Box<dyn Op>,
     pub of: PhantomData<fn() -> S>,
 }
 
@@ -919,11 +857,9 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        m.debug_base(regs);
-        // SAFETY: as `For`'s.
-        unsafe { S::advance(regs, self.counter) };
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        S::advance(m.regs(), self.counter);
+        self.next.run(m, r0)
     }
 }
 
@@ -940,9 +876,9 @@ where
     E: Ending,
 {
     pub cond: C::At,
-    pub on_true: Next,
-    pub on_false: Next,
-    pub next: Next,
+    pub on_true: Box<dyn Op>,
+    pub on_false: Box<dyn Op>,
+    pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> (C, E)>,
 }
 
@@ -954,16 +890,14 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        m.debug_base(regs);
-        // SAFETY: as `JumpIf`'s.
-        let arm = match unsafe { C::read(regs, self.cond, r0) } != 0 {
-            true => &self.on_true,
-            false => &self.on_false,
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let arm = match C::read(m.regs(), self.cond, r0) != 0 {
+            true => self.on_true.as_ref(),
+            false => self.on_false.as_ref(),
         };
-        let word = arm.run(m, regs, r0);
+        let word = arm.run(m, r0);
         match (E::ESCAPES, word) {
-            (true, FALL) | (false, _) => self.next.run(m, regs, word),
+            (true, FALL) | (false, _) => self.next.run(m, word),
             (true, verdict) => verdict,
         }
     }
@@ -973,17 +907,17 @@ where
         vec![
             OwnedOps {
                 part: "on_true",
-                head: self.on_true.op(),
+                head: self.on_true.as_ref(),
             },
             OwnedOps {
                 part: "on_false",
-                head: self.on_false.op(),
+                head: self.on_false.as_ref(),
             },
         ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.on_true, &mut self.on_false]
     }
 }
@@ -994,23 +928,23 @@ where
 pub struct Diverge;
 
 impl Op for Diverge {
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("a call typed `!` returned: its handler must panic")
     }
 }
 
 pub struct Merge {
     pub dst: Off,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Merge {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().put(self.dst, Value::unit());
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -1019,16 +953,16 @@ impl Op for Merge {
 /// being UB to read as a concrete value.
 pub struct Undef<const WORD: bool> {
     pub dst: Off,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for Undef<true> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().set_word(self.dst, 0);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -1036,27 +970,27 @@ impl Op for Undef<false> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().put(self.dst, Value::UNDEF);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
 /// The same for a slice's pair, whose two registers are word class.
 pub struct UndefWide {
     pub dst: SlicePair,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for UndefWide {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        frame.set_word(self.dst.ptr, 0);
-        frame.set_word(self.dst.len, 0);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        regs.set_word(self.dst.ptr, 0);
+        regs.set_word(self.dst.len, 0);
+        self.next.run(m, r0)
     }
 }
 
@@ -1070,17 +1004,17 @@ impl Op for UndefWide {
 /// lowering, and `Regs::take`'s debug assert is where it surfaces.
 pub struct DropValue {
     pub slot: Marked,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for DropValue {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         use acvus_extern::Release;
         m.regs().take::<true>(self.slot).release();
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -1089,7 +1023,7 @@ impl Op for DropValue {
 pub struct Poison;
 
 impl Op for Poison {
-    fn run(&self, _: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("reached poison instruction")
     }
 }

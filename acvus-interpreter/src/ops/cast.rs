@@ -14,12 +14,11 @@ use std::marker::PhantomData;
 
 use acvus_mir::ty::{IntTy, WordTy};
 
-use crate::code::{Exit, Next, Op, successor};
+use crate::code::{Exit, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::for_int_ty;
 use crate::ops::chain::Num;
 use crate::ops::place::{self, Place, UnaryAt, at_unary};
-use crate::regs::Cell;
 
 /// A numeric word read at its own type, at any other numeric type
 /// (RFC-0049).
@@ -72,7 +71,7 @@ where
 {
     src: S::At,
     dst: D::At,
-    next: Next,
+    next: Box<dyn Op>,
     at: PhantomData<fn() -> (F, T, S, D)>,
 }
 
@@ -83,7 +82,7 @@ where
     S: Place,
     D: Place,
 {
-    pub fn new(at: UnaryAt<S, D>, next: Next) -> Cast<F, T, S, D> {
+    pub fn new(at: UnaryAt<S, D>, next: Box<dyn Op>) -> Cast<F, T, S, D> {
         Cast {
             src: at.src,
             dst: at.dst,
@@ -103,19 +102,15 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        m.debug_base(regs);
-        // SAFETY: `regs` is this frame's base, and `prepare::check_assignment`
-        // proves the operand and the destination are registers this frame has.
-        let carried = unsafe {
-            let held: T = F::read(S::read(regs, self.src, r0)).as_num();
-            D::write(regs, self.dst, held.word())
-        };
-        self.next.run(m, regs, carried)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let held: T = F::read(S::read(regs, self.src, r0)).as_num();
+        let carried = D::write(regs, self.dst, held.word());
+        self.next.run(m, carried)
     }
 }
 
-fn into_ty<F, S, D>(into: WordTy, at: UnaryAt<S, D>, next: Next) -> Next
+fn into_ty<F, S, D>(into: WordTy, at: UnaryAt<S, D>, next: Box<dyn Op>) -> Box<dyn Op>
 where
     F: AsNum,
     S: Place,
@@ -123,13 +118,14 @@ where
 {
     match into {
         WordTy::Int(k) => {
-            for_int_ty!(k, |T| Next::of(Cast::<F, T, S, D>::new(at, next)))
+            for_int_ty!(k, |T| Box::new(Cast::<F, T, S, D>::new(at, next))
+                as Box<dyn Op>)
         }
-        WordTy::F64 => Next::of(Cast::<F, f64, S, D>::new(at, next)),
+        WordTy::F64 => Box::new(Cast::<F, f64, S, D>::new(at, next)),
     }
 }
 
-pub fn cast_op(conversion: Conversion, places: place::Unary, next: Next) -> Next {
+pub fn cast_op(conversion: Conversion, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
     let Conversion { from, into } = conversion;
     at_unary!(places, |at| match from {
         WordTy::Int(k) => for_int_ty!(k, |F| into_ty::<F, S, D>(into, at, next)),

@@ -22,7 +22,7 @@ use crate::code::{
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
-use crate::regs::{Cell, FrameState, Regs, RootFrame, Store};
+use crate::regs::{FrameState, Regs, RootFrame, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -99,7 +99,6 @@ impl<'c> Machine<'c> {
     /// `heads` array, and the two sentinels are what the compare catches.
     pub fn run(&mut self) -> Exit {
         let body = self.body;
-        let regs = self.regs.cells_ptr();
         let mut at: Exit = self.at.into();
         loop {
             debug_assert!(
@@ -110,7 +109,7 @@ impl<'c> Machine<'c> {
             // index of this array or to a sentinel, and a sentinel leaves the
             // loop at the compare below before it is used as an index.
             let head: &Box<dyn Op> = unsafe { body.heads.get_unchecked(at as usize) };
-            at = head.run(self, regs, 0);
+            at = head.run(self, 0);
             if at >= SENTINEL {
                 return at;
             }
@@ -124,19 +123,6 @@ impl<'c> Machine<'c> {
     #[inline(always)]
     pub fn regs(&mut self) -> &mut Regs<'c> {
         &mut self.regs
-    }
-
-    /// The base an operation was handed against this frame's own. Nothing on
-    /// the release path calls it: the check exists so that an operation which
-    /// moved the frame under a running chain fails here rather than reading a
-    /// stale base.
-    #[inline(always)]
-    pub fn debug_base(&mut self, regs: *mut Cell) {
-        debug_assert_eq!(
-            regs,
-            self.regs.cells_ptr(),
-            "an operation was handed a base that is not its frame's"
-        );
     }
 
     pub fn shared(&self) -> &Arc<InterpreterContext> {

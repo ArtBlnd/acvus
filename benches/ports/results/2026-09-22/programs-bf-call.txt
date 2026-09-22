@@ -1,0 +1,31 @@
+== programs bf call
+== Rust twin's value: 1161504
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:45:06 up 16:42,  1 user,  load average: 2.92, 2.94, 2.41
+acvus 7873.4
+rust 1278.5
+cpython 53811.6
+node 5204.8
+node-jitless 23628.0
+lua5.4 18637.0
+luajit 2636.0
+== rep 2
+ 19:45:06 up 16:42,  1 user,  load average: 2.92, 2.94, 2.41
+acvus 7841.9
+rust 1278.7
+cpython 52618.6
+node 5263.7
+node-jitless 24882.2
+lua5.4 18626.0
+luajit 2628.0
+== rep 3
+ 19:45:07 up 16:42,  1 user,  load average: 2.92, 2.94, 2.41
+acvus 7887.3
+rust 1278.2
+cpython 55589.9
+node 5193.2
+node-jitless 27544.1
+lua5.4 18647.0
+luajit 2635.0

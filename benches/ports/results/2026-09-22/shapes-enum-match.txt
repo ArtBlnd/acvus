@@ -1,0 +1,31 @@
+== shapes enum match
+== Rust twin's value: 500000000000
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:44:51 up 16:41,  1 user,  load average: 3.47, 3.04, 2.43
+acvus 6060.5
+rust 371.62
+cpython 61170.1
+node 1963.3
+node-jitless 23477.2
+lua5.4 69142.0
+luajit 1363.0
+== rep 2
+ 19:44:52 up 16:41,  1 user,  load average: 3.47, 3.04, 2.43
+acvus 6071.2
+rust 371.31
+cpython 60668.2
+node 1960.2
+node-jitless 22892.5
+lua5.4 69735.0
+luajit 1352.0
+== rep 3
+ 19:44:53 up 16:41,  1 user,  load average: 3.47, 3.04, 2.43
+acvus 6079.1
+rust 371.43
+cpython 60589.5
+node 1947.2
+node-jitless 22142.0
+lua5.4 70034.0
+luajit 1324.0

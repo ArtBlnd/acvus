@@ -1,0 +1,31 @@
+== accum map add | sum
+== Rust twin's value: 500000500000
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:44:28 up 16:41,  1 user,  load average: 4.52, 3.18, 2.46
+acvus 5090.5
+rust 372.99
+cpython 30430.4
+node 18679.2
+node-jitless 43848.6
+lua5.4 9988.0
+luajit 503.0
+== rep 2
+ 19:44:28 up 16:41,  1 user,  load average: 4.52, 3.18, 2.46
+acvus 5090.0
+rust 371.51
+cpython 30422.3
+node 18770.9
+node-jitless 43714.2
+lua5.4 9968.0
+luajit 509.0
+== rep 3
+ 19:44:29 up 16:41,  1 user,  load average: 4.52, 3.18, 2.46
+acvus 5093.3
+rust 372.69
+cpython 30367.2
+node 19087.2
+node-jitless 43965.2
+lua5.4 10004.0
+luajit 505.0

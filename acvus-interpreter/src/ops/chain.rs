@@ -10,14 +10,13 @@ use std::slice;
 use acvus_mir::ty::IntTy;
 
 use crate::code::{
-    Arith, ChainBounds, Code, Compare, Entry, Exit, ExprChain, Next, Op, Root, Shape, Where,
-    successor,
+    Arith, ChainBounds, Code, Compare, Entry, Exit, ExprChain, Op, Root, Shape, Where, successor,
 };
 use crate::machine::Machine;
 use crate::ops::arith::{Int, for_int_ty};
 use crate::ops::cast::AsNum;
 use crate::ops::place::Place;
-use crate::regs::{Cell, FrameState};
+use crate::regs::{FrameState, Regs};
 use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 
@@ -232,15 +231,11 @@ impl<'a> Operands<'a> {
         }
     }
 
-    /// The frame's registers, named by the base the operation was handed.
-    /// `len` bounds the debug assertion in `word` alone, so reading it back
-    /// out of the machine costs a release build nothing.
     #[inline(always)]
-    pub(crate) fn of_frame(m: &mut Machine<'_>, base: *mut Cell) -> Operands<'a> {
-        m.debug_base(base);
+    pub(crate) fn of_frame(regs: &'a Regs<'_>) -> Operands<'a> {
         Operands {
-            base: base.cast::<Value>(),
-            len: m.regs().len(),
+            base: regs.as_ptr(),
+            len: regs.len(),
             borrow: PhantomData,
         }
     }
@@ -697,7 +692,7 @@ where
 {
     pub dst: D::At,
     pub plan: Plan,
-    pub next: Next,
+    pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -708,7 +703,7 @@ where
 {
     pub dst: D::At,
     pub plan: Plan,
-    pub next: Next,
+    pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -719,7 +714,7 @@ where
 {
     pub dst: D::At,
     pub plan: Plan,
-    pub next: Next,
+    pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -731,13 +726,10 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _r0: u64) -> Exit {
-        let bits = tree1::<T, R, false>(&self.plan, Operands::of_frame(m, regs));
-        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
-        // and `prepare::check_assignment` proves the destination is a
-        // register this frame has.
-        let carried = unsafe { D::write(regs, self.dst, bits) };
-        self.next.run(m, regs, carried)
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
+        let bits = tree1::<T, R, false>(&self.plan, Operands::of_frame(m.regs()));
+        let carried = D::write(m.regs(), self.dst, bits);
+        self.next.run(m, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -757,13 +749,10 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _r0: u64) -> Exit {
-        let bits = tree2::<T, O0, R, false>(&self.plan, Operands::of_frame(m, regs));
-        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
-        // and `prepare::check_assignment` proves the destination is a
-        // register this frame has.
-        let carried = unsafe { D::write(regs, self.dst, bits) };
-        self.next.run(m, regs, carried)
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
+        let bits = tree2::<T, O0, R, false>(&self.plan, Operands::of_frame(m.regs()));
+        let carried = D::write(m.regs(), self.dst, bits);
+        self.next.run(m, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -783,13 +772,10 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _r0: u64) -> Exit {
-        let bits = tree3::<T, O0, O1, R, false>(&self.plan, Operands::of_frame(m, regs));
-        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
-        // and `prepare::check_assignment` proves the destination is a
-        // register this frame has.
-        let carried = unsafe { D::write(regs, self.dst, bits) };
-        self.next.run(m, regs, carried)
+    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
+        let bits = tree3::<T, O0, O1, R, false>(&self.plan, Operands::of_frame(m.regs()));
+        let carried = D::write(m.regs(), self.dst, bits);
+        self.next.run(m, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -926,7 +912,7 @@ where
 {
     dst: D::At,
     plan: Option<Plan>,
-    next: Option<Next>,
+    next: Option<Box<dyn Op>>,
     at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -935,7 +921,7 @@ where
     T: Num,
     D: Place,
 {
-    fn take(&mut self) -> (Plan, Next) {
+    fn take(&mut self) -> (Plan, Box<dyn Op>) {
         let plan = self
             .plan
             .take()
@@ -953,11 +939,11 @@ where
     T: Num,
     D: Place,
 {
-    type Out = Next;
+    type Out = Box<dyn Op>;
 
-    fn one<const R: u8>(&mut self) -> Next {
+    fn one<const R: u8>(&mut self) -> Box<dyn Op> {
         let (plan, next) = self.take();
-        Next::of(Chain1::<T, D, R> {
+        Box::new(Chain1::<T, D, R> {
             dst: self.dst,
             plan,
             next,
@@ -965,9 +951,9 @@ where
         })
     }
 
-    fn two<const O0: u8, const R: u8>(&mut self) -> Next {
+    fn two<const O0: u8, const R: u8>(&mut self) -> Box<dyn Op> {
         let (plan, next) = self.take();
-        Next::of(Chain2::<T, D, O0, R> {
+        Box::new(Chain2::<T, D, O0, R> {
             dst: self.dst,
             plan,
             next,
@@ -975,9 +961,9 @@ where
         })
     }
 
-    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Next {
+    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Box<dyn Op> {
         let (plan, next) = self.take();
-        Next::of(Chain3::<T, D, O0, O1, R> {
+        Box::new(Chain3::<T, D, O0, O1, R> {
             dst: self.dst,
             plan,
             next,
@@ -1070,7 +1056,7 @@ where
 /// Decision not to build: a leaf has no place of its own. A chain's leaves
 /// read registers the chain did not produce — a one-use value feeding a leaf
 /// was absorbed into the chain instead of reaching it — so no leaf rides.
-fn chain_at<D>(ty: ChainTy, dst: D::At, plan: Plan, next: Next) -> Next
+fn chain_at<D>(ty: ChainTy, dst: D::At, plan: Plan, next: Box<dyn Op>) -> Box<dyn Op>
 where
     D: Place,
 {
@@ -1098,7 +1084,7 @@ where
     }
 }
 
-pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Next) -> Next {
+pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Box<dyn Op>) -> Box<dyn Op> {
     match dst {
         Where::Frame(off) => chain_at::<crate::ops::place::Slot>(ty, off, plan, next),
         Where::Register => chain_at::<crate::ops::place::R0>(ty, (), plan, next),

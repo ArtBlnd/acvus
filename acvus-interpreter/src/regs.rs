@@ -355,42 +355,6 @@ impl Default for Store {
     }
 }
 
-/// The register at `off` of the frame whose cells begin at `base`.
-///
-/// # Safety
-/// `base` is a running frame's base — `Regs::cells_ptr` of the frame the
-/// operation was entered in, which `Machine::debug_base` is the check of —
-/// and `off` names a register that frame has, which
-/// `prepare::check_assignment` proves. The base carries no length, so the
-/// bound `Regs::at` re-checks in a debug build is the caller's here.
-#[inline(always)]
-unsafe fn value_at(base: *mut Cell, off: Off) -> *mut Value {
-    // SAFETY: the caller's contract, and `Off` is already the byte
-    // displacement (RFC-0052 §5), so this is one `add`.
-    unsafe { base.cast::<u8>().add(off.byte()).cast::<Value>() }
-}
-
-/// `Regs::word` through the base: one 8-byte load, the kind byte the frame
-/// wrote standing (RFC-0052 §5).
-///
-/// # Safety
-/// As `value_at`.
-#[inline(always)]
-pub unsafe fn word_at(base: *mut Cell, off: Off) -> u64 {
-    // SAFETY: the caller's contract.
-    unsafe { (*value_at(base, off)).bits() }
-}
-
-/// `Regs::set_word` through the base, the other half of `word_at`.
-///
-/// # Safety
-/// As `value_at`.
-#[inline(always)]
-pub unsafe fn set_word_at(base: *mut Cell, off: Off, bits: u64) {
-    // SAFETY: the caller's contract.
-    unsafe { *(*value_at(base, off)).bits_mut() = bits }
-}
-
 /// # Safety
 /// `cells` are one frame's own cells, `len` its registers, and every register
 /// of the run is defined at the call.
@@ -775,13 +739,6 @@ impl<'f> Regs<'f> {
     #[inline]
     pub fn as_ptr(&self) -> *const Value {
         self.cells.as_ptr().cast::<Value>()
-    }
-
-    /// The frame's first cell: the base `Machine::run` hands the block head
-    /// and every operation of its chains passes on.
-    #[inline(always)]
-    pub fn cells_ptr(&mut self) -> *mut Cell {
-        self.cells.as_mut_ptr()
     }
 
     #[inline]

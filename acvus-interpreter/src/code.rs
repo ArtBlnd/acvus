@@ -14,7 +14,7 @@ use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 
 use crate::machine::Machine;
-use crate::regs::{Cell, FrameState};
+use crate::regs::FrameState;
 use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 
@@ -235,13 +235,9 @@ where
 ///
 /// `r0` is the word the operation before it in the same chain produced
 /// (RFC-0052 rule 5, `Place::R0`).
-///
-/// Decision not to re-derive `regs`: the base is fixed for the frame, so a
-/// `run` that read it out of the machine read a fact it was already handed.
-/// `Machine::debug_base` is what checks the two agree.
 #[cfg(any(debug_assertions, feature = "probe"))]
 pub trait Op: Named + Send + Sync {
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit;
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
 
     fn chain(&self) -> Option<ChainProbe<'_>> {
         None
@@ -264,7 +260,7 @@ pub trait Op: Named + Send + Sync {
 
     /// The same heads, for `slice_ceiling`'s probe to substitute an operation
     /// inside a region.
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         Vec::new()
     }
 
@@ -274,54 +270,33 @@ pub trait Op: Named + Send + Sync {
     }
 
     /// The successor, for a probe that walks a chain to a node of it.
-    fn successor_mut(&mut self) -> Option<&mut Next> {
+    fn successor_mut(&mut self) -> Option<&mut Box<dyn Op>> {
         None
     }
 
     /// The successor, taken out: `substitute` is the one caller.
-    fn take_successor(self: Box<Self>) -> Option<Next> {
+    fn take_successor(self: Box<Self>) -> Option<Box<dyn Op>> {
         None
     }
 }
 
 /// Put `make`'s node in `slot`'s place, carrying the successor the node
 /// there held (RFC-0047 §7's probe, now that a successor is a field).
-///
-/// `make` hands back a `Next` rather than a box, which is what keeps the
-/// fn pointer and the node one pair: the pointer comes off the new node's own
-/// type at `Next::of`, so a probe cannot leave a `Next` reading one node
-/// through another's `run`.
 #[cfg(any(debug_assertions, feature = "probe"))]
-pub fn substitute<F>(slot: &mut Next, make: F)
+pub fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
 where
-    F: FnOnce(Next) -> Next,
+    F: FnOnce(Box<dyn Op>) -> Box<dyn Op>,
 {
-    // SAFETY: `read` copies the one owning `Next` out of `slot`;
-    // `take_successor` consumes the box inside that copy, which is the old
-    // node's only drop; `write` then stores the new node without dropping the
-    // copy. On every path `slot` owns exactly one node.
-    unsafe {
-        let old = std::ptr::read(slot).into_op();
-        let successor = old
-            .take_successor()
-            .expect("the node a probe substitutes holds a successor");
-        std::ptr::write(slot, make(successor));
-    }
-}
-
-/// The same, at a block head, which `Body::heads` holds as a bare box.
-#[cfg(any(debug_assertions, feature = "probe"))]
-pub fn substitute_head<F>(slot: &mut Box<dyn Op>, make: F)
-where
-    F: FnOnce(Next) -> Next,
-{
-    // SAFETY: as `substitute`, over the box this slot holds.
+    // SAFETY: `read` copies the one owning pointer out of `slot`;
+    // `take_successor` consumes that copy, which is the old node's only
+    // drop; `write` then stores the new node without dropping the copy. On
+    // every path `slot` owns exactly one node.
     unsafe {
         let old = std::ptr::read(slot);
         let successor = old
             .take_successor()
             .expect("the node a probe substitutes holds a successor");
-        std::ptr::write(slot, make(successor).into_op());
+        std::ptr::write(slot, make(successor));
     }
 }
 
@@ -339,95 +314,7 @@ pub struct OwnedOps<'o> {
 
 #[cfg(not(any(debug_assertions, feature = "probe")))]
 pub trait Op: Send + Sync {
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit;
-}
-
-/// An operation's `run` with its receiver erased to a thin pointer: what
-/// `Next` holds so that reaching a successor is a load and a jump.
-///
-/// # Safety
-/// `this` is a live `T` whose `Op::run` this pointer was taken from, `regs` is
-/// the base of the frame `m` runs, and `r0` is the word the chain's previous
-/// operation produced.
-pub type RunFn = unsafe fn(this: *const (), m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit;
-
-/// Obligation across artifacts: this is where an operation's `run` is
-/// emitted once its address has been taken, so `benches/asm_probe.rs` reads
-/// an `erased::<T>` symbol as the `run` of `T`.
-///
-/// # Safety
-/// As `RunFn`.
-#[inline(always)]
-unsafe fn erased<T>(this: *const (), m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit
-where
-    T: Op,
-{
-    // SAFETY: the caller's contract, which `Next::of` is the one writer of.
-    unsafe { &*(this as *const T) }.run(m, regs, r0)
-}
-
-/// An operation's successor: the node `chain` linked and the `run` it is
-/// reached through. Both fields are private and `Next::of` is the only
-/// constructor.
-///
-/// Decision not to dispatch through the box: which function runs next is a
-/// fact `prepare` fixed at `chain`, and reading it back out of a vtable per
-/// operation spent three loads on it (RFC-0052 §1).
-pub struct Next {
-    run: RunFn,
-    op: Box<dyn Op>,
-}
-
-impl Next {
-    /// The successor, with its `run` read off `T` here.
-    pub fn of<T>(op: T) -> Next
-    where
-        T: Op + 'static,
-    {
-        Next {
-            run: erased::<T>,
-            op: Box::new(op),
-        }
-    }
-
-    /// Run it. `#[inline(always)]` because the load and the jump have to fold
-    /// into the caller for the call to stay a tail call, which
-    /// `benches/asm_probe.rs` is what asserts.
-    #[inline(always)]
-    pub fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        // SAFETY: `run` came off `op`'s own type at `of`, `op` is the node it
-        // reads and is alive for this borrow, and `regs` and `r0` are what
-        // this operation was handed.
-        unsafe {
-            (self.run)(
-                std::ptr::from_ref(self.op.as_ref()) as *const (),
-                m,
-                regs,
-                r0,
-            )
-        }
-    }
-
-    /// The node itself, for a listing or a probe that walks a chain.
-    #[cfg(any(debug_assertions, feature = "probe"))]
-    pub fn op(&self) -> &dyn Op {
-        self.op.as_ref()
-    }
-
-    /// The node, for a probe that reads it back or walks into it.
-    ///
-    /// Decision not to hand out `&mut Box<dyn Op>`: replacing a node is
-    /// `substitute`'s job, because the `run` beside it has to be taken off
-    /// the new node's type.
-    #[cfg(any(debug_assertions, feature = "probe"))]
-    pub fn op_mut(&mut self) -> &mut dyn Op {
-        self.op.as_mut()
-    }
-
-    /// The node, out of the pair: a block head holds a bare box.
-    pub fn into_op(self) -> Box<dyn Op> {
-        self.op
-    }
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
 }
 
 /// The one writer of the three probe methods, over the `next` field the tail
@@ -436,16 +323,16 @@ macro_rules! successor {
     () => {
         #[cfg(any(debug_assertions, feature = "probe"))]
         fn successor(&self) -> Option<&dyn $crate::code::Op> {
-            Some(self.next.op())
+            Some(self.next.as_ref())
         }
 
         #[cfg(any(debug_assertions, feature = "probe"))]
-        fn successor_mut(&mut self) -> Option<&mut $crate::code::Next> {
+        fn successor_mut(&mut self) -> Option<&mut Box<dyn $crate::code::Op>> {
             Some(&mut self.next)
         }
 
         #[cfg(any(debug_assertions, feature = "probe"))]
-        fn take_successor(self: Box<Self>) -> Option<$crate::code::Next> {
+        fn take_successor(self: Box<Self>) -> Option<Box<dyn $crate::code::Op>> {
             Some(self.next)
         }
     };
@@ -456,32 +343,32 @@ pub(crate) use successor;
 /// An operation `prepare` has decided on and not yet linked: `prepare` emits
 /// a body's operations in the order they run, and `chain` links them from the
 /// end backwards.
-pub(crate) struct Node(Box<dyn FnOnce(Next) -> Next>);
+pub(crate) struct Node(Box<dyn FnOnce(Box<dyn Op>) -> Box<dyn Op>>);
 
 impl Node {
     #[inline]
-    pub(crate) fn link(self, next: Next) -> Next {
+    pub(crate) fn link(self, next: Box<dyn Op>) -> Box<dyn Op> {
         (self.0)(next)
     }
 }
 
 pub(crate) fn node<T, F>(make: F) -> Node
 where
-    F: FnOnce(Next) -> T + 'static,
+    F: FnOnce(Box<dyn Op>) -> T + 'static,
     T: Op + 'static,
 {
-    Node(Box::new(move |next| Next::of(make(next))))
+    Node(Box::new(move |next| Box::new(make(next)) as Box<dyn Op>))
 }
 
 pub(crate) fn made<F>(make: F) -> Node
 where
-    F: FnOnce(Next) -> Next + 'static,
+    F: FnOnce(Box<dyn Op>) -> Box<dyn Op> + 'static,
 {
     Node(Box::new(make))
 }
 
 /// The head of the chain `nodes` make, ending at `end`.
-pub(crate) fn chain<I>(nodes: I, end: Next) -> Next
+pub(crate) fn chain<I>(nodes: I, end: Box<dyn Op>) -> Box<dyn Op>
 where
     I: IntoIterator<Item = Node>,
     I::IntoIter: DoubleEndedIterator,
@@ -966,72 +853,44 @@ pub struct Prepared {
 mod tests {
     use super::*;
 
-    /// An operation is reached through a `Next` and its fields are read on the
-    /// one path that runs it, so a family spread over two cache lines pays a
-    /// second miss per operation. Carrying the mark word and bit as fields
-    /// (RFC-0050 rule 2) costs fourteen bytes per register an operation marks,
-    /// and this is what keeps that cost inside one line.
-    ///
-    /// Each entry carries the bound it is held to. `composite::MakeObject` is
-    /// the one family above a line: the successor pair is eight bytes wider
-    /// than the box it replaced, and this family was at exactly 64 before it.
+    /// An operation is reached through a `Box<dyn Op>` and its fields are read
+    /// on the one path that runs it, so a family spread over two cache lines
+    /// pays a second miss per operation. Carrying the mark word and bit as
+    /// fields (RFC-0050 rule 2) costs fourteen bytes per register an operation
+    /// marks, and this is what keeps that cost inside one line.
     #[test]
     fn no_operation_family_spans_two_cache_lines() {
         use crate::ops;
 
         const LINE: usize = 64;
-
-        /// One family, its measured size, and the lines it is held to.
-        struct Family {
-            name: &'static str,
-            size: usize,
-            lines: usize,
-        }
-
-        for family in [
-            Family {
-                name: "arith::Add<i64,Slot,Slot,Slot>",
-                size: size_of::<
-                    ops::arith::Add<i64, ops::place::Slot, ops::place::Slot, ops::place::Slot>,
-                >(),
-                lines: 1,
-            },
-            Family {
-                name: "control::DropValue",
-                size: size_of::<ops::control::DropValue>(),
-                lines: 1,
-            },
-            Family {
-                name: "control::Mov<true,false>",
-                size: size_of::<ops::control::Mov<true, false>>(),
-                lines: 1,
-            },
-            Family {
-                name: "storage::AssignVar<true>",
-                size: size_of::<ops::storage::AssignVar<true>>(),
-                lines: 1,
-            },
-            Family {
-                name: "storage::Update",
-                size: size_of::<ops::storage::Update>(),
-                lines: 1,
-            },
-            Family {
-                name: "string::CloneString<false>",
-                size: size_of::<ops::string::CloneString<false>>(),
-                lines: 1,
-            },
-            Family {
-                name: "composite::MakeObject",
-                size: size_of::<ops::composite::MakeObject>(),
-                lines: 2,
-            },
+        for (name, size) in [
+            (
+                "arith::Add<i64,Slot,Slot,Slot>",
+                size_of::<ops::arith::Add<i64, ops::place::Slot, ops::place::Slot, ops::place::Slot>>(
+                ),
+            ),
+            ("control::DropValue", size_of::<ops::control::DropValue>()),
+            (
+                "control::Mov<true,false>",
+                size_of::<ops::control::Mov<true, false>>(),
+            ),
+            (
+                "storage::AssignVar<true>",
+                size_of::<ops::storage::AssignVar<true>>(),
+            ),
+            ("storage::Update", size_of::<ops::storage::Update>()),
+            (
+                "string::CloneString<false>",
+                size_of::<ops::string::CloneString<false>>(),
+            ),
+            (
+                "composite::MakeObject",
+                size_of::<ops::composite::MakeObject>(),
+            ),
         ] {
-            let Family { name, size, lines } = family;
-            assert_eq!(
-                size.div_ceil(LINE),
-                lines,
-                "{name} is {size} bytes, which is not the {lines} cache lines it is held to"
+            assert!(
+                size <= LINE,
+                "{name} is {size} bytes, past the {LINE} one cache line holds"
             );
         }
     }

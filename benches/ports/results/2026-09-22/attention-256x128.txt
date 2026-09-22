@@ -1,0 +1,31 @@
+== attention 256x128
+== Rust twin's value: 0.49719065560641074
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:45:18 up 16:42,  1 user,  load average: 2.63, 2.87, 2.39
+acvus 444.5
+rust 136.5
+cpython 1884.4
+node 80.4
+node-jitless 1432.8
+lua5.4 561.0
+luajit 45.0
+== rep 2
+ 19:45:24 up 16:42,  1 user,  load average: 2.50, 2.84, 2.39
+acvus 441.9
+rust 135.0
+cpython 1902.2
+node 81.3
+node-jitless 1459.1
+lua5.4 588.0
+luajit 44.0
+== rep 3
+ 19:45:31 up 16:42,  1 user,  load average: 2.35, 2.80, 2.38
+acvus 452.6
+rust 139.3
+cpython 2134.6
+node 70.7
+node-jitless 1462.6
+lua5.4 570.0
+luajit 47.0

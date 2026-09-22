@@ -21,11 +21,10 @@ use std::marker::PhantomData;
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, Exit, Next, Off, Op, successor};
+use crate::code::{BlockId, Exit, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Int;
 use crate::ops::variant::scrutinee;
-use crate::regs::Cell;
 
 /// One tested arm: the word it names — a variant's tag or a literal
 /// (RFC-0051) — and the block the machine enters for it.
@@ -44,7 +43,7 @@ pub struct Switch<const THROUGH: bool> {
 
 impl<const THROUGH: bool> Op for Switch<THROUGH> {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
         // SAFETY: the preparation read an enum from the source's type.
         let tag = unsafe { source.as_variant() }.tag().bits();
@@ -67,7 +66,7 @@ pub struct SwitchOption<const THROUGH: bool> {
 
 impl<const THROUGH: bool> Op for SwitchOption<THROUGH> {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         match scrutinee::<THROUGH>(m.regs().peek(self.src)).is_none() {
             true => self.on_none.into(),
             false => self.on_some.into(),
@@ -80,7 +79,7 @@ impl<const THROUGH: bool> Op for SwitchOption<THROUGH> {
 /// is (RFC-0052 §3).
 pub struct RegionArm {
     pub key: u64,
-    pub head: Next,
+    pub head: Box<dyn Op>,
 }
 
 /// The region form of `Switch`: the arms are chains of this operation rather
@@ -89,15 +88,15 @@ pub struct RegionArm {
 pub struct SwitchRegion<const THROUGH: bool> {
     pub src: Off,
     pub arms: Box<[RegionArm]>,
-    pub default: Next,
-    pub next: Next,
+    pub default: Box<dyn Op>,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool> Op for SwitchRegion<THROUGH> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
         // SAFETY: the preparation read an enum from the source's type.
         let tag = unsafe { source.as_variant() }.tag().bits();
@@ -105,9 +104,9 @@ impl<const THROUGH: bool> Op for SwitchRegion<THROUGH> {
             .arms
             .iter()
             .find(|arm| arm.key == tag)
-            .map_or(&self.default, |arm| &arm.head);
-        let word = arm.run(m, regs, r0);
-        self.next.run(m, regs, word)
+            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
+        let word = arm.run(m, r0);
+        self.next.run(m, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -116,17 +115,17 @@ impl<const THROUGH: bool> Op for SwitchRegion<THROUGH> {
             .iter()
             .map(|arm| OwnedOps {
                 part: "arm",
-                head: arm.head.op(),
+                head: arm.head.as_ref(),
             })
             .chain([OwnedOps {
                 part: "default",
-                head: self.default.op(),
+                head: self.default.as_ref(),
             }])
             .collect()
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         self.arms
             .iter_mut()
             .map(|arm| &mut arm.head)
@@ -138,22 +137,22 @@ impl<const THROUGH: bool> Op for SwitchRegion<THROUGH> {
 /// The region form of `SwitchOption`.
 pub struct SwitchOptionRegion<const THROUGH: bool> {
     pub src: Off,
-    pub on_some: Next,
-    pub on_none: Next,
-    pub next: Next,
+    pub on_some: Box<dyn Op>,
+    pub on_none: Box<dyn Op>,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool> Op for SwitchOptionRegion<THROUGH> {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let arm = match scrutinee::<THROUGH>(m.regs().peek(self.src)).is_none() {
-            true => &self.on_none,
-            false => &self.on_some,
+            true => self.on_none.as_ref(),
+            false => self.on_some.as_ref(),
         };
-        let word = arm.run(m, regs, r0);
-        self.next.run(m, regs, word)
+        let word = arm.run(m, r0);
+        self.next.run(m, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -161,17 +160,17 @@ impl<const THROUGH: bool> Op for SwitchOptionRegion<THROUGH> {
         vec![
             OwnedOps {
                 part: "on_some",
-                head: self.on_some.op(),
+                head: self.on_some.as_ref(),
             },
             OwnedOps {
                 part: "on_none",
-                head: self.on_none.op(),
+                head: self.on_none.as_ref(),
             },
         ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         vec![&mut self.on_some, &mut self.on_none]
     }
 }
@@ -213,7 +212,7 @@ where
     T: Int,
 {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let word = T::read(m.regs().word(self.src)).word();
         self.arms
             .iter()
@@ -230,8 +229,8 @@ where
 {
     src: Off,
     arms: Box<[RegionArm]>,
-    default: Next,
-    next: Next,
+    default: Box<dyn Op>,
+    next: Box<dyn Op>,
     width: PhantomData<fn() -> T>,
 }
 
@@ -239,7 +238,12 @@ impl<T> SwitchWordRegion<T>
 where
     T: Int,
 {
-    pub fn new(src: Off, arms: Box<[RegionArm]>, default: Next, next: Next) -> SwitchWordRegion<T> {
+    pub fn new(
+        src: Off,
+        arms: Box<[RegionArm]>,
+        default: Box<dyn Op>,
+        next: Box<dyn Op>,
+    ) -> SwitchWordRegion<T> {
         SwitchWordRegion {
             src,
             arms,
@@ -257,15 +261,15 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let word = T::read(m.regs().word(self.src)).word();
         let arm = self
             .arms
             .iter()
             .find(|arm| arm.key == word)
-            .map_or(&self.default, |arm| &arm.head);
-        let taken = arm.run(m, regs, r0);
-        self.next.run(m, regs, taken)
+            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
+        let taken = arm.run(m, r0);
+        self.next.run(m, taken)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -274,17 +278,17 @@ where
             .iter()
             .map(|arm| OwnedOps {
                 part: "arm",
-                head: arm.head.op(),
+                head: arm.head.as_ref(),
             })
             .chain([OwnedOps {
                 part: "default",
-                head: self.default.op(),
+                head: self.default.as_ref(),
             }])
             .collect()
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Next> {
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
         self.arms
             .iter_mut()
             .map(|arm| &mut arm.head)

@@ -1,0 +1,31 @@
+== mandelbrot 200x100x200
+== Rust twin's value: 946598
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:45:09 up 16:42,  1 user,  load average: 2.92, 2.94, 2.41
+acvus 8446.7
+rust 1551.9
+cpython 72371.2
+node 1572.0
+node-jitless 31506.2
+lua5.4 13990.0
+luajit 1607.0
+== rep 2
+ 19:45:09 up 16:42,  1 user,  load average: 2.92, 2.94, 2.41
+acvus 8973.9
+rust 1556.3
+cpython 72338.9
+node 1560.6
+node-jitless 29494.7
+lua5.4 14086.0
+luajit 1607.0
+== rep 3
+ 19:45:10 up 16:42,  1 user,  load average: 2.77, 2.91, 2.40
+acvus 8828.8
+rust 1557.3
+cpython 72731.3
+node 1566.8
+node-jitless 29553.1
+lua5.4 14019.0
+luajit 1607.0

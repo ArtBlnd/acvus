@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use acvus_extern::{ObjectShape, Owned};
 
-use crate::code::{Exit, Marked, Next, Off, Op, successor};
+use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
-use crate::regs::Cell;
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -34,32 +33,32 @@ impl Elements {
 pub struct MakeArray {
     pub dst: Marked,
     pub elements: Elements,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeArray {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let items = self.elements.take(m);
         m.regs().define::<true>(self.dst, Value::array(items));
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
 pub struct MakeTuple {
     pub dst: Marked,
     pub elements: Elements,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeTuple {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let items = self.elements.take(m);
         m.regs().define::<true>(self.dst, Value::tuple(items));
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -74,22 +73,22 @@ pub struct MakeObject {
     /// `Elements`; the mask counts the registers, so a field with no register
     /// takes no bit.
     pub owns_large: u64,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeObject {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
         let object = Value::object_filled(Arc::clone(&self.shape), |at| {
             Owned::from_value(match self.fields[at.index()] {
-                Some(at) => frame.read(at),
+                Some(at) => regs.read(at),
                 None => Value::UNDEF,
             })
         });
-        frame.take_mask(self.owns_large);
+        regs.take_mask(self.owns_large);
         m.regs().define::<true>(self.dst, object);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }

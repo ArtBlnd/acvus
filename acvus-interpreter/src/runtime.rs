@@ -95,7 +95,7 @@ impl Runtime for AcvusRuntime {
     type Frame<'a> = FrameState;
     type Rooted<'a> = RootedCtx<'a>;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
-    type Op = crate::code::Next;
+    type Op = Box<dyn crate::code::Op>;
     type CallShape = call::CallShape;
     type AsyncShape = call::AsyncShape;
     type FusedCall = call::Call;
@@ -121,7 +121,7 @@ impl Runtime for AcvusRuntime {
         &mut rooted.ctx
     }
 
-    fn op<H>(handler: H, shape: call::CallShape) -> crate::code::Next
+    fn op<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
     where
         H: acvus_extern::Handler<AcvusRuntime>,
     {
@@ -135,7 +135,7 @@ impl Runtime for AcvusRuntime {
         call::fused_call(handler, shape)
     }
 
-    fn async_extern_op<H>(handler: H, shape: call::AsyncShape) -> crate::code::Next
+    fn async_extern_op<H>(handler: H, shape: call::AsyncShape) -> Box<dyn crate::code::Op>
     where
         H: acvus_extern::AsyncCall<AcvusRuntime>,
     {

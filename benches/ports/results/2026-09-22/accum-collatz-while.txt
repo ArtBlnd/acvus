@@ -1,0 +1,31 @@
+== accum collatz while
+== Rust twin's value: 875000250000
+== core 15, setarch -R, 3 reps, one warm-up per runtime discarded
+== warm-up (discarded)
+== rep 1
+ 19:44:33 up 16:41,  1 user,  load average: 4.23, 3.14, 2.45
+acvus 6451.1
+rust 352.27
+cpython 50768.7
+node 2947.5
+node-jitless 11874.7
+lua5.4 8384.0
+luajit 1352.0
+== rep 2
+ 19:44:34 up 16:41,  1 user,  load average: 4.23, 3.14, 2.45
+acvus 6439.4
+rust 318.76
+cpython 50760.0
+node 2941.4
+node-jitless 11670.3
+lua5.4 8399.0
+luajit 1352.0
+== rep 3
+ 19:44:35 up 16:41,  1 user,  load average: 4.23, 3.14, 2.45
+acvus 6425.8
+rust 321.04
+cpython 50764.5
+node 2944.0
+node-jitless 11905.7
+lua5.4 8390.0
+luajit 1351.0

@@ -13,10 +13,9 @@
 
 use acvus_extern::Owned;
 
-use crate::code::{Exit, Marked, Next, Off, Op, successor};
+use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
-use crate::regs::Cell;
 use crate::value::{Kind, Value, VariantValue};
 
 /// The place a variant test reads. A `Some` whose payload is a `None` has
@@ -36,31 +35,31 @@ pub(crate) fn scrutinee<const THROUGH: bool>(value: &Value) -> &Value {
 /// exactly when its payload does.
 pub struct MakeSome<const LARGE: bool> {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for MakeSome<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let payload = frame.take::<LARGE>(self.slots.src);
-        frame.define::<LARGE>(self.slots.dst, Value::some(payload));
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let payload = regs.take::<LARGE>(self.slots.src);
+        regs.define::<LARGE>(self.slots.dst, Value::some(payload));
+        self.next.run(m, r0)
     }
 }
 
 pub struct MakeNone {
     pub dst: Off,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeNone {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         m.regs().put(self.dst, Value::NONE);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
@@ -69,70 +68,70 @@ impl Op for MakeNone {
 pub struct MakeVariant<const LARGE: bool> {
     pub slots: Unary,
     pub tag: Value,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for MakeVariant<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let payload = Owned::from_value(frame.take::<LARGE>(self.slots.src));
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
         let value = Value::variant_of(self.tag, payload);
-        frame.define::<true>(self.slots.dst, value);
-        self.next.run(m, regs, r0)
+        regs.define::<true>(self.slots.dst, value);
+        self.next.run(m, r0)
     }
 }
 
 pub struct MakeUnitVariant {
     pub dst: Marked,
     pub tag: Value,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl Op for MakeUnitVariant {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = Value::variant_of(self.tag, Owned::from_value(Value::UNDEF));
         m.regs().define::<true>(self.dst, value);
-        self.next.run(m, regs, r0)
+        self.next.run(m, r0)
     }
 }
 
 /// `SOME` is what the tag the arm tests for resolved to at preparation.
 pub struct TestOption<const THROUGH: bool, const SOME: bool> {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool, const SOME: bool> Op for TestOption<THROUGH, SOME> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let is_some = !scrutinee::<THROUGH>(frame.peek(self.slots.src.at)).is_none();
-        frame.set_word(self.slots.dst.at, (is_some == SOME) as u64);
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src.at)).is_none();
+        regs.set_word(self.slots.dst.at, (is_some == SOME) as u64);
+        self.next.run(m, r0)
     }
 }
 
 pub struct TestVariant<const THROUGH: bool> {
     pub slots: Unary,
     pub tag: u64,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let source = scrutinee::<THROUGH>(frame.peek(self.slots.src.at));
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
         // SAFETY: the preparation read an enum from the source's type.
         let matches = unsafe { source.as_variant() }.tag().bits() == self.tag;
-        frame.set_word(self.slots.dst.at, matches as u64);
-        self.next.run(m, regs, r0)
+        regs.set_word(self.slots.dst.at, matches as u64);
+        self.next.run(m, r0)
     }
 }
 
@@ -140,17 +139,17 @@ impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
 /// unwrap moves it from one slot to another and the mark travels with it.
 pub struct UnwrapOption<const LARGE: bool> {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for UnwrapOption<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let option = frame.take::<LARGE>(self.slots.src);
-        frame.define::<LARGE>(self.slots.dst, Value::some_payload(option));
-        self.next.run(m, regs, r0)
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let option = regs.take::<LARGE>(self.slots.src);
+        regs.define::<LARGE>(self.slots.dst, Value::some_payload(option));
+        self.next.run(m, r0)
     }
 }
 
@@ -161,15 +160,15 @@ impl<const LARGE: bool> Op for UnwrapOption<LARGE> {
 /// instruction its tag and the kind test below becomes a second const.
 pub struct UnwrapVariant<const LARGE: bool> {
     pub slots: Unary,
-    pub next: Next,
+    pub next: Box<dyn Op>,
 }
 
 impl<const LARGE: bool> Op for UnwrapVariant<LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
-        let frame = m.regs();
-        let variant = frame.take::<true>(self.slots.src);
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let variant = regs.take::<true>(self.slots.src);
         // SAFETY: the preparation read an enum from the source's type.
         let payload = unsafe { variant.materialize::<VariantValue>() }
             .into_payload()
@@ -178,7 +177,7 @@ impl<const LARGE: bool> Op for UnwrapVariant<LARGE> {
             Kind::Undef => Value::unit(),
             _ => payload,
         };
-        frame.define::<LARGE>(self.slots.dst, value);
-        self.next.run(m, regs, r0)
+        regs.define::<LARGE>(self.slots.dst, value);
+        self.next.run(m, r0)
     }
 }
