@@ -409,7 +409,7 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
         }
     }
 
-    let (shared, mut interp) =
+    let (_shared, mut interp) =
         execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
     let result = interp.execute().await;
 

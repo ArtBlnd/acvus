@@ -1,12 +1,11 @@
-use std::collections::BTreeSet;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::{
     graph::infer,
-    ty::{ObjectTy, Param, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, TypeArg, lift_to_poly},
+    ty::{ObjectTy, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly},
 };
 use acvus_mir_test::*;
-use acvus_utils::{Astr, Freeze, Interner};
+use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 /// Helper: compile a template source via the graph pipeline (extract -> resolve -> lower).
@@ -18,7 +17,7 @@ fn compile_analysis(
 ) -> Result<acvus_mir::ir::MirModule, String> {
     use acvus_mir::graph::{CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef};
     use acvus_mir::graph::{extract, lower as graph_lower};
-    use acvus_mir::ty::{PolyBuilder, TypeArg};
+    use acvus_mir::ty::PolyBuilder;
     use acvus_utils::Freeze;
     use rustc_hash::{FxHashMap, FxHashSet};
 

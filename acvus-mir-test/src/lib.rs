@@ -55,15 +55,6 @@ fn extend_with_registries(
     types
 }
 
-/// Run extract -> infer -> lower, collecting errors from all passes.
-fn run_pipeline(
-    interner: &Interner,
-    graph: &CompilationGraph,
-    target: QualifiedRef,
-) -> Result<MirModule, String> {
-    run_pipeline_with_registry(interner, graph, target, TypeRegistry::new())
-}
-
 fn run_pipeline_with_registry(
     interner: &Interner,
     graph: &CompilationGraph,
@@ -455,7 +446,7 @@ pub fn refuse_script_mode_ir_with(
         return Err(refusals);
     }
 
-    let mut module = result.module(test_qref).cloned().ok_or_else(|| {
+    let module = result.module(test_qref).cloned().ok_or_else(|| {
         vec![Refusal {
             stage: "lower".to_string(),
             message: "no module produced for target".to_string(),

@@ -24,7 +24,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{LiveRange, owns_large};
 use crate::code::Slot;
-use crate::regs::{MAX_FRAME_SLOTS, MAX_RUN_SLOTS, MAX_SCALAR_SLOTS};
+use crate::regs::{MAX_FRAME_SLOTS, MAX_RUN_SLOTS};
 
 /// One register of an aggregate's flat layout (RFC-0050 rule 8).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -861,6 +861,8 @@ fn loop_depths(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Vec<u32> {
 mod tests {
     use acvus_mir::ty::ObjectTy;
     use acvus_utils::Interner;
+
+    use crate::regs::MAX_SCALAR_SLOTS;
 
     use super::*;
 

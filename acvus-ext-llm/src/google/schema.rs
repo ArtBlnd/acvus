@@ -9,20 +9,6 @@ pub struct Request {
     #[serde(rename = "systemInstruction")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<SystemInstruction>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ToolDeclaration>>,
-    #[serde(rename = "generationConfig")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub generation_config: Option<GenerationConfig>,
-}
-
-#[derive(Serialize)]
-pub struct CachedRequest {
-    #[serde(rename = "cachedContent")]
-    pub cached_content: String,
-    pub contents: Vec<Content>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ToolDeclaration>>,
     #[serde(rename = "generationConfig")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_config: Option<GenerationConfig>,
@@ -92,44 +78,6 @@ pub struct TextPart {
 }
 
 #[derive(Serialize)]
-#[serde(untagged)]
-pub enum ToolDeclaration {
-    Functions {
-        #[serde(rename = "functionDeclarations")]
-        function_declarations: Vec<FunctionDecl>,
-    },
-    GoogleSearch {
-        google_search: GoogleSearchConfig,
-    },
-}
-
-#[derive(Serialize)]
-pub struct GoogleSearchConfig {}
-
-#[derive(Serialize)]
-pub struct FunctionDecl {
-    pub name: String,
-    pub description: String,
-    pub parameters: GeminiSchema,
-}
-
-#[derive(Serialize)]
-pub struct GeminiSchema {
-    #[serde(rename = "type")]
-    pub schema_type: String,
-    pub properties: serde_json::Map<String, serde_json::Value>,
-    pub required: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct GeminiPropertySchema {
-    #[serde(rename = "type")]
-    pub ty: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-#[derive(Serialize)]
 pub struct GenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<Decimal>,
@@ -157,37 +105,6 @@ pub struct ThinkingConfig {
     pub thinking_level: Option<String>,
 }
 
-// -- Cache Request ---------------------------------------------------
-
-#[derive(Serialize)]
-pub struct CacheRequest {
-    pub model: String,
-    pub contents: Vec<Content>,
-    pub ttl: String,
-    #[serde(rename = "systemInstruction")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_instruction: Option<SystemInstruction>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-// -- Count Tokens Request --------------------------------------------
-
-#[derive(Serialize)]
-pub struct CountTokensRequest {
-    #[serde(rename = "generateContentRequest")]
-    pub generate_content_request: CountTokensInner,
-}
-
-#[derive(Serialize)]
-pub struct CountTokensInner {
-    pub model: String,
-    pub contents: Vec<Content>,
-    #[serde(rename = "systemInstruction")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_instruction: Option<SystemInstruction>,
-}
-
 // -- Response --------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -211,19 +128,8 @@ pub struct CandidateContent {
 #[derive(Deserialize)]
 pub struct ResponsePart {
     pub text: Option<String>,
-    #[serde(rename = "inlineData")]
-    pub inline_data: Option<ResponseInlineData>,
     #[serde(rename = "functionCall")]
     pub function_call: Option<ResponseFunctionCall>,
-    #[serde(rename = "thoughtSignature")]
-    pub thought_signature: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct ResponseInlineData {
-    #[serde(rename = "mimeType")]
-    pub mime_type: Option<String>,
-    pub data: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -238,19 +144,4 @@ pub struct UsageMetadata {
     pub prompt_token_count: Option<u32>,
     #[serde(rename = "candidatesTokenCount")]
     pub candidates_token_count: Option<u32>,
-}
-
-// -- Cache Response --------------------------------------------------
-
-#[derive(Deserialize)]
-pub struct CacheResponse {
-    pub name: Option<String>,
-}
-
-// -- Count Tokens Response -------------------------------------------
-
-#[derive(Deserialize)]
-pub struct CountTokensResponse {
-    #[serde(rename = "totalTokens")]
-    pub total_tokens: Option<u32>,
 }

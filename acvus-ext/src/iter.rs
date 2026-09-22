@@ -27,7 +27,7 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use acvus_extern::{Arr, Erased, OneValue, PassedByValue};
+use acvus_extern::{Arr, OneValue, PassedByValue};
 use acvus_extern::{
     Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared,
     Stored, TransparentOver, Var, core, extern_fn, kind,
@@ -737,7 +737,7 @@ where
 /// element it holds when it meets the next one that differs, one draw
 /// behind its source, because it keeps the element itself and requires no
 /// `core::clone` to keep a copy of it.
-enum Held<T> {
+pub(crate) enum Held<T> {
     NothingDrawn,
     Drawn(T),
     SourceSpent,

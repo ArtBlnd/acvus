@@ -12,10 +12,9 @@ use acvus_extern::{
     TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn, extern_registry,
     kind,
 };
-use acvus_mir::ty::{Ty, TypeArg};
+use acvus_mir::ty::Ty;
 
 use crate::iter::{Items, Refs, sig};
-use crate::vec::vec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deque<T>

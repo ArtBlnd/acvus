@@ -13,7 +13,6 @@ use acvus_mir::ty::IntTy;
 use crate::code::{Exit, Marked, Op, successor};
 use crate::machine::Machine;
 use crate::ops::place::{self, BinaryAt, Place, UnaryAt, at_binary, at_unary};
-use crate::value::Kind;
 
 /// Runs `$body` with `$t` the Rust integer type of an `IntTy`.
 macro_rules! for_int_ty {
@@ -66,7 +65,6 @@ pub struct Unary {
 
 /// One integer width, as the operations at that width read and write it.
 pub trait Int: Copy + PartialOrd + 'static {
-    const KIND: Kind;
     const SHIFT_MASK: u64;
 
     fn read(bits: u64) -> Self;
@@ -90,7 +88,6 @@ pub trait Int: Copy + PartialOrd + 'static {
 macro_rules! impl_int {
     ($($t:ty => $k:ident),* $(,)?) => {
         $(impl Int for $t {
-            const KIND: Kind = Kind::$k;
             const SHIFT_MASK: u64 = <$t>::BITS as u64 - 1;
 
             fn read(bits: u64) -> Self {

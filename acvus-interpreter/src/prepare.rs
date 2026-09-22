@@ -16,9 +16,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::{
-    ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width,
-};
+use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -6195,7 +6193,6 @@ struct ClassRange {
 /// argument window is (RFC-0044, stage 2b).
 pub struct Slots {
     of: Box<[u32]>,
-    class_of: Box<[SlotClass]>,
     frame: u32,
     windows: FxHashMap<usize, WindowPlan>,
     /// Each value's live range, indexed by `ValueId::to_raw`. `runs::plan` reads
@@ -6218,12 +6215,6 @@ impl Slots {
     /// `slot_kinds` walks, where `of` is what an operation asks.
     fn raw(&self, id: ValueId) -> u32 {
         self.of[id.to_raw()]
-    }
-
-    /// The registers value `id` occupies: one, or the two of a slice pair.
-    fn run_of(&self, id: usize) -> std::ops::Range<u32> {
-        let base = self.of[id];
-        base..base + self.class_of[id].width() as u32
     }
 
     fn window(&self, call: usize) -> &WindowPlan {
@@ -6473,7 +6464,6 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
 
     let slots = Slots {
         of: of.into_boxed_slice(),
-        class_of: classes_of.into_boxed_slice(),
         frame,
         windows,
         ranges: ranges.into_boxed_slice(),
@@ -6805,7 +6795,14 @@ mod recognizer_tests {
             let body = body_of(insts);
             let literals = Literals::of(literal_texts(&body));
             let entries = RefCell::new(InstanceEntryStore::default());
-            let prep = Prepare::new(&body, &ctx, &entries, &closures, &literals, label_map(&body));
+            let prep = Prepare::new(
+                &body,
+                &ctx,
+                &entries,
+                &closures,
+                &literals,
+                label_map(&body),
+            );
             matched(&prep.regions())
         }
     }

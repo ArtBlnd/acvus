@@ -1,7 +1,5 @@
-use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
 use acvus_utils::Interner;
-use rustc_hash::FxHashMap;
 
 // -- Text only ----------------------------------------------------
 

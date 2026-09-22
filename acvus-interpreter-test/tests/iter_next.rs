@@ -15,8 +15,8 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, OneValue, PassedByValue, Pure,
-    Ref, Registry, Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
+    Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, PassedByValue, Pure, Ref,
+    Registry, Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::code::Body;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};

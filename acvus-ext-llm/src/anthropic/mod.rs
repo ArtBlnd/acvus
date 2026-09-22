@@ -139,7 +139,6 @@ async fn anthropic(
         temperature: None,
         top_p: None,
         top_k: None,
-        thinking: None,
     };
 
     let http_request = HttpRequest {

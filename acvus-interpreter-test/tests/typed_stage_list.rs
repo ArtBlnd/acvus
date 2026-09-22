@@ -47,12 +47,12 @@ where
     Take { remaining: u64, same: Same<In, Out> },
 }
 
-pub enum Source<T, Rt>
+pub struct Source<T, Rt>
 where
     Rt: Runtime,
 {
-    Items(std::vec::IntoIter<T>),
-    Spent(PhantomData<Rt>),
+    items: std::vec::IntoIter<T>,
+    runtime: PhantomData<Rt>,
 }
 
 impl<T, Rt> Source<T, Rt>
@@ -60,10 +60,7 @@ where
     Rt: Runtime,
 {
     fn pull(&mut self) -> Option<T> {
-        match self {
-            Source::Items(items) => items.next(),
-            Source::Spent(_) => None,
-        }
+        self.items.next()
     }
 }
 
@@ -84,8 +81,6 @@ where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
 
-    const LENGTH: usize;
-
     fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -101,8 +96,6 @@ where
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
-
-    const LENGTH: usize = 0;
 
     fn pull<O, E>(body: &mut Source<O, Rt>, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
@@ -125,8 +118,6 @@ where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
 
-    const LENGTH: usize = 0;
-
     fn pull<O, E>(body: &mut Source<O, Rt>, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -147,8 +138,6 @@ where
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
-
-    const LENGTH: usize = 1 + Ts::LENGTH;
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
@@ -181,8 +170,6 @@ where
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
-
-    const LENGTH: usize = 0;
 
     fn pull<O, E>(body: &mut Never, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
@@ -242,7 +229,13 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Pipe(Source::Items(items.into_iter()), PhantomData)
+    Pipe(
+        Source {
+            items: items.into_iter(),
+            runtime: PhantomData,
+        },
+        PhantomData,
+    )
 }
 
 mod sig {

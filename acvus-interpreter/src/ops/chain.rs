@@ -18,7 +18,7 @@ use crate::ops::cast::AsNum;
 use crate::ops::place::Place;
 use crate::regs::{FrameState, Regs};
 use crate::runtime::AcvusRuntime;
-use crate::value::{Kind, Value};
+use crate::value::Value;
 
 /// One numeric type a chain runs at: the integer widths and `f64`.
 ///
@@ -26,8 +26,6 @@ use crate::value::{Kind, Value};
 /// as the one-operator-per-operation form does — the chain calls the same
 /// `Int` methods, so the panic texts are the same constants.
 pub trait Num: Copy + 'static {
-    const KIND: Kind;
-
     fn read(bits: u64) -> Self;
     fn word(self) -> u64;
     fn add(self, other: Self) -> Self;
@@ -95,8 +93,6 @@ macro_rules! num_of {
 macro_rules! impl_num_for_int {
     ($($t:ty),* $(,)?) => {
         $(impl Num for $t {
-            const KIND: Kind = <$t as Int>::KIND;
-
             #[inline(always)]
             fn read(bits: u64) -> Self {
                 <$t as Int>::read(bits)
@@ -159,8 +155,6 @@ macro_rules! impl_num_for_int {
 impl_num_for_int!(i8, i16, i32, i64, u8, u16, u32, u64);
 
 impl Num for f64 {
-    const KIND: Kind = Kind::F64;
-
     #[inline(always)]
     fn read(bits: u64) -> Self {
         f64::from_bits(bits)

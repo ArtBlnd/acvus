@@ -12,8 +12,7 @@
 //! borrow.
 
 use acvus_extern::{
-    Closure, ClosureFn, ExternType, Pure, Registry, Runtime, TyArg, Var, extern_fn,
-    extern_registry, kind,
+    Closure, ClosureFn, ExternType, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind,
 };
 
 use crate::iter::Items;

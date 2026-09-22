@@ -197,20 +197,6 @@ async fn value_of(source: &str) -> Value {
     .value
 }
 
-fn one_call_and_a_deref() -> RunShape {
-    RunShape {
-        calls: 1,
-        tail: true,
-    }
-}
-
-fn two_calls_and_a_deref() -> RunShape {
-    RunShape {
-        calls: 2,
-        tail: true,
-    }
-}
-
 fn dropped_since(before: usize) -> i64 {
     i64::try_from(ELEMENTS_DROPPED.load(Ordering::Relaxed) - before)
         .expect("a drop count below i64::MAX")

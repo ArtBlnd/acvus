@@ -1,7 +1,7 @@
 //! Integer widths (RFC-0037): a literal takes the width its use demands,
 //! is `i64` alone, is refused where it does not fit, and widths never mix.
 
-use acvus_mir::ty::{IntTy, Ty};
+use acvus_mir::ty::Ty;
 use acvus_mir_test::compile_script_ir;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;

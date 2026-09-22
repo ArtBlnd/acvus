@@ -11,8 +11,8 @@ use std::ops::DerefMut;
 use acvus_extern::{
     ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType,
     Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneRegister, OneValue, Owned, PolyTy,
-    Pure, Ref, Registry, Runtime, Shared, Task, TransparentOver, TyArg, TypeArg, TypesOnly,
-    Var, Words, extern_fn, extern_registry, extern_signature, kind,
+    Pure, Ref, Registry, Runtime, Shared, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var,
+    Words, extern_fn, extern_registry, extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -2164,7 +2164,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     };
     assert_eq!(instances.concrete.len(), 2);
     assert!(!instances.generic);
-    let acvus_extern::TyVarBound::OneOf { shapes: shapes, .. } = &bounds[0] else {
+    let acvus_extern::TyVarBound::OneOf { shapes, .. } = &bounds[0] else {
         panic!("the instance variable is bounded")
     };
     assert!(
@@ -2854,7 +2854,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 #[test]
 fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     use acvus_extern::FormKind;
-    use acvus_extern::{ByValue, Handler, HandlerFactory, Val, Width};
+    use acvus_extern::{ByValue, HandlerFactory, Val, Width};
 
     let glue = acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a * 3);
     let boxed: Box<dyn HandlerFactory<Tiny>> = Box::new(glue.clone());

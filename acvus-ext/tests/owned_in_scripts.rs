@@ -19,7 +19,6 @@ use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower, optimize as graph_optimize};
 use acvus_mir::ty::{Ty, lift_to_poly};
 use acvus_utils::{Astr, Freeze, Interner};
-use base64::Engine;
 use rustc_hash::FxHashMap;
 
 type TypedContext = FxHashMap<Astr, (Ty, Value)>;
@@ -32,26 +31,6 @@ async fn run_ext(
     registries: Vec<Registry<AcvusRuntime>>,
 ) -> Value {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
-    run_parsed(interner, ast, context, registries).await
-}
-
-async fn run_ext_script_mode(
-    interner: &Interner,
-    source: &str,
-    context: TypedContext,
-    registries: Vec<Registry<AcvusRuntime>>,
-) -> Value {
-    let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
-    run_parsed(interner, ast, context, registries).await
-}
-
-async fn run_ext_template(
-    interner: &Interner,
-    source: &str,
-    context: TypedContext,
-    registries: Vec<Registry<AcvusRuntime>>,
-) -> Value {
-    let ast = ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse"));
     run_parsed(interner, ast, context, registries).await
 }
 

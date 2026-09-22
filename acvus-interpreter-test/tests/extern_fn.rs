@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{ExternType, Owned, Registry, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, Executable, TokioExecutor, Value};
+use acvus_interpreter::{AcvusRuntime, TokioExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ir::InstKind;
 use acvus_mir::ty::{LenTerm, ObjectTy, Ty};

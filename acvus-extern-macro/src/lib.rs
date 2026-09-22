@@ -3523,7 +3523,7 @@ impl Received {
                     // here is what the checker unified the instance's result
                     // with, and the storage a borrow names is the receiver's.
                     __r.map(|__w| unsafe {
-                        <#var as ::acvus_extern::Passed<#runtime>>::restore::<'__r>(__rt, __w)
+                        <#var as ::acvus_extern::Passed<#runtime>>::restore(__rt, __w)
                     })
                 },
             },
@@ -3532,7 +3532,7 @@ impl Received {
                 bound: quote! { #ret: ::acvus_extern::Passed<#runtime> },
                 read: quote! {
                     // SAFETY: as the option shape's.
-                    unsafe { <#ret as ::acvus_extern::Passed<#runtime>>::restore::<'__r>(__rt, __r) }
+                    unsafe { <#ret as ::acvus_extern::Passed<#runtime>>::restore(__rt, __r) }
                 },
             },
         }

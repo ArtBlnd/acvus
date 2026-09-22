@@ -5,7 +5,7 @@
 //! predicate, and coercion behaviors.
 
 use acvus_mir::graph::types::QualifiedRef;
-use acvus_mir::solver::{Answer, Conversion, Decision, Unsettled};
+use acvus_mir::solver::{Decision, Unsettled};
 use acvus_mir::ty::{
     InferTy, PolyBuilder, PolyTy, Solver, Sources, Ty, TypeArg, TypeRegistry, lift_ty,
 };
@@ -48,17 +48,6 @@ fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
-    }
-}
-
-/// `Items<T>` whose source is still open, so a coercion may name it.
-fn iter_ity_open(interner: &Interner, s: &mut Solver, elem: InferTy) -> InferTy {
-    let iter_qref = QualifiedRef::root(interner.intern("Items"));
-    InferTy::UserDefined {
-        id: iter_qref,
-        type_args: vec![TypeArg::uniform(elem)],
-        effect_args: vec![],
-        identity_args: vec![s.fresh_identity_var()],
     }
 }
 

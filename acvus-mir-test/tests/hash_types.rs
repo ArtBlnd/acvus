@@ -10,7 +10,7 @@ use acvus_mir::graph::{
 };
 use acvus_mir::ir::{Callee, CastKind};
 use acvus_mir::ty::{
-    CastRule, Effect, Instances, LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Ty, TyTerm,
+    CastRule, Effect, Instances, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Ty, TyTerm,
     TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
 };
 use acvus_utils::{Freeze, Interner};

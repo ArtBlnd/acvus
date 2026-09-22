@@ -26,9 +26,7 @@
 use acvus_extern::Ctx;
 use std::cmp::Ordering;
 
-use acvus_extern::{
-    Erased, OneValue, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind,
-};
+use acvus_extern::{Erased, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind};
 
 use crate::iter::Items;
 

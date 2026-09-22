@@ -159,7 +159,6 @@ async fn google_llm(
         system_instruction: system.map(|s| schema::SystemInstruction {
             parts: vec![schema::TextPart { text: s }],
         }),
-        tools: None,
         generation_config: None,
     };
 

@@ -168,13 +168,6 @@ impl Release for Value {
     }
 }
 
-pub fn is_inline<T>() -> bool
-where
-    T: 'static,
-{
-    Kind::of::<T>().is_some()
-}
-
 fn large<T>(vtable: &'static Vtable, value: T) -> Value {
     let slot = Box::new(Slot {
         header: Header { vtable },
@@ -1073,6 +1066,13 @@ mod tests {
         assert_eq!(mem::align_of::<Value>(), 8);
     }
 
+    fn is_inline<T>() -> bool
+    where
+        T: 'static,
+    {
+        Kind::of::<T>().is_some()
+    }
+
     #[test]
     fn small_types_are_inline() {
         assert!(is_inline::<i64>());
@@ -1159,13 +1159,21 @@ mod tests {
         assert_eq!(unsafe { v.materialize::<String>() }, "hi");
     }
 
-    struct Counted(Arc<()>);
+    struct Counted {
+        _alive: Arc<()>,
+    }
 
     #[test]
     fn dropping_a_vec_of_owned_releases_them() {
         let alive = Arc::new(());
         let values: Vec<Owned<AcvusRuntime>> = (0..3)
-            .map(|_| Owned::from_value(unsafe { Value::erase(Counted(Arc::clone(&alive))) }))
+            .map(|_| {
+                Owned::from_value(unsafe {
+                    Value::erase(Counted {
+                        _alive: Arc::clone(&alive),
+                    })
+                })
+            })
             .collect();
         assert_eq!(Arc::strong_count(&alive), 4);
         drop(values);
@@ -1175,7 +1183,11 @@ mod tests {
     #[test]
     fn a_value_leaving_scope_releases_nothing_and_release_does() {
         let alive = Arc::new(());
-        let large = unsafe { Value::erase(Counted(Arc::clone(&alive))) };
+        let large = unsafe {
+            Value::erase(Counted {
+                _alive: Arc::clone(&alive),
+            })
+        };
         {
             let _copy = large;
         }

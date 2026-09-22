@@ -5,7 +5,7 @@
 
 use acvus_interpreter::code::{ChainBounds, Code, CodeBody, ExprBody, Off, Prepared, Shape};
 use acvus_interpreter::{PrepareCtx, Value, prepare_module};
-use acvus_interpreter_test::listing::{ChainShape, chains_of, chains_of_body};
+use acvus_interpreter_test::listing::{ChainShape, chains_of_body};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::ty::{IntTy, Ty};
@@ -43,10 +43,6 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
     assert_eq!(cr.modules.len(), 1, "these scripts are one module");
     let (_, module) = cr.modules.iter().next().expect("one module");
     prepare_module(module, &ctx)
-}
-
-fn chains(code: &Code) -> Vec<ChainShape> {
-    chains_of(code)
 }
 
 fn main_chains(prepared: &Prepared) -> Vec<ChainShape> {

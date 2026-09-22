@@ -180,7 +180,9 @@ impl Store {
 /// The cells of a `Store` whose root state has left it, with no operation on
 /// them: it keeps the cells alive and offers no `bind` and no `widen`, so the
 /// `FrameState` `new` hands back names cells that cannot move under it.
-pub struct RootCells(Store);
+pub struct RootCells {
+    _kept: Store,
+}
 
 /// A frame at the root of a call chain of its own: the state a call runs in,
 /// and the cells that state names.
@@ -197,7 +199,7 @@ impl RootFrame {
         state.cells = NonNull::from(&mut store.cells[..]);
         RootFrame {
             state,
-            cells: RootCells(store),
+            cells: RootCells { _kept: store },
         }
     }
 }

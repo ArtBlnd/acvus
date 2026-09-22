@@ -413,7 +413,7 @@ impl World {
         }
     }
 
-    fn call(&self, ns: &str, name: &str, mut args: Vec<V>) -> V {
+    fn call(&self, ns: &str, name: &str, args: Vec<V>) -> V {
         let qref = QualifiedRef::qualified(self.interner.intern(ns), self.interner.intern(name));
         let handlers = &self.externs.handlers[&qref];
         let ExternHandler::Sync(handler) = &handlers[0] else {
@@ -428,11 +428,6 @@ impl World {
             .into_op(());
         // SAFETY: the caller passes the declaration's own arguments.
         unsafe { op.call_run(&self.rt, &args) }
-    }
-
-    fn string(&self, s: &str) -> V {
-        // SAFETY: stored as itself.
-        unsafe { self.rt.erase::<String>(s.to_owned()) }
     }
 
     /// The pair a `&str` parameter is passed in (RFC-0062): the borrow is
