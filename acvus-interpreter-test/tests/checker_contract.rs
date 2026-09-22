@@ -126,3 +126,17 @@ fn an_input_nothing_types_is_refused_where_it_is_read() {
     refused_with("$s", "nothing that reads `$s` decides its type");
     refused_with("let t = $s; let u = $s; t + &u", "cannot infer type");
 }
+
+/// Whether a lent place holds a reference is read off its settled type: a
+/// lambda's parameter is still open where its body is checked.
+#[test]
+fn a_receiver_whose_type_settles_after_its_call_is_passed_as_what_it_is() {
+    runs_to(
+        "let v = vec([1]); let f = |r| -> { r.push(0); 0 }; f(&mut v); v.len()",
+        "2",
+    );
+    runs_to(
+        "let v = [1, 2]; let f = |r| -> { r[0u64] = 5; 0 }; f(&mut v); v[0u64]",
+        "5",
+    );
+}

@@ -106,6 +106,11 @@ enum SourceMode {
     Decided(DecisionId),
 }
 
+struct LentWhole {
+    place: AstId,
+    mutability: Mutability,
+}
+
 struct OpenDecision {
     open: InferTy,
     span: Span,
@@ -987,7 +992,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     structural_variant_calls: FxHashSet<AstId>,
     passing: FxHashMap<AstId, Passing>,
     source_modes: FxHashMap<AstId, SourceMode>,
-    operands: Vec<AstId>,
+    /// Places lent whole, whose passing is read off their settled types.
+    lent_places: Vec<LentWhole>,
     place_bases: FxHashMap<AstId, WrittenBase>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
@@ -1056,7 +1062,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             structural_variant_calls: FxHashSet::default(),
             passing: FxHashMap::default(),
             source_modes: FxHashMap::default(),
-            operands: Vec::new(),
+            lent_places: Vec::new(),
             place_bases: FxHashMap::default(),
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
@@ -1394,15 +1400,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn frozen_passing(&mut self, type_map: &TypeMap) -> FxHashMap<AstId, Passing> {
         let mut passing = std::mem::take(&mut self.passing);
-        for &operand in &self.operands {
+        for LentWhole { place, mutability } in &self.lent_places {
             let ty = type_map
-                .get(&operand)
-                .expect("an operand is checked before it is noted");
+                .get(place)
+                .expect("a lent place is checked before it is noted");
+            // A place that holds a reference is lent as that reference
+            // (RFC-0029): the lend reborrows nothing.
             let lent = match ty {
                 Ty::Ref(..) => Passing::AsIs,
-                _ => Passing::Lent(Mutability::Shared),
+                _ => Passing::Lent(*mutability),
             };
-            passing.insert(operand, lent);
+            passing.insert(*place, lent);
         }
         passing
     }
@@ -3947,19 +3955,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// that is already a reference value is passed as it is (RFC-0030); a
     /// receiver that is a value is bound to a temporary storage and that
     /// temporary is lent.
-    /// A place lent whole where it holds a reference is that reference
-    /// (RFC-0029): the lend reborrows nothing, so it is passed as it is.
-    fn lent_place_passing(&self, place: AstId, mutability: Mutability) -> Passing {
-        let ty = self
-            .type_map
-            .get(&place)
-            .expect("a checked receiver has its type recorded");
-        match self.solver.shallow_resolve_ty(ty) {
-            TyTerm::Ref(..) => Passing::AsIs,
-            _ => Passing::Lent(mutability),
-        }
-    }
-
     fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
         let (first, passing) = match mode {
             ReceiverMode::Lent(mutability) if names_a_place(receiver) => {
@@ -3969,8 +3964,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ty,
                     site: ArgSite::lent(receiver, taken_by),
                 };
-                let passing = self.lent_place_passing(receiver.id(), mutability);
-                (first, passing)
+                self.lent_places.push(LentWhole {
+                    place: receiver.id(),
+                    mutability,
+                });
+                (first, Passing::Lent(mutability))
             }
             ReceiverMode::Lent(mutability) => {
                 let ty = self.check_expr(receiver);
@@ -4143,8 +4141,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
                     site: ArgSite::lent(receiver, taken_by),
                 };
-                let passing = self.lent_place_passing(receiver.id(), mutability);
-                (first, passing)
+                self.lent_places.push(LentWhole {
+                    place: receiver.id(),
+                    mutability,
+                });
+                (first, Passing::Lent(mutability))
             }
             ReceiverMode::Value => {
                 let refused = self.reads_through_reference(receiver)
@@ -5425,7 +5426,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.demand = outer;
                 for operand in [left, right] {
                     self.note_place(operand);
-                    self.operands.push(operand.id());
+                    self.lent_places.push(LentWhole {
+                        place: operand.id(),
+                        mutability: Mutability::Shared,
+                    });
                 }
                 let lt = self.read_operand_through(&lt, *op);
                 let rt = self.read_operand_through(&rt, *op);
