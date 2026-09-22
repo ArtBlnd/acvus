@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it": while let on a local, payload moved then local reassigned
+let o = Some("the quick brown fox jumps over it".to_string()); let acc = "".to_string(); while let Some(s) = o { acc = acc + &s; o = None; } acc

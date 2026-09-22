@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it/0": literal test on Large String field of a local, no bind, whole local used after
+let o = { k: "the quick brown fox jumps over it".to_string(), }; let n = match o { { k: "jumps over the lazy dog, again and again", } => 1, _ => 0, }; o.k + "/" + &n.to_string()

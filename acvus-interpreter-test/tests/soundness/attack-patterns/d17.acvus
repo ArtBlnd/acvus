@@ -1,0 +1,2 @@
+// expect 9: Some(&x) payload bound, deref
+let x = 9; let o = Some(&x); match o { Some(r) => *r, None => 0, }

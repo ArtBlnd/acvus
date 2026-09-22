@@ -1,0 +1,2 @@
+// expect 2: pattern in a lambda body over its by-value parameter, called on two shapes
+let f = |p| -> match p { (Some(x), _) => x, (None, y) => y, _ => 0, }; f((Some(1), 5)) + f((None, 1))

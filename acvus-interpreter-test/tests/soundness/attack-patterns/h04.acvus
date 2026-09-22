@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it": literal arm matches the Large String then the local is used whole
+let o = ("the quick brown fox jumps over it".to_string(), 1); let n = match o { ("the quick brown fox jumps over it", 1) => 1, _ => 0, }; match o { (s, _) => if n == 1 { s } else { "".to_string() }, _ => "".to_string(), }

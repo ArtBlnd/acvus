@@ -1,0 +1,2 @@
+// expect 6: while let over a call that pops
+let v = vec([1, 2, 3]); let s = 0; while let Some(x) = v.pop() { s = s + x; } s

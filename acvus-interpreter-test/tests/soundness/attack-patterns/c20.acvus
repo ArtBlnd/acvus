@@ -1,0 +1,2 @@
+// expect refused or "…x…": String field moved out through a shared reference by a binding pattern, owner used after
+let o = { k: "the quick brown fox jumps over it".to_string(), }; let r = &o; let t = match r.k { s => s, }; t + &o.k

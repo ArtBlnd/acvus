@@ -1,0 +1,2 @@
+// expect 2: long string literal on a call result String, bind arm after
+let g = |x| -> x.to_string(); match g("the quick brown fox jumps over it") { "nope nope nope nope nope nope nope" => 1, "the quick brown fox jumps over it" => 2, _ => 0, }

@@ -1,0 +1,2 @@
+// expect 6: for with context bind each element of an array
+let a = [2, 4, 6]; for e in a { if let @n = e { }; } @n

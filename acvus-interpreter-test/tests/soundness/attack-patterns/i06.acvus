@@ -1,0 +1,2 @@
+// expect 1: one part bound and one literal through &mut
+let o = (1, 2); match &mut o { (x, 2) => *x, _ => 0, }

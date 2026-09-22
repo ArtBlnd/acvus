@@ -1,0 +1,2 @@
+// expect "q-p": bind strings out of context array then context still intact
+let t = match @names { [a, b] => b + "-" + &a, _ => "".to_string(), }; t

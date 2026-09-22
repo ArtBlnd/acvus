@@ -1,0 +1,2 @@
+// expect 7: match on an index of a Vec of Options
+let v = vec([None, Some(7)]); match v[1u64] { Some(x) => x, None => 0, }

@@ -1,0 +1,2 @@
+// expect 5: after match on &mut, local is mutable again
+let o = Some(4); let n = match &mut o { Some(x) => *x, None => 0, }; o = Some(n + 1); match o { Some(y) => y, None => 0, }

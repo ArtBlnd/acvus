@@ -1,0 +1,2 @@
+// expect 3: range through a reference
+let n = 7; match &n { 0..5 => 1, 5..7 => 2, 7..=9 => 3, _ => 0, }

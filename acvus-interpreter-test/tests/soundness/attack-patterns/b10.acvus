@@ -1,0 +1,2 @@
+// expect 9: context bind of @m from object field of a call
+let f = |x| -> { k: x, }; if let { k: @m, } = f(9) { }; @m

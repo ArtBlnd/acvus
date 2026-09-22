@@ -1,0 +1,2 @@
+// expect 1: whole-context binding then field
+match @o { x => x.a, _ => 0, }

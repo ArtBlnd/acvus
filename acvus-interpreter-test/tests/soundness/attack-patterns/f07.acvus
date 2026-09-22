@@ -1,0 +1,2 @@
+// expect 6: list pattern where head and tail overlap exactly
+let a = [1, 2, 3]; match a { [x, y, .., z] => x + y + z, _ => 0, }

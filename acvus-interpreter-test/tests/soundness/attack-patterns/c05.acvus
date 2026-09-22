@@ -1,0 +1,2 @@
+// expect 3: long string literal through a reference to a reference
+let s = "the quick brown fox jumps over it".to_string(); let r = &s; match &r { "nope nope nope nope nope nope nope" => 1, "the quick brown fox jumps over it" => 3, _ => 0, }

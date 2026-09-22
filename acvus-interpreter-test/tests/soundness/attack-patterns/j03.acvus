@@ -1,0 +1,2 @@
+// expect 3: control for j02 with a plain reference to an element
+let v = vec([(1, 2)]); let y = &v[0u64]; match y { (a, b) => *a + *b, _ => 0, }

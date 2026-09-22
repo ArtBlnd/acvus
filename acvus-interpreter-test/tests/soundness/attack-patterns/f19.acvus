@@ -1,0 +1,2 @@
+// expect 21: Vec bound by pattern is independent of the other part of the source
+let o = (vec([1]), vec([2])); let a = match o { (x, _) => x, _ => vec([]), }; a.push(9); let b = match o { (_, y) => y, _ => vec([]), }; a.len() * 10u64 + b.len()

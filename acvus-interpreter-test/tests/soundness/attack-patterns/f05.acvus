@@ -1,0 +1,2 @@
+// expect 0: rest-only list pattern with nothing around it
+let a = [1, 2]; match a { [..] => 0, _ => 1, }

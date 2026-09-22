@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it": first arm tests Large field, second binds it
+let o = { k: "the quick brown fox jumps over it".to_string(), n: 2, }; match o { { k: "jumps over the lazy dog, again and again", n: 2, } => "a".to_string(), { k, n: 2, } => k, _ => "z".to_string(), }

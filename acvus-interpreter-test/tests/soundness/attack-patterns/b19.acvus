@@ -1,0 +1,2 @@
+// expect "ac": for over array of tuples with Strings, if let
+let a = [("a".to_string(), true), ("b".to_string(), false), ("c".to_string(), true)]; let s = "".to_string(); for e in a { if let (t, true) = e { s = s + &t; }; } s

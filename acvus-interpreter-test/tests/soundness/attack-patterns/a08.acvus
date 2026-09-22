@@ -1,0 +1,2 @@
+// expect 14: list head/tail on a local array of Strings, compare
+let a = ["x".to_string(), "y".to_string(), "z".to_string()]; match a { [p, .., q] => if p == "x" && q == "z" { 14 } else { 0 }, _ => 1, }

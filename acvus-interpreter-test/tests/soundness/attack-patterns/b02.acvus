@@ -1,0 +1,2 @@
+// expect "x": bind a String field of a context, context still readable after
+let r = match @o { { b, } => b, _ => "n".to_string(), }; r + &@o.b

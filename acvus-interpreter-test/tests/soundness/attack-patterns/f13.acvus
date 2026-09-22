@@ -1,0 +1,2 @@
+// expect 3: one-element tuple with wildcard
+let t = (_); match t { (_) => 3, _ => 0, }

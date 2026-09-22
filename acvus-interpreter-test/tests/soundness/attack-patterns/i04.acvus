@@ -1,0 +1,2 @@
+// expect 3: two parts bound through &mut, only one used
+let o = (1, 2); match &mut o { (x, y) => *y + 1, _ => 0, }

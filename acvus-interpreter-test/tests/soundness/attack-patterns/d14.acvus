@@ -1,0 +1,2 @@
+// expect refused: context bind of a reference-bound part
+let o = Some(3); if let Some(@n) = &o { }; @n

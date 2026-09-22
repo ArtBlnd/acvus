@@ -1,0 +1,2 @@
+// expect 6: tuple nested 3 deep on a local
+let t = (1, (2, (3, 4))); match t { (a, (2, (b, _))) => a + 2 + b, _ => 0, }

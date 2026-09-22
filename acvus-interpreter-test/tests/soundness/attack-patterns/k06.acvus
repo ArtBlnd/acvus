@@ -1,0 +1,2 @@
+// expect 12: field-path source whose root is written in the arm
+let o = { p: (1, 2), q: 10, }; match o.p { (a, b) => { o.q = 0; a + b + 9 }, _ => 0, }

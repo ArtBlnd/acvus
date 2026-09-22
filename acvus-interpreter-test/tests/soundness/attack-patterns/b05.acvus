@@ -1,0 +1,2 @@
+// expect 4: context bind @n inside a list pattern on a local, then read @n
+let a = [4, 5]; if let [@n, _y] = a { }; @n

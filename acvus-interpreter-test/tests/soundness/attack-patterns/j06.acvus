@@ -1,0 +1,2 @@
+// expect 2: while let Some((1, b)) stops at the first mismatch
+let it = into_iter(vec([(1, 2), (3, 4), (1, 8)])); let acc = 0; while let Some((1, b)) = next(&mut it) { acc = acc + b; } acc

@@ -1,0 +1,2 @@
+// expect 1: object pattern with literal field, second arm
+let o = { k: "u".to_string(), v: 1, }; match o { { k: "w", } => 0, { k: "u", v, } => v, _ => 2, }

@@ -1,0 +1,2 @@
+// expect "ab": for over array of objects with a Large String and a literal key, by value
+let a = [{ t: "a".to_string(), k: 1, }, { t: "zz".to_string(), k: 2, }, { t: "b".to_string(), k: 1, }]; let s = "".to_string(); for e in a { match e { { t, k: 1, } => { s = s + &t; }, _ => { let u = 0; }, }; } s

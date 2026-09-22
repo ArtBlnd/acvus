@@ -1,0 +1,2 @@
+// expect "cba": while let over pop of Strings, concat
+let v = vec(["a".to_string(), "b".to_string(), "c".to_string()]); let s = "".to_string(); while let Some(x) = v.pop() { s = s + &x; } s

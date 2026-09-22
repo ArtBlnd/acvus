@@ -1,0 +1,2 @@
+// expect 7: object pattern on a call result, field bind
+let f = |u| -> { a: 3, b: u, }; match f(4) { { a, b, } => a + b, _ => 0, }

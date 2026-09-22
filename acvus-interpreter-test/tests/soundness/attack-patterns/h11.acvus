@@ -1,0 +1,2 @@
+// expect 9: whole call result bound to a context then read in arm
+match (|x| -> x * 3)(3) { @n => @n, _ => 0, }

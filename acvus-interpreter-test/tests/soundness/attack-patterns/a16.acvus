@@ -1,0 +1,2 @@
+// expect "u": object pattern then use of the moved field
+let o = { k: "u".to_string(), v: 1, }; match o { { k: "w", } => "no".to_string(), { k, } => k, _ => "d".to_string(), }

@@ -1,0 +1,2 @@
+// expect 97: char literal pattern
+let c = 'a'; match c { 'b' => 1, 'a' => 97, _ => 0, }

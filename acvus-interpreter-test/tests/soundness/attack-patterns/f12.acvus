@@ -1,0 +1,2 @@
+// expect refused: store a pattern-bound reference into a context
+let o = (1, 2); match &o { (a, _) => { @n = a; }, _ => { let z = 0; }, }; @n

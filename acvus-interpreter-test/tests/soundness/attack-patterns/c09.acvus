@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it#7": tuple of Large String and int from a call; literal on int
+let f = |x| -> (x.to_string(), 7); match f("the quick brown fox jumps over it") { (s, 8) => s, (s, n) => s + "#" + &n.to_string(), _ => "".to_string(), }

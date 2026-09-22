@@ -1,0 +1,2 @@
+// expect refused: Vec moved in one arm, then its tuple part used after
+let o = { v: vec([1]), n: 1, }; let a = match o { { v, n: 1, } => v, _ => vec([2]), }; o.v.len()

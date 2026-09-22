@@ -1,0 +1,2 @@
+// expect [1, 2, 3] refused: store through a shared binding from &mut list pattern
+let a = [1, 2, 3]; match &mut a { [p, x, q] => { *x = 9; }, _ => { let z = 0; }, }; a

@@ -1,0 +1,2 @@
+// expect 5: nested match on a reference-bound part of an outer reference pattern
+let o = Some((5, 6)); match &o { Some(inner) => match inner { (a, 6) => *a, _ => 0, }, None => 0, }

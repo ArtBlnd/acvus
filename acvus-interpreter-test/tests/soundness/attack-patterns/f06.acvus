@@ -1,0 +1,2 @@
+// expect 9: middle rest with 2 head and 2 tail on a 5 array
+let a = [1, 2, 3, 4, 5]; match a { [p, q, .., r, s] => p + q + r + s - 3, _ => 0, }

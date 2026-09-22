@@ -1,0 +1,2 @@
+// expect 1: object pattern on a context, literal field
+match @o { { a: 1, b, } => if b == "x" { 1 } else { 2 }, _ => 0, }

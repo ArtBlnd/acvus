@@ -1,0 +1,2 @@
+// expect "p": context bind @str from a list of Strings on a context
+if let [@str, ..] = @names { }; @str

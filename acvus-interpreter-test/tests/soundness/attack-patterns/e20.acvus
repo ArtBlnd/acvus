@@ -1,0 +1,2 @@
+// expect "q": nested field of a local object, tuple inside, Place with 2-deep path
+let o = { p: { q: ("q".to_string(), 2), }, }; match o.p.q { (s, 2) => s, _ => "".to_string(), }

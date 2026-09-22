@@ -1,0 +1,2 @@
+// expect "zz": string literal arm on a field of a local
+let o = { s: "zz".to_string(), n: 1, }; match o.s { "a" => "no".to_string(), t => t, }

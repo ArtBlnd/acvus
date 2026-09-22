@@ -1,0 +1,2 @@
+// expect "2": Err String of a list of Results from a call is bound after a String-literal arm
+let f = |u| -> [Err(u.to_string()), Ok(u)]; match f(2) { [Err("x"), _q] => "no".to_string(), [Err(b), Ok(_z)] => b, _ => "d".to_string(), }

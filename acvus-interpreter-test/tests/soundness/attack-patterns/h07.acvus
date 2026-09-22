@@ -1,0 +1,2 @@
+// expect 5: context bound to itself
+match @n { @n => @n, _ => 0, }

@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it!": literal arms fail then bind the Large call result
+let g = |x| -> x.to_string(); match g("the quick brown fox jumps over it") { "nope nope nope nope nope nope nope" => "a".to_string(), "other other other other other other" => "b".to_string(), s => s + "!", }

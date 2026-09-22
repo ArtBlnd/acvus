@@ -1,0 +1,2 @@
+// expect 7: return from inside an arm of a lambda with the bound value
+let f = |o| -> { match o { Some((a, 1)) => { return a; }, _ => { let z = 0; }, }; 0 }; f(Some((7, 1)))

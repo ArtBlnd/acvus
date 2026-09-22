@@ -1,0 +1,2 @@
+// expect 0: tuple nested 3 deep, inner literal mismatch
+let t = (1, (2, (3, 4))); match t { (_, (_, (_, 5))) => 1, (_, (5, _)) => 2, _ => 0, }

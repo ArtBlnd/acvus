@@ -1,0 +1,2 @@
+// expect "hi": String context bound to itself
+match @s { @s => @s, _ => "".to_string(), }

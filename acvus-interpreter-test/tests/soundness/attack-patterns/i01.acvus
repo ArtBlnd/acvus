@@ -1,0 +1,2 @@
+// expect 3: two parts bound through &mut of a tuple local
+let o = (1, 2); match &mut o { (x, y) => *x + *y, _ => 0, }

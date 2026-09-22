@@ -1,0 +1,2 @@
+// expect refused: context bind of a value that is a reference
+let x = 3; if let Some(@n) = Some(&x) { }; @n

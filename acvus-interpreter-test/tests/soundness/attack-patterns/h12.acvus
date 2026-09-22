@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it": context bind of a Large String from a call, then read binding
+let f = |u| -> Some(u.to_string()); if let Some(@str) = f("the quick brown fox jumps over it") { }; @str

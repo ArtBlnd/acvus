@@ -1,0 +1,2 @@
+// expect 1: Some(&x) with literal payload
+let x = 5; match Some(&x) { Some(5) => 1, _ => 0, }

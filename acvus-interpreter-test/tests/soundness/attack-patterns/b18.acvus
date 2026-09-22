@@ -1,0 +1,2 @@
+// expect 10: for over array elements, pattern each element with match
+let a = [Some(1), None, Some(9)]; let s = 0; for e in a { s = s + match e { Some(x) => x, None => 0, }; } s

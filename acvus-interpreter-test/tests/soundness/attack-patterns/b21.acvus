@@ -1,0 +1,2 @@
+// expect "xz": for over &v of objects, bind String field through reference
+let v = vec([{ k: "x".to_string(), on: true, }, { k: "y".to_string(), on: false, }, { k: "z".to_string(), on: true, }]); let s = "".to_string(); for e in &v { if let { k, on: true, } = e { s = s + k; }; } s

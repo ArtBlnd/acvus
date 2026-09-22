@@ -1,0 +1,2 @@
+// expect 7: while let through a reference with list and break
+let a = [1, 7]; let n = 0; while let [1, x] = &a { n = *x; break; } n

@@ -1,0 +1,2 @@
+// expect "the quick brown fox jumps over it": field of a reference, String
+let o = { k: "the quick brown fox jumps over it".to_string(), }; let r = &o; match &r.k { "the quick brown fox jumps over it" => r.k.to_string(), _ => "".to_string(), }

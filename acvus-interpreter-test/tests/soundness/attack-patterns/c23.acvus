@@ -1,0 +1,2 @@
+// expect 3: nested ref three deep with list
+let a = [1, 2]; let r = &a; let rr = &r; match &rr { [x, y] => *x + *y, _ => 0, }

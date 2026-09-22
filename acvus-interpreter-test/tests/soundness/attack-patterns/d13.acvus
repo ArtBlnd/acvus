@@ -1,0 +1,2 @@
+// expect 1: tuple of references with literals from a local
+let x = 5; let y = "the quick brown fox jumps over it".to_string(); let t = (&x, &y); match t { (5, "the quick brown fox jumps over it") => 1, _ => 0, }

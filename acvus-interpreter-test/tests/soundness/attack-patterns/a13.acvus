@@ -1,0 +1,2 @@
+// expect refused: store through Some(v) from &mut Option (binding is shared)
+let o = Some(1); match &mut o { Some(v) => { *v = 9; }, None => { let z = 0; }, }; o
