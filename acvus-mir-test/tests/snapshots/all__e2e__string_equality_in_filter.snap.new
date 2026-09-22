@@ -1,0 +1,81 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1029
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = ","
+  T2 = "admin"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @names
+     5 |   r4 = const_str T0
+     6 |   r5 = call #0(r4)
+     7 |   r6 = const_str T0
+     8 |   r7 = call #0(r6)
+     9 |   r8 = const_str T0
+    10 |   r9 = call #0(r8)
+    11 |   r10 = list [r5, r7, r9]
+    13 |   r11 = call #1(r3)
+    14 |   r12 = closure L0 []
+    15 |   r13 = call #2(r11, r12)
+    17 |   r14 = const_str T1
+    18 |   r15 = call #0(r14)
+    19 |   r16 = call #3(r13, r15)
+    20 |   r17 = string_concat [T0, T0, T0, r16]
+    21 |   commit @names = r10
+    22 |   return r17
+
+    ; r0 (v26) : Array<String, 3>
+    ; r1 (v27) : Array<String, 3>
+    ; r2 (v28) : Filter<Items<String>, String, Pure>
+    ; r3 (@names) : Array<String, 3>
+    ; r4 (v6) : &str
+    ; r5 (to_string(...)) : String
+    ; r6 (v8) : &str
+    ; r7 (to_string(...)) : String
+    ; r8 (v10) : &str
+    ; r9 (to_string(...)) : String
+    ; r10 (v12) : Array<String, 3>
+    ; r11 (into_iter(...)) : Items<String>
+    ; r12 (v16) : Fn(&String) -> Bool
+    ; r13 (filter(...)) : Filter<Items<String>, String, Pure>
+    ; r14 (v21) : &str
+    ; r15 (to_string(...)) : String
+    ; r16 (join(...)) : String
+    ; r17 (v24) : String
+    ; r18 (@names) : Array<String, 3>
+    ; r19 (names) : Array<String, 3>
+    ; r20 (v25) : Array<String, 3>
+    ; r21 (x) : Filter<Items<String>, String, Pure>
+    ; r22 (v13) : String
+    ; r23 (x) : Filter<Items<String>, String, Pure>
+    ; r24 (@names) : Array<String, 3>
+    ; r25 (names) : Array<String, 3>
+    ; r26 (v5) : String
+    ; r27 (v19) : String
+
+=== closure L0 (ValueId(0)) ===
+     0 |   r0 = undef
+     1 |   r1 = const_str T2
+     2 |   r2 = call #0(r1)
+     3 |   assign v6 = r2
+     4 |   r3 = ref &v6
+     5 |   r4 = string_eq r5 r3
+     6 |   r6 = !r4
+     7 |   return r6
+
+    ; r0 (v10) : &String
+    ; r1 (v4) : &str
+    ; r2 (to_string(...)) : String
+    ; r3 (var_6.) : &String
+    ; r4 (v9) : Bool
+    ; r5 (v1) : &String
+    ; r6 (v8) : Bool
+    ; r7 (n) : &String
+    ; r8 (v6) : String
+    ; r9 (n) : &String

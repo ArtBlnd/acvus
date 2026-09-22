@@ -28,22 +28,22 @@ impl<R> Owned<R>
 where
     R: Runtime,
 {
+    /// The runtime's and the glue's: a handler never names an `Owned`
+    /// (RFC-0068 D4).
+    #[doc(hidden)]
     #[inline(always)]
     pub fn from_value(value: R::Value) -> Self {
         Self(ManuallyDrop::new(value))
     }
 
+    /// As `from_value`'s.
+    #[doc(hidden)]
     #[inline(always)]
     pub fn into_value(self) -> R::Value {
         let mut held = ManuallyDrop::new(self);
         // SAFETY: `held` is a `ManuallyDrop`, so `Owned::drop` does not
         // run, and this is the only read of the inner value.
         unsafe { ManuallyDrop::take(&mut held.0) }
-    }
-
-    #[inline(always)]
-    pub fn borrow_value(&self) -> R::Value {
-        *self.0
     }
 
     #[inline(always)]
@@ -145,6 +145,7 @@ where
     }
 }
 
+#[doc(hidden)]
 /// The runtime's values behind a run of `Owned`s, for a caller that fills a
 /// destination it owns (RFC-0050 rule 6). `Owned<R>` is `#[repr(transparent)]`
 /// over `R::Value`, so the two slices have one layout.

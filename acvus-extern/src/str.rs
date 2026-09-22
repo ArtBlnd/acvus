@@ -24,8 +24,17 @@ unsafe impl Send for StrView {}
 // SAFETY: as `Send`.
 unsafe impl Sync for StrView {}
 
+/// The crossing's and the runtime's, and no handler's: a handler takes the
+/// language's `&str` as Rust's `&str` (`ByStr`) and returns it as Rust's
+/// `&str` borrowed from a parameter (`RetStr`), with Rust's lifetime on
+/// both. A `StrView` carries none, so every way in and out of one is
+/// `unsafe`.
 impl StrView {
-    pub fn of(s: &str) -> Self {
+    /// # Safety
+    /// `s` outlives every use of the view, which the loan the language's
+    /// `&str` holds keeps true for a view that crosses (RFC-0018).
+    #[doc(hidden)]
+    pub unsafe fn of(s: &str) -> Self {
         Self {
             ptr: s.as_ptr(),
             bytes: s.len(),
@@ -35,6 +44,7 @@ impl StrView {
     /// # Safety
     /// `words.ptr` is the first of `words.len` live UTF-8 bytes of one run,
     /// and that run outlives every `StrView` this makes.
+    #[doc(hidden)]
     #[inline(always)]
     pub const unsafe fn from_words(words: Words) -> Self {
         Self {
@@ -43,6 +53,7 @@ impl StrView {
         }
     }
 
+    #[doc(hidden)]
     #[inline(always)]
     pub fn words(&self) -> Words {
         Words {
@@ -60,6 +71,7 @@ impl StrView {
     ///
     /// # Safety
     /// The run this view names is live and unmoved for `'a`.
+    #[doc(hidden)]
     #[inline]
     pub unsafe fn as_str<'a>(&self) -> &'a str {
         // SAFETY: the caller's contract for liveness, and the checker's
@@ -106,7 +118,9 @@ where
     type Form = Pair;
 
     fn into_run(value: &str, rt: &Rt, out: &mut [Rt::Value]) {
-        rt.slice_into_run(StrView::of(value).words(), out)
+        // SAFETY: the result is a borrow of a parameter the caller lent
+        // for this call (RFC-0047 §3), which outlives the pair.
+        rt.slice_into_run(unsafe { StrView::of(value) }.words(), out)
     }
 }
 
@@ -122,7 +136,7 @@ where
 {
     type Site = ();
 
-    fn site(_: &[crate::handler::ArgAt<'_, Rt>], _: usize) {}
+    fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
 impl<'a, Rt> Arg<'a, Rt> for ByStr

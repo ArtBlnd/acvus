@@ -70,7 +70,7 @@ where
     // SAFETY: `Externs::combine` met this parameter's requirement with the
     // instance of `rest::eq` at the ground type `T` was filled with, and
     // both `a` and `b` are values of that type.
-    unsafe { eq.call(ctx, &mut a, (&*b,)) }
+    eq.call(ctx, &mut a, (&*b,))
 }
 
 /// The same crossing where the rest position is a pattern over the
@@ -92,7 +92,7 @@ where
         None => Owned::from_value(ctx.rt.none()),
     };
     // SAFETY: as `same`'s, at the option the signature writes there.
-    unsafe { tally.call(ctx, &mut a, (rest,)) }
+    tally.call(ctx, &mut a, (rest,))
 }
 
 fn rest_registry<R>() -> Registry<R>

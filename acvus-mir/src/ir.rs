@@ -137,11 +137,13 @@ pub enum RefTarget {
 }
 
 /// Target of a function call.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Callee {
     /// A function with a body in the graph. Enables pre-fetch and inlining.
     Direct(QualifiedRef),
-    /// An ExternFn at the instance the checker settled on (RFC-0040).
+    /// An ExternFn at the overload the checker settled on (RFC-0040). For
+    /// a declaration that states requirements the number is an `Overload`
+    /// in the declaration's `OverloadSpace` (RFC-0068 D5).
     Extern { id: QualifiedRef, instance: usize },
     /// Runtime-determined callable (closure, variable holding a function).
     Indirect(ValueId),
@@ -153,6 +155,99 @@ impl Callee {
         match self {
             Self::Direct(id) | Self::Extern { id, .. } => *id,
             Self::Indirect(_) => unreachable!("an indirect callee has no name"),
+        }
+    }
+}
+
+/// One overload of an ExternFn that states requirements: its own instance
+/// and, per requirement in the declaration's order, the instance of the
+/// required signature the checker settled on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overload {
+    pub own: usize,
+    pub required: Vec<usize>,
+}
+
+/// How many overloads such a declaration has: its own instances times the
+/// instances of each signature it requires. The IR names one by its position
+/// in this space, the checker writes that position and the registry reads
+/// it, both through here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverloadSpace {
+    pub own: usize,
+    pub required: Vec<usize>,
+}
+
+impl OverloadSpace {
+    pub fn of(scheme: &crate::ty::Scheme) -> Self {
+        OverloadSpace {
+            own: scheme.instances.as_ref().map_or(1, |declared| {
+                // A declaration that lists no instance is its one generic
+                // one, which `Solver::instantiate_scheme_with` fixes at 0.
+                (declared.concrete.len() + usize::from(declared.generic)).max(1)
+            }),
+            required: scheme
+                .requires
+                .iter()
+                .map(|r| r.instances.concrete.len())
+                .collect(),
+        }
+    }
+
+    /// The space of `function` among the declarations it is compiled with,
+    /// for a reader that has the graph and not the checker's schemes.
+    pub fn among(
+        function: QualifiedRef,
+        functions: &[crate::graph::Function],
+    ) -> Option<Self> {
+        let instances_of = |qref: QualifiedRef| {
+            functions.iter().find(|f| f.qref == qref).and_then(|f| match &f.kind {
+                crate::graph::FnKind::Extern { instances, .. } => Some(instances),
+                _ => None,
+            })
+        };
+        let crate::graph::FnKind::Extern { requires, .. } =
+            &functions.iter().find(|f| f.qref == function)?.kind
+        else {
+            return None;
+        };
+        let own = instances_of(function)?;
+        Some(OverloadSpace {
+            own: (own.concrete.len() + usize::from(own.generic)).max(1),
+            required: requires
+                .iter()
+                .map(|r| instances_of(r.signature).map(|i| i.concrete.len()))
+                .collect::<Option<_>>()?,
+        })
+    }
+
+    pub fn position(&self, overload: &Overload) -> usize {
+        debug_assert!(overload.own < self.own);
+        debug_assert_eq!(overload.required.len(), self.required.len());
+        let mut stride = self.own;
+        let mut position = overload.own;
+        for (instance, count) in overload.required.iter().zip(&self.required) {
+            debug_assert!(instance < count);
+            position += instance * stride;
+            stride *= count;
+        }
+        position
+    }
+
+    pub fn overload(&self, position: usize) -> Overload {
+        let mut rest = position / self.own;
+        let required = self
+            .required
+            .iter()
+            .map(|count| {
+                let instance = rest % count;
+                rest /= count;
+                instance
+            })
+            .collect();
+        Overload {
+            own: position % self.own,
+            required,
         }
     }
 }
@@ -908,4 +1003,48 @@ pub struct MirModule {
     /// The `ret` of the graph `Function` this module is the body of; for the
     /// entry, what the host declared (RFC-0054).
     pub ret: Ty,
+}
+
+#[cfg(test)]
+mod overload_space_tests {
+    use super::{Overload, OverloadSpace};
+
+    #[test]
+    fn a_position_names_the_overload_it_was_made_from() {
+        let space = OverloadSpace {
+            own: 2,
+            required: vec![3, 5],
+        };
+        let mut seen = Vec::new();
+        for own in 0..2 {
+            for a in 0..3 {
+                for b in 0..5 {
+                    let overload = Overload {
+                        own,
+                        required: vec![a, b],
+                    };
+                    let position = space.position(&overload);
+                    assert_eq!(space.overload(position), overload);
+                    seen.push(position);
+                }
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (0..30).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_declaration_with_no_requirement_keeps_its_instance_number() {
+        let space = OverloadSpace {
+            own: 4,
+            required: vec![],
+        };
+        assert_eq!(
+            space.position(&Overload {
+                own: 3,
+                required: vec![]
+            }),
+            3
+        );
+    }
 }

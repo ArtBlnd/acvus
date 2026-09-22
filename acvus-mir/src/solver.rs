@@ -1233,17 +1233,21 @@ impl Terms {
 
     /// Whether the call type would join an instance's signature, on a copy
     /// of the terms: the solver's own lattice says what "could match" means.
-    fn would_take(&self, call: &InferTy, signature: &PolyTy, registry: &TypeRegistry) -> bool {
+    fn would_take(
+        &self,
+        call: &InferTy,
+        signature: &PolyTy,
+        bound: EffectBoundedBy,
+        registry: &TypeRegistry,
+    ) -> bool {
         let mut trial = self.clone();
         let instance = trial.instantiate_open(signature, registry);
+        let Flow { value, into } = bound.ordered(CallOfInstance {
+            call,
+            instance: &instance,
+        });
         trial
-            .join(
-                call,
-                &instance,
-                Position::Value,
-                JoinKind::Decision,
-                registry,
-            )
+            .join(value, into, Position::Value, JoinKind::Decision, registry)
             .is_ok()
     }
 }
@@ -1339,6 +1343,79 @@ pub struct Candidate {
     pub admits: Task,
 }
 
+/// Which side of an instance's join holds the effect the other stays
+/// within: a call takes its instance's, a required instance stays within
+/// its requirer's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectBoundedBy {
+    TheInstance,
+    TheRequirer,
+}
+
+impl EffectBoundedBy {
+    fn of(required: Option<QualifiedRef>) -> Self {
+        match required {
+            Some(_) => EffectBoundedBy::TheRequirer,
+            None => EffectBoundedBy::TheInstance,
+        }
+    }
+
+    fn ordered<'t>(self, ran: CallOfInstance<'t>) -> Flow<'t> {
+        let CallOfInstance { call, instance } = ran;
+        match self {
+            EffectBoundedBy::TheInstance => Flow {
+                value: call,
+                into: instance,
+            },
+            EffectBoundedBy::TheRequirer => Flow {
+                value: instance,
+                into: call,
+            },
+        }
+    }
+}
+
+/// A call type and the type of an instance it may run.
+#[derive(Clone, Copy)]
+struct CallOfInstance<'t> {
+    call: &'t InferTy,
+    instance: &'t InferTy,
+}
+
+/// The two sides of a join, in the order `Terms::join` reads them.
+struct Flow<'t> {
+    value: &'t InferTy,
+    into: &'t InferTy,
+}
+
+/// A requirement's call type at `Requirement::calls`, the task of the
+/// marker `acvus-extern-macro` read off the requirer's `Instance` parameter.
+fn called_at(call: InferTy, calls: Task) -> InferTy {
+    match call {
+        TyTerm::Fn {
+            params,
+            ret,
+            captures,
+            effect: EffectTerm::Known(effect),
+        } => TyTerm::Fn {
+            params,
+            ret,
+            captures,
+            effect: EffectTerm::Known(effect.at_task(calls)),
+        },
+        other => other,
+    }
+}
+
+/// What still separates the candidates of an instance decision: their
+/// types, or, once the call has joined the one type they share, only the
+/// task each admits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceTie {
+    Types,
+    TaskOnly,
+}
+
 /// The generic instance of a function: the uniform one, whose signature a
 /// call type with a specialized slot does not match (hash-types.md, R3).
 #[derive(Debug, Clone)]
@@ -1356,6 +1433,10 @@ pub enum Decision {
         call: InferTy,
         candidates: Vec<Candidate>,
         generic: Option<GenericInstance>,
+        /// The signature a requirement asked an instance of (RFC-0068 D1);
+        /// a call's own decision is named by its site.
+        required: Option<QualifiedRef>,
+        tie: InstanceTie,
     },
     /// Which conversion takes an argument to its parameter (RFC-0023):
     /// identity where the two join, else a declared cast.
@@ -1651,6 +1732,7 @@ pub enum SettledSignature {
         qref: QualifiedRef,
         instance: Option<InstanceChoice>,
         bounded: Vec<TypeBoundId>,
+        requirements: Vec<DecisionId>,
     },
     Local,
 }
@@ -1673,10 +1755,13 @@ pub enum Conversion {
 /// Why a decision did not settle.
 #[derive(Debug, Clone)]
 pub enum Unsettled {
-    /// No instance's signature matches the call type.
+    /// No instance's signature matches the call type; `instances` are the
+    /// signatures the decision still held when the last was refused.
     NoInstance {
         decision: DecisionId,
         call: InferTy,
+        instances: Vec<PolyTy>,
+        required: Option<QualifiedRef>,
     },
     /// The one remaining instance's signature does not join the call type.
     InstanceMismatch {
@@ -1814,9 +1899,18 @@ enum Progress {
 
 // -- Solver ---------------------------------------------------------------
 
+/// A source that began where a decision settled on an instance, for the
+/// checker to place at that decision's site.
+#[derive(Debug, Clone, Copy)]
+pub struct BegunSource {
+    pub decision: DecisionId,
+    pub source: IdentityId,
+}
+
 pub struct Solver<'src> {
     terms: Terms,
     decisions: Vec<DecisionSlot>,
+    begun_by_decisions: Vec<BegunSource>,
     /// Mints a new source for every identity a declaration introduces;
     /// lent by the compilation for this solver's lifetime.
     sources: &'src mut Sources,
@@ -1830,6 +1924,7 @@ impl<'src> Solver<'src> {
         Self {
             terms: Terms::new(),
             decisions: Vec::new(),
+            begun_by_decisions: Vec::new(),
             sources,
             registry,
         }
@@ -1956,6 +2051,42 @@ impl<'src> Solver<'src> {
     fn settle_join(&mut self, a: &InferTy, b: &InferTy) -> Result<(), Mismatch> {
         self.terms
             .join(a, b, Position::Value, JoinKind::Decision, self.registry)
+    }
+
+    /// The call joined with the instance it runs. A call takes its
+    /// instance's effect, so the task `tightest_admitting` reads off the call
+    /// is the instance's own; a required instance only stays within its
+    /// requirer's.
+    fn settle_instance(
+        &mut self,
+        id: DecisionId,
+        ran: CallOfInstance<'_>,
+        bound: EffectBoundedBy,
+    ) -> Result<(), Unsettled> {
+        let CallOfInstance { call, instance } = ran;
+        let Flow { value, into } = bound.ordered(ran);
+        self.settle_join(value, into)
+            .map_err(
+                |Mismatch { expected, got, .. }| Unsettled::InstanceMismatch {
+                    decision: id,
+                    expected,
+                    got,
+                },
+            )?;
+        let (
+            EffectBoundedBy::TheInstance,
+            TyTerm::Fn { effect: called, .. },
+            TyTerm::Fn { effect: run, .. },
+        ) = (bound, call, instance)
+        else {
+            return Ok(());
+        };
+        self.terms
+            .unify_effect(called, run, EffectRelation::Equal)
+            .map_err(|conflict| Unsettled::EffectExceeded {
+                decision: id,
+                conflict,
+            })
     }
 
     /// Whether `settle_join(a, b)` would succeed, on a copy of the terms.
@@ -2211,7 +2342,9 @@ impl<'src> Solver<'src> {
                 call,
                 candidates,
                 generic,
-            } => self.step_instance(id, &call, candidates, generic),
+                required,
+                tie,
+            } => self.step_instance(id, &call, candidates, generic, required, tie),
             Decision::Conversion { from, to } => self.step_conversion(id, &from, &to),
             Decision::Signature {
                 name,
@@ -2505,6 +2638,7 @@ impl<'src> Solver<'src> {
                             ty,
                             bounded,
                             instance,
+                            requirements,
                         } = self.instantiate_scheme(scheme);
                         (
                             ty,
@@ -2512,6 +2646,7 @@ impl<'src> Solver<'src> {
                                 qref: *qref,
                                 instance,
                                 bounded,
+                                requirements,
                             },
                         )
                     }
@@ -2698,7 +2833,12 @@ impl<'src> Solver<'src> {
                             .bound_of_var(var)
                             .meet(&scheme.param_bound(&declared.ty))
                             .is_some(),
-                        _ => true,
+                        _ => match scheme.param_bound(&declared.ty) {
+                            TyVarBound::OneOf { shapes, .. } => {
+                                self.term_within_shapes(&param.ty, &shapes)
+                            }
+                            TyVarBound::Any | TyVarBound::Integer { .. } => true,
+                        },
                     },
                 );
         if !bounds_meet {
@@ -2795,6 +2935,13 @@ impl<'src> Solver<'src> {
         if shapes.iter().any(borrows_a_str) && self.borrows_a_string(arg) {
             return Admission::Viewed;
         }
+        if shapes
+            .iter()
+            .filter_map(borrowed_slice)
+            .any(|mutability| self.lends_a_slice(arg, mutability))
+        {
+            return Admission::Viewed;
+        }
         let converts = shapes.iter().any(|shape| {
             let mut trial = self.terms.clone();
             let to = trial.instantiate_open(shape, self.registry);
@@ -2836,6 +2983,15 @@ impl<'src> Solver<'src> {
             return false;
         };
         matches!(self.terms.resolve_ty(&lent.ty), TyTerm::Var(_))
+    }
+
+    fn lends_a_slice(&self, arg: &InferTy, mutability: Mutability) -> bool {
+        let TyTerm::Ref(lent, storage) = self.terms.resolve_ty(arg) else {
+            return false;
+        };
+        lent == mutability
+            && crate::ty::SliceableHead::of(&storage.ty)
+                .is_some_and(|head| self.registry.lends_a_slice(head, mutability))
     }
 
     fn borrows_a_string(&self, arg: &InferTy) -> bool {
@@ -2954,14 +3110,17 @@ impl<'src> Solver<'src> {
         call: &InferTy,
         candidates: Vec<Candidate>,
         generic: Option<GenericInstance>,
+        required: Option<QualifiedRef>,
+        tie: InstanceTie,
     ) -> Progress {
         let ty = self.terms.resolve_ty(call);
+        let bound = EffectBoundedBy::of(required);
         let remaining: Vec<Candidate> = candidates
             .iter()
-            .filter(|c| self.terms.would_take(call, &c.ty, self.registry))
+            .filter(|c| self.terms.would_take(call, &c.ty, bound, self.registry))
             .cloned()
             .collect();
-        let generic = generic.filter(|g| self.terms.would_take(call, &g.ty, self.registry));
+        let generic = generic.filter(|g| self.terms.would_take(call, &g.ty, bound, self.registry));
         let narrowed = remaining.len() != candidates.len();
         if narrowed
             && let Decision::Instance { candidates, .. } =
@@ -2978,33 +3137,63 @@ impl<'src> Solver<'src> {
             ([], None) => Progress::Failed(Unsettled::NoInstance {
                 decision: id,
                 call: ty,
+                instances: candidates.iter().map(|c| c.ty.clone()).collect(),
+                required,
             }),
             ([], Some(generic)) => {
                 let instance = self.instantiate_open(&generic.ty);
-                match self.settle_join(call, &instance) {
+                match self.settle_instance(
+                    id,
+                    CallOfInstance {
+                        call,
+                        instance: &instance,
+                    },
+                    bound,
+                ) {
                     Ok(()) => {
                         Progress::Settled(Answer::Instance(InstanceKind::Extern(generic.instance)))
                     }
-                    Err(Mismatch { expected, got, .. }) => {
-                        Progress::Failed(Unsettled::InstanceMismatch {
-                            decision: id,
-                            expected,
-                            got,
-                        })
-                    }
+                    Err(refused) => Progress::Failed(refused),
                 }
             }
             ([only], generic) if generic.is_none() || matches_pattern(&ty, &only.ty) => {
                 let instance = self.instantiate_open(&only.ty);
-                match self.settle_join(call, &instance) {
-                    Ok(()) => Progress::Settled(Answer::Instance(only.instance)),
-                    Err(Mismatch { expected, got, .. }) => {
-                        Progress::Failed(Unsettled::InstanceMismatch {
-                            decision: id,
-                            expected,
-                            got,
-                        })
+                match self.settle_instance(
+                    id,
+                    CallOfInstance {
+                        call,
+                        instance: &instance,
+                    },
+                    bound,
+                ) {
+                    Ok(()) => {
+                        self.begin_unbound_sources(id, &instance);
+                        Progress::Settled(Answer::Instance(only.instance))
                     }
+                    Err(refused) => Progress::Failed(refused),
+                }
+            }
+            ([first, rest @ ..], None)
+                if tie == InstanceTie::Types && rest.iter().all(|c| c.ty == first.ty) =>
+            {
+                let instance = self.instantiate_open(&first.ty);
+                match self.settle_instance(
+                    id,
+                    CallOfInstance {
+                        call,
+                        instance: &instance,
+                    },
+                    bound,
+                ) {
+                    Ok(()) => {
+                        if let Decision::Instance { tie, .. } =
+                            &mut self.decisions[id.0 as usize].decision
+                        {
+                            *tie = InstanceTie::TaskOnly;
+                        }
+                        Progress::Narrowed
+                    }
+                    Err(refused) => Progress::Failed(refused),
                 }
             }
             _ => progress_without_answer,
@@ -3126,8 +3315,12 @@ impl<'src> Solver<'src> {
         self.freeze_ty_with(ty, Open::Refuse)
     }
 
-    /// The type a report shows: as written, every variable nothing
-    /// resolved closed to `!`, whatever bound it carries (RFC-0043).
+    /// The type a report shows: as written, every type variable nothing
+    /// resolved closed to `!`, whatever bound it carries (RFC-0043), and
+    /// an open representation closed to its least element. A variable the
+    /// solve bound outside its declaration's bound is shown as bound, not
+    /// refused. An open identity or length still refuses: neither has a
+    /// concrete form standing for "open".
     pub fn written_ty(&self, ty: &InferTy) -> Result<Ty, FreezeError> {
         self.freeze_ty_with(ty, Open::AsWritten)
     }
@@ -3139,7 +3332,12 @@ impl<'src> Solver<'src> {
                 match &self.terms.ty_bounds[root.0 as usize] {
                     TypeBound::Resolved { ty: inner, bound } => {
                         let frozen = self.freeze_ty_with(inner, open)?;
-                        if bound.admits(&frozen) {
+                        // A report shows the type the solve bound the
+                        // variable to even where the declaration's bound
+                        // refuses it: that type is what the position
+                        // carries, and the bound itself is refused on its
+                        // own by `MirErrorKind::TypeOutOfBound`.
+                        if bound.admits(&frozen) || matches!(open, Open::AsWritten) {
                             Ok(frozen)
                         } else {
                             Err(FreezeError::OutOfBound {
@@ -3172,6 +3370,11 @@ impl<'src> Solver<'src> {
             &mut |id: ReprVarId| match self.terms.resolve_repr(Repr::Var(id)) {
                 Repr::Uniform => Ok(Repr::Uniform),
                 Repr::Specialized => Ok(Repr::Specialized),
+                // A report runs before `solve` has taken the least
+                // elements, and `Uniform` is the one an open
+                // representation takes there (solver.md R3), so a report
+                // shows the rest of the type rather than nothing.
+                Repr::Var(_) if matches!(open, Open::AsWritten) => Ok(Repr::Uniform),
                 Repr::Var(root) => Err(FreezeError::UnresolvedRepr(root)),
             },
         )
@@ -3202,6 +3405,45 @@ impl<'src> Solver<'src> {
         self.terms.instantiate_open(ty, self.registry)
     }
 
+    /// An identity the settled instance returns and nothing bound, neither
+    /// its parameters nor the call, is a source that begins at this call
+    /// (RFC-0012), as it is for a declaration called by name.
+    fn begin_unbound_sources(&mut self, decision: DecisionId, instance: &InferTy) {
+        let TyTerm::Fn { params, ret, .. } = instance else {
+            return;
+        };
+        let mut of_params: Vec<IdentityVarId> = Vec::new();
+        for param in params {
+            param.ty.for_each_identity(&mut |identity| {
+                if let IdentityTerm::Var(var) = self.terms.resolve_identity(identity) {
+                    of_params.push(var);
+                }
+            });
+        }
+        let mut open: Vec<IdentityVarId> = Vec::new();
+        ret.for_each_identity(&mut |identity| {
+            if let IdentityTerm::Var(var) = self.terms.resolve_identity(identity)
+                && !of_params.contains(&var)
+            {
+                open.push(var);
+            }
+        });
+        for var in open {
+            let IdentityTerm::Var(root) = self.terms.resolve_identity(&IdentityTerm::Var(var))
+            else {
+                continue;
+            };
+            let source = self.sources.next();
+            self.terms.identity_vars[root.0 as usize] = IdentityBound::Bound(source);
+            self.begun_by_decisions
+                .push(BegunSource { decision, source });
+        }
+    }
+
+    pub fn take_begun_sources(&mut self) -> Vec<BegunSource> {
+        std::mem::take(&mut self.begun_by_decisions)
+    }
+
     pub fn fresh_shape(&mut self, pattern: &PolyTy) -> InferTy {
         self.instantiate_open(pattern)
     }
@@ -3226,8 +3468,10 @@ impl<'src> Solver<'src> {
         } else {
             Reprs::Open
         };
-        let ty = self.instantiate_with(
+        let patterns: Vec<&PolyTy> = scheme.requires.iter().map(|req| &req.pattern).collect();
+        let (ty, required) = self.instantiate_with(
             &scheme.ty,
+            &patterns,
             |var, fresh| {
                 let bound = scheme.bound_of(var);
                 if bound != TyVarBound::Any {
@@ -3237,6 +3481,32 @@ impl<'src> Solver<'src> {
             },
             reprs,
         );
+        let requirements = scheme
+            .requires
+            .iter()
+            .zip(required)
+            .map(|(req, call)| {
+                let call = called_at(call, req.calls);
+                self.decide(Decision::Instance {
+                    call,
+                    candidates: req
+                        .instances
+                        .concrete
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, sig)| sig.task <= req.calls)
+                        .map(|(instance, sig)| Candidate {
+                            instance: InstanceKind::Extern(instance),
+                            ty: sig.ty.clone(),
+                            admits: sig.admits,
+                        })
+                        .collect(),
+                    generic: None,
+                    required: Some(req.signature),
+                    tie: InstanceTie::Types,
+                })
+            })
+            .collect();
         let instance = scheme.instances.as_ref().map(|instances| {
             if fixed_generic {
                 return InstanceChoice::Fixed(instances.generic_index());
@@ -3259,6 +3529,8 @@ impl<'src> Solver<'src> {
                     instance: instances.generic_index(),
                     ty: scheme.ty.clone(),
                 }),
+                required: None,
+                tie: InstanceTie::Types,
             });
             InstanceChoice::Decided(id)
         });
@@ -3266,15 +3538,19 @@ impl<'src> Solver<'src> {
             ty,
             bounded,
             instance,
+            requirements,
         }
     }
 
+    /// `ty` and `beside` at one set of fresh variables: a variable `ty`
+    /// and a pattern in `beside` both name is one solver variable.
     fn instantiate_with(
         &mut self,
         ty: &PolyTy,
+        beside: &[&PolyTy],
         mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
         reprs: Reprs,
-    ) -> InferTy {
+    ) -> (InferTy, Vec<InferTy>) {
         let mut maps = PolyMaps::default();
         let from_params = identity_vars_bound_by_params(ty);
         let Terms {
@@ -3286,52 +3562,63 @@ impl<'src> Solver<'src> {
             ..
         } = &mut self.terms;
         let sources = &mut *self.sources;
-        let instance = ty.map(
-            &mut |id: u32| {
-                let var = *maps.ty.entry(id).or_insert_with(|| {
-                    let fresh = alloc_ty_var(ty_bounds, TyVarBound::Any);
-                    let bound = bound_for(id, fresh);
-                    ty_bounds[fresh.0 as usize] = TypeBound::Unresolved { bound };
-                    fresh
-                });
-                TyTerm::Var(var)
-            },
-            &mut |id: u32| {
-                *maps.identity.entry(id).or_insert_with(|| {
-                    if from_params.contains(&id) {
-                        IdentityTerm::Var(alloc_identity_var(identity_vars))
-                    } else {
-                        IdentityTerm::Known(sources.next())
-                    }
-                })
-            },
-            &mut |id: u32| {
-                EffectTerm::Var(
-                    *maps
-                        .effect
-                        .entry(id)
-                        .or_insert_with(|| alloc_effect_var(effect_vars)),
-                )
-            },
-            &mut |id: u32| {
-                LenTerm::Var(
-                    *maps
-                        .len
-                        .entry(id)
-                        .or_insert_with(|| alloc_len_var(len_vars)),
-                )
-            },
-            &mut |id: u32| match reprs {
-                Reprs::Uniform => Repr::Uniform,
-                Reprs::Open => Repr::Var(
-                    *maps
-                        .repr
-                        .entry(id)
-                        .or_insert_with(|| alloc_repr_var(repr_vars, ReprOwner::Signature)),
-                ),
-            },
-        );
-        uniform_slots(instance, self.registry)
+        let mut instantiate = |poly: &PolyTy| {
+            poly.map(
+                &mut |id: u32| {
+                    let var = *maps.ty.entry(id).or_insert_with(|| {
+                        let fresh = alloc_ty_var(ty_bounds, TyVarBound::Any);
+                        let bound = bound_for(id, fresh);
+                        ty_bounds[fresh.0 as usize] = TypeBound::Unresolved { bound };
+                        fresh
+                    });
+                    TyTerm::Var(var)
+                },
+                &mut |id: u32| {
+                    *maps.identity.entry(id).or_insert_with(|| {
+                        if from_params.contains(&id) {
+                            IdentityTerm::Var(alloc_identity_var(identity_vars))
+                        } else {
+                            IdentityTerm::Known(sources.next())
+                        }
+                    })
+                },
+                &mut |id: u32| {
+                    EffectTerm::Var(
+                        *maps
+                            .effect
+                            .entry(id)
+                            .or_insert_with(|| alloc_effect_var(effect_vars)),
+                    )
+                },
+                &mut |id: u32| {
+                    LenTerm::Var(
+                        *maps
+                            .len
+                            .entry(id)
+                            .or_insert_with(|| alloc_len_var(len_vars)),
+                    )
+                },
+                &mut |id: u32| match reprs {
+                    Reprs::Uniform => Repr::Uniform,
+                    Reprs::Open => Repr::Var(
+                        *maps
+                            .repr
+                            .entry(id)
+                            .or_insert_with(|| alloc_repr_var(repr_vars, ReprOwner::Signature)),
+                    ),
+                },
+            )
+        };
+        let instance = instantiate(ty);
+        let beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
+        let registry = self.registry;
+        (
+            uniform_slots(instance, registry),
+            beside
+                .into_iter()
+                .map(|poly| uniform_slots(poly, registry))
+                .collect(),
+        )
     }
 
     /// Two polymorphic types sharing one set of placeholders, as a cast
@@ -3570,6 +3857,19 @@ where
     matches!(shape, TyTerm::Ref(Mutability::Shared, pointee) if matches!(pointee.ty, TyTerm::Str))
 }
 
+/// The mutability of a parameter that is `&[T]` or `&mut [T]`.
+fn borrowed_slice<V>(shape: &TyTerm<V>) -> Option<Mutability>
+where
+    V: Phase,
+{
+    match shape {
+        TyTerm::Ref(mutability, pointee) if matches!(pointee.ty, TyTerm::Slice(_)) => {
+            Some(*mutability)
+        }
+        _ => None,
+    }
+}
+
 /// A parameter that takes a run of what its argument lends rather than the
 /// storage itself: `&[T]` or `&mut [T]` (RFC-0047 rule 6), `&str` (RFC-0062
 /// Decision 3).
@@ -3758,6 +4058,9 @@ pub struct Instantiated {
     pub bounded: Vec<TypeBoundId>,
     /// `Some` for an Extern function.
     pub instance: Option<InstanceChoice>,
+    /// One instance decision per requirement the scheme states, in the
+    /// scheme's order (RFC-0068 D1).
+    pub requirements: Vec<DecisionId>,
 }
 
 /// Which instance of an Extern function a call runs: fixed at the

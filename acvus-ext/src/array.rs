@@ -1,10 +1,6 @@
-use acvus_extern::Ctx;
 use acvus_extern::{
-    Arr, Mut, Ref, Registry, Runtime, Shared, Slice, TransparentOver, Var, extern_fn,
-    extern_registry, extern_signature, kind,
+    Arr, Registry, Runtime, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
-
-use crate::vec::{elements, found, is_ordered};
 
 #[extern_fn(effect = pure)]
 fn len<T, N>(c: &Arr<T, N>) -> u64
@@ -26,184 +22,60 @@ where
 
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_slice<T, N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<T, N>, Shared, Rt>) -> Slice<T, Shared, Rt>
+fn as_slice<T, N, Rt>(c: &Arr<T, N>) -> &[T]
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    Slice::of(c.elements(rt))
+    &c.0
 }
 
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_slice_mut<T, N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<T, N>, Mut, Rt>) -> Slice<T, Mut, Rt>
-where
-    T: Var<kind::Type>,
-    N: Var<kind::Length>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    Slice::of(c.elements(rt))
-}
-
-#[extern_fn(effect = pure)]
-fn first<T, N, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    c: Ref<Arr<T, N>, Shared, Rt>,
-) -> Option<Ref<T, Shared, Rt>>
+fn as_slice_mut<T, N, Rt>(c: &mut Arr<T, N>) -> &mut [T]
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    c.try_map(rt, |c| c.0.first())
+    &mut c.0
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, N, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    c: Ref<Arr<T, N>, Shared, Rt>,
-) -> Option<Ref<T, Shared, Rt>>
+fn first<T, N, Rt>(c: &Arr<T, N>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    c.try_map(rt, |c| c.0.last())
+    c.0.first()
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, N, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    c: Ref<Arr<T, N>, Shared, Rt>,
-    at: u64,
-) -> Option<Ref<T, Shared, Rt>>
+fn last<T, N, Rt>(c: &Arr<T, N>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let at = usize::try_from(at).ok()?;
-    c.try_map(rt, |c| c.0.get(at))
+    c.0.last()
 }
 
-// A fixed length admits the read-only half of the element surface, each a
-// shared signature with one instance per concrete element type, for the
-// reason stated at `vec_registry`.
-
-extern_signature! {
-    ns: "array",
-    fn contains<T, N>(c: &Arr<T, N>, x: &T) -> bool
-    where
-        T: Var<kind::Type>,
-        N: Var<kind::Length>;
+#[extern_fn(effect = pure)]
+fn get<T, N, Rt>(c: &Arr<T, N>, at: u64) -> Option<&T>
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    N: Var<kind::Length>,
+    Rt: Runtime,
+{
+    c.0.get(usize::try_from(at).ok()?)
 }
 
-extern_signature! {
-    ns: "array",
-    fn binary_search<T, N>(c: &Arr<T, N>, x: &T) -> Option<u64>
-    where
-        T: Var<kind::Type>,
-        N: Var<kind::Length>;
-}
-
-extern_signature! {
-    ns: "array",
-    fn is_sorted<T, N>(c: &Arr<T, N>) -> bool
-    where
-        T: Var<kind::Type>,
-        N: Var<kind::Length>;
-}
-
-macro_rules! read_of {
-    (
-        $t:ty,
-        contains: $contains:ident,
-        binary_search: $binary_search:ident,
-        is_sorted: $is_sorted:ident,
-    ) => {
-        #[extern_fn(instance_of = contains, effect = pure)]
-        fn $contains<N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<$t, N>, Shared, Rt>, x: &$t) -> bool
-        where
-            N: Var<kind::Length>,
-            Rt: Runtime,
-        {
-            let rt = ctx.rt;
-            let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
-            // SAFETY: the run is this array's own values, every one erased
-            // from `$t`, and the array is live for the call (RFC-0018).
-            unsafe { elements::<$t, Rt>(rt, &run) }.any(|element| element == x)
-        }
-
-        #[extern_fn(instance_of = binary_search, effect = pure)]
-        fn $binary_search<N, Rt>(
-            ctx: &mut Ctx<'_, Rt>,
-            c: Ref<Arr<$t, N>, Shared, Rt>,
-            x: &$t,
-        ) -> Option<u64>
-        where
-            N: Var<kind::Length>,
-            Rt: Runtime,
-        {
-            let rt = ctx.rt;
-            let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
-            // SAFETY: as `$contains`.
-            unsafe { found::<$t, Rt>(rt, &run, x) }
-        }
-
-        #[extern_fn(instance_of = is_sorted, effect = pure)]
-        fn $is_sorted<N, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Arr<$t, N>, Shared, Rt>) -> bool
-        where
-            N: Var<kind::Length>,
-            Rt: Runtime,
-        {
-            let rt = ctx.rt;
-            let run = Slice::<$t, Shared, Rt>::of(c.elements(rt)).into_elements();
-            // SAFETY: as `$contains`.
-            unsafe { is_ordered::<$t, Rt>(rt, &run) }
-        }
-    };
-}
-
-read_of!(
-    i64,
-    contains: contains_int,
-    binary_search: binary_search_int,
-    is_sorted: is_sorted_int,
-);
-
-read_of!(
-    u64,
-    contains: contains_index,
-    binary_search: binary_search_index,
-    is_sorted: is_sorted_index,
-);
-
-read_of!(
-    f64,
-    contains: contains_float,
-    binary_search: binary_search_float,
-    is_sorted: is_sorted_float,
-);
-
-read_of!(
-    bool,
-    contains: contains_bool,
-    binary_search: binary_search_bool,
-    is_sorted: is_sorted_bool,
-);
-
-read_of!(
-    String,
-    contains: contains_str,
-    binary_search: binary_search_str,
-    is_sorted: is_sorted_str,
-);
+// The element surface is not declared here. `contains`, `binary_search`
+// and `is_sorted` read an element at its own type, and every such operation
+// lives once over `&[T]` in `crate::slice`; an array reaches it through the
+// `as_slice` view below (RFC-0047 §5).
 
 pub fn array_registry<R>() -> Registry<R>
 where
@@ -211,14 +83,6 @@ where
 {
     extern_registry! {
         ns: "array",
-        signatures: [contains, binary_search, is_sorted],
-        fns: [
-            len, is_empty, as_slice, as_slice_mut, first, last, get,
-            contains_int, binary_search_int, is_sorted_int,
-            contains_index, binary_search_index, is_sorted_index,
-            contains_float, binary_search_float, is_sorted_float,
-            contains_bool, binary_search_bool, is_sorted_bool,
-            contains_str, binary_search_str, is_sorted_str,
-        ],
+        fns: [len, is_empty, as_slice, as_slice_mut, first, last, get],
     }
 }

@@ -121,6 +121,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy, instances: Instances) -> Func
         kind: FnKind::Extern {
             bounds: vec![],
             instances,
+            requires: vec![],
         },
         ty,
     }
@@ -320,7 +321,7 @@ fn check_functions(
         .direct_calls
         .values()
         .filter_map(|callee| match callee {
-            Callee::Extern { id, instance } => Some((i.resolve(id.name).to_string(), *instance)),
+            Callee::Extern { id, instance, .. } => Some((i.resolve(id.name).to_string(), *instance)),
             _ => None,
         })
         .collect();

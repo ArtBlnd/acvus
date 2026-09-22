@@ -217,6 +217,7 @@ async fn view_length(source: &str) -> i64 {
         vec![
             registry(),
             acvus_ext::conversion_registry(),
+            acvus_ext::iterator_registry(),
             acvus_ext::string_registry(),
         ],
         Ty::U64,
@@ -260,6 +261,7 @@ fn a_view_result_takes_the_pair_form_of_its_argument_width() {
             vec![
                 registry(),
                 acvus_ext::conversion_registry(),
+                acvus_ext::iterator_registry(),
                 acvus_ext::string_registry(),
             ],
             Ty::U64,
@@ -301,6 +303,7 @@ async fn a_view_names_the_bytes_of_its_argument() {
         vec![
             registry(),
             acvus_ext::conversion_registry(),
+            acvus_ext::iterator_registry(),
             acvus_ext::string_registry(),
         ],
         Ty::I64,
@@ -358,7 +361,7 @@ async fn an_awaited_declaration_resumes_with_its_value() {
     let interner = Interner::new();
     let ran = run_script_with_externs(
         &interner,
-        "let a = vec([1, 2, 3, 4]); a | filter(|x| -> x > 1) | count",
+        "let a = vec([1, 2, 3, 4]); a | into_iter | filter(|x| -> x > 1) | count",
         Context::default(),
         acvus_ext::std_registries::<AcvusRuntime>(),
         Ty::I64,

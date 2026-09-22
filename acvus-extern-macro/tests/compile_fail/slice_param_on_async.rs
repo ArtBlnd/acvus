@@ -10,7 +10,7 @@ where
     Rt: Runtime,
 {
     let _ = ctx;
-    s.into_elements().len() as u64
+    s.len() as u64
 }
 
 fn main() {}

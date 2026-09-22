@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use acvus_ast::{BinOp, Literal, UnaryOp};
-use acvus_extern::{ArgAt, FieldAt, FormKind, ObjectShape, Width};
+use acvus_extern::{ArgAt, FieldAt, FormKind, ObjectShape, RequiredInstance, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
@@ -155,24 +155,45 @@ impl PrepareCtx<'_> {
         self.interner.resolve(*name).into()
     }
 
-    fn handler(&self, id: &QualifiedRef, instance: usize) -> ExternHandler {
+    /// The handler of the overload the IR names, with the instances that
+    /// overload runs its requirements at.
+    fn chosen(&self, id: &QualifiedRef, instance: usize) -> ChosenExtern {
         let Some(Executable::Extern(handlers)) = self.externs.get(id) else {
             panic!("{id:?} is called as an ExternFn but is not one of the module's externs")
         };
-        handlers
-            .get(instance)
+        let overload = self.instances.overload(*id, instance);
+        let handler = handlers
+            .get(overload.own)
             .unwrap_or_else(|| {
                 panic!(
-                    "{id:?} has {} instances; the checker settled on instance {instance}",
-                    handlers.len()
+                    "{id:?} has {} instances; the checker settled on instance {}",
+                    handlers.len(),
+                    overload.own
                 )
             })
-            .clone()
+            .clone();
+        ChosenExtern {
+            handler,
+            requires: overload
+                .required
+                .into_iter()
+                .map(RequiredInstance)
+                .collect(),
+        }
+    }
+
+    fn handler(&self, id: &QualifiedRef, instance: usize) -> ExternHandler {
+        self.chosen(id, instance).handler
     }
 
     fn extern_is_sync(&self, id: &QualifiedRef, instance: usize) -> bool {
         self.handler(id, instance).is_sync()
     }
+}
+
+struct ChosenExtern {
+    handler: ExternHandler,
+    requires: Vec<RequiredInstance>,
 }
 
 /// Every body of a module, prepared: the closures first, so a `MakeClosure`
@@ -1097,7 +1118,7 @@ impl<'a> Prepare<'a> {
             .filter_map(|inst| {
                 let InstKind::FunctionCall {
                     dst,
-                    callee: Callee::Extern { id, instance },
+                    callee: Callee::Extern { id, instance, .. },
                     ..
                 } = &inst.kind
                 else {
@@ -1932,7 +1953,7 @@ impl<'a> Prepare<'a> {
             InstKind::FunctionCall {
                 callee, callee_ty, ..
             } => match callee {
-                Callee::Extern { id, instance } => self.ctx.extern_is_sync(id, *instance),
+                Callee::Extern { id, instance, .. } => self.ctx.extern_is_sync(id, *instance),
                 Callee::Direct(_) | Callee::Indirect(_) => call_task(callee_ty) <= Task::Sync,
             },
 
@@ -3719,9 +3740,13 @@ impl<'a> Prepare<'a> {
                         })
                     }
                     Callee::Extern { id, instance } => {
-                        let handler = self.ctx.handler(id, *instance);
+                        let ChosenExtern { handler, requires } = self.ctx.chosen(id, *instance);
                         let window = self.window(at, args, ops);
                         let sites = self.arg_sites(args);
+                        let site = acvus_extern::CallSite {
+                            args: &sites,
+                            requires: &requires,
+                        };
                         assert_eq!(
                             handler.width().ret,
                             1,
@@ -3730,13 +3755,13 @@ impl<'a> Prepare<'a> {
                         );
                         match handler {
                             ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
-                                let f = f.at_site(&sites);
+                                let f = f.at_site(&site);
                                 made(move |next| {
                                     f.into_op(call::CallShape::Spawn { dst, window, next })
                                 })
                             }
                             ExternHandler::Async(f) => {
-                                let f = f.at_site(&sites);
+                                let f = f.at_site(&site);
                                 made(move |next| {
                                     f.into_op(call::AsyncShape::Spawn { dst, window, next })
                                 })
@@ -3857,7 +3882,7 @@ impl<'a> Prepare<'a> {
                 );
                 let f = {
                     let sites = self.arg_sites(args);
-                    f.at_site(&sites)
+                    f.at_site(&acvus_extern::CallSite::of_args(&sites))
                 };
                 made(move |next| {
                     f.into_op(call::CallShape::Pair1 {
@@ -4115,20 +4140,24 @@ impl<'a> Prepare<'a> {
                 Some(indirect_call_async(into, through, handle, operands, resume))
             }
             Callee::Extern { id, instance } => {
-                let handler = self.ctx.handler(id, *instance);
+                let ChosenExtern { handler, requires } = self.ctx.chosen(id, *instance);
+                let requires = requires.as_slice();
                 if !handler.is_sync() {
                     self.may_suspend = true;
                 }
                 match handler {
                     ExternHandler::Sync(f) => {
-                        let op = self.extern_call(at, site.dst, args, f, ops);
+                        let op = self.extern_call(at, site.dst, args, requires, f, ops);
                         ops.push(op);
                         None
                     }
                     ExternHandler::Heavy(f) => {
                         let f = {
                             let sites = self.arg_sites(args);
-                            f.at_site(&sites)
+                            f.at_site(&acvus_extern::CallSite {
+                                args: &sites,
+                                requires,
+                            })
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -4142,7 +4171,10 @@ impl<'a> Prepare<'a> {
                     ExternHandler::Async(f) => {
                         let f = {
                             let sites = self.arg_sites(args);
-                            f.at_site(&sites)
+                            f.at_site(&acvus_extern::CallSite {
+                                args: &sites,
+                                requires,
+                            })
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -4167,13 +4199,17 @@ impl<'a> Prepare<'a> {
         at: usize,
         result: ValueId,
         args: &[ValueId],
+        requires: &[RequiredInstance],
         f: call::Handler,
         ops: &mut Vec<Node>,
     ) -> Node {
         let width = f.width();
         let f = {
             let sites = self.arg_sites(args);
-            f.at_site(&sites)
+            f.at_site(&acvus_extern::CallSite {
+                args: &sites,
+                requires,
+            })
         };
         let takes = self.take_mask(args);
         let slots = self.argument_words(args);
@@ -5567,7 +5603,7 @@ fn carried_moves(into: &mut Vec<EdgeMove>, params: &[ValueId], args: &[ValueId])
 fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]> {
     match &inst.kind {
         InstKind::FunctionCall {
-            callee: Callee::Extern { id, instance },
+            callee: Callee::Extern { id, instance, .. },
             args,
             ..
         } => needs_window(&ctx.handler(id, *instance)).then_some(args.as_slice()),
@@ -5698,7 +5734,7 @@ mod call_form_tests {
 
         let site = acvus_extern::SitesNoParameterReads::default();
         let op = factory
-            .at_site(&site.args(arity))
+            .at_site(&acvus_extern::CallSite::of_args(&site.args(arity)))
             .into_op(call::CallShape::Registers2 {
                 dst: Marked::of(Off::of(2)),
                 a: Off::of(0),
@@ -7620,6 +7656,7 @@ impl Prepare<'_> {
 struct FusableCall<'a> {
     dst: ValueId,
     args: &'a [ValueId],
+    requires: Vec<RequiredInstance>,
     handler: call::Handler,
 }
 
@@ -7642,24 +7679,33 @@ impl FusedRegion {
 
 impl<'a> Prepare<'a> {
     fn fusable_call(&self, at: usize) -> Option<FusableCall<'a>> {
-        let (dst, id, instance, args) = match &self.body.insts.get(at)?.kind {
-            InstKind::FunctionCall {
-                dst,
-                callee: Callee::Extern { id, instance },
-                args,
-                order: None,
-                ..
-            } => (*dst, id, *instance, args.as_slice()),
-            _ => return None,
+        let InstKind::FunctionCall {
+            dst,
+            callee: Callee::Extern { id, instance },
+            args,
+            order: None,
+            ..
+        } = &self.body.insts.get(at)?.kind
+        else {
+            return None;
         };
-        let ExternHandler::Sync(handler) = self.ctx.handler(id, instance) else {
+        let ChosenExtern {
+            handler: ExternHandler::Sync(handler),
+            requires,
+        } = self.ctx.chosen(id, *instance)
+        else {
             return None;
         };
         let width = handler.width();
         if width.ret != 1 || width.args > 2 || width.args != args.len() {
             return None;
         }
-        Some(FusableCall { dst, args, handler })
+        Some(FusableCall {
+            dst: *dst,
+            args,
+            requires,
+            handler,
+        })
     }
 
     /// The `*r` closing a run whose last call left `last`: the read of a
@@ -7798,7 +7844,11 @@ impl<'a> Prepare<'a> {
                      shape for"
                 ),
             };
-            calls.push(f.at_site(&sites).into_fused(shape));
+            let site = acvus_extern::CallSite {
+                args: &sites,
+                requires: &found.requires,
+            };
+            calls.push(f.at_site(&site).into_fused(shape));
         }
         let last = previous.expect("a recognized run holds at least one call");
 

@@ -75,7 +75,7 @@ pub fn fields_into_run<Rt, const N: usize>(values: [Owned<Rt>; N], out: &mut [Rt
 where
     Rt: Runtime,
 {
-    assert_eq!(
+    debug_assert_eq!(
         out.len(),
         N,
         "a struct of {N} fields was lent a destination run of {} registers",

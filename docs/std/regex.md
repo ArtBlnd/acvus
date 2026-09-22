@@ -11,6 +11,11 @@ three are `&str`: `regex("[0-9]+")`, `fields.named("stamp")`,
 because a `String` result does not reach a `&str` parameter:
 `let p = escape("a.c"); regex(&p)`.
 
+`find_all`, `captures_all`, `split` and `split_n` answer a pipeline, and a
+pipeline's type is the stage itself: each builds `Items<T>`, the owned
+source, so the search finishes before the value is returned and the pipeline
+borrows neither the `Regex` nor the text.
+
 | name | signature | Rust `regex` twin | difference |
 | --- | --- | --- | --- |
 | `regex` | `(&str) -> Result<Regex, RegexError>` | `Regex::new` | the error carries the pattern and the crate's message |
@@ -21,10 +26,10 @@ because a `String` result does not reach a `&str` parameter:
 | `is_match_at` | `(&Regex, &str, u64) -> bool` | `Regex::is_match_at` | a start past the end or inside a character matches nothing |
 | `find` | `(&Regex, &str) -> Option<Match>` | `Regex::find` | `Match` is owned: `{ start: u64, end: u64, text: String }` |
 | `find_at` | `(&Regex, &str, u64) -> Option<Match>` | `Regex::find_at` | a start past the end or inside a character gives `None` |
-| `find_all` | `(&Regex, &str) -> Iter<Match>` | `Regex::find_iter` | the search finishes before the iterator is returned |
+| `find_all` | `(&Regex, &str) -> Items<Match>` | `Regex::find_iter` | the search finishes before the iterator is returned |
 | `shortest_match` | `(&Regex, &str) -> Option<u64>` | `Regex::shortest_match` | none |
 | `captures` | `(&Regex, &str) -> Option<Captures>` | `Regex::captures` | `Captures` is owned, because `regex::Captures` borrows the text |
-| `captures_all` | `(&Regex, &str) -> Iter<Captures>` | `Regex::captures_iter` | the search finishes before the iterator is returned |
+| `captures_all` | `(&Regex, &str) -> Items<Captures>` | `Regex::captures_iter` | the search finishes before the iterator is returned |
 | `group` | `(&Captures, u64) -> Option<Match>` | `Captures::get` | none |
 | `named` | `(&Captures, &str) -> Option<Match>` | `Captures::name` | none |
 | `group_count` | `(&Regex) -> u64` | `Regex::captures_len` | group 0 is not counted |
@@ -33,8 +38,8 @@ because a `String` result does not reach a `&str` parameter:
 | `replace_all` | `(&Regex, &str, &str) -> String` | `Regex::replace_all` | always owned |
 | `replace_n` | `(&Regex, &str, u64, &str) -> String` | `Regex::replacen` | an `n` of 0 replaces nothing |
 | `replace_with` | `(&Regex, &String, Closure<(Match,), String>) -> String` | `Regex::replace_all` with a closure | no `$1` expansion; the closure returns the replacement itself |
-| `split` | `(&Regex, &str) -> Iter<String>` | `Regex::split` | elements are owned |
-| `split_n` | `(&Regex, &str, u64) -> Iter<String>` | `Regex::splitn` | an `n` of 0 gives no piece |
+| `split` | `(&Regex, &str) -> Items<String>` | `Regex::split` | elements are owned |
+| `split_n` | `(&Regex, &str, u64) -> Items<String>` | `Regex::splitn` | an `n` of 0 gives no piece |
 
 `RegexError` is `Invalid { pattern, message }`: the crate reports a syntax
 error and a compiled-size overflow through one `Error` whose distinction is

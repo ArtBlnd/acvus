@@ -40,6 +40,7 @@ fn extern_at(i: &Interner, qref: QualifiedRef, param: Ty, effect: Effect) -> Fun
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty: fn_ty(
             i,
@@ -459,6 +460,7 @@ fn nullary(i: &Interner, name: &str, effect: Effect) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty: fn_ty(i, &[], lift_to_poly(&Ty::I64), effect.into()),
     }

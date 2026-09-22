@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 
 use acvus_mir::ty::Ty;
 
-use crate::handler::{Arg, ArgAt, Sited};
+use crate::handler::{Arg, ArgAt, CallSite, Sited};
 use crate::loan::{Loan, Mut, Shared};
 use crate::obj::{FieldAt, Obj, ObjectShape, One, Variant};
 use crate::owned::Owned;
@@ -318,13 +318,15 @@ where
     unsafe { S::at::<Variant<Owned<Rt>>, M, Rt>(rt, from) }
 }
 
+/// The values of a lent object, as the projection `#[derive(TyArg)]` writes
+/// reads them: the derive's `over` and no handler.
+#[doc(hidden)]
 pub struct Fields<'a, M, Rt>
 where
     M: Loan,
     Rt: Runtime,
 {
     obj: M::Of<'a, Obj<Owned<Rt>>>,
-    rt: &'a Rt,
 }
 
 impl<'a, M, Rt> Fields<'a, M, Rt>
@@ -332,12 +334,12 @@ where
     M: Loan,
     Rt: Runtime,
 {
-    pub fn of(rt: &'a Rt, obj: M::Of<'a, Obj<Owned<Rt>>>) -> Self {
-        Fields { obj, rt }
-    }
-
-    pub fn runtime(&self) -> &'a Rt {
-        self.rt
+    /// # Safety
+    /// `obj` is the storage a value the checker typed at the projection's
+    /// object names, and what is read from it goes only to that
+    /// projection's own `Project` crossings.
+    pub unsafe fn of(obj: M::Of<'a, Obj<Owned<Rt>>>) -> Self {
+        Fields { obj }
     }
 }
 
@@ -345,7 +347,9 @@ impl<'a, Rt> Fields<'a, Shared, Rt>
 where
     Rt: Runtime,
 {
-    pub fn field(&self, at: FieldAt) -> &'a Rt::Value {
+    /// # Safety
+    /// As `of`'s, at the field `at`.
+    pub unsafe fn field(&self, at: FieldAt) -> &'a Rt::Value {
         &self.obj.values[at.index()]
     }
 }
@@ -354,11 +358,14 @@ impl<'a, Rt> Fields<'a, Mut, Rt>
 where
     Rt: Runtime,
 {
+    /// # Safety
+    /// As `of`'s, at the fields `ats`.
+    ///
     /// # Panics
     /// Two of `ats` are equal, or one is past the object's width.
     /// `ObjectShape` holds each name once, so two equal positions would mean
     /// one name answering for two of the projection's fields.
-    pub fn disjoint<const N: usize>(self, ats: [FieldAt; N]) -> [&'a mut Rt::Value; N] {
+    pub unsafe fn disjoint<const N: usize>(self, ats: [FieldAt; N]) -> [&'a mut Rt::Value; N] {
         let at = ats.map(FieldAt::index);
         let width = self.obj.values.len();
         let Ok(fields) = self.obj.values.get_disjoint_mut(at) else {
@@ -437,8 +444,8 @@ where
 {
     type Site = <P as Projected<Rt>>::Table;
 
-    fn site(args: &[ArgAt<'_, Rt>], at: usize) -> Self::Site {
-        <P as Projected<Rt>>::table(args[at])
+    fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site {
+        <P as Projected<Rt>>::table(site.args[at])
     }
 }
 

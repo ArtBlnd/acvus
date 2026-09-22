@@ -1,0 +1,64 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1224
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @users
+     4 |   r3 = list []
+     5 |   r4 = call #0(r3)
+     7 |   r5 = call #1(r2)
+     8 |   r6 = closure L0 []
+     9 |   r7 = call #2(r5, r6)
+    10 |   r8 = call #3(r7)
+    11 |   assign x = r8
+    13 |   r9 = ref &x
+    14 |   r10 = call #4(r9)
+    15 |   assign out = r10
+    17 |   r11 = ref &out
+    18 |   r12 = call #5(r11)
+    19 |   r13 = string_concat [T0, T0, T0, T0, r12]
+    20 |   commit @users = r4
+    21 |   return r13
+
+    ; r0 (v24) : Vec<{active: Bool, name: String}>
+    ; r1 (v25) : Vec<{active: Bool, name: String}>
+    ; r2 (@users) : Vec<{active: Bool, name: String}>
+    ; r3 (v6) : Array<{active: Bool, name: String}, 0>
+    ; r4 (vec(...)) : Vec<{active: Bool, name: String}>
+    ; r5 (into_iter(...)) : Items<{active: Bool, name: String}>
+    ; r6 (v11) : Fn(&{active: Bool, name: String}) -> Bool
+    ; r7 (filter(...)) : Filter<Items<{active: Bool, name: String}>, {active: Bool, name: String}, Pure>
+    ; r8 (collect(...)) : Vec<{active: Bool, name: String}>
+    ; r9 (x.) : &Vec<{active: Bool, name: String}>
+    ; r10 (len(...)) : u64
+    ; r11 (out.) : &u64
+    ; r12 (to_string(...)) : String
+    ; r13 (v22) : String
+    ; r14 (@users) : Vec<{active: Bool, name: String}>
+    ; r15 (x) : Vec<{active: Bool, name: String}>
+    ; r16 (users) : Vec<{active: Bool, name: String}>
+    ; r17 (v15) : String
+    ; r18 (users) : Vec<{active: Bool, name: String}>
+    ; r19 (out) : u64
+    ; r20 (@users) : Vec<{active: Bool, name: String}>
+    ; r21 (v23) : Vec<{active: Bool, name: String}>
+    ; r22 (v5) : String
+    ; r23 (v8) : String
+    ; r24 (v19) : String
+
+=== closure L0 (ValueId(0)) ===
+     0 |   r0 = undef
+     1 |   r1 = take (*r2).active
+     2 |   return r1
+
+    ; r0 (v5) : &{active: Bool, name: String}
+    ; r1 ((*r3).active) : Bool
+    ; r2 (v1) : &{active: Bool, name: String}
+    ; r3 (v3) : &{active: Bool, name: String}
+    ; r4 (u) : &{active: Bool, name: String}

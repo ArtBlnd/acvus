@@ -15,17 +15,22 @@ use crate::value::{Kind, Value, VariantValue};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
+/// One run as a `Runtime`: the state its functions read and the page its
+/// contexts live on (RFC-0014). `Interpreter` makes the pair and a spawned
+/// run is handed its parent's, so a closure value carries neither
+/// (RFC-0069 D1): every caller of one holds a `&AcvusRuntime`.
 #[derive(Clone)]
-#[repr(transparent)]
-pub struct AcvusRuntime(pub Arc<InterpreterContext>);
+pub struct AcvusRuntime {
+    pub shared: Arc<InterpreterContext>,
+    pub page: Arc<dyn crate::journal::RuntimeContext>,
+}
 
 impl AcvusRuntime {
-    /// The runtime a context already is: `AcvusRuntime` is that context
-    /// and nothing else, so a caller holding one borrows a runtime from it
-    /// rather than sharing the `Arc` again.
-    pub fn of(shared: &Arc<InterpreterContext>) -> &AcvusRuntime {
-        // SAFETY: `#[repr(transparent)]` over `Arc<InterpreterContext>`.
-        unsafe { &*(shared as *const Arc<InterpreterContext>).cast::<AcvusRuntime>() }
+    pub fn new(
+        shared: Arc<InterpreterContext>,
+        page: Arc<dyn crate::journal::RuntimeContext>,
+    ) -> AcvusRuntime {
+        AcvusRuntime { shared, page }
     }
 }
 
@@ -43,7 +48,7 @@ impl AcvusRuntime {
             Ok(v) => ("Ok", v),
             Err(e) => ("Err", e),
         };
-        Value::variant(self.0.interner.intern(tag), Some(payload))
+        Value::variant(self.shared.interner.intern(tag), Some(payload))
     }
 
     fn result_of_variant(&self, value: Value) -> CrossedResult {
@@ -55,14 +60,14 @@ impl AcvusRuntime {
         } = held;
         // SAFETY: the first register of a variant this runtime wrote is its tag.
         let tag = unsafe { tag.into_value().as_tag() };
-        if tag == self.0.interner.intern("Ok") {
+        if tag == self.shared.interner.intern("Ok") {
             return Ok(payload);
         }
         debug_assert!(
-            tag == self.0.interner.intern("Err"),
+            tag == self.shared.interner.intern("Err"),
             "a Result crossed back holding the tag `{}`, and `variant_of_result` — the only \
              writer `materialize`'s contract admits — writes `Ok` or `Err`",
-            tag.display(&self.0.interner)
+            tag.display(&self.shared.interner)
         );
         Err(payload)
     }
@@ -382,11 +387,11 @@ impl Runtime for AcvusRuntime {
     }
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {
-        self.0.interner.intern(name)
+        self.shared.interner.intern(name)
     }
 
     fn variant_tag(&self, name: &str) -> Value {
-        Value::tag(self.0.interner.intern(name))
+        Value::tag(self.shared.interner.intern(name))
     }
 
     unsafe fn tag_symbol(&self, tag: &Value) -> acvus_utils::Astr {

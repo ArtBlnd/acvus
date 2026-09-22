@@ -298,7 +298,7 @@ mod one_type_two_sources {
         );
         assert_eq!(
             message,
-            "heterogeneous list: expected Iterator<i64, Pure>, got Iterator<String, Pure>"
+            "heterogeneous list: expected Items<i64>, got Items<String>"
         );
         assert_eq!(labels, []);
     }

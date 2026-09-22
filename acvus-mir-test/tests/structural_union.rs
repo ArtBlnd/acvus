@@ -16,6 +16,7 @@ fn extern_taking(i: &Interner, name: &str, param: TyTerm<Poly>) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("v"), param)],

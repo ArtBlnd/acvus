@@ -70,14 +70,20 @@ async fn contains_of_an_iterator_consumes_it() {
 #[tokio::test]
 async fn a_piped_vec_reaches_the_iterator_contains_through_into_iter() {
     assert!(
-        run("let v = vec([1, 2, 3]); v | contains(3)", Ty::Bool)
-            .await
-            .as_bool()
+        run(
+            "let v = vec([1, 2, 3]); v | into_iter | contains(3)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
     assert!(
-        !run("let v = vec([1, 2, 3]); v | contains(4)", Ty::Bool)
-            .await
-            .as_bool()
+        !run(
+            "let v = vec([1, 2, 3]); v | into_iter | contains(4)",
+            Ty::Bool
+        )
+        .await
+        .as_bool()
     );
 }
 

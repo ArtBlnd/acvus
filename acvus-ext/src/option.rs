@@ -37,7 +37,7 @@ use acvus_extern::{
     Closure, ClosureFn, Cross, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 
-use crate::iter::Iter;
+use crate::iter::Items;
 use acvus_extern::Ctx;
 
 #[extern_fn(effect = pure)]
@@ -125,16 +125,14 @@ where
     val.ok_or(error)
 }
 
-#[extern_fn(instance_of = crate::iterator::sig::into_iter, effect = pure)]
-#[extern_cast]
-fn into_iter_option<T, E, I, Rt>(val: Option<T>) -> Iter<T, E, I, Rt>
+#[extern_fn(instance_of = crate::iter::sig::into_iter, effect = pure)]
+fn into_iter_option<T, I, Rt>(val: Option<T>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(val.into_iter().collect::<Vec<T>>())
+    Items::of(val.into_iter().collect::<Vec<T>>())
 }
 
 fn is_some_and_now<T, E, Rt>(
@@ -143,7 +141,7 @@ fn is_some_and_now<T, E, Rt>(
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -160,7 +158,7 @@ async fn is_some_and<T, E, Rt>(
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -176,7 +174,7 @@ fn is_none_or_now<T, E, Rt>(
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -193,7 +191,7 @@ async fn is_none_or<T, E, Rt>(
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -243,7 +241,7 @@ fn map_or_now<T, U, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -262,7 +260,7 @@ async fn map_or<T, U, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -280,7 +278,7 @@ fn map_or_else_now<T, U, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -299,7 +297,7 @@ async fn map_or_else<T, U, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -316,7 +314,7 @@ fn and_then_now<T, U, E, Rt>(
     f: Closure<(T,), Option<U>, E, Rt>,
 ) -> Option<U>
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -331,7 +329,7 @@ async fn and_then<T, U, E, Rt>(
     f: Closure<(T,), Option<U>, E, Rt>,
 ) -> Option<U>
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,

@@ -331,6 +331,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: params
@@ -353,6 +354,7 @@ fn extern_async_call() {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
@@ -1264,7 +1266,7 @@ fn builtin_join() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = vec([]) }}{{ names | join(", ".to_string()) }}"#,
+        r#"{{ names = @names }}{{ @names = vec([]) }}{{ names | into_iter | join(", ".to_string()) }}"#,
         &context,
     )
     .unwrap();
@@ -1277,7 +1279,7 @@ fn builtin_contains() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | contains(3) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | contains(3) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1290,7 +1292,7 @@ fn builtin_find() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | find(|x| -> *x > 10) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | find(|x| -> *x > 10) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
         &context,
     )
     .unwrap();
@@ -1303,7 +1305,7 @@ fn builtin_reduce() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | reduce(|a, b| -> a + b) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | reduce(|a, b| -> a + b) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
         &context,
     )
     .unwrap();
@@ -1316,7 +1318,7 @@ fn builtin_fold() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | fold(0, |acc, x| -> acc + x) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | fold(0, |acc, x| -> acc + x) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1329,7 +1331,7 @@ fn builtin_any() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | any(|x| -> *x > 10) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | any(|x| -> *x > 10) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1342,7 +1344,7 @@ fn builtin_all() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | all(|x| -> *x > 0) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | all(|x| -> *x > 0) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1611,7 +1613,7 @@ fn migrated_integration_pipe_with_lambda() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &context,
     )
     .unwrap();
@@ -1642,7 +1644,7 @@ fn migrated_pipe_extern_fn_ok() {
     let mapper = extern_fn(&i, "mapper", &[Ty::I64], Ty::String);
     compile_to_ir_with(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | map(|i| -> mapper(i)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> mapper(i)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
         &items_list_context(&i),
         &[mapper],
     )
@@ -1670,7 +1672,7 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ n1 = items | filter(|x| -> *x > @threshold) | collect }}{{ out = len(&n1) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ n1 = items | into_iter | filter(|x| -> *x > @threshold) | collect }}{{ out = len(&n1) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1682,7 +1684,7 @@ fn migrated_typeck_lambda_type_check() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1694,7 +1696,7 @@ fn migrated_typeck_lambda_no_capture_local_params() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ n2 = items | map(|x| -> x + 1) | collect }}{{ out = len(&n2) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ n2 = items | into_iter | map(|x| -> x + 1) | collect }}{{ out = len(&n2) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1730,7 +1732,7 @@ fn migrated_typeck_nested_lambda_captures() {
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ n3 = items | map(|x| -> x * @factor) | collect }}{{ out = len(&n3) }}{{ out.to_string() }}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ n3 = items | into_iter | map(|x| -> x * @factor) | collect }}{{ out = len(&n3) }}{{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1769,7 +1771,7 @@ fn migrated_print_closure() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
+        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
         &context,
     )
     .unwrap();
@@ -1944,12 +1946,12 @@ fn iter_reuse_after_collect_rejected() {
 
 // -- From move_check.rs (e2e) ----------------------------------------
 
-/// `Iterator<Int>` from one fixed source, as a context would hold it.
+/// `Items<Int>` from one fixed source, as a context would hold it.
 fn iter_int_ty(interner: &Interner) -> Ty {
     Ty::UserDefined {
-        id: QualifiedRef::root(interner.intern("Iterator")),
+        id: QualifiedRef::root(interner.intern("Items")),
         type_args: vec![TypeArg::uniform(Ty::I64)],
-        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        effect_args: vec![],
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
@@ -2253,7 +2255,7 @@ fn migrated_move_accept_lambda_return_deque_as_iterator() {
     );
     let result = compile_script_ir(
         &i,
-        "let items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
+        "let items = @items; @items = [1, 2, 3]; items | into_iter | flat_map(|x| -> [x, x + 1]) | map(|x| -> x * 2) | collect",
         &context,
     );
     assert!(
@@ -2274,7 +2276,7 @@ fn migrated_move_accept_lambda_return_scalar() {
     );
     let result = compile_script_ir(
         &i,
-        "let items = @items; @items = [1, 2, 3]; items | map(|x| -> x + 1) | collect",
+        "let items = @items; @items = [1, 2, 3]; items | into_iter | map(|x| -> x + 1) | collect",
         &context,
     );
     assert!(
@@ -2295,7 +2297,7 @@ fn migrated_move_accept_nested_flat_map_deque_return() {
     );
     let result = compile_script_ir(
         &i,
-        "let items = @items; @items = [1, 2, 3]; items | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
+        "let items = @items; @items = [1, 2, 3]; items | into_iter | flat_map(|x| -> [x, x + 10]) | map(|x| -> x * 2) | collect",
         &context,
     );
     assert!(
@@ -2660,7 +2662,7 @@ fn sroa_field_read_in_lambda() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | join(",".to_string()) }}"#,
+        r#"{{ users = @users }}{{ @users = vec([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | into_iter | join(",".to_string()) }}"#,
         &context,
     )
     .unwrap();

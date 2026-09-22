@@ -136,11 +136,11 @@ impl<'c> Machine<'c> {
     }
 
     pub fn shared(&self) -> &Arc<InterpreterContext> {
-        &self.ctx.rt.0
+        &self.ctx.rt.shared
     }
 
     pub fn interner(&self) -> &Interner {
-        &self.ctx.rt.0.interner
+        &self.ctx.rt.shared.interner
     }
 
     /// The body returns this value; the `Return` terminator leaves the loop.
@@ -323,7 +323,7 @@ where
     F: FnOnce(&mut Machine<'_>),
     R: Returned,
 {
-    assert!(
+    debug_assert!(
         !body.may_suspend,
         "{named:?} is typed pure, and its prepared body can suspend"
     );
@@ -333,7 +333,7 @@ where
     let mut machine = Machine::new(body, regs, rt, page);
     fill(&mut machine);
     let stop = machine.run();
-    assert_eq!(
+    debug_assert_eq!(
         stop, RETURN,
         "{named:?} is typed pure, and its body left the machine at {stop}"
     );
@@ -481,7 +481,7 @@ impl Callable for Body {
         bind_captures(self, f, &mut regs);
         let mut machine = Machine::new(self, regs, AcvusRuntime::of(&f.shared), &f.page);
         let stop = machine.run();
-        assert_eq!(
+        debug_assert_eq!(
             stop, RETURN,
             "{:?} is typed pure, and its body left the machine at {stop}",
             self.span
@@ -587,7 +587,7 @@ fn fill(body: &Body, f: &FnValue, args: &mut [Value], regs: &mut Regs<'_>) {
 /// The call brought an arity the body was not prepared with.
 #[inline]
 fn expr_value(expr: &Expr, args: &[Value]) -> Value {
-    assert_eq!(
+    debug_assert_eq!(
         args.len(),
         expr.arity as usize,
         "an expression body is called with the arguments it reads"

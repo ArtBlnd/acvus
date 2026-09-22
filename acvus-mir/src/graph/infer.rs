@@ -509,11 +509,16 @@ pub fn declared_bounds<'a>(
 ) -> FxHashMap<QualifiedRef, Declared> {
     functions
         .filter_map(|f| match &f.kind {
-            FnKind::Extern { bounds, instances } => Some((
+            FnKind::Extern {
+                bounds,
+                instances,
+                requires,
+            } => Some((
                 f.qref,
                 Declared {
                     bounds: bounds.clone(),
                     instances: instances.clone(),
+                    requires: requires.clone(),
                 },
             )),
             FnKind::Local(_) => None,
@@ -524,6 +529,7 @@ pub fn declared_bounds<'a>(
 pub struct Declared {
     pub bounds: Vec<TyVarBound>,
     pub instances: crate::ty::Instances,
+    pub requires: Vec<crate::ty::RequirementSig>,
 }
 
 fn machine_signatures(
@@ -535,20 +541,44 @@ fn machine_signatures(
         .iter()
         .filter_map(|(&qref, ty)| {
             let viewed = registry.machine_view(qref)?;
-            let scheme = declared_scheme(declared.get(&qref), ty.clone());
+            let scheme = declared_scheme(declared, qref, ty.clone());
             Some((qref, MachineCoercion { viewed, scheme }))
         })
         .collect()
 }
 
-fn declared_scheme(declared: Option<&Declared>, ty: PolyTy) -> Scheme {
-    match declared {
-        Some(declared) => Scheme {
-            ty,
-            bounds: declared.bounds.clone(),
-            instances: Some(declared.instances.clone()),
-        },
-        None => Scheme::unbounded(ty),
+fn declared_scheme(
+    declared: &FxHashMap<QualifiedRef, Declared>,
+    qref: QualifiedRef,
+    ty: PolyTy,
+) -> Scheme {
+    let Some(own) = declared.get(&qref) else {
+        return Scheme::unbounded(ty);
+    };
+    let requires = own
+        .requires
+        .iter()
+        .map(|req| crate::ty::Requirement {
+            signature: req.signature,
+            pattern: req.pattern.clone(),
+            calls: req.calls,
+            instances: declared
+                .get(&req.signature)
+                .map(|sig| sig.instances.clone())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{qref:?} requires an instance of {:?}, which is not declared: \
+                         `Externs::combine` refuses this",
+                        req.signature
+                    )
+                }),
+        })
+        .collect();
+    Scheme {
+        ty,
+        bounds: own.bounds.clone(),
+        instances: Some(own.instances.clone()),
+        requires,
     }
 }
 
@@ -649,7 +679,7 @@ pub fn infer_scc(
     let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
         .iter()
         .filter(|(qref, _)| registry.machine_view(**qref).is_none())
-        .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
+        .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
         .collect();
     env_functions.extend(
         scc_fn_types
@@ -882,7 +912,7 @@ pub fn infer(
         let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
             .iter()
             .filter(|(qref, _)| registry_ref.machine_view(**qref).is_none())
-            .map(|(&k, v)| (k, declared_scheme(declared.get(&k), v.clone())))
+            .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
             .collect();
         env_functions.extend(
             scc_fn_types
@@ -1365,6 +1395,7 @@ mod tests {
             kind: FnKind::Extern {
                 bounds: vec![],
                 instances: crate::ty::Instances::default(),
+                requires: vec![],
             },
             ty: TyTerm::Fn {
                 params: named_params,

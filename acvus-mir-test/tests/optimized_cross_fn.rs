@@ -28,6 +28,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: infer_params,

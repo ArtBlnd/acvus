@@ -68,6 +68,7 @@ fn to_string(interner: &Interner) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: crate::ty::Instances::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

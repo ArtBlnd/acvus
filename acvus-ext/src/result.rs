@@ -21,7 +21,7 @@ use acvus_extern::{
     Closure, ClosureFn, Cross, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 
-use crate::iter::Iter;
+use crate::iter::Items;
 use acvus_extern::Ctx;
 
 #[extern_fn(effect = pure)]
@@ -151,17 +151,15 @@ where
     val.transpose()
 }
 
-#[extern_fn(instance_of = crate::iterator::sig::into_iter, effect = pure)]
-#[extern_cast]
-fn into_iter_result<T, Er, E, I, Rt>(val: Result<T, Er>) -> Iter<T, E, I, Rt>
+#[extern_fn(instance_of = crate::iter::sig::into_iter, effect = pure)]
+fn into_iter_result<T, Er, I, Rt>(val: Result<T, Er>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
     Er: Var<kind::Type>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(val.into_iter().collect::<Vec<T>>())
+    Items::of(val.into_iter().collect::<Vec<T>>())
 }
 
 fn is_ok_and_now<T, Er, E, Rt>(
@@ -170,7 +168,7 @@ fn is_ok_and_now<T, Er, E, Rt>(
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     Er: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -188,7 +186,7 @@ async fn is_ok_and<T, Er, E, Rt>(
     f: Closure<(T,), bool, E, Rt>,
 ) -> bool
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     Er: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -206,7 +204,7 @@ fn is_err_and_now<T, Er, E, Rt>(
 ) -> bool
 where
     T: Var<kind::Type>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -224,7 +222,7 @@ async fn is_err_and<T, Er, E, Rt>(
 ) -> bool
 where
     T: Var<kind::Type>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -241,7 +239,7 @@ fn map_err_now<T, Er, F, E, Rt>(
 ) -> Result<T, F>
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     F: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -257,7 +255,7 @@ async fn map_err<T, Er, F, E, Rt>(
 ) -> Result<T, F>
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     F: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -275,7 +273,7 @@ fn map_or_now<T, U, Er, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     Er: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -295,7 +293,7 @@ async fn map_or<T, U, Er, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     Er: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -314,9 +312,9 @@ fn map_or_else_now<T, U, Er, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -334,9 +332,9 @@ async fn map_or_else<T, U, Er, E, Rt>(
     f: Closure<(T,), U, E, Rt>,
 ) -> U
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -352,7 +350,7 @@ fn and_then_now<T, U, Er, E, Rt>(
     f: Closure<(T,), Result<U, Er>, E, Rt>,
 ) -> Result<U, Er>
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     Er: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
@@ -368,7 +366,7 @@ async fn and_then<T, U, Er, E, Rt>(
     f: Closure<(T,), Result<U, Er>, E, Rt>,
 ) -> Result<U, Er>
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     U: Var<kind::Type> + OneValue<Rt>,
     Er: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
@@ -387,7 +385,7 @@ fn or_else_now<T, Er, F, E, Rt>(
 ) -> Result<T, F>
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     F: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -403,7 +401,7 @@ async fn or_else<T, Er, F, E, Rt>(
 ) -> Result<T, F>
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     F: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -421,7 +419,7 @@ fn unwrap_or_else_now<T, Er, E, Rt>(
 ) -> T
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -436,7 +434,7 @@ async fn unwrap_or_else<T, Er, E, Rt>(
 ) -> T
 where
     T: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {

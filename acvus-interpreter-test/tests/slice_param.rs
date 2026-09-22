@@ -1,67 +1,43 @@
 //! A `&[T]` parameter reaches the Rust body as the container the script
 //! lent (RFC-0047 rule 6), at the contract: the number the script returns.
 
-use acvus_extern::Ctx;
-use acvus_extern::{Mut, OneValue, Registry, Runtime, Shared, Slice, extern_fn, extern_registry};
+use acvus_extern::{Erased, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
-fn element_of<Rt>(rt: &Rt, view: &acvus_extern::Elements<Rt>, at: usize) -> i64
-where
-    Rt: Runtime,
-{
-    // SAFETY: `at` is below the length the view reports, the container the
-    // caller lent is live for the call (RFC-0018), and every element of a
-    // language `Vec<i64>` was erased from `i64` (RFC-0047 rule 1).
-    unsafe { *rt.value_as_ref::<i64>(view.at(at)) }
-}
-
 #[extern_fn(effect = pure)]
-fn dot<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<i64, Shared, Rt>, b: Slice<i64, Shared, Rt>) -> i64
+fn dot<Rt>(a: &[Erased<Rt, i64>], b: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let (a, b) = (a.into_elements(), b.into_elements());
     assert_eq!(a.len(), b.len(), "dot takes two views of one length");
-    (0..a.len())
-        .map(|at| element_of(rt, &a, at) * element_of(rt, &b, at))
-        .sum()
+    a.iter().zip(b).map(|(x, y)| **x * **y).sum()
 }
 
 #[extern_fn(effect = opaque)]
-fn add_into<Rt>(ctx: &mut Ctx<'_, Rt>, dst: Slice<i64, Mut, Rt>, src: Slice<i64, Shared, Rt>) -> i64
+fn add_into<Rt>(dst: &mut [Erased<Rt, i64>], src: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let (dst, src) = (dst.into_elements(), src.into_elements());
     assert_eq!(
         dst.len(),
         src.len(),
         "add_into takes two views of one length"
     );
-    for at in 0..dst.len() {
-        let sum = element_of(rt, &dst, at) + element_of(rt, &src, at);
-        // SAFETY: `at` is below the length, and a `Mut` slice is an exclusive
-        // take of its container, so no other name of the element is live
-        // (RFC-0047 §2).
-        unsafe { *dst.at_mut(at) = OneValue::<_>::erase(sum, rt) };
+    for (d, s) in dst.iter_mut().zip(src) {
+        **d += **s;
     }
     i64::try_from(dst.len()).expect("a view's length is an i64")
 }
 
-/// The sum of a view.
 #[extern_fn(effect = pure)]
-fn total<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<i64, Shared, Rt>) -> i64
+fn total<Rt>(a: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let a = a.into_elements();
-    (0..a.len()).map(|at| element_of(rt, &a, at)).sum()
+    a.iter().map(|x| **x).sum()
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {

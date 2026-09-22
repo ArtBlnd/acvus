@@ -25,6 +25,13 @@ join the overload set of `iter::map`, and the two are then ambiguous at a
 call whose lambda parameter type is still open — `examples/grades` stops
 compiling.
 
+A function that walks a map or a set answers a pipeline, and a pipeline's
+type is the stage itself: `Keys<K, V>` and `Values<K, V>` borrow the map and
+yield `&K` and `&V`, `Refs<HashSet<K>>` borrows the set and yields `&K`, and
+`Items<K>` owns the keys a consumed map or set gave up. A function that
+*takes* a pipeline takes the stage's type variable, written `I` below; any
+stage whose element fits stands there.
+
 ## `HashMap<K, V>` — namespace `map`
 
 | name | signature | Rust twin | difference |
@@ -36,16 +43,16 @@ compiling.
 | `clear` | `Fn(&mut HashMap<K, V>) -> ()` | `HashMap::clear` | none |
 | `insert` | `Fn(&mut HashMap<K, V>, K, V) -> Option<V>` | `HashMap::insert` | a replaced key keeps the position it was first inserted at |
 | `get` | `Fn(&HashMap<K, V>, &K) -> Option<&V>` | `HashMap::get` | the probe is a `&K`; there is no `Borrow<Q>` |
-| `get_mut` | `Fn(&mut HashMap<K, V>, &K) -> Option<&mut V>` | `HashMap::get_mut` | as `get`, and the `Option` is bound to a name before it is unwrapped: reading or writing through `get_mut(&mut m, &k).unwrap()` written as one expression waits on the solver's R2, which leaves the `unwrap` call's `Signature` decision open where the deref is checked — see "What the boundary refuses" below |
+| `get_mut` | `Fn(&mut HashMap<K, V>, &K) -> Option<&mut V>` | `HashMap::get_mut` | as `get`; what the call binds is a `&mut V`, and the one spelling refused binds through a pattern — see "What the boundary refuses" below |
 | `contains_key` | `Fn(&HashMap<K, V>, &K) -> Bool` | `HashMap::contains_key` | the probe is a `&K` |
 | `remove` | `Fn(&mut HashMap<K, V>, &K) -> Option<V>` | `HashMap::remove` | the entries after it move down, as `IndexMap::shift_remove` does, so the order of what is left is the order it was |
 | `or_insert` | `Fn(&mut HashMap<K, V>, K, V) -> &mut V` | `HashMap::entry(k).or_insert(v)` | one call rather than an `Entry` value; the default is evaluated whether or not it is used |
 | `extend` | `Fn(&mut HashMap<K, V>, HashMap<K, V>) -> ()` | `HashMap::extend` | the argument is another map, consumed; a sequence of pairs does not cross |
 | `retain` | `Fn(&mut HashMap<K, V>, Fn(&K, &V) -> Bool) -> ()` | `HashMap::retain` | the closure is lent `&V`, not `&mut V` |
-| `keys` | `Fn(&HashMap<K, V>) -> Iterator<&K>` | `HashMap::keys` | insertion order |
-| `values` | `Fn(&HashMap<K, V>) -> Iterator<&V>` | `HashMap::values` | insertion order |
-| `into_keys` | `Fn(HashMap<K, V>) -> Iterator<K>` | `HashMap::into_keys` | insertion order |
-| `into_values` | `Fn(HashMap<K, V>) -> Iterator<V>` | `HashMap::into_values` | insertion order |
+| `keys` | `Fn(&HashMap<K, V>) -> Keys<K, V>` | `HashMap::keys` | insertion order; `Keys` is a borrowing source whose element is a `&K` |
+| `values` | `Fn(&HashMap<K, V>) -> Values<K, V>` | `HashMap::values` | insertion order; `Values` is a borrowing source whose element is a `&V` |
+| `into_keys` | `Fn(HashMap<K, V>) -> Items<K>` | `HashMap::into_keys` | insertion order; consumes the map |
+| `into_values` | `Fn(HashMap<K, V>) -> Items<V>` | `HashMap::into_values` | insertion order; consumes the map |
 
 ## `HashSet<K>` — namespace `set`
 
@@ -63,9 +70,9 @@ compiling.
 | `intersection` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::intersection` | consumes both and answers a set; Rust borrows both and yields references, which needs a clone of a key to build a set from, and the runtime offers none. The hasher, comparator and order kept are the first set's; the second set's own hasher and comparator decide each membership |
 | `difference` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::difference` | consumes both and answers a set, as `intersection` |
 | `is_subset` | `Fn(&HashSet<K>, &HashSet<K>) -> Bool` | `HashSet::is_subset` | the second set's own hasher and comparator decide each membership |
-| `from_iter` | `Fn(Iterator<K>, Fn(&K) -> i64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::from_iter` | the hasher and comparator are passed; a repeat keeps the first key |
-| `as_iter` | `Fn(&HashSet<K>) -> Iterator<&K>` | `HashSet::iter` | insertion order; the name is the language's shared container signature |
-| `into_iter` | `Fn(HashSet<K>) -> Iterator<K>` | `HashSet::into_iter` | insertion order |
+| `from_iter` | `Fn(I, Fn(&K) -> i64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::from_iter` | `I` is any pipeline whose element is a `K`; the hasher and comparator are passed; a repeat keeps the first key |
+| `as_iter` | `Fn(&HashSet<K>) -> Refs<HashSet<K>>` | `HashSet::iter` | insertion order; the name is the language's shared source signature, and the element is a `&K` |
+| `into_iter` | `Fn(HashSet<K>) -> Items<K>` | `HashSet::into_iter` | insertion order; consumes the set |
 
 ## Waiting on RFC-0067
 
@@ -100,46 +107,45 @@ arrives with RFC-0067.
 ## What the boundary refuses
 
 **There is no `iter` or `entries` over `(K, V)`.** No tuple crosses the
-extern boundary — a tuple has `TyArg` and no `Cross` — so an iterator cannot
+extern boundary — a tuple has `TyArg` and no `Cross` — so a stage cannot
 carry a pair, and for the same reason there is no `HashMap::from_iter` over
 pairs. `keys` and `values` walk the same insertion order, so the *n*-th of
 one belongs with the *n*-th of the other.
 
-**There is no `values_mut`.** Declared as an iterator of `&mut V` it
-compiles, and a script that stores through an element of it is refused with
-`cannot store through &i64: not a &mut`: an iterator's element type argument
-does not carry the exclusive loan. `get_mut` is the exclusive loan the
-boundary does carry, one key at a time.
+**There is no `values_mut`.** A `Values` whose `iter::next` answered
+`Option<&mut V>` compiles, and a script that stores through an element of it
+is refused with `cannot store through &i64: not a &mut`: a stage's element
+type argument does not carry the exclusive loan. `get_mut` is the exclusive
+loan the boundary does carry, one key at a time.
 
-**The `Option` is named before it is unwrapped.** This writes 99 at both
-`Opt`s:
+**What `get_mut` binds is a mutable reference; a pattern's binding is not.**
+Both of these write 99 at both `Opt`s, whether the `Option` is named first
+or the two calls are one expression:
 
 ```
 let o = get_mut(&mut m, &q); let v = o.unwrap(); *v = 99; let r = 1; *get(&m, &r).unwrap()
-```
-
-and the same program with the two calls written as one expression is
-refused at both `Opt`s with "cannot store through `v`, of type _: not a
-`&mut`; bind it with `&mut`":
-
-```
 let v = get_mut(&mut m, &q).unwrap(); *v = 99; let r = 1; *get(&m, &r).unwrap()
 ```
 
-`unwrap` is declared over `Option` and over `Result`, so a call of it is a
-`Signature` decision, which waits on its argument's head (`docs/solver.md`
-R2). In the one-expression form that head is the `get_mut` call's own open
-decision, and `typeck.rs`'s `Stmt::DerefStore` reads the target's type
-where the statement is checked, which is before `solve` runs — so it sees
-the open variable and refuses. Naming the `Option` first gives `unwrap` a
-head that is already written down, which R2 answers on the spot, and the
-store sees `&mut i64`. Reading through the one-expression form refuses too,
-with "no `unwrap` takes a call of type Fn(Option<&mut i64>) -> &i64", and
-the `if let Some(v) = get_mut(..)` spelling with "cannot store through `v`,
-of type &_". `acvus-interpreter-test/tests/map.rs`'s
-`a_chained_unwrap_of_get_mut_waits_on_the_open_signature_decision` pins all
-four. `vec.rs` records the same symptom as its reason for declaring no
-`get_mut`, `first_mut` or `last_mut`.
+and `let v = get_mut(&mut m, &q).unwrap(); *v` reads the value through the
+same binding. `unwrap` is declared over `Option` and over `Result`, so a
+call of it is a `Signature` decision that waits on its argument's head
+(`docs/solver.md` R2); in the one-expression form that head is another
+call's open decision, and a binding settles the decisions open before it, so
+`v` is a `&mut i64` where the store and the read are checked.
+
+The spelling still refused binds through a pattern, which lends a shared
+reference:
+
+```
+if let Some(v) = get_mut(&mut m, &q) { *v = 99; }
+```
+
+It is refused at both `Opt`s with "cannot store through `v`, of type &_: not
+a `&mut`; bind it with `&mut`".
+`acvus-interpreter-test/tests/map.rs`'s
+`a_chained_unwrap_of_get_mut_is_a_mutable_reference_where_it_is_bound` pins
+all four programs.
 
 **A `get_mut` whose key is read again refuses at `Opt::Full`.** A result
 that is a reference borrows the call, not a named parameter, so the `&mut V`

@@ -38,6 +38,7 @@ fn extern_fn(i: &Interner, name: &str, param: Option<TyTerm<Poly>>, ret: TyTerm<
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: param

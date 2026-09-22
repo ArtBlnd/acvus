@@ -11,8 +11,8 @@ use std::marker::PhantomData;
 
 use acvus_extern::Ctx;
 use acvus_extern::{
-    Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, Nth, OneValue, Registry,
-    Runtime, Var, extern_fn, extern_registry, kind,
+    Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, Nth, OneValue, PassedByValue,
+    Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -88,7 +88,7 @@ where
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
-        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>;
 }
 
@@ -106,7 +106,30 @@ where
 
     fn pull<O, E>(body: &mut Source<O, Rt>, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
-        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        E: Var<kind::Effect>,
+    {
+        body.pull()
+    }
+}
+
+/// The empty list held uniformly: a signature's `Ts` is a type variable, so
+/// an instance at the empty list holds it as the runtime does.
+impl<Rt> TypeList<Rt> for Erased<Rt, ()>
+where
+    Rt: Runtime,
+{
+    type Body<O, E>
+        = Source<O, Rt>
+    where
+        O: Var<kind::Type>,
+        E: Var<kind::Effect>;
+
+    const LENGTH: usize = 0;
+
+    fn pull<O, E>(body: &mut Source<O, Rt>, _: &mut Ctx<'_, Rt>) -> Option<O>
+    where
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
     {
         body.pull()
@@ -115,7 +138,7 @@ where
 
 impl<T, Ts, Rt> TypeList<Rt> for (T, Ts)
 where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
     Ts: TypeList<Rt>,
     Rt: Runtime,
 {
@@ -129,7 +152,7 @@ where
 
     fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
-        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
     {
         let Stages { stage, rest } = body;
@@ -163,7 +186,7 @@ where
 
     fn pull<O, E>(body: &mut Never, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
-        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
     {
         match *body {}
@@ -171,7 +194,7 @@ where
 }
 
 #[derive(ExternType)]
-#[extern_type(name = "Pipe", payload_per_instantiation)]
+#[extern_type(name = "Pipe")]
 #[repr(transparent)]
 pub struct Pipe<Ts, O, E, I, Rt>(<Ts as TypeList<Rt>>::Body<O, E>, PhantomData<I>)
 where
@@ -184,7 +207,7 @@ where
 impl<Ts, O, E, I, Rt> Pipe<Ts, O, E, I, Rt>
 where
     Ts: Var<kind::Type> + TypeList<Rt>,
-    O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+    O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -212,7 +235,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn ints<T, E, I, Rt>(items: Vec<T>) -> Pipe<(), T, E, I, Rt>
+fn ints<T, E, I, Rt>(items: Vec<T>) -> Pipe<Erased<Rt, ()>, T, E, I, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
@@ -267,15 +290,15 @@ mod sig {
 }
 
 macro_rules! adaptor_instances {
-    ($step:ident, $cut:ident, [$($v:ident),*], $ts:tt) => {
+    ($step:ident, $cut:ident, [$($v:ident),*], $($ts:tt)+) => {
         #[extern_fn(instance_of = sig::step, effect = pure)]
         fn $step<$($v,)* T, U, E, I, Rt>(
-            it: Pipe<$ts, T, E, I, Rt>,
+            it: Pipe<$($ts)+, T, E, I, Rt>,
             f: Closure<(T,), U, E, Rt>,
-        ) -> Pipe<(T, $ts), U, E, I, Rt>
+        ) -> Pipe<(T, $($ts)+), U, E, I, Rt>
         where
-            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
-            T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
+            T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
             U: Var<kind::Type>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
@@ -286,12 +309,12 @@ macro_rules! adaptor_instances {
 
         #[extern_fn(instance_of = sig::cut, effect = pure)]
         fn $cut<$($v,)* T, E, I, Rt>(
-            it: Pipe<$ts, T, E, I, Rt>,
+            it: Pipe<$($ts)+, T, E, I, Rt>,
             n: u64,
-        ) -> Pipe<(T, $ts), T, E, I, Rt>
+        ) -> Pipe<(T, $($ts)+), T, E, I, Rt>
         where
-            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
-            T: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
+            T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
             Rt: Runtime,
@@ -301,19 +324,19 @@ macro_rules! adaptor_instances {
     };
 }
 
-adaptor_instances!(step_0, cut_0, [], ());
+adaptor_instances!(step_0, cut_0, [], Erased<Rt, ()>);
 adaptor_instances!(step_1, cut_1, [A], (A, ()));
 adaptor_instances!(step_2, cut_2, [A, B], (A, (B, ())));
 
 macro_rules! total_instance {
-    ($name:ident, $now:ident, [$($v:ident),*], $ts:tt) => {
+    ($name:ident, $now:ident, [$($v:ident),*], $($ts:tt)+) => {
         fn $now<$($v,)* O, E, I, Rt>(
             ctx: &mut Ctx<'_, Rt>,
-            it: Pipe<$ts, O, E, I, Rt>,
+            it: Pipe<$($ts)+, O, E, I, Rt>,
         ) -> i64
         where
-            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
-            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
+            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
             Rt: Runtime,
@@ -330,11 +353,11 @@ macro_rules! total_instance {
         #[extern_fn(instance_of = sig::total, effect = E, sync = $now)]
         async fn $name<$($v,)* O, E, I, Rt>(
             ctx: &mut Ctx<'_, Rt>,
-            it: Pipe<$ts, O, E, I, Rt>,
+            it: Pipe<$($ts)+, O, E, I, Rt>,
         ) -> i64
         where
-            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,)*
-            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
+            $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
+            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
             Rt: Runtime,
@@ -350,7 +373,7 @@ macro_rules! total_instance {
     };
 }
 
-total_instance!(total_0, total_0_now, [], ());
+total_instance!(total_0, total_0_now, [], Erased<Rt, ()>);
 total_instance!(total_1, total_1_now, [A], (A, ()));
 total_instance!(total_2, total_2_now, [A, B], (A, (B, ())));
 total_instance!(total_3, total_3_now, [A, B, C], (A, (B, (C, ()))));

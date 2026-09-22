@@ -19,9 +19,7 @@ where
     I: Var<kind::Type> + acvus_extern::Borrowable<Rt> + DerefMut<Target = Rt::Value>,
     Rt: Runtime,
 {
-    // SAFETY: the instance stands at the type the reference names, which
-    // is what `Externs::combine` would have met the requirement with.
-    unsafe { inner.call(ctx, it, ()) }
+    inner.call(ctx, it, ())
 }
 
 fn main() {}

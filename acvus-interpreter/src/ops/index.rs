@@ -6,16 +6,54 @@
 //! one compare and one dependent load. Nothing is boxed and nothing is
 //! freed: a slice owns nothing (RFC-0048).
 
-use acvus_extern::{Elements, Release, Words};
+use acvus_extern::{Release, Words};
 use acvus_mir::ir::IndexMode;
 
 use crate::code::{Exit, Marked, Off, Op, SlicePair, successor};
 use crate::machine::Machine;
 use crate::regs::Regs;
-use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 
-type Run = Elements<AcvusRuntime>;
+/// The run a slice pair names, as the machine reads it: `len` values from
+/// `ptr`, in storage the slice's loan keeps live (RFC-0018).
+struct Run {
+    ptr: *const Value,
+    len: usize,
+}
+
+impl Run {
+    /// # Safety
+    /// `words` is a pair `AsSlice` wrote, and its container is live and
+    /// unmoved for as long as this run is read.
+    unsafe fn from_words(words: Words) -> Self {
+        Self {
+            ptr: words.ptr as *const Value,
+            len: words.len as usize,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    /// # Safety
+    /// `at < self.len()`, and the run is live.
+    #[inline(always)]
+    unsafe fn at<'a>(&self, at: usize) -> &'a Value {
+        // SAFETY: the caller's contract.
+        unsafe { &*self.ptr.add(at) }
+    }
+
+    /// # Safety
+    /// As `at`, and the pair was written from a `&mut [T]`, so this run is
+    /// the only live name of its storage.
+    #[allow(clippy::mut_from_ref)]
+    #[inline(always)]
+    unsafe fn at_mut<'a>(&self, at: usize) -> &'a mut Value {
+        // SAFETY: the caller's contract.
+        unsafe { &mut *self.ptr.cast_mut().add(at) }
+    }
+}
 
 /// The registers an indexed read names.
 #[derive(Clone, Copy)]

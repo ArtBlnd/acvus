@@ -30,7 +30,7 @@ use acvus_extern::{
     Erased, OneValue, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind,
 };
 
-use crate::iter::Iter;
+use crate::iter::Items;
 
 fn padding(fill: &str, count: usize) -> String {
     fill.chars().cycle().take(count).collect()
@@ -282,26 +282,14 @@ fn ge(a: &str, b: &str) -> bool {
 
 // -- Producers ----------------------------------------------------------
 
-fn iter_of<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let mut items = items.into_iter();
-    Iter::generate(move |_| items.next())
-}
-
 /// One Unicode scalar value per step.
 #[extern_fn(effect = pure)]
-fn chars<E, I, Rt>(s: &str) -> Iter<char, E, I, Rt>
+fn chars<I, Rt>(s: &str) -> Items<char, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.chars().collect())
+    Items::of(s.chars().collect())
 }
 
 /// A character and the byte offset it begins at.
@@ -313,13 +301,12 @@ pub struct CharIndex {
 
 /// One Unicode scalar value per step, each with its own byte offset.
 #[extern_fn(effect = pure)]
-fn char_indices<E, I, Rt>(s: &str) -> Iter<CharIndex, E, I, Rt>
+fn char_indices<I, Rt>(s: &str) -> Items<CharIndex, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(
+    Items::of(
         s.char_indices()
             .map(|(index, ch)| CharIndex {
                 index: index as u64,
@@ -330,68 +317,62 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn lines<E, I, Rt>(s: &str) -> Iter<String, E, I, Rt>
+fn lines<I, Rt>(s: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.lines().map(str::to_owned).collect())
+    Items::of(s.lines().map(str::to_owned).collect())
 }
 
 /// One byte per step.
 #[extern_fn(effect = pure)]
-fn bytes<E, I, Rt>(s: &str) -> Iter<i64, E, I, Rt>
+fn bytes<I, Rt>(s: &str) -> Items<i64, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.bytes().map(i64::from).collect())
+    Items::of(s.bytes().map(i64::from).collect())
 }
 
 #[extern_fn(effect = pure)]
-fn split_whitespace<E, I, Rt>(s: &str) -> Iter<String, E, I, Rt>
+fn split_whitespace<I, Rt>(s: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.split_whitespace().map(str::to_owned).collect())
+    Items::of(s.split_whitespace().map(str::to_owned).collect())
 }
 
 // -- Splitting ----------------------------------------------------------
 
 #[extern_fn(effect = pure)]
-fn split<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+fn split<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.split(pat).map(str::to_owned).collect())
+    Items::of(s.split(pat).map(str::to_owned).collect())
 }
 
 #[extern_fn(effect = pure)]
-fn rsplit<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+fn rsplit<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.rsplit(pat).map(str::to_owned).collect())
+    Items::of(s.rsplit(pat).map(str::to_owned).collect())
 }
 
 /// At most `n` pieces: the last one holds the rest of `s`, separators and
 /// all. An `n` of 0 gives no piece.
 #[extern_fn(effect = pure)]
-fn splitn<E, I, Rt>(s: &str, n: u64, pat: &str) -> Iter<String, E, I, Rt>
+fn splitn<I, Rt>(s: &str, n: u64, pat: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(
+    Items::of(
         s.splitn(count_of("splitn", n), pat)
             .map(str::to_owned)
             .collect(),
@@ -400,13 +381,12 @@ where
 
 /// As `splitn`, from the right: the last piece holds the start of `s`.
 #[extern_fn(effect = pure)]
-fn rsplitn<E, I, Rt>(s: &str, n: u64, pat: &str) -> Iter<String, E, I, Rt>
+fn rsplitn<I, Rt>(s: &str, n: u64, pat: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(
+    Items::of(
         s.rsplitn(count_of("rsplitn", n), pat)
             .map(str::to_owned)
             .collect(),
@@ -415,24 +395,22 @@ where
 
 /// As `split`, without the empty piece a trailing `pat` would give.
 #[extern_fn(effect = pure)]
-fn split_terminator<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+fn split_terminator<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.split_terminator(pat).map(str::to_owned).collect())
+    Items::of(s.split_terminator(pat).map(str::to_owned).collect())
 }
 
 /// Every non-overlapping `pat` in `s`, left to right.
 #[extern_fn(effect = pure)]
-fn matches<E, I, Rt>(s: &str, pat: &str) -> Iter<String, E, I, Rt>
+fn matches<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(s.matches(pat).map(str::to_owned).collect())
+    Items::of(s.matches(pat).map(str::to_owned).collect())
 }
 
 /// A match and the byte offset it begins at.
@@ -444,13 +422,12 @@ pub struct MatchIndex {
 
 /// Every non-overlapping `pat` in `s` with its byte offset, left to right.
 #[extern_fn(effect = pure)]
-fn match_indices<E, I, Rt>(s: &str, pat: &str) -> Iter<MatchIndex, E, I, Rt>
+fn match_indices<I, Rt>(s: &str, pat: &str) -> Items<MatchIndex, I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    iter_of(
+    Items::of(
         s.match_indices(pat)
             .map(|(index, text)| MatchIndex {
                 index: index as u64,
@@ -543,6 +520,12 @@ fn capitalize(s: &str) -> String {
     out
 }
 
+crate::iter::next_items_of!(element: String, next: next_items_string);
+crate::iter::next_items_of!(element: char, next: next_items_char);
+crate::iter::next_items_of!(element: i64, next: next_items_byte);
+crate::iter::next_items_of!(element: CharIndex, next: next_items_char_index);
+crate::iter::next_items_of!(element: MatchIndex, next: next_items_match_index);
+
 pub fn string_registry<R>() -> Registry<R>
 where
     R: Runtime,
@@ -561,6 +544,8 @@ where
             matches, match_indices,
             find, rfind, pad_start, pad_end, strip_prefix, strip_suffix, split_once,
             eq_ignore_ascii_case, eq_ignore_case, capitalize,
+            next_items_string, next_items_char, next_items_byte, next_items_char_index,
+            next_items_match_index,
         ],
     }
 }
@@ -573,9 +558,16 @@ mod tests {
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let reg =
-            Externs::combine(vec![string_registry::<TypesOnly>()], &i).expect("registry combines");
-        let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
+        let reg = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                string_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        let core = Externs::combine(vec![crate::iterator_registry::<TypesOnly>()], &i)
+            .expect("the baseline combines");
         assert_eq!(reg.functions.len() - core.functions.len(), 53);
         assert_eq!(reg.handlers.len() - core.handlers.len(), 53);
     }

@@ -85,6 +85,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![],
@@ -100,6 +101,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![
@@ -146,9 +148,9 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
 fn a_declared_context_never_shares_a_source_with_a_new_one() {
     let i = Interner::new();
     let declared = Ty::UserDefined {
-        id: QualifiedRef::root(i.intern("Iterator")),
+        id: QualifiedRef::root(i.intern("Items")),
         type_args: vec![TypeArg::uniform(Ty::I64)],
-        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        effect_args: vec![],
         identity_args: vec![IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],

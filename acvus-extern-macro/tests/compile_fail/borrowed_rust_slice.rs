@@ -1,5 +1,8 @@
-//! A Rust slice is not one of the language's types: `Slice<T, Shared, Rt>` is
-//! (RFC-0047). Both borrow modes are refused by the same missing impl.
+//! A Rust slice is the language's `&[T]` only where its element is stored as
+//! one of the runtime's values (`T: TransparentOver<Rt>`): a variable's fill
+//! or an `Erased<Rt, i64>`. A slice of bare `i64` names no storage the
+//! language has, and both borrow modes are refused by the same missing impl
+//! (RFC-0047, RFC-0068 D4).
 use acvus_extern::extern_fn;
 
 #[extern_fn(effect = pure)]

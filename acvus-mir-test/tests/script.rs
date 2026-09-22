@@ -174,7 +174,12 @@ fn ssa_sequential_writes() {
 fn func_pipe_chain() {
     let i = Interner::new();
     let c = ctx(&i, &[]);
-    let ir = compile_script_ir(&i, "[1, 2, 3] | filter(|x| -> *x > 0) | collect", &c).unwrap();
+    let ir = compile_script_ir(
+        &i,
+        "[1, 2, 3] | into_iter | filter(|x| -> *x > 0) | collect",
+        &c,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 

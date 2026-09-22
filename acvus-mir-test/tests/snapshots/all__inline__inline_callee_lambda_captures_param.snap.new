@@ -1,0 +1,22 @@
+---
+source: acvus-mir-test/tests/inline.rs
+assertion_line: 385
+expression: ir
+---
+=== main ===
+     0 |   r0 = fetch @items
+     1 |   assign @items = r0
+     2 |   r1 = take @items
+     4 |   r2 = call #0(r1, 10 (r3))
+     5 |   r4 = call #1(r2)
+     6 |   r5 = take @items
+     7 |   commit @items = r5
+     8 |   return r4
+
+    ; r0 (@items) : Array<i64, 3>
+    ; r1 (@items) : Array<i64, 3>
+    ; r2 (add_n(...)) : Map<Items<i64>, i64, i64, Pure>
+    ; r3 (v4) : i64
+    ; r4 (collect(...)) : Vec<i64>
+    ; r5 (v7) : Array<i64, 3>
+    ; r6 (@items) : Array<i64, 3>

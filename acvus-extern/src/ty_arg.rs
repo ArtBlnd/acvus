@@ -185,6 +185,16 @@ pub trait TyArg: Var<kind::Type> {
     fn slot(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
         TypeArg::new(Self::SLOT.repr(), Self::poly_ty(interner, vars))
     }
+
+    /// This type as an argument of a derived extension type, whose payload
+    /// holds it as the Rust type it is.
+    fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        let repr = match Self::SLOT {
+            SlotRepr::Var => Repr::Uniform,
+            SlotRepr::Ground | SlotRepr::Member => Repr::Specialized,
+        };
+        TypeArg::new(repr, Self::poly_ty(interner, vars))
+    }
 }
 
 impl<const N: usize> TyArg for Nth<kind::Type, N> {

@@ -46,12 +46,12 @@ rule 6).
 | `or_else` | `(Result<T, Er>, Fn(Er) -> Result<T, F>) -> Result<T, F>` | `Result::or_else` | none |
 | `flatten` | `(Result<Result<T, Er>, Er>) -> Result<T, Er>` | `Result::flatten` | none |
 | `transpose` | `(Result<Option<T>, Er>) -> Option<Result<T, Er>>` | `Result::transpose` | none |
-| `into_iter` | `(Result<T, Er>) -> Iter<T>` | `IntoIterator for Result<T, E>` | none; an instance of the shared `iter::into_iter` signature |
+| `into_iter` | `(Result<T, Er>) -> Items<T>` | `IntoIterator for Result<T, E>` | an instance of the shared `iter::into_iter` signature; `Items<T>` is the owned source, of the `Ok` payload or nothing |
 
 ## What Rust has and this does not
 
 `map` is absent for the reason `docs/std/option.md` gives: a method whose
-name `Iter` also carries and which takes a closure cannot be a second entry.
+name `iter` also holds and which takes a closure cannot be a second entry.
 `Result` has no `filter`, so that row's loss does not reach here.
 
 `unwrap_or_default` needs a generic `default<T>`, which nothing declares.

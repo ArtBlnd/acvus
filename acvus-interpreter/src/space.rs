@@ -525,7 +525,7 @@ impl Space {
                 Ok(())
             }
             Ty::Object(fields) => {
-                let laid = layout::sorted_fields(&rt.0.interner, fields);
+                let laid = layout::sorted_fields(&rt.shared.interner, fields);
                 let types: Vec<Ty> = laid.iter().map(|(_, t)| (*t).clone()).collect();
                 let values = unsafe { value.as_object_mut() };
                 for (t, v) in types.iter().zip(values.iter_mut()) {

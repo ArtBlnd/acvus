@@ -15,6 +15,7 @@ mod option;
 mod panic;
 mod regex;
 mod result;
+mod slice;
 mod string;
 mod vec;
 
@@ -27,7 +28,10 @@ pub use deque::{Deque, deque_registry};
 pub use encoding::encoding_registry;
 pub use hash::hash_registry;
 pub use io::io_registry;
-pub use iter::Iter;
+pub use iter::{
+    Chain, Chunks, Dedup, Filter, FlatMap, Flatten, Items, Map, Range, Refs, Skip, SkipWhile,
+    StepBy, Take, TakeWhile,
+};
 pub use iterator::iterator_registry;
 pub use map::{HashMap, HashSet, map_registry, set_registry};
 pub use num::{num_constant_registries, num_registry, num_width_registries};
@@ -35,8 +39,9 @@ pub use option::option_registry;
 pub use panic::panic_registry;
 pub use regex::regex_registry;
 pub use result::result_registry;
+pub use slice::slice_registry;
 pub use string::string_registry;
-pub use vec::{slice_registry, vec_registry};
+pub use vec::vec_registry;
 
 use acvus_extern::{Registry, Runtime};
 

@@ -908,6 +908,7 @@ mod tests {
             kind: FnKind::Extern {
                 bounds: vec![],
                 instances: acvus_mir::ty::Instances::default(),
+                requires: vec![],
             },
             ty: TyTerm::Fn {
                 params: vec![],

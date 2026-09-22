@@ -287,22 +287,6 @@ impl Vars {
         self.0.iter().any(|v| v.kind == VarKind::Len)
     }
 
-    /// Whether `ty` mentions a type, effect, or length variable.
-    pub fn mentions_var(&self, ty: &Type) -> bool {
-        let found = std::cell::Cell::new(false);
-        subst::substitute(ty, &|ident| {
-            if self
-                .0
-                .iter()
-                .any(|v| v.kind != VarKind::Runtime && v.ident == *ident)
-            {
-                found.set(true);
-            }
-            None
-        });
-        found.get()
-    }
-
     fn compile_time_stand_in(v: &Var) -> Type {
         let k = v.index;
         match v.kind {
@@ -326,6 +310,18 @@ impl Vars {
             VarKind::Effect | VarKind::Len | VarKind::Identity => syn::parse_quote! { () },
             VarKind::Runtime => syn::parse_quote! { __R },
         }
+    }
+
+    /// Whether `ty` mentions a type variable.
+    pub fn mentions_ty_var(&self, ty: &Type) -> bool {
+        let found = std::cell::Cell::new(false);
+        subst::substitute(ty, &|ident| {
+            if self.0.iter().any(|v| v.kind == VarKind::Ty && v.ident == *ident) {
+                found.set(true);
+            }
+            None
+        });
+        found.get()
     }
 
     /// Whether `ty` mentions the Monomorphize variable.
@@ -464,7 +460,7 @@ impl Vars {
             .filter(|v| v.kind == VarKind::Ty)
             .map(|v| {
                 let ident = &v.ident;
-                quote! { <#ident as ::acvus_extern::TyArg>::poly_ty(__i, __vars) }
+                quote! { <#ident as ::acvus_extern::TyArg>::held(__i, __vars) }
             })
             .collect()
     }

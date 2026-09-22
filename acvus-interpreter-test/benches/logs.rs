@@ -32,14 +32,13 @@
 //! These timings hold only under one pinned core and a fixed load base;
 //! `benches/README.md` states the protocol.
 
-use acvus_extern::Ctx;
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Elements, Owned, Registry, Shared, Slice, extern_fn, extern_registry, vec_ty};
+use acvus_extern::{Erased, Owned, Registry, extern_fn, extern_registry, vec_ty};
 use acvus_interpreter::{
     AcvusRuntime, Executor, Interpreter, InterpreterContext, SequentialExecutor, TokioExecutor,
     Value,
@@ -346,28 +345,14 @@ fn match_sync(#[state] corpus: &Arc<Corpus>, index: u64) -> bool {
 /// The same matcher in the caller's frame, over the pattern and the line the
 /// script lends it rather than a corpus of its own.
 #[extern_fn(effect = pure)]
-fn glob_match<Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    pat: Slice<i64, Shared, Rt>,
-    line: Slice<i64, Shared, Rt>,
-) -> bool
+fn glob_match<Rt>(pat: &[Erased<Rt, i64>], line: &[Erased<Rt, i64>]) -> bool
 where
     Rt: acvus_extern::Runtime,
 {
-    let rt = ctx.rt;
-    let (pat, line) = (pat.into_elements(), line.into_elements());
-    let byte = |view: &Elements<Rt>, at: usize| {
-        // SAFETY: `at` is below the length the view reports, the container the
-        // script lent is live for the call (RFC-0018), and every element of a
-        // language `Vec<i64>` was erased from `i64` (RFC-0047 rule 1).
-        unsafe { *rt.value_as_ref::<i64>(view.at(at)) }
-    };
-    glob_over(
-        pat.len(),
-        |at| byte(&pat, at),
-        line.len(),
-        |at| byte(&line, at),
-    )
+    // The elements are the script's own (RFC-0047 rule 6, RFC-0068 D4), and
+    // an `Erased<Rt, i64>` is read in place through its deref, so the
+    // accessors still index the container the script lent.
+    glob_over(pat.len(), |at| *pat[at], line.len(), |at| *line[at])
 }
 
 fn registries(corpus: &Arc<Corpus>) -> Vec<Registry<AcvusRuntime>> {

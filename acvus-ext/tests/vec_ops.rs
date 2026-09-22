@@ -26,6 +26,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         mut functions,
         types: type_registry,
         handlers,
+        instances,
         ..
     } = Externs::combine(registries, interner).expect("registries combine");
 
@@ -89,7 +90,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         interner,
         externs: &exec_fns,
         context_names: &context_names,
-        instances: &acvus_extern::NoInstances,
+        instances: &instances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules
@@ -353,8 +354,8 @@ async fn is_sorted_answers_for_the_order_sort_puts_them_in() {
 
 #[tokio::test]
 async fn contains_finds_an_element_and_misses_one_that_is_not_there() {
-    assert!(bool_of("let v = vec([1, 2, 3]); let x = 2; vec::contains(&v, &x)").await);
-    assert!(!bool_of("let v = vec([1, 2, 3]); let x = 9; vec::contains(&v, &x)").await);
+    assert!(bool_of("let v = vec([1, 2, 3]); let x = 2; slice::contains(&v, &x)").await);
+    assert!(!bool_of("let v = vec([1, 2, 3]); let x = 9; slice::contains(&v, &x)").await);
 }
 
 #[tokio::test]
@@ -504,7 +505,7 @@ async fn a_view_answers_its_first_last_and_indexed_element() {
         4
     );
     assert_eq!(
-        int_of("let v = vec([4, 5, 6]); let s = v.as_slice(); if let Some(x) = s.last() { *x } else { 0 - 1 }")
+        int_of("let v = vec([4, 5, 6]); let s = v.as_slice(); if let Some(x) = slice::last(s) { *x } else { 0 - 1 }")
             .await,
         6
     );
@@ -519,8 +520,8 @@ async fn a_view_answers_its_first_last_and_indexed_element() {
 
 #[tokio::test]
 async fn an_array_is_searched_for_an_element() {
-    assert!(bool_of("let a = [1, 2, 3]; let x = 2; array::contains(&a, &x)").await);
-    assert!(!bool_of("let a = [1, 2, 3]; let x = 9; array::contains(&a, &x)").await);
+    assert!(bool_of("let a = [1, 2, 3]; let x = 2; slice::contains(&a, &x)").await);
+    assert!(!bool_of("let a = [1, 2, 3]; let x = 9; slice::contains(&a, &x)").await);
 }
 
 #[tokio::test]
@@ -568,34 +569,34 @@ async fn a_rotation_past_the_length_is_refused_at_the_bound_rust_states() {
 
 #[tokio::test]
 async fn starts_with_and_ends_with_match_a_prefix_and_a_suffix() {
-    assert!(bool_of("let v = vec([1, 2, 3]); let p = vec([1, 2]); v.starts_with(&p)").await);
-    assert!(!bool_of("let v = vec([1, 2, 3]); let p = vec([2, 3]); v.starts_with(&p)").await);
-    assert!(bool_of("let v = vec([1, 2, 3]); let s = vec([2, 3]); v.ends_with(&s)").await);
-    assert!(!bool_of("let v = vec([1, 2, 3]); let s = vec([1, 2]); v.ends_with(&s)").await);
+    assert!(bool_of("let v = vec([1, 2, 3]); let p = vec([1, 2]); slice::starts_with(&v, &p)").await);
+    assert!(!bool_of("let v = vec([1, 2, 3]); let p = vec([2, 3]); slice::starts_with(&v, &p)").await);
+    assert!(bool_of("let v = vec([1, 2, 3]); let s = vec([2, 3]); slice::ends_with(&v, &s)").await);
+    assert!(!bool_of("let v = vec([1, 2, 3]); let s = vec([1, 2]); slice::ends_with(&v, &s)").await);
 }
 
 /// A part longer than the whole matches neither end, and says so rather
 /// than reading past the run.
 #[tokio::test]
 async fn a_part_longer_than_the_whole_matches_neither_end() {
-    assert!(!bool_of("let v = vec([1]); let p = vec([1, 2]); v.starts_with(&p)").await);
-    assert!(!bool_of("let v = vec([1]); let p = vec([1, 2]); v.ends_with(&p)").await);
+    assert!(!bool_of("let v = vec([1]); let p = vec([1, 2]); slice::starts_with(&v, &p)").await);
+    assert!(!bool_of("let v = vec([1]); let p = vec([1, 2]); slice::ends_with(&v, &p)").await);
 }
 
 #[tokio::test]
 async fn an_empty_part_matches_both_ends() {
-    assert!(bool_of("let v = vec([1, 2]); let p = with_capacity(1); v.starts_with(&p)").await);
-    assert!(bool_of("let v = vec([1, 2]); let p = with_capacity(1); v.ends_with(&p)").await);
+    assert!(bool_of("let v = vec([1, 2]); let p = with_capacity(1); slice::starts_with(&v, &p)").await);
+    assert!(bool_of("let v = vec([1, 2]); let p = with_capacity(1); slice::ends_with(&v, &p)").await);
 }
 
 #[tokio::test]
 async fn repeat_lays_the_run_down_that_many_times() {
     assert_eq!(
-        int_of("let v = vec([1, 2]); let r = v.repeat(3u64); r.len() as i64 * 10 + r[4]").await,
+        int_of("let v = vec([1, 2]); let r = slice::repeat(&v, 3u64); r.len() as i64 * 10 + r[4]").await,
         61
     );
     assert_eq!(
-        int_of("let v = vec([1, 2]); let r = v.repeat(0u64); r.len() as i64").await,
+        int_of("let v = vec([1, 2]); let r = slice::repeat(&v, 0u64); r.len() as i64").await,
         0
     );
 }
@@ -630,7 +631,7 @@ async fn sort_by_key_is_stable_where_the_key_ties() {
 
 /// Three declarations hold the bare name `max` — `num::max` over two
 /// numbers, `iter::max` over a stage, `vec::max` over a container — and
-/// one script reaches all three. The container's is written `max(&v)`:
+/// one script reaches all three. The container's is written `slice::max(&v)`:
 /// a method receiver does not settle between a lending and a consuming
 /// candidate, the same bound `v.contains(&x)` has (`docs/std/vec.md`).
 #[tokio::test]
@@ -638,7 +639,7 @@ async fn max_resolves_at_a_vec_at_two_numbers_and_over_an_iterator() {
     assert_eq!(
         int_of(
             "let v = vec([3, 9, 4]); \
-             let a = if let Some(x) = max(&v) { x } else { 0 - 1 }; \
+             let a = if let Some(x) = slice::max(&v) { x } else { 0 - 1 }; \
              let w = vec([5, 2]); \
              let b = if let Some(x) = (w.into_iter() | max()) { x } else { 0 - 1 }; \
              a * 10000 + b * 100 + max(a, b)"
@@ -653,7 +654,7 @@ async fn min_resolves_at_a_vec_at_two_numbers_and_over_an_iterator() {
     assert_eq!(
         int_of(
             "let v = vec([3, 9, 4]); \
-             let a = if let Some(x) = min(&v) { x } else { 0 - 1 }; \
+             let a = if let Some(x) = slice::min(&v) { x } else { 0 - 1 }; \
              let w = vec([5, 2]); \
              let b = if let Some(x) = (w.into_iter() | min()) { x } else { 0 - 1 }; \
              a * 10000 + b * 100 + min(a, b)"
@@ -663,12 +664,14 @@ async fn min_resolves_at_a_vec_at_two_numbers_and_over_an_iterator() {
     );
 }
 
-/// The method form of a `vec` name an `Iter` also carries waits on the
-/// receiver-mode rule; this is the refusal as it stands.
+/// A `Vec` has no `iter::next`, so `iter::max` does not take it and the
+/// method form is the slice's.
 #[tokio::test]
-#[should_panic(expected = "`max` is declared by iter::max and vec::max")]
-async fn the_method_form_of_max_does_not_settle_between_a_lent_and_a_consumed_receiver() {
-    int_of("let v = vec([3, 9, 4]); if let Some(x) = v.max() { x } else { 0 - 1 }").await;
+async fn the_method_form_of_max_on_a_vec_is_the_slices() {
+    assert_eq!(
+        int_of("let v = vec([3, 9, 4]); if let Some(x) = v.max() { x } else { 0 - 1 }").await,
+        9
+    );
 }
 
 #[tokio::test]
@@ -676,7 +679,7 @@ async fn the_least_of_an_empty_vec_is_none() {
     assert_eq!(
         int_of(
             "let v = with_capacity(2); v.push(1); v.pop(); \
-             if let Some(x) = min(&v) { x } else { 0 - 1 }"
+             if let Some(x) = slice::min(&v) { x } else { 0 - 1 }"
         )
         .await,
         -1
@@ -687,7 +690,7 @@ async fn the_least_of_an_empty_vec_is_none() {
 #[tokio::test]
 async fn the_least_float_is_read_at_the_order_sort_uses() {
     assert_eq!(
-        float_of("let v = vec([2.5, 0.5, 1.5]); if let Some(x) = min(&v) { x } else { 0.0 }").await,
+        float_of("let v = vec([2.5, 0.5, 1.5]); if let Some(x) = slice::min(&v) { x } else { 0.0 }").await,
         0.5
     );
 }
@@ -695,7 +698,7 @@ async fn the_least_float_is_read_at_the_order_sort_uses() {
 #[tokio::test]
 #[should_panic(expected = "compile failed")]
 async fn max_of_a_vec_of_something_no_instance_orders_is_refused() {
-    int_of("let v = vec([vec([1]), vec([2])]); if let Some(x) = max(&v) { x[0] } else { 0 - 1 }")
+    int_of("let v = vec([vec([1]), vec([2])]); if let Some(x) = slice::max(&v) { x[0] } else { 0 - 1 }")
         .await;
 }
 

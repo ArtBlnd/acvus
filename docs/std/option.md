@@ -39,21 +39,19 @@ or operator.
 | `flatten` | `(Option<Option<T>>) -> Option<T>` | `Option::flatten` | none |
 | `ok_or` | `(Option<T>, Er) -> Result<T, Er>` | `Option::ok_or` | none |
 | `ok_or_else` | `(Option<T>, Fn() -> Er) -> Result<T, Er>` | `Option::ok_or_else` | none |
-| `into_iter` | `(Option<T>) -> Iter<T>` | `IntoIterator for Option<T>` | none; an instance of the shared `iter::into_iter` signature |
+| `into_iter` | `(Option<T>) -> Items<T>` | `IntoIterator for Option<T>` | an instance of the shared `iter::into_iter` signature; `Items<T>` is the owned source, of one element or none |
 
 ## What Rust has and this does not
 
 `map` and `filter` **wait on `step_signature`** in
 `acvus-mir/src/solver.rs`, here and in `result`. Both are written and both
-register; what stops them is the solver, and each was measured one variable apart. With
-`option::map` declared beside `iter::map`, `acvus-ext/tests/e2e.rs` and
-`examples/grades` are refused at `as_iter() | map(|p| -> p.x)` with ``no
-`map` takes a call of type Fn(Iterator<&Pt{label: String, x: i64}, Pure>,
-Fn({x: _}) -> _) -> Iterator<i64, Pure>``. With `option::filter` declared
-beside `iter::filter`, `acvus-interpreter-test/tests/extern_call_forms.rs`
-is refused at `a | filter(|x| -> x > 1) | count` with ``no `filter` takes a
-call of type Fn(_, Fn(i64) -> Bool) -> Iterator<_, Pure>``. Unregistering
-that one name alone makes that one test pass again. `step_signature`
+register; what stops them is the solver, and each was measured one variable
+apart. With `option::map` declared beside `iter::map`,
+`acvus-ext/tests/e2e.rs` and `examples/grades` are refused at
+`ps.as_iter().map(|p| -> p.x)`; with `option::filter` declared beside
+`iter::filter`, `acvus-interpreter-test/tests/extern_call_forms.rs` is
+refused at `a | filter(|x| -> x > 1) | count`. Unregistering that one name
+alone makes that one test pass again. `step_signature`
 narrows an overloaded call by the candidates the call shape still takes; a
 receiver whose own type is not yet settled leaves two closure-taking
 candidates open, the closure is then typed from its body alone, and the

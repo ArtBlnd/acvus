@@ -1,918 +1,1072 @@
-//! The `Iterator` extension type: a lazy, move-only pipeline of stages.
+//! The iterator stages: one extension type per source and per adaptor, each
+//! with its own instance of `iter::next` (RFC-0067, RFC-0068).
 //!
-//! A stage is built by one constructor that takes its source and its
-//! closure at one element type, then boxed as a `dyn` stage, which yields
-//! the runtime's values. The box is the payload that crosses the boundary,
-//! and it names no element type: the glue erases a `Regex`'s `Iter<String>`
-//! and materializes the same box as a consumer's `Iter<T>`, so a payload
-//! that mentioned `T` would be two Rust types on the two sides.
+//! There is no `Iterator` type. A pipeline's type is the nesting of its
+//! stages, `Filter<Map<Items<i64, _>, ..>, ..>`, and a stage reaches the one
+//! below it through the `next` instance its constructor required, which it
+//! holds beside the stage it names. Per element a stage is one function
+//! pointer call.
 //!
-//! `None` is the end of the source or a trap. The trap itself is on the
-//! runtime, and the extern boundary that called the consumer is what reads
-//! it back and fails the run (RFC-0044, stage 6).
+//! **Task.** A stage holds its inner instance at `Later`, and its own `next`
+//! is an `async fn` with a `sync =` twin at the effect variable it shares
+//! with the inner signature and its closure. A pipeline with one suspending
+//! stage therefore has a suspending effect all the way up, and a site whose
+//! effect is `Sync` runs twins all the way down. A source's `next` returns
+//! and is a plain `fn` at `pure`.
 //!
-//! **The element contract.** `T` is the declared element type, and the
-//! checker is what makes it true: a consumer's `Iter<T, ..>` parameter was
-//! unified with the element type of the iterator its argument names, so every
-//! value the box yields was erased from `T`. The exit is `FromValue`, an
-//! `unsafe fn` whose contract is that fact — identity for the runtime's value,
-//! a downcast for `Erased` and the container boxes. A debug build restates it
-//! (`debug_assert_erased_from!`); a release build does not look, so the
-//! pipeline's construction is the proof and each `unsafe` block below names it.
+//! **Identity.** A source names the identity variable of what it came from.
+//! An adaptor names none: its source's is inside its first type argument.
+//!
+//! **Instances.** An `Instance` stands beside the receiver it is a method
+//! of, so a stage holds one per pipeline it reads: `Chain` holds two
+//! pipelines of two types and the `next` of each. A stage that flattens
+//! (`Flatten`, `FlatMap`) buffers the container it last drew and needs no
+//! instance for it. An element never leaves the type it was declared at:
+//! what an instance returns is a `T`, not a runtime value read back.
 
-use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::ops::DerefMut;
 
-use acvus_extern::Ctx;
+use acvus_extern::{Arr, Erased, OneValue, PassedByValue};
 use acvus_extern::{
-    BoxFuture, Closure, ClosureFn, Erased, ExternType, FromValue, OneValue, Owned, Ref, Runtime,
-    Shared, Stored, Var, kind,
+    Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared, Stored,
+    TransparentOver, Var, extern_fn, kind,
 };
-use sync_wrapper::SyncWrapper;
 
+/// The shared signatures of the iterator surface.
+pub mod sig {
+    use acvus_extern::extern_signature;
+
+    extern_signature! {
+        ns: "iter",
+        effect = E,
+        fn next<I, T, E, Rt>(it: &mut I) -> Option<T>
+        where
+            I: Var<kind::Type>,
+            T: Var<kind::Type>,
+            E: Var<kind::Effect>,
+            Rt: Runtime;
+    }
+
+    extern_signature! {
+        ns: "iter",
+        fn into_iter<C, It, Rt>(items: C) -> It
+        where
+            C: Var<kind::Type>,
+            It: Var<kind::Type>,
+            Rt: Runtime;
+    }
+
+    extern_signature! {
+        ns: "iter",
+        fn as_iter<C, It, Rt>(items: &C) -> It
+        where
+            C: Var<kind::Type>,
+            It: Var<kind::Type>,
+            Rt: Runtime;
+    }
+}
+
+pub struct ItemsBody<T> {
+    rest: std::vec::IntoIter<T>,
+}
+
+/// The owned source: the elements of a container that was consumed.
 #[derive(ExternType)]
-#[extern_type(name = "Iterator")]
+#[extern_type(name = "Items")]
 #[repr(transparent)]
-pub struct Iter<T, E, I, Rt>(Stages<Rt>, PhantomData<(T, E, I)>)
+pub struct Items<T, I, Rt>(ItemsBody<T>, PhantomData<(I, Rt)>)
 where
     T: Var<kind::Type>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-pub enum Stages<Rt>
+impl<T, I, Rt> Items<T, I, Rt>
 where
+    T: Var<kind::Type>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Sync(Box<dyn SyncStage<Rt>>),
-    Async(Box<dyn AsyncStage<Rt>>),
-}
+    pub fn of(items: Vec<T>) -> Self {
+        Items(
+            ItemsBody {
+                rest: items.into_iter(),
+            },
+            PhantomData,
+        )
+    }
 
-pub trait SyncStage<Rt>: Send + Sync
-where
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value>;
-}
-
-pub trait AsyncStage<Rt>: Send + Sync
-where
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>>;
-}
-
-impl<Rt> SyncStage<Rt> for Box<dyn SyncStage<Rt>>
-where
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        (**self).next(ctx)
+    pub(crate) fn step(&mut self) -> Option<T> {
+        self.0.rest.next()
     }
 }
 
-impl<Rt> AsyncStage<Rt> for Box<dyn AsyncStage<Rt>>
+#[extern_fn(instance_of = sig::next, effect = pure)]
+pub(crate) fn next_items<T, I, Rt>(it: &mut Items<T, I, Rt>) -> Option<T>
 where
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        (**self).next(ctx)
-    }
+    it.step()
 }
 
-struct Lifted<S>(S);
-
-impl<S, Rt> AsyncStage<Rt> for Lifted<S>
-where
-    S: SyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(std::future::ready(self.0.next(ctx)))
-    }
-}
-
-impl<Rt> Stages<Rt>
-where
-    Rt: Runtime,
-{
-    fn into_async(self) -> Box<dyn AsyncStage<Rt>> {
-        match self {
-            Self::Sync(stage) => Box::new(Lifted(stage)),
-            Self::Async(stage) => stage,
-        }
-    }
-
-    /// The synchronous arm, for a consumer the solver chose the
-    /// `Task::Sync` instance of. This is the one place that arm is read,
-    /// so the guarantee is stated once (RFC-0046).
-    pub fn sync_mut(&mut self) -> &mut Box<dyn SyncStage<Rt>> {
-        match self {
-            Self::Sync(stage) => stage,
-            Self::Async(_) => unreachable!(
-                "an Iterator whose effect's task is Sync was built from synchronous stages \
-                 only: every constructor that takes an asynchronous source or a suspending \
-                 closure raises the task above Sync, and the checker would then have chosen \
-                 this consumer's asynchronous instance (RFC-0046)"
-            ),
-        }
-    }
-}
-
-/// The body may await: both arms expand inside the consumer's own
-/// `async fn`, and only the source's `next` differs between them.
-macro_rules! drain {
-    ($it:expr, $ctx:expr, |$value:pat_param| $body:block) => {
-        match $it.stages_mut() {
-            $crate::iter::Stages::Sync(stage) => {
-                while let Some($value) = $crate::iter::SyncStage::next(stage, $ctx) $body
-            }
-            $crate::iter::Stages::Async(stage) => {
-                while let Some($value) =
-                    $crate::iter::AsyncStage::next(stage, $ctx).await $body
-            }
+/// The `next` of `Items<#T>`, for a declaration that builds an `Items` at a
+/// Rust type of its own (RFC-0068 D8).
+macro_rules! next_items_of {
+    (element: $t:ty, next: $next:ident) => {
+        #[::acvus_extern::extern_fn(instance_of = $crate::iter::sig::next, effect = pure)]
+        pub(crate) fn $next<I, Rt>(it: &mut $crate::iter::Items<$t, I, Rt>) -> Option<$t>
+        where
+            I: ::acvus_extern::Var<::acvus_extern::kind::Identity>,
+            Rt: ::acvus_extern::Runtime,
+        {
+            it.step()
         }
     };
 }
 
-/// The body cannot await: the consumer is the `Task::Sync` instance, and
-/// `Stages::sync_mut` is where that is checked.
-macro_rules! drain_now {
-    ($it:expr, $ctx:expr, |$value:pat_param| $body:block) => {{
-        let stage = $it.stages_mut().sync_mut();
-        while let Some($value) = $crate::iter::SyncStage::next(stage, $ctx) $body
-    }};
+pub(crate) use next_items_of;
+
+pub struct RefsBody<C, Rt>
+where
+    C: Var<kind::Type>,
+    Rt: Runtime,
+{
+    pub(crate) items: Ref<C, Shared, Rt>,
+    pub(crate) at: usize,
 }
 
-pub(crate) use {drain, drain_now};
-
-impl<T, E, I, Rt> Iter<T, E, I, Rt>
+/// The borrowed source: references into a container that stays where it is.
+/// Each container that can be read by position declares the `next` of its
+/// own `Refs`.
+#[derive(ExternType)]
+#[extern_type(name = "Refs")]
+#[repr(transparent)]
+pub struct Refs<C, I, Rt>(pub(crate) RefsBody<C, Rt>, PhantomData<I>)
 where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
+    C: Var<kind::Type>,
+    I: Var<kind::Identity>,
+    Rt: Runtime;
+
+impl<C, I, Rt> Refs<C, I, Rt>
+where
+    C: Var<kind::Type>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    fn sealed(stage: impl SyncStage<Rt> + 'static) -> Self {
-        Self(Stages::Sync(Box::new(stage)), PhantomData)
+    pub fn of(items: Ref<C, Shared, Rt>) -> Self {
+        Refs(RefsBody { items, at: 0 }, PhantomData)
     }
 
-    fn suspending(stage: impl AsyncStage<Rt> + 'static) -> Self {
-        Self(Stages::Async(Box::new(stage)), PhantomData)
-    }
-
-    pub fn stages_mut(&mut self) -> &mut Stages<Rt> {
-        &mut self.0
-    }
-
-    pub fn from_items(items: Vec<T>) -> Self
+    /// The element `at` reads at this step's position, and the step.
+    pub fn step<'a, T>(
+        &'a mut self,
+        ctx: &Ctx<'_, Rt>,
+        at: impl FnOnce(&'a C, usize) -> Option<&'a T>,
+    ) -> Option<&'a T>
     where
-        T: OneValue<Rt>,
+        C: OneValue<Rt>,
+        T: 'a,
     {
-        let mut items = items.into_iter();
-        Self::generate(move |_| items.next())
-    }
-
-    pub fn generate<F>(f: F) -> Self
-    where
-        F: FnMut(&Rt) -> Option<T> + Send + 'static,
-        T: OneValue<Rt>,
-    {
-        Self::sealed(Generate(SyncWrapper::new(f)))
-    }
-
-    pub fn map<U>(self, f: Closure<(T,), U, E, Rt>) -> Iter<U, E, I, Rt>
-    where
-        U: Var<kind::Type>,
-    {
-        let sync = f.is_sync();
-        let f = f.erased();
-        match self.0 {
-            Stages::Sync(source) if sync => Iter::sealed(Map { source, f }),
-            source => Iter::suspending(Map {
-                source: source.into_async(),
-                f,
-            }),
-        }
-    }
-
-    pub fn filter(self, f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>) -> Self {
-        match self.0 {
-            Stages::Sync(source) if f.is_sync() => Self::sealed(Filter { source, f }),
-            source => Self::suspending(Filter {
-                source: source.into_async(),
-                f,
-            }),
-        }
-    }
-
-    pub fn take(self, n: u64) -> Self {
-        match self.0 {
-            Stages::Sync(source) => Self::sealed(Take {
-                source,
-                remaining: n,
-            }),
-            Stages::Async(source) => Self::suspending(Take {
-                source,
-                remaining: n,
-            }),
-        }
-    }
-
-    pub fn skip(self, n: u64) -> Self {
-        match self.0 {
-            Stages::Sync(source) => Self::sealed(Skip {
-                source,
-                remaining: n,
-            }),
-            Stages::Async(source) => Self::suspending(Skip {
-                source,
-                remaining: n,
-            }),
-        }
-    }
-
-    /// Every `step`th element, the first included. `step` is at least one:
-    /// the ExternFn traps on zero before this is reached.
-    pub fn step_by(self, step: u64) -> Self {
-        match self.0 {
-            Stages::Sync(source) => Self::sealed(StepBy {
-                source,
-                step,
-                started: false,
-            }),
-            Stages::Async(source) => Self::suspending(StepBy {
-                source,
-                step,
-                started: false,
-            }),
-        }
-    }
-
-    pub fn take_while(self, f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>) -> Self {
-        match self.0 {
-            Stages::Sync(source) if f.is_sync() => Self::sealed(TakeWhile {
-                source,
-                f,
-                done: false,
-            }),
-            source => Self::suspending(TakeWhile {
-                source: source.into_async(),
-                f,
-                done: false,
-            }),
-        }
-    }
-
-    pub fn skip_while(self, f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>) -> Self {
-        match self.0 {
-            Stages::Sync(source) if f.is_sync() => Self::sealed(SkipWhile {
-                source,
-                f,
-                skipping: true,
-            }),
-            source => Self::suspending(SkipWhile {
-                source: source.into_async(),
-                f,
-                skipping: true,
-            }),
-        }
-    }
-
-    /// Consecutive elements in `Vec`s of `size`, the last one shorter when
-    /// the source runs out. `size` is at least one: the ExternFn traps on
-    /// zero before this is reached. One chunk is the only buffer.
-    pub fn chunks(self, size: u64) -> Iter<Vec<T>, E, I, Rt>
-    where
-        T: OneValue<Rt> + FromValue<Rt>,
-    {
-        match self.0 {
-            Stages::Sync(source) => Iter::sealed(Chunks::<_, T> {
-                source,
-                size,
-                item: PhantomData,
-            }),
-            Stages::Async(source) => Iter::suspending(Chunks::<_, T> {
-                source,
-                size,
-                item: PhantomData,
-            }),
-        }
-    }
-
-    pub fn chain<J, K>(self, other: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
-    where
-        J: Var<kind::Identity>,
-        K: Var<kind::Identity>,
-    {
-        Iter::chained(VecDeque::from([self.0, other.0]))
-    }
-
-    pub fn chain_all<K>(parts: Vec<Self>) -> Iter<T, E, K, Rt>
-    where
-        K: Var<kind::Identity>,
-    {
-        Iter::chained(parts.into_iter().map(|part| part.0).collect())
-    }
-
-    /// A chain suspends where any of its parts does: a later part is
-    /// reached only after the ones before it end, but the box that holds
-    /// them all is one stage and answers one way.
-    fn chained(parts: VecDeque<Stages<Rt>>) -> Self {
-        if parts.iter().all(|part| matches!(part, Stages::Sync(_))) {
-            let parts = parts
-                .into_iter()
-                .map(|part| match part {
-                    Stages::Sync(stage) => stage,
-                    Stages::Async(_) => unreachable!("every part answered Sync"),
-                })
-                .collect();
-            return Self::sealed(Chain { parts });
-        }
-        let parts = parts.into_iter().map(Stages::into_async).collect();
-        Self::suspending(Chain { parts })
-    }
-
-    pub fn flatten<U>(self) -> Iter<U, E, I, Rt>
-    where
-        T: FromValue<Rt> + IntoIterator<Item = U>,
-        T::IntoIter: Send + Sync,
-        U: Var<kind::Type> + OneValue<Rt>,
-    {
-        match self.0 {
-            Stages::Sync(source) => Iter::sealed(Flatten::<_, T> {
-                source,
-                pending: None,
-            }),
-            Stages::Async(source) => Iter::suspending(Flatten::<_, T> {
-                source,
-                pending: None,
-            }),
-        }
-    }
-
-    pub fn flat_map<S, U>(self, f: Closure<(T,), S, E, Rt>) -> Iter<U, E, I, Rt>
-    where
-        S: Var<kind::Type> + FromValue<Rt> + IntoIterator<Item = U>,
-        S::IntoIter: Send + Sync,
-        U: Var<kind::Type> + OneValue<Rt>,
-    {
-        self.map(f).flatten()
-    }
-
-    pub async fn next_value(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        match &mut self.0 {
-            Stages::Sync(stage) => stage.next(ctx),
-            Stages::Async(stage) => stage.next(ctx).await,
-        }
-    }
-
-    pub async fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<T>
-    where
-        T: FromValue<Rt>,
-    {
-        let rt = ctx.rt;
-        // SAFETY: the element contract at this module's head, for `self`'s `T`.
-        Some(unsafe { T::from_value(rt, self.next_value(ctx).await?) })
-    }
-
-    /// As `next`, for a consumer the solver chose the `Task::Sync`
-    /// instance of.
-    pub fn next_now(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<T>
-    where
-        T: FromValue<Rt>,
-    {
-        let rt = ctx.rt;
-        let value = self.0.sync_mut().next(ctx)?;
-        // SAFETY: the element contract at this module's head, for `self`'s `T`.
-        Some(unsafe { T::from_value(rt, value) })
+        let index = self.0.at;
+        self.0.at += 1;
+        self.0.items.with(ctx.rt, |items| at(items, index))
     }
 }
 
-impl<T, E, I, Rt> Iter<Erased<Rt, T>, E, I, Rt>
+#[extern_fn(instance_of = sig::next, effect = pure)]
+pub(crate) fn next_refs_vec<'a, T, I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &'a mut Refs<Vec<T>, I, Rt>,
+) -> Option<&'a T>
 where
-    T: Var<kind::Type> + Stored<Rt> + PartialEq + Clone,
-    E: Var<kind::Effect>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    /// Consecutive equal elements collapsed to the first. The stage keeps a
-    /// `T` clone of the last element it yielded, never a second value.
-    pub fn dedup(self) -> Self {
-        match self.0 {
-            Stages::Sync(source) => Self::sealed(Dedup::<_, T> { source, last: None }),
-            Stages::Async(source) => Self::suspending(Dedup::<_, T> { source, last: None }),
+    it.step(ctx, |items, index| items.get(index))
+}
+
+#[extern_fn(instance_of = sig::next, effect = pure)]
+pub(crate) fn next_refs_array<'a, T, N, I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &'a mut Refs<Arr<T, N>, I, Rt>,
+) -> Option<&'a T>
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    N: Var<kind::Length>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    it.step(ctx, |items, index| items.0.get(index))
+}
+
+pub struct RangeBody {
+    current: i64,
+    end: i64,
+    step: i64,
+}
+
+/// The counted source: `start`, `start + step`, … while short of `end` —
+/// upward for a positive `step`, downward for a negative one, and empty
+/// where `start` is already at or past `end`. The walk stops rather than
+/// wrapping when the next position would leave `i64`.
+#[derive(ExternType)]
+#[extern_type(name = "Range")]
+#[repr(transparent)]
+pub struct Range<I, Rt>(RangeBody, PhantomData<(I, Rt)>)
+where
+    I: Var<kind::Identity>,
+    Rt: Runtime;
+
+impl<I, Rt> Range<I, Rt>
+where
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    /// `step` is not zero: the constructors trap on zero before this is
+    /// reached.
+    pub fn of(start: i64, end: i64, step: i64) -> Self {
+        debug_assert!(step != 0, "a Range steps by a non-zero amount");
+        Range(
+            RangeBody {
+                current: start,
+                end,
+                step,
+            },
+            PhantomData,
+        )
+    }
+}
+
+#[extern_fn(instance_of = sig::next, effect = pure)]
+pub(crate) fn next_range<I, Rt>(it: &mut Range<I, Rt>) -> Option<i64>
+where
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    let current = it.0.current;
+    let short_of_end = match it.0.step > 0 {
+        true => current < it.0.end,
+        false => current > it.0.end,
+    };
+    if !short_of_end {
+        return None;
+    }
+    it.0.current = current.checked_add(it.0.step)?;
+    Some(current)
+}
+
+pub struct MapBody<I, T, U, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<(T,), U, E, Rt>,
+}
+
+#[derive(ExternType)]
+#[extern_type(name = "Map")]
+#[repr(transparent)]
+pub struct Map<I, T, U, E, Rt>(pub(crate) MapBody<I, T, U, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_map_now<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Map<I, T, U, E, Rt>) -> Option<U>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+    Some(it.0.f.call_now(ctx, (x,)))
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_map_now)]
+pub(crate) async fn next_map<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Map<I, T, U, E, Rt>,
+) -> Option<U>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+    Some(it.0.f.call(ctx, (x,)).await)
+}
+
+pub struct FilterBody<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+}
+
+#[derive(ExternType)]
+#[extern_type(name = "Filter")]
+#[repr(transparent)]
+pub struct Filter<I, T, E, Rt>(pub(crate) FilterBody<I, T, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_filter_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Filter<I, T, E, Rt>) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    loop {
+        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        if it.0.f.call_now(ctx, (&x,)) {
+            return Some(x);
         }
     }
 }
 
-struct Generate<F>(SyncWrapper<F>);
-
-impl<F, T, Rt> SyncStage<Rt> for Generate<F>
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_filter_now)]
+pub(crate) async fn next_filter<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Filter<I, T, E, Rt>,
+) -> Option<T>
 where
-    F: FnMut(&Rt) -> Option<T> + Send,
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        Some(self.0.get_mut()(rt)?.erase(rt))
-    }
-}
-
-/// The closure of a `map` stage, held at the types the elements have once the
-/// stage is built: a closure is called at its declared types, and what this
-/// stage hands it is one erased element (RFC-0039).
-struct Map<S, E, Rt>
-where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    source: S,
-    f: Closure<(Owned<Rt>,), Owned<Rt>, E, Rt>,
-}
-
-impl<S, E, Rt> SyncStage<Rt> for Map<S, E, Rt>
-where
-    S: SyncStage<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let item = self.source.next(ctx)?;
-        let out = self.f.call_now(ctx, (Owned::from_value(item),));
-        Some(out.into_value())
-    }
-}
-
-impl<S, E, Rt> AsyncStage<Rt> for Map<S, E, Rt>
-where
-    S: AsyncStage<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(async move {
-            let Map { source, f } = self;
-            let item = source.next(ctx).await?;
-            let out = f.call(ctx, (Owned::from_value(item),)).await;
-            Some(out.into_value())
-        })
-    }
-}
-
-struct Filter<S, T, E, Rt>
-where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    source: S,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-}
-
-impl<S, T, E, Rt> SyncStage<Rt> for Filter<S, T, E, Rt>
-where
-    S: SyncStage<Rt>,
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        while let Some(value) = self.source.next(ctx) {
-            if self.f.call_now(ctx, (Ref::lend(rt, &value),)) {
-                return Some(value);
-            }
+    loop {
+        let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        if it.0.f.call(ctx, (&x,)).await {
+            return Some(x);
         }
-        None
     }
 }
 
-impl<S, T, E, Rt> AsyncStage<Rt> for Filter<S, T, E, Rt>
+pub struct TakeBody<I, T, E, Rt>
 where
-    S: AsyncStage<Rt>,
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        let rt = ctx.rt;
-        Box::pin(async move {
-            let Filter { source, f } = self;
-            while let Some(value) = source.next(ctx).await {
-                if f.call(ctx, (Ref::lend(rt, &value),)).await {
-                    return Some(value);
-                }
-            }
-            None
-        })
-    }
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) remaining: u64,
 }
 
-struct Take<S> {
-    source: S,
-    remaining: u64,
-}
-
-impl<S, Rt> SyncStage<Rt> for Take<S>
+/// The first `n` elements, and fewer when the source ends first.
+#[derive(ExternType)]
+#[extern_type(name = "Take")]
+#[repr(transparent)]
+pub struct Take<I, T, E, Rt>(pub(crate) TakeBody<I, T, E, Rt>)
 where
-    S: SyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        self.remaining = self.remaining.checked_sub(1)?;
-        self.source.next(ctx)
-    }
-}
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
 
-impl<S, Rt> AsyncStage<Rt> for Take<S>
+fn next_take_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Take<I, T, E, Rt>) -> Option<T>
 where
-    S: AsyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(async move {
-            self.remaining = self.remaining.checked_sub(1)?;
-            self.source.next(ctx).await
-        })
-    }
-}
-
-struct Skip<S> {
-    source: S,
-    remaining: u64,
-}
-
-impl<S, Rt> SyncStage<Rt> for Skip<S>
-where
-    S: SyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        while self.remaining > 0 {
-            self.remaining -= 1;
-            self.source.next(ctx)?;
-        }
-        self.source.next(ctx)
-    }
-}
-
-impl<S, Rt> AsyncStage<Rt> for Skip<S>
-where
-    S: AsyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(async move {
-            while self.remaining > 0 {
-                self.remaining -= 1;
-                self.source.next(ctx).await?;
-            }
-            self.source.next(ctx).await
-        })
-    }
-}
-
-struct StepBy<S> {
-    source: S,
-    step: u64,
-    started: bool,
-}
-
-impl<S, Rt> SyncStage<Rt> for StepBy<S>
-where
-    S: SyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        if self.started {
-            for _ in 1..self.step {
-                self.source.next(ctx)?;
-            }
-        }
-        self.started = true;
-        self.source.next(ctx)
-    }
-}
-
-impl<S, Rt> AsyncStage<Rt> for StepBy<S>
-where
-    S: AsyncStage<Rt>,
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(async move {
-            if self.started {
-                for _ in 1..self.step {
-                    self.source.next(ctx).await?;
-                }
-            }
-            self.started = true;
-            self.source.next(ctx).await
-        })
-    }
-}
-
-struct TakeWhile<S, T, E, Rt>
-where
-    T: Var<kind::Type>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    source: S,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    done: bool,
+    it.0.remaining = it.0.remaining.checked_sub(1)?;
+    it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-impl<S, T, E, Rt> SyncStage<Rt> for TakeWhile<S, T, E, Rt>
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_take_now)]
+pub(crate) async fn next_take<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Take<I, T, E, Rt>,
+) -> Option<T>
 where
-    S: SyncStage<Rt>,
-    T: Var<kind::Type>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        if self.done {
-            return None;
-        }
-        let value = self.source.next(ctx)?;
-        if self.f.call_now(ctx, (Ref::lend(rt, &value),)) {
-            return Some(value);
-        }
-        self.done = true;
-        None
-    }
+    it.0.remaining = it.0.remaining.checked_sub(1)?;
+    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-impl<S, T, E, Rt> AsyncStage<Rt> for TakeWhile<S, T, E, Rt>
+pub struct SkipBody<I, T, E, Rt>
 where
-    S: AsyncStage<Rt>,
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        let rt = ctx.rt;
-        Box::pin(async move {
-            let TakeWhile { source, f, done } = self;
-            if *done {
-                return None;
-            }
-            let value = source.next(ctx).await?;
-            if f.call(ctx, (Ref::lend(rt, &value),)).await {
-                return Some(value);
-            }
-            *done = true;
-            None
-        })
-    }
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) remaining: u64,
 }
 
-struct SkipWhile<S, T, E, Rt>
+/// Everything after the first `n` elements; the elements skipped are drawn
+/// at the first step, not at construction.
+#[derive(ExternType)]
+#[extern_type(name = "Skip")]
+#[repr(transparent)]
+pub struct Skip<I, T, E, Rt>(pub(crate) SkipBody<I, T, E, Rt>)
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_skip_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Skip<I, T, E, Rt>) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    source: S,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    skipping: bool,
+    while it.0.remaining > 0 {
+        it.0.remaining -= 1;
+        it.0.next.call(ctx, &mut it.0.inner, ())?;
+    }
+    it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-impl<S, T, E, Rt> SyncStage<Rt> for SkipWhile<S, T, E, Rt>
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_now)]
+pub(crate) async fn next_skip<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Skip<I, T, E, Rt>,
+) -> Option<T>
 where
-    S: SyncStage<Rt>,
-    T: Var<kind::Type>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        while self.skipping {
-            let value = self.source.next(ctx)?;
-            if !self.f.call_now(ctx, (Ref::lend(rt, &value),)) {
-                self.skipping = false;
-                return Some(value);
-            }
-        }
-        self.source.next(ctx)
+    while it.0.remaining > 0 {
+        it.0.remaining -= 1;
+        it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
     }
+    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-impl<S, T, E, Rt> AsyncStage<Rt> for SkipWhile<S, T, E, Rt>
+pub struct StepByBody<I, T, E, Rt>
 where
-    S: AsyncStage<Rt>,
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        let rt = ctx.rt;
-        Box::pin(async move {
-            let SkipWhile {
-                source,
-                f,
-                skipping,
-            } = self;
-            while *skipping {
-                let value = source.next(ctx).await?;
-                if !f.call(ctx, (Ref::lend(rt, &value),)).await {
-                    *skipping = false;
-                    return Some(value);
-                }
-            }
-            source.next(ctx).await
-        })
-    }
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) step: u64,
+    pub(crate) started: bool,
 }
 
-struct Chunks<S, T> {
-    source: S,
-    size: u64,
-    item: PhantomData<T>,
-}
-
-impl<S, T, Rt> SyncStage<Rt> for Chunks<S, T>
+/// Every `step`th element, the first included. `step` is at least one: the
+/// constructor traps on zero before this is reached.
+#[derive(ExternType)]
+#[extern_type(name = "StepBy")]
+#[repr(transparent)]
+pub struct StepBy<I, T, E, Rt>(pub(crate) StepByBody<I, T, E, Rt>)
 where
-    S: SyncStage<Rt>,
-    T: OneValue<Rt> + FromValue<Rt> + Send + Sync,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_step_by_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut StepBy<I, T, E, Rt>) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        let mut chunk: Vec<T> = Vec::new();
-        while (chunk.len() as u64) < self.size {
-            let Some(value) = self.source.next(ctx) else {
-                break;
-            };
-            // SAFETY: the element contract at this module's head, for `self.source`.
-            chunk.push(unsafe { T::from_value(rt, value) });
+    if it.0.started {
+        for _ in 1..it.0.step {
+            it.0.next.call(ctx, &mut it.0.inner, ())?;
         }
-        (!chunk.is_empty()).then(|| <Vec<T> as OneValue<Rt>>::erase(chunk, rt))
     }
+    it.0.started = true;
+    it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-impl<S, T, Rt> AsyncStage<Rt> for Chunks<S, T>
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_step_by_now)]
+pub(crate) async fn next_step_by<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut StepBy<I, T, E, Rt>,
+) -> Option<T>
 where
-    S: AsyncStage<Rt>,
-    T: OneValue<Rt> + FromValue<Rt> + Send + Sync,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        let rt = ctx.rt;
-        Box::pin(async move {
-            let mut chunk: Vec<T> = Vec::new();
-            while (chunk.len() as u64) < self.size {
-                let Some(value) = self.source.next(ctx).await else {
-                    break;
-                };
-                // SAFETY: the element contract at this module's head, for `self.source`.
-                chunk.push(unsafe { T::from_value(rt, value) });
-            }
-            (!chunk.is_empty()).then(|| <Vec<T> as OneValue<Rt>>::erase(chunk, rt))
-        })
-    }
-}
-
-struct Dedup<S, T> {
-    source: S,
-    last: Option<T>,
-}
-
-impl<S, T, Rt> SyncStage<Rt> for Dedup<S, T>
-where
-    S: SyncStage<Rt>,
-    T: Stored<Rt> + PartialEq + Clone,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        while let Some(value) = self.source.next(ctx) {
-            // SAFETY: the element contract at this module's head, for `self.source`.
-            let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
-            let current = item.as_ref(rt);
-            if self.last.as_ref() == Some(current) {
-                continue;
-            }
-            self.last = Some(current.clone());
-            return Some(item.into_value());
+    if it.0.started {
+        for _ in 1..it.0.step {
+            it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
         }
-        None
     }
+    it.0.started = true;
+    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-impl<S, T, Rt> AsyncStage<Rt> for Dedup<S, T>
+pub struct TakeWhileBody<I, T, E, Rt>
 where
-    S: AsyncStage<Rt>,
-    T: Stored<Rt> + PartialEq + Clone,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        let rt = ctx.rt;
-        Box::pin(async move {
-            while let Some(value) = self.source.next(ctx).await {
-                // SAFETY: the element contract at this module's head, for `self.source`.
-                let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
-                let current = item.as_ref(rt);
-                if self.last.as_ref() == Some(current) {
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) done: bool,
+}
+
+/// The elements up to the first the predicate refuses; that element is drawn
+/// and dropped, and the stage answers `None` from then on without drawing
+/// again.
+#[derive(ExternType)]
+#[extern_type(name = "TakeWhile")]
+#[repr(transparent)]
+pub struct TakeWhile<I, T, E, Rt>(pub(crate) TakeWhileBody<I, T, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_take_while_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut TakeWhile<I, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    if it.0.done {
+        return None;
+    }
+    let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+    if it.0.f.call_now(ctx, (&x,)) {
+        return Some(x);
+    }
+    it.0.done = true;
+    None
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_take_while_now)]
+pub(crate) async fn next_take_while<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut TakeWhile<I, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    if it.0.done {
+        return None;
+    }
+    let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+    if it.0.f.call(ctx, (&x,)).await {
+        return Some(x);
+    }
+    it.0.done = true;
+    None
+}
+
+pub struct SkipWhileBody<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) skipping: bool,
+}
+
+/// Everything from the first element the predicate refuses, that element
+/// included; the predicate is not called again after it.
+#[derive(ExternType)]
+#[extern_type(name = "SkipWhile")]
+#[repr(transparent)]
+pub struct SkipWhile<I, T, E, Rt>(pub(crate) SkipWhileBody<I, T, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_skip_while_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut SkipWhile<I, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    while it.0.skipping {
+        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        if !it.0.f.call_now(ctx, (&x,)) {
+            it.0.skipping = false;
+            return Some(x);
+        }
+    }
+    it.0.next.call(ctx, &mut it.0.inner, ())
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_while_now)]
+pub(crate) async fn next_skip_while<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut SkipWhile<I, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    while it.0.skipping {
+        let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        if !it.0.f.call(ctx, (&x,)).await {
+            it.0.skipping = false;
+            return Some(x);
+        }
+    }
+    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
+}
+
+pub struct ChunksBody<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) size: u64,
+}
+
+/// Consecutive elements in `Vec`s of `size`, the last one shorter when the
+/// source runs out. `size` is at least one: the constructor traps on zero
+/// before this is reached. One chunk is the only buffer.
+#[derive(ExternType)]
+#[extern_type(name = "Chunks")]
+#[repr(transparent)]
+pub struct Chunks<I, T, E, Rt>(pub(crate) ChunksBody<I, T, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_chunks_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Chunks<I, T, E, Rt>,
+) -> Option<Vec<T>>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut chunk: Vec<T> = Vec::new();
+    while (chunk.len() as u64) < it.0.size {
+        let Some(x) = it.0.next.call(ctx, &mut it.0.inner, ()) else {
+            break;
+        };
+        chunk.push(x);
+    }
+    (!chunk.is_empty()).then_some(chunk)
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_chunks_now)]
+pub(crate) async fn next_chunks<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Chunks<I, T, E, Rt>,
+) -> Option<Vec<T>>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut chunk: Vec<T> = Vec::new();
+    while (chunk.len() as u64) < it.0.size {
+        let Some(x) = it.0.next.call_await(ctx, &mut it.0.inner, ()).await else {
+            break;
+        };
+        chunk.push(x);
+    }
+    (!chunk.is_empty()).then_some(chunk)
+}
+
+pub struct DedupBody<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) last: Option<T>,
+}
+
+/// Consecutive equal elements collapsed to the first. The stage keeps a
+/// clone of the last element it yielded, so it is built by a `Monomorphize`
+/// member and holds the element as the Rust type it is, `Dedup<_, #T, _>`,
+/// with one `next` per member.
+#[derive(ExternType)]
+#[extern_type(name = "Dedup")]
+#[repr(transparent)]
+pub struct Dedup<I, T, E, Rt>(pub(crate) DedupBody<I, T, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+macro_rules! next_dedup_of {
+    (element: $t:ty, now: $now:ident, later: $later:ident) => {
+        fn $now<I, E, Rt>(
+            ctx: &mut Ctx<'_, Rt>,
+            it: &mut Dedup<I, $t, E, Rt>,
+        ) -> Option<$t>
+        where
+            I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+            E: Var<kind::Effect>,
+            Rt: Runtime,
+        {
+            while let Some(item) = it.0.next.call(ctx, &mut it.0.inner, ()) {
+                if it.0.last.as_ref() == Some(&item) {
                     continue;
                 }
-                self.last = Some(current.clone());
-                return Some(item.into_value());
+                it.0.last = Some(item.clone());
+                return Some(item);
             }
             None
-        })
-    }
-}
-
-struct Chain<S> {
-    parts: VecDeque<S>,
-}
-
-impl<S, Rt> SyncStage<Rt> for Chain<S>
-where
-    S: SyncStage<Rt> + Send + Sync,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        while let Some(front) = self.parts.front_mut() {
-            if let Some(value) = front.next(ctx) {
-                return Some(value);
-            }
-            self.parts.pop_front();
         }
-        None
-    }
-}
 
-impl<S, Rt> AsyncStage<Rt> for Chain<S>
-where
-    S: AsyncStage<Rt> + Send + Sync,
-    Rt: Runtime,
-{
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        Box::pin(async move {
-            while let Some(front) = self.parts.front_mut() {
-                if let Some(value) = front.next(ctx).await {
-                    return Some(value);
+        #[extern_fn(instance_of = sig::next, effect = E, sync = $now)]
+        pub(crate) async fn $later<I, E, Rt>(
+            ctx: &mut Ctx<'_, Rt>,
+            it: &mut Dedup<I, $t, E, Rt>,
+        ) -> Option<$t>
+        where
+            I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+            E: Var<kind::Effect>,
+            Rt: Runtime,
+        {
+            while let Some(item) = it.0.next.call_await(ctx, &mut it.0.inner, ()).await {
+                if it.0.last.as_ref() == Some(&item) {
+                    continue;
                 }
-                self.parts.pop_front();
+                it.0.last = Some(item.clone());
+                return Some(item);
             }
             None
-        })
-    }
-}
-
-struct Flatten<S, T>
-where
-    T: IntoIterator,
-{
-    source: S,
-    pending: Option<T::IntoIter>,
-}
-
-impl<S, T, U, Rt> SyncStage<Rt> for Flatten<S, T>
-where
-    S: SyncStage<Rt>,
-    T: FromValue<Rt> + IntoIterator<Item = U> + Send + Sync,
-    T::IntoIter: Send + Sync,
-    U: OneValue<Rt>,
-    Rt: Runtime,
-{
-    fn next(&mut self, ctx: &mut Ctx<'_, Rt>) -> Option<Rt::Value> {
-        let rt = ctx.rt;
-        loop {
-            if let Some(item) = self.pending.as_mut().and_then(Iterator::next) {
-                return Some(item.erase(rt));
-            }
-            let value = self.source.next(ctx)?;
-            // SAFETY: the element contract at this module's head, for `self.source`.
-            self.pending = Some(unsafe { T::from_value(rt, value) }.into_iter());
         }
+    };
+}
+
+next_dedup_of!(element: i64, now: next_dedup_int_now, later: next_dedup_int);
+next_dedup_of!(element: f64, now: next_dedup_float_now, later: next_dedup_float);
+next_dedup_of!(element: bool, now: next_dedup_bool_now, later: next_dedup_bool);
+next_dedup_of!(element: String, now: next_dedup_string_now, later: next_dedup_string);
+
+pub struct ChainBody<A, B, T, E, Rt>
+where
+    A: Var<kind::Type>,
+    B: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) first: A,
+    pub(crate) next_first: Instance<sig::next<A, T, E, Rt>, A, Rt, Later>,
+    pub(crate) second: B,
+    pub(crate) next_second: Instance<sig::next<B, T, E, Rt>, B, Rt, Later>,
+    pub(crate) on_first: bool,
+}
+
+/// The first pipeline, then the second. The two may be of different types;
+/// each stands beside its own `next`.
+#[derive(ExternType)]
+#[extern_type(name = "Chain")]
+#[repr(transparent)]
+pub struct Chain<A, B, T, E, Rt>(pub(crate) ChainBody<A, B, T, E, Rt>)
+where
+    A: Var<kind::Type>,
+    B: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_chain_now<A, B, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Chain<A, B, T, E, Rt>) -> Option<T>
+where
+    A: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    B: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    if it.0.on_first {
+        if let Some(x) = it.0.next_first.call(ctx, &mut it.0.first, ()) {
+            return Some(x);
+        }
+        it.0.on_first = false;
+    }
+    it.0.next_second.call(ctx, &mut it.0.second, ())
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_chain_now)]
+pub(crate) async fn next_chain<A, B, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Chain<A, B, T, E, Rt>,
+) -> Option<T>
+where
+    A: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    B: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    if it.0.on_first {
+        if let Some(x) = it.0.next_first.call_await(ctx, &mut it.0.first, ()).await {
+            return Some(x);
+        }
+        it.0.on_first = false;
+    }
+    it.0.next_second.call_await(ctx, &mut it.0.second, ()).await
+}
+
+pub struct FlattenBody<I, C, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    C: Var<kind::Type> + Cross<Rt> + PassedByValue<Rt>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, C, E, Rt>, I, Rt, Later>,
+    pub(crate) pending: std::vec::IntoIter<T>,
+}
+
+/// The elements of each container the source yields, in order. `C` is the
+/// container the source's elements stand at — a `Vec` or an `Arr` — and the
+/// one it last drew is the only buffer.
+#[derive(ExternType)]
+#[extern_type(name = "Flatten")]
+#[repr(transparent)]
+pub struct Flatten<I, C, T, E, Rt>(pub(crate) FlattenBody<I, C, T, E, Rt>)
+where
+    I: Var<kind::Type>,
+    C: Var<kind::Type> + Cross<Rt> + PassedByValue<Rt>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_flatten_now<I, C, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Flatten<I, C, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    C: Var<kind::Type>
+        + Cross<Rt>
+        + PassedByValue<Rt>
+        + IntoIterator<Item = T, IntoIter = std::vec::IntoIter<T>>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    loop {
+        if let Some(x) = it.0.pending.next() {
+            return Some(x);
+        }
+        let batch = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        it.0.pending = batch.into_iter();
     }
 }
 
-impl<S, T, U, Rt> AsyncStage<Rt> for Flatten<S, T>
+async fn next_flatten_at<I, C, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Flatten<I, C, T, E, Rt>,
+) -> Option<T>
 where
-    S: AsyncStage<Rt>,
-    T: FromValue<Rt> + IntoIterator<Item = U> + Send + Sync,
-    T::IntoIter: Send + Sync,
-    U: OneValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    C: Var<kind::Type>
+        + Cross<Rt>
+        + PassedByValue<Rt>
+        + IntoIterator<Item = T, IntoIter = std::vec::IntoIter<T>>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn next<'a>(&'a mut self, ctx: &'a mut Ctx<'_, Rt>) -> BoxFuture<'a, Option<Rt::Value>> {
-        let rt = ctx.rt;
-        Box::pin(async move {
-            loop {
-                if let Some(item) = self.pending.as_mut().and_then(Iterator::next) {
-                    return Some(item.erase(rt));
-                }
-                let value = self.source.next(ctx).await?;
-                // SAFETY: the element contract at this module's head, for `self.source`.
-                self.pending = Some(unsafe { T::from_value(rt, value) }.into_iter());
-            }
-        })
+    loop {
+        if let Some(x) = it.0.pending.next() {
+            return Some(x);
+        }
+        let batch = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        it.0.pending = batch.into_iter();
+    }
+}
+
+fn next_flatten_vecs_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Flatten<I, Vec<T>, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    next_flatten_now(ctx, it)
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_vecs_now)]
+pub(crate) async fn next_flatten_vecs<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Flatten<I, Vec<T>, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    next_flatten_at(ctx, it).await
+}
+
+fn next_flatten_arrays_now<I, T, N, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Flatten<I, Arr<T, N>, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    next_flatten_now(ctx, it)
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_arrays_now)]
+pub(crate) async fn next_flatten_arrays<I, T, N, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Flatten<I, Arr<T, N>, T, E, Rt>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    next_flatten_at(ctx, it).await
+}
+
+pub struct FlatMapBody<I, T, U, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<(T,), Vec<U>, E, Rt>,
+    pub(crate) pending: std::vec::IntoIter<U>,
+}
+
+/// The elements of each `Vec` the closure returns, in order. This is `map`
+/// and `flatten` in one stage: two stages would need two instances, and the
+/// intermediate one has no name to require an instance at.
+#[derive(ExternType)]
+#[extern_type(name = "FlatMap")]
+#[repr(transparent)]
+pub struct FlatMap<I, T, U, E, Rt>(pub(crate) FlatMapBody<I, T, U, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+fn next_flat_map_now<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut FlatMap<I, T, U, E, Rt>,
+) -> Option<U>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    loop {
+        if let Some(y) = it.0.pending.next() {
+            return Some(y);
+        }
+        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        it.0.pending = it.0.f.call_now(ctx, (x,)).into_iter();
+    }
+}
+
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_flat_map_now)]
+pub(crate) async fn next_flat_map<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut FlatMap<I, T, U, E, Rt>,
+) -> Option<U>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    loop {
+        if let Some(y) = it.0.pending.next() {
+            return Some(y);
+        }
+        let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        it.0.pending = it.0.f.call(ctx, (x,)).await.into_iter();
     }
 }

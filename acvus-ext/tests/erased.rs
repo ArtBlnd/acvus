@@ -9,10 +9,10 @@ use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_ext::{string_registry, vec_registry};
+use acvus_ext::{iterator_registry, string_registry, vec_registry};
 use acvus_extern::{
-    DirectOp, Erased, ExternHandler, Externs, FromValue, Interner, PolyTy, QualifiedRef, Ref,
-    Registry, Release, Runtime, Shared, TyTerm, TypeArg, extern_fn, extern_registry,
+    DirectOp, Erased, ExternHandler, Externs, FromValue, Interner, Owned, PolyTy, QualifiedRef,
+    Registry, Release, Runtime, TyTerm, TypeArg, Words, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -362,16 +362,12 @@ impl Runtime for Counting {
 // -- The reader under test --------------------------------------------
 
 #[extern_fn(effect = pure)]
-fn join_erased<Rt>(ctx: &mut Ctx<'_, Rt>, items: Ref<Vec<Erased<Rt, String>>, Shared, Rt>) -> String
+fn join_erased<Rt>(ctx: &mut Ctx<'_, Rt>, items: &[Erased<Rt, String>]) -> String
 where
     Rt: Runtime,
 {
     let rt = ctx.rt;
-    let parts: Vec<&str> = items
-        .as_slice(rt)
-        .iter()
-        .map(|s| s.as_ref(rt).as_str())
-        .collect();
+    let parts: Vec<&str> = items.iter().map(|s| s.as_ref(rt).as_str()).collect();
     parts.join(",")
 }
 
@@ -390,6 +386,7 @@ where
 
 fn registries() -> Vec<Registry<Counting>> {
     vec![
+        iterator_registry(),
         string_registry(),
         vec_registry(),
         extern_registry! {
@@ -425,7 +422,9 @@ impl World {
         let site = acvus_extern::SitesNoParameterReads::default();
         let op = handler
             .clone()
-            .at_site(&site.args(handler.arity()))
+            .at_site(&acvus_extern::CallSite::of_args(
+                &site.args(handler.arity()),
+            ))
             .into_op(());
         // SAFETY: the caller passes the declaration's own arguments.
         unsafe { op.call_run(&self.rt, &args) }
@@ -438,10 +437,24 @@ impl World {
 
     /// The pair a `&str` parameter is passed in (RFC-0062): the borrow is
     /// of `s`, which the caller keeps alive across the call.
+    fn slice_view(&self, container: &V) -> [V; 2] {
+        let elements = open_ref::<Vec<Owned<Counting>>>(container);
+        let mut pair = [V::default(); 2];
+        let words = Words {
+            ptr: elements.as_ptr() as u64,
+            len: elements.len() as u64,
+        };
+        self.rt.slice_into_run(words, &mut pair);
+        pair
+    }
+
     fn str_view(&self, s: &str) -> [V; 2] {
         let mut pair = [V::default(); 2];
-        self.rt
-            .slice_into_run(acvus_extern::StrView::of(s).words(), &mut pair);
+        let words = Words {
+            ptr: s.as_ptr() as u64,
+            len: s.len() as u64,
+        };
+        self.rt.slice_into_run(words, &mut pair);
         pair
     }
 
@@ -551,10 +564,9 @@ fn join_reads_through_as_ref_with_no_unbox() {
         [w.str_view(&text), w.str_view(&sep)].concat(),
     );
     let reversed = w.call("vec", "reverse", vec![parts]);
-    // SAFETY: `reversed` is live and unmoved for the call.
-    let lent = unsafe { w.rt.reference(&reversed) };
+    let lent = w.slice_view(&reversed);
     let start = w.rt.counts();
-    let joined = w.call("t", "join_erased", vec![lent]);
+    let joined = w.call("t", "join_erased", lent.to_vec());
     assert_eq!(
         w.rt.since(start),
         Counts {

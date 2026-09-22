@@ -1,11 +1,10 @@
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt;
-use std::sync::Arc;
 
 use crate::graph::types::QualifiedRef;
 use acvus_utils::{Astr, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 // -- UserDefined type system ------------------------------------------
 
@@ -233,15 +232,8 @@ impl From<acvus_ast::IntWidth> for IntTy {
 pub enum TyVarBound {
     Any,
     /// The variable resolves to a type of one of these shapes (RFC-0027).
-    ///
-    /// `required` names the shared signatures an instance of which was
-    /// asked for, `shapes` then being the patterns those instances stand at
-    /// (RFC-0067 Decision 1). It is empty where the shapes came from
-    /// somewhere else — an operator's admitted types, a scheme's expansion
-    /// — and a refusal says so by naming the shapes alone.
     OneOf {
         shapes: Vec<PolyTy>,
-        required: Vec<Required>,
     },
     /// The variable is an integer literal's type: one of `among`, which a
     /// use narrows, signed where the literal is negated (RFC-0037).
@@ -251,129 +243,9 @@ pub enum TyVarBound {
     },
 }
 
-/// One requirement a bound states: the signature an instance was asked of,
-/// and the instance sets every requirement below it resolves through.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Required {
-    pub signature: QualifiedRef,
-    pub instances: Arc<InstanceSets>,
-}
-
-/// Where in an instance's pattern one of that instance's own bounded
-/// variables stands, and what an instance is required of there: the
-/// type-argument positions to walk down a ground type of the pattern's
-/// shape.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InnerBound {
-    pub signature: QualifiedRef,
-    pub at: Vec<usize>,
-}
-
-/// One instance as a bound sees it: the pattern it stands at, and what its
-/// own `where` clause required.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InstanceShape {
-    pub ty: PolyTy,
-    pub requires: Vec<InnerBound>,
-}
-
-/// Every shared signature's instances, by name. One of these is built per
-/// `Externs::combine` and shared by every bound that states a requirement,
-/// so that a requirement inside a pattern resolves by the signature's name
-/// rather than by a value that would have to contain itself.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct InstanceSets {
-    by_signature: FxHashMap<QualifiedRef, Vec<InstanceShape>>,
-}
-
-impl InstanceSets {
-    pub fn new(by_signature: FxHashMap<QualifiedRef, Vec<InstanceShape>>) -> Self {
-        InstanceSets { by_signature }
-    }
-
-    /// Whether `ty` has an instance of `signature`, with the instances that
-    /// instance's own bounds require standing under it — the recursion
-    /// `InstanceTable::entry_at` walks at `prepare`, decided here instead
-    /// (RFC-0067 Decision 2).
-    ///
-    /// It terminates because every step walks one type argument down `ty`
-    /// and `Externs::combine` refuses a requirement whose path is empty.
-    pub fn admits(&self, signature: QualifiedRef, ty: &Ty) -> bool {
-        let ty = behind_a_reference(ty);
-        self.by_signature
-            .get(&signature)
-            .is_some_and(|shapes| shapes.iter().any(|shape| self.stands_at(shape, ty)))
-    }
-
-    /// Whether the instances this set holds leave `ty` admitted. A shape no
-    /// instance here stands at is one the bound took from elsewhere —
-    /// `typeck` joins the compiler's own instances of a shared signature to
-    /// a bound's shapes (RFC-0020), and an intrinsic states no requirement
-    /// of its own — so the set judges the shapes it declared and no others.
-    pub fn own_bounds_hold(&self, signature: QualifiedRef, ty: &Ty) -> bool {
-        let ty = behind_a_reference(ty);
-        let Some(shapes) = self.by_signature.get(&signature) else {
-            return true;
-        };
-        let mut standing = shapes.iter().filter(|shape| matches_poly(ty, &shape.ty));
-        standing.next().is_none_or(|_| {
-            shapes
-                .iter()
-                .any(|shape| matches_poly(ty, &shape.ty) && self.stands_at(shape, ty))
-        })
-    }
-
-    fn stands_at(&self, shape: &InstanceShape, ty: &Ty) -> bool {
-        matches_poly(ty, &shape.ty)
-            && shape.requires.iter().all(|inner| {
-                arg_at(ty, &inner.at).is_some_and(|at| self.admits(inner.signature, at))
-            })
-    }
-}
-
-fn behind_a_reference(ty: &Ty) -> &Ty {
-    match ty {
-        TyTerm::Ref(_, target) => &target.ty,
-        at => at,
-    }
-}
-
-/// What filled the variable `path` leads to, in a ground type of the
-/// pattern's shape.
-fn arg_at<'a>(ty: &'a Ty, path: &[usize]) -> Option<&'a Ty> {
-    let mut at = ty;
-    for step in path {
-        let TyTerm::UserDefined { type_args, .. } = at else {
-            return None;
-        };
-        at = &type_args.get(*step)?.ty;
-    }
-    Some(at)
-}
-
 impl TyVarBound {
-    /// Shapes that no requirement produced.
     pub fn one_of(shapes: Vec<PolyTy>) -> Self {
-        Self::OneOf {
-            shapes,
-            required: Vec::new(),
-        }
-    }
-
-    /// The patterns the instances of `signature` stand at, with the sets
-    /// every requirement under them resolves through.
-    pub fn instances_of(
-        signature: QualifiedRef,
-        shapes: Vec<PolyTy>,
-        instances: Arc<InstanceSets>,
-    ) -> Self {
-        Self::OneOf {
-            shapes,
-            required: vec![Required {
-                signature,
-                instances,
-            }],
-        }
+        Self::OneOf { shapes }
     }
 
     /// An integer bound over the widths `among` yields, signed-only where
@@ -402,12 +274,7 @@ impl TyVarBound {
         match self {
             _ if matches!(ty, Ty::Error(_)) => true,
             Self::Any => true,
-            Self::OneOf { shapes, required } => {
-                shapes.iter().any(|s| matches_poly(ty, s))
-                    && required
-                        .iter()
-                        .all(|r| r.instances.own_bounds_hold(r.signature, ty))
-            }
+            Self::OneOf { shapes } => shapes.iter().any(|s| matches_poly(ty, s)),
             Self::Integer { signed, among } => {
                 matches!(ty, Ty::Int(k) if among.contains(k) && (!*signed || k.signed()))
             }
@@ -423,14 +290,10 @@ impl TyVarBound {
                 Self::Integer { among, .. } => Some(among.into_iter().map(TyTerm::Int).collect()),
             }
         };
-        let required = both_require(&self, &other);
         match (shapes(self), shapes(other)) {
             (Some(mut a), Some(b)) => {
                 a.extend(b);
-                Self::OneOf {
-                    shapes: a,
-                    required,
-                }
+                Self::OneOf { shapes: a }
             }
             (None, _) | (_, None) => Self::Any,
         }
@@ -459,44 +322,15 @@ impl TyVarBound {
                     _ => None,
                 }),
             ),
-            (
-                Self::OneOf {
-                    shapes: a,
-                    required: ra,
-                },
-                Self::OneOf {
-                    shapes: b,
-                    required: rb,
-                },
-            ) => {
+            (Self::OneOf { shapes: a }, Self::OneOf { shapes: b }) => {
                 let both: Vec<PolyTy> = a
                     .iter()
                     .flat_map(|x| b.iter().filter_map(move |y| unify_patterns(x, y)))
                     .collect();
-                if both.is_empty() {
-                    None
-                } else {
-                    let mut required = ra.clone();
-                    required.extend(rb.iter().filter(|s| !ra.contains(s)).cloned());
-                    Some(Self::OneOf {
-                        shapes: both,
-                        required,
-                    })
-                }
+                (!both.is_empty()).then_some(Self::OneOf { shapes: both })
             }
         }
     }
-}
-
-/// The signatures both bounds require: a type satisfying either bound has
-/// an instance of exactly these.
-fn both_require(left: &TyVarBound, right: &TyVarBound) -> Vec<Required> {
-    let (TyVarBound::OneOf { required: a, .. }, TyVarBound::OneOf { required: b, .. }) =
-        (left, right)
-    else {
-        return Vec::new();
-    };
-    a.iter().filter(|s| b.contains(s)).cloned().collect()
 }
 
 /// The instances of an Extern function, numbered as the runtime numbers
@@ -515,12 +349,15 @@ impl Instances {
     }
 }
 
-/// One concrete instance of an extern: its signature and the greatest task
-/// it runs, which is a ceiling and not the instance's own task (RFC-0046).
+/// One concrete instance of an extern: its signature, the greatest task it
+/// admits a call at, which is a ceiling and not its own task (RFC-0046),
+/// and the task its body runs at, which is what a requirement written at a
+/// lower task cannot reach (RFC-0068).
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceSig {
     pub ty: PolyTy,
     pub admits: Task,
+    pub task: Task,
 }
 
 impl InstanceSig {
@@ -528,8 +365,20 @@ impl InstanceSig {
         Self {
             ty,
             admits: Task::Heavy,
+            task: Task::Sync,
         }
     }
+}
+
+/// What a declaration requires of its type variables: an instance of
+/// `signature` whose type joins `pattern`, written at the declaration's own
+/// variables, and called at no task above `calls` (RFC-0068 D1). The
+/// checker decides it as it decides a call of the signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequirementSig {
+    pub signature: QualifiedRef,
+    pub pattern: PolyTy,
+    pub calls: Task,
 }
 
 /// A polymorphic type with the bounds its variables were declared with.
@@ -540,6 +389,17 @@ pub struct Scheme {
     pub ty: PolyTy,
     pub bounds: Vec<TyVarBound>,
     pub instances: Option<Instances>,
+    pub requires: Vec<Requirement>,
+}
+
+/// A `RequirementSig` with the instances of the signature it names, so
+/// that the solver decides it without reaching for the environment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Requirement {
+    pub signature: QualifiedRef,
+    pub pattern: PolyTy,
+    pub calls: Task,
+    pub instances: Instances,
 }
 
 impl Scheme {
@@ -548,6 +408,7 @@ impl Scheme {
             ty,
             bounds: Vec::new(),
             instances: None,
+            requires: Vec::new(),
         }
     }
 
@@ -1250,6 +1111,7 @@ pub struct TypeRegistry {
     pub(crate) from_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
     pub(crate) to_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
     machine_views: FxHashMap<QualifiedRef, Viewed>,
+    sliced: FxHashSet<SlicedStorage>,
 }
 
 /// A coercion rule: `from` can be implicitly converted to `to`.
@@ -1421,9 +1283,25 @@ impl TypeRegistry {
 
     // -- Machine coercions -------------------------------------------
 
-    pub fn register_machine_view(&mut self, qref: QualifiedRef, viewed: Viewed) {
+    pub fn register_machine_view(
+        &mut self,
+        qref: QualifiedRef,
+        viewed: Viewed,
+        referent_taken: &PolyTy,
+    ) {
         let prev = self.machine_views.insert(qref, viewed);
         assert!(prev.is_none(), "duplicate machine coercion: {qref:?}");
+        if let (View::Slice, Some(head)) = (viewed.view, SliceableHead::of(referent_taken)) {
+            self.sliced.insert(SlicedStorage {
+                head,
+                mutability: viewed.mutability,
+            });
+        }
+    }
+
+    /// Whether a storage of this head lends a slice at this mutability.
+    pub fn lends_a_slice(&self, head: SliceableHead, mutability: Mutability) -> bool {
+        self.sliced.contains(&SlicedStorage { head, mutability })
     }
 
     /// There is deliberately no way to ask this question of a name or of a
@@ -2253,6 +2131,33 @@ impl View {
     }
 }
 
+/// A container the machine can slice, named by its head alone: two `Vec`s
+/// of different elements have one `as_slice` between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SliceableHead {
+    Array,
+    Named(QualifiedRef),
+}
+
+impl SliceableHead {
+    pub fn of<V>(ty: &TyTerm<V>) -> Option<Self>
+    where
+        V: Phase,
+    {
+        match ty {
+            TyTerm::UserDefined { id, .. } => Some(SliceableHead::Named(*id)),
+            TyTerm::Array(..) => Some(SliceableHead::Array),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SlicedStorage {
+    head: SliceableHead,
+    mutability: Mutability,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Viewed {
     pub view: View,
@@ -2935,6 +2840,15 @@ impl<V: Phase> TyTerm<V> {
     /// that refusal reads, and `typeck` compares the two lists position by
     /// position.
     pub fn for_each_source(&self, on_source: &mut impl FnMut(IdentityId)) {
+        self.for_each_identity(&mut |identity| {
+            if let IdentityTerm::Known(id) = identity {
+                on_source(*id);
+            }
+        });
+    }
+
+    /// Every identity argument in the type, in `for_each_source`'s order.
+    pub fn for_each_identity(&self, on_identity: &mut impl FnMut(&IdentityTerm<V>)) {
         match self {
             TyTerm::Int(_)
             | TyTerm::Float
@@ -2947,25 +2861,25 @@ impl<V: Phase> TyTerm<V> {
             | TyTerm::Str
             | TyTerm::Error(_)
             | TyTerm::Var(_) => {}
-            TyTerm::Array(inner, _) => inner.for_each_source(on_source),
-            TyTerm::Slice(elem) => elem.for_each_source(on_source),
-            TyTerm::Handle(inner) => inner.for_each_source(on_source),
-            TyTerm::Option(inner) => inner.for_each_source(on_source),
-            TyTerm::Ref(_, inner) => inner.ty.for_each_source(on_source),
+            TyTerm::Array(inner, _) => inner.for_each_identity(on_identity),
+            TyTerm::Slice(elem) => elem.for_each_identity(on_identity),
+            TyTerm::Handle(inner) => inner.for_each_identity(on_identity),
+            TyTerm::Option(inner) => inner.for_each_identity(on_identity),
+            TyTerm::Ref(_, inner) => inner.ty.for_each_identity(on_identity),
             TyTerm::Result(ok, err) => {
-                ok.for_each_source(on_source);
-                err.for_each_source(on_source);
+                ok.for_each_identity(on_identity);
+                err.for_each_identity(on_identity);
             }
             TyTerm::Tuple(elems) => {
                 for elem in elems {
-                    elem.for_each_source(on_source);
+                    elem.for_each_identity(on_identity);
                 }
             }
             TyTerm::Object(object) => {
                 let mut fields: Vec<_> = object.iter().collect();
                 fields.sort_by_key(|(name, _)| **name);
                 for (_, ty) in fields {
-                    ty.for_each_source(on_source);
+                    ty.for_each_identity(on_identity);
                 }
             }
             TyTerm::Enum { variants, .. } => {
@@ -2973,7 +2887,7 @@ impl<V: Phase> TyTerm<V> {
                 tags.sort_by_key(|(tag, _)| **tag);
                 for (_, payload) in tags {
                     if let Some(ty) = payload {
-                        ty.for_each_source(on_source);
+                        ty.for_each_identity(on_identity);
                     }
                 }
             }
@@ -2984,11 +2898,11 @@ impl<V: Phase> TyTerm<V> {
                 ..
             } => {
                 for param in params {
-                    param.ty.for_each_source(on_source);
+                    param.ty.for_each_identity(on_identity);
                 }
-                ret.for_each_source(on_source);
+                ret.for_each_identity(on_identity);
                 for capture in captures {
-                    capture.for_each_source(on_source);
+                    capture.for_each_identity(on_identity);
                 }
             }
             TyTerm::UserDefined {
@@ -2997,12 +2911,10 @@ impl<V: Phase> TyTerm<V> {
                 ..
             } => {
                 for arg in type_args {
-                    arg.ty.for_each_source(on_source);
+                    arg.ty.for_each_identity(on_identity);
                 }
                 for arg in identity_args {
-                    if let IdentityTerm::Known(id) = arg {
-                        on_source(*id);
-                    }
+                    on_identity(arg);
                 }
             }
         }

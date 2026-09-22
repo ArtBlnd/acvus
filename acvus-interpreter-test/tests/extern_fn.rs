@@ -121,6 +121,7 @@ async fn regex_match_via_extern() {
     let i = Interner::new();
 
     let registries = vec![
+        acvus_ext::iterator_registry(),
         acvus_ext::regex_registry(),
         acvus_ext::conversion_registry(),
     ];
@@ -141,6 +142,8 @@ async fn regex_find_via_extern() {
     let i = Interner::new();
 
     let registries = vec![
+        acvus_ext::vec_registry(),
+        acvus_ext::iterator_registry(),
         acvus_ext::regex_registry(),
         acvus_ext::conversion_registry(),
     ];

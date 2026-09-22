@@ -23,16 +23,20 @@ use crate::runtime::Runtime;
 
 /// What an instance itself requires is a field of its payload, laid at
 /// construction, so this lookup walks nothing (RFC-0067 Decision 1).
+/// Which instance of a required signature a call site runs: its position
+/// among that signature's own instances, as `Instances` numbers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequiredInstance(pub usize);
+
 pub trait InstanceEntries<Rt>: Send + Sync
 where
     Rt: Runtime,
 {
-    /// # Panics
-    /// No instance of `signature` stands at `ty`. The checker admits a call
-    /// only at a type inside the `OneOf` bound `Externs::combine` met the
-    /// requirement with, so reaching this is a defect in that meet and not
-    /// a program error.
-    fn instance_at(&self, signature: QualifiedRef, ty: &Ty) -> InstanceRun;
+    /// The glue of the instance the checker settled on.
+    fn glue(&self, signature: QualifiedRef, instance: RequiredInstance) -> InstanceRun;
+
+    /// The overload the IR names `function` at, taken apart.
+    fn overload(&self, function: QualifiedRef, position: usize) -> acvus_mir::ir::Overload;
 }
 
 pub struct NoInstances;
@@ -41,10 +45,17 @@ impl<Rt> InstanceEntries<Rt> for NoInstances
 where
     Rt: Runtime,
 {
-    fn instance_at(&self, _: QualifiedRef, _: &Ty) -> InstanceRun {
+    fn glue(&self, _: QualifiedRef, _: RequiredInstance) -> InstanceRun {
         panic!(
             "this call site was built with no registry, so a required instance cannot be resolved (RFC-0067 Decision 1)"
         )
+    }
+
+    fn overload(&self, _: QualifiedRef, position: usize) -> acvus_mir::ir::Overload {
+        acvus_mir::ir::Overload {
+            own: position,
+            required: Vec::new(),
+        }
     }
 }
 
@@ -55,6 +66,30 @@ where
     pub interner: &'a Interner,
     pub ty: &'a Ty,
     pub instances: &'a dyn InstanceEntries<Rt>,
+}
+
+/// One call site as `prepare` hands it to a handler: the settled type of
+/// each argument, and the instance the checker settled on for each
+/// requirement the callee states, in the declaration's order (RFC-0068 D5).
+pub struct CallSite<'a, Rt>
+where
+    Rt: Runtime,
+{
+    pub args: &'a [ArgAt<'a, Rt>],
+    pub requires: &'a [RequiredInstance],
+}
+
+impl<'a, Rt> CallSite<'a, Rt>
+where
+    Rt: Runtime,
+{
+    /// A site whose callee states no requirement.
+    pub fn of_args(args: &'a [ArgAt<'a, Rt>]) -> Self {
+        CallSite {
+            args,
+            requires: &[],
+        }
+    }
 }
 
 impl<Rt> Clone for ArgAt<'_, Rt>
@@ -139,7 +174,7 @@ where
     /// A required instance takes none: the site table is where its word is.
     const ARGUMENTS: usize = 1;
 
-    fn site(args: &[ArgAt<'_, Rt>], at: usize) -> Self::Site;
+    fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site;
 }
 
 /// How one Rust parameter takes its argument out of a call's argument run.
@@ -185,7 +220,7 @@ where
 {
     type Site = ();
 
-    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
+    fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
 impl<T, Rt> Sited<Rt> for ByValue<T, Specialized>
@@ -195,7 +230,7 @@ where
 {
     type Site = ();
 
-    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
+    fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
 impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Uniform>
@@ -206,7 +241,7 @@ where
 {
     type Site = ();
 
-    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
+    fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
 impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Specialized>
@@ -217,14 +252,14 @@ where
 {
     type Site = ();
 
-    fn site(_: &[ArgAt<'_, Rt>], _: usize) {}
+    fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
-/// A parameter that is a required instance: the call site resolved it from
-/// the settled type of argument `AT`, and the run carries nothing for it.
-pub struct Required<S, I, T, const AT: usize>(PhantomData<fn() -> (S, I, T)>);
+/// A parameter that is the declaration's `NTH` required instance: the call
+/// site holds the checker's answer for it, and the run carries nothing.
+pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
 
-impl<S, I, T, Rt, const AT: usize> Sited<Rt> for Required<S, I, T, AT>
+impl<S, I, T, Rt, const NTH: usize> Sited<Rt> for Required<S, I, T, NTH>
 where
     S: Signature<Rt> + SharedSignature,
     I: Send + Sync + 'static,
@@ -235,18 +270,19 @@ where
 
     const ARGUMENTS: usize = 0;
 
-    fn site(args: &[ArgAt<'_, Rt>], _: usize) -> Instance<S, I, Rt, T> {
-        let at = &args[AT];
-        let run = at
-            .instances
-            .instance_at(<S as SharedSignature>::qref(at.interner), at.ty);
-        // SAFETY: the registry answered for this signature at the settled
-        // type of the argument the requirement's variable stands at.
+    fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<S, I, Rt, T> {
+        let at = &site.args[0];
+        let run = at.instances.glue(
+            <S as SharedSignature>::qref(at.interner),
+            site.requires[NTH],
+        );
+        // SAFETY: the checker settled on this instance of `S` for the type
+        // the requirement's variable is filled with at this site.
         unsafe { Instance::at(<Rt as Runtime>::instance_value(run)) }
     }
 }
 
-impl<'a, S, I, T, Rt, const AT: usize> Arg<'a, Rt> for Required<S, I, T, AT>
+impl<'a, S, I, T, Rt, const NTH: usize> Arg<'a, Rt> for Required<S, I, T, NTH>
 where
     S: Signature<Rt> + SharedSignature,
     I: Send + Sync + 'static,
@@ -428,6 +464,57 @@ into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4);
 into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5);
 into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6);
 into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6, A7: 7);
+
+/// A result that is a borrow of a parameter the caller lent, at the carrier
+/// type the declaration names for it (RFC-0047 §3, RFC-0068 D4): `Ref`,
+/// `Slice`, and an `Option` of one. The handler returns Rust's borrow with
+/// Rust's lifetime; the crossing writes the word or pair.
+pub trait LentBack<Rt>: Sized
+where
+    Rt: Runtime,
+{
+    type Of<'a>;
+    type Form: Form;
+
+    fn into_run(value: Self::Of<'_>, rt: &Rt, out: Out<'_, Rt>);
+}
+
+impl<L, Rt> LentBack<Rt> for Option<L>
+where
+    L: LentBack<Rt, Form = One>,
+    Rt: Runtime,
+{
+    type Of<'a> = Option<L::Of<'a>>;
+    type Form = One;
+
+    fn into_run(value: Option<L::Of<'_>>, rt: &Rt, out: Out<'_, Rt>) {
+        let Some(lent) = value else {
+            out[0] = rt.none();
+            return;
+        };
+        let mut word = [rt.none()];
+        L::into_run(lent, rt, &mut word);
+        let [word] = word;
+        out[0] = rt.some(word);
+    }
+}
+
+/// The macro emits this where `Val` would stand for an owned result, for a
+/// result written as a Rust borrow.
+pub struct RetLent<L>(PhantomData<fn() -> L>);
+
+impl<L, Rt> Ret<Rt> for RetLent<L>
+where
+    L: LentBack<Rt>,
+    Rt: Runtime,
+{
+    type Of<'a> = L::Of<'a>;
+    type Form = L::Form;
+
+    fn into_run(value: L::Of<'_>, rt: &Rt, out: Out<'_, Rt>) {
+        L::into_run(value, rt, out)
+    }
+}
 
 /// A result crossing as itself, at whichever width its type declares.
 pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
@@ -793,7 +880,7 @@ where
     /// How many of the runtime's values the whole argument run is.
     const WIDTH: usize;
 
-    fn sites(args: &[ArgAt<'_, Rt>]) -> Self::Sites;
+    fn sites(site: &CallSite<'_, Rt>) -> Self::Sites;
 
     /// # Safety
     /// As `Arg::take`, for each parameter over its own values of `run`.
@@ -991,7 +1078,7 @@ where
     /// types `at_site` reads. `Width::args` counts the runtime's values
     /// instead, and a `&str` or a slice parameter is two of them.
     fn arity(&self) -> usize;
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AtSite<Rt>>;
+    fn at_site(self: Box<Self>, site: &CallSite<'_, Rt>) -> Box<dyn AtSite<Rt>>;
     /// This handler as the plain function an `Instance` value names
     /// (RFC-0067 Decision 1), for the declarations that have one.
     fn instance(&self) -> Option<InstanceRun>;
@@ -1060,7 +1147,7 @@ where
     fn width(&self) -> Width;
     /// As `HandlerFactory::arity`.
     fn arity(&self) -> usize;
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>>;
+    fn at_site(self: Box<Self>, site: &CallSite<'_, Rt>) -> Box<dyn AsyncAtSite<Rt>>;
     /// As `HandlerFactory::instance`.
     fn instance(&self) -> Option<InstanceRun>;
 }
@@ -1223,18 +1310,18 @@ macro_rules! parameters {
             const WIDTH: usize = 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*;
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
-            fn sites(args: &[ArgAt<'_, Rt>]) -> Self::Sites {
+            fn sites(site: &CallSite<'_, Rt>) -> Self::Sites {
                 assert_eq!(
-                    args.len(),
+                    site.args.len(),
                     <Self as Parameters<Rt>>::ARITY,
                     "a call site hands {} settled argument types to a declaration of {} \
                      parameters (RFC-0059 rule 7)",
-                    args.len(),
+                    site.args.len(),
                     <Self as Parameters<Rt>>::ARITY
                 );
                 let mut _at = 0usize;
                 $(
-                    let $out = <$arg as Sited<Rt>>::site(args, _at);
+                    let $out = <$arg as Sited<Rt>>::site(site, _at);
                     _at += <$arg as Sited<Rt>>::ARGUMENTS;
                 )*
                 ($($out,)*)
@@ -1409,8 +1496,8 @@ where
         <A as Parameters<Rt>>::ARITY
     }
 
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AtSite<Rt>> {
-        Box::new(self.at(args))
+    fn at_site(self: Box<Self>, site: &CallSite<'_, Rt>) -> Box<dyn AtSite<Rt>> {
+        Box::new(self.at(site))
     }
 
     fn instance(&self) -> Option<InstanceRun> {
@@ -1423,10 +1510,10 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
 {
-    pub fn at(self, args: &[ArgAt<'_, Rt>]) -> Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E> {
+    pub fn at(self, site: &CallSite<'_, Rt>) -> Glue<Rt, F, A, R, <A as Parameters<Rt>>::Sites, E> {
         Glue {
             f: self.f,
-            sites: <A as Parameters<Rt>>::sites(args),
+            sites: <A as Parameters<Rt>>::sites(site),
             shape: PhantomData,
         }
     }
@@ -1525,8 +1612,8 @@ where
         <A as Parameters<Rt>>::ARITY
     }
 
-    fn at_site(self: Box<Self>, args: &[ArgAt<'_, Rt>]) -> Box<dyn AsyncAtSite<Rt>> {
-        Box::new(self.at(args))
+    fn at_site(self: Box<Self>, site: &CallSite<'_, Rt>) -> Box<dyn AsyncAtSite<Rt>> {
+        Box::new(self.at(site))
     }
 
     fn instance(&self) -> Option<InstanceRun> {
@@ -1541,11 +1628,11 @@ where
 {
     pub fn at(
         self,
-        args: &[ArgAt<'_, Rt>],
+        site: &CallSite<'_, Rt>,
     ) -> AsyncGlue<Rt, F, A, <A as Parameters<Rt>>::Sites, E> {
         AsyncGlue {
             f: self.f,
-            sites: <A as Parameters<Rt>>::sites(args),
+            sites: <A as Parameters<Rt>>::sites(site),
             shape: PhantomData,
         }
     }
@@ -1691,6 +1778,7 @@ impl<R: Runtime> Instances<R> {
                 .map(|i| acvus_mir::ty::InstanceSig {
                     ty: i.signature.clone(),
                     admits: i.admits,
+                    task: i.handler.task(),
                 })
                 .collect(),
             generic: self.generic.is_some(),

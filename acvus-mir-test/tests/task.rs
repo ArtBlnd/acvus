@@ -30,6 +30,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty,
     }
@@ -171,14 +172,17 @@ fn sync_or_async(i: &Interner) -> Function {
                     InstanceSig {
                         ty: ty.clone(),
                         admits: Task::Sync,
+                        task: Task::Sync,
                     },
                     InstanceSig {
                         ty: ty.clone(),
                         admits: Task::Heavy,
+                        task: Task::Async,
                     },
                 ],
                 generic: false,
             },
+            requires: vec![],
         },
         ty,
     }

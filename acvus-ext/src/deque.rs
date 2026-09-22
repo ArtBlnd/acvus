@@ -4,19 +4,17 @@
 //! last settled as counts over its own storage: an append-only journal
 //! persists that record instead of the whole value.
 
-use acvus_extern::Ctx;
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, Encode, ExternTypeDecl, Interner, Journaled, Mut, NodeHash, Owned, PolyTy, PolyVars,
+    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
     QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
     TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn, extern_registry,
     kind,
 };
 use acvus_mir::ty::{Ty, TypeArg};
 
-use crate::iter::Iter;
-use crate::iterator::{lent_iter, sig};
+use crate::iter::{Items, Refs, sig};
 use crate::vec::vec;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,20 +140,6 @@ where
 }
 
 acvus_extern::cross_as_stored!(Deque<T>, T: Var<kind::Type>);
-
-unsafe impl<T, Rt> acvus_extern::FromValue<Rt> for Deque<T>
-where
-    T: Var<kind::Type>,
-    Rt: acvus_extern::Runtime,
-{
-    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        acvus_extern::debug_assert_erased_from!(rt, &value, Deque<T>);
-        // SAFETY: the trait's contract — a `Deque<T>` crosses as itself
-        // (`cross_as_stored!` above), so the value was erased from this `T`'s
-        // deque at the site the checker matched.
-        unsafe { rt.materialize::<Deque<T>>(value) }
-    }
-}
 
 impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
 
@@ -398,25 +382,36 @@ where
 }
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
-fn into_iter_deque<T, E, I, Rt>(d: Deque<T>) -> Iter<T, E, I, Rt>
+fn into_iter_deque<T, I, Rt>(d: Deque<T>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + acvus_extern::OneValue<Rt>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(d.items.into())
+    Items::of(d.items.into())
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_deque<T, E, I, Rt>(d: Ref<Deque<T>, Shared, Rt>) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
+fn as_iter_deque<T, I, Rt>(d: Ref<Deque<T>, Shared, Rt>) -> Refs<Deque<T>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    lent_iter(d, Deque::get)
+    Refs::of(d)
+}
+
+#[extern_fn(instance_of = sig::next, effect = pure)]
+fn next_refs_deque<'a, T, I, Rt>(
+    ctx: &mut acvus_extern::Ctx<'_, Rt>,
+    it: &'a mut Refs<Deque<T>, I, Rt>,
+) -> Option<&'a T>
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    it.step(ctx, Deque::get)
 }
 
 #[extern_fn(effect = pure)]
@@ -445,45 +440,41 @@ fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
 }
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Shared, Rt>, index: i64) -> Ref<T, Shared, Rt>
+fn get<T, Rt>(d: &Deque<T>, index: i64) -> &T
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let i = d.with(rt, |d| checked_index("get", d.len(), index));
-    d.map(rt, |d| &d.items[i])
+    let i = checked_index("get", d.len(), index);
+    &d.items[i]
 }
 
 #[extern_fn(effect = pure)]
-fn get_mut<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Mut, Rt>, index: i64) -> Ref<T, Mut, Rt>
+fn get_mut<T, Rt>(d: &mut Deque<T>, index: i64) -> &mut T
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let i = d.with(rt, |d| checked_index("get_mut", d.len(), index));
-    d.map(rt, |d| &mut d.items[i])
+    let i = checked_index("get_mut", d.len(), index);
+    &mut d.items[i]
 }
 
 #[extern_fn(effect = pure)]
-fn first<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn first<T, Rt>(d: &Deque<T>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    d.try_map(rt, |d| d.items.front())
+    d.items.front()
 }
 
 #[extern_fn(effect = pure)]
-fn last<T, Rt>(ctx: &mut Ctx<'_, Rt>, d: Ref<Deque<T>, Shared, Rt>) -> Option<Ref<T, Shared, Rt>>
+fn last<T, Rt>(d: &Deque<T>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    d.try_map(rt, |d| d.items.back())
+    d.items.back()
 }
 
 // No `deque::contains`: the reason is stated at `vec_registry`.
@@ -497,7 +488,7 @@ where
         types: [Deque<_>],
         fns: [
             deque, push_front, push_back, pop_front, pop_back,
-            vec_deque, into_iter_deque, as_iter_deque,
+            vec_deque, into_iter_deque, as_iter_deque, next_refs_deque,
             len, is_empty, get, get_mut, first, last,
         ],
     }

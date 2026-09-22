@@ -30,6 +30,7 @@ fn extern_fn(
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params,

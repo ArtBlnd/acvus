@@ -9,10 +9,10 @@ use std::marker::PhantomData;
 use std::ops::DerefMut;
 
 use acvus_extern::{
-    Arr, Borrowable, ClosureFn, Effect, EffectTerm, Elements, ExternHandler, ExternType, Externs,
+    Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType, Externs,
     Instance, Interner, LenTerm, Nth, OneValue, Owned, PolyTy, Pure, Ref, Registry, Runtime,
-    Shared, Slice, Task, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn, extern_registry,
-    extern_signature, kind,
+    Shared, Slice, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var, Words, extern_fn,
+    extern_registry, extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -445,7 +445,7 @@ impl Runtime for Tiny {
 #[derive(ExternType)]
 #[repr(transparent)]
 #[extern_type(name = "Box")]
-struct Boxed<T, E, Rt>(Vec<Rt::Value>, PhantomData<(T, E)>)
+struct Boxed<T, E, Rt>(Vec<T>, PhantomData<(E, Rt)>)
 where
     T: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -485,16 +485,14 @@ async fn apply<T, U, E, Rt>(
     f: acvus_extern::Closure<(T,), U, E, Rt>,
 ) -> Boxed<U, E, Rt>
 where
-    T: Var<kind::Type>,
-    U: Var<kind::Type>,
+    T: Var<kind::Type> + acvus_extern::PassedByValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let f = f.erased();
     let mut out = Vec::with_capacity(v.0.len());
     for item in v.0 {
-        let crossed = f.call(ctx, (Owned::from_value(item),)).await;
-        out.push(crossed.into_value());
+        out.push(f.call(ctx, (item,)).await);
     }
     Boxed(out, PhantomData)
 }
@@ -507,11 +505,8 @@ where
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    Boxed(
-        items.0.into_iter().map(|v| v.erase(rt)).collect(),
-        PhantomData,
-    )
+    let _ = ctx;
+    Boxed(items.0, PhantomData)
 }
 
 #[extern_fn]
@@ -548,34 +543,62 @@ fn bump(n: &mut i64, by: i64) -> i64 {
     *n
 }
 
+/// A returned borrow (RFC-0068 D4): the slice is Rust's `&[T]` of the
+/// parameter, and the crossing writes the pair.
 #[extern_fn(effect = pure)]
-fn as_slice<T, Rt>(ctx: &mut Ctx<'_, Rt>, c: Ref<Vec<T>, Shared, Rt>) -> Slice<T, Shared, Rt>
+fn as_slice<T, Rt>(c: &Vec<T>) -> &[T]
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    Slice::of(c.elements(rt))
+    c
 }
 
-/// The parameter direction of RFC-0047 rule 6: the declaration reads the
-/// elements through the view the caller lent, and the pair it was handed is
-/// the only thing it was handed.
+/// The parameter direction of RFC-0047 rule 6: the declaration takes the
+/// language's `&[i64]` as Rust's slice of the `Erased<Rt, i64>`s it holds.
 #[extern_fn(effect = pure)]
-fn sum_slice<Rt>(ctx: &mut Ctx<'_, Rt>, s: Slice<i64, Shared, Rt>) -> i64
+fn sum_slice<Rt>(s: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let elements = s.into_elements();
-    (0..elements.len())
-        .map(|at| {
-            // SAFETY: `at` is below the length the view reports, the
-            // container the caller lent is live for the call (RFC-0018), and
-            // every element of a language `Vec<i64>` was erased from `i64`.
-            unsafe { *rt.value_as_ref::<i64>(elements.at(at)) }
-        })
-        .sum()
+    s.iter().map(|x| **x).sum()
+}
+
+/// A lent result out of a lent slice: the element is in the container the
+/// slice borrows, and the crossing writes a reference to it.
+#[extern_fn(effect = pure)]
+fn slice_first<T, Rt>(s: &[T]) -> Option<&T>
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    s.first()
+}
+
+/// A returned borrow of one element, and `None` past the end.
+#[extern_fn(effect = pure)]
+fn at<T, Rt>(c: &Vec<T>, index: u64) -> Option<&T>
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    c.get(index as usize)
+}
+
+/// A closure parameter declared `&T` is passed as Rust's `&T`: the count
+/// of elements the predicate takes.
+#[extern_fn(effect = E)]
+fn count_where<T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    c: &Vec<T>,
+    keep: acvus_extern::Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+) -> u64
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    c.iter().filter(|x| keep.call_now(ctx, (*x,))).count() as u64
 }
 
 extern_signature! { ns: "t", fn eq<T>(a: &T, b: &T) -> bool where T: Var<kind::Type>; }
@@ -591,6 +614,54 @@ fn eq_point(a: &Point, b: &Point) -> bool {
 }
 
 extern_signature! { ns: "t", fn step<I>(it: &mut I) -> i64 where I: Var<kind::Type>; }
+
+extern_signature! {
+    ns: "t",
+    fn front<I, T>(it: &mut I) -> Option<T> where I: Var<kind::Type>, T: Var<kind::Type>;
+}
+
+/// A holder of `i64`s at the language's own storage, whose `front` yields a
+/// borrow of its first element (RFC-0068 D6).
+#[derive(ExternType)]
+#[repr(transparent)]
+#[extern_type(name = "Held")]
+struct Held<Rt>(Vec<Erased<Rt, i64>>)
+where
+    Rt: Runtime;
+
+#[extern_fn(effect = pure)]
+fn held<Rt>(ctx: &mut Ctx<'_, Rt>, items: Vec<i64>) -> Held<Rt>
+where
+    Rt: Runtime,
+{
+    let rt = ctx.rt;
+    Held(items.into_iter().map(|n| Erased::new(rt, n)).collect())
+}
+
+#[extern_fn(instance_of = front, effect = pure)]
+fn front_held<Rt>(it: &mut Held<Rt>) -> Option<&Erased<Rt, i64>>
+where
+    Rt: Runtime,
+{
+    it.0.first()
+}
+
+/// A requirer that reads a borrowed element out of a `front`: what
+/// `Instance::call` hands back at `Ref<Erased<Rt, i64>, Shared, Rt>` is a
+/// Rust `&Erased<Rt, i64>` for the receiver's lifetime.
+#[extern_fn(effect = pure)]
+fn first_of<I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    front_at: Instance<front<I, Ref<Erased<Rt, i64>, Shared, Rt>, Rt>, I, Rt>,
+) -> i64
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    front_at.call(ctx, &mut it, ()).map(|x| **x).unwrap_or(-1)
+}
 
 #[extern_fn(instance_of = step, effect = pure)]
 fn step_int(n: &mut i64) -> i64 {
@@ -608,10 +679,7 @@ where
     I: Var<kind::Type> + Borrowable<Rt> + DerefMut<Target = Rt::Value>,
     Rt: Runtime,
 {
-    // SAFETY: `Externs::combine` met this parameter's requirement with the
-    // instance of `t::step` at the ground type `I` was filled with, and
-    // `it` names a value of that type.
-    unsafe { step_at.call(ctx, it, ()) }
+    step_at.call(ctx, it, ())
 }
 
 /// A greeting held by the handler: what a `#[state]` parameter carries.
@@ -628,10 +696,11 @@ where
 {
     extern_registry! {
         ns: "t",
-        types: [Boxed<_, _, R>, Token<_>],
-        signatures: [eq, step],
+        types: [Boxed<_, _, R>, Token<_>, Held<R>],
+        signatures: [eq, step, front],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, eq_int, eq_point, step_int, drive,
+              sum_slice, slice_first, at, count_where, eq_int, eq_point, step_int, drive,
+              held, front_held, first_of,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -780,7 +849,9 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         ExternHandler::Sync(f) => {
             let site = acvus_extern::SitesNoParameterReads::default();
-            let f = f.clone().at_site(&site.args(f.arity()));
+            let f = f
+                .clone()
+                .at_site(&acvus_extern::CallSite::of_args(&site.args(f.arity())));
             // SAFETY: the caller passes the declaration's own arguments.
             unsafe { f.into_op(()).call_run(&Tiny, &args) }
         }
@@ -789,24 +860,70 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     }
 }
 
-/// One resolved instance reached without the glue: the mono glue a
-/// requirement is called through (RFC-0067 Decision 1). The receiver is
-/// named in `ctx` and is not an argument.
-fn call_instance<S>(handler: &ExternHandler<Tiny>, recv: &mut V, rest: S::Rest<'_>) -> S::Ret
+/// One resolved instance, reached the way a site reaches it: the table
+/// answers for the signature at the receiver's settled type, and the
+/// receiver is named in `ctx` rather than passed.
+fn call_instance<'r, S, R>(
+    receiver: Receiver<'_>,
+    recv: &'r mut Place,
+    rest: S::Rest<'r>,
+    read: impl FnOnce(S::Ret<'r>) -> R,
+) -> R
 where
-    S: acvus_extern::Signature<Tiny>,
+    S: acvus_extern::Signature<Tiny> + acvus_extern::SharedSignature,
 {
-    let run = handler
-        .instance()
-        .expect("this declaration has a mono glue");
-    // SAFETY: `run` is the glue `#[extern_fn(instance_of = S)]` wrote, so
-    // it is an instance of `S`, and `recv` holds a value of the type it
-    // stands at.
-    unsafe {
-        let instance: acvus_extern::Instance<S, &mut V, Tiny> =
-            acvus_extern::Instance::at(<Tiny as Runtime>::instance_value(run));
-        let mut at = recv;
-        instance.call(&mut Ctx::new(&Tiny, ()), &mut at, rest)
+    type Site<S> = acvus_extern::Required<S, Place, acvus_extern::Now, 0>;
+    let site = acvus_extern::CallSite {
+        args: &[receiver.at],
+        requires: &[receiver.instance],
+    };
+    let instance = <Site<S> as acvus_extern::Sited<Tiny>>::site(&site, 0);
+    read(instance.call(&mut Ctx::new(&Tiny, ()), recv, rest))
+}
+
+/// The site a requirement over one receiver is resolved at: the receiver's
+/// settled type, and the instance the checker would have settled on.
+#[derive(Clone, Copy)]
+struct Receiver<'a> {
+    at: acvus_extern::ArgAt<'a, Tiny>,
+    instance: acvus_extern::RequiredInstance,
+}
+
+/// A storage holding one of `Tiny`'s values: what a requirer's receiver
+/// variable is filled with here, as `Owned<Rt>` fills it in a real glue.
+struct Place(V);
+
+impl std::ops::Deref for Place {
+    type Target = V;
+
+    fn deref(&self) -> &V {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Place {
+    fn deref_mut(&mut self) -> &mut V {
+        &mut self.0
+    }
+}
+
+/// The receiver site of `call`, whose instance is the `nth` of its signature.
+fn receiver_at<'a>(
+    reg: &'a Externs<Tiny>,
+    i: &'a Interner,
+    call: &'a acvus_extern::Ty,
+    nth: usize,
+) -> Receiver<'a> {
+    let acvus_extern::Ty::Fn { params, .. } = call else {
+        panic!("a call type")
+    };
+    Receiver {
+        at: acvus_extern::ArgAt {
+            interner: i,
+            ty: &params[0].ty,
+            instances: &reg.instances,
+        },
+        instance: acvus_extern::RequiredInstance(nth),
     }
 }
 
@@ -829,9 +946,15 @@ fn a_mono_glue_runs_the_instance_the_glue_runs() {
     // SAFETY: both places outlive the two calls below.
     let args = || unsafe { vec![Tiny.reference(&left), Tiny.reference(&right)] };
     assert!(open::<bool>(call_sync(h, args())));
-    let mut recv = left;
+    let mut recv = Place(left);
     let other = erased(7i64);
-    assert!(call_instance::<eq<i64, Tiny>>(h, &mut recv, (&other,)));
+    let at = receiver_at(&reg, &i, &on_int, 0);
+    assert!(call_instance::<eq<i64, Tiny>, _>(
+        at,
+        &mut recv,
+        (&other,),
+        |same| same
+    ));
 }
 
 #[test]
@@ -845,27 +968,29 @@ fn a_receiver_is_named_in_ctx_and_written_through() {
         acvus_extern::Ty::I64,
         &i,
     );
-    let h = instance_for(&reg, &i, "step", &on_int).expect("the i64 instance of t::step");
-    let mut recv = erased(7i64);
-    assert_eq!(call_instance::<step<i64, Tiny>>(h, &mut recv, ()), 8);
-    assert_eq!(call_instance::<step<i64, Tiny>>(h, &mut recv, ()), 9);
+    instance_for(&reg, &i, "step", &on_int).expect("the i64 instance of t::step");
+    let mut recv = Place(erased(7i64));
+    let at = receiver_at(&reg, &i, &on_int, 0);
+    assert_eq!(
+        call_instance::<step<i64, Tiny>, _>(at, &mut recv, (), |n| n),
+        8
+    );
+    assert_eq!(
+        call_instance::<step<i64, Tiny>, _>(at, &mut recv, (), |n| n),
+        9
+    );
     assert_eq!(peek::<i64>(&recv), 9);
 }
 
 /// One requiring handler, called at the settled argument types a site
 /// would hand it: the site table resolves every `Instance` parameter from
 /// `args`, and the run carries nothing for it.
-fn call_requiring(
-    reg: &Externs<Tiny>,
-    i: &Interner,
-    name: &str,
-    args: &[acvus_extern::Ty],
-    run: Vec<V>,
-) -> V {
-    let ExternHandler::Sync(f) = handler(reg, i, name) else {
-        panic!("`{name}` is declared with a plain `fn`")
+fn call_requiring(reg: &Externs<Tiny>, i: &Interner, site: RequiringSite<'_>, run: Vec<V>) -> V {
+    let ExternHandler::Sync(f) = handler(reg, i, site.name) else {
+        panic!("`{}` is declared with a plain `fn`", site.name)
     };
-    let at: Vec<acvus_extern::ArgAt<'_, Tiny>> = args
+    let at: Vec<acvus_extern::ArgAt<'_, Tiny>> = site
+        .args
         .iter()
         .map(|ty| acvus_extern::ArgAt {
             interner: i,
@@ -873,10 +998,21 @@ fn call_requiring(
             instances: &reg.instances,
         })
         .collect();
-    let f = f.clone().at_site(&at);
+    let f = f.clone().at_site(&acvus_extern::CallSite {
+        args: &at,
+        requires: site.requires,
+    });
     // SAFETY: the run is the declaration's own arguments at the types the
     // site table was filled from.
     unsafe { f.into_op(()).call_run(&Tiny, &run) }
+}
+
+/// A call of a requiring declaration as a site states it: the settled
+/// argument types, and the checker's answer for each requirement.
+struct RequiringSite<'a> {
+    name: &'a str,
+    args: &'a [acvus_extern::Ty],
+    requires: &'a [acvus_extern::RequiredInstance],
 }
 
 /// `drive` takes the parameter its requirement stands at by `&mut`, so the
@@ -892,11 +1028,14 @@ fn a_required_instance_resolves_from_a_reference_parameters_target() {
     let out = call_requiring(
         &reg,
         &i,
-        "drive",
-        &[acvus_extern::Ty::Ref(
-            acvus_extern::Mutability::Mut,
-            Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
-        )],
+        RequiringSite {
+            name: "drive",
+            args: &[acvus_extern::Ty::Ref(
+                acvus_extern::Mutability::Mut,
+                Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+            )],
+            requires: &[acvus_extern::RequiredInstance(0)],
+        },
         vec![lent],
     );
     assert_eq!(
@@ -950,10 +1089,11 @@ fn an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi() 
         acvus_extern::Ty::Bool,
         &i,
     );
-    let h = instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
-    let mut left = a_point(1);
+    instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
+    let mut left = Place(a_point(1));
     let right = a_point(1);
-    let _ = call_instance::<eq<Point, Tiny>>(h, &mut left, (&right,));
+    let at = receiver_at(&reg, &i, &on_point, 1);
+    let _ = call_instance::<eq<Point, Tiny>, _>(at, &mut left, (&right,), |same| same);
 }
 
 /// The marker `extern_signature!` writes names the signature's own
@@ -1037,7 +1177,9 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     unsafe {
         entry
             .clone()
-            .at_site(&acvus_extern::SitesNoParameterReads::default().args(entry.arity()))
+            .at_site(&acvus_extern::CallSite::of_args(
+                &acvus_extern::SitesNoParameterReads::default().args(entry.arity()),
+            ))
             .into_op(())
             .call(&Tiny, &[container()], &mut pair)
     };
@@ -1045,13 +1187,11 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     assert_eq!(len, 3);
     assert_ne!(ptr, 0);
 
-    // SAFETY: the words came from the handler, whose storage is live here.
-    let run = unsafe { Elements::<Tiny>::from_words(Words { ptr, len }) };
-    // SAFETY: as above, over the same two words.
-    let rebuilt = unsafe { Elements::<Tiny>::from_words(Words { ptr, len }) };
-    for at in 0..run.len() {
-        // SAFETY: `at` is below the length the handler reported.
-        let (lent, again) = unsafe { (run.at(at), rebuilt.at(at)) };
+    let run = ptr as *const V;
+    for at in 0..len as usize {
+        // SAFETY: the words came from the handler, whose storage is live
+        // here, and `at` is below the length the handler reported.
+        let (lent, again) = unsafe { (&*run.add(at), &*run.add(at)) };
         assert!(
             std::ptr::eq(lent, again),
             "element {at} is one place in the container's own storage"
@@ -1082,9 +1222,10 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
 
     let mut run = [V::default(); 2];
     Tiny.slice_into_run(
-        Slice::<i64, Shared, Tiny>::of(&storage)
-            .into_elements()
-            .words(),
+        Words {
+            ptr: storage.as_ptr() as u64,
+            len: storage.len() as u64,
+        },
         &mut run,
     );
     let mut out = [V::default(); 1];
@@ -1093,7 +1234,9 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
     unsafe {
         entry
             .clone()
-            .at_site(&acvus_extern::SitesNoParameterReads::default().args(entry.arity()))
+            .at_site(&acvus_extern::CallSite::of_args(
+                &acvus_extern::SitesNoParameterReads::default().args(entry.arity()),
+            ))
             .into_op(())
             .call(&Tiny, &run, &mut out)
     };
@@ -1105,7 +1248,9 @@ async fn call_async(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     match handler {
         ExternHandler::Async(f) => {
             let site = acvus_extern::SitesNoParameterReads::default();
-            let f = f.clone().at_site(&site.args(f.arity()));
+            let f = f
+                .clone()
+                .at_site(&acvus_extern::CallSite::of_args(&site.args(f.arity())));
             // SAFETY: as `call_sync`'s; the future owns `args`.
             unsafe { f.into_op(()).call_async(Tiny, &args) }.await
         }
@@ -1187,7 +1332,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
     let Boxed::<Owned<Tiny>, (), Tiny>(items, _) =
         unsafe { OneValue::<Tiny>::materialize(&Tiny, out) };
-    let doubled: Vec<i64> = items.into_iter().map(open::<i64>).collect();
+    let doubled: Vec<i64> = items
+        .into_iter()
+        .map(|item| open::<i64>(item.into_value()))
+        .collect();
     assert_eq!(doubled, vec![2, 4]);
 
     // An object crosses as its fields (RFC-0032): the handler receives
@@ -1214,6 +1362,134 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
         .expect("two fields");
     assert_eq!(open::<i64>(x.into_value()), 42);
     assert_eq!(open::<String>(label.into_value()), "p");
+}
+
+/// A lent result (RFC-0068 D4): `at` returns Rust's `Option<&T>` of the
+/// container the caller lent, and the crossing writes a reference into
+/// that container's own storage, or `None`.
+#[test]
+fn a_lent_element_names_the_containers_own_storage() {
+    let (i, reg) = combined::<Tiny>();
+    let storage = erased(vec![
+        Owned::<Tiny>::from_value(erased(10i64)),
+        Owned::<Tiny>::from_value(erased(20i64)),
+    ]);
+    // SAFETY: `storage` outlives every reference taken from it here.
+    let container = || unsafe { Tiny.reference(&storage) };
+    let found = call_sync(handler(&reg, &i, "at"), vec![container(), erased(1u64)]);
+    let V::Some(inner) = found else {
+        panic!("index 1 of two elements is found: {found:?}")
+    };
+    // SAFETY: `Tiny::some` boxed the payload and nothing freed it.
+    let element = target(unsafe { &*inner });
+    assert_eq!(peek::<i64>(element), 20);
+    let past = call_sync(handler(&reg, &i, "at"), vec![container(), erased(2u64)]);
+    assert!(
+        matches!(past, V::None),
+        "index 2 of two elements is None: {past:?}"
+    );
+}
+
+/// A signature whose instance yields a borrow of its receiver: the glue
+/// crosses the `&Erased<Rt, i64>` as a reference word, and the requirer
+/// reads it back as a Rust borrow of the receiver it lent (RFC-0068 D6).
+#[test]
+fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
+    let (i, reg) = combined::<Tiny>();
+    let held = call_sync(
+        handler(&reg, &i, "held"),
+        vec![erased(vec![
+            Owned::<Tiny>::from_value(erased(41i64)),
+            Owned::<Tiny>::from_value(erased(5i64)),
+        ])],
+    );
+    let held_ty = acvus_extern::Ty::UserDefined {
+        id: acvus_extern::QualifiedRef::root(i.intern("Held")),
+        type_args: vec![],
+        effect_args: vec![],
+        identity_args: vec![],
+    };
+    fn first_of(args: &[acvus_extern::Ty]) -> RequiringSite<'_> {
+        RequiringSite {
+            name: "first_of",
+            args,
+            requires: &[acvus_extern::RequiredInstance(0)],
+        }
+    }
+    let out = call_requiring(&reg, &i, first_of(&[held_ty.clone()]), vec![held]);
+    assert_eq!(open::<i64>(out), 41);
+    let empty = call_sync(
+        handler(&reg, &i, "held"),
+        vec![erased(Vec::<Owned<Tiny>>::new())],
+    );
+    let out = call_requiring(&reg, &i, first_of(&[held_ty]), vec![empty]);
+    assert_eq!(open::<i64>(out), -1);
+}
+
+/// A slice parameter taken as Rust's `&[T]`, and a lent element out of it:
+/// the pair the caller wrote names the container, so the element the
+/// handler returns is in that container's own storage.
+#[test]
+fn a_lent_element_out_of_a_lent_slice_names_the_container() {
+    let (i, reg) = combined::<Tiny>();
+    let storage = vec![erased(7i64), erased(8i64)];
+    let mut pair = [V::default(); 2];
+    Tiny.slice_into_run(
+        Words {
+            ptr: storage.as_ptr() as u64,
+            len: storage.len() as u64,
+        },
+        &mut pair,
+    );
+    let ExternHandler::Sync(entry) = handler(&reg, &i, "slice_first") else {
+        panic!("a declaration returning a borrow has a synchronous handler")
+    };
+    let mut out = [V::default(); 1];
+    // SAFETY: `pair` is the pair `slice_into_run` just wrote, `storage` is
+    // live and unmoved, and `out` has room for the one value the width names.
+    unsafe {
+        entry
+            .clone()
+            .at_site(&acvus_extern::CallSite::of_args(
+                &acvus_extern::SitesNoParameterReads::default().args(entry.arity()),
+            ))
+            .into_op(())
+            .call(&Tiny, &pair, &mut out)
+    };
+    let [found] = out;
+    let V::Some(inner) = found else {
+        panic!("the first of two elements is found: {found:?}")
+    };
+    // SAFETY: `Tiny::some` boxed the payload and nothing freed it.
+    let element = target(unsafe { &*inner });
+    assert!(
+        std::ptr::eq(element, &storage[0]),
+        "the lent element is the container's own first slot"
+    );
+}
+
+/// A closure parameter declared `&T` is passed as Rust's `&T` and reaches
+/// the closure as a reference into the container the handler borrowed.
+#[test]
+fn a_borrowed_closure_argument_is_a_reference_into_the_handlers_borrow() {
+    let (i, reg) = combined::<Tiny>();
+    let storage = erased(vec![
+        Owned::<Tiny>::from_value(erased(1i64)),
+        Owned::<Tiny>::from_value(erased(5i64)),
+        Owned::<Tiny>::from_value(erased(9i64)),
+    ]);
+    // SAFETY: `storage` outlives every reference taken from it here.
+    let container = unsafe { Tiny.reference(&storage) };
+    let above_three = V::Closure(Closure::new(|args| {
+        let [x] = <[V; 1]>::try_from(args)
+            .unwrap_or_else(|args| panic!("the predicate takes one argument, got {}", args.len()));
+        erased(peek::<i64>(target(&x)) > 3)
+    }));
+    let out = call_sync(
+        handler(&reg, &i, "count_where"),
+        vec![container, above_three],
+    );
+    assert_eq!(open::<u64>(out), 2);
 }
 
 #[test]
@@ -1243,7 +1519,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     let acvus_extern::FnKind::Extern { bounds, .. } = &eq_fn.kind else {
         panic!("eq is extern")
     };
-    let acvus_extern::TyVarBound::OneOf { shapes, required } = &bounds[0] else {
+    let acvus_extern::TyVarBound::OneOf { shapes } = &bounds[0] else {
         panic!("eq's first bound is an instance set")
     };
     assert_eq!(
@@ -1252,11 +1528,6 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
             acvus_extern::PolyTy::I64,
             acvus_extern::lift_to_poly(&point)
         ]
-    );
-    assert_eq!(
-        required.iter().map(|r| r.signature).collect::<Vec<_>>(),
-        vec![qref(&i, "eq")],
-        "the bound names the signature that asked for the shapes"
     );
     assert_eq!(reg.handlers[&qref(&i, "eq")].len(), 2);
 }
@@ -1585,35 +1856,36 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         "x"
     );
 
-    let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
+    let boxed_of = |arg: TypeArg<acvus_mir::ty::Concrete>| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
-        type_args: vec![TypeArg::uniform(t)],
+        type_args: vec![arg],
         effect_args: vec![EffectTerm::Known(Effect::PURE)],
         identity_args: vec![],
     };
     let ty = call_type(
-        vec![boxed_of(acvus_extern::Ty::String)],
+        vec![boxed_of(TypeArg::specialized(acvus_extern::Ty::String))],
         acvus_extern::Ty::I64,
         &i,
     );
     let h = instance_for(&reg, &i, "box_count", &ty).unwrap();
     let payload = OneValue::<Tiny>::erase(
-        Boxed::<String, Pure, Tiny>(
-            vec![erased(String::from("a")), erased(String::from("b"))],
-            PhantomData,
-        ),
+        Boxed::<String, Pure, Tiny>(vec![String::from("a"), String::from("b")], PhantomData),
         &Tiny,
     );
     assert_eq!(open::<i64>(call_sync(h, vec![payload])), 2);
     let ty = call_type(
-        vec![boxed_of(acvus_extern::Ty::Float)],
+        vec![boxed_of(TypeArg::uniform(acvus_extern::Ty::Float))],
         acvus_extern::Ty::I64,
         &i,
     );
     let fallback = instance_for(&reg, &i, "box_count", &ty).unwrap();
     let payload = OneValue::<Tiny>::erase(
         Boxed::<Owned<Tiny>, Pure, Tiny>(
-            vec![erased(1.5f64), erased(2.5f64), erased(3.5f64)],
+            vec![
+                Owned::from_value(erased(1.5f64)),
+                Owned::from_value(erased(2.5f64)),
+                Owned::from_value(erased(3.5f64)),
+            ],
             PhantomData,
         ),
         &Tiny,
@@ -1625,23 +1897,25 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
 fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
     let i = Interner::new();
     let reg = Externs::combine(vec![mono_registry::<Tiny>()], &i).expect("registries combine");
-    let boxed_of = |t: acvus_extern::Ty| acvus_extern::Ty::UserDefined {
+    let boxed_of = |arg: TypeArg<acvus_mir::ty::Concrete>| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
-        type_args: vec![TypeArg::uniform(t)],
+        type_args: vec![arg],
         effect_args: vec![EffectTerm::Known(Effect::PURE)],
         identity_args: vec![],
     };
     let ty = call_type(
         vec![acvus_extern::Ty::Ref(
             acvus_extern::Mutability::Shared,
-            Box::new(TypeArg::uniform(boxed_of(acvus_extern::Ty::I64))),
+            Box::new(TypeArg::uniform(boxed_of(TypeArg::specialized(
+                acvus_extern::Ty::I64,
+            )))),
         )],
         acvus_extern::Ty::I64,
         &i,
     );
     let h = instance_for(&reg, &i, "box_width", &ty).expect("an instance on i64");
     let place = OneValue::<Tiny>::erase(
-        Boxed::<i64, Pure, Tiny>(vec![erased(1i64), erased(2i64), erased(3i64)], PhantomData),
+        Boxed::<i64, Pure, Tiny>(vec![1i64, 2i64, 3i64], PhantomData),
         &Tiny,
     );
     // SAFETY: `place` outlives the call.
@@ -1703,7 +1977,10 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         .iter()
         .find(|f| f.qref == qref(&i, "first"))
         .expect("first");
-    let acvus_extern::FnKind::Extern { bounds, instances } = &first_fn.kind else {
+    let acvus_extern::FnKind::Extern {
+        bounds, instances, ..
+    } = &first_fn.kind
+    else {
         panic!("first is extern")
     };
     assert_eq!(instances.concrete.len(), 2);
@@ -1934,7 +2211,7 @@ extern_signature! {
 }
 
 #[extern_fn(instance_of = width, effect = pure)]
-fn width_i64<E, Rt>(b: Boxed<i64, E, Rt>) -> i64
+fn width_i64<E, Rt>(b: Boxed<Erased<Rt, i64>, E, Rt>) -> i64
 where
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1943,7 +2220,7 @@ where
 }
 
 #[extern_fn(instance_of = width, effect = pure)]
-fn width_string<E, Rt>(b: Boxed<String, E, Rt>) -> i64
+fn width_string<E, Rt>(b: Boxed<Erased<Rt, String>, E, Rt>) -> i64
 where
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -2005,13 +2282,8 @@ fn container_registry<R: Runtime>() -> Registry<R> {
     }
 }
 
-/// The shapes of a declaration's first bound, and the signatures that
-/// asked for them.
-fn bound_of(
-    reg: &Externs<Tiny>,
-    i: &Interner,
-    name: &str,
-) -> (Vec<PolyTy>, Vec<acvus_extern::QualifiedRef>) {
+/// The shapes of a declaration's first bound.
+fn bound_of(reg: &Externs<Tiny>, i: &Interner, name: &str) -> Vec<PolyTy> {
     let function = reg
         .functions
         .iter()
@@ -2020,13 +2292,10 @@ fn bound_of(
     let acvus_extern::FnKind::Extern { bounds, .. } = &function.kind else {
         panic!("{name} is extern")
     };
-    let acvus_extern::TyVarBound::OneOf { shapes, required } = &bounds[0] else {
+    let acvus_extern::TyVarBound::OneOf { shapes } = &bounds[0] else {
         panic!("{name}'s first bound is an instance set")
     };
-    (
-        shapes.clone(),
-        required.iter().map(|r| r.signature).collect(),
-    )
+    shapes.clone()
 }
 
 #[test]
@@ -2035,11 +2304,11 @@ fn a_signature_naming_its_argument_is_bounded_by_the_types_inside_it() {
     let reg = Externs::combine(vec![named_registry::<Tiny>()], &i).expect("registries combine");
     assert_eq!(
         bound_of(&reg, &i, "width"),
-        (vec![PolyTy::I64, PolyTy::String], vec![qref(&i, "width")])
+        vec![PolyTy::I64, PolyTy::String]
     );
     assert_eq!(
         bound_of(&reg, &i, "head"),
-        (vec![PolyTy::I64, PolyTy::String], vec![qref(&i, "head")])
+        vec![PolyTy::I64, PolyTy::String]
     );
     assert_eq!(reg.handlers[&qref(&i, "width")].len(), 2);
     assert_eq!(reg.handlers[&qref(&i, "head")].len(), 2);
@@ -2241,7 +2510,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     assert_eq!(
         answered(
-            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, ()| 0).at(&site.args(0)),
+            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, ()| 0)
+                .at(&acvus_extern::CallSite::of_args(&site.args(0))),
             Width {
                 args: 0,
                 ret: 1,
@@ -2253,7 +2523,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a).at(&site.args(1)),
+            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a)
+                .at(&acvus_extern::CallSite::of_args(&site.args(1))),
             Width {
                 args: 1,
                 ret: 1,
@@ -2268,7 +2539,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
             acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(
                 |_, (a, b)| a + b
             )
-            .at(&site.args(2)),
+            .at(&acvus_extern::CallSite::of_args(&site.args(2))),
             Width {
                 args: 2,
                 ret: 1,
@@ -2290,7 +2561,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 (ByValue<i64>, ByRef<i64, Shared>, ByValue<i64>),
                 Val<i64>,
             >(|_, (a, b, c)| a + *b + c)
-            .at(&site.args(3)),
+            .at(&acvus_extern::CallSite::of_args(&site.args(3))),
             Width {
                 args: 3,
                 ret: 1,
@@ -2310,7 +2581,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 (ByValue<i64>, ByValue<i64>, ByValue<i64>, ByValue<i64>,),
                 Val<i64>,
             >(|_, (a, b, c, d)| a + b + c + d)
-            .at(&site.args(4)),
+            .at(&acvus_extern::CallSite::of_args(&site.args(4))),
             Width {
                 args: 4,
                 ret: 1,
@@ -2325,7 +2596,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
         acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(|_, (a, b)| {
             a * 10 + b
         })
-        .at(&site.args(2));
+        .at(&acvus_extern::CallSite::of_args(&site.args(2)));
     // SAFETY: the width says two arguments in and one value out.
     let by_register =
         unsafe { two_wide.call2(&mut Ctx::new(&Tiny, ()), erased(1i64), erased(2i64)) };
@@ -2365,18 +2636,18 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
         }
     );
     let site = acvus_extern::SitesNoParameterReads::default();
-    let glue = glue.at(&site.args(1));
+    let glue = glue.at(&acvus_extern::CallSite::of_args(&site.args(1)));
     // SAFETY: the width says one argument in and one value out, at each of
     // the three names of this one handler.
     let answers = unsafe {
         [
             glue.call1(&mut Ctx::new(&Tiny, ()), erased(7i64)),
             boxed
-                .at_site(&site.args(1))
+                .at_site(&acvus_extern::CallSite::of_args(&site.args(1)))
                 .into_op(())
                 .call_run(&Tiny, &[erased(7i64)]),
             again
-                .at_site(&site.args(1))
+                .at_site(&acvus_extern::CallSite::of_args(&site.args(1)))
                 .into_op(())
                 .call_run(&Tiny, &[erased(7i64)]),
         ]
@@ -2425,7 +2696,7 @@ fn a_plain_declarations_site_table_is_zero_sized() {
     let site = SitesNoParameterReads::default();
     let closure = |_: &mut Ctx<'_, Tiny>, (a, b): (i64, i64)| a + b;
     let unsited = acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(closure);
-    let sited = unsited.at(&site.args(2));
+    let sited = unsited.at(&acvus_extern::CallSite::of_args(&site.args(2)));
 
     assert_eq!(size_of_val(&closure), 0);
     assert_eq!(size_of_val(&sited), 0);

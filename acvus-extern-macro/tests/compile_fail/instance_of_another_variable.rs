@@ -22,10 +22,8 @@ where
 {
     let mut it = it;
     let mut other = other;
-    // SAFETY: the instance stands at the type `I` was filled with, which
-    // `it` is a value of; `other` is the line this golden pins.
-    let first = unsafe { step.call(ctx, &mut it, ()) };
-    first + unsafe { step.call(ctx, &mut other, ()) }
+    let first = step.call(ctx, &mut it, ());
+    first + step.call(ctx, &mut other, ())
 }
 
 fn main() {}

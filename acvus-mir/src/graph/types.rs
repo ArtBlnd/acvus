@@ -28,6 +28,7 @@ pub enum FnKind {
     Extern {
         bounds: Vec<crate::ty::TyVarBound>,
         instances: crate::ty::Instances,
+        requires: Vec<crate::ty::RequirementSig>,
     },
 }
 

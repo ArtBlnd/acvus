@@ -454,7 +454,9 @@ impl World {
         let site = acvus_extern::SitesNoParameterReads::default();
         let op = handler
             .clone()
-            .at_site(&site.args(handler.arity()))
+            .at_site(&acvus_extern::CallSite::of_args(
+                &site.args(handler.arity()),
+            ))
             .into_op(());
         // SAFETY: the caller passes the declaration's own arguments.
         unsafe { op.call_run(&self.rt, &args) }

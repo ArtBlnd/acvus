@@ -16,7 +16,7 @@ use acvus_extern::{
     extern_registry, kind,
 };
 
-use crate::iter::Iter;
+use crate::iter::Items;
 use acvus_extern::Ctx;
 
 #[derive(ExternType)]
@@ -175,12 +175,12 @@ fn find_at(re: &Regex, text: &str, start: u64) -> Option<Match> {
 
 /// Every non-overlapping match, left to right.
 #[extern_fn(effect = pure)]
-fn find_all<I, Rt>(re: &Regex, text: &str) -> Iter<Match, Pure, I, Rt>
+fn find_all<I, Rt>(re: &Regex, text: &str) -> Items<Match, I, Rt>
 where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(re.0.find_iter(text).map(match_of).collect())
+    Items::of(re.0.find_iter(text).map(match_of).collect())
 }
 
 /// The end of the shortest match beginning at the leftmost position that
@@ -201,12 +201,12 @@ fn captures(re: &Regex, text: &str) -> Option<Captures> {
 
 /// The groups of every non-overlapping match, left to right.
 #[extern_fn(effect = pure)]
-fn captures_all<I, Rt>(re: &Regex, text: &str) -> Iter<Captures, Pure, I, Rt>
+fn captures_all<I, Rt>(re: &Regex, text: &str) -> Items<Captures, I, Rt>
 where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(
+    Items::of(
         re.0.captures_iter(text)
             .map(|caps| groups_of(&re.0, &caps))
             .collect(),
@@ -323,25 +323,28 @@ where
 /// The pieces of `text` between matches. A match at either end gives an
 /// empty piece there.
 #[extern_fn(effect = pure)]
-fn split<I, Rt>(re: &Regex, text: &str) -> Iter<String, Pure, I, Rt>
+fn split<I, Rt>(re: &Regex, text: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(re.0.split(text).map(str::to_owned).collect())
+    Items::of(re.0.split(text).map(str::to_owned).collect())
 }
 
 /// At most `n` pieces: the last one holds the rest of `text`, matches and
 /// all. An `n` of 0 gives no piece.
 #[extern_fn(effect = pure)]
-fn split_n<I, Rt>(re: &Regex, text: &str, n: u64) -> Iter<String, Pure, I, Rt>
+fn split_n<I, Rt>(re: &Regex, text: &str, n: u64) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let n = usize::try_from(n).unwrap_or(usize::MAX);
-    Iter::from_items(re.0.splitn(text, n).map(str::to_owned).collect())
+    Items::of(re.0.splitn(text, n).map(str::to_owned).collect())
 }
+
+crate::iter::next_items_of!(element: Match, next: next_items_match);
+crate::iter::next_items_of!(element: Captures, next: next_items_captures);
 
 pub fn regex_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
@@ -353,6 +356,7 @@ pub fn regex_registry<R: Runtime>() -> Registry<R> {
             captures, captures_all, group, named, group_count, group_names,
             replace, replace_all, replace_n, replace_with,
             split, split_n,
+            next_items_match, next_items_captures,
         ],
     }
 }
@@ -365,9 +369,16 @@ mod tests {
     #[test]
     fn registry_produces_functions() {
         let i = Interner::new();
-        let registered =
-            Externs::combine(vec![regex_registry::<TypesOnly>()], &i).expect("registry combines");
-        let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
+        let registered = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                regex_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        let core = Externs::combine(vec![crate::iterator_registry::<TypesOnly>()], &i)
+            .expect("the baseline combines");
         assert_eq!(registered.functions.len() - core.functions.len(), 22);
         assert_eq!(registered.handlers.len() - core.handlers.len(), 22);
     }

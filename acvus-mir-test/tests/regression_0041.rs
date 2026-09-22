@@ -163,6 +163,7 @@ fn check_functions(
     let script = script_fn(i, source);
     let qref = script.qref;
     functions.push(script);
+    let declared = functions.clone();
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
@@ -203,9 +204,10 @@ fn check_functions(
         .direct_calls
         .values()
         .filter_map(|callee| match callee {
-            Callee::Extern { id, instance } => Some(SettledCall {
+            Callee::Extern { id, instance, .. } => Some(SettledCall {
                 callee: i.resolve(id.name).to_string(),
-                instance: *instance,
+                instance: acvus_mir::ir::OverloadSpace::among(*id, &declared)
+                    .map_or(*instance, |space| space.overload(*instance).own),
             }),
             _ => None,
         })

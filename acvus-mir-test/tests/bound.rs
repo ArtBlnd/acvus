@@ -5,12 +5,11 @@ use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
 use acvus_mir::ty::{
-    InnerBound, InstanceSets, InstanceShape, ParamTerm, Poly, PolyBuilder, Ty, TyTerm, TyVarBound,
-    TypeArg, TypeRegistry, UserDefinedDecl,
+    InstanceSig, Instances, ParamTerm, Poly, PolyBuilder, RequirementSig, Task, Ty, TyTerm,
+    TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, try_freeze_poly,
 };
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
 
 /// `add: Fn(T, T) -> T` with `T: OneOf([Int, Float])`.
 fn add_fn(i: &Interner) -> Function {
@@ -21,6 +20,7 @@ fn add_fn(i: &Interner) -> Function {
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::one_of(vec![TyTerm::I64, TyTerm::Float])],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![
@@ -62,62 +62,75 @@ fn advance_ref(i: &Interner) -> QualifiedRef {
     QualifiedRef::qualified(i.intern("probe"), i.intern("advance"))
 }
 
-/// The instances of `probe::advance`: one at `Counter`, and one at
-/// `Doubled<_>` whose own `where` clause requires an instance of the same
-/// signature of what fills its one type argument.
-fn advance_instances(i: &Interner) -> Arc<InstanceSets> {
-    let mut inner = PolyBuilder::new();
-    let mut by_signature = FxHashMap::default();
-    by_signature.insert(
-        advance_ref(i),
-        vec![
-            InstanceShape {
-                ty: user(i, "Counter", vec![]),
-                requires: vec![],
-            },
-            InstanceShape {
-                ty: user(i, "Doubled", vec![inner.fresh_ty_var()]),
-                requires: vec![InnerBound {
-                    signature: advance_ref(i),
-                    at: vec![0],
-                }],
-            },
-        ],
-    );
-    Arc::new(InstanceSets::new(by_signature))
-}
-
-/// `drain: Fn(T) -> T` where `T` is required to have an instance of
-/// `probe::advance` (RFC-0067 Decision 1).
-fn drain_fn(i: &Interner) -> Function {
+/// `probe::advance: Fn(S) -> S`, a shared signature with an instance at
+/// `Counter` and one at `Doubled<_>`.
+fn advance_fn(i: &Interner) -> Function {
     let mut pb = PolyBuilder::new();
-    let t = pb.fresh_ty_var();
+    let s = pb.fresh_ty_var();
+    let at = |ty: acvus_mir::ty::PolyTy| InstanceSig {
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::<Poly>::new(i.intern("it"), ty.clone())],
+            ret: Box::new(ty),
+            captures: vec![],
+            effect: acvus_mir::ty::Effect::PURE.into(),
+        },
+        admits: Task::Sync,
+        task: Task::Sync,
+    };
     let mut inner = PolyBuilder::new();
     Function {
-        qref: QualifiedRef::root(i.intern("drain")),
+        qref: advance_ref(i),
         kind: FnKind::Extern {
-            bounds: vec![TyVarBound::instances_of(
-                advance_ref(i),
-                vec![
-                    user(i, "Counter", vec![]),
-                    user(i, "Doubled", vec![inner.fresh_ty_var()]),
+            bounds: vec![TyVarBound::one_of(vec![
+                user(i, "Counter", vec![]),
+                user(i, "Doubled", vec![inner.fresh_ty_var()]),
+            ])],
+            instances: Instances {
+                concrete: vec![
+                    at(user(i, "Counter", vec![])),
+                    at(user(i, "Doubled", vec![inner.fresh_ty_var()])),
                 ],
-                advance_instances(i),
-            )],
-            instances: Default::default(),
+                generic: false,
+            },
+            requires: vec![],
         },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("it"), t.clone())],
-            ret: Box::new(t),
+            params: vec![ParamTerm::<Poly>::new(i.intern("it"), s.clone())],
+            ret: Box::new(s),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
         },
     }
 }
 
-/// `wrap: Fn(T) -> Doubled<T>` with no bound on `T`: the second
-/// constructor, which builds the pattern for an inner type that has no
-/// instance.
+/// `drain: Fn(T) -> T` requiring an instance of `probe::advance` at `T`
+/// (RFC-0068 D1): the requirement's pattern is `advance`'s type at `T`.
+fn drain_fn(i: &Interner) -> Function {
+    let mut pb = PolyBuilder::new();
+    let t = pb.fresh_ty_var();
+    let signature = |ty: acvus_mir::ty::PolyTy| TyTerm::Fn {
+        params: vec![ParamTerm::<Poly>::new(i.intern("it"), ty.clone())],
+        ret: Box::new(ty),
+        captures: vec![],
+        effect: acvus_mir::ty::Effect::PURE.into(),
+    };
+    Function {
+        qref: QualifiedRef::root(i.intern("drain")),
+        kind: FnKind::Extern {
+            bounds: vec![TyVarBound::Any],
+            instances: Default::default(),
+            requires: vec![RequirementSig {
+                signature: advance_ref(i),
+                pattern: signature(t.clone()),
+                calls: Task::Sync,
+            }],
+        },
+        ty: signature(t),
+    }
+}
+
+/// `wrap: Fn(T) -> Doubled<T>` with no bound on `T`: builds the pattern
+/// `Doubled<_>` stands at, for any inner type.
 fn wrap_fn(i: &Interner) -> Function {
     let mut pb = PolyBuilder::new();
     let t = pb.fresh_ty_var();
@@ -126,6 +139,7 @@ fn wrap_fn(i: &Interner) -> Function {
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::Any],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("it"), t.clone())],
@@ -157,7 +171,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let f = script_fn(i, source);
     let qref = f.qref;
     let graph = CompilationGraph {
-        functions: Freeze::new(vec![add_fn(i), drain_fn(i), wrap_fn(i), f]),
+        functions: Freeze::new(vec![add_fn(i), advance_fn(i), drain_fn(i), wrap_fn(i), f]),
         contexts: Freeze::new(vec![]),
         entry: None,
     };
@@ -222,41 +236,32 @@ fn members_do_not_mix() {
     assert!(errs.iter().any(|e| e.contains("type mismatch")), "{errs:?}");
 }
 
-/// A bound whose shapes are an instance set names the signature that asked
-/// for them, so the refusal says what is missing rather than listing the
-/// types that happen to be allowed.
+/// A requirement is decided as a call of the signature it names, so the
+/// refusal names the signature, the declaration that required it, the
+/// call it could not place, and the instances it could have reached.
 #[test]
-fn a_refusal_names_the_signature_the_bound_required() {
+fn a_refusal_names_the_signature_the_requirement_asked_of() {
     let i = Interner::new();
     let errs = check(&i, "drain(7)").unwrap_err();
     assert!(
         errs.contains(
-            &"no instance of probe::advance at i64; instances exist at Counter, Doubled<'0>"
+            &"no instance of probe::advance required by drain has the call type Fn(i64) -> \
+              i64; the instances it could reach are Fn(Counter) -> Counter, Fn(Doubled<'1>) \
+              -> Doubled<'1>"
                 .to_string()
         ),
         "{errs:?}"
     );
 }
 
-/// The instance at a pattern carries its own bound, so a ground type whose
-/// inner has no instance is refused at check rather than found missing at
-/// `prepare`. `wrap` builds the pattern without the bound; `Doubled<i64>`
-/// matches the shape and fails the requirement under it.
+/// The pattern instance is reached through a type built for it, and the
+/// requirement's variable is bound from the instance: `drain(wrap(7))` is
+/// `Doubled<i64>`.
 #[test]
-fn a_pattern_instances_own_bound_holds_at_the_pattern() {
+fn a_pattern_instance_is_reached_through_the_pattern() {
     let i = Interner::new();
-    let errs = check(&i, "drain(wrap(7))").unwrap_err();
-    assert!(
-        errs.contains(
-            &"no instance of probe::advance at Doubled<i64>; instances exist at Counter, \
-              Doubled<'0>"
-                .to_string()
-        ),
-        "{errs:?}"
-    );
     assert_eq!(
-        check(&i, "drain(wrap(wrap(7)))").unwrap_err().len(),
-        1,
-        "the recursion refuses the inner pattern too"
+        check(&i, "drain(wrap(7))").expect("checks"),
+        try_freeze_poly(&user(&i, "Doubled", vec![TyTerm::I64])).expect("ground")
     );
 }

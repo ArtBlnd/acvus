@@ -11,14 +11,13 @@
 //! These timings hold only under one pinned core and a fixed load base;
 //! `benches/README.md` states the protocol.
 
-use acvus_extern::Ctx;
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acvus_extern::{Elements, Owned, Registry, Shared, Slice, extern_fn, extern_registry};
+use acvus_extern::{Erased, Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
 use acvus_interpreter_test::listing::{regions_named, script_listing_with_externs};
 use acvus_interpreter_test::scripts::{ATTENTION, ATTENTION_VEC};
@@ -32,27 +31,17 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 use tokio::runtime::Runtime;
 
-fn element_of<Rt>(rt: &Rt, view: &Elements<Rt>, at: usize) -> f64
-where
-    Rt: acvus_extern::Runtime,
-{
-    // SAFETY: `at` is below the length the view reports, the container the
-    // caller lent is live for the call (RFC-0018), and every element of a
-    // language `Array<f64, N>` was erased from `f64` (RFC-0047 rule 1).
-    unsafe { *rt.value_as_ref::<f64>(view.at(at)) }
-}
-
+/// The elements reach the body as the caller's own run (RFC-0047 rule 6,
+/// RFC-0068 D4): an `Erased<Rt, f64>` is read in place through its deref,
+/// so the loop is the same multiply-add over the script's container that
+/// the view-based form ran.
 #[extern_fn(effect = pure)]
-fn dot<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<f64, Shared, Rt>, b: Slice<f64, Shared, Rt>) -> f64
+fn dot<Rt>(a: &[Erased<Rt, f64>], b: &[Erased<Rt, f64>]) -> f64
 where
     Rt: acvus_extern::Runtime,
 {
-    let rt = ctx.rt;
-    let (a, b) = (a.into_elements(), b.into_elements());
     assert_eq!(a.len(), b.len(), "dot takes two views of one length");
-    (0..a.len())
-        .map(|at| element_of(rt, &a, at) * element_of(rt, &b, at))
-        .sum()
+    a.iter().zip(b).map(|(x, y)| **x * **y).sum()
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {

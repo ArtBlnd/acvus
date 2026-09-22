@@ -1,6 +1,5 @@
 //! The shared signatures the compiler names (RFC-0019, RFC-0020).
 
-use crate::str::StrView;
 use crate::{Registry, Runtime, extern_fn, extern_registry, extern_signature};
 
 extern_signature! { ns: "core", fn clone<T>(a: &T) -> T where T: crate::Var<crate::kind::Type>; }
@@ -20,8 +19,8 @@ extern_signature! { ns: "core", fn hash<T>(a: &T) -> i64 where T: crate::Var<cra
 /// (RFC-0039).
 #[extern_fn(effect = pure)]
 #[extern_view]
-fn as_str(s: &String) -> StrView {
-    StrView::of(s)
+fn as_str(s: &String) -> &str {
+    s
 }
 
 pub fn core_registry<R>() -> Registry<R>

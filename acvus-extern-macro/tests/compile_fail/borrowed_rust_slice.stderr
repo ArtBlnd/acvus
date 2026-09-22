@@ -1,105 +1,67 @@
-error[E0277]: the trait bound `[i64]: TyArg` is not satisfied
- --> tests/compile_fail/borrowed_rust_slice.rs:5:1
+error[E0277]: the trait bound `i64: TransparentOver<__R>` is not satisfied
+ --> tests/compile_fail/borrowed_rust_slice.rs:8:1
   |
-5 | #[extern_fn(effect = pure)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TyArg` is not implemented for `[i64]`
+8 | #[extern_fn(effect = pure)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TransparentOver<__R>` is not implemented for `i64`
   |
-help: the trait `TyArg` is implemented for `[T; N]`
- --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+help: the following other types implement trait `TransparentOver<Rt>`
+ --> $WORKSPACE/acvus-extern/src/erased.rs
   |
-  | / impl<T, const N: usize> TyArg for [T; N]
+  | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
   | | where
-  | |     T: TyArg,
-  | |_____________^
-  = note: required for `acvus_extern::Ref<[i64], acvus_extern::Shared, __R>` to implement `TyArg`
+  | |     R: Runtime,
+  | |     T: Stored<R>,
+  | |_________________^ `Erased<R, T>` implements `TransparentOver<R>`
+  |
+ ::: $WORKSPACE/acvus-extern/src/ty_arg.rs
+  |
+  | / unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N> where
+  | |     Rt: crate::Runtime
+  | |______________________^ `Nth<acvus_extern::kind::Type, N>` implements `TransparentOver<Rt>`
+...
+  | / unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
+  | | where
+  | |     T: Send + Sync + 'static,
+  | |     Rt: crate::Runtime,
+  | |_______________________^ `Spec<T>` implements `TransparentOver<Rt>`
+  |
+ ::: $WORKSPACE/acvus-extern/src/owned.rs
+  |
+  |   unsafe impl<R> crate::TransparentOver<R> for Owned<R> where R: Runtime {}
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `acvus_extern::Owned<R>` implements `TransparentOver<R>`
+  = note: required for `BySlice<i64, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the size for values of type `[i64]` cannot be known at compilation time
- --> tests/compile_fail/borrowed_rust_slice.rs:5:1
-  |
-5 | #[extern_fn(effect = pure)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
-  |
-  = help: the trait `Sized` is not implemented for `[i64]`
-note: required by an implicit `Sized` bound in `acvus_extern::Ref`
- --> $WORKSPACE/acvus-extern/src/reference.rs
-  |
-  | pub struct Ref<T, M, Rt>(Rt::Value, PhantomData<(T, M)>)
-  |                ^ required by the implicit `Sized` requirement on this type parameter in `Ref`
-  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `[i64]` has no storage of its own type, so a parameter cannot borrow one
- --> tests/compile_fail/borrowed_rust_slice.rs:5:1
-  |
-5 | #[extern_fn(effect = pure)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
-  |
-  = help: the trait `Borrowable<__R>` is not implemented for `[i64]`
-  = note: a borrowed aggregate crosses as its projection: where `[i64]` is a `#[derive(TyArg)] #[projection]` aggregate, write `[i64]Ref<'_>`, or `[i64]Mut<'_>` for a struct and `[i64]Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
-  = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
-  = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
-  = help: the following other types implement trait `Borrowable<Rt>`:
-            `()` implements `Borrowable<__Rt>`
-            `Arr<T, N>` implements `Borrowable<Rt>`
-            `Erased<R, T>` implements `Borrowable<R>`
-            `Nth<acvus_extern::kind::Type, N>` implements `Borrowable<Rt>`
-            `Spec<T>` implements `Borrowable<Rt>`
-            `Vec<T>` implements `Borrowable<Rt>`
-            `acvus_extern::Owned<R>` implements `Borrowable<R>`
-            `bool` implements `Borrowable<__Rt>`
-          and $N others
-  = note: required for `ByRef<[i64], acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
-  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `[i64]: TyArg` is not satisfied
-  --> tests/compile_fail/borrowed_rust_slice.rs:10:1
+error[E0277]: the trait bound `i64: TransparentOver<__R>` is not satisfied
+  --> tests/compile_fail/borrowed_rust_slice.rs:13:1
    |
-10 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TyArg` is not implemented for `[i64]`
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TransparentOver<__R>` is not implemented for `i64`
    |
-help: the trait `TyArg` is implemented for `[T; N]`
-  --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+help: the following other types implement trait `TransparentOver<Rt>`
+  --> $WORKSPACE/acvus-extern/src/erased.rs
    |
-   | / impl<T, const N: usize> TyArg for [T; N]
+   | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
    | | where
-   | |     T: TyArg,
-   | |_____________^
-   = note: required for `acvus_extern::Ref<[i64], acvus_extern::Mut, __R>` to implement `TyArg`
-   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the size for values of type `[i64]` cannot be known at compilation time
-  --> tests/compile_fail/borrowed_rust_slice.rs:10:1
+   | |     R: Runtime,
+   | |     T: Stored<R>,
+   | |_________________^ `Erased<R, T>` implements `TransparentOver<R>`
    |
-10 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+  ::: $WORKSPACE/acvus-extern/src/ty_arg.rs
    |
-   = help: the trait `Sized` is not implemented for `[i64]`
-note: required by an implicit `Sized` bound in `acvus_extern::Ref`
-  --> $WORKSPACE/acvus-extern/src/reference.rs
+   | / unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N> where
+   | |     Rt: crate::Runtime
+   | |______________________^ `Nth<acvus_extern::kind::Type, N>` implements `TransparentOver<Rt>`
+...
+   | / unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
+   | | where
+   | |     T: Send + Sync + 'static,
+   | |     Rt: crate::Runtime,
+   | |_______________________^ `Spec<T>` implements `TransparentOver<Rt>`
    |
-   | pub struct Ref<T, M, Rt>(Rt::Value, PhantomData<(T, M)>)
-   |                ^ required by the implicit `Sized` requirement on this type parameter in `Ref`
-   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `[i64]` has no storage of its own type, so a parameter cannot borrow one
-  --> tests/compile_fail/borrowed_rust_slice.rs:10:1
+  ::: $WORKSPACE/acvus-extern/src/owned.rs
    |
-10 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
-   |
-   = help: the trait `Borrowable<__R>` is not implemented for `[i64]`
-   = note: a borrowed aggregate crosses as its projection: where `[i64]` is a `#[derive(TyArg)] #[projection]` aggregate, write `[i64]Ref<'_>`, or `[i64]Mut<'_>` for a struct and `[i64]Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
-   = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
-   = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
-   = help: the following other types implement trait `Borrowable<Rt>`:
-             `()` implements `Borrowable<__Rt>`
-             `Arr<T, N>` implements `Borrowable<Rt>`
-             `Erased<R, T>` implements `Borrowable<R>`
-             `Nth<acvus_extern::kind::Type, N>` implements `Borrowable<Rt>`
-             `Spec<T>` implements `Borrowable<Rt>`
-             `Vec<T>` implements `Borrowable<Rt>`
-             `acvus_extern::Owned<R>` implements `Borrowable<R>`
-             `bool` implements `Borrowable<__Rt>`
-           and $N others
-   = note: required for `ByRef<[i64], acvus_extern::Mut>` to implement `for<'a> Arg<'a, __R>`
+   |   unsafe impl<R> crate::TransparentOver<R> for Owned<R> where R: Runtime {}
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `acvus_extern::Owned<R>` implements `TransparentOver<R>`
+   = note: required for `BySlice<i64, acvus_extern::Mut>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

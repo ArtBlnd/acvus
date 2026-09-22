@@ -3,8 +3,7 @@
 //! `substring` reach a caller through a body and not only through an extern
 //! call's `CallShape::Pair*`.
 
-use acvus_extern::Ctx;
-use acvus_extern::{Registry, Runtime, Shared, Slice, extern_fn, extern_registry};
+use acvus_extern::{Erased, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::{Helper, Refusal, check_graph, execute_compiled};
 use acvus_mir::graph::ParsedAst;
@@ -18,20 +17,11 @@ use std::sync::Arc;
 /// words of the pair arrived, since a wrong `ptr` reads other storage and a
 /// wrong `len` reads another count of elements.
 #[extern_fn(effect = pure)]
-fn total<Rt>(ctx: &mut Ctx<'_, Rt>, a: Slice<i64, Shared, Rt>) -> i64
+fn total<Rt>(a: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let a = a.into_elements();
-    (0..a.len())
-        .map(|at| {
-            // SAFETY: `at` is below the length the view reports, the
-            // container the caller lent is live for the call (RFC-0018), and
-            // every element of a language `[i64; 3]` was erased from `i64`.
-            unsafe { *rt.value_as_ref::<i64>(a.at(at)) }
-        })
-        .sum()
+    a.iter().map(|x| **x).sum()
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {

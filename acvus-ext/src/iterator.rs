@@ -1,44 +1,50 @@
-//! Iterator functions.
+//! Iterator functions: the constructors of the stages in `iter`, and the
+//! consumers, each of which requires the `iter::next` of the pipeline it is
+//! handed and drives it (RFC-0067, RFC-0068).
 //!
-//! - Constructors: the shared signatures `iter::into_iter` (consuming) and
+//! A consumer is an `async fn` at the pipeline's effect with a `sync =` twin:
+//! a site whose effect is `Sync` runs the twin, which calls the instance and
+//! returns, and any other site awaits it.
+//!
+//! - Sources: the shared signatures `iter::into_iter` (consuming) and
 //!   `iter::as_iter` (over a borrowed container, yielding references), with
-//!   instances for `Vec` and `Array` here and for `Deque` in `deque`;
-//!   rev_iter (consuming); range, range_step
-//! - Lazy combinators: map, pmap, filter, take, skip, step_by, take_while,
-//!   skip_while, chunks, dedup, chain, pchain, flatten, flatten_arrays,
-//!   flat_map
-//! - Consumers (async, effect E): collect, join, contains, next, find,
-//!   reduce, fold, any, all, count, last, nth, position, min_by_key,
-//!   max_by_key (the key is `i64`)
-//! - Aggregates over a numeric element (async, effect E): sum, product,
-//!   min, max
+//!   instances for `Vec` and `Array` here and for `Deque`, `Map` and `Set`
+//!   in their own modules; `rev_iter`, `range`, `range_step`.
+//! - Adaptors: `map`, `pmap`, `filter`, `take`, `skip`, `step_by`,
+//!   `take_while`, `skip_while`, `chunks`, `dedup`, `chain`, `flatten`,
+//!   `flatten_arrays`, `flat_map`.
 //!
-//! A typed per-element operation takes `Iter<Erased<Rt, T>>` with `T`
-//! bounded by `Monomorphize`: the element is read in place through
-//! `Erased::as_ref`, and the `Iter` slot stays uniform (RFC-0041).
+//! There is no `pchain`. Its parameter is a `Vec` of pipelines, and a
+//! declaration requiring an instance of `I` takes a parameter standing at
+//! `I` itself, which a `Vec<I>` is not (RFC-0067 Decision 1).
+//! - Consumers: `collect`, `join`, `contains`, `find`, `reduce`,
+//!   `fold`, `any`, `all`, `count`, `last`, `nth`, `position`, `min_by_key`,
+//!   `max_by_key` (the key is `i64`), and the numeric aggregates `sum`,
+//!   `product`, `min`, `max`. One step is the signature itself: `iter::next`
+//!   called on a pipeline runs that pipeline's instance.
 //!
-//! **The element contract** (`iter.rs`'s head states it for the stages). A
-//! consumer takes `it: Iter<T, ..>` as a declared parameter, so the checker
-//! unified `T` with the element type of the iterator the argument names: every
-//! value the stage drains was erased from `T`. That fact is what each
-//! `unsafe { ..::from_value(..) }` below names, and `FromValue`'s contract is
-//! the door it goes through.
+//! A typed per-element operation stands at `sig::next<I, Erased<Rt, T>, E,
+//! Rt>` with `T` bounded by `Monomorphize`: the element is read in place
+//! through `Erased::as_ref` (RFC-0041).
 //!
 //! Not here, each an `acvus-extern` contract: `enumerate`, `zip`,
 //! `partition` yield a tuple, and no tuple implements `Cross` (a tuple has
-//! `TyArg` only); `repeat` needs a clone of a runtime value, which
-//! `Runtime` does not offer; `min_by_key`/`max_by_key` take an `i64` key
-//! and not a `Monomorphize<(i64, f64)>` member, because a member fn's glue
-//! crosses every parameter naming the member at its specialized
-//! representation, which `Closure` does not have.
+//! `TyArg` only); `repeat` needs a clone of a runtime value, which `Runtime`
+//! does not offer; `min_by_key`/`max_by_key` take an `i64` key and not a
+//! `Monomorphize<(i64, f64)>` member, because a member fn's glue crosses
+//! every parameter naming the member at its specialized representation,
+//! which `Closure` does not have.
 
+use std::ops::DerefMut;
+
+use acvus_extern::PassedByValue;
 use acvus_extern::{
-    Arr, Closure, ClosureFn, Cross, Erased, FromValue, Monomorphize, OneValue, Ref, Registry,
-    Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
+    Arr, Closure, ClosureFn, Cross, Ctx, Erased, Monomorphize, Ref, Registry, Runtime, Shared,
+    Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
+use acvus_extern::{Instance, Later};
 
-use crate::iter::{Iter, drain, drain_now};
-use acvus_extern::Ctx;
+use crate::iter::*;
 
 /// The arithmetic the aggregates need of a `Monomorphize<(i64, f64)>`
 /// member; `add` and `mul` are what `Iterator::sum` and `Iterator::product`
@@ -97,979 +103,1030 @@ impl Num for f64 {
     }
 }
 
-/// The shared signatures every container declares instances of (RFC-0027).
-pub mod sig {
-    use acvus_extern::{Ref, Shared, extern_signature};
-
-    use crate::iter::Iter;
-
-    extern_signature! {
-        ns: "iter",
-        fn into_iter<C, T, E, I, Rt>(items: C) -> Iter<T, E, I, Rt>
-        where
-            C: Var<kind::Type>,
-            T: Var<kind::Type>,
-            E: Var<kind::Effect>,
-            I: Var<kind::Identity>,
-            Rt: Runtime;
-    }
-
-    extern_signature! {
-        ns: "iter",
-        fn as_iter<C, T, E, I, Rt>(items: &C) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
-        where
-            C: Var<kind::Type>,
-            T: Var<kind::Type>,
-            E: Var<kind::Effect>,
-            I: Var<kind::Identity>,
-            Rt: Runtime;
-    }
-}
-
-/// An iterator over references into a borrowed container, read by `at`.
-pub(crate) fn lent_iter<C, T, E, I, Rt>(
-    items: Ref<C, Shared, Rt>,
-    at: impl Fn(&C, usize) -> Option<&T> + Send + Sync + 'static,
-) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
+#[extern_fn(instance_of = sig::into_iter, effect = pure)]
+fn into_iter_vec<T, I, Rt>(items: Vec<T>) -> Items<T, I, Rt>
 where
-    C: Var<kind::Type>,
-    T: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut index = 0;
-    Iter::generate(move |rt| {
-        let item = items.try_map(rt, |container| at(container, index));
-        index += 1;
-        item
-    })
+    Items::of(items)
 }
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
-#[extern_cast]
-fn into_iter_vec<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
+fn into_iter_array<T, N, I, Rt>(items: Arr<T, N>) -> Items<T, I, Rt>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    Iter::from_items(items)
-}
-
-#[extern_fn(instance_of = sig::into_iter, effect = pure)]
-#[extern_cast]
-fn into_iter_array<T, N, E, I, Rt>(items: Arr<T, N>) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     N: Var<kind::Length>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    Iter::from_items(items.0)
+    Items::of(items.0)
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_vec<T, E, I, Rt>(items: Ref<Vec<T>, Shared, Rt>) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
+fn as_iter_vec<T, I, Rt>(items: Ref<Vec<T>, Shared, Rt>) -> Refs<Vec<T>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    lent_iter(items, |items, i| items.get(i))
+    Refs::of(items)
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_array<T, N, E, I, Rt>(
-    items: Ref<Arr<T, N>, Shared, Rt>,
-) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
+fn as_iter_array<T, N, I, Rt>(items: Ref<Arr<T, N>, Shared, Rt>) -> Refs<Arr<T, N>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    lent_iter(items, |array, i| array.0.get(i))
+    Refs::of(items)
 }
 
 #[extern_fn(effect = pure)]
-fn rev_iter<T, E, I, Rt>(items: Vec<T>) -> Iter<T, E, I, Rt>
+fn rev_iter<T, I, Rt>(items: Vec<T>) -> Items<T, I, Rt>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let mut items = items;
     items.reverse();
-    Iter::from_items(items)
-}
-
-#[extern_fn(effect = pure)]
-fn map<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Closure<(T,), U, E, Rt>) -> Iter<U, E, I, Rt>
-where
-    T: Var<kind::Type>,
-    U: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.map(f)
-}
-
-#[extern_fn(effect = pure)]
-fn pmap<T, U, E, I, Rt>(it: Iter<T, E, I, Rt>, f: Closure<(T,), U, E, Rt>) -> Iter<U, E, I, Rt>
-where
-    T: Var<kind::Type>,
-    U: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.map(f)
-}
-
-#[extern_fn(effect = pure)]
-fn filter<T, E, I, Rt>(
-    it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.filter(f)
-}
-
-#[extern_fn(effect = pure)]
-fn take<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.take(n)
-}
-
-#[extern_fn(effect = pure)]
-fn skip<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.skip(n)
-}
-
-#[extern_fn(effect = pure)]
-fn chain<T, E, I, J, K, Rt>(a: Iter<T, E, I, Rt>, b: Iter<T, E, J, Rt>) -> Iter<T, E, K, Rt>
-where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    J: Var<kind::Identity>,
-    K: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    a.chain(b)
-}
-
-#[extern_fn(effect = pure)]
-fn pchain<T, E, I, K, Rt>(parts: Vec<Iter<T, E, I, Rt>>) -> Iter<T, E, K, Rt>
-where
-    T: Var<kind::Type>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    K: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    Iter::chain_all(parts)
-}
-
-#[extern_fn(effect = pure)]
-fn flatten<T, E, I, Rt>(it: Iter<Vec<T>, E, I, Rt>) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.flatten()
-}
-
-#[extern_fn(effect = pure)]
-fn flatten_arrays<T, N, E, I, Rt>(it: Iter<Arr<T, N>, E, I, Rt>) -> Iter<T, E, I, Rt>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    N: Var<kind::Length>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.flatten()
-}
-
-#[extern_fn(effect = pure)]
-fn flat_map<T, U, E, I, Rt>(
-    it: Iter<T, E, I, Rt>,
-    f: Closure<(T,), Vec<U>, E, Rt>,
-) -> Iter<U, E, I, Rt>
-where
-    T: Var<kind::Type>,
-    U: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.flat_map::<Vec<U>, U>(f)
-}
-
-fn collect_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Vec<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut items = Vec::new();
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        items.push(unsafe { T::from_value(rt, value) });
-    });
-    items
-}
-
-#[extern_fn(effect = E, sync = collect_now)]
-async fn collect<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Vec<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut items = Vec::new();
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        items.push(unsafe { T::from_value(rt, value) });
-    });
-    items
-}
-
-fn join_now<E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
-    sep: String,
-) -> String
-where
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut parts: Vec<String> = Vec::new();
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        parts.push(unsafe { Erased::<Rt, String>::from_value(rt, value) }.into_inner(rt));
-    });
-    parts.join(&sep)
-}
-
-#[extern_fn(effect = E, sync = join_now)]
-async fn join<E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
-    sep: String,
-) -> String
-where
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut parts: Vec<String> = Vec::new();
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        parts.push(unsafe { Erased::<Rt, String>::from_value(rt, value) }.into_inner(rt));
-    });
-    parts.join(&sep)
-}
-
-fn contains_now<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-    needle: T,
-) -> bool
-where
-    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut found = false;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        if *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt) == needle {
-            found = true;
-            break;
-        }
-    });
-    found
-}
-
-#[extern_fn(effect = E, sync = contains_now)]
-async fn contains<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<Erased<Rt, T>, E, I, Rt>,
-    needle: T,
-) -> bool
-where
-    T: acvus_extern::Monomorphize<(i64, f64, bool, u8, String)> + Stored<Rt> + PartialEq,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut found = false;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        if *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt) == needle {
-            found = true;
-            break;
-        }
-    });
-    found
-}
-
-fn next_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Iter<T, E, I, Rt>) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.next_now(ctx)
-}
-
-#[extern_fn(effect = E, sync = next_now)]
-async fn next<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Iter<T, E, I, Rt>) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.next(ctx).await
-}
-
-fn find_now<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.filter(f).next_now(ctx)
-}
-
-#[extern_fn(effect = E, sync = find_now)]
-async fn find<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    it.filter(f).next(ctx).await
-}
-
-fn reduce_now<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(T, T), T, E, Rt>,
-) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut acc = it.next_now(ctx)?;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { T::from_value(rt, value) };
-        acc = f.call_now(ctx, (acc, item));
-    });
-    Some(acc)
-}
-
-#[extern_fn(effect = E, sync = reduce_now)]
-async fn reduce<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(T, T), T, E, Rt>,
-) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut acc = it.next(ctx).await?;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { T::from_value(rt, value) };
-        acc = f.call(ctx, (acc, item)).await;
-    });
-    Some(acc)
-}
-
-fn fold_now<T, U, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    init: U,
-    f: Closure<(U, T), U, E, Rt>,
-) -> U
-where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut acc = init;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { T::from_value(rt, value) };
-        acc = f.call_now(ctx, (acc, item));
-    });
-    acc
-}
-
-#[extern_fn(effect = E, sync = fold_now)]
-async fn fold<T, U, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    init: U,
-    f: Closure<(U, T), U, E, Rt>,
-) -> U
-where
-    T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + FromValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt> + Cross<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut acc = init;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { T::from_value(rt, value) };
-        acc = f.call(ctx, (acc, item)).await;
-    });
-    acc
-}
-
-fn any_now<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> bool
-where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut found = false;
-    drain_now!(it, ctx, |value| {
-        if f.call_now(ctx, (Ref::lend(rt, &value),)) {
-            found = true;
-            break;
-        }
-    });
-    found
-}
-
-#[extern_fn(effect = E, sync = any_now)]
-async fn any<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> bool
-where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut found = false;
-    drain!(it, ctx, |value| {
-        if f.call(ctx, (Ref::lend(rt, &value),)).await {
-            found = true;
-            break;
-        }
-    });
-    found
-}
-
-fn all_now<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> bool
-where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut holds_throughout = true;
-    drain_now!(it, ctx, |value| {
-        if !f.call_now(ctx, (Ref::lend(rt, &value),)) {
-            holds_throughout = false;
-            break;
-        }
-    });
-    holds_throughout
-}
-
-#[extern_fn(effect = E, sync = all_now)]
-async fn all<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> bool
-where
-    T: Var<kind::Type> + OneValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let mut holds_throughout = true;
-    drain!(it, ctx, |value| {
-        if !f.call(ctx, (Ref::lend(rt, &value),)).await {
-            holds_throughout = false;
-            break;
-        }
-    });
-    holds_throughout
+    Items::of(items)
 }
 
 /// `start..end`: empty when `end <= start`.
 #[extern_fn(effect = pure)]
-fn range<E, I, Rt>(start: i64, end: i64) -> Iter<i64, E, I, Rt>
+fn range<I, Rt>(start: i64, end: i64) -> Range<I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut current = start;
-    Iter::generate(move |_| {
-        if current >= end {
-            return None;
-        }
-        let item = current;
-        current += 1;
-        Some(item)
-    })
+    Range::of(start, end, 1)
 }
 
 /// `start`, `start + step`, … while short of `end`: upward for a positive
 /// `step`, downward for a negative one. A zero `step` traps.
 #[extern_fn(effect = pure)]
-fn range_step<E, I, Rt>(start: i64, end: i64, step: i64) -> Iter<i64, E, I, Rt>
+fn range_step<I, Rt>(start: i64, end: i64, step: i64) -> Range<I, Rt>
 where
-    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
     assert!(step != 0, "range_step: step is zero");
-    let mut current = start;
-    Iter::generate(move |_| {
-        let short_of_end = if step > 0 {
-            current < end
-        } else {
-            current > end
-        };
-        if !short_of_end {
-            return None;
-        }
-        let item = current;
-        current = current.checked_add(step)?;
-        Some(item)
+    Range::of(start, end, step)
+}
+
+#[extern_fn(effect = pure)]
+fn map<I, T, U, E, Rt>(
+    it: I,
+    f: Closure<(T,), U, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Map<I, T, U, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    Map(MapBody { inner: it, next, f })
+}
+
+/// The same stage as `map`: parallelism is a property of the site that runs
+/// the pipeline, not of the stage, so `pmap` builds a `Map`.
+#[extern_fn(effect = pure)]
+fn pmap<I, T, U, E, Rt>(
+    it: I,
+    f: Closure<(T,), U, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Map<I, T, U, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    Map(MapBody { inner: it, next, f })
+}
+
+#[extern_fn(effect = pure)]
+fn filter<I, T, E, Rt>(
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Filter<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    Filter(FilterBody { inner: it, next, f })
+}
+
+#[extern_fn(effect = pure)]
+fn take<I, T, E, Rt>(
+    it: I,
+    n: u64,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Take<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    Take(TakeBody {
+        inner: it,
+        next,
+        remaining: n,
     })
 }
 
 #[extern_fn(effect = pure)]
-fn step_by<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<T, E, I, Rt>
+fn skip<I, T, E, Rt>(
+    it: I,
+    n: u64,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Skip<I, T, E, Rt>
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    Skip(SkipBody {
+        inner: it,
+        next,
+        remaining: n,
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn step_by<I, T, E, Rt>(
+    it: I,
+    n: u64,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> StepBy<I, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
     assert!(n != 0, "step_by: step is zero");
-    it.step_by(n)
+    StepBy(StepByBody {
+        inner: it,
+        next,
+        step: n,
+        started: false,
+    })
 }
 
 #[extern_fn(effect = pure)]
-fn take_while<T, E, I, Rt>(
-    it: Iter<T, E, I, Rt>,
+fn take_while<I, T, E, Rt>(
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> Iter<T, E, I, Rt>
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> TakeWhile<I, T, E, Rt>
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.take_while(f)
+    TakeWhile(TakeWhileBody {
+        inner: it,
+        next,
+        f,
+        done: false,
+    })
 }
 
 #[extern_fn(effect = pure)]
-fn skip_while<T, E, I, Rt>(
-    it: Iter<T, E, I, Rt>,
+fn skip_while<I, T, E, Rt>(
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-) -> Iter<T, E, I, Rt>
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> SkipWhile<I, T, E, Rt>
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.skip_while(f)
+    SkipWhile(SkipWhileBody {
+        inner: it,
+        next,
+        f,
+        skipping: true,
+    })
 }
 
 #[extern_fn(effect = pure)]
-fn chunks<T, E, I, Rt>(it: Iter<T, E, I, Rt>, n: u64) -> Iter<Vec<T>, E, I, Rt>
+fn chunks<I, T, E, Rt>(
+    it: I,
+    n: u64,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Chunks<I, T, E, Rt>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     assert!(n != 0, "chunks: chunk size is zero");
-    it.chunks(n)
+    Chunks(ChunksBody {
+        inner: it,
+        next,
+        size: n,
+    })
 }
 
 #[extern_fn(effect = pure)]
-fn dedup<T, E, I, Rt>(it: Iter<Erased<Rt, T>, E, I, Rt>) -> Iter<Erased<Rt, T>, E, I, Rt>
+fn dedup<I, T, E, Rt>(
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Dedup<I, T, E, Rt>
 where
-    T: Monomorphize<(i64, f64, bool, String)> + Stored<Rt> + PartialEq + Clone,
+    I: Var<kind::Type>,
+    T: Monomorphize<(i64, f64, bool, String)> + Var<kind::Type> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.dedup()
+    Dedup(DedupBody {
+        inner: it,
+        next,
+        last: None,
+    })
 }
 
-fn count_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> i64
+#[extern_fn(effect = pure)]
+fn chain<A, B, T, E, Rt>(
+    a: A,
+    b: B,
+    next_a: Instance<sig::next<A, T, E, Rt>, A, Rt, Later>,
+    next_b: Instance<sig::next<B, T, E, Rt>, B, Rt, Later>,
+) -> Chain<A, B, T, E, Rt>
 where
-    T: Var<kind::Type>,
+    A: Var<kind::Type>,
+    B: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    Chain(ChainBody {
+        first: a,
+        next_first: next_a,
+        second: b,
+        next_second: next_b,
+        on_first: true,
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn flatten<I, T, E, Rt>(
+    it: I,
+    next: Instance<sig::next<I, Vec<T>, E, Rt>, I, Rt, Later>,
+) -> Flatten<I, Vec<T>, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    Flatten(FlattenBody {
+        inner: it,
+        next,
+        pending: Vec::new().into_iter(),
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn flatten_arrays<I, T, N, E, Rt>(
+    it: I,
+    next: Instance<sig::next<I, Arr<T, N>, E, Rt>, I, Rt, Later>,
+) -> Flatten<I, Arr<T, N>, T, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    N: Var<kind::Length>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    Flatten(FlattenBody {
+        inner: it,
+        next,
+        pending: Vec::new().into_iter(),
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn flat_map<I, T, U, E, Rt>(
+    it: I,
+    f: Closure<(T,), Vec<U>, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> FlatMap<I, T, U, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    FlatMap(FlatMapBody {
+        inner: it,
+        next,
+        f,
+        pending: Vec::new().into_iter(),
+    })
+}
+
+fn collect_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Vec<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut items = Vec::new();
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        items.push(x);
+    }
+    items
+}
+
+#[extern_fn(effect = E, sync = collect_now)]
+async fn collect<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Vec<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut items = Vec::new();
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        items.push(x);
+    }
+    items
+}
+
+fn join_now<I, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    sep: String,
+    next: Instance<sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
+) -> String
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let rt = ctx.rt;
+    let mut it = it;
+    let mut parts: Vec<String> = Vec::new();
+    while let Some(part) = next.call(ctx, &mut it, ()) {
+        parts.push(part.as_ref(rt).clone());
+    }
+    parts.join(&sep)
+}
+
+#[extern_fn(effect = E, sync = join_now)]
+async fn join<I, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    sep: String,
+    next: Instance<sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
+) -> String
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let rt = ctx.rt;
+    let mut it = it;
+    let mut parts: Vec<String> = Vec::new();
+    while let Some(part) = next.call_await(ctx, &mut it, ()).await {
+        parts.push(part.as_ref(rt).clone());
+    }
+    parts.join(&sep)
+}
+
+fn contains_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    needle: T,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> bool
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64, bool, u8, String)> + Var<kind::Type> + Stored<Rt> + PartialEq,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let rt = ctx.rt;
+    let mut it = it;
+    while let Some(item) = next.call(ctx, &mut it, ()) {
+        if *item.as_ref(rt) == needle {
+            return true;
+        }
+    }
+    false
+}
+
+#[extern_fn(effect = E, sync = contains_now)]
+async fn contains<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    needle: T,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> bool
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64, bool, u8, String)> + Var<kind::Type> + Stored<Rt> + PartialEq,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let rt = ctx.rt;
+    let mut it = it;
+    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+        if *item.as_ref(rt) == needle {
+            return true;
+        }
+    }
+    false
+}
+
+fn find_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    loop {
+        let x = next.call(ctx, &mut it, ())?;
+        if f.call_now(ctx, (&x,)) {
+            return Some(x);
+        }
+    }
+}
+
+#[extern_fn(effect = E, sync = find_now)]
+async fn find<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    loop {
+        let x = next.call_await(ctx, &mut it, ()).await?;
+        if f.call(ctx, (&x,)).await {
+            return Some(x);
+        }
+    }
+}
+
+fn reduce_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(T, T), T, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut acc = next.call(ctx, &mut it, ())?;
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        acc = f.call_now(ctx, (acc, x));
+    }
+    Some(acc)
+}
+
+#[extern_fn(effect = E, sync = reduce_now)]
+async fn reduce<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(T, T), T, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut acc = next.call_await(ctx, &mut it, ()).await?;
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        acc = f.call(ctx, (acc, x)).await;
+    }
+    Some(acc)
+}
+
+fn fold_now<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    init: U,
+    f: Closure<(U, T), U, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> U
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut acc = init;
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        acc = f.call_now(ctx, (acc, x));
+    }
+    acc
+}
+
+#[extern_fn(effect = E, sync = fold_now)]
+async fn fold<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    init: U,
+    f: Closure<(U, T), U, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> U
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    let mut acc = init;
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        acc = f.call(ctx, (acc, x)).await;
+    }
+    acc
+}
+
+fn any_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> bool
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        if f.call_now(ctx, (&x,)) {
+            return true;
+        }
+    }
+    false
+}
+
+#[extern_fn(effect = E, sync = any_now)]
+async fn any<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> bool
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        if f.call(ctx, (&x,)).await {
+            return true;
+        }
+    }
+    false
+}
+
+fn all_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> bool
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        if !f.call_now(ctx, (&x,)) {
+            return false;
+        }
+    }
+    true
+}
+
+#[extern_fn(effect = E, sync = all_now)]
+async fn all<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> bool
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        if !f.call(ctx, (&x,)).await {
+            return false;
+        }
+    }
+    true
+}
+
+fn count_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> i64
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    let mut it = it;
     let mut n = 0;
-    drain_now!(it, ctx, |_value| {
+    while next.call(ctx, &mut it, ()).is_some() {
         n += 1;
-    });
+    }
     n
 }
 
 #[extern_fn(effect = E, sync = count_now)]
-async fn count<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> i64
+async fn count<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> i64
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
+    let mut it = it;
     let mut n = 0;
-    drain!(it, ctx, |_value| {
+    while next.call_await(ctx, &mut it, ()).await.is_some() {
         n += 1;
-    });
+    }
     n
 }
 
-fn last_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Option<T>
+fn last_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
+    let mut it = it;
     let mut last = None;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        last = Some(unsafe { T::from_value(rt, value) });
-    });
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        last = Some(x);
+    }
     last
 }
 
 #[extern_fn(effect = E, sync = last_now)]
-async fn last<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<T, E, I, Rt>) -> Option<T>
+async fn last<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
+    let mut it = it;
     let mut last = None;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        last = Some(unsafe { T::from_value(rt, value) });
-    });
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        last = Some(x);
+    }
     last
 }
 
-fn nth_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
+fn nth_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    n: u64,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.skip(n).next_now(ctx)
+    let mut it = it;
+    for _ in 0..n {
+        next.call(ctx, &mut it, ())?;
+    }
+    next.call(ctx, &mut it, ())
 }
 
 #[extern_fn(effect = E, sync = nth_now)]
-async fn nth<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, it: Iter<T, E, I, Rt>, n: u64) -> Option<T>
+async fn nth<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    n: u64,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    it.skip(n).next(ctx).await
+    let mut it = it;
+    for _ in 0..n {
+        next.call_await(ctx, &mut it, ()).await?;
+    }
+    next.call_await(ctx, &mut it, ()).await
 }
 
-fn position_now<T, E, I, Rt>(
+fn position_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
+    let mut it = it;
     let mut index = 0;
-    let mut at = None;
-    drain_now!(it, ctx, |value| {
-        if f.call_now(ctx, (Ref::lend(rt, &value),)) {
-            at = Some(index);
-            break;
+    while let Some(x) = next.call(ctx, &mut it, ()) {
+        if f.call_now(ctx, (&x,)) {
+            return Some(index);
         }
         index += 1;
-    });
-    at
+    }
+    None
 }
 
 #[extern_fn(effect = E, sync = position_now)]
-async fn position<T, E, I, Rt>(
+async fn position<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
-    T: Var<kind::Type>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
+    let mut it = it;
     let mut index = 0;
-    let mut at = None;
-    drain!(it, ctx, |value| {
-        if f.call(ctx, (Ref::lend(rt, &value),)).await {
-            at = Some(index);
-            break;
+    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+        if f.call(ctx, (&x,)).await {
+            return Some(index);
         }
         index += 1;
-    });
-    at
+    }
+    None
 }
 
-fn sum_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
+fn sum_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> T
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut acc = T::ZERO;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
+    while let Some(item) = next.call(ctx, &mut it, ()) {
         acc = acc.add(*item.as_ref(rt));
-    });
+    }
     acc
 }
 
 #[extern_fn(effect = E, sync = sum_now)]
-async fn sum<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
+async fn sum<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> T
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut acc = T::ZERO;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
+    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
         acc = acc.add(*item.as_ref(rt));
-    });
+    }
     acc
 }
 
-fn product_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
+fn product_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> T
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut acc = T::ONE;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
+    while let Some(item) = next.call(ctx, &mut it, ()) {
         acc = acc.mul(*item.as_ref(rt));
-    });
+    }
     acc
 }
 
 #[extern_fn(effect = E, sync = product_now)]
-async fn product<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> T
+async fn product<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> T
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut acc = T::ONE;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let item = unsafe { Erased::<Rt, T>::from_value(rt, value) };
+    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
         acc = acc.mul(*item.as_ref(rt));
-    });
+    }
     acc
 }
 
-fn min_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
+fn min_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut best: Option<T> = None;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
+    while let Some(item) = next.call(ctx, &mut it, ()) {
+        let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
             None => current,
         });
-    });
+    }
     best
 }
 
 #[extern_fn(effect = E, sync = min_now)]
-async fn min<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
+async fn min<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut best: Option<T> = None;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
+    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+        let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
             None => current,
         });
-    });
+    }
     best
 }
 
-fn max_now<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
+fn max_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut best: Option<T> = None;
-    drain_now!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
+    while let Some(item) = next.call(ctx, &mut it, ()) {
+        let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
             None => current,
         });
-    });
+    }
     best
 }
 
 #[extern_fn(effect = E, sync = max_now)]
-async fn max<T, E, I, Rt>(ctx: &mut Ctx<'_, Rt>, mut it: Iter<Erased<Rt, T>, E, I, Rt>) -> Option<T>
+async fn max<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+) -> Option<T>
 where
-    T: Monomorphize<(i64, f64)> + Stored<Rt> + Num,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
+    let mut it = it;
     let mut best: Option<T> = None;
-    drain!(it, ctx, |value| {
-        // SAFETY: the element contract at this module's head, for `it`'s `T`.
-        let current = *unsafe { Erased::<Rt, T>::from_value(rt, value) }.as_ref(rt);
+    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+        let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
             None => current,
         });
-    });
+    }
     best
 }
 
@@ -1093,22 +1150,23 @@ impl Extreme {
     }
 }
 
-async fn extreme_by_key<T, E, I, Rt>(
+async fn extreme_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
 where
-    T: Var<kind::Type> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let mut best: Option<Keyed<Rt::Value>> = None;
-    drain!(it, ctx, |value| {
-        let key = f.call(ctx, (Ref::lend(rt, &value),)).await;
+    let mut it = it;
+    let mut best: Option<Keyed<T>> = None;
+    while let Some(value) = next.call_await(ctx, &mut it, ()).await {
+        let key = f.call(ctx, (&value,)).await;
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,
@@ -1116,41 +1174,27 @@ where
         if replace {
             best = Some(Keyed { value, key });
         }
-    });
-    // SAFETY: the element contract at this module's head, for `it`'s `T`.
-    Some(unsafe { T::from_value(rt, best?.value) })
+    }
+    Some(best?.value)
 }
 
-fn min_by_key_now<T, E, I, Rt>(
+fn extreme_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-) -> Option<T>
-where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    extreme_by_key_now(ctx, it, f, Extreme::Min)
-}
-
-fn extreme_by_key_now<T, E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<T, E, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
 where
-    T: Var<kind::Type> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let mut best: Option<Keyed<Rt::Value>> = None;
-    drain_now!(it, ctx, |value| {
-        let key = f.call_now(ctx, (Ref::lend(rt, &value),));
+    let mut it = it;
+    let mut best: Option<Keyed<T>> = None;
+    while let Some(value) = next.call(ctx, &mut it, ()) {
+        let key = f.call_now(ctx, (&value,));
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
             None => true,
@@ -1158,53 +1202,70 @@ where
         if replace {
             best = Some(Keyed { value, key });
         }
-    });
-    // SAFETY: the element contract at this module's head, for `it`'s `T`.
-    Some(unsafe { T::from_value(rt, best?.value) })
+    }
+    Some(best?.value)
+}
+
+fn min_by_key_now<I, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: I,
+    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Option<T>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    extreme_by_key_now(ctx, it, f, next, Extreme::Min)
 }
 
 #[extern_fn(effect = E, sync = min_by_key_now)]
-async fn min_by_key<T, E, I, Rt>(
+async fn min_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key(ctx, it, f, Extreme::Min).await
+    extreme_by_key(ctx, it, f, next, Extreme::Min).await
 }
 
-fn max_by_key_now<T, E, I, Rt>(
+fn max_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key_now(ctx, it, f, Extreme::Max)
+    extreme_by_key_now(ctx, it, f, next, Extreme::Max)
 }
 
 #[extern_fn(effect = E, sync = max_by_key_now)]
-async fn max_by_key<T, E, I, Rt>(
+async fn max_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: Iter<T, E, I, Rt>,
+    it: I,
     f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    extreme_by_key(ctx, it, f, Extreme::Max).await
+    extreme_by_key(ctx, it, f, next, Extreme::Max).await
 }
 
 pub fn iterator_registry<Rt>() -> Registry<Rt>
@@ -1213,15 +1274,30 @@ where
 {
     extern_registry! {
         ns: "iter",
-        types: [Iter<_, _, _, Rt>],
-        signatures: [sig::into_iter, sig::as_iter],
+        types: [
+            Items<_, _, Rt>, Refs<_, _, Rt>, Range<_, Rt>,
+            Map<_, _, _, _, Rt>, Filter<_, _, _, Rt>,
+            Take<_, _, _, Rt>, Skip<_, _, _, Rt>, StepBy<_, _, _, Rt>,
+            TakeWhile<_, _, _, Rt>, SkipWhile<_, _, _, Rt>,
+            Chunks<_, _, _, Rt>, Dedup<_, _, _, Rt>,
+            Chain<_, _, _, _, Rt>,
+            Flatten<_, _, _, _, Rt>, FlatMap<_, _, _, _, Rt>,
+        ],
+        signatures: [sig::next, sig::into_iter, sig::as_iter],
         fns: [
-            into_iter_vec, into_iter_array, as_iter_vec, as_iter_array, rev_iter,
-            range, range_step,
-            map, pmap, filter, take, skip, step_by, take_while, skip_while, chunks, dedup,
-            chain, pchain, flatten, flatten_arrays, flat_map,
-            collect, join, contains, next, find, reduce, fold, any, all,
-            count, last, nth, position, sum, product, min, max, min_by_key, max_by_key,
+            into_iter_vec, next_items, into_iter_array,
+            as_iter_vec, next_refs_vec, as_iter_array, next_refs_array,
+            rev_iter, range, range_step, next_range,
+            map, next_map, pmap, filter, next_filter,
+            take, next_take, skip, next_skip, step_by, next_step_by,
+            take_while, next_take_while, skip_while, next_skip_while,
+            chunks, next_chunks, dedup, next_dedup_int, next_dedup_float, next_dedup_bool, next_dedup_string,
+            chain, next_chain,
+            flatten, next_flatten_vecs, flatten_arrays, next_flatten_arrays,
+            flat_map, next_flat_map,
+            collect, join, contains, find, reduce, fold, any, all,
+            count, last, nth, position, sum, product, min, max,
+            min_by_key, max_by_key,
         ],
     }
 }

@@ -1,0 +1,69 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1138
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = ","
+  T2 = "!"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @names
+     5 |   r4 = list []
+     6 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r3)
+     9 |   r7 = closure L0 []
+    10 |   r8 = call #2(r6, r7)
+    12 |   r9 = const_str T1
+    13 |   r10 = call #3(r9)
+    14 |   r11 = call #4(r8, r10)
+    15 |   r12 = string_concat [T0, T0, T0, r11]
+    16 |   commit @names = r5
+    17 |   return r12
+
+    ; r0 (v21) : Vec<String>
+    ; r1 (v22) : Vec<String>
+    ; r2 (v23) : Map<Items<String>, String, String, Pure>
+    ; r3 (@names) : Vec<String>
+    ; r4 (v6) : Array<String, 0>
+    ; r5 (vec(...)) : Vec<String>
+    ; r6 (into_iter(...)) : Items<String>
+    ; r7 (v11) : Fn(String) -> String
+    ; r8 (map(...)) : Map<Items<String>, String, String, Pure>
+    ; r9 (v16) : &str
+    ; r10 (to_string(...)) : String
+    ; r11 (join(...)) : String
+    ; r12 (v19) : String
+    ; r13 (@names) : Vec<String>
+    ; r14 (v14) : String
+    ; r15 (v20) : Vec<String>
+    ; r16 (names) : Vec<String>
+    ; r17 (x) : Map<Items<String>, String, String, Pure>
+    ; r18 (names) : Vec<String>
+    ; r19 (x) : Map<Items<String>, String, String, Pure>
+    ; r20 (@names) : Vec<String>
+    ; r21 (v5) : String
+    ; r22 (v8) : String
+
+=== closure L0 (ValueId(0)) ===
+     0 |   assign n = r0
+     1 |   r1 = ref &n
+     2 |   r2 = const_str T2
+     3 |   r3 = call #3(r2)
+     4 |   assign v6 = r3
+     5 |   r4 = ref &v6
+     6 |   r5 = string_concat [r1, r4]
+     7 |   return r5
+
+    ; r0 (v1) : String
+    ; r1 (n.) : &String
+    ; r2 (v4) : &str
+    ; r3 (to_string(...)) : String
+    ; r4 (var_6.) : &String
+    ; r5 (v8) : String
+    ; r6 (v6) : String
+    ; r7 (n) : String

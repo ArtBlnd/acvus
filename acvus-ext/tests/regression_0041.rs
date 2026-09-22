@@ -1,22 +1,26 @@
 //! Regression tests for RFC-0041 at the extension boundary (R1–R6): every
 //! `Inline` type round-trips through `Erased`, the checked exit refuses
 //! the wrong type by name, container downcasts count no per-element
-//! unbox, a `Ref` reads and edits elements in place, an `Iter` pipeline is
-//! lazy, and a `Monomorphize` member whose slot holds a composite has the
-//! signature and casts the registry gives it. The numbers are counted by
-//! `Counting`, the runtime of `erased.rs`, extended to run a Rust closure
-//! held in a value so `map`/`filter` can be driven.
+//! unbox, elements are read and edited in place, and a `Monomorphize`
+//! member whose slot holds a composite has the signature and casts the
+//! registry gives it. The numbers are counted by `Counting`, the runtime of
+//! `erased.rs`.
+//!
+//! R5, the laziness of a pipeline, is not here. A stage now holds the
+//! `iter::next` instance of the stage below it, and an instance is minted
+//! only by a call site the checker resolved, so no pipeline can be built
+//! from Rust. The laziness those tests asserted is asserted by the script
+//! tests in `e2e.rs` instead.
 
-use acvus_extern::Ctx;
 use std::any::{Any, TypeId, type_name};
 use std::future::Ready;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
-use acvus_ext::{Deque, Iter, vec_registry};
+use acvus_ext::{Deque, vec_registry};
 use acvus_extern::{
-    Arr, Closure, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, Mut, OneValue, Owned,
-    QualifiedRef, Ref, Registry, Release, Runtime, Shared, extern_fn, extern_registry,
+    Arr, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, OneValue, Owned, QualifiedRef,
+    Registry, Release, Runtime, extern_fn, extern_registry,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -381,40 +385,6 @@ where
     unsafe { rt.erase::<T>(value) }
 }
 
-fn int(rt: &Counting, n: i64) -> V {
-    erased_from(rt, n)
-}
-
-fn read_int(rt: &Counting, value: &V) -> i64 {
-    // SAFETY: the value was erased from an `i64`.
-    *unsafe { rt.value_as_ref::<i64>(value) }
-}
-
-fn closure(rt: &Counting, f: impl Fn(&Counting, V) -> V + Send + Sync + 'static) -> V {
-    let f: UnaryClosure = Box::new(f);
-    erased_from(rt, f)
-}
-
-type It = Iter<Owned<Counting>, (), (), Counting>;
-
-fn drain(rt: &Counting, mut it: It) -> Vec<i64> {
-    futures::executor::block_on(async {
-        let mut out = Vec::new();
-        while let Some(value) = it.next_value(&mut Ctx::new(rt, ())).await {
-            out.push(read_int(rt, &value));
-        }
-        out
-    })
-}
-
-fn items(rt: &Counting, ns: impl IntoIterator<Item = i64>) -> It {
-    Iter::from_items(
-        ns.into_iter()
-            .map(|n| Owned::from_value(int(rt, n)))
-            .collect(),
-    )
-}
-
 // -- R1: every Inline type round-trips through Erased -------------------
 
 macro_rules! inline_round_trip {
@@ -422,7 +392,7 @@ macro_rules! inline_round_trip {
         let value: $t = $v;
         let erased = Erased::<Counting, $t>::new(&$rt, value);
         assert_eq!(erased.get(), value, "{} reads back by Deref", type_name::<$t>());
-        let raw = erased.into_value();
+        let raw = OneValue::erase(erased, &$rt);
         assert_eq!(
             $rt.type_of(&raw),
             Some(TypeId::of::<$t>()),
@@ -543,28 +513,25 @@ fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
     assert_eq!(read, ["a", "b"]);
 }
 
-// -- R4: a Ref reads and edits elements in place ---------------------------
+// -- R4: elements are read and edited in place -----------------------------
 
 #[test]
-fn a_ref_to_a_vec_of_erased_ints_sees_the_elements_and_an_edit_through_a_mutable_one() {
+fn a_vec_of_erased_ints_is_read_and_edited_through_deref_with_no_box() {
     let rt = Counting::default();
-    let storage = OneValue::<_>::erase(vec![int(&rt, 1), int(&rt, 2)], &rt);
+    let mut elements = vec![
+        Erased::<Counting, i64>::new(&rt, 1),
+        Erased::<Counting, i64>::new(&rt, 2),
+    ];
     let start = rt.counts();
 
-    let lent = Ref::<Vec<Erased<Counting, i64>>, Shared, Counting>::lend(&rt, &storage);
-    let seen: Vec<i64> = lent.as_slice(&rt).iter().map(|x| x.get()).collect();
+    let seen: Vec<i64> = elements.iter().map(|x| x.get()).collect();
     assert_eq!(seen, [1, 2]);
 
-    // SAFETY: `storage` is live and unmoved; no other name reads it during
-    // the edit.
-    let lent_mut =
-        Ref::<Vec<Erased<Counting, i64>>, Mut, Counting>::new(unsafe { rt.reference(&storage) });
-    for x in lent_mut.as_slice(&rt) {
+    for x in &mut elements {
         **x += 1;
     }
 
-    let again = Ref::<Vec<Erased<Counting, i64>>, Shared, Counting>::lend(&rt, &storage);
-    let seen: Vec<i64> = again.as_slice(&rt).iter().map(|x| x.get()).collect();
+    let seen: Vec<i64> = elements.iter().map(|x| x.get()).collect();
     assert_eq!(seen, [2, 3]);
     assert_eq!(
         rt.since(start),
@@ -574,85 +541,6 @@ fn a_ref_to_a_vec_of_erased_ints_sees_the_elements_and_an_edit_through_a_mutable
         },
         "reading and editing in place boxes and unboxes nothing"
     );
-}
-
-// -- R5: an Iter pipeline is lazy ------------------------------------------
-
-#[test]
-fn map_then_take_two_calls_the_closure_exactly_twice() {
-    let rt = Counting::default();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let f = {
-        let calls = calls.clone();
-        closure(&rt, move |rt, x| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            int(rt, read_int(rt, &x) * 10)
-        })
-    };
-    let it = items(&rt, [1, 2, 3])
-        .map::<Owned<Counting>>(Closure::new(&rt, f))
-        .take(2);
-    assert_eq!(drain(&rt, it), [10, 20]);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-}
-
-#[test]
-fn filter_then_map_interleave_per_element() {
-    let rt = Counting::default();
-    let log = Arc::new(Mutex::new(Vec::<String>::new()));
-    let keep_odd = {
-        let log = log.clone();
-        closure(&rt, move |rt, r| {
-            // SAFETY: the filter lends a live element.
-            let x = *unsafe { rt.deref::<i64>(&r) };
-            log.lock().unwrap().push(format!("f{x}"));
-            erased_from(rt, x % 2 == 1)
-        })
-    };
-    let times_ten = {
-        let log = log.clone();
-        closure(&rt, move |rt, x| {
-            let x = read_int(rt, &x);
-            log.lock().unwrap().push(format!("m{x}"));
-            int(rt, x * 10)
-        })
-    };
-    let it = items(&rt, [1, 2, 3])
-        .filter(Closure::new(&rt, keep_odd))
-        .map::<Owned<Counting>>(Closure::new(&rt, times_ten));
-    assert_eq!(drain(&rt, it), [10, 30]);
-    assert_eq!(
-        *log.lock().unwrap(),
-        ["f1", "m1", "f2", "f3", "m3"],
-        "a lazy pipeline maps an element before filtering the next"
-    );
-}
-
-#[test]
-fn flat_map_skips_an_empty_inner_sequence() {
-    let rt = Counting::default();
-    let twice_unless_two = closure(&rt, |rt, x| {
-        let x = read_int(rt, &x);
-        let inner: Vec<Owned<Counting>> = if x == 2 {
-            vec![]
-        } else {
-            vec![Owned::from_value(int(rt, x)), Owned::from_value(int(rt, x))]
-        };
-        OneValue::<_>::erase(inner, rt)
-    });
-    let it = items(&rt, [1, 2, 3])
-        .flat_map::<Vec<Owned<Counting>>, Owned<Counting>>(Closure::new(&rt, twice_unless_two));
-    assert_eq!(drain(&rt, it), [1, 1, 3, 3]);
-}
-
-#[test]
-fn chain_of_three_and_empty_and_empty_and_three_yields_six_in_order() {
-    let rt = Counting::default();
-    let it: It = items(&rt, [1, 2, 3])
-        .chain::<(), ()>(items(&rt, []))
-        .chain::<(), ()>(items(&rt, []))
-        .chain::<(), ()>(items(&rt, [4, 5, 6]));
-    assert_eq!(drain(&rt, it), [1, 2, 3, 4, 5, 6]);
 }
 
 // -- R6: a member under a composite slot ------------------------------------

@@ -2,16 +2,19 @@
 //! combined once into the compiler's and the runtime's inputs (RFC-0021).
 
 use std::fmt;
-use std::sync::Arc;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, IdentityTerm, InstanceSets, InstanceShape, ParamTerm, Poly,
-    PolyBuilder, PolyTy, Repr, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
-    Viewed, matches_pattern, unify_patterns,
+    CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
+    RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed,
+    matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+use acvus_mir::ir::{Overload, OverloadSpace};
+
+use crate::handler::RequiredInstance;
 
 use crate::handler::{DeclaredInstance, ExternHandler, Instances};
 use crate::instance::InstanceRun;
@@ -29,8 +32,8 @@ pub struct FnDecl {
     pub coercion: Option<Coercion>,
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
-    /// What each type variable is required to have an instance of
-    /// (RFC-0067 Decision 1), in the order `#[extern_fn]` read the bounds.
+    /// The instances this declaration requires (RFC-0068 D1), in the order
+    /// `#[extern_fn]` read its `Instance` parameters.
     pub requires: Vec<Requirement>,
 }
 
@@ -49,22 +52,26 @@ pub enum Coercion {
     View,
 }
 
-/// One `InstanceOf<sig::S<..>>` bound of a declaration: which of the
-/// declaration's type variables carries it, and which signature it names.
-/// The order of these on a `FnDecl` is the order of the entries in the
-/// carrier `#[extern_fn]` writes for that variable.
+/// One `Instance<S<..>, I, Rt>` parameter of a declaration: the signature
+/// it names, that signature's type at the declaration's own variables, and
+/// the highest task an instance it reaches may run at (RFC-0046): what the
+/// parameter's `Now`/`Later` spelling drives, met with what the requiring
+/// Rust body can — an `async fn` body with a `sync =` twin requires what
+/// the twin does.
 pub struct Requirement {
-    /// The variable's position among the declaration's type variables,
-    /// which is its position in `FnDecl::bounds`.
-    pub var: usize,
     pub signature: QualifiedRef,
-    /// The highest task an instance this bound reaches may run at
-    /// (RFC-0046): what the bound's own spelling drives, met with what the
-    /// requiring Rust body can. `InstanceOf` is a call that returns, so it
-    /// is `Task::Sync` however the body was declared; `InstanceOfAsync` in
-    /// an `async fn` body is `Task::Async`, and in a plain `fn` body —
-    /// which can only drain a ready future — `Task::Sync` again.
+    pub pattern: PolyTy,
     pub calls: Task,
+}
+
+impl Requirement {
+    fn signature_of(&self) -> RequirementSig {
+        RequirementSig {
+            signature: self.signature,
+            pattern: self.pattern.clone(),
+            calls: self.calls,
+        }
+    }
 }
 
 /// A shared signature: a name with a polymorphic type and no body.
@@ -141,36 +148,15 @@ where
     if specialized == uniform {
         return Vec::new();
     }
-    let TyTerm::UserDefined {
-        id,
-        type_args,
-        effect_args,
-        identity_args,
-    } = &specialized
+    let Some(FamilyPatterns {
+        family,
+        specialized: specialized_pattern,
+        uniform: uniform_pattern,
+        ty_vars,
+    }) = FamilyPatterns::of(i, &specialized)
     else {
         return Vec::new();
     };
-    let mut b = PolyBuilder::new();
-    let ty_vars: Vec<PolyTy> = type_args.iter().map(|_| b.fresh_ty_var()).collect();
-    let effect_vars: Vec<EffectTerm<Poly>> =
-        effect_args.iter().map(|_| b.fresh_effect_var()).collect();
-    let identity_vars: Vec<IdentityTerm<Poly>> = identity_args
-        .iter()
-        .map(|_| b.fresh_identity_var())
-        .collect();
-    let pattern = |repr_of: fn(&TypeArg<Poly>) -> Repr<Poly>| PolyTy::UserDefined {
-        id: *id,
-        type_args: type_args
-            .iter()
-            .zip(&ty_vars)
-            .map(|(arg, var)| TypeArg::new(repr_of(arg), var.clone()))
-            .collect(),
-        effect_args: effect_vars.clone(),
-        identity_args: identity_vars.clone(),
-    };
-    let specialized_pattern = pattern(|arg| arg.repr);
-    let uniform_pattern = pattern(|_| Repr::Uniform);
-    let family = written(i, *id);
     let fn_ty = |from: PolyTy, to: PolyTy| PolyTy::Fn {
         params: vec![ParamTerm::<Poly>::new(i.intern("value"), from)],
         ret: Box::new(to),
@@ -181,7 +167,7 @@ where
         decl: FnDecl {
             qref: QualifiedRef::qualified(i.intern(&family), i.intern(name)),
             ty: generic,
-            bounds: vec![TyVarBound::Any; ty_vars.len()],
+            bounds: vec![TyVarBound::Any; ty_vars],
             coercion: Some(Coercion::Cast),
             instance_of: None,
             requires: Vec::new(),
@@ -209,6 +195,134 @@ where
             materialize,
         ),
     ]
+}
+
+/// A family type as the two patterns its casts are declared between: every
+/// argument a variable, at the representation the member gave it and at the
+/// uniform one.
+struct FamilyPatterns {
+    family: String,
+    specialized: PolyTy,
+    uniform: PolyTy,
+    ty_vars: usize,
+}
+
+impl FamilyPatterns {
+    fn of(i: &Interner, specialized: &PolyTy) -> Option<Self> {
+        let TyTerm::UserDefined {
+            id,
+            type_args,
+            effect_args,
+            identity_args,
+        } = specialized
+        else {
+            return None;
+        };
+        let mut b = PolyBuilder::new();
+        let ty_vars: Vec<PolyTy> = type_args.iter().map(|_| b.fresh_ty_var()).collect();
+        let effect_vars: Vec<EffectTerm<Poly>> =
+            effect_args.iter().map(|_| b.fresh_effect_var()).collect();
+        let identity_vars: Vec<IdentityTerm<Poly>> = identity_args
+            .iter()
+            .map(|_| b.fresh_identity_var())
+            .collect();
+        let pattern = |repr_of: fn(&TypeArg<Poly>) -> Repr<Poly>| PolyTy::UserDefined {
+            id: *id,
+            type_args: type_args
+                .iter()
+                .zip(&ty_vars)
+                .map(|(arg, var)| TypeArg::new(repr_of(arg), var.clone()))
+                .collect(),
+            effect_args: effect_vars.clone(),
+            identity_args: identity_vars.clone(),
+        };
+        Some(FamilyPatterns {
+            family: written(i, *id),
+            specialized: pattern(|arg| arg.repr),
+            uniform: pattern(|_| Repr::Uniform),
+            ty_vars: ty_vars.len(),
+        })
+    }
+}
+
+/// A cast a declaration wrote from `X<#T>` to `X<T>` (RFC-0068 D8) is one
+/// instance of the family's `X::erase`, the form `family_casts` declares, so
+/// that every element type's cast is one rule and one name.
+fn as_family_erase<R>(i: &Interner, declared: ExternFn<R>) -> ExternFn<R>
+where
+    R: Runtime,
+{
+    let ExternFn { decl, instances } = declared;
+    let Some(written) = WrittenErase::of(i, &decl) else {
+        return ExternFn { decl, instances };
+    };
+    let handler = match instances {
+        Instances {
+            concrete,
+            generic: Some(handler),
+        } if concrete.is_empty() => handler,
+        instances => return ExternFn { decl, instances },
+    };
+    ExternFn {
+        decl: FnDecl {
+            qref: QualifiedRef::qualified(i.intern(&written.patterns.family), i.intern("erase")),
+            ty: PolyTy::Fn {
+                params: vec![ParamTerm::<Poly>::new(
+                    written.value,
+                    written.patterns.specialized,
+                )],
+                ret: Box::new(written.patterns.uniform),
+                captures: vec![],
+                effect: written.effect,
+            },
+            bounds: vec![TyVarBound::Any; written.patterns.ty_vars],
+            coercion: Some(Coercion::Cast),
+            instance_of: None,
+            requires: Vec::new(),
+        },
+        instances: Instances {
+            concrete: vec![DeclaredInstance {
+                signature: decl.ty,
+                handler,
+                admits: Task::Heavy,
+            }],
+            generic: None,
+        },
+    }
+}
+
+/// What a cast declaration wrote, where its two sides are one family at two
+/// representations.
+struct WrittenErase {
+    value: acvus_utils::Astr,
+    effect: EffectTerm<Poly>,
+    patterns: FamilyPatterns,
+}
+
+impl WrittenErase {
+    fn of(i: &Interner, decl: &FnDecl) -> Option<Self> {
+        let (Some(Coercion::Cast), PolyTy::Fn { params, ret, effect, .. }) =
+            (&decl.coercion, &decl.ty)
+        else {
+            return None;
+        };
+        let [value] = params.as_slice() else {
+            return None;
+        };
+        let (TyTerm::UserDefined { id: from, .. }, TyTerm::UserDefined { id: to, .. }) =
+            (&value.ty, &**ret)
+        else {
+            return None;
+        };
+        if from != to || value.ty == **ret {
+            return None;
+        }
+        Some(WrittenErase {
+            value: value.name,
+            effect: effect.clone(),
+            patterns: FamilyPatterns::of(i, &value.ty)?,
+        })
+    }
 }
 
 pub trait ExternTypeDecl {
@@ -323,20 +437,6 @@ pub enum CombineError {
         instance: String,
         ty: PolyTy,
     },
-    /// An instance whose own bound stands at a variable its pattern does
-    /// not hold as a type argument, so no ground type the instance is
-    /// chosen at says what fills it (RFC-0067, step 3 second half).
-    /// An instance whose pattern is the bare variable it requires an
-    /// instance of: every type with an instance has one, so the set is its
-    /// own definition and no ground type ever decides it.
-    RequirementIsThePattern {
-        instance: QualifiedRef,
-        signature: QualifiedRef,
-    },
-    RequirementOffThePattern {
-        instance: QualifiedRef,
-        signature: QualifiedRef,
-    },
     /// A handler that runs above the task its declaration names (RFC-0046).
     HandlerTask {
         function: String,
@@ -387,25 +487,6 @@ impl fmt::Display for CombineError {
                  `#[state]` value, and one taking a `&str` or a projection parameter are the \
                  shapes that have no mono glue. Give that instance one of the other shapes, \
                  or drop the requirement."
-            ),
-            Self::RequirementIsThePattern {
-                instance,
-                signature,
-            } => write!(
-                f,
-                "{instance:?} is an instance of {signature:?} at a bare type variable and \
-                 requires an instance of {signature:?} of that same variable: the set of types \
-                 it admits is its own definition, and no ground type decides it. Stand the \
-                 instance at a pattern, or drop the requirement."
-            ),
-            Self::RequirementOffThePattern {
-                instance,
-                signature,
-            } => write!(
-                f,
-                "{instance:?} requires an instance of {signature:?} of a variable its own \
-                 pattern does not hold as a type argument, so the ground type it is chosen at \
-                 does not say what fills that variable"
             ),
             Self::HandlerTask {
                 function,
@@ -478,51 +559,41 @@ pub struct Externs<R: Runtime> {
     pub instances: InstanceTable,
 }
 
-/// Every shared signature's instances that have a mono glue, in the order
-/// `Externs::combine` collected them; a call site's table is filled from it
-/// once, at prepare.
+/// The mono glue of every instance of every required signature, numbered
+/// as the compiler numbers that signature's instances (`Instances`): a call
+/// site's requirement is the checker's answer, and this is where that
+/// answer is a word (RFC-0068 D5).
 ///
-/// An instance without a glue is not a row here, and it cannot be missed:
-/// `Externs::combine` refuses a requirement on a signature that has one
-/// (`CombineError::RequiredInstanceWithoutGlue`), so no requirement ever
-/// resolves at a type only such an instance stands at.
+/// A row is dense: a signature one of whose instances has no glue is not a
+/// row, and `Externs::combine` refuses a requirement on such a signature
+/// (`CombineError::RequiredInstanceWithoutGlue`).
 #[derive(Default)]
 pub struct InstanceTable {
-    by_signature: FxHashMap<QualifiedRef, Vec<GlueAt>>,
-}
-
-/// One instance as `prepare` reads it: the pattern it stands at, and the
-/// mono glue a requirement resolves to.
-struct GlueAt {
-    ty: PolyTy,
-    run: InstanceRun,
+    by_signature: FxHashMap<QualifiedRef, Vec<InstanceRun>>,
+    requiring: FxHashMap<QualifiedRef, OverloadSpace>,
 }
 
 impl<R> crate::handler::InstanceEntries<R> for InstanceTable
 where
     R: Runtime,
 {
-    fn instance_at(&self, signature: QualifiedRef, ty: &acvus_mir::ty::Ty) -> InstanceRun {
-        let ty = match ty {
-            TyTerm::Ref(_, target) => &target.ty,
-            at => at,
-        };
-        let Some(instances) = self.by_signature.get(&signature) else {
-            panic!("{signature:?} is required but no registry declares it")
-        };
-        let Some(found) = instances.iter().find(|at| matches_pattern(ty, &at.ty)) else {
-            panic!(
-                "{signature:?} has no instance at {ty:?}, so the OneOf bound the requirement \
-                 was met with admitted a type it does not hold (RFC-0067 Decision 1)"
-            )
-        };
-        found.run
+    fn glue(&self, signature: QualifiedRef, instance: RequiredInstance) -> InstanceRun {
+        self.by_signature[&signature][instance.0]
+    }
+
+    fn overload(&self, function: QualifiedRef, position: usize) -> Overload {
+        match self.requiring.get(&function) {
+            Some(space) => space.overload(position),
+            None => Overload {
+                own: position,
+                required: Vec::new(),
+            },
+        }
     }
 }
 
-/// One instance of one shared signature as the checker's `InstanceSets`
-/// needs it: the pattern it stands at, what its own bounds require, and the
-/// task its body runs at.
+/// One instance of one shared signature: the pattern it stands at, its
+/// mono glue, and the task its body runs at.
 pub struct InstanceAt {
     /// The declaration this instance came from, which is what a refusal
     /// naming it has to print.
@@ -531,32 +602,10 @@ pub struct InstanceAt {
     /// Obligation across artifacts: `#[extern_fn]` decides which
     /// declarations get a mono glue, and this is `None` for the rest.
     pub run: Option<InstanceRun>,
-    pub requires: Vec<BoundAt>,
     /// The task this instance's own body runs at: the tightest of the
     /// handlers the declaration contributed, which for a declaration with a
     /// `sync =` twin is the twin's `Task::Sync`.
     pub task: Task,
-}
-
-/// One bound of an instance's own declaration, as both the checker and
-/// `prepare` read it.
-pub type BoundAt = acvus_mir::ty::InnerBound;
-
-/// Where a declaration's type variable stands inside the pattern its
-/// instance is matched by. `None` where the variable stands somewhere a
-/// ground type cannot be walked to by type-argument position.
-fn path_to_var(pattern: &PolyTy, var: u32, at: &mut Vec<usize>) -> bool {
-    match pattern {
-        TyTerm::Var(v) => *v == var,
-        TyTerm::UserDefined { type_args, .. } => type_args.iter().enumerate().any(|(n, arg)| {
-            at.push(n);
-            path_to_var(&arg.ty, var, at) || {
-                at.pop();
-                false
-            }
-        }),
-        _ => false,
-    }
 }
 
 /// The instances collected for one signature.
@@ -568,17 +617,6 @@ struct Collected<R: Runtime> {
     /// with a `sync =` companion contributes two handlers and one type.
     entries: Vec<InstanceAt>,
     casts: Vec<CastRule>,
-}
-
-impl<R: Runtime> Collected<R> {
-    /// The patterns of the instances a body at `task` can reach.
-    fn types_at(&self, task: Task) -> Vec<PolyTy> {
-        self.entries
-            .iter()
-            .filter(|at| at.task <= task)
-            .map(|at| at.ty.clone())
-            .collect()
-    }
 }
 
 impl<R: Runtime> Externs<R> {
@@ -637,6 +675,8 @@ impl<R: Runtime> Externs<R> {
                 match decl.instance_of {
                     Some(sig) => add_instance(interner, &mut signatures, decl, instances, sig)?,
                     None => {
+                        let ExternFn { decl, instances } =
+                            as_family_erase(interner, ExternFn { decl, instances });
                         let declared = plain
                             .iter_mut()
                             .find(|f| same_family_cast(&f.decl, &f.instances, &decl, &instances));
@@ -654,48 +694,54 @@ impl<R: Runtime> Externs<R> {
             }
         }
 
-        let sets = Arc::new(InstanceSets::new(
-            signatures
-                .iter()
-                .map(|(sig, c)| {
-                    let shapes = c
-                        .entries
-                        .iter()
-                        .map(|at| InstanceShape {
-                            ty: at.ty.clone(),
-                            requires: at.requires.clone(),
-                        })
-                        .collect();
-                    (*sig, shapes)
-                })
-                .collect(),
-        ));
         let mut functions = Vec::new();
         let mut handlers: Handlers<R> = FxHashMap::default();
         let mut required_signatures: FxHashSet<QualifiedRef> = FxHashSet::default();
-        for ExternFn {
-            mut decl,
-            instances,
-        } in plain
-        {
+        let mut requiring: FxHashMap<QualifiedRef, OverloadSpace> = FxHashMap::default();
+        for ExternFn { decl, instances } in plain {
+            let mut decl = decl;
+            if !decl.requires.is_empty() {
+                requiring.insert(
+                    decl.qref,
+                    OverloadSpace {
+                        own: instances.concrete.len() + usize::from(instances.generic.is_some()),
+                        required: decl
+                            .requires
+                            .iter()
+                            .filter_map(|r| signatures.get(&r.signature))
+                            .map(|signature| signature.instances.len())
+                            .collect(),
+                    },
+                );
+            }
             for required in &decl.requires {
                 required_signatures.insert(required.signature);
-                let collected = signatures.get(&required.signature).ok_or(
-                    CombineError::RequiredSignatureUnknown {
+                let Some(signature) = signatures.get(&required.signature) else {
+                    return Err(CombineError::RequiredSignatureUnknown {
                         function: decl.qref,
                         signature: required.signature,
-                    },
-                )?;
-                decl.bounds[required.var] = meet(
-                    &decl.bounds[required.var],
-                    required.signature,
-                    &collected.types_at(required.calls),
-                    &sets,
-                );
+                    });
+                };
+                if let Some(PolyTy::Var(standing)) =
+                    instance_type(&signature.decl.ty, &required.pattern)
+                {
+                    let bound = &mut decl.bounds[standing as usize];
+                    *bound = meet(bound, &signature.instance_types);
+                }
             }
             match decl.coercion {
                 Some(Coercion::Cast) => types.register_cast(cast_rule(&decl)?),
-                Some(Coercion::View) => types.register_machine_view(decl.qref, view_of(&decl)?),
+                Some(Coercion::View) => {
+                    let viewed = view_of(&decl)?;
+                    let referent_taken = match &decl.ty {
+                        PolyTy::Fn { params, .. } => match params.first().map(|p| &p.ty) {
+                            Some(TyTerm::Ref(_, referent)) => &referent.ty,
+                            _ => &decl.ty,
+                        },
+                        other => other,
+                    };
+                    types.register_machine_view(decl.qref, viewed, referent_taken);
+                }
                 None => {}
             }
             for instance in &instances.concrete {
@@ -709,6 +755,7 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
                     instances: instances.signatures(),
+                    requires: decl.requires.iter().map(Requirement::signature_of).collect(),
                 },
                 ty: decl.ty,
             });
@@ -716,32 +763,28 @@ impl<R: Runtime> Externs<R> {
         }
         let mut collected: Vec<Collected<R>> = signatures.into_values().collect();
         collected.sort_by_key(|c| c.decl.qref);
-        required_signatures.extend(
-            collected
-                .iter()
-                .flat_map(|c| &c.entries)
-                .flat_map(|at| &at.requires)
-                .map(|bound| bound.signature),
-        );
-        let mut instance_table = InstanceTable::default();
-        for mut c in collected {
-            let required = required_signatures.contains(&c.decl.qref);
-            let glues: Vec<GlueAt> = std::mem::take(&mut c.entries)
-                .into_iter()
-                .filter_map(|at| match at.run {
-                    Some(run) => Some(Ok(GlueAt { ty: at.ty, run })),
-                    None if required => Some(Err(CombineError::RequiredInstanceWithoutGlue {
-                        signature: written(interner, c.decl.qref),
-                        instance: written(interner, at.qref),
-                        ty: at.ty,
-                    })),
-                    None => None,
-                })
-                .collect::<Result<_, CombineError>>()?;
-            instance_table.by_signature.insert(c.decl.qref, glues);
+        let mut instance_table = InstanceTable {
+            by_signature: FxHashMap::default(),
+            requiring,
+        };
+        for c in collected {
+            if required_signatures.contains(&c.decl.qref)
+                && let Some(bare) = c.entries.iter().find(|at| at.run.is_none())
+            {
+                return Err(CombineError::RequiredInstanceWithoutGlue {
+                    signature: written(interner, c.decl.qref),
+                    instance: written(interner, bare.qref),
+                    ty: bare.ty.clone(),
+                });
+            }
+            let row: Option<Vec<InstanceRun>> =
+                c.instances.iter().map(|arm| arm.handler.instance()).collect();
+            if let Some(row) = row {
+                instance_table.by_signature.insert(c.decl.qref, row);
+            }
             let mut bounds = c.decl.bounds;
             if let Some(first) = bounds.first_mut() {
-                *first = meet(first, c.decl.qref, &c.instance_types, &sets);
+                *first = meet(first, &c.instance_types);
             }
             for cast in c.casts {
                 types.register_cast(cast);
@@ -755,6 +798,7 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds,
                     instances: instances.signatures(),
+                    requires: Vec::new(),
                 },
                 ty: c.decl.ty,
             });
@@ -770,20 +814,12 @@ impl<R: Runtime> Externs<R> {
     }
 }
 
-/// The bound a variable keeps when it must also have an instance of
-/// `signature`, which stands at the shapes in `allowed`.
-fn meet(
-    bound: &TyVarBound,
-    signature: QualifiedRef,
-    allowed: &[PolyTy],
-    sets: &Arc<InstanceSets>,
-) -> TyVarBound {
-    let required = TyVarBound::instances_of(signature, allowed.to_vec(), Arc::clone(sets));
-    bound.meet(&required).unwrap_or(TyVarBound::instances_of(
-        signature,
-        Vec::new(),
-        Arc::clone(sets),
-    ))
+/// The bound a signature's receiver keeps: its declared bound met with the
+/// patterns its instances stand at.
+fn meet(bound: &TyVarBound, allowed: &[PolyTy]) -> TyVarBound {
+    bound
+        .meet(&TyVarBound::one_of(allowed.to_vec()))
+        .unwrap_or(TyVarBound::one_of(Vec::new()))
 }
 
 fn add_instance<R: Runtime>(
@@ -823,36 +859,10 @@ fn add_instance<R: Runtime>(
         rule.fn_ref = sig;
         collected.casts.push(rule);
     }
-    let requires = decl
-        .requires
-        .iter()
-        .map(|required| {
-            let mut at = Vec::new();
-            let var = u32::try_from(required.var)
-                .expect("a declaration's type variables are numbered by PolyVars");
-            if !path_to_var(&ty, var, &mut at) {
-                return Err(CombineError::RequirementOffThePattern {
-                    instance: decl.qref,
-                    signature: required.signature,
-                });
-            }
-            if at.is_empty() {
-                return Err(CombineError::RequirementIsThePattern {
-                    instance: decl.qref,
-                    signature: required.signature,
-                });
-            }
-            Ok(BoundAt {
-                signature: required.signature,
-                at,
-            })
-        })
-        .collect::<Result<Vec<BoundAt>, CombineError>>()?;
     collected.entries.push(InstanceAt {
         qref: decl.qref,
         ty: ty.clone(),
         run: admitted.iter().find_map(|i| i.handler.instance()),
-        requires,
         task: admitted
             .iter()
             .map(|i| i.handler.task())
@@ -901,14 +911,15 @@ fn instance_type(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
 
 /// The instance's type facing the signature's first `Var(0)`, and `None`
 /// where the signature names that variable only under a head with no arm
-/// here — a function type, a slice, an option, a result, a handle, an
-/// object, an enum. Descending those is not built, and `add_instance`
+/// here — a function type, an option, a result, a handle, an object, an
+/// enum. Descending those is not built, and `add_instance`
 /// refuses such a signature with `InstanceMismatch`.
 fn instance_at_first_var(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
     match (signature, instance) {
         (PolyTy::Var(0), t) => Some(t.clone()),
         (PolyTy::Ref(_, s), PolyTy::Ref(_, i)) => instance_at_first_var(&s.ty, &i.ty),
         (PolyTy::Array(s, _), PolyTy::Array(i, _)) => instance_at_first_var(s, i),
+        (PolyTy::Slice(s), PolyTy::Slice(i)) => instance_at_first_var(s, i),
         (PolyTy::UserDefined { type_args: sa, .. }, PolyTy::UserDefined { type_args: ia, .. }) => {
             sa.iter()
                 .zip(ia)

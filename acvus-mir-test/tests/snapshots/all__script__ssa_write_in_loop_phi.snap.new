@@ -1,0 +1,53 @@
+---
+source: acvus-mir-test/tests/script.rs
+assertion_line: 148
+expression: ir
+---
+=== main ===
+     0 |   r0 = fetch @acc
+     1 |   assign @acc = r0
+     2 |   r1 = fetch @items
+     3 |   assign @items = r1
+     4 |   r2 = take @items
+     5 |   r3 = call #0(r2)
+     6 |   assign it = r3
+     7 |   jump L0
+     8 | L0:
+     9 |   r4 = ref &mut it
+    10 |   r5 = call #1(r4)
+    11 |   r6 = test r5 is Some
+    12 |   jump_if r6 then L1 else L2
+    13 | L1:
+    14 |   r7 = unwrap r5
+    15 |   assign x = r7
+    16 |   r8 = take @acc
+    17 |   r9 = take x
+    18 |   r10 = r8 + r9
+    19 |   assign @acc = r10
+    20 |   jump L0
+    21 | L2:
+    22 |   r11 = take @acc
+    23 |   r12 = take @acc
+    24 |   commit @acc = r12
+    25 |   r13 = take @items
+    26 |   commit @items = r13
+    27 |   return r11
+
+    ; r0 (@acc) : i64
+    ; r1 (@items) : Array<i64, 3>
+    ; r2 (@items) : Array<i64, 3>
+    ; r3 (into_iter(...)) : Items<i64>
+    ; r4 (it.) : &mut Items<i64>
+    ; r5 (next(...)) : Option<i64>
+    ; r6 (v10) : Bool
+    ; r7 (x) : i64
+    ; r8 (@acc) : i64
+    ; r9 (x) : i64
+    ; r10 (v15) : i64
+    ; r11 (@acc) : i64
+    ; r12 (v17) : i64
+    ; r13 (v18) : Array<i64, 3>
+    ; r14 (@items) : Array<i64, 3>
+    ; r15 (@acc) : i64
+    ; r16 (x) : i64
+    ; r17 (it) : Items<i64>

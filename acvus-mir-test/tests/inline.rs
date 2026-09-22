@@ -296,7 +296,7 @@ fn inline_callee_returns_closure_result() {
         ("main", "apply_double([1, 2, 3]) | collect"),
         &[(
             "apply_double",
-            "$xs | map(|x| -> x + x)",
+            "$xs | into_iter | map(|x| -> x + x)",
             sig(
                 &i,
                 &[(
@@ -322,7 +322,7 @@ fn inline_callee_takes_lambda_arg() {
         ("main", "transform([1, 2]) | collect"),
         &[(
             "transform",
-            "$xs | map(|x| -> x * 2)",
+            "$xs | into_iter | map(|x| -> x * 2)",
             sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::I64))]),
         )],
         &[],
@@ -340,7 +340,7 @@ fn inline_callee_with_filter_lambda() {
         ("main", "positives([1, -2, 3]) | collect"),
         &[(
             "positives",
-            "$xs | filter(|x| -> *x > 0)",
+            "$xs | into_iter | filter(|x| -> *x > 0)",
             sig(
                 &i,
                 &[(
@@ -364,7 +364,7 @@ fn inline_callee_lambda_captures_param() {
         ("main", "add_n(@items, 10) | collect"),
         &[(
             "add_n",
-            "$xs | map(|x| -> x + $n)",
+            "$xs | into_iter | map(|x| -> x + $n)",
             sig(
                 &i,
                 &[
@@ -397,7 +397,7 @@ fn inline_chain_with_lambda() {
         &[
             (
                 "double_all",
-                "$xs | map(|x| -> x * 2)",
+                "$xs | into_iter | map(|x| -> x * 2)",
                 sig(
                     &i,
                     &[(
@@ -408,7 +408,7 @@ fn inline_chain_with_lambda() {
             ),
             (
                 "sum_list",
-                "$xs | fold(0, |a, b| -> a + b)",
+                "$xs | into_iter | fold(0, |a, b| -> a + b)",
                 sig(&i, &[("xs", acvus_extern::vec_ty(&i, Ty::I64))]),
             ),
         ],
@@ -447,6 +447,7 @@ fn inline_io_extern_inside() {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
@@ -713,7 +714,7 @@ fn inline_list_collect_pattern() {
         ("main", "to_list([1, 2, 3])"),
         &[(
             "to_list",
-            "$xs | map(|x| -> x * 2) | collect",
+            "$xs | into_iter | map(|x| -> x * 2) | collect",
             sig(
                 &i,
                 &[(

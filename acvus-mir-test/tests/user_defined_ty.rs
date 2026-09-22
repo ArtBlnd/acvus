@@ -1,6 +1,6 @@
-//! Tests for the Iterator UserDefined type.
+//! Tests for the owned iterator source `Items` as a UserDefined type.
 //!
-//! These tests construct Iterator as `Ty::UserDefined` with proper `QualifiedRef`
+//! These tests construct `Items` as `Ty::UserDefined` with proper `QualifiedRef`
 //! via `acvus_ext::std_registries`, verifying unification, the data
 //! predicate, and coercion behaviors.
 
@@ -13,7 +13,7 @@ use acvus_utils::Interner;
 
 // -- Helpers ----------------------------------------------------------
 
-/// Create an Interner and TypeRegistry with Iterator registered.
+/// Create an Interner and TypeRegistry with `Items` registered.
 fn setup() -> (Interner, TypeRegistry) {
     let interner = Interner::new();
     let externs = acvus_extern::Externs::combine(
@@ -24,39 +24,39 @@ fn setup() -> (Interner, TypeRegistry) {
     (interner, externs.types)
 }
 
-/// Build Iterator<T> as concrete Ty.
+/// Build `Items<T>` as concrete Ty.
 fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
-    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+    let iter_qref = QualifiedRef::root(interner.intern("Items"));
     Ty::UserDefined {
         id: iter_qref,
         type_args: vec![TypeArg::uniform(elem)],
-        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        effect_args: vec![],
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
     }
 }
 
-/// Build Iterator<T> as InferTy (for unification tests).
+/// Build `Items<T>` as InferTy (for unification tests).
 fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
-    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+    let iter_qref = QualifiedRef::root(interner.intern("Items"));
     InferTy::UserDefined {
         id: iter_qref,
         type_args: vec![TypeArg::uniform(elem)],
-        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        effect_args: vec![],
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
     }
 }
 
-/// `Iterator<T>` whose source is still open, so a coercion may name it.
+/// `Items<T>` whose source is still open, so a coercion may name it.
 fn iter_ity_open(interner: &Interner, s: &mut Solver, elem: InferTy) -> InferTy {
-    let iter_qref = QualifiedRef::root(interner.intern("Iterator"));
+    let iter_qref = QualifiedRef::root(interner.intern("Items"));
     InferTy::UserDefined {
         id: iter_qref,
         type_args: vec![TypeArg::uniform(elem)],
-        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        effect_args: vec![],
         identity_args: vec![s.fresh_identity_var()],
     }
 }

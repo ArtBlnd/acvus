@@ -33,6 +33,7 @@ fn takes_slice(i: &Interner, name: &str, mutability: Mutability) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty,
     }
@@ -59,6 +60,7 @@ fn two_slices(i: &Interner, name: &str) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty,
     }

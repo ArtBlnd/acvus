@@ -426,6 +426,19 @@ macro_rules! cross_one_value {
                 <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
             }
         }
+
+        impl $crate::Passed<$rt> for $t {
+            type As<'a> = Self;
+
+            fn cross(rt: &$rt, passed: Self) -> <$rt as $crate::Runtime>::Value {
+                <Self as $crate::OneValue<$rt>>::erase(passed, rt)
+            }
+
+            unsafe fn restore<'a>(rt: &$rt, word: <$rt as $crate::Runtime>::Value) -> Self::As<'a> {
+                // SAFETY: the caller's contract, which is `materialize`'s.
+                unsafe { <Self as $crate::OneValue<$rt>>::materialize(rt, word) }
+            }
+        }
     };
     ($t:ty $(, $($g:tt)*)?) => {
         impl<$($($g)*,)? __Rt> $crate::Cross<__Rt> for $t
@@ -445,6 +458,25 @@ macro_rules! cross_one_value {
 
             fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
+            }
+        }
+
+        impl<$($($g)*,)? __Rt> $crate::Passed<__Rt> for $t
+        where
+            __Rt: $crate::Runtime,
+        {
+            type As<'a> = Self;
+
+            fn cross(rt: &__Rt, passed: Self) -> <__Rt as $crate::Runtime>::Value {
+                <Self as $crate::OneValue<__Rt>>::erase(passed, rt)
+            }
+
+            unsafe fn restore<'a>(
+                rt: &__Rt,
+                word: <__Rt as $crate::Runtime>::Value,
+            ) -> Self::As<'a> {
+                // SAFETY: the caller's contract, which is `materialize`'s.
+                unsafe { <Self as $crate::OneValue<__Rt>>::materialize(rt, word) }
             }
         }
     };
@@ -511,6 +543,7 @@ where
 ///
 /// Only `debug_assert_erased_from!` calls this, so the comparison exists on no
 /// release path.
+#[doc(hidden)]
 pub fn is_erased_from<T, Rt>(rt: &Rt, value: &Rt::Value) -> bool
 where
     T: 'static,
@@ -538,6 +571,7 @@ macro_rules! debug_assert_erased_from {
 ///
 /// Only that macro's message calls this, and only when the contract was
 /// already broken.
+#[doc(hidden)]
 pub fn erased_description<Rt>(rt: &Rt, value: &Rt::Value) -> String
 where
     Rt: Runtime,

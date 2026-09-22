@@ -74,6 +74,12 @@ impl Exception {
     }
 }
 
+/// A consumer takes its pipeline by value, so the pipeline is the handler's
+/// own local, and `Instance::call` names it as the receiver by address
+/// (RFC-0067): `&mut it` into `Ctx::recv`, read by the stage's `next`.
+const DRAINED_PIPELINE: &str = "the pipeline the consumer drains, `&mut it` into `Ctx::recv` for \
+                                the stage's `next`";
+
 /// The closed list of families that hold the address of a stack local across
 /// a callee. LLVM's sibling-call rule refuses a tail call out of any function
 /// an alloca's address escapes, because the callee may reach the caller's
@@ -137,6 +143,61 @@ const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
         handler: Some("__extern_fn_min_by_key"),
         stack_address: "the iterator the handler drains, `&mut it` into its stage's `next` \
                         through the stage's vtable",
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("iterator::__extern_fn_count"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("iterator::__extern_fn_last"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("iterator::__extern_fn_max"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("iterator::__extern_fn_min"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("iterator::__extern_fn_product"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("iterator::__extern_fn_sum"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern2",
+        handler: Some("iterator::__extern_fn_contains"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallExtern2",
+        handler: Some("iterator::__extern_fn_nth"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallWindow",
+        handler: Some("iterator::__extern_fn_count"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallWindow",
+        handler: Some("iterator::__extern_fn_product"),
+        stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "call::CallWindow",
+        handler: Some("iterator::__extern_fn_sum"),
+        stack_address: DRAINED_PIPELINE,
     },
     Exception {
         family: "call::CallExtern1",

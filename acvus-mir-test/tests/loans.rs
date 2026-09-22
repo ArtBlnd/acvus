@@ -20,6 +20,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: params
@@ -99,6 +100,7 @@ fn peek(i: &Interner) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

@@ -18,37 +18,36 @@
 //! from the key's own instances at each call site (RFC-0067), which stores
 //! no closure. It arrives with that RFC, and `docs/std/map.md` names it.
 //!
-//! **The element contract.** A handler takes `m: Ref<HashMap<K, V, E, Rt>, ..>`
-//! or a `HashSet` as a declared parameter, so the checker unified `K` and `V`
-//! with the key and value types of the table the argument names: every value
-//! a table hands back was erased from that `V` (or `K`). Each `unsafe
-//! { V::from_value(..) }` below cites this fact and nothing else.
+//! **The element contract.** The table holds its keys at `K` and its values
+//! at `V` — the handler's own type variables — and the two closures at the
+//! `K` and `E` the map's type carries (RFC-0068 D3). A handler takes
+//! `m: &HashMap<K, V, E, Rt>` or a `HashSet` as a declared parameter, so the
+//! checker unified those variables with the key and value types of the table
+//! the argument names, and Rust's own checker carries that decision from
+//! there: nothing below reads a runtime value back at a type, because
+//! nothing below holds a runtime value.
 
 use std::marker::PhantomData;
+use std::ops::DerefMut;
 
+use acvus_extern::{Instance, Later};
 use acvus_extern::{
-    Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternTypeDecl, FromValue,
-    FxHashMap, Interner, Mut, One, OneValue, Owned, PolyTy, PolyVars, QualifiedRef, Ref, Registry,
-    Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg, TyVarBound, TypeArg,
-    UserDefinedDecl, Var, borrowed_as_self, extern_fn, extern_registry, kind,
+    Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
+    FxHashMap, Interner, One, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
+    Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg, TyVarBound,
+    TypeArg, UserDefinedDecl, Var, borrowed_as_self, extern_fn, extern_registry, kind,
 };
 
-use crate::iter::Iter;
-use crate::iterator::sig;
+use crate::iter::{Items, Refs, sig};
 
-/// The hash and the comparator as the declaration sees them: at the key
-/// type and the effect the map's own type carries.
+/// The hash and the comparator as the declaration sees them, and as the
+/// table keeps them: at the key type and the effect the map's own type
+/// carries. A closure is stored at the types it was declared with and is
+/// not re-spelled (RFC-0068 D1).
 type HashOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>,), i64, E, Rt>;
 type EqOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>, Ref<K, Shared, Rt>), bool, E, Rt>;
 
-type Key<Rt> = Ref<Owned<Rt>, Shared, Rt>;
-type Hasher<Rt> = Closure<(Key<Rt>,), i64, (), Rt>;
-type Comparator<Rt> = Closure<(Key<Rt>, Key<Rt>), bool, (), Rt>;
-
-/// A key's hash and equality as the table keeps them: at the erased key
-/// every reference value is at run time, and at no effect, an effect being
-/// a fact of the declaration that admitted the closure rather than
-/// anything a lookup reads.
+/// A key's hash and equality as the table keeps them.
 ///
 /// Concrete, and not `Box<dyn>`. `ClosureFn::call_now` takes the context as
 /// `&mut Ctx<'_, Rt>`, a pointer to the one the machine owns; behind a
@@ -56,69 +55,25 @@ type Comparator<Rt> = Closure<(Key<Rt>, Key<Rt>), bool, (), Rt>;
 /// LLVM must assume keeps it, and its sibling-call rule then refuses the
 /// tail jump every operation owes its successor (RFC-0052, enforced by
 /// `acvus-interpreter-test/benches/asm_probe.rs`).
-struct Keying<Rt>
+struct Keying<K, E, Rt>
 where
-    Rt: Runtime,
-{
-    hash: Hasher<Rt>,
-    eq: Comparator<Rt>,
-}
-
-impl<Rt> Keying<Rt>
-where
-    Rt: Runtime,
-{
-    fn of<K, E>(rt: &Rt, hash: HashOf<K, E, Rt>, eq: EqOf<K, E, Rt>) -> Self
-    where
-        K: Var<kind::Type>,
-        E: Var<kind::Effect>,
-    {
-        Self {
-            hash: Closure::new(rt, hash.into_value()),
-            eq: Closure::new(rt, eq.into_value()),
-        }
-    }
-}
-
-/// An iterator over references into a borrowed container, read by
-/// position. `iterator::lent_iter` is this function over a container that
-/// is `Var<kind::Type>` in Rust; a declared extension type carries that
-/// bound only where its own parameters are `TyArg`, which a handler's
-/// parameters are not, so the map reads its entries through this one.
-fn lent_parts<C, T, E, I, Rt>(
-    container: Ref<C, Shared, Rt>,
-    at: impl Fn(&C, usize) -> Option<&T> + Send + Sync + 'static,
-) -> Iter<Ref<T, Shared, Rt>, E, I, Rt>
-where
-    C: Send + Sync + 'static,
-    T: Var<kind::Type> + TransparentOver<Rt>,
+    K: Var<kind::Type>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut index = 0;
-    Iter::generate(move |rt| {
-        let part = container.try_map(rt, |c| at(c, index));
-        index += 1;
-        part
-    })
+    hash: HashOf<K, E, Rt>,
+    eq: EqOf<K, E, Rt>,
 }
 
-struct Entry<Rt>
-where
-    Rt: Runtime,
-{
+struct Entry<K, V> {
     hash: i64,
-    binding: Binding<Rt>,
+    binding: Binding<K, V>,
 }
 
-/// A key and the value it names.
-struct Binding<Rt>
-where
-    Rt: Runtime,
-{
-    key: Owned<Rt>,
-    value: Owned<Rt>,
+/// A key and the value it names, each at the type the declaration gave it.
+struct Binding<K, V> {
+    key: K,
+    value: V,
 }
 
 /// Where a key belongs: its hash, and the entry already holding it.
@@ -135,87 +90,35 @@ struct Pushed(usize);
 
 /// What became of a binding the table took in: the position its key
 /// occupies, and the binding turned away where the key was already there.
-struct Placed<Rt>
-where
-    Rt: Runtime,
-{
+struct Placed<K, V> {
     at: usize,
-    turned_away: Option<Binding<Rt>>,
+    turned_away: Option<Binding<K, V>>,
 }
 
 /// The storage a `Map` and a `Set` are both laid out as: entries in
-/// insertion order, and the positions each hash occupies.
-pub struct Table<Rt>
+/// insertion order, and the positions each hash occupies. A set's value
+/// slot is `()`: nothing reads it, and a runtime value written there would
+/// be a value the table owns for no reader.
+pub struct Table<K, V, E, Rt>
 where
+    K: Var<kind::Type>,
+    V: Send + Sync + 'static,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    entries: Vec<Entry<Rt>>,
+    entries: Vec<Entry<K, V>>,
     positions: FxHashMap<i64, Vec<usize>>,
-    keying: Keying<Rt>,
+    keying: Keying<K, E, Rt>,
 }
 
-/// An entry's key or value at the element type the handler declares. The
-/// storage holds the runtime's own value, and `TransparentOver<Rt>` is the
-/// promise that a `T` is that value's layout — the cast `acvus-extern`'s
-/// `reference` module makes to read a container's elements in place.
-fn at_element<T, Rt>(owned: &Owned<Rt>) -> &T
+impl<K, V, E, Rt> Table<K, V, E, Rt>
 where
-    T: TransparentOver<Rt>,
+    K: Var<kind::Type>,
+    V: Send + Sync + 'static,
+    E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    // SAFETY: `T: TransparentOver<Rt>` and `Owned<Rt>` is `repr(transparent)`
-    // over `Rt::Value`, so the two are one layout.
-    unsafe { &*(owned as *const Owned<Rt>).cast::<T>() }
-}
-
-fn at_element_mut<T, Rt>(owned: &mut Owned<Rt>) -> &mut T
-where
-    T: TransparentOver<Rt>,
-    Rt: Runtime,
-{
-    // SAFETY: as `at_element`, with the caller's exclusive loan.
-    unsafe { &mut *(owned as *mut Owned<Rt>).cast::<T>() }
-}
-
-/// A reference value naming a held value where it lies.
-fn lend<Rt>(rt: &Rt, held: &Owned<Rt>) -> Rt::Value
-where
-    Rt: Runtime,
-{
-    // SAFETY: the storage is live for the whole call, and a closure the
-    // reference is handed to keeps it no longer than the call (RFC-0018).
-    unsafe { rt.reference(held) }
-}
-
-fn binding<K, V, Rt>(rt: &Rt, key: K, value: V) -> Binding<Rt>
-where
-    K: OneValue<Rt>,
-    V: OneValue<Rt>,
-    Rt: Runtime,
-{
-    Binding {
-        key: Owned::<Rt>::from_value(key.erase(rt)),
-        value: Owned::<Rt>::from_value(value.erase(rt)),
-    }
-}
-
-/// A set's binding: the key, and the unit the runtime writes for a value
-/// nothing reads.
-fn keyed<Rt>(rt: &Rt, key: Rt::Value) -> Binding<Rt>
-where
-    Rt: Runtime,
-{
-    Binding {
-        key: Owned::<Rt>::from_value(key),
-        value: Owned::<Rt>::from_value(rt.undef()),
-    }
-}
-
-impl<Rt> Table<Rt>
-where
-    Rt: Runtime,
-{
-    fn new(keying: Keying<Rt>, capacity: usize) -> Self {
+    fn new(keying: Keying<K, E, Rt>, capacity: usize) -> Self {
         Self {
             entries: Vec::with_capacity(capacity),
             positions: FxHashMap::default(),
@@ -242,51 +145,13 @@ where
         self.positions.get(&hash).cloned().unwrap_or_default()
     }
 
-    /// Where the key `probe` — a `&K` reference value — belongs.
-    fn seek_now(&self, ctx: &mut Ctx<'_, Rt>, probe: Rt::Value) -> Probe {
-        let rt = ctx.rt;
-        let hash = self.keying.hash.call_now(ctx, (Ref::new(probe),));
-        for at in self.candidates(hash) {
-            let held = lend(rt, &self.entries[at].binding.key);
-            let same = (Ref::new(probe), Ref::new(held));
-            if self.keying.eq.call_now(ctx, same) {
-                return Probe { hash, at: Some(at) };
-            }
-        }
-        Probe { hash, at: None }
-    }
-
-    async fn seek(&self, ctx: &mut Ctx<'_, Rt>, probe: Rt::Value) -> Probe {
-        let rt = ctx.rt;
-        let hash = self.keying.hash.call(ctx, (Ref::new(probe),)).await;
-        for at in self.candidates(hash) {
-            let held = lend(rt, &self.entries[at].binding.key);
-            let same = (Ref::new(probe), Ref::new(held));
-            if self.keying.eq.call(ctx, same).await {
-                return Probe { hash, at: Some(at) };
-            }
-        }
-        Probe { hash, at: None }
-    }
-
-    fn push(&mut self, binding: Binding<Rt>) -> Pushed {
+    fn push(&mut self, binding: Binding<K, V>) -> Pushed {
         let at = self.entries.len();
         self.entries.push(Entry { hash: 0, binding });
         Pushed(at)
     }
 
-    fn seek_pushed_now(&self, ctx: &mut Ctx<'_, Rt>, fresh: &Pushed) -> Probe {
-        let rt = ctx.rt;
-        self.seek_now(ctx, lend(rt, &self.entries[fresh.0].binding.key))
-    }
-
-    async fn seek_pushed(&self, ctx: &mut Ctx<'_, Rt>, fresh: &Pushed) -> Probe {
-        let rt = ctx.rt;
-        self.seek(ctx, lend(rt, &self.entries[fresh.0].binding.key))
-            .await
-    }
-
-    fn settle(&mut self, probe: Probe, fresh: Pushed) -> Placed<Rt> {
+    fn settle(&mut self, probe: Probe, fresh: Pushed) -> Placed<K, V> {
         let Some(at) = probe.at else {
             self.entries[fresh.0].hash = probe.hash;
             self.positions.entry(probe.hash).or_default().push(fresh.0);
@@ -302,22 +167,7 @@ where
         }
     }
 
-    /// Rust's `insert`: the new value takes the key's entry, which keeps
-    /// the position it was first inserted at, and the value it displaced is
-    /// the answer.
-    fn put_now(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<Rt>) -> Option<Owned<Rt>> {
-        let fresh = self.push(binding);
-        let probe = self.seek_pushed_now(ctx, &fresh);
-        self.displace(probe, fresh)
-    }
-
-    async fn put(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<Rt>) -> Option<Owned<Rt>> {
-        let fresh = self.push(binding);
-        let probe = self.seek_pushed(ctx, &fresh).await;
-        self.displace(probe, fresh)
-    }
-
-    fn displace(&mut self, probe: Probe, fresh: Pushed) -> Option<Owned<Rt>> {
+    fn displace(&mut self, probe: Probe, fresh: Pushed) -> Option<V> {
         let placed = self.settle(probe, fresh);
         let new = placed.turned_away?.value;
         Some(std::mem::replace(
@@ -326,24 +176,9 @@ where
         ))
     }
 
-    /// Rust's `entry(k).or_insert(v)` and `HashSet::insert`: a key already
-    /// there keeps the entry it has, and the binding offered is turned
-    /// away.
-    fn occupy_now(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<Rt>) -> Placed<Rt> {
-        let fresh = self.push(binding);
-        let probe = self.seek_pushed_now(ctx, &fresh);
-        self.settle(probe, fresh)
-    }
-
-    async fn occupy(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<Rt>) -> Placed<Rt> {
-        let fresh = self.push(binding);
-        let probe = self.seek_pushed(ctx, &fresh).await;
-        self.settle(probe, fresh)
-    }
-
     /// As `IndexMap::shift_remove`: the entries after it move down, so what
     /// is left keeps the order it was inserted in.
-    fn take_out(&mut self, at: usize) -> Entry<Rt> {
+    fn take_out(&mut self, at: usize) -> Entry<K, V> {
         let entry = self.entries.remove(at);
         self.reindex();
         entry
@@ -356,14 +191,86 @@ where
         }
     }
 
-    fn drain_entries(&mut self) -> Vec<Entry<Rt>> {
+    fn drain_entries(&mut self) -> Vec<Entry<K, V>> {
         self.positions.clear();
         std::mem::take(&mut self.entries)
     }
 
-    fn refill(&mut self, entries: Vec<Entry<Rt>>) {
+    fn refill(&mut self, entries: Vec<Entry<K, V>>) {
         self.entries = entries;
         self.reindex();
+    }
+}
+
+/// Everything a lookup reaches: the key crosses into the two closures as
+/// Rust's `&K`, which is the passed form of the `&K` their declaration
+/// names (`Passed`, RFC-0018).
+impl<K, V, E, Rt> Table<K, V, E, Rt>
+where
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    V: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    /// Where the key `probe` belongs.
+    fn seek_now(&self, ctx: &mut Ctx<'_, Rt>, probe: &K) -> Probe {
+        let hash = self.keying.hash.call_now(ctx, (probe,));
+        for at in self.candidates(hash) {
+            let same = (probe, &self.entries[at].binding.key);
+            if self.keying.eq.call_now(ctx, same) {
+                return Probe { hash, at: Some(at) };
+            }
+        }
+        Probe { hash, at: None }
+    }
+
+    async fn seek(&self, ctx: &mut Ctx<'_, Rt>, probe: &K) -> Probe {
+        let hash = self.keying.hash.call(ctx, (probe,)).await;
+        for at in self.candidates(hash) {
+            let same = (probe, &self.entries[at].binding.key);
+            if self.keying.eq.call(ctx, same).await {
+                return Probe { hash, at: Some(at) };
+            }
+        }
+        Probe { hash, at: None }
+    }
+
+    fn seek_pushed_now(&self, ctx: &mut Ctx<'_, Rt>, fresh: &Pushed) -> Probe {
+        self.seek_now(ctx, &self.entries[fresh.0].binding.key)
+    }
+
+    async fn seek_pushed(&self, ctx: &mut Ctx<'_, Rt>, fresh: &Pushed) -> Probe {
+        self.seek(ctx, &self.entries[fresh.0].binding.key).await
+    }
+
+    /// Rust's `insert`: the new value takes the key's entry, which keeps
+    /// the position it was first inserted at, and the value it displaced is
+    /// the answer.
+    fn put_now(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<K, V>) -> Option<V> {
+        let fresh = self.push(binding);
+        let probe = self.seek_pushed_now(ctx, &fresh);
+        self.displace(probe, fresh)
+    }
+
+    async fn put(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<K, V>) -> Option<V> {
+        let fresh = self.push(binding);
+        let probe = self.seek_pushed(ctx, &fresh).await;
+        self.displace(probe, fresh)
+    }
+
+    /// Rust's `entry(k).or_insert(v)` and `HashSet::insert`: a key already
+    /// there keeps the entry it has, and the binding offered is turned
+    /// away.
+    fn occupy_now(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<K, V>) -> Placed<K, V> {
+        let fresh = self.push(binding);
+        let probe = self.seek_pushed_now(ctx, &fresh);
+        self.settle(probe, fresh)
+    }
+
+    async fn occupy(&mut self, ctx: &mut Ctx<'_, Rt>, binding: Binding<K, V>) -> Placed<K, V> {
+        let fresh = self.push(binding);
+        let probe = self.seek_pushed(ctx, &fresh).await;
+        self.settle(probe, fresh)
     }
 }
 
@@ -503,21 +410,6 @@ macro_rules! stored_extern_type {
             acvus_extern::whole_box!($t<$($k,)+ E, Rt>, Rt);
         }
 
-        unsafe impl<$($k,)+ E, Rt> FromValue<Rt> for $t<$($k,)+ E, Rt>
-        where
-            $($k: Var<kind::Type>,)+
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-                acvus_extern::debug_assert_erased_from!(rt, &value, $t<$($k,)+ E, Rt>);
-                // SAFETY: the trait's contract — a table crosses as itself
-                // (`whole_box!` above), so the value was erased from this
-                // table type at the site the checker matched.
-                unsafe { rt.materialize::<$t<$($k,)+ E, Rt>>(value) }
-            }
-        }
-
         borrowed_as_self!(
             $t<$($k,)+ E, Rt>,
             $($k: Var<kind::Type>,)+ E: Var<kind::Effect>, Rt: Runtime
@@ -527,7 +419,7 @@ macro_rules! stored_extern_type {
 
 // -- The map ------------------------------------------------------------
 
-pub struct HashMap<K, V, E, Rt>(Table<Rt>, PhantomData<(K, V, E)>)
+pub struct HashMap<K, V, E, Rt>(Table<K, V, E, Rt>, PhantomData<(K, V, E)>)
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -537,7 +429,6 @@ where
 stored_extern_type!(HashMap<K, V>, name: "HashMap");
 
 fn new_map<K, V, E, Rt>(
-    rt: &Rt,
     hash: HashOf<K, E, Rt>,
     eq: EqOf<K, E, Rt>,
     capacity: usize,
@@ -548,28 +439,22 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    HashMap(Table::new(Keying::of(rt, hash, eq), capacity), PhantomData)
+    HashMap(Table::new(Keying { hash, eq }, capacity), PhantomData)
 }
 
 #[extern_fn(effect = pure)]
-fn hash_map<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    hash: HashOf<K, E, Rt>,
-    eq: EqOf<K, E, Rt>,
-) -> HashMap<K, V, E, Rt>
+fn hash_map<K, V, E, Rt>(hash: HashOf<K, E, Rt>, eq: EqOf<K, E, Rt>) -> HashMap<K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    new_map(rt, hash, eq, 0)
+    new_map(hash, eq, 0)
 }
 
 #[extern_fn(effect = pure)]
 fn with_capacity<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
     n: u64,
     hash: HashOf<K, E, Rt>,
     eq: EqOf<K, E, Rt>,
@@ -580,8 +465,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    new_map(rt, hash, eq, as_capacity(n))
+    new_map(hash, eq, as_capacity(n))
 }
 
 #[extern_fn(effect = pure)]
@@ -617,10 +501,97 @@ where
     m.0.clear();
 }
 
+/// The map a borrowed reading names, and the position it has reached.
+///
+/// `iter::Refs` is this over a container whose elements are its own one
+/// type. A map has two element types and a stage carries one `iter::next`,
+/// so reading the keys and reading the values are two stages, each with a
+/// body of its own.
+pub struct KeysBody<K, V, E, Rt>
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    map: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
+    at: usize,
+}
+
+/// The borrowed source over a map's keys.
+#[derive(ExternType)]
+#[extern_type(name = "Keys")]
+#[repr(transparent)]
+pub struct Keys<K, V, E, I, Rt>(KeysBody<K, V, E, Rt>, PhantomData<I>)
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime;
+
+impl<K, V, E, I, Rt> Keys<K, V, E, I, Rt>
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    /// The key at this step's position, and the step.
+    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a K> {
+        let index = self.0.at;
+        self.0.at += 1;
+        self.0
+            .map
+            .with(ctx.rt, |m| m.0.entries.get(index).map(|e| &e.binding.key))
+    }
+}
+
+/// As `KeysBody`, over the values.
+pub struct ValuesBody<K, V, E, Rt>
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    map: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
+    at: usize,
+}
+
+/// The borrowed source over a map's values.
+#[derive(ExternType)]
+#[extern_type(name = "Values")]
+#[repr(transparent)]
+pub struct Values<K, V, E, I, Rt>(ValuesBody<K, V, E, Rt>, PhantomData<I>)
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime;
+
+impl<K, V, E, I, Rt> Values<K, V, E, I, Rt>
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    /// The value at this step's position, and the step.
+    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a V> {
+        let index = self.0.at;
+        self.0.at += 1;
+        self.0
+            .map
+            .with(ctx.rt, |m| m.0.entries.get(index).map(|e| &e.binding.value))
+    }
+}
+
 #[extern_fn(effect = pure)]
-fn keys<K, V, E, I, Rt>(
-    m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
-) -> Iter<Ref<K, Shared, Rt>, E, I, Rt>
+fn keys<K, V, E, I, Rt>(m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>) -> Keys<K, V, E, I, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type>,
@@ -628,15 +599,26 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    lent_parts(m, |m, at| {
-        m.0.entries.get(at).map(|e| at_element(&e.binding.key))
-    })
+    Keys(KeysBody { map: m, at: 0 }, PhantomData)
+}
+
+#[extern_fn(instance_of = sig::next, effect = pure)]
+fn next_keys<'a, K, V, E, I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &'a mut Keys<K, V, E, I, Rt>,
+) -> Option<&'a K>
+where
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    it.step(ctx)
 }
 
 #[extern_fn(effect = pure)]
-fn values<K, V, E, I, Rt>(
-    m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
-) -> Iter<Ref<V, Shared, Rt>, E, I, Rt>
+fn values<K, V, E, I, Rt>(m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>) -> Values<K, V, E, I, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type> + TransparentOver<Rt>,
@@ -644,61 +626,52 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    lent_parts(m, |m, at| {
-        m.0.entries.get(at).map(|e| at_element(&e.binding.value))
-    })
+    Values(ValuesBody { map: m, at: 0 }, PhantomData)
 }
 
-// There is no `values_mut`. Declared as
-// `Iter<Ref<V, Mut, Rt>, E, I, Rt>` it compiles, and a script that stores
-// through an element of it is refused with "cannot store through &i64: not
-// a `&mut`": an iterator's element type argument does not carry the
-// exclusive loan. `get_mut` is the exclusive loan the boundary does carry,
-// one key at a time.
-
-fn drained<K, V, T, E, I, Rt>(
-    m: HashMap<K, V, E, Rt>,
-    part: impl Fn(Entry<Rt>) -> Owned<Rt> + Send + 'static,
-) -> Iter<T, E, I, Rt>
+#[extern_fn(instance_of = sig::next, effect = pure)]
+fn next_values<'a, K, V, E, I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &'a mut Values<K, V, E, I, Rt>,
+) -> Option<&'a V>
 where
     K: Var<kind::Type>,
-    V: Var<kind::Type>,
-    T: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    V: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut entries = m.0.entries.into_iter();
-    Iter::generate(move |rt| {
-        entries
-            .next()
-            // SAFETY: the element contract at this module's head.
-            .map(|entry| unsafe { T::from_value(rt, part(entry).into_value()) })
-    })
+    it.step(ctx)
 }
 
+// There is no `values_mut`. A `Values` whose `iter::next` answered
+// `Option<&mut V>` compiles, and a script that stores through an element of
+// it is refused with "cannot store through &i64: not a `&mut`": a stage's
+// element type argument does not carry the exclusive loan. `get_mut` is the
+// exclusive loan the boundary does carry, one key at a time.
+
 #[extern_fn(effect = pure)]
-fn into_keys<K, V, E, I, Rt>(m: HashMap<K, V, E, Rt>) -> Iter<K, E, I, Rt>
+fn into_keys<K, V, E, I, Rt>(m: HashMap<K, V, E, Rt>) -> Items<K, I, Rt>
 where
-    K: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    K: Var<kind::Type> + Stored<Rt> + Cross<Rt>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    drained(m, |entry| entry.binding.key)
+    Items::of(m.0.entries.into_iter().map(|e| e.binding.key).collect())
 }
 
 #[extern_fn(effect = pure)]
-fn into_values<K, V, E, I, Rt>(m: HashMap<K, V, E, Rt>) -> Iter<V, E, I, Rt>
+fn into_values<K, V, E, I, Rt>(m: HashMap<K, V, E, Rt>) -> Items<V, I, Rt>
 where
     K: Var<kind::Type>,
-    V: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    V: Var<kind::Type> + Stored<Rt> + Cross<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    drained(m, |entry| entry.binding.value)
+    Items::of(m.0.entries.into_iter().map(|e| e.binding.value).collect())
 }
 
 fn insert_now<K, V, E, Rt>(
@@ -708,15 +681,12 @@ fn insert_now<K, V, E, Rt>(
     value: V,
 ) -> Option<V>
 where
-    K: Var<kind::Type> + OneValue<Rt>,
-    V: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
+    V: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let old = m.0.put_now(ctx, binding(rt, key, value))?;
-    // SAFETY: the element contract at this module's head.
-    Some(unsafe { V::from_value(rt, old.into_value()) })
+    m.0.put_now(ctx, Binding { key, value })
 }
 
 #[extern_fn(effect = E, sync = insert_now)]
@@ -727,182 +697,121 @@ async fn insert<K, V, E, Rt>(
     value: V,
 ) -> Option<V>
 where
-    K: Var<kind::Type> + OneValue<Rt>,
-    V: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
+    V: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let old = m.0.put(ctx, binding(rt, key, value)).await?;
-    // SAFETY: the element contract at this module's head.
-    Some(unsafe { V::from_value(rt, old.into_value()) })
+    m.0.put(ctx, Binding { key, value }).await
 }
 
-fn get_now<K, V, E, Rt>(
+/// The result is Rust's borrow of the map the caller lent (RFC-0047 §3,
+/// RFC-0068 D4), so the declaration runs at `Task::Sync`: there is no
+/// awaited form of a result that names the frame the call laid its
+/// arguments on.
+#[extern_fn(effect = E)]
+fn get<'m, K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> Option<Ref<V, Shared, Rt>>
+    m: &'m HashMap<K, V, E, Rt>,
+    key: &K,
+) -> Option<&'m V>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     V: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let at = m.with(rt, |m| &m.0).seek_now(ctx, key.into_value()).at?;
-    Some(m.map(rt, |m| at_element(&m.0.entries[at].binding.value)))
+    let at = m.0.seek_now(ctx, key).at?;
+    Some(&m.0.entries[at].binding.value)
 }
 
-#[extern_fn(effect = E, sync = get_now)]
-async fn get<K, V, E, Rt>(
+/// As `get`'s, with the exclusive loan the boundary carries one key at a
+/// time.
+#[extern_fn(effect = E)]
+fn get_mut<'m, K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> Option<Ref<V, Shared, Rt>>
+    m: &'m mut HashMap<K, V, E, Rt>,
+    key: &K,
+) -> Option<&'m mut V>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     V: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let at = m.with(rt, |m| &m.0).seek(ctx, key.into_value()).await.at?;
-    Some(m.map(rt, |m| at_element(&m.0.entries[at].binding.value)))
+    let at = m.0.seek_now(ctx, key).at?;
+    Some(&mut m.0.entries[at].binding.value)
 }
 
-fn get_mut_now<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    m: Ref<HashMap<K, V, E, Rt>, Mut, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> Option<Ref<V, Mut, Rt>>
+fn contains_key_now<K, V, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<K, V, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let at = m.with(rt, |m| &m.0).seek_now(ctx, key.into_value()).at?;
-    Some(m.map(rt, |m| at_element_mut(&mut m.0.entries[at].binding.value)))
-}
-
-#[extern_fn(effect = E, sync = get_mut_now)]
-async fn get_mut<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    m: Ref<HashMap<K, V, E, Rt>, Mut, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> Option<Ref<V, Mut, Rt>>
-where
-    K: Var<kind::Type>,
-    V: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let at = m.with(rt, |m| &m.0).seek(ctx, key.into_value()).await.at?;
-    Some(m.map(rt, |m| at_element_mut(&mut m.0.entries[at].binding.value)))
-}
-
-fn contains_key_now<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    m: &HashMap<K, V, E, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> bool
-where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    m.0.seek_now(ctx, key.into_value()).at.is_some()
+    m.0.seek_now(ctx, key).at.is_some()
 }
 
 #[extern_fn(effect = E, sync = contains_key_now)]
-async fn contains_key<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    m: &HashMap<K, V, E, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> bool
+async fn contains_key<K, V, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<K, V, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    m.0.seek(ctx, key.into_value()).await.at.is_some()
+    m.0.seek(ctx, key).await.at.is_some()
 }
 
 fn remove_now<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &mut HashMap<K, V, E, Rt>,
-    key: Ref<K, Shared, Rt>,
+    key: &K,
 ) -> Option<V>
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type> + FromValue<Rt>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
+    V: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let at = m.0.seek_now(ctx, key.into_value()).at?;
-    // SAFETY: the element contract at this module's head.
-    Some(unsafe { V::from_value(rt, m.0.take_out(at).binding.value.into_value()) })
+    let at = m.0.seek_now(ctx, key).at?;
+    Some(m.0.take_out(at).binding.value)
 }
 
 #[extern_fn(effect = E, sync = remove_now)]
 async fn remove<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &mut HashMap<K, V, E, Rt>,
-    key: Ref<K, Shared, Rt>,
+    key: &K,
 ) -> Option<V>
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type> + FromValue<Rt>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
+    V: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let at = m.0.seek(ctx, key.into_value()).await.at?;
-    // SAFETY: the element contract at this module's head.
-    Some(unsafe { V::from_value(rt, m.0.take_out(at).binding.value.into_value()) })
+    let at = m.0.seek(ctx, key).await.at?;
+    Some(m.0.take_out(at).binding.value)
 }
 
-fn or_insert_now<K, V, E, Rt>(
+/// As `get_mut`'s: the result is a borrow of the map, so the declaration
+/// runs at `Task::Sync`.
+#[extern_fn(effect = E)]
+fn or_insert<'m, K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: Ref<HashMap<K, V, E, Rt>, Mut, Rt>,
+    m: &'m mut HashMap<K, V, E, Rt>,
     key: K,
     value: V,
-) -> Ref<V, Mut, Rt>
+) -> &'m mut V
 where
-    K: Var<kind::Type> + OneValue<Rt>,
+    K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
     V: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let one = binding(rt, key, value);
-    let at = m.with(rt, |m| m.0.occupy_now(ctx, one)).at;
-    m.map(rt, |m| at_element_mut(&mut m.0.entries[at].binding.value))
-}
-
-#[extern_fn(effect = E, sync = or_insert_now)]
-async fn or_insert<K, V, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    m: Ref<HashMap<K, V, E, Rt>, Mut, Rt>,
-    key: K,
-    value: V,
-) -> Ref<V, Mut, Rt>
-where
-    K: Var<kind::Type> + OneValue<Rt>,
-    V: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    let one = binding(rt, key, value);
-    let at = m.with(rt, |m| m.0.occupy(ctx, one)).await.at;
-    m.map(rt, |m| at_element_mut(&mut m.0.entries[at].binding.value))
+    let at = m.0.occupy_now(ctx, Binding { key, value }).at;
+    &mut m.0.entries[at].binding.value
 }
 
 fn extend_now<K, V, E, Rt>(
@@ -910,7 +819,7 @@ fn extend_now<K, V, E, Rt>(
     m: &mut HashMap<K, V, E, Rt>,
     other: HashMap<K, V, E, Rt>,
 ) where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -926,7 +835,7 @@ async fn extend<K, V, E, Rt>(
     m: &mut HashMap<K, V, E, Rt>,
     other: HashMap<K, V, E, Rt>,
 ) where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -943,17 +852,14 @@ fn retain_now<K, V, E, Rt>(
     m: &mut HashMap<K, V, E, Rt>,
     keep: KeepOf<K, V, E, Rt>,
 ) where
-    K: Var<kind::Type>,
-    V: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    V: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
     let mut kept = Vec::with_capacity(m.0.len());
     for entry in m.0.drain_entries() {
-        let key = Ref::new(lend(rt, &entry.binding.key));
-        let value = Ref::new(lend(rt, &entry.binding.value));
-        if keep.call_now(ctx, (key, value)) {
+        if keep.call_now(ctx, (&entry.binding.key, &entry.binding.value)) {
             kept.push(entry);
         }
     }
@@ -966,17 +872,17 @@ async fn retain<K, V, E, Rt>(
     m: &mut HashMap<K, V, E, Rt>,
     keep: KeepOf<K, V, E, Rt>,
 ) where
-    K: Var<kind::Type>,
-    V: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    V: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
     let mut kept = Vec::with_capacity(m.0.len());
     for entry in m.0.drain_entries() {
-        let key = Ref::new(lend(rt, &entry.binding.key));
-        let value = Ref::new(lend(rt, &entry.binding.value));
-        if keep.call(ctx, (key, value)).await {
+        if keep
+            .call(ctx, (&entry.binding.key, &entry.binding.value))
+            .await
+        {
             kept.push(entry);
         }
     }
@@ -989,10 +895,10 @@ where
 {
     extern_registry! {
         ns: "map",
-        types: [HashMap<_, _, _, Rt>],
+        types: [HashMap<_, _, _, Rt>, Keys<_, _, _, _, Rt>, Values<_, _, _, _, Rt>],
         fns: [
             hash_map, with_capacity, len, is_empty, clear,
-            keys, values, into_keys, into_values,
+            keys, next_keys, values, next_values, into_keys, into_values,
             insert, get, get_mut, contains_key, remove, or_insert, extend, retain,
         ],
     }
@@ -1000,7 +906,11 @@ where
 
 // -- The set ------------------------------------------------------------
 
-pub struct HashSet<K, E, Rt>(Table<Rt>, PhantomData<(K, E)>)
+/// A set's value slot is `()`: the table's shape is the map's, and the only
+/// thing a set does not have is a value to hold.
+type SetTable<K, E, Rt> = Table<K, (), E, Rt>;
+
+pub struct HashSet<K, E, Rt>(SetTable<K, E, Rt>, PhantomData<(K, E)>)
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1014,28 +924,28 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn table(&self) -> &Table<Rt> {
+    fn table(&self) -> &SetTable<K, E, Rt> {
         &self.0
     }
 
-    fn table_mut(&mut self) -> &mut Table<Rt> {
+    fn table_mut(&mut self) -> &mut SetTable<K, E, Rt> {
         &mut self.0
     }
 }
 
+/// A set's binding: the key, and the value slot nothing reads.
+fn keyed<K>(key: K) -> Binding<K, ()> {
+    Binding { key, value: () }
+}
+
 #[extern_fn(effect = pure)]
-fn hash_set<K, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    hash: HashOf<K, E, Rt>,
-    eq: EqOf<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+fn hash_set<K, E, Rt>(hash: HashOf<K, E, Rt>, eq: EqOf<K, E, Rt>) -> HashSet<K, E, Rt>
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    HashSet(Table::new(Keying::of(rt, hash, eq), 0), PhantomData)
+    HashSet(Table::new(Keying { hash, eq }, 0), PhantomData)
 }
 
 #[extern_fn(name = "len", effect = pure)]
@@ -1068,106 +978,103 @@ where
     s.table_mut().clear();
 }
 
+/// A set has one element type, so its borrowed source is `iter::Refs` over
+/// the set itself; only the `iter::next` that reads a set by position is
+/// declared here.
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_set<K, E, I, Rt>(
-    s: Ref<HashSet<K, E, Rt>, Shared, Rt>,
-) -> Iter<Ref<K, Shared, Rt>, E, I, Rt>
+fn as_iter_set<K, E, I, Rt>(s: Ref<HashSet<K, E, Rt>, Shared, Rt>) -> Refs<HashSet<K, E, Rt>, I, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    lent_parts(s, |s, at| {
-        s.table()
-            .entries
-            .get(at)
-            .map(|e| at_element(&e.binding.key))
-    })
+    Refs::of(s)
 }
 
-#[extern_fn(instance_of = sig::into_iter, effect = pure)]
-fn into_iter_set<K, E, I, Rt>(s: HashSet<K, E, Rt>) -> Iter<K, E, I, Rt>
+#[extern_fn(instance_of = sig::next, effect = pure)]
+fn next_refs_set<'a, K, E, I, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &'a mut Refs<HashSet<K, E, Rt>, I, Rt>,
+) -> Option<&'a K>
 where
-    K: Var<kind::Type> + OneValue<Rt> + FromValue<Rt>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let mut entries = s.0.entries.into_iter();
-    Iter::generate(move |rt| {
-        entries
-            .next()
-            // SAFETY: the element contract at this module's head.
-            .map(|entry| unsafe { K::from_value(rt, entry.binding.key.into_value()) })
+    it.step(ctx, |s, at| {
+        s.table().entries.get(at).map(|e| &e.binding.key)
     })
+}
+
+#[extern_fn(instance_of = sig::into_iter, effect = pure)]
+fn into_iter_set<K, E, I, Rt>(s: HashSet<K, E, Rt>) -> Items<K, I, Rt>
+where
+    K: Var<kind::Type> + Stored<Rt> + Cross<Rt>,
+    E: Var<kind::Effect>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    Items::of(s.0.entries.into_iter().map(|e| e.binding.key).collect())
 }
 
 /// Rust's `HashSet::insert` answers whether the set gained the key, and a
 /// key already there is left as it was.
 fn set_insert_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: K) -> bool
 where
-    K: Var<kind::Type> + OneValue<Rt>,
+    K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let one = keyed(rt, key.erase(rt));
-    s.table_mut().occupy_now(ctx, one).turned_away.is_none()
+    s.table_mut()
+        .occupy_now(ctx, keyed(key))
+        .turned_away
+        .is_none()
 }
 
 #[extern_fn(name = "insert", effect = E, sync = set_insert_now)]
 async fn set_insert<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: K) -> bool
 where
-    K: Var<kind::Type> + OneValue<Rt>,
+    K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let one = keyed(rt, key.erase(rt));
-    s.table_mut().occupy(ctx, one).await.turned_away.is_none()
+    s.table_mut()
+        .occupy(ctx, keyed(key))
+        .await
+        .turned_away
+        .is_none()
 }
 
-fn contains_now<K, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    s: &HashSet<K, E, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> bool
+fn contains_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<K, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    s.table().seek_now(ctx, key.into_value()).at.is_some()
+    s.table().seek_now(ctx, key).at.is_some()
 }
 
 #[extern_fn(effect = E, sync = contains_now)]
-async fn contains<K, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    s: &HashSet<K, E, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> bool
+async fn contains<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<K, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    s.table().seek(ctx, key.into_value()).await.at.is_some()
+    s.table().seek(ctx, key).await.at.is_some()
 }
 
 /// Rust's `HashSet::remove` answers whether the key was there.
-fn set_remove_now<K, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    s: &mut HashSet<K, E, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> bool
+fn set_remove_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
     let table = s.table_mut();
-    let Some(at) = table.seek_now(ctx, key.into_value()).at else {
+    let Some(at) = table.seek_now(ctx, key).at else {
         return false;
     };
     drop(table.take_out(at));
@@ -1175,18 +1082,14 @@ where
 }
 
 #[extern_fn(name = "remove", effect = E, sync = set_remove_now)]
-async fn set_remove<K, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    s: &mut HashSet<K, E, Rt>,
-    key: Ref<K, Shared, Rt>,
-) -> bool
+async fn set_remove<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
     let table = s.table_mut();
-    let Some(at) = table.seek(ctx, key.into_value()).await.at else {
+    let Some(at) = table.seek(ctx, key).await.at else {
         return false;
     };
     drop(table.take_out(at));
@@ -1198,7 +1101,7 @@ fn set_extend_now<K, E, Rt>(
     s: &mut HashSet<K, E, Rt>,
     other: HashSet<K, E, Rt>,
 ) where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1213,7 +1116,7 @@ async fn set_extend<K, E, Rt>(
     s: &mut HashSet<K, E, Rt>,
     other: HashSet<K, E, Rt>,
 ) where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1228,7 +1131,7 @@ fn union_now<K, E, Rt>(
     b: HashSet<K, E, Rt>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1245,7 +1148,7 @@ async fn union<K, E, Rt>(
     b: HashSet<K, E, Rt>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1257,24 +1160,22 @@ where
 
 /// Whether `b` holds the key: `b`'s own hasher and comparator decide, as
 /// they do for every lookup in `b`.
-fn keeps_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &Owned<Rt>) -> bool
+fn keeps_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    b.table().seek_now(ctx, lend(rt, key)).at.is_some()
+    b.table().seek_now(ctx, key).at.is_some()
 }
 
-async fn keeps<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &Owned<Rt>) -> bool
+async fn keeps<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &K) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    b.table().seek(ctx, lend(rt, key)).await.at.is_some()
+    b.table().seek(ctx, key).await.at.is_some()
 }
 
 /// Rust's `intersection` and `difference` borrow both sets and yield
@@ -1288,7 +1189,7 @@ fn intersection_now<K, E, Rt>(
     b: HashSet<K, E, Rt>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1309,7 +1210,7 @@ async fn intersection<K, E, Rt>(
     b: HashSet<K, E, Rt>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1329,7 +1230,7 @@ fn difference_now<K, E, Rt>(
     b: HashSet<K, E, Rt>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1350,7 +1251,7 @@ async fn difference<K, E, Rt>(
     b: HashSet<K, E, Rt>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1370,7 +1271,7 @@ fn is_subset_now<K, E, Rt>(
     b: &HashSet<K, E, Rt>,
 ) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1389,7 +1290,7 @@ async fn is_subset<K, E, Rt>(
     b: &HashSet<K, E, Rt>,
 ) -> bool
 where
-    K: Var<kind::Type>,
+    K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -1401,46 +1302,46 @@ where
     true
 }
 
-fn from_iter_now<K, E, I, Rt>(
+fn from_iter_now<It, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<K, E, I, Rt>,
+    it: It,
     hash: HashOf<K, E, Rt>,
     eq: EqOf<K, E, Rt>,
+    next: Instance<sig::next<It, K, E, Rt>, It, Rt, Later>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type> + OneValue<Rt>,
+    It: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    K: Var<kind::Type> + Stored<Rt> + Cross<Rt> + TransparentOver<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let mut s = HashSet(Table::new(Keying::of(rt, hash, eq), 0), PhantomData);
-    crate::iter::drain_now!(it, ctx, |value| {
-        let one = keyed(rt, value);
-        s.table_mut().occupy_now(ctx, one);
-    });
+    let mut it = it;
+    let mut s = HashSet(Table::new(Keying { hash, eq }, 0), PhantomData);
+    while let Some(key) = next.call(ctx, &mut it, ()) {
+        s.table_mut().occupy_now(ctx, keyed(key));
+    }
     s
 }
 
 #[extern_fn(effect = E, sync = from_iter_now)]
-async fn from_iter<K, E, I, Rt>(
+async fn from_iter<It, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<K, E, I, Rt>,
+    it: It,
     hash: HashOf<K, E, Rt>,
     eq: EqOf<K, E, Rt>,
+    next: Instance<sig::next<It, K, E, Rt>, It, Rt, Later>,
 ) -> HashSet<K, E, Rt>
 where
-    K: Var<kind::Type> + OneValue<Rt>,
+    It: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    K: Var<kind::Type> + Stored<Rt> + Cross<Rt> + TransparentOver<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    let rt = ctx.rt;
-    let mut s = HashSet(Table::new(Keying::of(rt, hash, eq), 0), PhantomData);
-    crate::iter::drain!(it, ctx, |value| {
-        let one = keyed(rt, value);
-        s.table_mut().occupy(ctx, one).await;
-    });
+    let mut it = it;
+    let mut s = HashSet(Table::new(Keying { hash, eq }, 0), PhantomData);
+    while let Some(key) = next.call_await(ctx, &mut it, ()).await {
+        s.table_mut().occupy(ctx, keyed(key)).await;
+    }
     s
 }
 
@@ -1453,7 +1354,7 @@ where
         types: [HashSet<_, _, Rt>],
         fns: [
             hash_set, set_len, set_is_empty, set_clear,
-            as_iter_set, into_iter_set,
+            as_iter_set, next_refs_set, into_iter_set,
             set_insert, contains, set_remove, set_extend,
             union, intersection, difference, is_subset, from_iter,
         ],

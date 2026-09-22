@@ -432,16 +432,6 @@ fn an_erased_that_gave_its_inner_back_is_released_by_its_receiver() {
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
 }
 
-#[test]
-fn an_erased_that_gave_its_value_back_releases_nothing() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let value = Erased::<Counted, Tracked>::new(&rt, drops.payload()).into_value();
-    assert_eq!(drops.count(), 0, "the value is out of the holder");
-    value.release();
-    assert_eq!(drops.count(), 1, "its new owner released it once");
-}
-
 // -- The `Closure` carrier -----------------------------------------------
 
 #[test]
@@ -449,27 +439,17 @@ fn a_closure_carrier_releases_its_closure_once() {
     let rt = Counted;
     let drops = Drops::default();
     {
-        let _held = Closure::<(V,), V, Opaque, Counted>::new(
-            &rt,
-            closure_owning_a_tracked_capture(&rt, &drops),
-        );
+        // SAFETY: the test is the crossing here, and the value is a closure
+        // of `Counted`'s.
+        let _held = unsafe {
+            <Closure<(V,), V, Opaque, Counted> as OneValue<Counted>>::materialize(
+                &rt,
+                closure_owning_a_tracked_capture(&rt, &drops),
+            )
+        };
         assert_eq!(drops.count(), 0, "the holder has not been let go of yet");
     }
     assert_eq!(drops.count(), 1, "the carrier released its closure once");
-}
-
-#[test]
-fn a_closure_carrier_that_gave_its_value_back_releases_nothing() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let value = Closure::<(V,), V, Opaque, Counted>::new(
-        &rt,
-        closure_owning_a_tracked_capture(&rt, &drops),
-    )
-    .into_value();
-    assert_eq!(drops.count(), 0, "the closure is out of the carrier");
-    value.release();
-    assert_eq!(drops.count(), 1, "its new owner released it once");
 }
 
 // -- `Vec<Owned<Rt>>`: a container's elements ----------------------------
@@ -728,9 +708,16 @@ fn a_borrow_releases_nothing_and_its_storage_still_releases_once() {
     let drops = Drops::default();
     let storage = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], &rt);
     {
-        let lent = Ref::<Vec<Tracked>, Shared, Counted>::lend(&rt, &storage);
+        // SAFETY: the test is the crossing here: `storage` is a value the
+        // language would type `&Vec<Tracked>`, live for this block.
+        let lent = unsafe {
+            <Ref<Vec<Owned<Counted>>, Shared, Counted> as OneValue<Counted>>::materialize(
+                &rt,
+                rt.reference(&storage),
+            )
+        };
         assert_eq!(
-            lent.elements(&rt).len(),
+            lent.with(&rt, |v| v.len()),
             2,
             "the borrow reads the storage in place"
         );

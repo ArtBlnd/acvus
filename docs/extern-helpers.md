@@ -233,7 +233,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Decode` | reading one element back | atom — the space's half again, in the other direction |
 | `Visit` | visiting a nested value the space commits before its parent | atom |
 | `extern_fn` | a Rust function declares an ExternFn | atom — `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync` |
-| `ExternType` | a `repr(transparent)` Rust struct declares an extension type | atom — the helper attribute `extern_type` takes `name`, `ns`, `payload_per_instantiation` |
+| `ExternType` | a `repr(transparent)` Rust struct declares an extension type | atom — the helper attribute `extern_type` takes `name` and `ns` |
 | `TyArg` (derive) | a Rust struct declares an object type, a Rust enum the language's enum of the same name | atom — the helper attribute `projection` is a bare presence test and adds the borrow types beside the aggregate |
 | `extern_signature` | a shared signature with no body | atom — it declares the marker type a declaration's `instance_of` names |
 | `extern_registry` | the items one registry contributes | derived from `Contribution` + `Manifest` — the list written out, so the map types stay in the library |

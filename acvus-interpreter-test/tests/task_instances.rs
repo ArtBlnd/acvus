@@ -140,8 +140,9 @@ const fn consumer(name: &'static str, members: usize) -> Consumer {
     Consumer { name, members }
 }
 
-/// The nineteen consumers RFC-0046's second brief names.
-const CONSUMERS: [Consumer; 19] = [
+/// The consumers RFC-0046's second brief names. `next` is not among them:
+/// it is the signature the stages are instances of, checked below.
+const CONSUMERS: [Consumer; 18] = [
     consumer("all", 1),
     consumer("any", 1),
     consumer("collect", 1),
@@ -155,7 +156,6 @@ const CONSUMERS: [Consumer; 19] = [
     consumer("max_by_key", 1),
     consumer("min", 2),
     consumer("min_by_key", 1),
-    consumer("next", 1),
     consumer("nth", 1),
     consumer("position", 1),
     consumer("product", 2),
@@ -185,6 +185,25 @@ fn every_consumer_has_a_sync_instance_beside_its_async_one() {
             "iter::{name}: one of each pair reaches its result without suspending"
         );
     }
+}
+
+/// A stage whose `next` can suspend is declared with the plain `fn` a `Sync`
+/// site runs, so `iter::next` holds a synchronous instance for every
+/// asynchronous one, and the sources' besides.
+#[test]
+fn every_suspending_stage_has_a_sync_next_beside_it() {
+    let i = Interner::new();
+    let externs = Externs::<AcvusRuntime>::combine(registries(), &i).expect("registries combine");
+    let next = QualifiedRef::qualified(i.intern("iter"), i.intern("next"));
+    let handlers = externs.handlers.get(&next).expect("iter::next is declared");
+    let synchronous = handlers.iter().filter(|h| h.is_sync()).count();
+    let suspending = handlers.len() - synchronous;
+    assert!(suspending > 0, "the adaptors' `next` can suspend");
+    assert!(
+        synchronous > suspending,
+        "{synchronous} synchronous instances beside {suspending} suspending ones: one per \
+         suspending stage, and the sources'"
+    );
 }
 
 // -- One answer, whichever instance ran ---------------------------------

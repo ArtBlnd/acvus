@@ -1,15 +1,17 @@
 //! `Erased<R, T>` inside a running script (E2, E3): an element edited
 //! through `as_mut` is what the program reads afterwards, and equality over
-//! an `Iter` of it goes through `as_ref` with no `Monomorphize` member list.
+//! a container of it goes through `as_ref` with no `Monomorphize` member
+//! list.
+//!
+//! E3 reads the collected container and not the pipeline itself. A stage
+//! consumer would have to name `acvus_ext`'s `iter::next` signature in its
+//! required instance, and that signature lives in a private module, so no
+//! handler outside `acvus-ext` can be written as one.
 
-use std::any::type_name;
 use std::sync::Arc;
 
-use acvus_ext::Iter;
 use acvus_extern::Ctx;
-use acvus_extern::{
-    Erased, FromValue, Mut, Ref, Registry, Runtime, Var, extern_fn, extern_registry, kind,
-};
+use acvus_extern::{Erased, FromValue, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -17,54 +19,30 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 #[extern_fn(effect = pure)]
-fn upcase_first<Rt>(ctx: &mut Ctx<'_, Rt>, items: Ref<Vec<Erased<Rt, String>>, Mut, Rt>)
+fn upcase_first<Rt>(ctx: &mut Ctx<'_, Rt>, items: &mut [Erased<Rt, String>])
 where
     Rt: Runtime,
 {
     let rt = ctx.rt;
-    let Some(first) = items.as_slice(rt).first_mut() else {
+    let Some(first) = items.first_mut() else {
         return;
     };
     first.as_mut(rt).make_ascii_uppercase();
 }
 
-#[extern_fn(effect = E, sync = contains_erased_now)]
-async fn contains_erased<E, I, Rt>(
+#[extern_fn(effect = pure)]
+fn contains_erased<Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
+    items: &[Erased<Rt, String>],
     needle: Erased<Rt, String>,
 ) -> bool
 where
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
     Rt: Runtime,
 {
     let rt = ctx.rt;
-    while let Some(item) = it.next(ctx).await {
-        if item.as_ref(rt) == needle.as_ref(rt) {
-            return true;
-        }
-    }
-    false
-}
-
-fn contains_erased_now<E, I, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    mut it: Iter<Erased<Rt, String>, E, I, Rt>,
-    needle: Erased<Rt, String>,
-) -> bool
-where
-    E: Var<kind::Effect>,
-    I: Var<kind::Identity>,
-    Rt: Runtime,
-{
-    let rt = ctx.rt;
-    while let Some(item) = it.next_now(ctx) {
-        if item.as_ref(rt) == needle.as_ref(rt) {
-            return true;
-        }
-    }
-    false
+    items
+        .iter()
+        .any(|item| item.as_ref(rt) == needle.as_ref(rt))
 }
 
 fn registry() -> Registry<AcvusRuntime> {
@@ -106,13 +84,13 @@ async fn an_element_edited_through_as_mut_is_what_the_program_reads() {
 #[tokio::test]
 async fn contains_compares_through_as_ref() {
     let hit = run(
-        r#"split("a,b,c", ",") | contains_erased("b".to_string())"#,
+        r#"let v = split("a,b,c", ",") | collect; contains_erased(&v, "b".to_string())"#,
         Ty::Bool,
     )
     .await;
     assert!(hit.as_bool());
     let miss = run(
-        r#"split("a,b,c", ",") | contains_erased("z".to_string())"#,
+        r#"let v = split("a,b,c", ",") | collect; contains_erased(&v, "z".to_string())"#,
         Ty::Bool,
     )
     .await;

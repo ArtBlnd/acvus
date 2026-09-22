@@ -8,9 +8,7 @@
 use std::any::{TypeId, type_name};
 use std::sync::Arc;
 
-use acvus_extern::{
-    Erased, FromValue, Monomorphize, Registry, Runtime, extern_fn, extern_registry,
-};
+use acvus_extern::{Erased, Monomorphize, OneValue, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -165,14 +163,13 @@ fn runtime(i: &Interner) -> AcvusRuntime {
 fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_with_its_type_recorded() {
     let rt = runtime(&Interner::new());
     let pixel = Pixel { x: 1, y: 2 };
-    let value = Erased::<AcvusRuntime, Pixel>::new(&rt, pixel).into_value();
+    let erased = Erased::<AcvusRuntime, Pixel>::new(&rt, pixel);
+    assert_eq!(*erased.as_ref(&rt), pixel);
+    let value = OneValue::erase(erased, &rt);
     assert!(
         value.kind() == acvus_interpreter::Kind::Large,
         "a Copy type outside the Inline set is a Large box: {value:?}"
     );
     assert_eq!(rt.type_of(&value), Some(TypeId::of::<Pixel>()));
     assert_eq!(rt.type_name_of(&value), Some(type_name::<Pixel>()));
-    // SAFETY: `value` is the `Erased::<_, Pixel>::new` above, read back.
-    let back = unsafe { Erased::<AcvusRuntime, Pixel>::from_value(&rt, value) };
-    assert_eq!(*back.as_ref(&rt), pixel);
 }

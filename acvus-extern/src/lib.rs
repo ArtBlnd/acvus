@@ -33,18 +33,19 @@ pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure};
 pub use erased::Erased;
-pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn};
+pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByValue};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
-    Borrowable, BorrowableSpecialized, ByRef, ByValue, DeclaredInstance, DirectOp, ExternHandler,
+    Borrowable, BorrowableSpecialized, ByRef, ByValue, CallSite, DeclaredInstance, DirectOp,
+    ExternHandler,
     Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries, Instances, IntoRun,
-    NoInstance, NoInstances, Parameters, REGISTER_FORM, Required, Ret, Sited,
+    LentBack, NoInstance, NoInstances, RequiredInstance, Parameters, REGISTER_FORM, Required, Ret, RetLent, Sited,
     SitesNoParameterReads, Specialized, TakenForm, Uniform, Unsited, Val, ValueParameters,
     ValuesOnly, Width, async_glue, async_glue_at_instance, glue, glue_at_instance,
 };
 pub use instance::{
-    CalledAt, Instance, InstanceRun, Later, Now, RestRun, RestoreByValue, RestoreExclusive,
-    RestoreShared, Signature,
+    CalledAt, Instance, InstanceRun, Later, Now, RequirementOf, RestRun, RestoreByValue,
+    RestoreExclusive, RestoreShared, Signature,
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
@@ -60,12 +61,12 @@ pub use projection::{
 };
 pub use reference::Ref;
 pub use registry::{
-    BoundAt, Coercion, CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl,
-    Handlers, InstanceAt, InstanceTable, Manifest, MemberType, Registry, Requirement,
-    SharedSignature, SignatureDecl, family_casts,
+    Coercion, CombineError, Contribution, ExternFn, ExternTypeDecl, Externs, FnDecl, Handlers,
+    InstanceAt, InstanceTable, Manifest, MemberType, Registry, Requirement, SharedSignature,
+    SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
-pub use slice::{Elements, Slice, Words};
+pub use slice::{BySlice, Slice, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
 pub use ty_arg::{
@@ -82,5 +83,5 @@ pub use acvus_mir::ty::{
     UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };
 pub use acvus_utils::{Astr, Interner, QualifiedRef};
-pub use futures::future::BoxFuture;
+pub use futures::future::{BoxFuture, Either};
 pub use rustc_hash::FxHashMap;

@@ -1,0 +1,58 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+assertion_line: 1049
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = ","
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = undef
+     3 |   r3 = fetch @users
+     5 |   r4 = list []
+     6 |   r5 = call #0(r4)
+     8 |   r6 = call #1(r3)
+     9 |   r7 = closure L0 []
+    10 |   r8 = call #2(r6, r7)
+    12 |   r9 = const_str T1
+    13 |   r10 = call #3(r9)
+    14 |   r11 = call #4(r8, r10)
+    15 |   r12 = string_concat [T0, T0, T0, r11]
+    16 |   commit @users = r5
+    17 |   return r12
+
+    ; r0 (v21) : Vec<{age: i64, name: String}>
+    ; r1 (v22) : Vec<{age: i64, name: String}>
+    ; r2 (v23) : Map<Items<{age: i64, name: String}>, {age: i64, name: String}, String, Pure>
+    ; r3 (@users) : Vec<{age: i64, name: String}>
+    ; r4 (v6) : Array<{age: i64, name: String}, 0>
+    ; r5 (vec(...)) : Vec<{age: i64, name: String}>
+    ; r6 (into_iter(...)) : Items<{age: i64, name: String}>
+    ; r7 (v11) : Fn({age: i64, name: String}) -> String
+    ; r8 (map(...)) : Map<Items<{age: i64, name: String}>, {age: i64, name: String}, String, Pure>
+    ; r9 (v16) : &str
+    ; r10 (to_string(...)) : String
+    ; r11 (join(...)) : String
+    ; r12 (v19) : String
+    ; r13 (@users) : Vec<{age: i64, name: String}>
+    ; r14 (v14) : String
+    ; r15 (v20) : Vec<{age: i64, name: String}>
+    ; r16 (users) : Vec<{age: i64, name: String}>
+    ; r17 (x) : Map<Items<{age: i64, name: String}>, {age: i64, name: String}, String, Pure>
+    ; r18 (users) : Vec<{age: i64, name: String}>
+    ; r19 (x) : Map<Items<{age: i64, name: String}>, {age: i64, name: String}, String, Pure>
+    ; r20 (@users) : Vec<{age: i64, name: String}>
+    ; r21 (v5) : String
+    ; r22 (v8) : String
+
+=== closure L0 (ValueId(0)) ===
+     0 |   assign u = r0
+     1 |   r1 = take u.name
+     2 |   return r1
+
+    ; r0 (v1) : {age: i64, name: String}
+    ; r1 (u.name) : String
+    ; r2 (u) : {age: i64, name: String}

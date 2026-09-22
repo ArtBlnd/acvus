@@ -9,6 +9,12 @@ what `len`, `find`, `rfind`, `substring`, `is_char_boundary`, `char_indices`
 and `match_indices` speak in; Unicode scalar values are what `char_at`,
 `chars` and the `pad_*` width count.
 
+A function that walks the text answers a pipeline, and a pipeline's type is
+the stage itself. Every one here builds `Items<T>`, the owned source, so the
+whole text is walked before the value is returned and the pipeline borrows
+nothing. Adaptors and consumers are reached from it as from any other
+source: `s.chars() | count`.
+
 Where Rust's method panics on a byte offset that is not a character
 boundary, this module refuses the run rather than returning an `Option`. An
 offset comes from `find`, `rfind` or a regex match, all of which report
@@ -54,18 +60,18 @@ text is refused by name: ``` `<` is not defined on String; use `string::cmp`,
 | `gt` | `(&str, &str) -> bool` | `PartialOrd::gt for str` | as `lt` |
 | `ge` | `(&str, &str) -> bool` | `PartialOrd::ge for str` | as `lt` |
 | `char_at` | `(&str, i64) -> char` | `str::chars().nth(i)` | counts scalar values; an index past the end is refused, where Rust gives `None` |
-| `chars` | `(&str) -> Iter<char>` | `str::chars` | the whole text is walked before the iterator is returned |
-| `char_indices` | `(&str) -> Iter<CharIndex>` | `str::char_indices` | yields `{ index: u64, ch: char }`, because an extern function returns no tuple |
-| `lines` | `(&str) -> Iter<String>` | `str::lines` | elements are owned |
-| `bytes` | `(&str) -> Iter<i64>` | `str::bytes` | element is `i64`, not `u8` |
-| `split_whitespace` | `(&str) -> Iter<String>` | `str::split_whitespace` | elements are owned |
-| `split` | `(&str, &str) -> Iter<String>` | `str::split` | elements are owned |
-| `rsplit` | `(&str, &str) -> Iter<String>` | `str::rsplit` | elements are owned |
-| `splitn` | `(&str, u64, &str) -> Iter<String>` | `str::splitn` | count is `u64`; one above the address space is refused |
-| `rsplitn` | `(&str, u64, &str) -> Iter<String>` | `str::rsplitn` | as `splitn` |
-| `split_terminator` | `(&str, &str) -> Iter<String>` | `str::split_terminator` | elements are owned |
-| `matches` | `(&str, &str) -> Iter<String>` | `str::matches` | elements are owned |
-| `match_indices` | `(&str, &str) -> Iter<MatchIndex>` | `str::match_indices` | yields `{ index: u64, text: String }`, because an extern function returns no tuple |
+| `chars` | `(&str) -> Items<char>` | `str::chars` | the whole text is walked before the iterator is returned |
+| `char_indices` | `(&str) -> Items<CharIndex>` | `str::char_indices` | yields `{ index: u64, ch: char }`, because an extern function returns no tuple |
+| `lines` | `(&str) -> Items<String>` | `str::lines` | elements are owned |
+| `bytes` | `(&str) -> Items<i64>` | `str::bytes` | element is `i64`, not `u8` |
+| `split_whitespace` | `(&str) -> Items<String>` | `str::split_whitespace` | elements are owned |
+| `split` | `(&str, &str) -> Items<String>` | `str::split` | elements are owned |
+| `rsplit` | `(&str, &str) -> Items<String>` | `str::rsplit` | elements are owned |
+| `splitn` | `(&str, u64, &str) -> Items<String>` | `str::splitn` | count is `u64`; one above the address space is refused |
+| `rsplitn` | `(&str, u64, &str) -> Items<String>` | `str::rsplitn` | as `splitn` |
+| `split_terminator` | `(&str, &str) -> Items<String>` | `str::split_terminator` | elements are owned |
+| `matches` | `(&str, &str) -> Items<String>` | `str::matches` | elements are owned |
+| `match_indices` | `(&str, &str) -> Items<MatchIndex>` | `str::match_indices` | yields `{ index: u64, text: String }`, because an extern function returns no tuple |
 | `find` | `(&str, &str) -> Option<i64>` | `str::find` | byte offset as `i64` |
 | `rfind` | `(&str, &str) -> Option<i64>` | `str::rfind` | byte offset as `i64` |
 | `pad_start` | `(&str, i64, &str) -> String` | none | JS `padStart`; width counts scalar values |
@@ -84,7 +90,7 @@ text is refused by name: ``` `<` is not defined on String; use `string::cmp`,
 | `s.to_owned()`, `s.to_string()` | `s.to_string()`, the `core::to_string` instance for `&str` |
 | `s.parse::<i64>()` | `i64::parse(s)` or `i64::from_str(s)`, one pair per integer width |
 | `s.chars().count()` | `s.chars() \| count` |
-| `s.chars().rev()` | `rev_iter(s.chars() \| collect)` — `rev` on an `Iterator` is not offered |
+| `s.chars().rev()` | `rev_iter(s.chars() \| collect)` — there is no `rev` adaptor |
 | `parts.join(sep)`, `parts.concat()` | `parts \| join(sep)`, in `iterator` |
 | `&s[a..b]` | `substring(s, a, b)` |
 | `s.as_bytes()` | `to_bytes(s)`, which consumes the `String` |

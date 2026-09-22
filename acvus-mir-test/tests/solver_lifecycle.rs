@@ -70,6 +70,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy, instances: Instances) -> Func
         kind: FnKind::Extern {
             bounds: vec![],
             instances,
+            requires: vec![],
         },
         ty,
     }
@@ -202,7 +203,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
         .direct_calls
         .values()
         .filter_map(|callee| match callee {
-            Callee::Extern { id, instance } => Some((i.resolve(id.name).to_string(), *instance)),
+            Callee::Extern { id, instance, .. } => Some((i.resolve(id.name).to_string(), *instance)),
             _ => None,
         })
         .collect();
@@ -297,6 +298,7 @@ fn s3_dependent_decisions_settle_in_one_call() {
         ty: vec_array.ty,
         bounds: vec![],
         instances: Some(instances),
+        requires: vec![],
     });
     let Some(InstanceChoice::Decided(instance)) = instantiated.instance else {
         panic!("a decision among instances")

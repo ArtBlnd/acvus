@@ -66,12 +66,12 @@ fn owned_cut(s: &str, from: u64, to: u64) -> String {
 /// split across two artifacts: change a signature there and change it
 /// here, or the `n ...` rows stop measuring the design the tests pin.
 mod next_design {
-    use std::marker::PhantomData;
     use std::ops::DerefMut;
 
     use acvus_extern::{
-        Closure, ClosureFn, Ctx, ExternType, Instance, OneValue, Opaque, Owned, Ref, Registry,
-        Runtime, Shared, Var, extern_fn, extern_registry, kind,
+        Closure, ClosureFn, Cross, Ctx, ExternType, Instance, PassedByValue, Ref, Registry,
+        Runtime,
+        Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
     };
 
     mod sig {
@@ -89,9 +89,6 @@ mod next_design {
         }
     }
 
-    /// A payload may name no type or effect parameter, so it holds this at
-    /// the erased ones — as it already holds its `Closure` at `Opaque`.
-    type InnerNext<Rt> = Instance<sig::next<Owned<Rt>, i64, Opaque, Rt>, Owned<Rt>, Rt>;
 
     pub struct NRangeBody {
         at: i64,
@@ -117,114 +114,113 @@ mod next_design {
         })
     }
 
-    pub struct NMapBody<Rt>
+    pub struct NMapBody<I, T, U, E, Rt>
     where
+        I: Var<kind::Type>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        inner: Owned<Rt>,
-        next: InnerNext<Rt>,
-        f: Closure<(i64,), i64, Opaque, Rt>,
+        inner: I,
+        next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
+        f: Closure<(T,), U, E, Rt>,
     }
 
     #[derive(ExternType)]
     #[extern_type(name = "NMap")]
     #[repr(transparent)]
-    pub struct NMap<I, E, Rt>(NMapBody<Rt>, PhantomData<(I, E)>)
+    pub struct NMap<I, T, U, E, Rt>(NMapBody<I, T, U, E, Rt>)
     where
         I: Var<kind::Type>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime;
 
     #[extern_fn(effect = pure)]
-    fn nmap<I, E, Rt>(
-        ctx: &mut Ctx<'_, Rt>,
+    fn nmap<I, T, U, E, Rt>(
         it: I,
-        f: Closure<(i64,), i64, E, Rt>,
-        next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
-    ) -> NMap<I, E, Rt>
+        f: Closure<(T,), U, E, Rt>,
+        next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
+    ) -> NMap<I, T, U, E, Rt>
     where
-        I: Var<kind::Type> + Into<Owned<Rt>>,
+        I: Var<kind::Type>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        NMap(
-            NMapBody {
-                inner: it.into(),
-                // SAFETY: the same word, at the erased parameters the
-                // payload names.
-                next: unsafe { Instance::at(next.into_value()) },
-                f: Closure::new(ctx.rt, f.into_value()),
-            },
-            PhantomData,
-        )
+        NMap(NMapBody { inner: it, next, f })
     }
 
     #[extern_fn(instance_of = sig::next, effect = E)]
-    fn next_nmap<I, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, E, Rt>) -> Option<i64>
+    fn next_nmap<I, T, U, E, Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        it: &mut NMap<I, T, U, E, Rt>,
+    ) -> Option<U>
     where
-        I: Var<kind::Type>,
+        I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        // SAFETY: `inner` and `next` were laid side by side by `nmap`.
-        let x = unsafe { it.0.next.call(ctx, &mut it.0.inner, ()) }?;
+        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
         Some(it.0.f.call_now(ctx, (x,)))
     }
 
-    pub struct NFilterBody<Rt>
+    pub struct NFilterBody<I, T, E, Rt>
     where
+        I: Var<kind::Type>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+        E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        inner: Owned<Rt>,
-        next: InnerNext<Rt>,
-        f: Closure<(Ref<i64, Shared, Rt>,), bool, Opaque, Rt>,
+        inner: I,
+        next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
+        f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
     }
 
     #[derive(ExternType)]
     #[extern_type(name = "NFilter")]
     #[repr(transparent)]
-    pub struct NFilter<I, E, Rt>(NFilterBody<Rt>, PhantomData<(I, E)>)
+    pub struct NFilter<I, T, E, Rt>(NFilterBody<I, T, E, Rt>)
     where
         I: Var<kind::Type>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime;
 
     #[extern_fn(effect = pure)]
-    fn nfilter<I, E, Rt>(
-        ctx: &mut Ctx<'_, Rt>,
+    fn nfilter<I, T, E, Rt>(
         it: I,
-        f: Closure<(Ref<i64, Shared, Rt>,), bool, E, Rt>,
-        next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
-    ) -> NFilter<I, E, Rt>
+        f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+        next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
+    ) -> NFilter<I, T, E, Rt>
     where
-        I: Var<kind::Type> + Into<Owned<Rt>>,
+        I: Var<kind::Type>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        NFilter(
-            NFilterBody {
-                inner: it.into(),
-                // SAFETY: as `nmap`'s.
-                next: unsafe { Instance::at(next.into_value()) },
-                f: Closure::new(ctx.rt, f.into_value()),
-            },
-            PhantomData,
-        )
+        NFilter(NFilterBody { inner: it, next, f })
     }
 
     #[extern_fn(instance_of = sig::next, effect = E)]
-    fn next_nfilter<I, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, E, Rt>) -> Option<i64>
+    fn next_nfilter<I, T, E, Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        it: &mut NFilter<I, T, E, Rt>,
+    ) -> Option<T>
     where
-        I: Var<kind::Type>,
+        I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+        T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
         loop {
-            // SAFETY: as `next_nmap`'s.
-            let x = unsafe { it.0.next.call(ctx, &mut it.0.inner, ()) }?;
-            let lent = <i64 as OneValue<Rt>>::erase(x, ctx.rt);
-            let keep = it.0.f.call_now(ctx, (Ref::lend(ctx.rt, &lent),));
-            Owned::<Rt>::from_value(lent).release();
+            let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+            let keep = it.0.f.call_now(ctx, (&x,));
             if keep {
                 return Some(x);
             }
@@ -244,9 +240,7 @@ mod next_design {
     {
         let mut it = it;
         let mut acc = 0i64;
-        // SAFETY: `Externs::combine` met this parameter's requirement with
-        // the instance of `nit::next` at the type `I` was filled with.
-        while let Some(x) = unsafe { next.call(ctx, &mut it, ()) } {
+        while let Some(x) = next.call(ctx, &mut it, ()) {
             acc = acc.wrapping_add(x);
         }
         acc
@@ -258,7 +252,7 @@ mod next_design {
     {
         extern_registry! {
             ns: "nit",
-            types: [NRange, NMap<_, _, Rt>, NFilter<_, _, Rt>],
+            types: [NRange, NMap<_, _, _, _, Rt>, NFilter<_, _, _, Rt>],
             signatures: [sig::next],
             fns: [nrange, next_nrange, nmap, next_nmap, nfilter, next_nfilter, nsum],
         }

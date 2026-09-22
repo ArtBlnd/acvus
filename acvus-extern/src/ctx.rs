@@ -27,13 +27,16 @@ where
     }
 
     #[inline(always)]
-    pub fn name_receiver(&mut self, at: &mut Rt::Value) {
+    pub(crate) fn name_receiver(&mut self, at: &mut Rt::Value) {
         self.recv = at;
     }
 
+    /// The mono glue's, and no handler's.
+    ///
     /// # Safety
     /// An `Instance::call` named a receiver for the call now running, and
     /// the value it named is live and exclusively named for `'r`.
+    #[doc(hidden)]
     #[inline(always)]
     pub unsafe fn receiver<'r>(&mut self) -> &'r mut Rt::Value {
         debug_assert!(

@@ -1,21 +1,22 @@
 //! RFC-0048 rule 7 at the extension crate's own holders: a `Deque` and an
-//! `Iter` stage release what they own, exactly once.
+//! `Items` source release what they own, exactly once.
+//!
+//! The adaptor stages are not here. A `Map` or a `Filter` holds the
+//! `iter::next` instance of the stage below it, and an instance is minted
+//! only by a call site the checker resolved, so no adaptor can be built
+//! from Rust and no test outside a script can drain one.
 //!
 //! The runtime fixture is the one `acvus-extern/tests/owned_holders.rs`
 //! uses, repeated here because a test target cannot import another
 //! crate's test target.
 
-use acvus_extern::Ctx;
 use std::any::{Any, TypeId, type_name};
 use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_ext::{Deque, Iter};
-use acvus_extern::{
-    Astr, Closure, FromValue, Interner, OneValue, Owned, Ref, Release, Runtime, Shared,
-    cross_as_stored,
-};
+use acvus_ext::{Deque, Items};
+use acvus_extern::{Astr, FromValue, Interner, OneValue, Owned, Release, Runtime, cross_as_stored};
 
 /// No registry these tests combine declares a sliceable container, so the
 /// pair a slice would occupy is never built or read.
@@ -368,45 +369,6 @@ fn tracked_value(rt: &Counted, drops: &Drops) -> V {
     unsafe { rt.erase::<Tracked>(drops.payload()) }
 }
 
-fn mapping_closure_owning_a_tracked_capture(rt: &Counted, drops: &Drops) -> V {
-    let captured = drops.payload();
-    let f: UnaryClosure = Box::new(move |rt, argument| {
-        argument.release();
-        // SAFETY: `usize` is stored as itself.
-        unsafe { rt.erase::<usize>(captured.0.load(Ordering::SeqCst)) }
-    });
-    // SAFETY: a closure is stored as itself.
-    unsafe { rt.erase::<UnaryClosure>(f) }
-}
-
-fn predicate_closure_owning_a_tracked_capture(rt: &Counted, drops: &Drops) -> V {
-    let captured = drops.payload();
-    let f: UnaryClosure = Box::new(move |rt, borrowed| {
-        assert!(
-            matches!(borrowed, V::Reference(_)),
-            "a predicate stage lends its element (RFC-0018)"
-        );
-        // SAFETY: `bool` is stored as itself.
-        unsafe { rt.erase::<bool>(captured.0.load(Ordering::SeqCst) == 0) }
-    });
-    // SAFETY: a closure is stored as itself.
-    unsafe { rt.erase::<UnaryClosure>(f) }
-}
-
-type Elements = Iter<Owned<Counted>, (), (), Counted>;
-type Mapping = Closure<(Owned<Counted>,), Owned<Counted>, (), Counted>;
-type Predicate = Closure<(Ref<Owned<Counted>, Shared, Counted>,), bool, (), Counted>;
-
-fn drain(rt: &Counted, mut it: Elements) -> Vec<V> {
-    futures::executor::block_on(async {
-        let mut out = Vec::new();
-        while let Some(value) = it.next_value(&mut Ctx::new(rt, ())).await {
-            out.push(value);
-        }
-        out
-    })
-}
-
 // -- `Deque<Owned<R>>` ---------------------------------------------------
 
 #[test]
@@ -438,75 +400,18 @@ fn a_deque_element_popped_is_released_by_its_receiver() {
     assert_eq!(drops.count(), 1, "its receiver released it once");
 }
 
-// -- The `Iter` stages that own a closure --------------------------------
+// -- The owned source ----------------------------------------------------
 
 #[test]
-fn a_map_stage_releases_its_closure_when_the_pipeline_ends() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let f = Mapping::new(&rt, mapping_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).map::<Owned<Counted>>(f));
-    assert!(yielded.is_empty(), "an empty source yields nothing");
-    assert_eq!(drops.count(), 1, "the stage released its closure once");
-}
-
-#[test]
-fn a_filter_stage_releases_its_closure_when_the_pipeline_ends() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).filter(f));
-    assert!(yielded.is_empty(), "an empty source yields nothing");
-    assert_eq!(drops.count(), 1, "the stage released its closure once");
-}
-
-#[test]
-fn a_take_while_stage_releases_its_closure_when_the_pipeline_ends() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).take_while(f));
-    assert!(yielded.is_empty(), "an empty source yields nothing");
-    assert_eq!(drops.count(), 1, "the stage released its closure once");
-}
-
-#[test]
-fn a_skip_while_stage_releases_its_closure_when_the_pipeline_ends() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let f = Predicate::new(&rt, predicate_closure_owning_a_tracked_capture(&rt, &drops));
-    let yielded = drain(&rt, Elements::from_items(vec![]).skip_while(f));
-    assert!(yielded.is_empty(), "an empty source yields nothing");
-    assert_eq!(drops.count(), 1, "the stage released its closure once");
-}
-
-// -- The `Iter` source ---------------------------------------------------
-
-#[test]
-fn a_drained_pipeline_hands_every_element_to_its_receiver() {
-    let rt = Counted;
-    let drops = Drops::default();
-    let items = (0..3)
-        .map(|_| Owned::from_value(tracked_value(&rt, &drops)))
-        .collect();
-    let yielded = drain(&rt, Elements::from_items(items));
-    assert_eq!(yielded.len(), 3, "the source yielded every element");
-    assert_eq!(drops.count(), 0, "the elements are out of the pipeline");
-    for value in yielded {
-        value.release();
-    }
-    assert_eq!(drops.count(), 3, "each element was released once");
-}
-
-#[test]
-fn an_undrained_pipeline_releases_the_elements_it_did_not_yield() {
+fn an_abandoned_source_releases_the_elements_it_did_not_yield() {
     let rt = Counted;
     let drops = Drops::default();
     let items = (0..3)
         .map(|_| Owned::from_value(tracked_value(&rt, &drops)))
         .collect();
     {
-        let _abandoned = Elements::from_items(items).take(1);
+        let _abandoned = Items::<Owned<Counted>, (), Counted>::of(items);
+        assert_eq!(drops.count(), 0, "the elements are in the source");
     }
     assert_eq!(drops.count(), 3, "the source released every element once");
 }

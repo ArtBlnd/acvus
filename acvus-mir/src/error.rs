@@ -17,6 +17,18 @@ fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
     }
 }
 
+/// Whose instance a refused instance decision was looking for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceWanted {
+    /// The callee's own shared signature (RFC-0027).
+    Callee(Option<QualifiedRef>),
+    /// RFC-0068 D1.
+    Requirement {
+        signature: QualifiedRef,
+        required_by: Option<QualifiedRef>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShownValue {
     Named(String),
@@ -244,9 +256,12 @@ pub enum MirErrorKind {
         op: &'static str,
         ty: Ty,
     },
-    /// A call of a shared signature that no instance matches (RFC-0027).
+    /// A call of a shared signature that no instance matches (RFC-0027):
+    /// the call's type, and the instances the call could have reached.
     NoInstance {
         ty: Ty,
+        instances: Vec<crate::ty::PolyTy>,
+        of: InstanceWanted,
     },
     StoreThroughSharedReference {
         subject: ShownValue,
@@ -678,13 +693,43 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "{subject} is a shared reference and cannot be borrowed mutably; bind it with `&mut`"
                 )
             }
-            MirErrorKind::NoInstance { ty } => {
+            MirErrorKind::NoInstance { ty, instances, of } => {
+                let wanted = match of {
+                    InstanceWanted::Callee(None) => "the signature".to_string(),
+                    InstanceWanted::Callee(Some(callee)) => qualified(interner, *callee),
+                    InstanceWanted::Requirement {
+                        signature,
+                        required_by: None,
+                    } => qualified(interner, *signature),
+                    InstanceWanted::Requirement {
+                        signature,
+                        required_by: Some(by),
+                    } => format!(
+                        "{} required by {}",
+                        qualified(interner, *signature),
+                        qualified(interner, *by)
+                    ),
+                };
                 write!(
                     f,
-                    "no instance of the signature has the call type {}{}",
+                    "no instance of {wanted} has the call type {}{}",
                     ty.shown(interner),
                     view_in(ty)
-                )
+                )?;
+                let InstanceWanted::Requirement { .. } = of else {
+                    return Ok(());
+                };
+                if instances.is_empty() {
+                    return Ok(());
+                }
+                write!(f, "; the instances it could reach are ")?;
+                for (i, t) in instances.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t.shown(interner))?;
+                }
+                Ok(())
             }
             MirErrorKind::NoOperatorInstance { op, ty } => {
                 write!(
@@ -714,19 +759,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     }
                     Ok(())
                 };
-                if let crate::ty::TyVarBound::OneOf {
-                    shapes: tys,
-                    required,
-                } = bound
-                    && let [first, rest @ ..] = required.as_slice()
-                {
-                    write!(f, "no instance of {}", qualified(interner, first.signature))?;
-                    for other in rest {
-                        write!(f, ", {}", qualified(interner, other.signature))?;
-                    }
-                    write!(f, " at {}; instances exist at ", ty.shown(interner))?;
-                    return shapes(f, tys);
-                }
                 write!(
                     f,
                     "type {} is outside the declared bound ",

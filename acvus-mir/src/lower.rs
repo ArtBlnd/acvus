@@ -1777,8 +1777,9 @@ impl<'a> Lowerer<'a> {
         mutability: Mutability,
         span: Span,
     ) -> ValueId {
-        let Some(Callee::Extern { id: qref, instance }) =
-            self.resolution.direct_calls.get(&callee_id).copied()
+        let Some(Callee::Extern {
+            id: qref, instance, ..
+        }) = self.resolution.direct_calls.get(&callee_id).cloned()
         else {
             panic!("type checking settles an `as_slice` instance on every index expression")
         };
@@ -3421,7 +3422,7 @@ impl<'a> Lowerer<'a> {
         call.values.insert(0, first);
         call.restores.splice(0..0, restores);
         let dst = self.alloc_typed(call_id);
-        match self.resolution.direct_calls.get(&callee_id).copied() {
+        match self.resolution.direct_calls.get(&callee_id).cloned() {
             Some(callee) => {
                 self.set_origin(dst, ValOrigin::Call(callee.id().name));
                 self.emit_call_with(call_span, dst, callee, callee_ty, call);
@@ -3488,7 +3489,7 @@ impl<'a> Lowerer<'a> {
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
-                    if let Some(callee) = self.resolution.direct_calls.get(&func.id()).copied() {
+                    if let Some(callee) = self.resolution.direct_calls.get(&func.id()).cloned() {
                         let callee_ty = self.type_of_id(func.id());
                         self.emit_call_with(call_span, dst, callee, callee_ty, call);
                         return dst;

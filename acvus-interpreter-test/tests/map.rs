@@ -188,18 +188,15 @@ fn contains_key_answers_for_a_key_present_and_one_absent() {
 
 // -- get_mut, or_insert -------------------------------------------------
 
-/// The write through `get_mut`'s entry, and the three spellings of it the
-/// checker refuses. `unwrap` is declared over `Option` and over `Result`,
-/// so a call of it is a `Signature` decision that waits on its argument's
-/// head, and in `get_mut(&mut m, &q).unwrap()` that head is another call's
-/// still-open decision. `typeck.rs`'s `Stmt::DerefStore` reads the
-/// target's type where the statement is checked, which is before `solve`
-/// runs, so it sees `_`. Naming the `Option` first gives the decision a
-/// head that is already written down and the write goes through. The
-/// refusals here are pinned as they stand; `docs/std/map.md` and the queue
-/// row of 2026-09-21 carry the same four programs.
+/// The write through `get_mut`'s entry. `unwrap` is declared over `Option`
+/// and over `Result`, so a call of it is a `Signature` decision that waits on
+/// its argument's head, and in `get_mut(&mut m, &q).unwrap()` that head is
+/// another call's decision; a binding settles the decisions open before it,
+/// so `v` is a `&mut i64` where the store and the read are checked. The one
+/// spelling still refused binds through a pattern, which lends a shared
+/// reference; `docs/std/map.md` carries the same programs.
 #[test]
-fn a_chained_unwrap_of_get_mut_waits_on_the_open_signature_decision() {
+fn a_chained_unwrap_of_get_mut_is_a_mutable_reference_where_it_is_bound() {
     assert_eq!(
         int(&with_map(
             "insert(&mut m, 1, 10); let q = 1; let o = get_mut(&mut m, &q); \
@@ -207,24 +204,18 @@ fn a_chained_unwrap_of_get_mut_waits_on_the_open_signature_decision() {
         )),
         99
     );
-    let stored = refusal_at_both(
-        &with_map(
+    assert_eq!(
+        int(&with_map(
             "insert(&mut m, 1, 10); let q = 1; let v = get_mut(&mut m, &q).unwrap(); \
-             *v = 99; let r = 1; *get(&m, &r).unwrap()",
-        ),
-        Ty::I64,
+             *v = 99; let r = 1; *get(&m, &r).unwrap()"
+        )),
+        99
     );
-    assert!(
-        stored.contains("cannot store through `v`, of type _: not a `&mut`; bind it with `&mut`"),
-        "the store names a target whose type is still open: {stored}"
-    );
-    let read = refusal_at_both(
-        &with_map("insert(&mut m, 1, 10); let q = 1; let v = get_mut(&mut m, &q).unwrap(); *v"),
-        Ty::I64,
-    );
-    assert!(
-        read.contains("no `unwrap` takes a call of type Fn(Option<&mut i64>) -> &i64"),
-        "the read asked for a shared reference out of an `Option<&mut i64>`: {read}"
+    assert_eq!(
+        int(&with_map(
+            "insert(&mut m, 1, 10); let q = 1; let v = get_mut(&mut m, &q).unwrap(); *v"
+        )),
+        10
     );
     let bound = refusal_at_both(
         &with_map(

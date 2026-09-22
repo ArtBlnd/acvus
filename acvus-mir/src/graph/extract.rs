@@ -106,6 +106,7 @@ mod tests {
                 kind: FnKind::Extern {
                     bounds: vec![],
                     instances: crate::ty::Instances::default(),
+                    requires: vec![],
                 },
                 ty: TyTerm::Fn {
                     params: vec![],

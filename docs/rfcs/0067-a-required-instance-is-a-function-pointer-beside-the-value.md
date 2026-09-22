@@ -168,9 +168,9 @@ pub struct NMapBody<Rt> where Rt: Runtime {
 `next_nmap` calls `it.0.next.call(ctx, &mut it.0.inner, ())`. Nothing is
 walked, nothing is rebuilt, and what an instance itself requires is a field
 of its own payload — which is why `instance_at` is a lookup and not a
-recursion. A payload names no type or effect parameter, so it holds the
-instance at the erased ones (`Owned<Rt>`, `Opaque`), the same way it already
-holds a `Closure`.
+recursion. A payload names its own type and effect parameters and holds the
+instance at them (RFC-0068 D3); the glue fills every one of them with the
+same stand-in, so the payload is one Rust type however it is spelled.
 
 ### `into_async` and the `Later` form
 
@@ -322,10 +322,10 @@ scripts with every counter but the removed and added files' own identical.
 
 ## What waits
 
-- **The word a hand-written `AtInstance` puts in `InstanceRun`.** The glue
-  `#[extern_fn]` writes is typed at the signature's own `Now`, but
-  `InstanceRun::at` is a public `usize`, so an impl written by hand can
-  still put any address there.
+- **The word a hand-written `AtInstance` puts in `InstanceRun`.** Closed by
+  RFC-0068 D2: `InstanceRun`'s fields are private and its one constructor
+  is `unsafe`, so an address that is not a glue is a contract broken where
+  it is written.
 - **Two `prepare`-time panics in `instance_at`** ("is required but no
   registry declares it", "has no instance at this type") re-check what
   `combine` proved. They stay because the checker decides with the `OneOf`

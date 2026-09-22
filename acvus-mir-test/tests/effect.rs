@@ -14,6 +14,7 @@ fn extern_fn(i: &Interner, name: &str, effect: Effect) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Default::default(),
+            requires: vec![],
         },
         ty: TyTerm::Fn {
             params: vec![],

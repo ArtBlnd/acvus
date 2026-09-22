@@ -383,11 +383,11 @@ impl Value {
     #[inline]
     pub fn instance(at: acvus_extern::InstanceRun) -> Value {
         Value {
-            kind: match at.task {
+            kind: match at.task() {
                 acvus_extern::Task::Sync => Kind::Instance,
                 _ => Kind::InstanceAwait,
             },
-            word: at.at as u64,
+            word: at.at() as u64,
         }
     }
 
@@ -399,13 +399,13 @@ impl Value {
             matches!(self.kind, Kind::Instance | Kind::InstanceAwait),
             "as_instance: {self:?} is not an instance"
         );
-        acvus_extern::InstanceRun {
-            at: self.word as usize,
-            task: match self.kind {
-                Kind::Instance => acvus_extern::Task::Sync,
-                _ => acvus_extern::Task::Async,
-            },
-        }
+        let task = match self.kind {
+            Kind::Instance => acvus_extern::Task::Sync,
+            _ => acvus_extern::Task::Async,
+        };
+        // SAFETY: the caller's contract: `Value::instance` wrote this word
+        // from an `InstanceRun`, whose task is its kind.
+        unsafe { acvus_extern::InstanceRun::from_glue(self.word as usize, task) }
     }
 
     /// A projection onto the aggregate whose flat layout begins at `base`.

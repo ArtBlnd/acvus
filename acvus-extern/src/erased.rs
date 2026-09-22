@@ -3,7 +3,7 @@
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::PolyTy;
+use acvus_mir::ty::{Poly, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
 use crate::obj::{FromValue, Inline, OneValue, Stored, TransparentOver};
@@ -43,10 +43,6 @@ where
     pub fn into_inner(self, rt: &R) -> T {
         // SAFETY: `new` erased the value from a `T`.
         unsafe { T::materialize(rt, self.0.into_value()) }
-    }
-
-    pub fn into_value(self) -> R::Value {
-        self.0.into_value()
     }
 
     pub fn get(&self) -> T
@@ -187,5 +183,9 @@ where
 {
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy {
         T::poly_ty(interner, vars)
+    }
+
+    fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::uniform(T::poly_ty(interner, vars))
     }
 }

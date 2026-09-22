@@ -6,12 +6,12 @@
 //! `iter::min(it)`), `contains` over `string` and `iter`, and `len` over
 //! `vec`, `array`, `deque`, and `string`. The fixtures live in namespaces no standard
 //! registry declares and use names none declares: `fx_a::probe(&Vec<T>, T)`
-//! and `fx_b::probe(Iter<T>, T)` are a pair separated by the first
+//! and `fx_b::probe(Items<T>, T)` are a pair separated by the first
 //! argument, `fx_a::size(&Vec<T>)` and `fx_c::size(&Arr<T, N>)` a pair
 //! a second use intersects with, `fx_a::apply_any` takes a lambda without
 //! saying what its parameter is, and `fx_a::only_vec` is one shape.
 
-use acvus_ext::Iter;
+use acvus_ext::Items;
 use acvus_extern::{
     Arr, Closure, Externs, Registry, Runtime, TypesOnly, Var, extern_fn, extern_registry, kind,
 };
@@ -82,10 +82,9 @@ mod fx_b {
     use super::*;
 
     #[extern_fn(effect = pure)]
-    pub fn probe<T, E, I, Rt>(it: Iter<T, E, I, Rt>, x: T) -> bool
+    pub fn probe<T, I, Rt>(it: Items<T, I, Rt>, x: T) -> bool
     where
         T: Var<kind::Type> + acvus_extern::Cross<Rt>,
-        E: Var<kind::Effect>,
         I: Var<kind::Identity>,
         Rt: Runtime,
     {
@@ -444,7 +443,7 @@ fn an_arity_no_signature_has_is_no_matching_function() {
 #[test]
 fn a_piped_vec_reaches_iter_contains_through_into_iter() {
     let i = Interner::new();
-    let c = checked(&i, "let v = vec([1, 2]); v | contains(3)");
+    let c = checked(&i, "let v = vec([1, 2]); v | into_iter | contains(3)");
     assert_eq!(c.ret, Ty::Bool);
     assert_eq!(calls(&c, "iter::contains"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "string::contains"), 0, "{:?}", c.callees);

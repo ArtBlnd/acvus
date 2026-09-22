@@ -48,6 +48,7 @@ fn pick_fn(i: &Interner) -> Function {
                     .collect(),
                 generic: false,
             },
+            requires: vec![],
         },
         ty: fn_of(i, &[("c", c), ("f", f(&t))], t),
     }
@@ -60,6 +61,7 @@ fn text_fn(i: &Interner) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: acvus_mir::ty::Instances::default(),
+            requires: vec![],
         },
         ty: fn_of(i, &[], TyTerm::String),
     }

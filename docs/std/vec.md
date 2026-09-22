@@ -1,18 +1,25 @@
-# `Vec<T>` and `&[T]`
+# `Vec<T>`
 
-Every function `vec` and `slice` offer, the Rust name it carries, and where
-the language's answer is not Rust's.
+Every function `vec` offers, the Rust name it carries, and where the
+language's answer is not Rust's. The operations over a container's
+*elements* are `docs/std/slice.md`'s, reached through the `as_slice` view.
 
 A `Vec<T>` is Rust's `Vec<T>`. Indices are `u64`; where Rust panics on an
 index, the language traps with Rust's own message. Integer overflow is what
 the language does everywhere else: `i64` arithmetic wraps, as `num::abs`
 and `num::pow` do (`acvus-ext/src/num.rs`, RFC-0058).
 
-`as_slice` and `as_slice_mut` are the view. They are still the coercion the
+`as_slice` and `as_slice_mut` are the view. They are the coercion the
 compiler inserts behind `&v` at a `&[T]` parameter, behind `a[i]` and behind
 `for x in &v` (RFC-0047 §5), and a script may also write the call itself,
 which resolves to the container's own instance. Where the target asks for no
 view, `&v` stays a `&Vec<T>`.
+
+A `&Vec<T>` and a `&Array<T, N>` reach the `slice` surface through that same
+view, so the element operations — `sort`, `contains`, `binary_search`,
+`is_sorted`, `to_vec`, `starts_with`, `ends_with`, `repeat`, `min`, `max`,
+`rotate_left`, `rotate_right` — live once, over `&[T]`, and are tabulated in
+`docs/std/slice.md`.
 
 ## `vec`
 
@@ -28,7 +35,7 @@ view, `&v` stays a `&Vec<T>`.
 | `as_slice` | `as_slice(c: &Vec<T>) -> &[T]` | `Vec::as_slice` | none |
 | `as_slice_mut` | `as_slice_mut(c: &mut Vec<T>) -> &mut [T]` | `Vec::as_mut_slice` | Rust's name is `as_mut_slice` |
 | `first` | `first(c: &Vec<T>) -> Option<&T>` | `slice::first` | none |
-| `last` | `last(c: &Vec<T>) -> Option<&T>` | `slice::last` | ambiguous as a bare name against `iter::last`; written `vec::last(&v)` |
+| `last` | `last(c: &Vec<T>) -> Option<&T>` | `slice::last` | the name is also `iter::last`, `array::last`, `deque::last` and `slice::last`; where a call does not settle it is written `vec::last(&v)` |
 | `get` | `get(c: &Vec<T>, at: u64) -> Option<&T>` | `slice::get` | `u64` index; an index past the address space is `None` |
 | `push` | `push(c: &mut Vec<T>, x: T)` | `Vec::push` | none |
 | `pop` | `pop(c: &mut Vec<T>) -> Option<T>` | `Vec::pop` | none |
@@ -38,103 +45,75 @@ view, `&v` stays a `&Vec<T>`.
 | `truncate` | `truncate(c: &mut Vec<T>, n: u64)` | `Vec::truncate` | none |
 | `extend` | `extend(c: &mut Vec<T>, items: Vec<T>)` | `Vec::append` | takes the other vec by value |
 | `split_off` | `split_off(c: &mut Vec<T>, at: u64) -> Vec<T>` | `Vec::split_off` | traps past the length, with Rust's message |
-| `swap` | `swap(c: &mut Vec<T>, i: u64, j: u64)` | `slice::swap` | none |
+| `swap` | `swap(c: &mut Vec<T>, i: u64, j: u64)` | `slice::swap` | none; `slice::swap` is the same operation over the view |
 | `reverse` | `reverse(items: Vec<T>) -> Vec<T>` | `slice::reverse` | consumes and returns, where Rust's reverses in place |
-| `sort` | `sort(c: &mut Vec<T>)` | `slice::sort` | stable, as Rust's; instances for `i64`, `u64`, `f64`, `bool`, `String`; `f64` orders by `total_cmp`, which is what Rust's own float slices sort by |
 | `sort_by` | `sort_by(c: &mut Vec<T>, f: \|&T, &T\| -> i64)` | `slice::sort_by` | stable; the closure answers −1/0/1, the protocol `string::cmp` speaks, because the language has no `Ordering` |
 | `sort_by_key` | `sort_by_key(c: &mut Vec<T>, f: \|&T\| -> i64)` | `slice::sort_by_cached_key` | stable; the key is `i64` and nothing else, as `iter::min_by_key`'s is — a `Closure` has no specialized representation for a `Monomorphize` member to cross at. Rust's `sort_by_key` calls its closure once per *comparison*; this one calls it once per *element*, as `sort_by_cached_key` does, because a closure that crosses the boundary is dear. For a key that answers the same twice, the order is the same |
-| `is_sorted` | `is_sorted(c: &Vec<T>) -> bool` | `slice::is_sorted` | same instance set as `sort` |
-| `min` | `min(c: &Vec<T>) -> Option<T>` | `slice::iter().min()` | answers the element, where Rust's yields `Option<&T>`: a shared signature's result is an owned value, and `iter::min` already spells the language's `min` that way. First of equal elements, as Rust's; same instance set as `sort`. Written `min(&v)`: the method form `v.min()` waits on the receiver-mode rule, as `contains` does |
-| `max` | `max(c: &Vec<T>) -> Option<T>` | `slice::iter().max()` | as `min`, and last of equal elements, as Rust's |
-| `contains` | `contains(c: &Vec<T>, x: &T) -> bool` | `slice::contains` | ambiguous as a bare name against `iter::contains`; written `vec::contains(&v, &x)`. The argument must be a variable — the language has no `&literal` |
-| `binary_search` | `binary_search(c: &Vec<T>, x: &T) -> Option<u64>` | `slice::binary_search` | Rust's `Err(at)` carries where the element would go; the language has no `Result<u64, u64>` to tell two indices of one meaning apart, so a miss is `None` |
-| `to_vec` | `to_vec(c: &Vec<T>) -> Vec<T>` | `slice::to_vec` | same instance set as `sort` |
-| `starts_with` | `starts_with(c: &Vec<T>, prefix: &Vec<T>) -> bool` | `slice::starts_with` | the prefix is a `&Vec<T>`, not a `&[T]`; same instance set as `sort` |
-| `ends_with` | `ends_with(c: &Vec<T>, suffix: &Vec<T>) -> bool` | `slice::ends_with` | the suffix is a `&Vec<T>`, not a `&[T]`; same instance set as `sort` |
-| `repeat` | `repeat(c: &Vec<T>, times: u64) -> Vec<T>` | `slice::repeat` | `u64` count; a total length past the address space traps with "capacity overflow" |
 
-## `slice`
+`sort_by` and `sort_by_key` stay the vec's own. Each is generic in `T` and
+reads no element at a type — it hands the closure a `&T` and moves the
+elements the verdicts order — and the namespace a registry carries is the
+name a script writes.
 
-The view's own surface. Each takes a `&[T]` or a `&mut [T]`, so a script
-reaches it through `v.as_slice()`, `a.as_slice()` or a `&[T]` parameter. A
-method receiver does not coerce to a slice parameter, so `v.reverse()` is
-`vec::reverse`, not this one.
+## Walking a vec
 
-| language | signature | Rust `std` twin | difference |
-| --- | --- | --- | --- |
-| `len` | `len(s: &[T]) -> u64` | `slice::len` | `u64`, not `usize` |
-| `is_empty` | `is_empty(s: &[T]) -> bool` | `slice::is_empty` | none |
-| `get` | `get(s: &[T], at: u64) -> Option<&T>` | `slice::get` | `u64` index; an index past the address space is `None` |
-| `first` | `first(s: &[T]) -> Option<&T>` | `slice::first` | none |
-| `last` | `last(s: &[T]) -> Option<&T>` | `slice::last` | none |
-| `swap` | `swap(s: &mut [T], i: u64, j: u64)` | `slice::swap` | none |
-| `rotate_left` | `rotate_left(s: &mut [T], mid: u64)` | `slice::rotate_left` | traps unless `mid <= len`, as Rust does |
-| `rotate_right` | `rotate_right(s: &mut [T], k: u64)` | `slice::rotate_right` | traps unless `k <= len`, as Rust does |
+There is no conversion from a container to a pipeline: `v | fold(..)` does
+not compile. A script names the source. `into_iter(v)` consumes the vec and
+yields its elements by value; `as_iter(&v)` yields references and leaves the
+vec usable, so a closure over it receives references. Both spellings take
+the method form as well — `v.into_iter() | max()`,
+`ps.as_iter().map(|p| -> p.x)`.
 
-A named `&[T]` is not a `for` source and is not indexable: `for` traverses
-`&v`, `&mut v`, an array or a range, and `a[i]` takes its own view of a
-container. A view bound to a name is walked through `len` and `get`.
-
-## Not here
-
-`dedup`, `fill` and `resize` are a bound rather than an omission. A
-container's storage is a `Vec<Owned<Rt>>`, so a handler reaches its elements
-at their own type only as a run of fixed length whose elements it may not
-drop; the first two change the length and the third overwrites an owned
-value. A script dedups with `into_iter(v) | dedup | collect` and fills with
-`filled(n, x)`.
-
-`get_mut`, `first_mut` and `last_mut` would each answer
-`Option<&mut T>`, and the language does not carry a `&mut` inside an
-`Option` — a store through what such a call binds is refused with "cannot
-store through &_: not a `&mut`". An element is written through `v[i] = x`.
-
-`as_iter(&v) | max` is still refused: `iter::max` takes its element by
-value and has no instance at a reference element, so the aggregate over a
-borrowing view is "`&i64` is outside the declared bound". `max(&v)` and
-`into_iter(v) | max` both answer.
-
-There is still no `slice::reverse`, and that is a collision rather than a
-bound. `vec::reverse` holds the bare name with a by-value
-`Vec<T> -> Vec<T>` signature, and a second declaration stops a call that
-used to settle: `reverse(x)` over a `Vec<#Float>` is refused with "no
-`reverse` takes a call of type Fn(Vec<#Float>) -> Vec<_>". Measured one
-variable apart — registering it fails
-`acvus-mir-test/tests/regression_0041.rs`, unregistering it passes. A view
-is reversed by `swap` over its halves until `vec::reverse` takes Rust's
-in-place shape or RFC-0043 settles the pair.
-
-A method receiver written `v.f()` does not settle between a candidate that
-lends it and one that consumes it, so `v.max()`, `v.min()` and
-`v.contains(&x)` are each "`f` is declared by iter::f and vec::f" while
-`max(&v)`, `min(&v)` and `contains(&v, &x)` settle. Measured one variable
-apart in `acvus-ext/tests/vec_ops.rs`. The call form is the answer until
-RFC-0043 gains a mode rule for method receivers.
-
-`split_at` is not here: one call returns one pair (RFC-0062), and two views
-are two pairs.
+`as_iter(&v) | max` is refused. `iter::max` bounds its element to `i64` or
+`f64` and takes it by value, and `as_iter` yields references, so the
+aggregate over a borrowing view is outside that bound. `slice::max(&v)`,
+`v.max()` and `into_iter(v) | max` all answer.
 
 `retain` is `into_iter(v) | filter(f) | collect`, and `drain` is
 `into_iter(v)`; `chunks`, `join`, `sum`, `product` and `position` are the
 iterator's, over `into_iter` or `as_iter`.
 
-`windows(n)` is not built. Rust's yields views, and a view cannot be an
-iterator's element: a slice crosses as a register pair where an `Iter`'s
-element is one value, so `Iter<&[T]>` has no crossing. `chunks` is the
-iterator's for the same reason it can be — it yields a `Vec`, not a view.
-A `windows` returning `Vec<Vec<T>>` would build, at the cost of copying
-every window, and whether that is worth having under Rust's name is a
-decision not yet made.
+A consumer takes the pipeline's own type and its element, not one iterator
+type: `fold` is `Fn(I, U, Fn(U, T) -> U) -> U`, where `I` is any pipeline
+whose element is a `T`. The instance of `iter::next` the pipeline answers to
+is required by the consumer and passed at the call; a script writes none of
+it. `next(&mut it)` is that signature called directly, so
+`while let Some(x) = next(&mut it) { .. }` walks a pipeline without a
+consumer.
 
-`concat` and `join` for a `Vec<Vec<T>>` are not built. The outer run's
-elements are each a whole container erased into one value, and reading one
-back at its own type is the `NO_VEC_STORAGE` trap again — a nested run
-needs a crossing `acvus-extern` does not offer. `join` is additionally the
-iterator's name.
+`dedup` is declared as a stage and is not callable from a script at any
+element type: `into_iter([1, 1, 2]) | dedup` is refused because no instance
+of the constructor's signature takes the pipeline.
+`acvus-interpreter-test/tests/iter_more.rs`'s
+`dedup_collapses_consecutive_equal_elements_only` and
+`dedup_over_strings_reads_each_element_in_place` fail there.
 
-`sort_unstable` is not declared: both of this file's sorts are stable, the
-language has no unstable one to distinguish, and an alias that promises
-less than it delivers is a name with no meaning.
+`pchain` is not available. A declaration requiring an instance of `I` takes
+a parameter standing at `I` itself, and a `Vec<I>` is not one (RFC-0067
+Decision 1).
 
-`iter_mut` is not built: the iterator has no `&mut` element form, for the
-same reason `get_mut` is absent.
+## Not here
+
+The element operations are not declared over `Vec<T>`. `sort`, `contains`,
+`binary_search`, `is_sorted`, `to_vec`, `starts_with`, `ends_with`,
+`repeat`, `min`, `max`, `rotate_left` and `rotate_right` each read or order
+an element at its own type; each is declared once over `&[T]`, and a vec
+reaches it through `as_slice` — `v.sort()` and `v.max()` in the method form,
+`slice::contains(&v, &x)` where the bare name does not settle.
+
+`dedup`, `fill` and `resize` are a bound rather than an omission. A
+container's storage is a `Vec<Owned<Rt>>`, so a handler reaches its elements
+at their own type only as a run of fixed length whose elements it may not
+drop; the first two change the length and the third overwrites an owned
+value. A script fills with `filled(n, x)`.
+
+`get_mut`, `first_mut` and `last_mut` would each answer `Option<&mut T>`,
+and the language does not carry a `&mut` inside an `Option` — a store
+through what such a call binds is refused with "cannot store through &_:
+not a `&mut`". An element is written through `v[i] = x`.
+
+`split_at` is not here: one call returns one pair (RFC-0062), and two views
+are two pairs.
+
+`windows(n)`, `concat`, `join` over a `Vec<Vec<T>>`, `sort_unstable` and
+`iter_mut` are not built; `docs/std/slice.md` gives the reason for each.

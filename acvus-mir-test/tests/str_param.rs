@@ -27,6 +27,7 @@ fn takes_str(i: &Interner, name: &str) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty,
     }

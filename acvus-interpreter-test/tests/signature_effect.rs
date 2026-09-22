@@ -9,7 +9,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_extern::{Closure, ExternType, Registry, Runtime, Var, extern_fn, extern_registry, kind};
+use acvus_extern::{
+    Closure, Erased, ExternType, Registry, Runtime, Var, extern_fn, extern_registry, kind,
+};
 use acvus_interpreter::code::Body;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
 use acvus_interpreter_test::*;
@@ -43,7 +45,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn src<E, I, Rt>() -> Pipe<(), i64, E, I, Rt>
+fn src<E, I, Rt>() -> Pipe<Erased<Rt, ()>, Erased<Rt, i64>, E, I, Rt>
 where
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
@@ -117,12 +119,12 @@ mod sig {
 /// answer this file reads is the length the types carried, not a computation
 /// over elements.
 macro_rules! step_instance {
-    ($name:ident, [$($v:ident),*], $ts:tt) => {
+    ($name:ident, [$($v:ident),*], $($ts:tt)+) => {
         #[extern_fn(instance_of = sig::step, effect = pure)]
         fn $name<$($v,)* T, U, E, I, Rt>(
-            it: Pipe<$ts, T, E, I, Rt>,
+            it: Pipe<$($ts)+, T, E, I, Rt>,
             f: Closure<(T,), U, E, Rt>,
-        ) -> Pipe<(T, $ts), U, E, I, Rt>
+        ) -> Pipe<(T, $($ts)+), U, E, I, Rt>
         where
             $($v: Var<kind::Type>,)*
             T: Var<kind::Type>,
@@ -137,14 +139,14 @@ macro_rules! step_instance {
     };
 }
 
-step_instance!(step_0, [], ());
+step_instance!(step_0, [], Erased<Rt, ()>);
 step_instance!(step_1, [A], (A, ()));
 step_instance!(step_2, [A, B], (A, (B, ())));
 
 macro_rules! drain_instance {
-    ($name:ident, $now:ident, [$($v:ident),*], $ts:tt) => {
+    ($name:ident, $now:ident, [$($v:ident),*], $($ts:tt)+) => {
         fn $now<$($v,)* T, U, E, I, Rt>(
-            it: Pipe<$ts, T, E, I, Rt>,
+            it: Pipe<$($ts)+, T, E, I, Rt>,
             f: Closure<(T,), U, E, Rt>,
         ) -> i64
         where
@@ -161,7 +163,7 @@ macro_rules! drain_instance {
 
         #[extern_fn(instance_of = sig::drain, effect = E, sync = $now)]
         async fn $name<$($v,)* T, U, E, I, Rt>(
-            it: Pipe<$ts, T, E, I, Rt>,
+            it: Pipe<$($ts)+, T, E, I, Rt>,
             f: Closure<(T,), U, E, Rt>,
         ) -> i64
         where
@@ -178,7 +180,7 @@ macro_rules! drain_instance {
     };
 }
 
-drain_instance!(drain_0, drain_0_now, [], ());
+drain_instance!(drain_0, drain_0_now, [], Erased<Rt, ()>);
 drain_instance!(drain_1, drain_1_now, [A], (A, ()));
 
 #[extern_fn(instance_of = sig::drain, effect = pure)]
@@ -200,8 +202,8 @@ where
 }
 
 macro_rules! tally_instance {
-    ($name:ident, $now:ident, $sig:ident, [$($v:ident),*], $ts:tt) => {
-        fn $now<$($v,)* T, E, I, Rt>(it: Pipe<$ts, T, E, I, Rt>) -> i64
+    ($name:ident, $now:ident, $sig:ident, [$($v:ident),*], $($ts:tt)+) => {
+        fn $now<$($v,)* T, E, I, Rt>(it: Pipe<$($ts)+, T, E, I, Rt>) -> i64
         where
             $($v: Var<kind::Type>,)*
             T: Var<kind::Type>,
@@ -213,7 +215,7 @@ macro_rules! tally_instance {
         }
 
         #[extern_fn(instance_of = sig::$sig, effect = E, sync = $now)]
-        async fn $name<$($v,)* T, E, I, Rt>(it: Pipe<$ts, T, E, I, Rt>) -> i64
+        async fn $name<$($v,)* T, E, I, Rt>(it: Pipe<$($ts)+, T, E, I, Rt>) -> i64
         where
             $($v: Var<kind::Type>,)*
             T: Var<kind::Type>,
@@ -226,9 +228,9 @@ macro_rules! tally_instance {
     };
 }
 
-tally_instance!(tally_0, tally_0_now, tally, [], ());
+tally_instance!(tally_0, tally_0_now, tally, [], Erased<Rt, ()>);
 tally_instance!(tally_1, tally_1_now, tally, [A], (A, ()));
-tally_instance!(bare_tally_0, bare_tally_0_now, bare_tally, [], ());
+tally_instance!(bare_tally_0, bare_tally_0_now, bare_tally, [], Erased<Rt, ()>);
 tally_instance!(bare_tally_1, bare_tally_1_now, bare_tally, [A], (A, ()));
 
 fn depth_now<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
@@ -373,16 +375,16 @@ async fn a_signature_that_names_the_pipeline_is_async_over_an_async_stage() {
     assert_eq!(run_i64(over_async).await, 1);
 }
 
-/// A signature that hides the pipeline hides the task, and that is the
-/// construction rather than a gap: `bare_tally`'s parameter is the bare
-/// variable the per-length instances are matched by, so the instantiated
-/// signature relates nothing to the call's effect and
-/// `Solver::tightest_admitting` closes the instance decision with the call
-/// still `Sync`. `tally`, one variable apart, names `Pipe<Ts, O, E, I, Rt>`
-/// and is `Async` over the same pipeline.
+/// A call runs its instance, so it has the instance's effect whether or
+/// not the signature's parameter names the pipeline: `bare_tally`'s is the
+/// bare variable its per-length instances are matched by, and the call over
+/// an async stage is `Async` as `tally`'s is.
 #[tokio::test]
-async fn a_signature_that_hides_the_pipeline_leaves_its_call_sync() {
+async fn a_signature_that_hides_the_pipeline_still_takes_its_instances_task() {
+    let over_sync = "src() | step(|x| -> x + 1) | bare_tally()";
     let over_async = "src() | step(|x| -> seen(x)) | bare_tally()";
-    assert!(!prepared_entry(over_async).may_suspend);
+    assert!(!prepared_entry(over_sync).may_suspend);
+    assert!(prepared_entry(over_async).may_suspend);
+    assert_eq!(run_i64(over_sync).await, 1);
     assert_eq!(run_i64(over_async).await, 1);
 }

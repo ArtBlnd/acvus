@@ -61,6 +61,7 @@ async fn run_parsed(
         mut functions,
         types: type_registry,
         handlers,
+        instances,
         ..
     } = Externs::combine(all_registries, interner).expect("registries combine");
 
@@ -140,7 +141,7 @@ async fn run_parsed(
         interner,
         externs: &exec_fns,
         context_names: &context_names,
-        instances: &acvus_extern::NoInstances,
+        instances: &instances,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules

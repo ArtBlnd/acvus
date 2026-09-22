@@ -7,14 +7,31 @@
 //! width is the runtime's `Value` and nothing else (RFC-0047 §1); an
 //! `Elements` is therefore the only payload it carries, and the
 //! machine reads it without knowing any container's layout.
+//!
+//! A `Slice<T, M, Rt>` is made in one place: the crossing, as
+//! `Cross::from_run` of the register pair the machine keeps a slice the
+//! checker typed `&[T]` / `&mut [T]` in. That is the whole ground of `T`,
+//! so there is no constructor a handler can call: `of` over a `[Rt::Value]`
+//! put a `T` on a run nothing checked, and `from_elements` did the same
+//! over the pair (RFC-0068 D1).
+//!
+//! `with` is the one operation, and Rust proves it safe: it hands `f` a
+//! `&'a [T]` for the `'a` of `&'a self`, or a `&'a mut [T]` for `&'a mut
+//! self`, so the borrow cannot outlive the slice and an exclusive one is
+//! the only one. What it reads is `T`s in a live run by the premise above —
+//! the crossing made the slice, the loan it holds keeps the run alive
+//! (RFC-0018), and `T: TransparentOver<Rt>` is the layout that lets a
+//! `[Rt::Value]` be read as a `[T]`. `at` and `at_mut` returned one element
+//! at a lifetime the caller chose, with the bound left to a `debug_assert!`;
+//! a Rust slice indexes with Rust's own check and Rust's own lifetime.
 
 use std::marker::PhantomData;
 
 use acvus_mir::ty::{PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::loan::Loan;
-use crate::obj::Cross;
+use crate::loan::{Loan, Mut, Shared};
+use crate::obj::{Cross, TransparentOver};
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
@@ -25,10 +42,9 @@ pub struct Words {
     pub len: u64,
 }
 
-/// A run of the runtime's values in a storage. Both fields are private and
-/// `of` takes a Rust slice, so a pointer and a length that did not come
-/// from one run cannot be named.
-pub struct Elements<Rt>
+/// A run of the runtime's values in a storage: what a `Slice` carries and
+/// what the crossing builds it from. Nothing outside this module names one.
+struct Elements<Rt>
 where
     Rt: Runtime,
 {
@@ -45,21 +61,10 @@ unsafe impl<Rt> Send for Elements<Rt> where Rt: Runtime {}
 // SAFETY: as `Send`.
 unsafe impl<Rt> Sync for Elements<Rt> where Rt: Runtime {}
 
-/// What a `debug_assert!` here reports: the bound belongs to `Index`'s
-/// handler (RFC-0047 §6), which panics with Rust's own text.
-const OUT_OF_RANGE: &str = "an element was read past the end of a slice";
-
 impl<Rt> Elements<Rt>
 where
     Rt: Runtime,
 {
-    fn of(values: &[Rt::Value]) -> Self {
-        Self {
-            ptr: values.as_ptr(),
-            len: values.len(),
-        }
-    }
-
     /// Obligation across artifacts: `acvus-interpreter`'s `ops::index` keeps
     /// a slice in the register pair these two words are (RFC-0047 amended).
     ///
@@ -68,7 +73,7 @@ where
     /// and that run outlives every `Elements` this makes — the loan the
     /// slice holds is what keeps it so (RFC-0018).
     #[inline(always)]
-    pub const unsafe fn from_words(words: Words) -> Self {
+    const unsafe fn from_words(words: Words) -> Self {
         Self {
             ptr: words.ptr as *const Rt::Value,
             len: words.len as usize,
@@ -76,46 +81,11 @@ where
     }
 
     #[inline(always)]
-    pub fn words(&self) -> Words {
+    fn words(&self) -> Words {
         Words {
             ptr: self.ptr as u64,
             len: self.len as u64,
         }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// The element at `index`.
-    ///
-    /// # Safety
-    /// `index < self.len()`, and the storage this was taken from is live
-    /// and unmoved.
-    #[inline]
-    pub unsafe fn at<'a>(&self, index: usize) -> &'a Rt::Value {
-        debug_assert!(index < self.len, "{OUT_OF_RANGE}");
-        // SAFETY: the caller's contract: the run is live and `index` is
-        // within it.
-        unsafe { &*self.ptr.add(index) }
-    }
-
-    /// The element at `index`, exclusively.
-    ///
-    /// # Safety
-    /// As `at`, and this `Elements` came from a `Slice::<_, Mut, _>::of`, whose
-    /// `&mut [Rt::Value]` is the exclusivity this hands on.
-    #[allow(clippy::mut_from_ref)]
-    #[inline]
-    pub unsafe fn at_mut<'a>(&self, index: usize) -> &'a mut Rt::Value {
-        debug_assert!(index < self.len, "{OUT_OF_RANGE}");
-        // SAFETY: the caller's contract: the run is live, exclusively named,
-        // and `index` is within it.
-        unsafe { &mut *self.ptr.cast_mut().add(index) }
     }
 }
 
@@ -134,19 +104,38 @@ where
     M: Loan,
     Rt: Runtime,
 {
-    /// The elements of a container read in place; the caller holds the
-    /// container's loan, at this slice's own strength, for as long as the
-    /// slice.
-    pub fn of(values: M::Of<'_, [Rt::Value]>) -> Self {
-        Self(Elements::of(M::shared(&values)), PhantomData)
+    pub fn len(&self) -> usize {
+        self.0.len
     }
 
-    pub fn from_elements(elements: Elements<Rt>) -> Self {
-        Self(elements, PhantomData)
+    pub fn is_empty(&self) -> bool {
+        self.0.len == 0
     }
+}
 
-    pub fn into_elements(self) -> Elements<Rt> {
-        self.0
+impl<T, Rt> Slice<T, Shared, Rt>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    /// The elements, read in place as the `[T]` they are.
+    pub fn with<'a, R>(&'a self, f: impl FnOnce(&'a [T]) -> R) -> R {
+        // SAFETY: the module's head: the run is live for as long as this
+        // slice, and `T: TransparentOver<Rt>` is the layout.
+        f(unsafe { std::slice::from_raw_parts(self.0.ptr.cast::<T>(), self.0.len) })
+    }
+}
+
+impl<T, Rt> Slice<T, Mut, Rt>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    /// The elements, read and written in place as the `[T]` they are.
+    pub fn with<'a, R>(&'a mut self, f: impl FnOnce(&'a mut [T]) -> R) -> R {
+        // SAFETY: as the shared `with`'s, and an exclusive slice is the only
+        // live name of its run (RFC-0047 §2), which `&'a mut self` keeps.
+        f(unsafe { std::slice::from_raw_parts_mut(self.0.ptr.cast_mut().cast::<T>(), self.0.len) })
     }
 }
 
@@ -175,6 +164,91 @@ where
     }
 }
 
+/// A result declared `&[T]` / `&mut [T]` is returned as Rust's slice of a
+/// parameter the caller lent (RFC-0047 §3), and crosses as the pair.
+impl<T, Rt> crate::LentBack<Rt> for Slice<T, Shared, Rt>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    type Of<'a> = &'a [T];
+    type Form = crate::obj::Pair;
+
+    fn into_run(value: &[T], rt: &Rt, out: &mut [Rt::Value]) {
+        let words = Words {
+            ptr: value.as_ptr() as u64,
+            len: value.len() as u64,
+        };
+        rt.slice_into_run(words, out)
+    }
+}
+
+impl<T, Rt> crate::LentBack<Rt> for Slice<T, Mut, Rt>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    type Of<'a> = &'a mut [T];
+    type Form = crate::obj::Pair;
+
+    fn into_run(value: &mut [T], rt: &Rt, out: &mut [Rt::Value]) {
+        let words = Words {
+            ptr: value.as_mut_ptr() as u64,
+            len: value.len() as u64,
+        };
+        rt.slice_into_run(words, out)
+    }
+}
+
+/// The macro emits this where `ByRef` would stand for a `&T` parameter, for
+/// a parameter written `&[T]` / `&mut [T]` in Rust: the handler takes
+/// Rust's slice, at the run's own lifetime, and never names a `Slice`.
+pub struct BySlice<T, M>(PhantomData<fn() -> (T, M)>);
+
+impl<T, M, Rt> crate::handler::Sited<Rt> for BySlice<T, M>
+where
+    T: TransparentOver<Rt>,
+    M: Loan,
+    Rt: Runtime,
+{
+    type Site = ();
+
+    fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
+}
+
+impl<'a, T, Rt> crate::handler::Arg<'a, Rt> for BySlice<T, Shared>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    type Out = &'a [T];
+    type Form = crate::obj::Pair;
+
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a [T] {
+        // SAFETY: the caller's contract: `run` is this parameter's pair, and
+        // the container it names is live for `'a` (RFC-0018); `T:
+        // TransparentOver<Rt>` is the layout.
+        let words = unsafe { rt.slice_from_run(run) };
+        unsafe { std::slice::from_raw_parts(words.ptr as *const T, words.len as usize) }
+    }
+}
+
+impl<'a, T, Rt> crate::handler::Arg<'a, Rt> for BySlice<T, Mut>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    type Out = &'a mut [T];
+    type Form = crate::obj::Pair;
+
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a mut [T] {
+        // SAFETY: as the shared form's, and a `&mut [T]` argument is the
+        // only live name of its run (RFC-0047 §2).
+        let words = unsafe { rt.slice_from_run(run) };
+        unsafe { std::slice::from_raw_parts_mut(words.ptr as *mut T, words.len as usize) }
+    }
+}
+
 /// A slice crosses as the register pair the machine keeps it in, and as
 /// nothing else: it implements `Cross` and not `OneValue`, so a parameter, a
 /// field or an element that names one is a compile error. The two words
@@ -192,10 +266,10 @@ where
     unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract: `run` is the pair a slice was written
         // into, and the elements it names are live.
-        Self::from_elements(unsafe { Elements::from_words(rt.slice_from_run(run)) })
+        Self(unsafe { Elements::from_words(rt.slice_from_run(run)) }, PhantomData)
     }
 
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
-        rt.slice_into_run(self.into_elements().words(), out)
+        rt.slice_into_run(self.0.words(), out)
     }
 }

@@ -33,6 +33,7 @@ fn shaped_like_the_str_view(i: &Interner, ns: &str, name: &str) -> Function {
         kind: FnKind::Extern {
             bounds: vec![],
             instances: Instances::default(),
+            requires: vec![],
         },
         ty,
     }

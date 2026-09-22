@@ -267,7 +267,7 @@ fn contains_of_a_lent_vec_settles_vec_contains_beside_iter_contains() {
     let i = Interner::new();
     let c = checked(&i, "let v = vec([1, 2]); let x = 2; contains(&v, &x)");
     assert_eq!(c.ret, Ty::Bool);
-    assert_eq!(calls(&c, "vec::contains"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "slice::contains"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "iter::contains"), 0, "{:?}", c.callees);
 }
 
