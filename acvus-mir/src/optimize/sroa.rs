@@ -656,17 +656,12 @@ fn whole_assign(
     // parts then need is the one the SSA builder places for them.
     let param = cfg.blocks[at.0].params.iter().position(|p| *p == value)?;
     let label = cfg.blocks[at.0].label;
-    // A `For` fills its body's leading parameters itself (RFC-0057): no
-    // constructor stands behind them, so the slot keeps its aggregate.
-    let filled_by_a_for = cfg.blocks.iter().any(|pred| {
-        matches!(&pred.terminator, Terminator::For { body, .. } if *body == label)
-    });
-    if filled_by_a_for {
-        return None;
-    }
     let mut tails: Vec<Tail> = Vec::new();
     for (pi, pred) in cfg.blocks.iter().enumerate() {
-        for args in incoming(&pred.terminator, label) {
+        for edge in incoming(&pred.terminator, label) {
+            let Incoming::Carries(args) = edge else {
+                return None;
+            };
             let arg = args
                 .get(param)
                 .expect("a jump carries one argument per block parameter");
@@ -806,9 +801,16 @@ fn shape_of(ty: &Ty) -> Option<Shape> {
     }
 }
 
-fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
+/// An edge into a block: the arguments it passes the block's parameters,
+/// or the parameters it fills itself, which no constructor stands behind.
+enum Incoming<'t> {
+    Carries(&'t Vec<ValueId>),
+    Fills,
+}
+
+fn incoming(term: &Terminator, label: Label) -> Vec<Incoming<'_>> {
     match term {
-        Terminator::Jump { label: to, args } if *to == label => vec![args],
+        Terminator::Jump { label: to, args } if *to == label => vec![Incoming::Carries(args)],
         Terminator::JumpIf {
             then_label,
             then_args,
@@ -825,21 +827,21 @@ fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
         } => [(then_label, then_args), (else_label, else_args)]
             .into_iter()
             .filter(|(to, _)| **to == label)
-            .map(|(_, args)| args)
+            .map(|(_, args)| Incoming::Carries(args))
             .collect(),
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .map(|(_, to, args)| (to, args))
             .chain(default.iter().map(|(to, args)| (to, args)))
             .filter(|(to, _)| **to == label)
-            .map(|(_, args)| args)
+            .map(|(_, args)| Incoming::Carries(args))
             .collect(),
-        // A `For`'s exit edge carries its target's whole parameter list; the
-        // body edge carries only what follows the parameters the terminator
-        // fills, so its arguments line up with no parameter here (RFC-0057).
+        // A `For`'s exit edge carries its target's whole parameter list; its
+        // body edge fills the body's leading parameters itself (RFC-0057).
         Terminator::For {
             exit, exit_args, ..
-        } if *exit == label => vec![exit_args],
+        } if *exit == label => vec![Incoming::Carries(exit_args)],
+        Terminator::For { body, .. } if *body == label => vec![Incoming::Fills],
         Terminator::For { .. }
         | Terminator::Jump { .. }
         | Terminator::Return { .. }
