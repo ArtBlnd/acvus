@@ -1,0 +1,2 @@
+// expect 2
+let t = 0; let v = vec([A::X(1), A::X(2)]); for o in &mut v { *o = match o { A::X(s) => A::X(*s * 2), }; } for o in &v { match o { A::X(s) => { t = *s; }, }; } t / 2

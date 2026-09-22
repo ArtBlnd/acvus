@@ -1,0 +1,2 @@
+// expect 1
+let o = Some(A::X(1)); match o { Some(a) => match a { A::X(s) => s, }, None => 0, }

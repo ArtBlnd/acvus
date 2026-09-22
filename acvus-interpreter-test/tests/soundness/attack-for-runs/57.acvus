@@ -1,0 +1,2 @@
+// expect 3
+let acc = { s: A::X(0), n: 0, }; for o in [A::X(1), A::X(2)] { let p = match acc.s { A::X(q) => q, }; acc = { s: match o { A::X(q) => A::X(p + q), }, n: acc.n + 1, }; } match acc.s { A::X(s) => s, }

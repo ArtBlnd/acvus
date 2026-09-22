@@ -1,0 +1,2 @@
+// expect 6
+let t = 0; for i in 0..3 { let e = A::X(i + 1); for o in [e] { match o { A::X(s) => { t = t + s; }, }; } } t

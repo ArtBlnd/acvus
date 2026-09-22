@@ -1,0 +1,2 @@
+// expect 6
+let t = 0; let v = vec([{ k: A::X(1), }, { k: A::X(5), }]); for o in &v { match &o.k { A::X(s) => { t = t + *s; }, }; } t

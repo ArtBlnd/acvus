@@ -1,0 +1,2 @@
+// expect "e!"
+let s = "".to_string(); for o in [Ok(2), Err("e".to_string())] { match o { Ok(x) => { s = s; }, Err(e) => { s = e + "!"; }, }; } s

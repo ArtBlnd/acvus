@@ -1,0 +1,2 @@
+// expect 10
+let t = 0; for o in [A::X(1), A::X(2)] { let p = o; let q = p; match q { A::X(s) => { t = t + s * 10 / 3 * 1; }, }; } t + 1

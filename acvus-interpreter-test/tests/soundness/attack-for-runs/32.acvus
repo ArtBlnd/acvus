@@ -1,0 +1,2 @@
+// expect 2
+let keep = vec([A::X(0)]); for o in [A::X(1), A::X(2)] { keep.push(o); } match &keep[2u64] { A::X(s) => *s, }

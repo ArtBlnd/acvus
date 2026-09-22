@@ -1,0 +1,2 @@
+// expect 5
+let cur = A::X(0); for i in 0..5 { cur = match cur { A::X(s) => A::X(s + 1), }; } match cur { A::X(s) => s, }

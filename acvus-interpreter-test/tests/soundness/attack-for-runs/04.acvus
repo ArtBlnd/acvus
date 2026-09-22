@@ -1,0 +1,2 @@
+// expect 2
+let last = A::X(0); for o in [A::X(1), A::X(2)] { last = o; } match last { A::X(s) => s, }

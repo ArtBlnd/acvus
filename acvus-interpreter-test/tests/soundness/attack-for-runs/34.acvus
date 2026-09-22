@@ -1,0 +1,2 @@
+// refuse
+let pick = |xs| -> { let r = "".to_string(); for o in xs { if o.a == 2 { r = o.b; break; }; } r }; pick([{ a: 1, b: "a".to_string(), }, { a: 2, b: "b".to_string(), }])

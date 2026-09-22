@@ -80,7 +80,25 @@ const KNOWN: &[Known] = &[
         program: "attack-places/p15.acvus",
         shows: "Take takes a primitive through a reference",
     },
-    // An `Option` of an aggregate with a `None` element, in an array.
+    Known {
+        program: "attack-for-runs/13.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
+    // An `Option` of an aggregate with a `None` element, in an array: a `None`
+    // is written with no claim on its register (`prepare.rs` `make_variant`,
+    // `MakeNone`), and the array takes it as the type's owned value.
+    Known {
+        program: "attack-for-runs/07.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-for-runs/28.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-for-runs/44.acvus",
+        shows: "a double take",
+    },
     Known {
         program: "attack-cleanups/h01.acvus",
         shows: "a double take",
@@ -187,42 +205,6 @@ const KNOWN: &[Known] = &[
     Known {
         program: "b27/q3.acvus",
         shows: "a double take",
-    },
-    // A structural enum element of `for x in <array>`, matched: the element
-    // arrives as a heap variant where the match reads a run's tag word
-    // (`prepare.rs`). `b28/r3` reaches it because its array's two
-    // constructions are one type; before that the checker refused it.
-    Known {
-        program: "b26/k7.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b27/q9.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b27/q10.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b28/r1.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b28/r2.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b28/r3.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b28/r14.acvus",
-        shows: "carries no bits",
-    },
-    Known {
-        program: "b30/u14.acvus",
-        shows: "carries no bits",
     },
 ];
 

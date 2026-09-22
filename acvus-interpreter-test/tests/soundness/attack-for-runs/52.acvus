@@ -1,0 +1,2 @@
+// expect "ab"
+let s = "".to_string(); for o in [A::S("a".to_string()), A::S("b".to_string())] { match o { A::S(x) => { s = s + &x; }, }; } s

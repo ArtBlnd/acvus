@@ -1,0 +1,2 @@
+// expect 7
+let t = 0; for o in [A::Y({ n: 1, m: A::X(6), })] { match o { A::Y(p) => { match p.m { A::X(s) => { t = p.n + s; }, }; }, }; } t

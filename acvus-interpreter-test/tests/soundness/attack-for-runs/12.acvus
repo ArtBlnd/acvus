@@ -1,0 +1,2 @@
+// expect 7
+let v = vec([A::X(1), A::X(2)]); for o in &mut v { *o = A::X(3); } let t = 0; for o in &v { match o { A::X(s) => { t = t + *s; }, }; } t + 1

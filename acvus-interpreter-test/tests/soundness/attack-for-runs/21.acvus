@@ -1,0 +1,2 @@
+// expect 6
+let t = 0; for o in [{ xs: [A::X(1), A::X(2)], }, { xs: [A::X(3), A::X(0)], }] { for p in o.xs { match p { A::X(s) => { t = t + s; }, }; } } t

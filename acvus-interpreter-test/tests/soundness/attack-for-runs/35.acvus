@@ -1,0 +1,2 @@
+// refuse
+let t = 0; let v = vec([A::X(1), A::X(2)]); for o in v.as_slice() { match o { A::X(s) => { t = t + *s; }, }; } t

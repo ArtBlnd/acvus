@@ -1,0 +1,2 @@
+// expect 2
+let t = 0; for o in [{ e: Some({ n: 2, }), }] { if let Some(p) = o.e { t = p.n; }; } t

@@ -1,0 +1,2 @@
+// expect 8
+let t = 0; for o in [A::X(3), A::Y({ n: 5, })] { let v = match o { A::X(s) => { n: s, }, A::Y(p) => p, }; t = t + v.n; } t

@@ -1,0 +1,2 @@
+// expect 3
+let t = 0; for o in [[A::X(1), A::X(2)]] { match o { [A::X(p), A::X(q)] => { t = p + q; }, _ => { t = t; }, }; } t

@@ -1,0 +1,2 @@
+// expect "b"
+let last = A::S("".to_string()); for o in [A::S("a".to_string()), A::S("b".to_string())] { last = o; } match last { A::S(x) => x, }

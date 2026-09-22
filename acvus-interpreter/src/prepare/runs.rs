@@ -577,11 +577,12 @@ impl Sites<'_> {
                     self.refuse_target(target);
                 }
             }
-            InstKind::Take { target, path, .. } => {
+            InstKind::Take { dst, target, path } => {
                 let read = matches!(path.as_slice(), [PathSeg::Field(_) | PathSeg::Payload])
                     && self.reached(target).is_some();
                 if !read {
                     self.refuse_target(target);
+                    self.refuse(*dst);
                 }
             }
             InstKind::Drop { .. }
@@ -709,6 +710,18 @@ fn candidates(
     }
     for id in &entry {
         sites.refuse(*id);
+    }
+    // A `For` defines the parameters it supplies itself — the element and the
+    // counter — as the machine writes them, which no instruction's `defs`
+    // names; an element is written as a heap value, so it has no run.
+    let edges = Edges { body, labels };
+    for inst in &body.insts {
+        if let InstKind::For { source, body, .. } = &inst.kind {
+            let params = edges.params(body);
+            for supplied in &params[..params.len() - source.carried_params(params).len()] {
+                sites.refuse(*supplied);
+            }
+        }
     }
     let (refused, read) = (sites.refused, sites.read);
 

@@ -1,0 +1,2 @@
+// expect 45
+let t = 0; for i in 0..10 { let o = if i % 2 == 0 { A::X(i) } else { A::Y({ n: i, }) }; match o { A::X(s) => { t = t + s; }, A::Y(p) => { t = t + p.n; }, }; } t

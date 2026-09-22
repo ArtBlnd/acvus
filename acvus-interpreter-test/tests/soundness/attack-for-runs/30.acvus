@@ -1,0 +1,2 @@
+// expect 3
+let o2 = A::X(0); let i = 0; for o in [A::X(1), A::X(3)] { i = i + 1; o2 = o; } match o2 { A::X(s) => s * i - 3, }

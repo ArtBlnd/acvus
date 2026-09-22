@@ -1,0 +1,2 @@
+// expect 3
+let cur = { a: 0, b: A::X(0), }; for o in [1, 2, 3] { cur = { a: cur.a + 1, b: A::X(o), }; } match cur.b { A::X(s) => s, }

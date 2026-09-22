@@ -283,14 +283,13 @@ fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Pla
         let Terminator::Switch { tag, arms, default } = &block.terminator else {
             continue;
         };
-        let Some(slot) = aliases
-            .get(tag)
-            .copied()
-            .or_else(|| plan.shapes.contains_key(tag).then_some(*tag))
-        else {
+        // A tag that names no slot still planned — never one, or one an
+        // earlier round refused — is the machine's to dispatch.
+        let slot = aliases.get(tag).copied().unwrap_or(*tag);
+        let Some(shape) = plan.shapes.get(&slot) else {
             continue;
         };
-        match dispatch_for(&plan.shapes[&slot], slot, arms, default.as_ref()) {
+        match dispatch_for(shape, slot, arms, default.as_ref()) {
             Some(dispatch) => plan.dispatches[bi] = Some(dispatch),
             None => refused.push(slot),
         }
