@@ -95,3 +95,17 @@ fn a_unary_operator_refuses_an_operand_it_does_not_take() {
     refused_with("let x = !5; x", "type mismatch in `!`");
     refused_with("let x = *5; x", "`*` needs a reference");
 }
+
+#[tokio::test]
+async fn a_context_read_inside_a_variant_payload_has_its_slot() {
+    let i = acvus_utils::Interner::new();
+    let context = acvus_interpreter_test::int_context(&i, "n", 5);
+    let value = acvus_interpreter_test::run_script(
+        &i,
+        "let x = Some(@n); x.unwrap()",
+        context,
+        acvus_mir::ty::Ty::I64,
+    )
+    .await;
+    assert_eq!(value.as_int(), 5);
+}
