@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 518
 expression: ir
 ---
 === literals ===
@@ -10,18 +9,23 @@ expression: ir
      0 |   r0 = undef
      1 |   r1 = fetch @name
      2 |   assign @name = r1
-     3 |   r2 = ref &@name
-     5 |   r3 = string_concat [T0, r2]
-     6 |   r4 = take @name
-     7 |   commit @name = r4
-     8 |   return r3
+     4 |   assign <template> = T0
+     5 |   r2 = ref &@name
+     6 |   r3 = ref &mut <template>
+     7 |   append r3 r2
+     8 |   r4 = take <template>
+     9 |   r5 = take @name
+    10 |   commit @name = r5
+    11 |   return r4
 
-    ; r0 (v9) : &String
+    ; r0 (v11) : &String
     ; r1 (@name) : String
     ; r2 (@name.) : &String
-    ; r3 (v7) : String
-    ; r4 (v8) : String
-    ; r5 (result) : &String
-    ; r6 (v5) : String
-    ; r7 (@name) : String
+    ; r3 (<template>.) : &mut String
+    ; r4 (v9) : String
+    ; r5 (v10) : String
+    ; r6 (result) : &String
+    ; r7 (v3) : String
     ; r8 (result) : &String
+    ; r9 (@name) : String
+    ; r10 (<template>) : String

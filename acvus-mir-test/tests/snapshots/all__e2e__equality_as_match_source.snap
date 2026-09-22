@@ -3,49 +3,54 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "equal"
-  T1 = "not equal"
+  T0 = ""
+  T1 = "equal\n"
+  T2 = "not equal\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @a
      3 |   r3 = fetch @b
-     4 |   r4 = r2 == r3
-     5 | L2:
-     6 |   r5 = test r4 == true
-     7 |   jump_if r5 then L3 else L1
-     8 | L3:
-     9 |   r6 = const_str T0
-    10 |   r7 = string_concat [r6]
-    11 |   jump L0(r7)
-    12 | L1:
-    13 |   r8 = const_str T1
-    14 |   r9 = string_concat [r8]
-    15 |   jump L0(r9)
-    16 | L0(r10: String):
-    17 |   r11 = string_concat [r10]
-    18 |   commit @a = r2
-    19 |   commit @b = r3
-    20 |   return r11
+     5 |   assign <template> = T0
+     6 |   r4 = r2 == r3
+     7 |   if r4 -> L0 else L2 join L1
+     8 | L0:
+     9 |   r5 = const_str T1
+    10 |   r6 = ref &mut <template>
+    11 |   append r6 r5
+    13 |   jump L1(() (r7))
+    14 | L2:
+    15 |   r8 = const_str T2
+    16 |   r9 = ref &mut <template>
+    17 |   append r9 r8
+    19 |   jump L1(() (r10))
+    20 | L1(r11: Unit):
+    21 |   r12 = take <template>
+    22 |   commit @a = r2
+    23 |   commit @b = r3
+    24 |   return r12
 
-    ; r0 (v17) : i64
-    ; r1 (v18) : i64
+    ; r0 (v20) : i64
+    ; r1 (v21) : i64
     ; r2 (@a) : i64
     ; r3 (@b) : i64
-    ; r4 (v7) : Bool
-    ; r5 (v8) : Bool
-    ; r6 (v9) : &str
-    ; r7 (v10) : String
-    ; r8 (v11) : &str
-    ; r9 (v12) : String
-    ; r10 (v13) : String
-    ; r11 (v14) : String
-    ; r12 (@b) : i64
-    ; r13 (@b) : i64
-    ; r14 (v20) : i64
-    ; r15 (@a) : i64
-    ; r16 (v15) : i64
+    ; r4 (v9) : Bool
+    ; r5 (v10) : &str
+    ; r6 (<template>.) : &mut String
+    ; r7 (v12) : Unit
+    ; r8 (v13) : &str
+    ; r9 (<template>.) : &mut String
+    ; r10 (v15) : Unit
+    ; r11 (v16) : Unit
+    ; r12 (v17) : String
+    ; r13 (v22) : i64
+    ; r14 (@b) : i64
+    ; r15 (<template>) : String
+    ; r16 (v18) : i64
     ; r17 (@a) : i64
-    ; r18 (v16) : i64
-    ; r19 (v19) : i64
+    ; r18 (@a) : i64
+    ; r19 (v23) : i64
+    ; r20 (v5) : String
+    ; r21 (@b) : i64
+    ; r22 (v19) : i64

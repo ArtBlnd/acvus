@@ -8,22 +8,27 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
-     3 |   r2 = call #0(1 (r3)) [r4 -> r5]
-     5 |   r6 = string_concat [T0, r2]
-     6 |   return r6 [r5]
+     3 |   assign <template> = T0
+     5 |   r2 = call #0(1 (r3)) [r4 -> r5]
+     6 |   r6 = ref &mut <template>
+     7 |   append r6 r2
+     8 |   r7 = take <template>
+     9 |   return r7 [r5]
 
     ; orders: what the body's yielded Order waits for
-    ;   call@3 #0 <- r4(entry)
+    ;   call@5 #0 <- r4(entry)
 
-    ; r0 (v12) : Order
-    ; r1 (v13) : String
+    ; r0 (v14) : Order
+    ; r1 (v15) : String
     ; r2 (fetch_user(...)) : String
-    ; r3 (v3) : i64
+    ; r3 (v5) : i64
     ; r4 (v1) : Order
-    ; r5 (v6) : Order
-    ; r6 (v10) : String
-    ; r7 (user) : String
-    ; r8 (v11) : Order
-    ; r9 (user) : String
-    ; r10 (v5) : Order
-    ; r11 (v8) : String
+    ; r5 (v8) : Order
+    ; r6 (<template>.) : &mut String
+    ; r7 (v12) : String
+    ; r8 (v7) : Order
+    ; r9 (v3) : String
+    ; r10 (user) : String
+    ; r11 (v13) : Order
+    ; r12 (user) : String
+    ; r13 (<template>) : String

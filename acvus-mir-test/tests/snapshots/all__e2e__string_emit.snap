@@ -3,12 +3,19 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "hello"
+  T0 = ""
+  T1 = "hello"
 
 === main ===
-     0 |   r0 = const_str T0
-     1 |   r1 = string_concat [r0]
-     2 |   return r1
+     1 |   assign <template> = T0
+     2 |   r0 = const_str T1
+     3 |   r1 = ref &mut <template>
+     4 |   append r1 r0
+     5 |   r2 = take <template>
+     6 |   return r2
 
-    ; r0 (v1) : &str
-    ; r1 (v2) : String
+    ; r0 (v3) : &str
+    ; r1 (<template>.) : &mut String
+    ; r2 (v5) : String
+    ; r3 (v1) : String
+    ; r4 (<template>) : String

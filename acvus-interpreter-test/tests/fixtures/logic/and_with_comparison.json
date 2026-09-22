@@ -1,5 +1,5 @@
 {
-  "template": "{{ true = @x > 10 && @x < 20 }}in range{{_}}out{{/}}",
+  "template": "% if @x > 10 && @x < 20\nin range\n% else\nout\n% end",
   "context": { "x": 15 },
-  "expected": "in range"
+  "expected": "in range\n"
 }

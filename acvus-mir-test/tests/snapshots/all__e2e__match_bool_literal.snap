@@ -3,38 +3,43 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "on"
-  T1 = "off"
+  T0 = ""
+  T1 = "on\n"
+  T2 = "off\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @flag
-     2 | L2:
-     3 |   r2 = test r1 == true
-     4 |   jump_if r2 then L3 else L1
-     5 | L3:
-     6 |   r3 = const_str T0
-     7 |   r4 = string_concat [r3]
-     8 |   jump L0(r4)
-     9 | L1:
-    10 |   r5 = const_str T1
-    11 |   r6 = string_concat [r5]
-    12 |   jump L0(r6)
-    13 | L0(r7: String):
-    14 |   r8 = string_concat [r7]
-    15 |   commit @flag = r1
-    16 |   return r8
+     3 |   assign <template> = T0
+     4 |   if r1 -> L0 else L2 join L1
+     5 | L0:
+     6 |   r2 = const_str T1
+     7 |   r3 = ref &mut <template>
+     8 |   append r3 r2
+    10 |   jump L1(() (r4))
+    11 | L2:
+    12 |   r5 = const_str T2
+    13 |   r6 = ref &mut <template>
+    14 |   append r6 r5
+    16 |   jump L1(() (r7))
+    17 | L1(r8: Unit):
+    18 |   r9 = take <template>
+    19 |   commit @flag = r1
+    20 |   return r9
 
-    ; r0 (v12) : Bool
+    ; r0 (v15) : Bool
     ; r1 (@flag) : Bool
-    ; r2 (v4) : Bool
-    ; r3 (v5) : &str
-    ; r4 (v6) : String
-    ; r5 (v7) : &str
-    ; r6 (v8) : String
-    ; r7 (v9) : String
-    ; r8 (v10) : String
-    ; r9 (v11) : Bool
-    ; r10 (v3) : Bool
-    ; r11 (v13) : Bool
+    ; r2 (v6) : &str
+    ; r3 (<template>.) : &mut String
+    ; r4 (v8) : Unit
+    ; r5 (v9) : &str
+    ; r6 (<template>.) : &mut String
+    ; r7 (v11) : Unit
+    ; r8 (v12) : Unit
+    ; r9 (v13) : String
+    ; r10 (v3) : String
+    ; r11 (v14) : Bool
     ; r12 (@flag) : Bool
+    ; r13 (<template>) : String
+    ; r14 (@flag) : Bool
+    ; r15 (v16) : Bool

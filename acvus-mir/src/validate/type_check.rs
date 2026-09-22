@@ -879,6 +879,38 @@ impl CheckCtx {
                     }
                 }
             }
+            InstKind::StringAppend { target, part } => {
+                let target_ty = ty!(*target);
+                let expected = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String)));
+                self.assert_match(
+                    pc,
+                    span,
+                    "StringAppend",
+                    "target",
+                    &expected,
+                    target_ty,
+                    errors,
+                );
+                let part_ty = ty!(*part);
+                let is_text = match part_ty {
+                    Ty::String => true,
+                    Ty::Ref(_, inner) => matches!(inner.ty, Ty::String | Ty::Str),
+                    Ty::Error(_) => true,
+                    _ => false,
+                };
+                if !is_text {
+                    errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span,
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "StringAppend".to_string(),
+                            expected_constructor: "String, &String or &str".to_string(),
+                            actual: part_ty.clone(),
+                        },
+                    });
+                }
+            }
             InstKind::MakeArray { dst, elements } => {
                 let dst_ty = ty!(*dst);
                 if let Ty::Array(inner, len) = dst_ty {

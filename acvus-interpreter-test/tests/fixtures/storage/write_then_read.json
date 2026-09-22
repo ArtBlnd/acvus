@@ -1,4 +1,4 @@
 {
-  "template": "{{ x = 42 }}{{ x.to_string() }}",
+  "template": "% let x = 42\n{{ x.to_string() }}",
   "expected": "42"
 }

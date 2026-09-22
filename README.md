@@ -128,23 +128,30 @@ expression language runs inside a template's `{{ }}`.
 
 ## Templates
 
-```
-Hello, {{ @name }}!
+A template is a script with one extra rule (RFC-0071): a line that does not
+begin with `%` is text, appended to the result as written. A line whose
+first non-blank character is `%` is one statement of the script grammar,
+without its `;` and without block braces, and `% end` closes what it opened.
 
-{{ "korean" = @language }}
+```
+Hello, {{ &@name }}!
+
+% if @language == "korean"
 한국어로 답변합니다.
-{{ _ }}
+% else
 Responding in English.
-{{ / }}
+% end
 
-{{ item in @items }}
-- {{ item.name }}: {{ item.value | to_string }}
-{{ / }}
+% for item in &@items
+- {{ &item.name }}: {{ item.value.to_string() }}
+% end
 ```
 
-`{{ pattern = value }} … {{ / }}` matches; `{{ x in list }} … {{ / }}`
-iterates; `{{-- … --}}` comments out a whole tag, and `//` inside a tag
-comments out the rest of its line.
+A text line carries its newline; one ending in `\` does not, and one
+beginning with `%%` writes a single `%`. `{{ expr }}` inside a text line is
+the format string a script already writes, and `//` inside a tag comments
+out the rest of its line. Inline branching is the expression grammar's:
+`{{ if c { "a" } else { "b" } }}`.
 
 ## Types
 

@@ -1,14 +1,27 @@
-use acvus_utils::{Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, QualifiedRef};
 use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
 use crate::error::{Expected, Found, ParseError, ParseErrorKind};
-use crate::grammar::{ExprParser, ScriptParser, TagContentParser};
-use crate::lexer::{ExprTokenizer, Segment, scan_template};
+use crate::grammar::{
+    ArmLineParser, BindLineParser, ExprParser, ForLineParser, ScriptParser, TemplateStmtParser,
+};
+use crate::lexer::{ExprTokenizer, Line, Piece, scan_template};
 use crate::span::Span;
 use crate::token::Token;
 
-use crate::tag_content::TagContent;
+/// `x in head`: what the `for` of a `% for` line is followed by.
+pub struct ForLine {
+    pub binding: Astr,
+    pub head: ForHead,
+}
+
+/// `pattern = source`: what the `let` of a `% if let` or `% while let`
+/// line is followed by.
+pub struct BindLine {
+    pub pattern: Pattern,
+    pub source: Expr,
+}
 
 /// A decoded literal, or the grammar's error at the literal's span
 /// (`literal::LiteralErrorKind`).
@@ -30,8 +43,8 @@ pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError>
 }
 
 /// Parse a script source string. One statement grammar: `let x = e;` binds,
-/// `x = e;` assigns the `x` in scope, and `if`/`while`/`anyorder`/the tag
-/// form are statements of the same rule in every block.
+/// `x = e;` assigns the `x` in scope, and `if`/`while`/`anyorder` are
+/// statements of the same rule in every block.
 pub fn parse_script(interner: &Interner, source: &str) -> Result<Script, ParseError> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
     ScriptParser::new()
@@ -39,289 +52,545 @@ pub fn parse_script(interner: &Interner, source: &str) -> Result<Script, ParseEr
         .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
 }
 
-/// Parse a template source string into an AST.
+/// Parse a template source string into an AST (RFC-0071).
 pub fn parse_template(interner: &Interner, source: &str) -> Result<Template, ParseError> {
-    let segments = scan_template(source)?;
-    let mut builder = TreeBuilder {
-        segments: &segments,
-        pos: 0,
-        source,
+    let lines = scan_template(source)?;
+    let mut builder = Builder {
         interner,
+        open: Vec::new(),
+        body: Vec::new(),
     };
-    let body = builder.build_body()?;
-    let span = if body.is_empty() {
-        Span::new(0, source.len())
-    } else {
-        let first = node_span(&body[0]);
-        let last = node_span(body.last().unwrap());
-        first.merge(last)
-    };
-    Ok(Template {
-        id: AstId::alloc(),
-        body,
-        span,
-    })
-}
-
-fn node_span(node: &Node) -> Span {
-    match node {
-        Node::Text { span, .. } | Node::Comment { span, .. } | Node::InlineExpr { span, .. } => {
-            *span
-        }
-        Node::MatchBlock(mb) => mb.span,
+    for line in &lines {
+        builder.line(line)?;
     }
+    builder.finish(Span::new(0, source.len()))
 }
 
-struct TreeBuilder<'a> {
-    segments: &'a [Segment],
-    pos: usize,
-    #[allow(dead_code)]
-    source: &'a str,
+/// A block a `%` line opened and `% end` has yet to close.
+enum Open {
+    If(IfChain),
+    Match(MatchChain),
+    For {
+        id: AstId,
+        callee_id: AstId,
+        binding: Astr,
+        head: ForHead,
+        body: Vec<Stmt>,
+        span: Span,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+        span: Span,
+    },
+    WhileLet {
+        pattern: Pattern,
+        source: Expr,
+        body: Vec<Stmt>,
+        span: Span,
+    },
+    Anyorder {
+        body: Vec<Stmt>,
+        span: Span,
+    },
+}
+
+/// The `% if` / `% else if` / `% else` chain of one block.
+struct IfChain {
+    first: IfArm,
+    else_ifs: Vec<IfArm>,
+    otherwise: Option<ElseArm>,
+    span: Span,
+}
+
+struct IfArm {
+    head: IfHead,
+    body: Vec<Stmt>,
+    span: Span,
+}
+
+struct ElseArm {
+    body: Vec<Stmt>,
+    span: Span,
+}
+
+enum IfHead {
+    Cond(Expr),
+    Bind { pattern: Pattern, source: Expr },
+}
+
+/// The `% match` scrutinee and the `% pattern =>` arms opened under it.
+struct MatchChain {
+    scrutinee: Expr,
+    arms: Vec<MatchExprArm>,
+    span: Span,
+}
+
+/// A `%` line's head, once the leading keyword has been read.
+enum Head {
+    Open(Open),
+    Else(ElseArm),
+    ElseIf(IfArm),
+    Arm { pattern: Pattern, span: Span },
+    End(Span),
+    Plain(Stmt),
+    Comment,
+}
+
+struct Builder<'a> {
     interner: &'a Interner,
+    open: Vec<Open>,
+    body: Vec<Stmt>,
 }
 
-/// What stopped `build_body` from collecting more nodes.
-enum BodyTerminator {
-    /// We've reached the end of segments.
-    Eof,
-    /// We hit `{{/}}` or `{{/+N}}` / `{{/-N}}`.
-    CloseBlock(Span, Option<IndentModifier>),
-    /// We hit `{{_}}`.
-    CatchAll(Span),
-    /// We hit a `{{ pattern = }}` multi-arm continuation.
-    MultiArm { expr: Expr, tag_span: Span },
-}
-
-impl<'a> TreeBuilder<'a> {
-    fn peek(&self) -> Option<&'a Segment> {
-        self.segments.get(self.pos)
+impl Builder<'_> {
+    fn line(&mut self, line: &Line) -> Result<(), ParseError> {
+        match line {
+            Line::Text { pieces, .. } => {
+                for piece in pieces {
+                    let stmt = self.append_of(piece)?;
+                    self.push(stmt)?;
+                }
+                Ok(())
+            }
+            Line::Stmt { content, span } => match self.head(content, *span)? {
+                Head::Comment => Ok(()),
+                Head::Plain(stmt) => self.push(stmt),
+                Head::Open(open) => {
+                    self.open.push(open);
+                    Ok(())
+                }
+                Head::End(span) => self.close(span),
+                Head::ElseIf(arm) => self.else_if(arm, *span),
+                Head::Else(arm) => self.otherwise(arm, *span),
+                Head::Arm { pattern, span } => self.arm(pattern, span),
+            },
+        }
     }
 
-    fn advance(&mut self) {
-        self.pos += 1;
-    }
-
-    /// Build nodes until we hit a block-structural segment or EOF.
-    fn build_body(&mut self) -> Result<Vec<Node>, ParseError> {
-        let (nodes, _terminator) = self.build_body_until_terminator(false)?;
-        Ok(nodes)
-    }
-
-    /// Build nodes until we hit a block-structural segment or EOF.
-    /// When `in_match` is true, bare expressions that can only be patterns
-    /// (literals, lists, ranges, objects) are treated as continuation arms.
-    fn build_body_until_terminator(
-        &mut self,
-        in_match: bool,
-    ) -> Result<(Vec<Node>, BodyTerminator), ParseError> {
-        let mut nodes = Vec::new();
-
-        loop {
-            match self.peek() {
-                None => return Ok((nodes, BodyTerminator::Eof)),
-                Some(Segment::CloseBlock { span, indent }) => {
-                    let span = *span;
-                    let indent = *indent;
-                    self.advance();
-                    return Ok((nodes, BodyTerminator::CloseBlock(span, indent)));
-                }
-                Some(Segment::CatchAll { span }) => {
-                    let span = *span;
-                    self.advance();
-                    return Ok((nodes, BodyTerminator::CatchAll(span)));
-                }
-                Some(Segment::Text { value, span }) => {
-                    let node = Node::Text {
-                        id: AstId::alloc(),
-                        value: value.clone(),
-                        span: *span,
-                    };
-                    self.advance();
-                    nodes.push(node);
-                }
-                Some(Segment::Comment { value, span }) => {
-                    let node = Node::Comment {
-                        id: AstId::alloc(),
-                        value: value.clone(),
-                        span: *span,
-                    };
-                    self.advance();
-                    nodes.push(node);
-                }
-                Some(Segment::ExprTag {
-                    content,
-                    span,
-                    inner_span,
-                }) => {
-                    let content = content.clone();
-                    let tag_span = *span;
-                    let inner_span = *inner_span;
-                    self.advance();
-
-                    let tag_content = parse_tag_content(self.interner, &content, inner_span.start)?;
-
-                    match tag_content {
-                        TagContent::Expr(expr) => {
-                            nodes.push(Node::InlineExpr {
-                                id: AstId::alloc(),
-                                expr,
-                                span: tag_span,
-                            });
-                        }
-                        TagContent::ContinuationArm { pattern, .. } => {
-                            if !in_match {
-                                return Err(ParseError::new(
-                                    ParseErrorKind::InvalidPattern(
-                                        "continuation arm `{{ pattern = }}` outside match block"
-                                            .into(),
-                                    ),
-                                    tag_span,
-                                ));
-                            }
-                            return Ok((
-                                nodes,
-                                BodyTerminator::MultiArm {
-                                    expr: pattern,
-                                    tag_span,
-                                },
-                            ));
-                        }
-                        TagContent::Binding { lhs, rhs, .. } => {
-                            let pattern = expr_to_pattern(&lhs)?;
-                            // Bare binding (variable or storage) -> body-less (no {{/}})
-                            if matches!(
-                                &pattern,
-                                Pattern::Binding { .. } | Pattern::ContextBind { .. }
-                            ) {
-                                let match_block = MatchBlock {
-                                    id: AstId::alloc(),
-                                    source: rhs,
-                                    arms: vec![MatchArm {
-                                        id: AstId::alloc(),
-                                        pattern,
-                                        body: vec![],
-                                        tag_span,
-                                    }],
-                                    catch_all: None,
-                                    indent: None,
-                                    span: tag_span,
-                                };
-                                nodes.push(Node::MatchBlock(match_block));
-                            } else {
-                                let match_block = self.build_match_block(pattern, rhs, tag_span)?;
-                                nodes.push(Node::MatchBlock(match_block));
-                            }
-                        }
-                    }
-                }
+    /// One piece of a text line, as the append it is (RFC-0071 Decision 2).
+    fn append_of(&self, piece: &Piece) -> Result<Stmt, ParseError> {
+        match piece {
+            Piece::Text { value, span } => Ok(append(
+                Expr::Literal {
+                    id: AstId::alloc(),
+                    value: Literal::String(value.clone()),
+                    span: *span,
+                },
+                *span,
+            )),
+            Piece::Tag {
+                content,
+                span,
+                inner_span,
+            } => {
+                let expr = parse_slice(self.interner, content, inner_span.start, |tokenizer| {
+                    ExprParser::new().parse(self.interner, tokenizer)
+                })?;
+                Ok(append(expr, *span))
             }
         }
     }
 
-    /// Build a match block starting after the first arm's tag has been consumed.
-    fn build_match_block(
-        &mut self,
-        first_pattern: Pattern,
-        source_expr: Expr,
-        first_tag_span: Span,
-    ) -> Result<MatchBlock, ParseError> {
-        let block_start = first_tag_span.start;
-        let mut arms = Vec::new();
+    /// Read a `%` line: the leading keyword names the rule the rest of the
+    /// line is parsed by, so the grammar has no line form to disambiguate.
+    fn head(&self, content: &str, span: Span) -> Result<Head, ParseError> {
+        let tokens: Vec<(usize, Token, usize)> =
+            ExprTokenizer::new(content, span.start, self.interner).collect::<Result<_, _>>()?;
+        let Some((_, first, first_end)) = tokens.first().cloned() else {
+            return Ok(Head::Comment);
+        };
+        let rest = |at: usize| Rest {
+            text: &content[at - span.start..],
+            at,
+        };
 
-        // Build body for first arm (in_match = true to detect continuation arms)
-        let (body, terminator) = self.build_body_until_terminator(true)?;
-        arms.push(MatchArm {
-            id: AstId::alloc(),
-            pattern: first_pattern,
-            body,
-            tag_span: first_tag_span,
-        });
+        if let Token::Ident(name) = first
+            && tokens.len() == 1
+            && self.interner.resolve(name) == "end"
+        {
+            return Ok(Head::End(span));
+        }
+        if let Some((arrow_start, _, _)) = tokens.last().filter(|t| t.1 == Token::FatArrow) {
+            let head = Rest {
+                text: &content[..arrow_start - span.start],
+                at: span.start,
+            };
+            let pattern = head.parse(self.interner, |interner, tokenizer| {
+                ArmLineParser::new().parse(interner, tokenizer)
+            })?;
+            return Ok(Head::Arm { pattern, span });
+        }
 
-        // Process remaining arms, catch-all, and close
-        let (catch_all, close_span, indent) =
-            self.continue_match_block(&mut arms, terminator, &source_expr)?;
+        match first {
+            Token::Else => self.else_head(&tokens, rest(first_end), span),
+            Token::If => Ok(Head::Open(Open::If(IfChain {
+                first: self.if_arm(&tokens, rest(first_end), span)?,
+                else_ifs: Vec::new(),
+                otherwise: None,
+                span,
+            }))),
+            Token::For => {
+                let line = rest(first_end).parse(self.interner, |interner, tokenizer| {
+                    ForLineParser::new().parse(interner, tokenizer)
+                })?;
+                Ok(Head::Open(Open::For {
+                    id: AstId::alloc(),
+                    callee_id: AstId::alloc(),
+                    binding: line.binding,
+                    head: line.head,
+                    body: Vec::new(),
+                    span,
+                }))
+            }
+            Token::While => match tokens.get(1).map(|t| &t.1) {
+                Some(Token::Let) => {
+                    let bind = rest(tokens[1].2).parse(self.interner, |interner, tokenizer| {
+                        BindLineParser::new().parse(interner, tokenizer)
+                    })?;
+                    Ok(Head::Open(Open::WhileLet {
+                        pattern: bind.pattern,
+                        source: bind.source,
+                        body: Vec::new(),
+                        span,
+                    }))
+                }
+                _ => Ok(Head::Open(Open::While {
+                    cond: rest(first_end).parse(self.interner, |interner, tokenizer| {
+                        ExprParser::new().parse(interner, tokenizer)
+                    })?,
+                    body: Vec::new(),
+                    span,
+                })),
+            },
+            Token::Match => Ok(Head::Open(Open::Match(MatchChain {
+                scrutinee: rest(first_end).parse(self.interner, |interner, tokenizer| {
+                    ExprParser::new().parse(interner, tokenizer)
+                })?,
+                arms: Vec::new(),
+                span,
+            }))),
+            Token::Anyorder if tokens.len() == 1 => Ok(Head::Open(Open::Anyorder {
+                body: Vec::new(),
+                span,
+            })),
+            _ => Ok(Head::Plain(
+                Rest {
+                    text: content,
+                    at: span.start,
+                }
+                .parse(self.interner, |interner, tokenizer| {
+                    TemplateStmtParser::new().parse(interner, tokenizer)
+                })?,
+            )),
+        }
+    }
 
-        let span = Span::new(block_start, close_span.end);
-        Ok(MatchBlock {
-            id: AstId::alloc(),
-            source: source_expr,
-            arms,
-            catch_all,
-            indent,
+    fn if_arm(
+        &self,
+        tokens: &[(usize, Token, usize)],
+        rest: Rest<'_>,
+        span: Span,
+    ) -> Result<IfArm, ParseError> {
+        let head = match tokens.get(1).map(|t| &t.1) {
+            Some(Token::Let) => {
+                let bind = Rest {
+                    text: &rest.text[tokens[1].2 - rest.at..],
+                    at: tokens[1].2,
+                }
+                .parse(self.interner, |interner, tokenizer| {
+                    BindLineParser::new().parse(interner, tokenizer)
+                })?;
+                IfHead::Bind {
+                    pattern: bind.pattern,
+                    source: bind.source,
+                }
+            }
+            _ => IfHead::Cond(rest.parse(self.interner, |interner, tokenizer| {
+                ExprParser::new().parse(interner, tokenizer)
+            })?),
+        };
+        Ok(IfArm {
+            head,
+            body: Vec::new(),
             span,
         })
     }
 
-    /// Continue processing a match block after the first arm's body.
-    /// Returns `(catch_all, close_span, indent)`.
-    fn continue_match_block(
-        &mut self,
-        arms: &mut Vec<MatchArm>,
-        terminator: BodyTerminator,
-        _source_expr: &Expr,
-    ) -> Result<(Option<CatchAll>, Span, Option<IndentModifier>), ParseError> {
-        match terminator {
-            BodyTerminator::Eof => {
-                let span = if let Some(arm) = arms.last() {
-                    arm.tag_span
-                } else {
-                    Span::new(0, 0)
-                };
-                Err(ParseError::new(ParseErrorKind::UnclosedBlock, span))
-            }
-            BodyTerminator::CloseBlock(span, indent) => Ok((None, span, indent)),
-            BodyTerminator::CatchAll(catch_tag_span) => {
-                // Build catch-all body, expect CloseBlock
-                let (catch_body, next_terminator) = self.build_body_until_terminator(false)?;
-                match next_terminator {
-                    BodyTerminator::CloseBlock(close_span, indent) => {
-                        let catch_all = CatchAll {
-                            id: AstId::alloc(),
-                            body: catch_body,
-                            tag_span: catch_tag_span,
-                        };
-                        Ok((Some(catch_all), close_span, indent))
-                    }
-                    BodyTerminator::Eof => Err(ParseError::new(
-                        ParseErrorKind::UnclosedBlock,
-                        catch_tag_span,
-                    )),
-                    BodyTerminator::CatchAll(span) => {
-                        Err(ParseError::new(ParseErrorKind::UnmatchedCatchAll, span))
-                    }
-                    BodyTerminator::MultiArm { tag_span, .. } => Err(ParseError::new(
-                        ParseErrorKind::ExpectedCloseBlock,
-                        tag_span,
-                    )),
-                }
-            }
-            BodyTerminator::MultiArm { expr, tag_span } => {
-                // This is a `{{ pattern }}` continuation arm
-                let pattern = expr_to_pattern(&expr)?;
-                let (body, next_terminator) = self.build_body_until_terminator(true)?;
-                arms.push(MatchArm {
-                    id: AstId::alloc(),
-                    pattern,
-                    body,
-                    tag_span,
-                });
-                self.continue_match_block(arms, next_terminator, _source_expr)
-            }
+    fn else_head(
+        &self,
+        tokens: &[(usize, Token, usize)],
+        rest: Rest<'_>,
+        span: Span,
+    ) -> Result<Head, ParseError> {
+        match tokens.get(1).map(|t| &t.1) {
+            None => Ok(Head::Else(ElseArm {
+                body: Vec::new(),
+                span,
+            })),
+            Some(Token::If) => Ok(Head::ElseIf(self.if_arm(
+                &tokens[1..],
+                Rest {
+                    text: &rest.text[tokens[1].2 - rest.at..],
+                    at: tokens[1].2,
+                },
+                span,
+            )?)),
+            Some(_) => Err(ParseError::new(ParseErrorKind::ElseOutsideIf, span)),
         }
+    }
+
+    /// The body the next statement joins: the innermost open block's, or
+    /// the template's own.
+    fn body_mut(&mut self, span: Span) -> Result<&mut Vec<Stmt>, ParseError> {
+        let Some(open) = self.open.last_mut() else {
+            return Ok(&mut self.body);
+        };
+        match open {
+            Open::If(chain) => match &mut chain.otherwise {
+                Some(arm) => Ok(&mut arm.body),
+                None => Ok(&mut chain.else_ifs.last_mut().unwrap_or(&mut chain.first).body),
+            },
+            Open::Match(chain) => match chain.arms.last_mut() {
+                Some(arm) => Ok(&mut arm.body),
+                None => Err(ParseError::new(ParseErrorKind::MatchBodyBeforeArm, span)),
+            },
+            Open::For { body, .. }
+            | Open::While { body, .. }
+            | Open::WhileLet { body, .. }
+            | Open::Anyorder { body, .. } => Ok(body),
+        }
+    }
+
+    fn push(&mut self, stmt: Stmt) -> Result<(), ParseError> {
+        let span = stmt_span(&stmt);
+        self.body_mut(span)?.push(stmt);
+        Ok(())
+    }
+
+    fn else_if(&mut self, arm: IfArm, span: Span) -> Result<(), ParseError> {
+        let Some(chain) = self.if_chain_mut() else {
+            return Err(ParseError::new(ParseErrorKind::ElseOutsideIf, span));
+        };
+        if chain.otherwise.is_some() {
+            return Err(ParseError::new(ParseErrorKind::ElseAfterElse, span));
+        }
+        chain.else_ifs.push(arm);
+        Ok(())
+    }
+
+    fn otherwise(&mut self, arm: ElseArm, span: Span) -> Result<(), ParseError> {
+        let Some(chain) = self.if_chain_mut() else {
+            return Err(ParseError::new(ParseErrorKind::ElseOutsideIf, span));
+        };
+        if chain.otherwise.is_some() {
+            return Err(ParseError::new(ParseErrorKind::ElseAfterElse, span));
+        }
+        chain.otherwise = Some(arm);
+        Ok(())
+    }
+
+    fn if_chain_mut(&mut self) -> Option<&mut IfChain> {
+        match self.open.last_mut() {
+            Some(Open::If(chain)) => Some(chain),
+            _ => None,
+        }
+    }
+
+    fn arm(&mut self, pattern: Pattern, span: Span) -> Result<(), ParseError> {
+        let Some(Open::Match(chain)) = self.open.last_mut() else {
+            return Err(ParseError::new(ParseErrorKind::ArmOutsideMatch, span));
+        };
+        chain.arms.push(MatchExprArm {
+            id: AstId::alloc(),
+            pattern,
+            body: Vec::new(),
+            tail: None,
+            span,
+        });
+        Ok(())
+    }
+
+    fn close(&mut self, span: Span) -> Result<(), ParseError> {
+        let Some(open) = self.open.pop() else {
+            return Err(ParseError::new(ParseErrorKind::UnmatchedEnd, span));
+        };
+        let stmt = closed(open, span);
+        self.push(stmt)
+    }
+
+    fn finish(mut self, span: Span) -> Result<Template, ParseError> {
+        if let Some(open) = self.open.pop() {
+            return Err(ParseError::new(
+                ParseErrorKind::UnclosedBlock,
+                open_span(&open),
+            ));
+        }
+        Ok(Template {
+            id: AstId::alloc(),
+            body: std::mem::take(&mut self.body),
+            span,
+        })
     }
 }
 
-/// Parse the content of a `{{ }}` tag using LALRPOP.
-fn parse_tag_content(
+/// The text of a `%` line that follows the keyword already read, and where
+/// it begins in the source.
+struct Rest<'a> {
+    text: &'a str,
+    at: usize,
+}
+
+impl Rest<'_> {
+    fn parse<T, F>(&self, interner: &Interner, parse: F) -> Result<T, ParseError>
+    where
+        F: FnOnce(
+            &Interner,
+            ExprTokenizer<'_>,
+        ) -> Result<T, LalrpopError<usize, Token, ParseError>>,
+    {
+        parse_slice(interner, self.text, self.at, |tokenizer| {
+            parse(interner, tokenizer)
+        })
+    }
+}
+
+fn parse_slice<T, F>(
     interner: &Interner,
-    content: &str,
-    base_offset: usize,
-) -> Result<TagContent, ParseError> {
-    let tokenizer = ExprTokenizer::new(content, base_offset, interner);
-    let parser = TagContentParser::new();
-    parser
-        .parse(interner, tokenizer)
-        .map_err(|e| convert_lalrpop_error(e, base_offset, content.len()))
+    text: &str,
+    at: usize,
+    parse: F,
+) -> Result<T, ParseError>
+where
+    F: FnOnce(ExprTokenizer<'_>) -> Result<T, LalrpopError<usize, Token, ParseError>>,
+{
+    parse(ExprTokenizer::new(text, at, interner))
+        .map_err(|e| convert_lalrpop_error(e, at, text.len()))
+}
+
+fn append(expr: Expr, span: Span) -> Stmt {
+    Stmt::Append {
+        id: AstId::alloc(),
+        expr,
+        span,
+    }
+}
+
+fn open_span(open: &Open) -> Span {
+    match open {
+        Open::If(chain) => chain.span,
+        Open::Match(chain) => chain.span,
+        Open::For { span, .. }
+        | Open::While { span, .. }
+        | Open::WhileLet { span, .. }
+        | Open::Anyorder { span, .. } => *span,
+    }
+}
+
+fn stmt_span(stmt: &Stmt) -> Span {
+    match stmt {
+        Stmt::Store { span, .. }
+        | Stmt::DerefStore { span, .. }
+        | Stmt::LetBind { span, .. }
+        | Stmt::LetUninit { span, .. }
+        | Stmt::Assign { span, .. }
+        | Stmt::While { span, .. }
+        | Stmt::For { span, .. }
+        | Stmt::Break { span, .. }
+        | Stmt::Continue { span, .. }
+        | Stmt::WhileLet { span, .. }
+        | Stmt::Anyorder { span, .. }
+        | Stmt::Append { span, .. } => *span,
+        Stmt::Expr(expr) => expr.span(),
+    }
+}
+
+/// The statement a `% end` closes the block into.
+fn closed(open: Open, end: Span) -> Stmt {
+    match open {
+        Open::If(chain) => Stmt::Expr(if_expr_of(chain, end)),
+        Open::Match(chain) => Stmt::Expr(Expr::Match {
+            id: AstId::alloc(),
+            scrutinee: Box::new(chain.scrutinee),
+            arms: chain.arms,
+            span: chain.span.merge(end),
+        }),
+        Open::For {
+            id,
+            callee_id,
+            binding,
+            head,
+            body,
+            span,
+        } => Stmt::For {
+            id,
+            callee_id,
+            binding,
+            head,
+            body,
+            span: span.merge(end),
+        },
+        Open::While { cond, body, span } => Stmt::While {
+            id: AstId::alloc(),
+            cond,
+            body,
+            span: span.merge(end),
+        },
+        Open::WhileLet {
+            pattern,
+            source,
+            body,
+            span,
+        } => Stmt::WhileLet {
+            id: AstId::alloc(),
+            pattern,
+            source,
+            body,
+            span: span.merge(end),
+        },
+        Open::Anyorder { body, span } => Stmt::Anyorder {
+            id: AstId::alloc(),
+            body,
+            span: span.merge(end),
+        },
+    }
+}
+
+fn if_expr_of(chain: IfChain, end: Span) -> Expr {
+    let mut branch = chain.otherwise.map(|arm| {
+        Box::new(ElseBranch::Else {
+            body: arm.body,
+            tail: None,
+            span: arm.span.merge(end),
+        })
+    });
+    for arm in chain.else_ifs.into_iter().rev() {
+        branch = Some(Box::new(ElseBranch::ElseIf(if_arm_expr(arm, branch, end))));
+    }
+    if_arm_expr(chain.first, branch, end)
+}
+
+fn if_arm_expr(arm: IfArm, branch: Option<Box<ElseBranch>>, end: Span) -> Expr {
+    let span = arm.span.merge(end);
+    match arm.head {
+        IfHead::Cond(cond) => Expr::If {
+            id: AstId::alloc(),
+            cond: Box::new(cond),
+            then_body: arm.body,
+            then_tail: None,
+            else_branch: branch,
+            span,
+        },
+        IfHead::Bind { pattern, source } => Expr::IfLet {
+            id: AstId::alloc(),
+            pattern,
+            source: Box::new(source),
+            then_body: arm.body,
+            then_tail: None,
+            else_branch: branch,
+            span,
+        },
+    }
 }
 
 /// Convert a LALRPOP error to our ParseError. The `expected` set arrives as
@@ -341,6 +610,18 @@ fn convert_lalrpop_error(
             location,
             expected: _,
         } => ParseError::new(ParseErrorKind::UnexpectedEof, Span::new(location, location)),
+        // An empty expected set is the grammar saying nothing may follow,
+        // which is what `ExtraToken` reports. A template's `%` line reaches
+        // it wherever a line holds a complete statement and more text.
+        LalrpopError::UnrecognizedToken {
+            token: (start, tok, end),
+            expected,
+        } if expected.is_empty() => ParseError::new(
+            ParseErrorKind::ExtraToken {
+                found: Found::of(&tok),
+            },
+            Span::new(start, end),
+        ),
         LalrpopError::UnrecognizedToken {
             token: (start, tok, end),
             expected,
@@ -360,33 +641,6 @@ fn convert_lalrpop_error(
             Span::new(start, end),
         ),
         LalrpopError::User { error } => error,
-    }
-}
-
-/// Validate that a pattern is irrefutable (always matches).
-/// Only Binding, Object (with irrefutable sub-patterns), and Tuple (with irrefutable sub-patterns)
-/// are allowed. Literals and Lists are refutable.
-fn validate_irrefutable(pattern: &Pattern) -> Result<(), ParseError> {
-    match pattern {
-        Pattern::Binding { .. } | Pattern::ContextBind { .. } => Ok(()),
-        Pattern::Object { fields, .. } => {
-            for f in fields {
-                validate_irrefutable(&f.pattern)?;
-            }
-            Ok(())
-        }
-        Pattern::Tuple { elements, .. } => {
-            for elem in elements {
-                if let TuplePatternElem::Pattern(p) = elem {
-                    validate_irrefutable(p)?;
-                }
-            }
-            Ok(())
-        }
-        _ => Err(ParseError::new(
-            ParseErrorKind::RefutablePattern,
-            pattern.span(),
-        )),
     }
 }
 
@@ -592,331 +846,219 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
 mod tests {
     use super::*;
 
-    fn parse(src: &str) -> (Interner, Result<Template, ParseError>) {
+    fn template(src: &str) -> Template {
         let interner = Interner::new();
-        let result = parse_template(&interner, src);
-        (interner, result)
+        parse_template(&interner, src).unwrap_or_else(|e| panic!("{src}: {e}"))
     }
 
+    fn refusal(src: &str) -> ParseErrorKind {
+        let interner = Interner::new();
+        parse_template(&interner, src).expect_err(src).kind
+    }
+
+    fn appended(stmt: &Stmt) -> &Expr {
+        let Stmt::Append { expr, .. } = stmt else {
+            panic!("{stmt:?}");
+        };
+        expr
+    }
+
+    fn text_of(stmt: &Stmt) -> &str {
+        let Expr::Literal {
+            value: Literal::String(text),
+            ..
+        } = appended(stmt)
+        else {
+            panic!("{stmt:?}");
+        };
+        text
+    }
+
+    /// A line that does not begin with `%` is text, its newline included
+    /// (RFC-0071 Decision 2).
     #[test]
-    fn parse_literal_text() {
-        let (_interner, result) = parse("hello world");
-        let t = result.unwrap();
+    fn a_text_line_is_one_append_with_its_newline() {
+        let t = template("hello world\n");
         assert_eq!(t.body.len(), 1);
-        assert!(matches!(&t.body[0], Node::Text { value, .. } if value == "hello world"));
+        assert_eq!(text_of(&t.body[0]), "hello world\n");
     }
 
     #[test]
-    fn parse_inline_expr() {
-        let (_interner, result) = parse("{{ \"hello\" }}");
-        let t = result.unwrap();
+    fn a_tag_is_an_append_of_its_expression() {
+        let t = template("a {{ name }} b");
+        assert_eq!(t.body.len(), 3);
+        assert_eq!(text_of(&t.body[0]), "a ");
+        assert!(matches!(appended(&t.body[1]), Expr::Ident { .. }));
+        assert_eq!(text_of(&t.body[2]), " b");
+    }
+
+    #[test]
+    fn a_percent_line_is_a_statement() {
+        let t = template("% let x = 1\n{{ x }}");
+        assert!(matches!(&t.body[0], Stmt::LetBind { .. }));
+        assert!(matches!(&t.body[1], Stmt::Append { .. }));
+    }
+
+    #[test]
+    fn a_percent_may_be_indented() {
+        let t = template("    % let x = 1\n");
         assert_eq!(t.body.len(), 1);
-        assert!(matches!(&t.body[0], Node::InlineExpr { .. }));
+        assert!(matches!(&t.body[0], Stmt::LetBind { .. }));
     }
 
     #[test]
-    fn parse_comment() {
-        let (_interner, result) = parse("{{-- comment --}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        assert!(matches!(&t.body[0], Node::Comment { .. }));
+    fn a_double_percent_line_is_text_holding_one() {
+        assert_eq!(text_of(&template("%% literal\n").body[0]), "% literal\n");
     }
 
     #[test]
-    fn parse_storage_write() {
-        let (interner, result) = parse("{{ $global = 42 }}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.arms.len(), 1);
-            assert!(mb.arms[0].body.is_empty());
-            assert!(mb.catch_all.is_none());
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::Binding { name, ref_kind: RefKind::ExternParam, .. } if interner.resolve(*name) == "global"
-            ));
-            assert!(matches!(
-                &mb.source,
-                Expr::Literal {
-                    value: Literal::Int(42),
-                    ..
-                }
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
+    fn a_trailing_backslash_drops_the_newline() {
+        let t = template("a\\\nb\n");
+        assert_eq!(text_of(&t.body[0]), "a");
+        assert_eq!(text_of(&t.body[1]), "b\n");
     }
 
     #[test]
-    fn parse_simple_variable_binding() {
-        // Variable bindings are body-less (no {{/}} needed).
-        let (interner, result) = parse("{{ item = list }}{{ item }}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 2);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.arms.len(), 1);
-            assert!(mb.arms[0].body.is_empty());
-            assert!(mb.catch_all.is_none());
-            assert!(
-                matches!(&mb.arms[0].pattern, Pattern::Binding { name, ref_kind: RefKind::Value, .. } if interner.resolve(*name) == "item")
-            );
-            assert!(
-                matches!(&mb.source, Expr::Ident { name, .. } if interner.resolve(name.name) == "list")
-            );
-        } else {
-            panic!("expected MatchBlock");
-        }
+    fn a_comment_line_leaves_nothing() {
+        assert!(template("% // what follows\nx").body.len() == 1);
     }
 
     #[test]
-    fn parse_match_with_catch_all() {
-        let (_interner, result) = parse("{{ true = is_valid }}yes{{_}}no{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.arms.len(), 1);
-            assert!(mb.catch_all.is_some());
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::Literal {
-                    value: Literal::Bool(true),
-                    ..
-                }
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
+    fn a_for_block_closes_at_end() {
+        let t = template("% for m in &$xs\n- {{ &m }}\n% end\n");
+        let Stmt::For { body, .. } = &t.body[0] else {
+            panic!("{:?}", t.body[0]);
+        };
+        assert_eq!(body.len(), 3);
+        assert_eq!(text_of(&body[0]), "- ");
+        assert_eq!(text_of(&body[2]), "\n");
     }
 
     #[test]
-    fn parse_multi_arm() {
-        // `{{ pattern = }}` is a continuation arm.
-        let (_interner, result) =
-            parse(r#"{{ "admin" = role }}admin{{ "user" = }}user{{_}}guest{{/}}"#);
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.arms.len(), 2);
-            assert!(mb.catch_all.is_some());
-        } else {
-            panic!("expected MatchBlock");
-        }
+    fn an_if_chain_is_one_expression_statement() {
+        let t = template("% if $a\nA\n% else if $b\nB\n% else\nC\n% end\n");
+        let Stmt::Expr(Expr::If {
+            then_body,
+            else_branch,
+            ..
+        }) = &t.body[0]
+        else {
+            panic!("{:?}", t.body[0]);
+        };
+        assert_eq!(text_of(&then_body[0]), "A\n");
+        let Some(branch) = else_branch else {
+            panic!("expected an else branch");
+        };
+        let ElseBranch::ElseIf(Expr::If {
+            then_body,
+            else_branch: Some(tail),
+            ..
+        }) = branch.as_ref()
+        else {
+            panic!("{branch:?}");
+        };
+        assert_eq!(text_of(&then_body[0]), "B\n");
+        let ElseBranch::Else { body, .. } = tail.as_ref() else {
+            panic!("{tail:?}");
+        };
+        assert_eq!(text_of(&body[0]), "C\n");
     }
 
     #[test]
-    fn parse_destructuring_rest_tail() {
-        let (_interner, result) = parse("{{ [a, b, ..] = list }}{{a}}{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::List { head, rest: Some(_), tail, .. }
-                    if head.len() == 2 && tail.is_empty()
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
+    fn an_if_let_block_binds() {
+        let t = template("% if let Some(v) = $o\n{{ v }}\n% end\n");
+        assert!(matches!(&t.body[0], Stmt::Expr(Expr::IfLet { .. })));
     }
 
     #[test]
-    fn parse_destructuring_rest_head() {
-        let (_interner, result) = parse("{{ [.., a, b] = list }}{{a}}{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::List { head, rest: Some(_), tail, .. }
-                    if head.is_empty() && tail.len() == 2
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn parse_destructuring_exhaustive() {
-        let (_interner, result) = parse("{{ [a, b, c] = list }}{{a}}{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::List { head, rest: None, tail, .. }
-                    if head.len() == 3 && tail.is_empty()
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn parse_nested_blocks() {
-        // Variable bindings are body-less, so nested blocks use pattern matches.
-        let (_interner, result) = parse("{{ true = flag }}yes{{_}}no{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.arms.len(), 1);
-            assert!(mb.catch_all.is_some());
-        } else {
-            panic!("expected MatchBlock");
-        }
-
-        // Variable bindings followed by usage.
-        let (_interner, result) = parse("{{ user = users }}{{ user }}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 2);
-        assert!(matches!(&t.body[0], Node::MatchBlock(_)));
-        assert!(matches!(&t.body[1], Node::InlineExpr { .. }));
-    }
-
-    #[test]
-    fn parse_pipe_and_lambda() {
-        let (_interner, result) = parse("{{ list | filter(|x| -> x != 0) | map(|x| -> x * 2) }}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::InlineExpr { expr, .. } = &t.body[0] {
-            // Should be a Pipe expression
-            assert!(matches!(expr, Expr::Pipe { .. }));
-        } else {
-            panic!("expected InlineExpr");
-        }
-    }
-
-    #[test]
-    fn parse_arithmetic() {
-        let (_interner, result) = parse("{{ 1 + 2 * 3 }}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::InlineExpr { expr, .. } = &t.body[0] {
-            // Should be Add(1, Mul(2, 3)) due to precedence
-            if let Expr::BinaryOp {
-                op: BinOp::Add,
-                right,
-                ..
-            } = expr
-            {
-                assert!(matches!(
-                    right.as_ref(),
-                    Expr::BinaryOp { op: BinOp::Mul, .. }
-                ));
-            } else {
-                panic!("expected Add at top level");
-            }
-        } else {
-            panic!("expected InlineExpr");
-        }
-    }
-
-    #[test]
-    fn parse_field_access() {
-        let (interner, result) = parse("{{ user.name }}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::InlineExpr { expr, .. } = &t.body[0] {
-            assert!(
-                matches!(expr, Expr::FieldAccess { field, .. } if interner.resolve(*field) == "name")
-            );
-        } else {
-            panic!("expected InlineExpr");
-        }
-    }
-
-    #[test]
-    fn parse_object_pattern() {
-        // Objects require trailing comma: { $value, name, }
-        let (interner, result) = parse("{{ { $value, name, } = $global }}x{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            if let Pattern::Object { fields, .. } = &mb.arms[0].pattern {
-                assert_eq!(fields.len(), 2);
-                assert_eq!(interner.resolve(fields[0].key), "value");
-                assert!(matches!(
-                    &fields[0].pattern,
-                    Pattern::Binding { name, ref_kind: RefKind::ExternParam, .. } if interner.resolve(*name) == "value"
-                ));
-                assert_eq!(interner.resolve(fields[1].key), "name");
-                assert!(matches!(
-                    &fields[1].pattern,
-                    Pattern::Binding { name, ref_kind: RefKind::Value, .. } if interner.resolve(*name) == "name"
-                ));
-            } else {
-                panic!("expected Object pattern");
-            }
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn parse_unclosed_block() {
-        // A literal pattern match without {{/}} is unclosed.
-        let (_interner, result) = parse("{{ true = x }}hello");
-        assert!(result.is_err());
+    fn a_match_takes_one_arm_per_line() {
+        let t = template("% match $m\n% \"a\" =>\nA\n% _ =>\nB\n% end\n");
+        let Stmt::Expr(Expr::Match { arms, .. }) = &t.body[0] else {
+            panic!("{:?}", t.body[0]);
+        };
+        assert_eq!(arms.len(), 2);
         assert!(matches!(
-            result.unwrap_err().kind,
-            ParseErrorKind::UnclosedBlock
+            &arms[0].pattern,
+            Pattern::Literal {
+                value: Literal::String(_),
+                ..
+            }
+        ));
+        assert!(matches!(&arms[1].pattern, Pattern::Wildcard { .. }));
+        assert_eq!(text_of(&arms[1].body[0]), "B\n");
+    }
+
+    #[test]
+    fn a_while_and_an_anyorder_are_blocks() {
+        assert!(matches!(
+            &template("% while $c\nx\n% end\n").body[0],
+            Stmt::While { .. }
+        ));
+        assert!(matches!(
+            &template("% while let Some(v) = f()\n{{ v }}\n% end\n").body[0],
+            Stmt::WhileLet { .. }
+        ));
+        assert!(matches!(
+            &template("% anyorder\nx\n% end\n").body[0],
+            Stmt::Anyorder { .. }
         ));
     }
 
+    /// An `if` and a `match` are operands of the expression grammar, so
+    /// inline branching needs no template form (RFC-0071 Rationale).
     #[test]
-    fn parse_unmatched_close() {
-        // {{/}} at top level with no open block - this should be an error
-        // In our design, build_body returns CloseBlock as terminator.
-        // At top level, build_body doesn't distinguish - the top-level call
-        // uses build_body() which wraps build_body_until_terminator.
-        // Let's verify through the public API that it either errors or
-        // handles it. Actually, our build_body discards the terminator,
-        // so a stray {{/}} would cause the top-level parse to think the
-        // block ended. This is a limitation we accept for now.
+    fn an_inline_if_is_an_expression() {
+        let t = template(r#"{{ if $c { "a" } else { "b" } }}"#);
+        assert!(matches!(appended(&t.body[0]), Expr::If { .. }));
+    }
+
+    /// The tag's content is tokenized, so a string literal inside it may
+    /// hold the delimiters (RFC-0071 Decision 3).
+    #[test]
+    fn a_tag_writes_a_literal_brace_pair() {
+        let t = template(r#"{{ "{{" }}"#);
+        let Expr::Literal {
+            value: Literal::String(text),
+            ..
+        } = appended(&t.body[0])
+        else {
+            panic!("{:?}", t.body[0]);
+        };
+        assert_eq!(text, "{{");
     }
 
     #[test]
-    fn parse_indent_increase() {
-        let (_interner, result) = parse("{{ true = x }}hello{{/+2}}");
-        let t = result.unwrap();
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.indent, Some(IndentModifier::Increase(2)));
-        } else {
-            panic!("expected MatchBlock");
-        }
+    fn each_block_structure_fault_is_its_own_refusal() {
+        assert_eq!(refusal("% end\n"), ParseErrorKind::UnmatchedEnd);
+        assert_eq!(refusal("% for x in &$v\na\n"), ParseErrorKind::UnclosedBlock);
+        assert_eq!(refusal("% else\n"), ParseErrorKind::ElseOutsideIf);
+        assert_eq!(
+            refusal("% if $c\na\n% else\nb\n% else\nc\n% end\n"),
+            ParseErrorKind::ElseAfterElse
+        );
+        assert_eq!(refusal("% 1 =>\n% end\n"), ParseErrorKind::ArmOutsideMatch);
+        assert_eq!(
+            refusal("% match $m\ntext\n% _ =>\na\n% end\n"),
+            ParseErrorKind::MatchBodyBeforeArm
+        );
     }
 
+    /// A `%` line the statement grammar does not admit is a diagnostic at
+    /// the line, not text. The message is total: a grammar state that
+    /// admits nothing more reports what stands after the statement.
     #[test]
-    fn parse_indent_decrease() {
-        let (_interner, result) = parse("{{ true = x }}hello{{/-1}}");
-        let t = result.unwrap();
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.indent, Some(IndentModifier::Decrease(1)));
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
+    fn a_percent_line_that_does_not_parse_is_refused() {
+        let interner = Interner::new();
+        let err = parse_template(&interner, "ok\n% let = \nmore\n").expect_err("a malformed line");
+        assert_eq!(err.span, Span::new(9, 10));
+        assert_eq!(err.kind.to_string(), "expected a name, found `=`");
 
-    #[test]
-    fn parse_indent_none() {
-        let (_interner, result) = parse("{{ true = x }}hello{{/}}");
-        let t = result.unwrap();
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert_eq!(mb.indent, None);
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn parse_indent_with_catch_all() {
-        let (_interner, result) = parse("{{ true = x }}yes{{_}}no{{/+3}}");
-        let t = result.unwrap();
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(mb.catch_all.is_some());
-            assert_eq!(mb.indent, Some(IndentModifier::Increase(3)));
-        } else {
-            panic!("expected MatchBlock");
-        }
+        let err = parse_template(&interner, "% if $c { 1 } else { 2 }\n")
+            .expect_err("an inline `if` on a `%` line");
+        assert_eq!(
+            err.kind.to_string(),
+            "found `{` after the end of the input"
+        );
     }
 
     // -- Script parsing tests ------------------------------------------
@@ -1028,15 +1170,14 @@ mod tests {
         );
     }
 
-    /// A tag's extent is the template scanner's, decided before the
-    /// expression tokenizer runs, so a comment inside one ends at the
-    /// line's end or at the tag's `}}`, whichever comes first.
+    /// A tag's extent is one line, so a comment inside one ends at the
+    /// tag's `}}`.
     #[test]
     fn a_comment_inside_a_tag_is_whitespace() {
-        let (interner, result) = parse("{{ user // the name the context carries\n}}");
-        let t = result.unwrap();
+        let interner = Interner::new();
+        let t = parse_template(&interner, "{{ user // the name it carries }}").unwrap();
         assert_eq!(t.body.len(), 1);
-        let Node::InlineExpr { expr, .. } = &t.body[0] else {
+        let Stmt::Append { expr, .. } = &t.body[0] else {
             panic!("{:?}", t.body[0]);
         };
         assert!(matches!(
@@ -1365,73 +1506,32 @@ mod tests {
 
     // -- Variant (Option) --------------------------------------------
 
+    /// `Some`, `None` and a payload pattern read the same inside a
+    /// template as in a script: the tag's content is the one expression
+    /// grammar, and an arm line's head is the one pattern grammar.
     #[test]
-    fn parse_some_expr() {
-        let (_interner, result) = parse("{{ Some(42) | to_string }}{{_}}{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-    }
+    fn the_option_forms_read_the_same_in_a_template() {
+        let t = template("{{ Some(42) | to_string }}");
+        assert!(matches!(
+            appended(&t.body[0]),
+            Expr::Pipe { .. } | Expr::FuncCall { .. }
+        ));
 
-    #[test]
-    fn parse_none_expr() {
-        let (interner, result) = parse("{{ x = None }}{{_}}{{/}}");
-        let t = result.unwrap();
-        assert_eq!(t.body.len(), 1);
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(matches!(
-                &mb.source,
-                Expr::Variant { tag, payload: None, .. } if interner.resolve(*tag) == "None"
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn parse_some_pattern() {
-        let (interner, result) = parse("{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}");
-        let t = result.unwrap();
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::Variant { tag, payload: Some(_), .. } if interner.resolve(*tag) == "Some"
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn parse_none_pattern() {
-        let (interner, result) = parse("{{ None = @opt }}nothing{{_}}{{/}}");
-        let t = result.unwrap();
-        if let Node::MatchBlock(mb) = &t.body[0] {
-            assert!(matches!(
-                &mb.arms[0].pattern,
-                Pattern::Variant { tag, payload: None, .. } if interner.resolve(*tag) == "None"
-            ));
-        } else {
-            panic!("expected MatchBlock");
-        }
-    }
-
-    #[test]
-    fn validate_variant_is_refutable() {
-        let interner = Interner::new();
-        let expr = Expr::Variant {
-            id: AstId::alloc(),
-            enum_name: None,
-            tag: interner.intern("Some"),
-            payload: Some(Box::new(Expr::Ident {
-                id: AstId::alloc(),
-                name: QualifiedRef::root(interner.intern("x")),
-                ref_kind: RefKind::Value,
-                span: Span::new(0, 1),
-            })),
-            span: Span::new(0, 1),
+        let t = template("% match $o\n% Some(x) =>\n{{ x }}\n% None =>\nnothing\n% end\n");
+        let Stmt::Expr(Expr::Match { arms, .. }) = &t.body[0] else {
+            panic!("{:?}", t.body[0]);
         };
-        let pat = expr_to_pattern(&expr).unwrap();
-        assert!(validate_irrefutable(&pat).is_err());
+        assert!(matches!(
+            &arms[0].pattern,
+            Pattern::Variant {
+                payload: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &arms[1].pattern,
+            Pattern::Variant { payload: None, .. }
+        ));
     }
 
     // -- RFC-0058: a literal says its type ----------------------------

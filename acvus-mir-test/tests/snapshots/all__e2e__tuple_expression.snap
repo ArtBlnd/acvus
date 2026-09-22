@@ -2,86 +2,63 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = ""
+  T1 = "\n"
+
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @a
      4 |   r4 = fetch @b
-     5 |   r5 = string_clone r4
-     6 |   r6 = tuple (r3, r5)
-     7 |   assign $source = r6
-     8 | L2:
-    10 |   if true (r7) -> L3 else L4 join L5
-    11 | L3:
-    13 |   jump L5(true (r8))
-    14 | L4:
-    16 |   jump L5(false (r9))
-    17 | L5(r10: Bool):
-    18 |   if r10 -> L6 else L7 join L8
-    19 | L6:
-    21 |   jump L8(true (r11))
-    22 | L7:
-    24 |   jump L8(false (r12))
-    25 | L8(r13: Bool):
-    26 |   jump_if r13 then L9 else L1
-    27 | L9:
-    28 |   r14 = take $source[0]
-    29 |   assign a = r14
-    30 |   r15 = take $source[1]
-    31 |   r16 = ref &a
-    32 |   r17 = call #0(r16)
-    33 |   r18 = string_clone r15
-    34 |   r19 = string_concat [r17, r18]
-    35 |   jump L0(r19, r15)
-    36 | L1:
-    37 |   r20 = string_concat []
-    38 |   jump L0(r20, r2)
-    39 | L0(r21: String, r22: String):
-    40 |   r23 = string_concat [r21]
-    41 |   commit @a = r3
-    42 |   commit @b = r4
-    43 |   return r23
+     6 |   assign <template> = T0
+     7 |   r5 = string_clone r4
+     8 |   r6 = tuple (r3, r5)
+     9 |   assign $source = r6
+    10 |   r7 = take $source[0]
+    11 |   assign a = r7
+    12 |   r8 = take $source[1]
+    13 |   r9 = ref &a
+    14 |   r10 = call #0(r9)
+    15 |   r11 = ref &mut <template>
+    16 |   append r11 r10
+    17 |   r12 = ref &mut <template>
+    18 |   append r12 r8
+    19 |   r13 = const_str T1
+    20 |   r14 = ref &mut <template>
+    21 |   append r14 r13
+    23 |   r15 = take <template>
+    24 |   commit @a = r3
+    25 |   commit @b = r4
+    26 |   return r15
 
-    ; r0 (v29) : i64
-    ; r1 (v30) : String
-    ; r2 (v31) : String
+    ; r0 (v26) : i64
+    ; r1 (v27) : String
+    ; r2 (v28) : String
     ; r3 (@a) : i64
     ; r4 (@b) : String
-    ; r5 (v41) : String
-    ; r6 (v7) : (i64, String)
-    ; r7 (v9) : Bool
-    ; r8 (v11) : Bool
-    ; r9 (v12) : Bool
-    ; r10 (v10) : Bool
-    ; r11 (v14) : Bool
-    ; r12 (v15) : Bool
-    ; r13 (v13) : Bool
-    ; r14 (a) : i64
-    ; r15 (b) : String
-    ; r16 (a.) : &i64
-    ; r17 (to_string(...)) : String
-    ; r18 (v42) : String
-    ; r19 (v23) : String
-    ; r20 (v24) : String
-    ; r21 (v25) : String
-    ; r22 (v40) : String
-    ; r23 (v26) : String
-    ; r24 (@b) : String
-    ; r25 (b) : String
-    ; r26 (@b) : String
-    ; r27 (v28) : String
-    ; r28 (v27) : i64
-    ; r29 (@a) : i64
-    ; r30 ($source) : (i64, String)
-    ; r31 (v33) : i64
-    ; r32 (v36) : String
-    ; r33 (v34) : i64
-    ; r34 (v37) : String
-    ; r35 (a) : i64
-    ; r36 (v39) : String
-    ; r37 (@a) : i64
-    ; r38 (v32) : i64
-    ; r39 (v35) : String
-    ; r40 (b) : String
-    ; r41 (v38) : String
+    ; r5 (v29) : String
+    ; r6 (v9) : (i64, String)
+    ; r7 (a) : i64
+    ; r8 (b) : String
+    ; r9 (a.) : &i64
+    ; r10 (to_string(...)) : String
+    ; r11 (<template>.) : &mut String
+    ; r12 (<template>.) : &mut String
+    ; r13 (v20) : &str
+    ; r14 (<template>.) : &mut String
+    ; r15 (v23) : String
+    ; r16 (@b) : String
+    ; r17 (v22) : Unit
+    ; r18 (v25) : String
+    ; r19 (<template>) : String
+    ; r20 (a) : i64
+    ; r21 (@b) : String
+    ; r22 (b) : String
+    ; r23 (@a) : i64
+    ; r24 (b) : String
+    ; r25 (v24) : i64
+    ; r26 (v5) : String
+    ; r27 (@a) : i64
+    ; r28 ($source) : (i64, String)

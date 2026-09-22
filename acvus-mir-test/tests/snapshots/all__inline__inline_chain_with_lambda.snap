@@ -13,6 +13,6 @@ expression: ir
     ; r1 (v1) : i64
     ; r2 (v2) : i64
     ; r3 (v3) : i64
-    ; r4 (double_all(...)) : Iterator<i64, Pure>
+    ; r4 (double_all(...)) : Map<Items<i64>, i64, i64, Pure>
     ; r5 (collect(...)) : Vec<i64>
     ; r6 (sum_list(...)) : i64

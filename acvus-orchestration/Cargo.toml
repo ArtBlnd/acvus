@@ -4,19 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-acvus-ast = { path = "../acvus-ast" }
-acvus-mir = { path = "../acvus-mir" }
-acvus-interpreter = { path = "../acvus-interpreter" }
-acvus-utils = { path = "../acvus-utils" }
-rustc-hash = { workspace = true }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["arbitrary_precision"] }
-rust_decimal = { version = "1", features = ["serde-with-arbitrary-precision"] }
-futures = "0.3"
-trait-variant = "0.1"
-tracing = "0.1"
-uuid = { workspace = true }
-blake3 = "1"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+toml = "0.9"

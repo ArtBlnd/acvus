@@ -3,69 +3,87 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "none"
+  T0 = ""
+  T1 = "\n"
+  T2 = "none\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @user
      2 |   assign @user = r1
-     3 | L2:
-     5 |   if true (r2) -> L3 else L4 join L5
-     6 | L3:
-     8 |   jump L5(true (r3))
-     9 | L4:
-    11 |   jump L5(false (r4))
-    12 | L5(r5: Bool):
-    13 |   if r5 -> L6 else L7 join L8
-    14 | L6:
-    16 |   jump L8(true (r6))
-    17 | L7:
-    19 |   jump L8(false (r7))
-    20 | L8(r8: Bool):
-    21 |   jump_if r8 then L9 else L1
-    22 | L9:
-    23 |   r9 = take @user.name
-    24 |   r10 = take @user.age
-    25 |   assign age = r10
-    26 |   r11 = ref &age
-    27 |   r12 = call #0(r11)
-    28 |   r13 = string_clone r9
-    29 |   r14 = string_concat [r13, r12]
-    30 |   jump L0(r14, r9)
-    31 | L1:
-    32 |   r15 = const_str T0
-    33 |   r16 = string_concat [r15]
-    34 |   jump L0(r16, r0)
-    35 | L0(r17: String, r18: String):
-    36 |   r19 = string_concat [r17]
-    37 |   r20 = take @user
-    38 |   commit @user = r20
-    39 |   return r19
+     4 |   assign <template> = T0
+     5 |   jump L1
+     6 | L1:
+     8 |   if true (r2) -> L2 else L3 join L4
+     9 | L2:
+    11 |   jump L4(true (r3))
+    12 | L3:
+    14 |   jump L4(false (r4))
+    15 | L4(r5: Bool):
+    16 |   if r5 -> L5 else L6 join L7
+    17 | L5:
+    19 |   jump L7(true (r6))
+    20 | L6:
+    22 |   jump L7(false (r7))
+    23 | L7(r8: Bool):
+    24 |   jump_if r8 then L8 else L9
+    25 | L8:
+    26 |   r9 = take @user.name
+    27 |   r10 = take @user.age
+    28 |   assign age = r10
+    29 |   r11 = ref &mut <template>
+    30 |   r12 = string_clone r9
+    31 |   append r11 r12
+    32 |   r13 = ref &age
+    33 |   r14 = call #0(r13)
+    34 |   r15 = ref &mut <template>
+    35 |   append r15 r14
+    36 |   r16 = const_str T1
+    37 |   r17 = ref &mut <template>
+    38 |   append r17 r16
+    40 |   jump L0(() (r18), r9)
+    41 | L9:
+    42 |   r19 = const_str T2
+    43 |   r20 = ref &mut <template>
+    44 |   append r20 r19
+    46 |   jump L0(() (r21), r0)
+    47 | L0(r22: Unit, r23: String):
+    48 |   r24 = take <template>
+    49 |   r25 = take @user
+    50 |   commit @user = r25
+    51 |   return r24
 
-    ; r0 (v23) : String
+    ; r0 (v30) : String
     ; r1 (@user) : {age: i64, email: String, name: String}
-    ; r2 (v3) : Bool
-    ; r3 (v5) : Bool
-    ; r4 (v6) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v8) : Bool
-    ; r7 (v9) : Bool
-    ; r8 (v7) : Bool
+    ; r2 (v5) : Bool
+    ; r3 (v7) : Bool
+    ; r4 (v8) : Bool
+    ; r5 (v6) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v11) : Bool
+    ; r8 (v9) : Bool
     ; r9 (name) : String
     ; r10 (age) : i64
-    ; r11 (age.) : &i64
-    ; r12 (to_string(...)) : String
-    ; r13 (v27) : String
-    ; r14 (v17) : String
-    ; r15 (v18) : &str
-    ; r16 (v19) : String
-    ; r17 (v20) : String
-    ; r18 (v26) : String
-    ; r19 (v21) : String
-    ; r20 (v22) : {age: i64, email: String, name: String}
-    ; r21 (name) : String
-    ; r22 (name) : String
-    ; r23 (v25) : String
-    ; r24 (age) : i64
-    ; r25 (@user) : {age: i64, email: String, name: String}
-    ; r26 (v24) : String
+    ; r11 (<template>.) : &mut String
+    ; r12 (v34) : String
+    ; r13 (age.) : &i64
+    ; r14 (to_string(...)) : String
+    ; r15 (<template>.) : &mut String
+    ; r16 (v21) : &str
+    ; r17 (<template>.) : &mut String
+    ; r18 (v23) : Unit
+    ; r19 (v24) : &str
+    ; r20 (<template>.) : &mut String
+    ; r21 (v26) : Unit
+    ; r22 (v27) : Unit
+    ; r23 (v33) : String
+    ; r24 (v28) : String
+    ; r25 (v29) : {age: i64, email: String, name: String}
+    ; r26 (v3) : String
+    ; r27 (v31) : String
+    ; r28 (@user) : {age: i64, email: String, name: String}
+    ; r29 (age) : i64
+    ; r30 (<template>) : String
+    ; r31 (v32) : String
+    ; r32 (name) : String
+    ; r33 (name) : String

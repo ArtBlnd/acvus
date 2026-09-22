@@ -646,6 +646,9 @@ impl Loans {
             InstKind::IndexSet { slice, .. } => {
                 self.touch_region(&mut effect, *slice, Mutability::Mut)
             }
+            InstKind::StringAppend { target, .. } => {
+                self.touch_region(&mut effect, *target, Mutability::Mut)
+            }
             _ => {}
         }
         effect

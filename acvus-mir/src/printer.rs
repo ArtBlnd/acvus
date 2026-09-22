@@ -500,6 +500,12 @@ fn write_body(
                 vn.fmt_val(*dst),
                 vn.fmt_uses(parts, &consts, &texts)
             )?,
+            InstKind::StringAppend { target, part } => writeln!(
+                f,
+                "append {} {}",
+                vn.fmt_use(*target, &consts, &texts),
+                vn.fmt_use(*part, &consts, &texts)
+            )?,
             InstKind::MakeArray { dst, elements } => writeln!(
                 f,
                 "{} = list [{}]",
@@ -1157,13 +1163,13 @@ mod tests {
     }
 
     #[test]
-    fn print_match_block() {
+    fn print_if_block() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
-        let out = compile_and_dump_ctx(r#"{{ true = @n == 1 }}matched{{/}}"#, &context, &interner);
-        assert!(!out.contains("iter_init"));
-        assert!(!out.contains("iter_next"));
-        assert!(out.contains("jump_if"));
+        let out = compile_and_dump_ctx("% if @n == 1\nmatched\n% end\n", &context, &interner);
+        assert!(!out.contains("iter_init"), "{out}");
+        assert!(!out.contains("iter_next"), "{out}");
+        assert!(out.contains(" else L1 join L1"), "{out}");
     }
 
     #[test]
@@ -1176,14 +1182,14 @@ mod tests {
                 (interner.intern("age"), Ty::I64),
             ]))),
         )]);
-        let out = compile_and_dump_ctx("{{ x = @user.age }}", &context, &interner);
+        let out = compile_and_dump_ctx("% let x = @user.age", &context, &interner);
         assert!(out.contains(".age"), "{out}");
     }
 
     #[test]
     fn extern_param_write_rejected() {
         let interner = Interner::new();
-        let result = crate::test::compile_template(&interner, "{{ $count = 42 }}", &[]);
+        let result = crate::test::compile_template(&interner, "% $count = 42", &[]);
         assert!(result.is_err());
     }
 

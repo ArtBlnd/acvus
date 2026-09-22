@@ -6,26 +6,30 @@ expression: ir
   T0 = ""
 
 === main ===
-     3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 |   assign x = r0
-     6 |   r4 = ref &x
-     7 |   r5 = call #0(r4)
-     8 |   assign out = r5
+     1 |   assign <template> = T0
+     5 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
+     6 |   assign x = r0
+     7 |   r4 = ref &x
+     8 |   r5 = call #0(r4)
+     9 |   assign out = r5
     10 |   r6 = ref &out
     11 |   r7 = call #1(r6)
-    12 |   r8 = string_concat [T0, T0, r7]
-    13 |   return r8
+    12 |   r8 = ref &mut <template>
+    13 |   append r8 r7
+    14 |   r9 = take <template>
+    15 |   return r9
 
-    ; r0 (v4) : Array<i64, 3>
-    ; r1 (v1) : i64
-    ; r2 (v2) : i64
-    ; r3 (v3) : i64
+    ; r0 (v6) : Array<i64, 3>
+    ; r1 (v3) : i64
+    ; r2 (v4) : i64
+    ; r3 (v5) : i64
     ; r4 (x.) : &Array<i64, 3>
     ; r5 (len(...)) : u64
     ; r6 (out.) : &u64
     ; r7 (to_string(...)) : String
-    ; r8 (v13) : String
-    ; r9 (v10) : String
-    ; r10 (v6) : String
+    ; r8 (<template>.) : &mut String
+    ; r9 (v14) : String
+    ; r10 (x) : Array<i64, 3>
     ; r11 (out) : u64
-    ; r12 (x) : Array<i64, 3>
+    ; r12 (<template>) : String
+    ; r13 (v1) : String

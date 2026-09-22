@@ -1,4 +1,4 @@
 {
-  "template": "{{ out = 1 + 2 }}{{ \"sum: {{ out.to_string() }}\" }}",
+  "template": "% let out = 1 + 2\n{{ \"sum: {{ out.to_string() }}\" }}",
   "expected": "sum: 3"
 }

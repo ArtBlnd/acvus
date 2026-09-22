@@ -30,9 +30,15 @@ async fn a_result_s_two_sides_are_typed_apart() {
     let i = Interner::new();
     let out = run(
         &i,
-        r#"{{ r = Ok(7) }}{{ Ok(v) = r }}{{ v.to_string() }}{{ Err(e) = }}{{ e }}{{/}}"#,
+        "% let r = Ok(7)\n\
+         % match r\n\
+         % Ok(v) =>\n\
+         {{ v.to_string() }}\n\
+         % Err(e) =>\n\
+         {{ e }}\n\
+         % end",
         Context::default(),
     )
     .await;
-    assert_eq!(out, "7");
+    assert_eq!(out, "7\n");
 }

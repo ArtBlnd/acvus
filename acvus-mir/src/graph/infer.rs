@@ -214,6 +214,7 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
                 collect_value_refs_stmts(body, refs);
             }
             Stmt::Anyorder { body, .. } => collect_value_refs_stmts(body, refs),
+            Stmt::Append { expr, .. } => collect_value_refs_expr(expr, refs),
         }
     }
 }
@@ -230,30 +231,8 @@ fn collect_value_refs_script(script: &acvus_ast::Script) -> Vec<Astr> {
 
 fn collect_value_refs_template(template: &acvus_ast::Template) -> Vec<Astr> {
     let mut refs = Vec::new();
-    for node in &template.body {
-        collect_value_refs_node(node, &mut refs);
-    }
+    collect_value_refs_stmts(&template.body, &mut refs);
     refs
-}
-
-fn collect_value_refs_node(node: &acvus_ast::Node, refs: &mut Vec<Astr>) {
-    match node {
-        acvus_ast::Node::Text { .. } | acvus_ast::Node::Comment { .. } => {}
-        acvus_ast::Node::InlineExpr { expr, .. } => collect_value_refs_expr(expr, refs),
-        acvus_ast::Node::MatchBlock(mb) => {
-            collect_value_refs_expr(&mb.source, refs);
-            for arm in &mb.arms {
-                for n in &arm.body {
-                    collect_value_refs_node(n, refs);
-                }
-            }
-            if let Some(ca) = &mb.catch_all {
-                for n in &ca.body {
-                    collect_value_refs_node(n, refs);
-                }
-            }
-        }
-    }
 }
 
 fn collect_value_refs_place(place: &acvus_ast::Place, refs: &mut Vec<Astr>) {

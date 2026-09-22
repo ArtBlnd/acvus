@@ -1,7 +1,7 @@
 use acvus_ast::report::Label;
 use acvus_ast::{
-    AstId, BinOp, Expr, Literal, MatchBlock, Node, ObjectExprField, ObjectPatternField, Pattern,
-    RefKind, Span, SuffixedInt, Template, TupleElem, TuplePatternElem,
+    AstId, BinOp, Expr, Literal, ObjectExprField, ObjectPatternField, Pattern, RefKind, Span,
+    SuffixedInt, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1143,7 +1143,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         mut self,
         template: &Template,
     ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
-        self.check_nodes(&template.body);
+        for stmt in &template.body {
+            self.check_stmt(stmt);
+        }
         self.solve_body();
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
@@ -4443,6 +4445,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         true
     }
 
+    fn bound_to_text(&mut self, open: &InferTy, span: Span) -> bool {
+        let text = TyVarBound::one_of(vec![TyTerm::String.into(), TyTerm::Str.into()]);
+        let bounded = self.solver.fresh_var_with(text);
+        if self.solver.unify(open, &bounded).is_err() {
+            return false;
+        }
+        if let TyTerm::Var(var) = self.solver.resolve_ty(open) {
+            self.bound_sites.push(BoundSite { var, span });
+        }
+        true
+    }
+
     fn no_ordering(&mut self, op: &'static str, operand: InferTy, span: Span) {
         self.error(
             MirErrorKind::NoOrdering {
@@ -4485,52 +4499,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         false
     }
 
-    fn check_nodes(&mut self, nodes: &[Node]) {
-        for node in nodes {
-            self.check_node(node);
-        }
-    }
-
-    fn check_node(&mut self, node: &Node) {
-        match node {
-            Node::Text { .. } | Node::Comment { .. } => {}
-            Node::InlineExpr { expr, span, .. } => {
-                let ty = self.check_expr(expr);
-                let resolved = self.solver.resolve_ty(&ty);
-                // A `&str` emits as it is: the node joins the template's
-                // other parts in one `StringConcat`, which reads a part's
-                // bytes through either representation (RFC-0062 Decision 3).
-                match &resolved {
-                    TyTerm::String | TyTerm::Error(_) => {}
-                    TyTerm::Ref(_, inner)
-                        if matches!(
-                            self.solver.resolve_ty(&inner.ty),
-                            TyTerm::String | TyTerm::Str
-                        ) => {}
-                    TyTerm::Var(_) => self.convert_at(
-                        &ty,
-                        &TyTerm::String,
-                        ConversionSite {
-                            id: expr.id(),
-                            span: *span,
-                            report: ConversionReport::Emit,
-                        },
-                    ),
-                    _ => self.error(
-                        MirErrorKind::EmitNotString {
-                            actual: self.type_as_written(&resolved),
-                        },
-                        *span,
-                    ),
-                }
-            }
-            Node::MatchBlock(mb) => self.check_match_block(mb),
-        }
-    }
-
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt) {
         match stmt {
+            acvus_ast::Stmt::Append { expr, span, .. } => self.check_append(expr, *span),
             acvus_ast::Stmt::Store {
                 id,
                 place,
@@ -4918,66 +4890,36 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.error(MirErrorKind::ArrayLoopLeftEarly { keyword, element }, span);
     }
 
-    fn check_match_block(&mut self, mb: &MatchBlock) {
-        // Body-less variable binding: define in current scope (no push/pop).
-        if self.is_bodyless_var_binding(mb) {
-            let source_ty = self.check_expr(&mb.source);
-            self.check_pattern(
-                &mb.arms[0].pattern,
-                &source_ty,
-                PatternSource::Expr(mb.source.id()),
-                mb.arms[0].tag_span,
-            );
-            return;
+    /// A template's append reads a `String` or a `&str`; nothing is
+    /// converted to text implicitly (RFC-0071 Decision 3).
+    fn check_append(&mut self, expr: &Expr, span: Span) {
+        let ty = self.check_expr(expr);
+        let resolved = self.solver.resolve_ty(&ty);
+        let site = ConversionSite {
+            id: expr.id(),
+            span,
+            report: ConversionReport::Emit,
+        };
+        match &resolved {
+            TyTerm::String | TyTerm::Error(_) => {}
+            TyTerm::Ref(_, inner) => match self.solver.resolve_ty(&inner.ty) {
+                TyTerm::String | TyTerm::Str | TyTerm::Error(_) => {}
+                TyTerm::Var(_) => self.convert_at(&inner.ty, &TyTerm::String, site),
+                _ => self.error(
+                    MirErrorKind::EmitNotString {
+                        actual: self.type_as_written(&resolved),
+                    },
+                    span,
+                ),
+            },
+            TyTerm::Var(_) => self.convert_at(&ty, &TyTerm::String, site),
+            _ => self.error(
+                MirErrorKind::EmitNotString {
+                    actual: self.type_as_written(&resolved),
+                },
+                span,
+            ),
         }
-
-        let source_ty = self.check_expr(&mb.source);
-        let resolved_source = self.solver.resolve_ty(&source_ty);
-
-        for arm in &mb.arms {
-            let match_ty = self.pattern_match_type(&arm.pattern, &resolved_source);
-            // For patterns that destructure the source as a whole and may
-            // contain nested variants (Variant, Tuple, List), pass the
-            // unresolved source so unify can trace the Var chain and rebind
-            // the merged type. This ensures variant sets from all arms are
-            // accumulated into the same type variable.
-            // Object patterns are NOT included because they go through the
-            // iteration path (pattern_match_type extracts element types).
-            let pattern_source = match &arm.pattern {
-                Pattern::Variant { .. }
-                | Pattern::Tuple { .. }
-                | Pattern::List { .. }
-                | Pattern::Binding { .. } => source_ty.clone(),
-                _ => match_ty,
-            };
-
-            self.push_scope();
-            self.check_pattern(
-                &arm.pattern,
-                &pattern_source,
-                PatternSource::Expr(mb.source.id()),
-                arm.tag_span,
-            );
-            self.check_nodes(&arm.body);
-            self.pop_scope();
-        }
-
-        if let Some(catch_all) = &mb.catch_all {
-            self.push_scope();
-            self.check_nodes(&catch_all.body);
-            self.pop_scope();
-        }
-    }
-
-    fn is_bodyless_var_binding(&self, mb: &MatchBlock) -> bool {
-        mb.arms.len() == 1
-            && mb.arms[0].body.is_empty()
-            && matches!(&mb.arms[0].pattern, Pattern::Binding { .. })
-    }
-
-    /// A pattern matches the source's type as it is (RFC-0024).
-    fn pattern_match_type(&self, _pattern: &Pattern, source_ty: &InferTy) -> InferTy {
-        source_ty.clone()
     }
 
     fn check_expr(&mut self, expr: &Expr) -> InferTy {
@@ -5169,6 +5111,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                     }
                     BinOp::Eq | BinOp::Neq => {
+                        let (rl, rr) = (self.solver.resolve_ty(&lt), self.solver.resolve_ty(&rt));
+                        let open_side = match (&rl, &rr) {
+                            (TyTerm::Var(_), text) if is_text(text) => Some(&lt),
+                            (text, TyTerm::Var(_)) if is_text(text) => Some(&rt),
+                            _ => None,
+                        };
+                        if let Some(open) = open_side {
+                            if !self.bound_to_text(open, *span) {
+                                self.binop_error(op_str(*op), lt, rt, *span);
+                            }
+                            return self.record_ret(*id, TyTerm::Bool);
+                        }
                         if self.solver.unify(&lt, &rt).is_err() {
                             self.binop_error(op_str(*op), lt, rt, *span);
                             return self.record_ret(*id, TyTerm::Bool);
@@ -6837,17 +6791,14 @@ mod tests {
 
     #[test]
     fn arithmetic_mixed_fails() {
-        // We need the result to be used somewhere. Let's use a match to avoid emit errors.
-        // Actually, let's test directly: Int + Float is a type error.
-        let src = r#"{{ x = 1 + 2.0 }}{{_}}{{/}}"#;
+        let src = "% let x = 1 + 2.0";
         let result = check(src);
         assert!(result.is_err());
     }
 
     #[test]
-    fn catch_all_optional() {
-        // Catch-all is optional - match blocks without {{_}} should type-check fine.
-        let src = "{{ x = 42 }}hello{{/}}";
+    fn match_without_a_wildcard_arm_ok() {
+        let src = "% match 42\n% x =>\nhello\n% end\n";
         let result = check(src);
         result.unwrap();
     }
@@ -6862,14 +6813,14 @@ mod tests {
 
     #[test]
     fn undefined_variable() {
-        let src = "{{ x = unknown }}{{_}}{{/}}";
+        let src = "% let x = unknown";
         let result = check(src);
         assert!(result.is_err());
     }
 
     #[test]
     fn extern_param_write_rejected() {
-        let src = "{{ $count = 42 }}";
+        let src = "% $count = 42";
         let err = check(src).expect_err("should reject extern param write");
         assert!(
             err.contains("$count"),
@@ -6890,7 +6841,7 @@ mod tests {
                 effect: crate::ty::Effect::OPAQUE.into(),
             },
         )]);
-        let src = "{{ x = fetch_user(1) }}{{ x }}{{_}}{{/}}";
+        let src = "% let x = fetch_user(1)\n{{ x }}";
         check_with_env(src, &FxHashMap::default(), &context, &i).unwrap();
     }
 
@@ -6930,7 +6881,7 @@ mod tests {
     fn pattern_binding_captures_type() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("name"), Ty::String)]);
-        let src = "{{ x = @name }}{{ x }}{{_}}{{/}}";
+        let src = "% let x = @name\n{{ x }}";
         check_with_interner(src, &context, &i).unwrap();
     }
 
@@ -6938,13 +6889,13 @@ mod tests {
 
     #[test]
     fn some_int_is_option_int() {
-        let src = "{{ x = Some(42) }}{{_}}{{/}}";
+        let src = "% let x = Some(42)";
         check(src).unwrap();
     }
 
     #[test]
     fn none_is_option() {
-        let src = "{{ x = None }}{{_}}{{/}}";
+        let src = "% let x = None";
         check(src).unwrap();
     }
 
@@ -6952,7 +6903,7 @@ mod tests {
     fn some_pattern_extracts_inner() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::String)))]);
-        let src = "{{ Some(x) = @opt }}{{ x }}{{_}}{{/}}";
+        let src = "% match @opt\n% Some(x) =>\n{{ x }}\n% None =>\n% end\n";
         check_with_interner(src, &context, &i).unwrap();
     }
 
@@ -6960,7 +6911,7 @@ mod tests {
     fn none_pattern_matches_option() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::I64)))]);
-        let src = "{{ None = @opt }}none{{_}}has value{{/}}";
+        let src = "% match @opt\n% None =>\nnone\n% _ =>\nhas value\n% end\n";
         check_with_interner(src, &context, &i).unwrap();
     }
 
@@ -6969,7 +6920,7 @@ mod tests {
         let i = Interner::new();
         // Some(42) is Option<Int>, cannot match against String
         let context = FxHashMap::from_iter([(i.intern("s"), Ty::String)]);
-        let src = "{{ Some(x) = @s }}{{ x }}{{_}}{{/}}";
+        let src = "% match @s\n% Some(x) =>\n{{ x }}\n% None =>\n% end\n";
         assert!(check_with_interner(src, &context, &i).is_err());
     }
 
@@ -7063,7 +7014,7 @@ mod tests {
     fn context_fn_rejected() {
         let i = Interner::new();
         let ctx = my_fn(&i);
-        let err = check_with_interner("{{ f = @my_fn }}{{_}}{{/}}", &ctx, &i).unwrap_err();
+        let err = check_with_interner("% let f = @my_fn", &ctx, &i).unwrap_err();
         assert!(err.contains("not data"), "{err}");
         let err = check_with_interner(r#"{{ @my_fn("hello") }}"#, &ctx, &i).unwrap_err();
         assert!(err.contains("not data"), "{err}");
@@ -7076,7 +7027,7 @@ mod tests {
             i.intern("items"),
             Ty::Array(Box::new(Ty::I64), LenTerm::Known(3)),
         )]);
-        let src = "{{ x = @items }}{{_}}{{/}}";
+        let src = "% let x = @items";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
@@ -7088,7 +7039,7 @@ mod tests {
         // @opt : Option<Int> - Lazy tier, allowed.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("opt"), Ty::Option(Box::new(Ty::I64)))]);
-        let src = "{{ x = @opt }}{{_}}{{/}}";
+        let src = "% let x = @opt";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
@@ -7097,7 +7048,7 @@ mod tests {
         // @pair : (Int, String) - Lazy tier, allowed.
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("pair"), Ty::Tuple(vec![Ty::I64, Ty::String]))]);
-        let src = "{{ x = @pair }}{{_}}{{/}}";
+        let src = "% let x = @pair";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
@@ -7112,7 +7063,7 @@ mod tests {
                 Ty::I64,
             )]))),
         )]);
-        let src = "{{ x = @obj }}{{_}}{{/}}";
+        let src = "% let x = @obj";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
@@ -7131,7 +7082,7 @@ mod tests {
                 LenTerm::Known(3),
             ),
         )]);
-        let src = "{{ x = @fns }}{{_}}{{/}}";
+        let src = "% let x = @fns";
         let err = check_with_interner(src, &ctx, &i).unwrap_err();
         assert!(err.contains("not data"), "{err}");
     }
@@ -7148,7 +7099,7 @@ mod tests {
                 identity_args: vec![],
             },
         )]);
-        let src = "{{ x = @conn }}{{_}}{{/}}";
+        let src = "% let x = @conn";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
@@ -7179,7 +7130,7 @@ mod tests {
     fn pure_int_context_load_ok() {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("count"), Ty::I64)]);
-        let src = "{{ x = @count }}{{_}}{{/}}";
+        let src = "% let x = @count";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 
@@ -7187,7 +7138,7 @@ mod tests {
     fn pure_string_context_load_ok() {
         let i = Interner::new();
         let ctx = FxHashMap::from_iter([(i.intern("msg"), Ty::String)]);
-        let src = "{{ x = @msg }}{{_}}{{/}}";
+        let src = "% let x = @msg";
         check_with_interner(src, &ctx, &i).unwrap();
     }
 }

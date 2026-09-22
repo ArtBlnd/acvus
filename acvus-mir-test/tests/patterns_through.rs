@@ -55,9 +55,16 @@ fn a_word_binding_is_read_through_the_reference_at_an_operator() {
 #[test]
 fn an_object_pattern_against_a_reference_binds_field_references() {
     let i = Interner::new();
-    let ir = compile_to_ir(&i, "{{ { name, } = &@user }}{{ name }}{{/}}", &user(&i)).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% if let { name, } = &@user\n\
+         {{ name }}\n\
+         % end",
+        &user(&i),
+    )
+    .unwrap();
     assert!(ir.contains(".name"), "{ir}");
-    assert!(ir.contains("string_concat"), "{ir}");
+    assert!(ir.contains("append"), "{ir}");
     assert!(ir.contains("commit @user"), "{ir}");
 }
 
@@ -65,8 +72,19 @@ fn an_object_pattern_against_a_reference_binds_field_references() {
 fn a_literal_pattern_compares_through_the_reference() {
     let i = Interner::new();
     let role = FxHashMap::from_iter([(i.intern("role"), Ty::String)]);
-    let ir = compile_to_ir(&i, r#"{{ "admin" = &@role }}yes{{_}}no{{/}}"#, &role).unwrap();
-    assert!(ir.contains("test_literal") || ir.contains("test "), "{ir}");
+    let ir = compile_to_ir(
+        &i,
+        "% match &@role\n\
+         % \"admin\" =>\n\
+         yes\n\
+         % _ =>\n\
+         no\n\
+         % end",
+        &role,
+    )
+    .unwrap();
+    assert!(ir.contains("ref &@role"), "{ir}");
+    assert!(ir.contains("switch"), "{ir}");
     assert!(ir.contains("commit @role"), "{ir}");
 }
 

@@ -27,8 +27,6 @@ impl std::error::Error for ParseError {}
 pub enum ParseErrorKind {
     // Scanner errors
     UnclosedTag,
-    UnclosedComment,
-    UnclosedString,
 
     // Tokenizer errors
     UnexpectedCharacter(char),
@@ -48,15 +46,16 @@ pub enum ParseErrorKind {
     InvalidToken,
     UnexpectedEof,
 
-    // Tree builder errors
-    UnmatchedCloseBlock,
-    UnmatchedCatchAll,
+    // Template block structure (RFC-0071)
+    UnmatchedEnd,
     UnclosedBlock,
-    ExpectedCloseBlock,
+    ElseOutsideIf,
+    ElseAfterElse,
+    ArmOutsideMatch,
+    MatchBodyBeforeArm,
 
     // Pattern conversion errors
     InvalidPattern(String),
-    RefutablePattern,
 
     // Script errors
     InvalidAssignTarget,
@@ -66,10 +65,6 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParseErrorKind::UnclosedTag => write!(f, "unclosed tag, expected `}}}}`"),
-            ParseErrorKind::UnclosedComment => {
-                write!(f, "unclosed comment, expected `--}}}}`")
-            }
-            ParseErrorKind::UnclosedString => write!(f, "unclosed string literal"),
             ParseErrorKind::UnexpectedCharacter(c) => write!(f, "unexpected character '{c}'"),
             ParseErrorKind::InvalidNumber(s) => write!(f, "invalid number '{s}'"),
             ParseErrorKind::BadLiteral(kind) => write!(f, "{kind}"),
@@ -81,19 +76,24 @@ impl fmt::Display for ParseErrorKind {
             }
             ParseErrorKind::InvalidToken => write!(f, "not the start of any token"),
             ParseErrorKind::UnexpectedEof => write!(f, "unexpected end of input"),
-            ParseErrorKind::UnmatchedCloseBlock => {
-                write!(f, "`{{{{/}}}}` without matching open block")
+            ParseErrorKind::UnmatchedEnd => {
+                write!(f, "`% end` closes no block")
             }
-            ParseErrorKind::UnmatchedCatchAll => {
-                write!(f, "`{{{{_}}}}` without matching open block")
+            ParseErrorKind::UnclosedBlock => write!(f, "block not closed, expected `% end`"),
+            ParseErrorKind::ElseOutsideIf => {
+                write!(f, "`% else` needs an `% if` to belong to")
             }
-            ParseErrorKind::UnclosedBlock => write!(f, "block not closed, expected `{{{{/}}}}`"),
-            ParseErrorKind::ExpectedCloseBlock => write!(f, "expected `{{{{/}}}}`"),
-            ParseErrorKind::InvalidPattern(s) => write!(f, "invalid pattern: {s}"),
-            ParseErrorKind::RefutablePattern => write!(
+            ParseErrorKind::ElseAfterElse => {
+                write!(f, "this `% if` already has an `% else`")
+            }
+            ParseErrorKind::ArmOutsideMatch => {
+                write!(f, "`% pattern =>` needs a `% match` to belong to")
+            }
+            ParseErrorKind::MatchBodyBeforeArm => write!(
                 f,
-                "refutable pattern not allowed in `in` binding; use `=` for pattern matching"
+                "a `% match` body begins with a `% pattern =>` arm"
             ),
+            ParseErrorKind::InvalidPattern(s) => write!(f, "invalid pattern: {s}"),
             ParseErrorKind::InvalidAssignTarget => write!(
                 f,
                 "not an assignment target: the left of `=` is a place -- a name, \

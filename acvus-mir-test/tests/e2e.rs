@@ -142,7 +142,7 @@ fn obj(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
 /// Helper: a context holding a `Vec<elem>`. A pipeline takes the vec whole
 /// (`iter` consumes it), so a body that names the context takes it into a
 /// local and puts an empty list back before the pipeline runs
-/// (`{{ items = @items }}{{ @items = vec([]) }}`, RFC-0025).
+/// (`% let items = @items` / `% @items = vec([])`, RFC-0025).
 fn list_context(i: &Interner, name: &str, elem: Ty) -> FxHashMap<Astr, Ty> {
     ctx(i, &[(name, acvus_extern::vec_ty(i, elem))])
 }
@@ -196,7 +196,7 @@ fn context_read() {
 #[test]
 fn variable_write() {
     let i = Interner::new();
-    let ir = compile_simple(&i, "{{ count = 42 }}").unwrap();
+    let ir = compile_simple(&i, "% let count = 42").unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -213,7 +213,13 @@ fn context_field_access() {
 fn arithmetic_to_string() {
     let i = Interner::new();
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
-    let ir = compile_to_ir(&i, "{{ out = @a + @b }}{{ out.to_string() }}", &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% let out = @a + @b\n\
+                                {{ out.to_string() }}",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -224,7 +230,13 @@ fn simple_match_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
     // Variable binding is body-less - defines x in current scope.
-    let ir = compile_to_ir(&i, r#"{{ x = &@name }}{{ x }}"#, &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% let x = &@name\n\
+                                {{ x }}",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -234,7 +246,12 @@ fn match_literal_filter() {
     let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ "admin" = @role }}admin page{{_}}guest page{{/}}"#,
+        "% match @role\n\
+         % \"admin\" =>\n\
+         admin page\n\
+         % _ =>\n\
+         guest page\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -247,7 +264,14 @@ fn multi_arm_match() {
     let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ "admin" = @role }}admin{{ "user" = }}user{{_}}guest{{/}}"#,
+        "% match @role\n\
+         % \"admin\" =>\n\
+         admin\n\
+         % \"user\" =>\n\
+         user\n\
+         % _ =>\n\
+         guest\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -261,7 +285,12 @@ fn list_destructure_head() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ [a, b, ..] = @items }}{{ a.to_string() }}{{_}}empty{{/}}"#,
+        "% match @items\n\
+         % [a, b, ..] =>\n\
+         {{ a.to_string() }}\n\
+         % _ =>\n\
+         empty\n\
+         % end",
         &items_context(&i),
     )
     .unwrap();
@@ -275,7 +304,9 @@ fn object_pattern() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ { name, age, } = @user }}{{ name }}{{/}}"#,
+        "% if let { name, age, } = @user\n\
+         {{ name }}\n\
+         % end",
         &user_context(&i),
     )
     .unwrap();
@@ -292,7 +323,11 @@ fn pipe_filter_map() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|x| -> *x != 0) | map(|x| -> x + 1) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -315,7 +350,11 @@ fn lambda_in_filter() {
     // Variable binding is body-less.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|x| -> *x != 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -368,7 +407,8 @@ fn extern_async_call() {
     };
     let ir = compile_to_ir_with(
         &i,
-        r#"{{ user = fetch_user(1) }}{{ user }}"#,
+        "% let user = fetch_user(1)\n\
+         {{ user }}",
         &FxHashMap::default(),
         &[fetch_user],
     )
@@ -384,7 +424,9 @@ fn tuple_expression() {
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ (a, b) = (@a, @b) }}{{ a.to_string() }}{{ b }}{{_}}{{/}}"#,
+        "% if let (a, b) = (@a, @b)\n\
+         {{ a.to_string() }}{{ b }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -395,7 +437,14 @@ fn tuple_expression() {
 fn tuple_pattern_binding() {
     let i = Interner::new();
     let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::I64]))]);
-    let ir = compile_to_ir(&i, r#"{{ (name, age) = @pair }}{{ name }}{{/}}"#, &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% if let (name, age) = @pair\n\
+                                {{ name }}\n\
+                                % end",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -403,7 +452,14 @@ fn tuple_pattern_binding() {
 fn tuple_pattern_wildcard() {
     let i = Interner::new();
     let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::String, Ty::I64]))]);
-    let ir = compile_to_ir(&i, r#"{{ (name, _) = @pair }}{{ name }}{{/}}"#, &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% if let (name, _) = @pair\n\
+                                {{ name }}\n\
+                                % end",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -413,7 +469,14 @@ fn tuple_pattern_literal_match() {
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ (0, 1) = (@a, @b) }}zero-one{{ (1, _) = }}one-any{{_}}other{{/}}"#,
+        "% match (@a, @b)\n\
+         % (0, 1) =>\n\
+         zero-one\n\
+         % (1, _) =>\n\
+         one-any\n\
+         % _ =>\n\
+         other\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -432,7 +495,9 @@ fn tuple_nested_destructure() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ (label, { x, }) = &@data }}{{ label }}{{/}}"#,
+        "% if let (label, { x, }) = &@data\n\
+         {{ label }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -445,7 +510,9 @@ fn error_tuple_arity_mismatch() {
     let context = ctx(&i, &[("pair", Ty::Tuple(vec![Ty::I64, Ty::I64]))]);
     let result = compile_to_ir(
         &i,
-        r#"{{ (a, b, c) = @pair }}{{ a.to_string() }}{{/}}"#,
+        "% if let (a, b, c) = @pair\n\
+         {{ a.to_string() }}\n\
+         % end",
         &context,
     );
     assert!(result.is_err());
@@ -476,14 +543,14 @@ fn undeclared_context_is_refused() {
 #[test]
 fn error_undefined_variable() {
     let i = Interner::new();
-    let result = compile_to_ir(&i, "{{ x = unknown }}{{_}}{{/}}", &FxHashMap::default());
+    let result = compile_to_ir(&i, "% let x = unknown", &FxHashMap::default());
     assert!(result.is_err());
 }
 
 #[test]
 fn error_type_mismatch() {
     let i = Interner::new();
-    let result = compile_simple(&i, r#"{{ x = 1 + 2.0 }}{{_}}{{/}}"#);
+    let result = compile_simple(&i, "% let x = 1 + 2.0");
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -491,24 +558,16 @@ fn error_type_mismatch() {
 // -- Iteration (`in`) --------------------------------------------
 
 #[test]
-fn error_iter_refutable_pattern() {
-    let i = Interner::new();
-    let context = ctx(
-        &i,
-        &[(
-            "roles",
-            Ty::Array(Box::new(Ty::String), acvus_mir::ty::LenTerm::Known(3)),
-        )],
-    );
-    let result = compile_to_ir(&i, r#"{{ "admin" in @roles }}...{{/}}"#, &context);
-    assert!(result.is_err());
-}
-
-#[test]
 fn error_iter_not_iterable() {
     let i = Interner::new();
     let context = ctx(&i, &[("name", Ty::String)]);
-    let result = compile_to_ir(&i, "{{ x in @name }}{{ x }}{{/}}", &context);
+    let result = compile_to_ir(
+        &i,
+        "% for x in &@name\n\
+         {{ x }}\n\
+         % end",
+        &context,
+    );
     assert!(result.is_err());
 }
 
@@ -519,7 +578,13 @@ fn variable_new_ref_binding() {
     let i = Interner::new();
     // result is not in initial context - dynamically created via binding.
     let context = ctx(&i, &[("name", Ty::String)]);
-    let ir = compile_to_ir(&i, r#"{{ result = &@name }}{{ result }}"#, &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% let result = &@name\n\
+                                {{ result }}",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -530,7 +595,14 @@ fn variable_new_ref_in_match_arm() {
     let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ selected = "" }}{{ "admin" = @role }}{{ selected = "yes" }}{{_}}{{ selected = "no" }}{{/}}{{ selected }}"#,
+        "% let selected = \"\"\n\
+         % match @role\n\
+         % \"admin\" =>\n\
+         % selected = \"yes\"\n\
+         % _ =>\n\
+         % selected = \"no\"\n\
+         % end\n\
+         {{ selected }}",
         &context,
     )
     .unwrap();
@@ -555,7 +627,12 @@ fn list_head_with_object_elements() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ [first, ..] = &@users }}{{ first.name }}{{_}}empty{{/}}"#,
+        "% match &@users\n\
+         % [first, ..] =>\n\
+         {{ first.name }}\n\
+         % _ =>\n\
+         empty\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -570,7 +647,8 @@ fn object_literal_field_access() {
     let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ o = { @name, } }}{{ o.name }}{{_}}{{/}}"#,
+        "% let o = { @name, }\n\
+         {{ o.name }}",
         &context,
     )
     .unwrap();
@@ -585,7 +663,8 @@ fn comparison_operators() {
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @a > @b }}{{ x.to_string() }}{{_}}{{/}}"#,
+        "% let x = @a > @b\n\
+         {{ x.to_string() }}",
         &context,
     )
     .unwrap();
@@ -598,7 +677,8 @@ fn unary_negation() {
     let context = ctx(&i, &[("n", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = -@n }}{{ x.to_string() }}{{_}}{{/}}"#,
+        "% let x = -@n\n\
+         {{ x.to_string() }}",
         &context,
     )
     .unwrap();
@@ -611,7 +691,8 @@ fn boolean_not() {
     let context = ctx(&i, &[("flag", Ty::Bool)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = !@flag }}{{ x.to_string() }}{{_}}{{/}}"#,
+        "% let x = !@flag\n\
+         {{ x.to_string() }}",
         &context,
     )
     .unwrap();
@@ -626,7 +707,8 @@ fn to_float_conversion() {
     let context = ctx(&i, &[("n", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @n as f64 }}{{ x.to_string() }}{{_}}{{/}}"#,
+        "% let x = @n as f64\n\
+         {{ x.to_string() }}",
         &context,
     )
     .unwrap();
@@ -639,7 +721,8 @@ fn to_int_conversion() {
     let context = ctx(&i, &[("f", Ty::Float)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @f as i64 }}{{ x.to_string() }}{{_}}{{/}}"#,
+        "% let x = @f as i64\n\
+         {{ x.to_string() }}",
         &context,
     )
     .unwrap();
@@ -653,7 +736,11 @@ fn pmap_builtin() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | pmap(|i| -> i + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | pmap(|i| -> i + 1) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -667,7 +754,12 @@ fn list_destructure_tail() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ [.., a, b] = @items }}{{ a.to_string() }}{{_}}empty{{/}}"#,
+        "% match @items\n\
+         % [.., a, b] =>\n\
+         {{ a.to_string() }}\n\
+         % _ =>\n\
+         empty\n\
+         % end",
         &items_context(&i),
     )
     .unwrap();
@@ -679,7 +771,12 @@ fn list_destructure_tail() {
 #[test]
 fn variable_write_then_read() {
     let i = Interner::new();
-    let ir = compile_simple(&i, r#"{{ x = 42 }}{{ x.to_string() }}"#).unwrap();
+    let ir = compile_simple(
+        &i,
+        "% let x = 42\n\
+                                 {{ x.to_string() }}",
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -723,7 +820,11 @@ fn closure_capture_context() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > @threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|i| -> *i > @threshold) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -739,7 +840,9 @@ fn list_literal_expression() {
     let i = Interner::new();
     let ir = compile_simple(
         &i,
-        r#"{{ x = [1, 2, 3] }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        "% let x = [1, 2, 3]\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
     )
     .unwrap();
     insta::assert_snapshot!(ir);
@@ -753,7 +856,11 @@ fn lambda_map_arithmetic() {
     // Lambda param type resolved via unification: map(Vec<Int>, |x| -> x + 1)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | map(|i| -> i + 1) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -766,7 +873,11 @@ fn lambda_filter_comparison() {
     // Lambda param type resolved via unification: filter(Vec<Int>, |x| -> *x > 0)
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|i| -> *i > 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -782,7 +893,12 @@ fn closure_capture_local() {
     // copied at each use (RFC-0018).
     let ir = compile_to_ir(
         &i,
-        r#"{{ threshold = 5 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > threshold) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        "% let threshold = 5\n\
+         % let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|i| -> *i > threshold) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -799,7 +915,12 @@ fn list_destructure_head_and_tail() {
     // [a, .., z] pattern - head and tail extraction.
     let ir = compile_to_ir(
         &i,
-        r#"{{ [first, .., last] = @items }}{{ first.to_string() }}{{_}}empty{{/}}"#,
+        "% match @items\n\
+         % [first, .., last] =>\n\
+         {{ first.to_string() }}\n\
+         % _ =>\n\
+         empty\n\
+         % end",
         &items_context(&i),
     )
     .unwrap();
@@ -820,7 +941,9 @@ fn nested_tuple_pattern() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ ((a, b), label) = &@data }}{{ label }}{{/}}"#,
+        "% if let ((a, b), label) = &@data\n\
+         {{ label }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -835,7 +958,8 @@ fn variable_write_computed() {
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ result = @a + @b }}{{ result.to_string() }}"#,
+        "% let result = @a + @b\n\
+         {{ result.to_string() }}",
         &context,
     )
     .unwrap();
@@ -850,7 +974,12 @@ fn match_binding_with_body() {
     // Object pattern with body (goes through normal match lowering).
     let ir = compile_to_ir(
         &i,
-        r#"{{ { name, } = @user }}{{ name }} is here{{_}}no user{{/}}"#,
+        "% match @user\n\
+         % { name, } =>\n\
+         {{ name }} is here\n\
+         % _ =>\n\
+         no user\n\
+         % end",
         &user_context(&i),
     )
     .unwrap();
@@ -865,7 +994,9 @@ fn variable_shadowing() {
     let context = ctx(&i, &[("name", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = "outer" }}{{ x = &@name }}{{ x }}{{_}}{{/}}"#,
+        "% let x = \"outer\"\n\
+         % let x = &@name\n\
+         {{ x }}",
         &context,
     )
     .unwrap();
@@ -882,7 +1013,13 @@ fn catch_all_with_binding() {
     let context = ctx(&i, &[("role", Ty::String)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ "admin" = @role }}admin{{_}}{{ fallback = "guest" }}{{ fallback }}{{/}}"#,
+        "% match @role\n\
+         % \"admin\" =>\n\
+         admin\n\
+         % _ =>\n\
+         % let fallback = \"guest\"\n\
+         {{ fallback }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -896,7 +1033,11 @@ fn triple_pipe_chain() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|i| -> *i != 0) | map(|i| -> i + 1) | map(|i| -> i * 2) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -919,7 +1060,9 @@ fn field_access_on_destructured() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ (obj, _) = &@pair }}{{ obj.name }}{{/}}"#,
+        "% if let (obj, _) = &@pair\n\
+         {{ obj.name }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -934,7 +1077,11 @@ fn equality_as_match_source() {
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        r#"{{ true = @a == @b }}equal{{_}}not equal{{/}}"#,
+        "% if @a == @b\n\
+         equal\n\
+         % else\n\
+         not equal\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -949,7 +1096,11 @@ fn lambda_negate_param() {
     // Lambda param has Ty::Var initially; -i must resolve via unification.
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> -i) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | map(|i| -> -i) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -965,7 +1116,11 @@ fn lambda_not_param() {
     let context = list_context(&i, "flags", Ty::Bool);
     let ir = compile_to_ir(
         &i,
-        r#"{{ flags = @flags }}{{ @flags = vec([]) }}{{ x = flags | into_iter | map(|i| -> !i) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let flags = @flags\n\
+         % @flags = vec([])\n\
+         % let x = flags | into_iter | map(|i| -> !i) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -980,7 +1135,12 @@ fn object_destructure_match() {
     // Object pattern directly on Object source (not Vec<Object>).
     let ir = compile_to_ir(
         &i,
-        r#"{{ { name, age, } = @user }}{{ name }}{{ age.to_string() }}{{_}}none{{/}}"#,
+        "% match @user\n\
+         % { name, age, } =>\n\
+         {{ name }}{{ age.to_string() }}\n\
+         % _ =>\n\
+         none\n\
+         % end",
         &user_context(&i),
     )
     .unwrap();
@@ -1001,7 +1161,11 @@ fn multiple_closures_same_capture() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | map(|i| -> i + @offset) | filter(|i| -> *i > 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1022,7 +1186,10 @@ fn string_equality_in_filter() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = ["".to_string(), "".to_string(), "".to_string()] }}{{ x = names | into_iter | filter(|n| -> n != "admin".to_string()) }}{{ x | join(",".to_string()) }}"#,
+        "% let names = @names\n\
+         % @names = [\"\".to_string(), \"\".to_string(), \"\".to_string()]\n\
+         % let x = names | into_iter | filter(|n| -> n != \"admin\".to_string())\n\
+         {{ x | join(\",\".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -1042,7 +1209,10 @@ fn lambda_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.name) }}{{ x | join(",".to_string()) }}"#,
+        "% let users = @users\n\
+         % @users = vec([])\n\
+         % let x = users | into_iter | map(|u| -> u.name)\n\
+         {{ x | join(\",\".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -1058,7 +1228,11 @@ fn pipe_map_to_string_then_filter() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | map(|i| -> i + 1) | filter(|i| -> *i != 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
     )
     .unwrap();
@@ -1076,7 +1250,12 @@ fn lambda_capture_local_var_ref() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ offset = 10 }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|i| -> *i > offset) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        "% let offset = 10\n\
+         % let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|i| -> *i > offset) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1096,7 +1275,11 @@ fn lambda_multiple_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> (u.name, u.age)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let users = @users\n\
+         % @users = vec([])\n\
+         % let x = users | into_iter | map(|u| -> (u.name, u.age)) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1115,7 +1298,10 @@ fn lambda_chained_field_access() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | map(|u| -> u.address.city) }}{{ x | join(",".to_string()) }}"#,
+        "% let users = @users\n\
+         % @users = vec([])\n\
+         % let x = users | into_iter | map(|u| -> u.address.city)\n\
+         {{ x | join(\",\".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -1131,7 +1317,10 @@ fn lambda_string_concat() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = vec([]) }}{{ x = names | into_iter | map(|n| -> n + "!".to_string()) }}{{ x | join(",".to_string()) }}"#,
+        "% let names = @names\n\
+         % @names = vec([])\n\
+         % let x = names | into_iter | map(|n| -> n + \"!\".to_string())\n\
+         {{ x | join(\",\".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -1150,7 +1339,10 @@ fn pipe_filter_then_map_field() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name) }}{{ x | join(",".to_string()) }}"#,
+        "% let users = @users\n\
+         % @users = vec([])\n\
+         % let x = users | into_iter | filter(|u| -> u.age > 18) | map(|u| -> u.name)\n\
+         {{ x | join(\",\".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -1175,7 +1367,7 @@ fn error_variable_write_type_mismatch() {
     let i = Interner::new();
     // Attempting to write to a context key (read-only).
     let context = ctx(&i, &[("count", Ty::I64)]);
-    let result = compile_to_ir(&i, r#"{{ @count = "hello".to_string() }}"#, &context);
+    let result = compile_to_ir(&i, "% @count = \"hello\".to_string()", &context);
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -1188,7 +1380,11 @@ fn lambda_float_arithmetic() {
     let context = list_context(&i, "vals", Ty::Float);
     let ir = compile_to_ir(
         &i,
-        r#"{{ vals = @vals }}{{ @vals = vec([]) }}{{ x = vals | into_iter | map(|v| -> v * 2.0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let vals = @vals\n\
+         % @vals = vec([])\n\
+         % let x = vals | into_iter | map(|v| -> v * 2.0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1201,7 +1397,16 @@ fn lambda_float_arithmetic() {
 fn match_bool_literal() {
     let i = Interner::new();
     let context = ctx(&i, &[("flag", Ty::Bool)]);
-    let ir = compile_to_ir(&i, r#"{{ true = @flag }}on{{_}}off{{/}}"#, &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% if @flag\n\
+                                on\n\
+                                % else\n\
+                                off\n\
+                                % end",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1217,7 +1422,11 @@ fn filter_object_field_equality() {
     );
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ x = users | into_iter | filter(|u| -> u.active) | collect }}{{ out = len(&x) }}{{ out.to_string() }}"#,
+        "% let users = @users\n\
+         % @users = vec([])\n\
+         % let x = users | into_iter | filter(|u| -> u.active) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1237,7 +1446,8 @@ fn extern_fn_object_return() {
     );
     let ir = compile_to_ir_with(
         &i,
-        r#"{{ u = get_user(1) }}{{ u.name }}"#,
+        "% let u = get_user(1)\n\
+         {{ u.name }}",
         &FxHashMap::default(),
         &[get_user],
     )
@@ -1253,7 +1463,10 @@ fn builtin_len() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = len(&items) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = len(&items)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1266,7 +1479,9 @@ fn builtin_join() {
     let context = list_context(&i, "names", Ty::String);
     let ir = compile_to_ir(
         &i,
-        r#"{{ names = @names }}{{ @names = vec([]) }}{{ names | into_iter | join(", ".to_string()) }}"#,
+        "% let names = @names\n\
+         % @names = vec([])\n\
+         {{ names | into_iter | join(\", \".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -1279,7 +1494,10 @@ fn builtin_contains() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | contains(3) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = items | into_iter | contains(3)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1292,7 +1510,15 @@ fn builtin_find() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | find(|x| -> *x > 10) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = items | into_iter | find(|x| -> *x > 10)\n\
+         % match out\n\
+         % Some(v) =>\n\
+         {{ v.to_string() }}\n\
+         % _ =>\n\
+         none\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -1305,7 +1531,15 @@ fn builtin_reduce() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | reduce(|a, b| -> a + b) }}{{ Some(v) = out }}{{ v.to_string() }}{{_}}none{{/}}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = items | into_iter | reduce(|a, b| -> a + b)\n\
+         % match out\n\
+         % Some(v) =>\n\
+         {{ v.to_string() }}\n\
+         % _ =>\n\
+         none\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -1318,7 +1552,10 @@ fn builtin_fold() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | fold(0, |acc, x| -> acc + x) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = items | into_iter | fold(0, |acc, x| -> acc + x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1331,7 +1568,10 @@ fn builtin_any() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | any(|x| -> *x > 10) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = items | into_iter | any(|x| -> *x > 10)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1344,7 +1584,10 @@ fn builtin_all() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ out = items | into_iter | all(|x| -> *x > 0) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let out = items | into_iter | all(|x| -> *x > 0)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1358,14 +1601,14 @@ fn builtin_all() {
 #[test]
 fn variant_some_expr() {
     let i = Interner::new();
-    let ir = compile_simple(&i, "{{ x = Some(42) }}{{_}}{{/}}").unwrap();
+    let ir = compile_simple(&i, "% let x = Some(42)").unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn variant_none_expr() {
     let i = Interner::new();
-    let ir = compile_simple(&i, "{{ x = None }}{{_}}{{/}}").unwrap();
+    let ir = compile_simple(&i, "% let x = None").unwrap();
     insta::assert_snapshot!(ir);
 }
 
@@ -1375,7 +1618,12 @@ fn variant_some_pattern() {
     let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::I64)))]);
     let ir = compile_to_ir(
         &i,
-        "{{ Some(v) = &@opt }}{{ to_string(v) }}{{_}}nope{{/}}",
+        "% match &@opt\n\
+         % Some(v) =>\n\
+         {{ to_string(v) }}\n\
+         % _ =>\n\
+         nope\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -1386,15 +1634,34 @@ fn variant_some_pattern() {
 fn variant_none_pattern() {
     let i = Interner::new();
     let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::I64)))]);
-    let ir = compile_to_ir(&i, "{{ None = @opt }}none{{_}}has value{{/}}", &context).unwrap();
+    let ir = compile_to_ir(
+        &i,
+        "% match @opt\n\
+                                % None =>\n\
+                                none\n\
+                                % _ =>\n\
+                                has value\n\
+                                % end",
+        &context,
+    )
+    .unwrap();
     insta::assert_snapshot!(ir);
 }
 
 #[test]
 fn structural_enum_variant_merge() {
     let i = Interner::new();
-    let module =
-        compile_analysis(&i, "{{ A::B = @a }}hi{{/}}{{ A::C = @a }}bye{{/}}", &[]).unwrap();
+    let module = compile_analysis(
+        &i,
+        "% if let A::B = @a\n\
+                              hi\n\
+                              % end\n\
+                              % if let A::C = @a\n\
+                              bye\n\
+                              % end",
+        &[],
+    )
+    .unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
     assert!(ir.contains("C"), "variant C missing from IR:\n{ir}");
@@ -1405,7 +1672,17 @@ fn structural_enum_variant_merge() {
 #[test]
 fn structural_enum_single_variant() {
     let i = Interner::new();
-    let module = compile_analysis(&i, "{{ A::B = @a }}yes{{_}}no{{/}}", &[]).unwrap();
+    let module = compile_analysis(
+        &i,
+        "% match @a\n\
+                                       % A::B =>\n\
+                                       yes\n\
+                                       % _ =>\n\
+                                       no\n\
+                                       % end",
+        &[],
+    )
+    .unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing from IR:\n{ir}");
 }
@@ -1413,7 +1690,15 @@ fn structural_enum_single_variant() {
 #[test]
 fn structural_enum_three_variants_merge() {
     let i = Interner::new();
-    let src = "{{ S::X = @v }}x{{/}}{{ S::Y = @v }}y{{/}}{{ S::Z = @v }}z{{/}}";
+    let src = "% if let S::X = @v\n\
+               x\n\
+               % end\n\
+               % if let S::Y = @v\n\
+               y\n\
+               % end\n\
+               % if let S::Z = @v\n\
+               z\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
@@ -1424,7 +1709,12 @@ fn structural_enum_three_variants_merge() {
 #[test]
 fn structural_enum_with_payload() {
     let i = Interner::new();
-    let src = r#"{{ R::Good(v) = @r }}{{ v.to_string() }}{{_}}err{{/}}"#;
+    let src = "% match @r\n\
+               % R::Good(v) =>\n\
+               {{ v.to_string() }}\n\
+               % _ =>\n\
+               err\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Good"), "variant Good missing:\n{ir}");
@@ -1433,7 +1723,14 @@ fn structural_enum_with_payload() {
 #[test]
 fn structural_enum_mixed_payload_and_unit() {
     let i = Interner::new();
-    let src = r#"{{ R::Good(v) = @r }}{{ v.to_string() }}{{ R::Bad = }}fail{{_}}??{{/}}"#;
+    let src = "% match @r\n\
+               % R::Good(v) =>\n\
+               {{ v.to_string() }}\n\
+               % R::Bad =>\n\
+               fail\n\
+               % _ =>\n\
+               ??\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Good"), "variant Good missing:\n{ir}");
@@ -1444,7 +1741,12 @@ fn structural_enum_mixed_payload_and_unit() {
 fn structural_enum_same_var_different_blocks_merge() {
     // Key regression test: separate match blocks on the same context var must merge.
     let i = Interner::new();
-    let src = "{{ A::B = @a }}b{{/}}{{ A::C = @a }}c{{/}}";
+    let src = "% if let A::B = @a\n\
+               b\n\
+               % end\n\
+               % if let A::C = @a\n\
+               c\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("B"), "variant B missing:\n{ir}");
@@ -1454,7 +1756,12 @@ fn structural_enum_same_var_different_blocks_merge() {
 #[test]
 fn structural_enum_different_enums_different_vars() {
     let i = Interner::new();
-    let src = "{{ X::A = @x }}xa{{/}}{{ Y::B = @y }}yb{{/}}";
+    let src = "% if let X::A = @x\n\
+               xa\n\
+               % end\n\
+               % if let Y::B = @y\n\
+               yb\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("A"), "variant A missing:\n{ir}");
@@ -1465,7 +1772,12 @@ fn structural_enum_different_enums_different_vars() {
 fn structural_enum_name_mismatch_is_error() {
     // Matching X::A and Y::B on the same var should fail (different enum names).
     let i = Interner::new();
-    let src = "{{ X::A = @v }}a{{/}}{{ Y::B = @v }}b{{/}}";
+    let src = "% if let X::A = @v\n\
+               a\n\
+               % end\n\
+               % if let Y::B = @v\n\
+               b\n\
+               % end";
     let result = compile_analysis(&i, src, &[]);
     assert!(
         result.is_err(),
@@ -1477,7 +1789,17 @@ fn structural_enum_name_mismatch_is_error() {
 fn structural_enum_payload_unifies_with_inner_match() {
     // Payload variable must unify with patterns inside the arm body.
     let i = Interner::new();
-    let src = r#"{{ A::X(x) = @a }}{{ 0 = x }}zero{{_}}other{{/}}{{_}}none{{/}}"#;
+    let src = "% match @a\n\
+               % A::X(x) =>\n\
+               % match x\n\
+               % 0 =>\n\
+               zero\n\
+               % _ =>\n\
+               other\n\
+               % end\n\
+               % _ =>\n\
+               none\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
@@ -1487,7 +1809,13 @@ fn structural_enum_payload_unifies_with_inner_match() {
 fn structural_enum_payload_unifies_with_emit() {
     // Payload bound by variant pattern can be used in expressions (emit).
     let i = Interner::new();
-    let src = r#"{{ A::Val(v) = @a }}{{ out = v + 1 }}{{ out.to_string() }}{{_}}n/a{{/}}"#;
+    let src = "% match @a\n\
+               % A::Val(v) =>\n\
+               % let out = v + 1\n\
+               {{ out.to_string() }}\n\
+               % _ =>\n\
+               n/a\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("Val"), "variant Val missing:\n{ir}");
@@ -1500,7 +1828,15 @@ fn structural_enum_payload_type_propagates_through_context() {
     let mut variants = FxHashMap::default();
     variants.insert(i.intern("Good"), Some(Box::new(Ty::I64)));
     variants.insert(i.intern("Bad"), None);
-    let src = r#"{{ R::Good(v) = @r }}{{ out = v + 1 }}{{ out.to_string() }}{{ R::Bad = }}err{{_}}??{{/}}"#;
+    let src = "% match @r\n\
+               % R::Good(v) =>\n\
+               % let out = v + 1\n\
+               {{ out.to_string() }}\n\
+               % R::Bad =>\n\
+               err\n\
+               % _ =>\n\
+               ??\n\
+               % end";
     let module = compile_analysis(
         &i,
         src,
@@ -1527,7 +1863,14 @@ fn variant_merge_inside_tuple_pattern() {
     // Two arms with different variants nested inside a tuple pattern.
     // Both A and B must appear in the final merged Enum type.
     let i = Interner::new();
-    let src = r#"{{ (S::A, x) = @t }}{{ x }}{{ (S::B, y) = }}{{ y }}{{_}}??{{/}}"#;
+    let src = "% match @t\n\
+               % (S::A, x) =>\n\
+               {{ x }}\n\
+               % (S::B, y) =>\n\
+               {{ y }}\n\
+               % _ =>\n\
+               ??\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     eprintln!("=== TUPLE VARIANT IR ===\n{ir}\n=== END ===");
@@ -1538,7 +1881,16 @@ fn variant_merge_inside_tuple_pattern() {
 #[test]
 fn variant_merge_inside_tuple_three_arms() {
     let i = Interner::new();
-    let src = r#"{{ (S::X, _) = @t }}x{{ (S::Y, _) = }}y{{ (S::Z, _) = }}z{{_}}??{{/}}"#;
+    let src = "% match @t\n\
+               % (S::X, _) =>\n\
+               x\n\
+               % (S::Y, _) =>\n\
+               y\n\
+               % (S::Z, _) =>\n\
+               z\n\
+               % _ =>\n\
+               ??\n\
+               % end";
     let module = compile_analysis(&i, src, &[]).unwrap();
     let ir = acvus_mir::printer::dump_with(&i, &module);
     assert!(ir.contains("X"), "variant X missing:\n{ir}");
@@ -1590,7 +1942,7 @@ fn ssa_multiple_contexts_independent() {
 fn migrated_extern_param_write_rejected() {
     let i = Interner::new();
     // Writing to extern param is rejected.
-    assert!(compile_to_ir(&i, "{{ $count = 42 }}", &FxHashMap::default()).is_err());
+    assert!(compile_to_ir(&i, "% $count = 42", &FxHashMap::default()).is_err());
     // Reading an extern param via context with pipe is valid.
     let context = ctx(&i, &[("count", Ty::I64)]);
     compile_to_ir(&i, "{{ @count.to_string() }}", &context).unwrap();
@@ -1601,7 +1953,9 @@ fn migrated_integration_list_destructure() {
     let i = Interner::new();
     compile_to_ir(
         &i,
-        r#"{{ [a, b, ..] = @items }}{{ a.to_string() }}{{_}}{{/}}"#,
+        "% if let [a, b, ..] = @items\n\
+         {{ a.to_string() }}\n\
+         % end",
         &items_context(&i),
     )
     .unwrap();
@@ -1613,7 +1967,11 @@ fn migrated_integration_pipe_with_lambda() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|x| -> *x != 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1644,7 +2002,11 @@ fn migrated_pipe_extern_fn_ok() {
     let mapper = extern_fn(&i, "mapper", &[Ty::I64], Ty::String);
     compile_to_ir_with(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | map(|i| -> mapper(i)) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | map(|i| -> mapper(i)) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &items_list_context(&i),
         &[mapper],
     )
@@ -1672,7 +2034,11 @@ fn migrated_typeck_lambda_captures_outer_variable() {
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ n1 = items | into_iter | filter(|x| -> *x > @threshold) | collect }}{{ out = len(&n1) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let n1 = items | into_iter | filter(|x| -> *x > @threshold) | collect\n\
+         % let out = len(&n1)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1684,7 +2050,11 @@ fn migrated_typeck_lambda_type_check() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|x| -> *x != 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1696,7 +2066,11 @@ fn migrated_typeck_lambda_no_capture_local_params() {
     let context = items_list_context(&i);
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ n2 = items | into_iter | map(|x| -> x + 1) | collect }}{{ out = len(&n2) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let n2 = items | into_iter | map(|x| -> x + 1) | collect\n\
+         % let out = len(&n2)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1714,7 +2088,9 @@ fn migrated_typeck_list_pattern_matching() {
     );
     compile_to_ir(
         &i,
-        "{{ [a, b, ..] = @items }}{{ a.to_string() }}{{_}}{{/}}",
+        "% if let [a, b, ..] = @items\n\
+         {{ a.to_string() }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -1732,7 +2108,11 @@ fn migrated_typeck_nested_lambda_captures() {
     );
     compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ n3 = items | into_iter | map(|x| -> x * @factor) | collect }}{{ out = len(&n3) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let n3 = items | into_iter | map(|x| -> x * @factor) | collect\n\
+         % let out = len(&n3)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1744,7 +2124,9 @@ fn migrated_typeck_some_unifies_with_option_context() {
     let context = ctx(&i, &[("opt", Ty::Option(Box::new(Ty::I64)))]);
     compile_to_ir(
         &i,
-        "{{ Some(v) = &@opt }}{{ to_string(v) }}{{_}}{{/}}",
+        "% if let Some(v) = &@opt\n\
+         {{ to_string(v) }}\n\
+         % end",
         &context,
     )
     .unwrap();
@@ -1758,7 +2140,8 @@ fn migrated_print_arithmetic() {
     let context = ctx(&i, &[("a", Ty::I64), ("b", Ty::I64)]);
     let ir = compile_to_ir(
         &i,
-        "{{ x = @a + @b }}{{ x.to_string() }}{{_}}{{/}}",
+        "% let x = @a + @b\n\
+         {{ x.to_string() }}",
         &context,
     )
     .unwrap();
@@ -1771,7 +2154,11 @@ fn migrated_print_closure() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter | filter(|x| -> *x != 0) | collect }}{{ out = len(&x) }}{{ out.to_string() }}{{_}}{{/}}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter | filter(|x| -> *x != 0) | collect\n\
+         % let out = len(&x)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -2001,7 +2388,13 @@ fn migrated_move_reject_var_double_load() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | into_iter }}{{ n4 = a | collect }}{{ out = len(&n4) }}{{ out.to_string() }}{{ n5 = a | collect }}{{ out = len(&n5) }}{{ out.to_string() }}",
+        "% let a = @items | into_iter\n\
+         % let n4 = a | collect\n\
+         % let out = len(&n4)\n\
+         {{ out.to_string() }}\n\
+         % let n5 = a | collect\n\
+         % let out = len(&n5)\n\
+         {{ out.to_string() }}",
         &context,
     );
     assert!(result.is_err(), "should reject var double load of iterator");
@@ -2089,7 +2482,18 @@ fn migrated_move_accept_var_reassign() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ a = items | into_iter }}{{ n6 = a | collect }}{{ out = len(&n6) }}{{ out.to_string() }}{{ items2 = @items2 }}{{ @items2 = vec([]) }}{{ a = items2 | into_iter }}{{ n7 = a | collect }}{{ out = len(&n7) }}{{ out.to_string() }}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let a = items | into_iter\n\
+         % let n6 = a | collect\n\
+         % let out = len(&n6)\n\
+         {{ out.to_string() }}\n\
+         % let items2 = @items2\n\
+         % @items2 = vec([])\n\
+         % let a = items2 | into_iter\n\
+         % let n7 = a | collect\n\
+         % let out = len(&n7)\n\
+         {{ out.to_string() }}",
         &context,
     );
     assert!(result.is_ok(), "reassigned var should be alive: {result:?}");
@@ -2179,7 +2583,17 @@ fn migrated_move_reject_branch_move_then_use() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ a = @items | into_iter }}{{ true = @flag }}{{ n8 = a | collect }}{{ out = len(&n8) }}{{ out.to_string() }}{{_}}nothing{{/}}{{ n9 = a | collect }}{{ out = len(&n9) }}{{ out.to_string() }}",
+        "% let a = @items | into_iter\n\
+         % if @flag\n\
+         % let n8 = a | collect\n\
+         % let out = len(&n8)\n\
+         {{ out.to_string() }}\n\
+         % else\n\
+         nothing\n\
+         % end\n\
+         % let n9 = a | collect\n\
+         % let out = len(&n9)\n\
+         {{ out.to_string() }}",
         &context,
     );
     assert!(
@@ -2198,7 +2612,19 @@ fn migrated_move_reject_both_branches_move_then_use() {
     let context = ctx(&i, &[("flag", Ty::Bool), ("src", iter_int_ty(&i))]);
     let result = compile_to_ir(
         &i,
-        "{{ a = @src }}{{ true = @flag }}{{ n10 = a | collect }}{{ out = len(&n10) }}{{ out.to_string() }}{{_}}{{ n11 = a | collect }}{{ out = len(&n11) }}{{ out.to_string() }}{{/}}{{ n12 = a | collect }}{{ out = len(&n12) }}{{ out.to_string() }}",
+        "% let a = @src\n\
+         % if @flag\n\
+         % let n10 = a | collect\n\
+         % let out = len(&n10)\n\
+         {{ out.to_string() }}\n\
+         % else\n\
+         % let n11 = a | collect\n\
+         % let out = len(&n11)\n\
+         {{ out.to_string() }}\n\
+         % end\n\
+         % let n12 = a | collect\n\
+         % let out = len(&n12)\n\
+         {{ out.to_string() }}",
         &context,
     );
     assert!(
@@ -2219,7 +2645,16 @@ fn migrated_move_accept_branch_move_no_use_after() {
     );
     let result = compile_to_ir(
         &i,
-        "{{ items = @items }}{{ @items = vec([]) }}{{ a = items | into_iter }}{{ true = @flag }}{{ n13 = a | collect }}{{ out = len(&n13) }}{{ out.to_string() }}{{_}}nothing{{/}}",
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let a = items | into_iter\n\
+         % if @flag\n\
+         % let n13 = a | collect\n\
+         % let out = len(&n13)\n\
+         {{ out.to_string() }}\n\
+         % else\n\
+         nothing\n\
+         % end",
         &context,
     );
     assert!(
@@ -2312,7 +2747,13 @@ fn migrated_move_accept_lambda_context_in_body_is_fn() {
     let context = items_list_context(&i);
     let result = compile_to_ir(
         &i,
-        "{{ f = (|z| -> { let items = @items; @items = vec([]); collect(items | into_iter) }) }}{{ n19 = f(0) }}{{ out = len(&n19) }}{{ out.to_string() }}{{ n20 = f(0) }}{{ out = len(&n20) }}{{ out.to_string() }}",
+        "% let f = (|z| -> { let items = @items; @items = vec([]); collect(items | into_iter) })\n\
+         % let n19 = f(0)\n\
+         % let out = len(&n19)\n\
+         {{ out.to_string() }}\n\
+         % let n20 = f(0)\n\
+         % let out = len(&n20)\n\
+         {{ out.to_string() }}",
         &context,
     );
     assert!(
@@ -2357,7 +2798,13 @@ fn migrated_move_reject_iter_var_without_purify() {
     let context = ctx(&i, &[("src", iter_int_ty(&i))]);
     let result = compile_to_ir(
         &i,
-        "{{ a = @src }}{{ n14 = a | collect }}{{ out = len(&n14) }}{{ out.to_string() }}{{ n15 = a | collect }}{{ out = len(&n15) }}{{ out.to_string() }}",
+        "% let a = @src\n\
+         % let n14 = a | collect\n\
+         % let out = len(&n14)\n\
+         {{ out.to_string() }}\n\
+         % let n15 = a | collect\n\
+         % let out = len(&n15)\n\
+         {{ out.to_string() }}",
         &context,
     );
     assert!(
@@ -2427,7 +2874,7 @@ fn projection_context_field_read() {
 fn projection_context_whole_write() {
     let i = Interner::new();
     let context = ctx(&i, &[("out", Ty::String)]);
-    let ir = compile_to_ir(&i, r#"{{ @out = "hello".to_string() }}"#, &context).unwrap();
+    let ir = compile_to_ir(&i, "% @out = \"hello\".to_string()", &context).unwrap();
     // Context store should produce Store instruction (may remain after SSA for write-back).
     assert!(
         ir.contains("commit @out"),
@@ -2480,7 +2927,8 @@ fn projection_param_read() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        "{{ n = $count + 1 }}{{ n.to_string() }}",
+        "% let n = $count + 1\n\
+         {{ n.to_string() }}",
         &FxHashMap::from_iter([(i.intern("count"), Ty::I64)]),
     )
     .unwrap();
@@ -2542,7 +2990,7 @@ fn projection_soundness_reject_param_write() {
     let i = Interner::new();
     let result = compile_to_ir(
         &i,
-        "{{ $count = 42 }}",
+        "% $count = 42",
         &FxHashMap::from_iter([(i.intern("count"), Ty::I64)]),
     );
     assert!(result.is_err(), "writing to ExternParam should fail");
@@ -2586,7 +3034,12 @@ fn projection_move_single_use() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter }}{{ n16 = x | collect }}{{ out = len(&n16) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter\n\
+         % let n16 = x | collect\n\
+         % let out = len(&n16)\n\
+         {{ out.to_string() }}",
         &context,
     )
     .unwrap();
@@ -2603,9 +3056,21 @@ fn projection_move_var_reassign_revives() {
     let context = items_list_context(&i);
     let ir = compile_to_ir(
         &i,
-        r#"{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter }}{{ n17 = x | collect }}{{ out = len(&n17) }}{{ out.to_string() }}{{ items = @items }}{{ @items = vec([]) }}{{ x = items | into_iter }}{{ n18 = x | collect }}{{ out = len(&n18) }}{{ out.to_string() }}"#,
+        "% let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter\n\
+         % let n17 = x | collect\n\
+         % let out = len(&n17)\n\
+         {{ out.to_string() }}\n\
+         % let items = @items\n\
+         % @items = vec([])\n\
+         % let x = items | into_iter\n\
+         % let n18 = x | collect\n\
+         % let out = len(&n18)\n\
+         {{ out.to_string() }}",
         &context,
-    ).unwrap();
+    )
+    .unwrap();
     assert!(
         ir.contains("return"),
         "var reassign should revive move-only: {ir}"
@@ -2667,7 +3132,9 @@ fn sroa_field_read_in_lambda() {
     let context = list_context(&i, "users", obj(&i, &[("name", Ty::String)]));
     let ir = compile_to_ir(
         &i,
-        r#"{{ users = @users }}{{ @users = vec([]) }}{{ users | into_iter | map(|u| -> u.name) | collect | into_iter | join(",".to_string()) }}"#,
+        "% let users = @users\n\
+         % @users = vec([])\n\
+         {{ users | into_iter | map(|u| -> u.name) | collect | into_iter | join(\",\".to_string()) }}",
         &context,
     )
     .unwrap();
@@ -2914,4 +3381,52 @@ fn script_if_let_expr() {
     let i = Interner::new();
     let ir = script_mode(&i, "let x = if let Some(v) = Some(42) { v } else { 0 }; x");
     insta::assert_snapshot!(ir);
+}
+
+// -- RFC-0071: a template is a script whose text lines are output -------
+
+/// A `%` line's `for` is the script's own, so a traversal of a container
+/// of objects needs no template form: the body's text lines append once
+/// per iteration.
+#[test]
+fn a_template_traverses_a_vec_of_objects() {
+    let i = Interner::new();
+    let ir = compile_to_ir(
+        &i,
+        "% let people = vec([{ name: \"Ada\".to_string(), }, { name: \"Emmy\".to_string(), }])\n\
+         % for p in &people\n\
+         - {{ &p.name }}\n\
+         % end\n",
+        &FxHashMap::default(),
+    )
+    .unwrap();
+    assert!(ir.contains("for slice"), "{ir}");
+    assert!(ir.contains("append"), "{ir}");
+    assert!(!ir.contains("string_concat"), "{ir}");
+}
+
+/// A template calls another function as any function that returns a
+/// `String`; composition is a call and there is no include (RFC-0071
+/// Decision 4).
+#[test]
+fn a_template_calls_a_function_returning_a_string() {
+    let i = Interner::new();
+    let ir = compile_template_with_helpers(
+        &i,
+        ("main", "Answer {{ rules(@lang) }}.\n"),
+        &[(
+            "rules",
+            r#""in " + $lang"#,
+            vec![ParamTerm::<Poly>::new(
+                i.intern("lang"),
+                lift_to_poly(&Ty::String),
+            )],
+        )],
+        &[("lang", Ty::String)],
+        &[],
+    )
+    .unwrap();
+    assert!(ir.contains("-- rules --"), "{ir}");
+    assert!(ir.contains("-- main --"), "{ir}");
+    assert!(ir.contains("append"), "{ir}");
 }

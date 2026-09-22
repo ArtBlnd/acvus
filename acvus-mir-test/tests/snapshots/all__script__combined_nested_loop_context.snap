@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/script.rs
-assertion_line: 219
 expression: ir
 ---
 === main ===
@@ -50,14 +49,14 @@ expression: ir
     ; r0 (@outer) : Array<Array<i64, 3>, 3>
     ; r1 (@total) : i64
     ; r2 (@outer) : Array<Array<i64, 3>, 3>
-    ; r3 (into_iter(...)) : Iterator<Array<i64, 3>, Pure>
-    ; r4 (rows.) : &mut Iterator<Array<i64, 3>, Pure>
+    ; r3 (into_iter(...)) : Items<Array<i64, 3>>
+    ; r4 (rows.) : &mut Items<Array<i64, 3>>
     ; r5 (next(...)) : Option<Array<i64, 3>>
     ; r6 (v10) : Bool
     ; r7 (row) : Array<i64, 3>
     ; r8 (row) : Array<i64, 3>
-    ; r9 (into_iter(...)) : Iterator<i64, Pure>
-    ; r10 (xs.) : &mut Iterator<i64, Pure>
+    ; r9 (into_iter(...)) : Items<i64>
+    ; r10 (xs.) : &mut Items<i64>
     ; r11 (next(...)) : Option<i64>
     ; r12 (v18) : Bool
     ; r13 (x) : i64
@@ -68,8 +67,8 @@ expression: ir
     ; r18 (v25) : Array<Array<i64, 3>, 3>
     ; r19 (v26) : i64
     ; r20 (@total) : i64
-    ; r21 (xs) : Iterator<i64, Pure>
-    ; r22 (rows) : Iterator<Array<i64, 3>, Pure>
+    ; r21 (xs) : Items<i64>
+    ; r22 (rows) : Items<Array<i64, 3>>
     ; r23 (x) : i64
     ; r24 (@outer) : Array<Array<i64, 3>, 3>
     ; r25 (row) : Array<i64, 3>

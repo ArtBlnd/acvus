@@ -4,65 +4,40 @@ expression: ir
 ---
 === literals ===
   T0 = ""
+  T1 = "\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @pair
      3 |   assign @pair = r2
-     4 | L2:
-     6 |   if true (r3) -> L3 else L4 join L5
-     7 | L3:
-     9 |   jump L5(true (r4))
-    10 | L4:
-    12 |   jump L5(false (r5))
-    13 | L5(r6: Bool):
-    14 |   if r6 -> L6 else L7 join L8
-    15 | L6:
-    17 |   jump L8(true (r7))
-    18 | L7:
-    20 |   jump L8(false (r8))
-    21 | L8(r9: Bool):
-    22 |   jump_if r9 then L9 else L1
-    23 | L9:
-    24 |   r10 = take @pair[0]
-    25 |   r11 = take @pair[1]
-    26 |   r12 = string_clone r10
-    27 |   r13 = string_concat [r12]
-    28 |   jump L0(r13, r10, r11)
-    29 | L1:
-    31 |   jump L0(T0, r0, r1)
-    32 | L0(r14: String, r15: String, r16: i64):
-    33 |   r17 = string_concat [r14]
-    34 |   r18 = take @pair
-    35 |   commit @pair = r18
-    36 |   return r17
+     5 |   assign <template> = T0
+     6 |   r3 = take @pair[0]
+     7 |   r4 = take @pair[1]
+     8 |   r5 = ref &mut <template>
+     9 |   append r5 r3
+    10 |   r6 = const_str T1
+    11 |   r7 = ref &mut <template>
+    12 |   append r7 r6
+    14 |   r8 = take <template>
+    15 |   r9 = take @pair
+    16 |   commit @pair = r9
+    17 |   return r8
 
-    ; r0 (v20) : String
-    ; r1 (v21) : i64
+    ; r0 (v16) : String
+    ; r1 (v17) : i64
     ; r2 (@pair) : (String, i64)
-    ; r3 (v3) : Bool
-    ; r4 (v5) : Bool
-    ; r5 (v6) : Bool
-    ; r6 (v4) : Bool
-    ; r7 (v8) : Bool
-    ; r8 (v9) : Bool
-    ; r9 (v7) : Bool
-    ; r10 (name) : String
-    ; r11 (age) : i64
-    ; r12 (v28) : String
-    ; r13 (v15) : String
-    ; r14 (v17) : String
-    ; r15 (v26) : String
-    ; r16 (v27) : i64
-    ; r17 (v18) : String
-    ; r18 (v19) : (String, i64)
-    ; r19 (v22) : String
-    ; r20 (name) : String
-    ; r21 (name) : String
-    ; r22 (v25) : i64
-    ; r23 (age) : i64
-    ; r24 (@pair) : (String, i64)
-    ; r25 (v23) : i64
-    ; r26 (v24) : String
-    ; r27 (v16) : String
+    ; r3 (name) : String
+    ; r4 (age) : i64
+    ; r5 (<template>.) : &mut String
+    ; r6 (v11) : &str
+    ; r7 (<template>.) : &mut String
+    ; r8 (v14) : String
+    ; r9 (v15) : (String, i64)
+    ; r10 (v3) : String
+    ; r11 (name) : String
+    ; r12 (name) : String
+    ; r13 (@pair) : (String, i64)
+    ; r14 (<template>) : String
+    ; r15 (v13) : Unit
+    ; r16 (age) : i64

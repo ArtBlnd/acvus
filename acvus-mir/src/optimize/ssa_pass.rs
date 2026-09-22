@@ -153,6 +153,10 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
         InstKind::Merge { orders, .. } => orders.iter_mut().for_each(|v| s(v)),
         InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(|v| s(v)),
         InstKind::StringConcat { parts, .. } => parts.iter_mut().for_each(|v| s(v)),
+        InstKind::StringAppend { target, part } => {
+            s(target);
+            s(part);
+        }
         InstKind::StringEq { a, b, .. } => {
             s(a);
             s(b);
@@ -814,11 +818,11 @@ mod tests {
     // -- Completeness: PHI inserted when needed --
 
     #[test]
-    fn match_one_arm_write_phi() {
+    fn if_one_arm_write_phi() {
         let i = Interner::new();
         let module = compile_template(
             &i,
-            r#"{{ true = @n == 1 }}{{ @x = 42 }}{{ _ }}noop{{/}}"#,
+            "% if @n == 1\n% @x = 42\n% else\nnoop\n% end\n",
             &[("x", Ty::I64), ("n", Ty::I64)],
         )
         .unwrap();
@@ -831,11 +835,11 @@ mod tests {
     }
 
     #[test]
-    fn match_both_arms_write_phi() {
+    fn if_both_arms_write_phi() {
         let i = Interner::new();
         let module = compile_template(
             &i,
-            r#"{{ true = @n == 1 }}{{ @x = 1 }}{{ _ }}{{ @x = 2 }}{{/}}"#,
+            "% if @n == 1\n% @x = 1\n% else\n% @x = 2\n% end\n",
             &[("x", Ty::I64), ("n", Ty::I64)],
         )
         .unwrap();
@@ -847,11 +851,11 @@ mod tests {
     // -- Soundness: page ops are neither removed nor duplicated --
 
     #[test]
-    fn match_no_write_keeps_commits() {
+    fn if_no_write_keeps_commits() {
         let i = Interner::new();
         let module = compile_template(
             &i,
-            r#"{{ true = @n == 1 }}yes{{ _ }}no{{/}}"#,
+            "% if @n == 1\nyes\n% else\nno\n% end\n",
             &[("n", Ty::I64)],
         )
         .unwrap();

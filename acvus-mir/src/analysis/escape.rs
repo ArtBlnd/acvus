@@ -125,6 +125,10 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
             elements.iter().copied().for_each(out)
         }
         InstKind::StringConcat { parts, .. } => parts.iter().copied().for_each(out),
+        InstKind::StringAppend { target, part } => {
+            out(*target);
+            out(*part);
+        }
         InstKind::MakeObject { fields, .. } => fields.iter().for_each(|(_, v)| out(*v)),
         InstKind::FieldSet { object, value, .. }
         | InstKind::IndexSet {

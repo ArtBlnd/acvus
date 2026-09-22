@@ -1,5 +1,5 @@
 {
-  "template": "{{ \"admin\" = @role }}admin{{ \"user\" = }}user{{_}}guest{{/}}",
+  "template": "% match @role\n% \"admin\" =>\nadmin\n% \"user\" =>\nuser\n% _ =>\nguest\n% end",
   "context": { "role": "user" },
-  "expected": "user"
+  "expected": "user\n"
 }

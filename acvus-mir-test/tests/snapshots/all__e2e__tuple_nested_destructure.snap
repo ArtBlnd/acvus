@@ -4,84 +4,44 @@ expression: ir
 ---
 === literals ===
   T0 = ""
+  T1 = "\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @data
      3 |   assign @data = r2
-     4 |   r3 = ref &@data
-     5 | L2:
+     5 |   assign <template> = T0
+     6 |   r3 = ref &@data
      7 |   r4 = ref &(*r3)[0]
      8 |   r5 = ref &(*r3)[1]
-     9 |   if true (r6) -> L3 else L4 join L5
-    10 | L3:
-    12 |   jump L5(true (r7))
-    13 | L4:
-    15 |   jump L5(false (r8))
-    16 | L5(r9: Bool):
-    17 |   if r9 -> L6 else L7 join L8
-    18 | L6:
-    20 |   r10 = ref &(*r5).x
-    21 |   if true (r11) -> L9 else L10 join L11
-    22 | L9:
-    24 |   jump L11(true (r12))
-    25 | L10:
-    27 |   jump L11(false (r13))
-    28 | L11(r14: Bool):
-    29 |   jump L8(r14)
-    30 | L7:
-    32 |   jump L8(false (r15))
-    33 | L8(r16: Bool):
-    34 |   jump_if r16 then L12 else L1
-    35 | L12:
-    36 |   r17 = ref &(*r3)[0]
-    37 |   r18 = ref &(*r3)[1]
-    38 |   r19 = ref &(*r18).x
-    39 |   r20 = string_concat [r17]
-    40 |   jump L0(r20, r17, r19)
-    41 | L1:
-    43 |   jump L0(T0, r0, r1)
-    44 | L0(r21: String, r22: &String, r23: &i64):
-    45 |   r24 = string_concat [r21]
-    46 |   r25 = take @data
-    47 |   commit @data = r25
-    48 |   return r24
+     9 |   r6 = ref &(*r5).x
+    10 |   r7 = ref &mut <template>
+    11 |   append r7 r4
+    12 |   r8 = const_str T1
+    13 |   r9 = ref &mut <template>
+    14 |   append r9 r8
+    16 |   r10 = take <template>
+    17 |   r11 = take @data
+    18 |   commit @data = r11
+    19 |   return r10
 
-    ; r0 (v28) : &String
-    ; r1 (v29) : &i64
+    ; r0 (v18) : &String
+    ; r1 (v19) : &i64
     ; r2 (@data) : (String, {x: i64})
     ; r3 (@data.) : &(String, {x: i64})
-    ; r4 ((*r3).[0]) : &String
-    ; r5 ((*r3).[1]) : &{x: i64}
-    ; r6 (v4) : Bool
-    ; r7 (v8) : Bool
-    ; r8 (v9) : Bool
-    ; r9 (v7) : Bool
-    ; r10 ((*r6).x) : &i64
-    ; r11 (v11) : Bool
-    ; r12 (v14) : Bool
-    ; r13 (v15) : Bool
-    ; r14 (v13) : Bool
-    ; r15 (v16) : Bool
-    ; r16 (v10) : Bool
-    ; r17 (label) : &String
-    ; r18 ((*r3).[1]) : &{x: i64}
-    ; r19 (x) : &i64
-    ; r20 (v23) : String
-    ; r21 (v25) : String
-    ; r22 (v36) : &String
-    ; r23 (v37) : &i64
-    ; r24 (v26) : String
-    ; r25 (v27) : (String, {x: i64})
-    ; r26 (label) : &String
-    ; r27 (v31) : &i64
-    ; r28 (v30) : &String
-    ; r29 (v33) : &i64
-    ; r30 (v34) : &String
-    ; r31 (x) : &i64
-    ; r32 (v24) : String
-    ; r33 (@data) : (String, {x: i64})
-    ; r34 (v32) : &String
-    ; r35 (v35) : &i64
-    ; r36 (label) : &String
+    ; r4 (label) : &String
+    ; r5 ((*r5).[1]) : &{x: i64}
+    ; r6 (x) : &i64
+    ; r7 (<template>.) : &mut String
+    ; r8 (v13) : &str
+    ; r9 (<template>.) : &mut String
+    ; r10 (v16) : String
+    ; r11 (v17) : (String, {x: i64})
+    ; r12 (v3) : String
+    ; r13 (label) : &String
+    ; r14 (@data) : (String, {x: i64})
+    ; r15 (<template>) : String
+    ; r16 (v15) : Unit
+    ; r17 (x) : &i64
+    ; r18 (label) : &String

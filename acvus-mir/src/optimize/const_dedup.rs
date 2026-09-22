@@ -212,6 +212,10 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             remap_vec(elements, remap);
         }
         InstKind::StringConcat { parts, .. } => remap_vec(parts, remap),
+        InstKind::StringAppend { target, part } => {
+            remap_val(target, remap);
+            remap_val(part, remap);
+        }
         InstKind::StringEq { a, b, .. } => {
             remap_val(a, remap);
             remap_val(b, remap);

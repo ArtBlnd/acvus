@@ -69,10 +69,11 @@ fn string_addition_is_a_string_concat_of_lent_operands() {
 }
 
 #[test]
-fn a_template_joins_its_parts_with_a_string_concat() {
+fn a_template_appends_each_of_its_parts_to_its_result() {
     let i = Interner::new();
     let ir = compile_to_ir(&i, "Hello, {{ &@role }}!", &string_context(&i, "role")).unwrap();
-    assert!(ir.contains("string_concat"), "{ir}");
+    assert!(ir.contains("append"), "{ir}");
+    assert!(!ir.contains("string_concat"), "{ir}");
     assert!(ir.contains("ref &@role"), "{ir}");
 }
 

@@ -11,45 +11,48 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @users
-     5 |   r4 = list []
-     6 |   r5 = call #0(r4)
+     5 |   assign <template> = T0
+     6 |   r4 = list []
+     7 |   r5 = call #0(r4)
      8 |   r6 = call #1(r3)
      9 |   r7 = closure L0 []
     10 |   r8 = call #2(r6, r7)
     11 |   r9 = closure L1 []
     12 |   r10 = call #3(r8, r9)
-    14 |   r11 = const_str T1
-    15 |   r12 = call #4(r11)
-    16 |   r13 = call #5(r10, r12)
-    17 |   r14 = string_concat [T0, T0, T0, r13]
-    18 |   commit @users = r5
-    19 |   return r14
+    13 |   r11 = const_str T1
+    14 |   r12 = call #4(r11)
+    15 |   r13 = call #5(r10, r12)
+    16 |   r14 = ref &mut <template>
+    17 |   append r14 r13
+    18 |   r15 = take <template>
+    19 |   commit @users = r5
+    20 |   return r15
 
     ; r0 (v23) : Vec<{age: i64, name: String}>
     ; r1 (v24) : Vec<{age: i64, name: String}>
-    ; r2 (v25) : Iterator<String, Pure>
+    ; r2 (v25) : Map<Filter<Items<{age: i64, name: String}>, {age: i64, name: String}, Pure>, {age: i64, name: String}, String, Pure>
     ; r3 (@users) : Vec<{age: i64, name: String}>
-    ; r4 (v6) : Array<{age: i64, name: String}, 0>
+    ; r4 (v7) : Array<{age: i64, name: String}, 0>
     ; r5 (vec(...)) : Vec<{age: i64, name: String}>
-    ; r6 (into_iter(...)) : Iterator<{age: i64, name: String}, Pure>
+    ; r6 (into_iter(...)) : Items<{age: i64, name: String}>
     ; r7 (v11) : Fn(&{age: i64, name: String}) -> Bool
-    ; r8 (filter(...)) : Iterator<{age: i64, name: String}, Pure>
+    ; r8 (filter(...)) : Filter<Items<{age: i64, name: String}>, {age: i64, name: String}, Pure>
     ; r9 (v13) : Fn({age: i64, name: String}) -> String
-    ; r10 (map(...)) : Iterator<String, Pure>
-    ; r11 (v18) : &str
+    ; r10 (map(...)) : Map<Filter<Items<{age: i64, name: String}>, {age: i64, name: String}, Pure>, {age: i64, name: String}, String, Pure>
+    ; r11 (v17) : &str
     ; r12 (to_string(...)) : String
     ; r13 (join(...)) : String
-    ; r14 (v21) : String
-    ; r15 (v22) : Vec<{age: i64, name: String}>
-    ; r16 (@users) : Vec<{age: i64, name: String}>
-    ; r17 (users) : Vec<{age: i64, name: String}>
-    ; r18 (x) : Iterator<String, Pure>
-    ; r19 (x) : Iterator<String, Pure>
-    ; r20 (users) : Vec<{age: i64, name: String}>
-    ; r21 (@users) : Vec<{age: i64, name: String}>
-    ; r22 (v5) : String
-    ; r23 (v16) : String
-    ; r24 (v8) : String
+    ; r14 (<template>.) : &mut String
+    ; r15 (v21) : String
+    ; r16 (v22) : Vec<{age: i64, name: String}>
+    ; r17 (v3) : String
+    ; r18 (users) : Vec<{age: i64, name: String}>
+    ; r19 (users) : Vec<{age: i64, name: String}>
+    ; r20 (x) : Map<Filter<Items<{age: i64, name: String}>, {age: i64, name: String}, Pure>, {age: i64, name: String}, String, Pure>
+    ; r21 (<template>) : String
+    ; r22 (@users) : Vec<{age: i64, name: String}>
+    ; r23 (@users) : Vec<{age: i64, name: String}>
+    ; r24 (x) : Map<Filter<Items<{age: i64, name: String}>, {age: i64, name: String}, Pure>, {age: i64, name: String}, String, Pure>
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

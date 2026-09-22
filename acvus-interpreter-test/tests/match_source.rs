@@ -6,11 +6,16 @@ async fn a_nested_pattern_on_a_temporary_takes_it_once() {
     let i = Interner::new();
     let out = run(
         &i,
-        "{{ Some(Some(v)) = Some(Some(3)) }}{{ v.to_string() }}{{_}}none{{/}}",
+        "% match Some(Some(3))\n\
+         % Some(Some(v)) =>\n\
+         {{ v.to_string() }}\n\
+         % _ =>\n\
+         none\n\
+         % end",
         Context::default(),
     )
     .await;
-    assert_eq!(out, "3");
+    assert_eq!(out, "3\n");
 }
 
 #[tokio::test]
@@ -18,11 +23,17 @@ async fn a_nested_pattern_on_a_bound_value() {
     let i = Interner::new();
     let out = run(
         &i,
-        "{{ r = Ok(Some(3)) }}{{ Ok(Some(v)) = r }}{{ v.to_string() }}{{_}}none{{/}}",
+        "% let r = Ok(Some(3))\n\
+         % match r\n\
+         % Ok(Some(v)) =>\n\
+         {{ v.to_string() }}\n\
+         % _ =>\n\
+         none\n\
+         % end",
         Context::default(),
     )
     .await;
-    assert_eq!(out, "3");
+    assert_eq!(out, "3\n");
 }
 
 #[tokio::test]
@@ -30,11 +41,16 @@ async fn every_arm_of_a_match_on_a_temporary_reads_the_same_value() {
     let i = Interner::new();
     let out = run(
         &i,
-        "{{ None = strip_prefix(\"abc\", \"a\") }}none{{ Some(v) = }}{{ v }}{{/}}",
+        "% match strip_prefix(\"abc\", \"a\")\n\
+         % None =>\n\
+         none\n\
+         % Some(v) =>\n\
+         {{ v }}\n\
+         % end",
         Context::default(),
     )
     .await;
-    assert_eq!(out, "bc");
+    assert_eq!(out, "bc\n");
 }
 
 #[tokio::test]
@@ -42,9 +58,14 @@ async fn a_string_payload_moved_out_of_a_temporary_result_is_the_string() {
     let i = Interner::new();
     let out = run(
         &i,
-        "{{ Ok(c) = int_to_char(65) }}{{ c.to_string() }}{{_}}bad{{/}}",
+        "% match int_to_char(65)\n\
+         % Ok(c) =>\n\
+         {{ c.to_string() }}\n\
+         % _ =>\n\
+         bad\n\
+         % end",
         Context::default(),
     )
     .await;
-    assert_eq!(out, "A");
+    assert_eq!(out, "A\n");
 }

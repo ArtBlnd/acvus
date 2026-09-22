@@ -1,7 +1,7 @@
 use acvus_ast::{
-    AstId, BinOp, ElseBranch, Expr, ForHead, IndentModifier, Literal, MatchBlock, MatchExprArm,
-    Node, ObjectExprField, ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template,
-    TupleElem, TuplePatternElem, UnaryOp,
+    AstId, BinOp, ElseBranch, Expr, ForHead, Literal, MatchExprArm, ObjectExprField,
+    ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
+    TuplePatternElem, UnaryOp,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -17,6 +17,10 @@ use crate::ir::{
 use crate::solver::CaptureRead;
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
 use crate::typeck::{CapturedName, TypeResolution};
+
+/// The name of a template's accumulator. A source name cannot collide with
+/// it: the lexer admits no `<` in an identifier.
+const TEMPLATE_RESULT: &str = "<template>";
 
 pub struct Lowerer<'a> {
     body: MirBody,
@@ -43,6 +47,9 @@ pub struct Lowerer<'a> {
     order_slot: Option<ValueId>,
     /// The innermost `anyorder` block being lowered, if any.
     anyorder: Option<AnyorderScope>,
+    /// The slot holding a template's accumulated text, which every
+    /// `Stmt::Append` writes through (RFC-0071). `None` in a script.
+    result: Option<ValueId>,
     context_slots: BTreeMap<QualifiedRef, ValueId>,
     /// The places the calls being lowered have cast for their callees,
     /// innermost last (RFC-0041).
@@ -307,10 +314,6 @@ fn holds_text(ty: &Ty) -> bool {
     }
 }
 
-fn str_ty() -> Ty {
-    Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
-}
-
 fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => true,
@@ -343,71 +346,6 @@ fn test_reads_a_part(pattern: &Pattern) -> bool {
     }
 }
 
-/// Adjust indentation of a text string according to an `IndentModifier`.
-/// All lines (including the first) are affected.
-fn adjust_text_indent(text: &str, modifier: &IndentModifier) -> String {
-    let mut result = String::with_capacity(text.len());
-    for (i, line) in text.split('\n').enumerate() {
-        if i > 0 {
-            result.push('\n');
-        }
-        match modifier {
-            IndentModifier::Decrease(n) => {
-                let n = *n as usize;
-                let spaces = line.len() - line.trim_start_matches(' ').len();
-                let remove = spaces.min(n);
-                result.push_str(&line[remove..]);
-            }
-            IndentModifier::Increase(n) => {
-                let n = *n as usize;
-                if !line.is_empty() {
-                    for _ in 0..n {
-                        result.push(' ');
-                    }
-                }
-                result.push_str(line);
-            }
-        }
-    }
-    result
-}
-
-/// Recursively apply an indent modifier to all `Node::Text` nodes in a slice.
-fn apply_indent_to_nodes(nodes: &[Node], modifier: &IndentModifier) -> Vec<Node> {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Text { value, span, .. } => Node::Text {
-                id: acvus_ast::AstId::alloc(),
-                value: adjust_text_indent(value, modifier),
-                span: *span,
-            },
-            Node::MatchBlock(mb) => Node::MatchBlock(MatchBlock {
-                id: acvus_ast::AstId::alloc(),
-                arms: mb
-                    .arms
-                    .iter()
-                    .map(|arm| acvus_ast::MatchArm {
-                        id: acvus_ast::AstId::alloc(),
-                        pattern: arm.pattern.clone(),
-                        body: apply_indent_to_nodes(&arm.body, modifier),
-                        tag_span: arm.tag_span,
-                    })
-                    .collect(),
-                catch_all: mb.catch_all.as_ref().map(|ca| acvus_ast::CatchAll {
-                    id: acvus_ast::AstId::alloc(),
-                    body: apply_indent_to_nodes(&ca.body, modifier),
-                    tag_span: ca.tag_span,
-                }),
-                source: mb.source.clone(),
-                indent: mb.indent,
-                span: mb.span,
-            }),
-            other => other.clone(),
-        })
-        .collect()
-}
-
 impl<'a> Lowerer<'a> {
     pub fn new(interner: &'a Interner, resolution: Freeze<TypeResolution>, ret: Ty) -> Self {
         let coercion_lookup: FxHashMap<AstId, CastKind> =
@@ -436,12 +374,15 @@ impl<'a> Lowerer<'a> {
             closure_label_count: 0,
             order_slot: None,
             anyorder: None,
+            result: None,
             context_slots: BTreeMap::new(),
             holds: Vec::new(),
             loops: Vec::new(),
         }
     }
 
+    /// A template is its statements over one accumulator: a `String` the
+    /// appends write through and the body returns (RFC-0071).
     pub fn lower_template(mut self, template: &Template) -> MirModule {
         let effect = self.resolution.effect.clone();
         self.enter_body_order(effect, template.span);
@@ -449,7 +390,14 @@ impl<'a> Lowerer<'a> {
             acvus_ast::direct_template_context_refs(template),
             template.span,
         );
-        let result = self.lower_nodes(&template.body, template.span);
+        let empty = self.emit_empty_string(template.span);
+        let slot = self.define_var(self.interner.intern(TEMPLATE_RESULT), Ty::String);
+        self.emit_assign(template.span, RefTarget::Var(slot), vec![], empty);
+        self.result = Some(slot);
+        for stmt in &template.body {
+            self.lower_stmt(stmt);
+        }
+        let result = self.emit_take(template.span, RefTarget::Var(slot), vec![], Ty::String);
         self.emit_return(template.span, result);
         self.build_module()
     }
@@ -842,7 +790,27 @@ impl<'a> Lowerer<'a> {
             }
             Stmt::Break { span, .. } => self.leave_loop(Leave::Break, *span),
             Stmt::Continue { span, .. } => self.leave_loop(Leave::Continue, *span),
+            Stmt::Append { expr, span, .. } => self.lower_append(expr, *span),
         }
+    }
+
+    /// One append onto the template's accumulator. The `&mut` is taken per
+    /// append rather than once above the block: a borrow held across a
+    /// loop's back edge would refuse every other name of the accumulator
+    /// in the body.
+    fn lower_append(&mut self, expr: &Expr, span: Span) {
+        let part = self.lower_expr(expr);
+        let Some(slot) = self.result else {
+            return;
+        };
+        let target = self.emit_ref(
+            span,
+            RefTarget::Var(slot),
+            vec![],
+            Mutability::Mut,
+            Ty::String,
+        );
+        self.emit_inst(span, InstKind::StringAppend { target, part });
     }
 
     /// Lower `match e { P1 => e1, .., Pn => en }` (RFC-0051).
@@ -2319,43 +2287,6 @@ impl<'a> Lowerer<'a> {
 
     // --- Node lowering ---
 
-    /// Lower a sequence of template nodes into a single concatenated String value.
-    fn lower_nodes(&mut self, nodes: &[Node], span: Span) -> ValueId {
-        let parts: Vec<ValueId> = nodes
-            .iter()
-            .map(|node| self.lower_node(node, span))
-            .collect();
-        let dst = self.alloc_val();
-        self.set_val_type(dst, Ty::String);
-        self.emit_inst(span, InstKind::StringConcat { dst, parts });
-        dst
-    }
-
-    /// Lower a single template node, returning a String-typed ValueId.
-    fn lower_node(&mut self, node: &Node, parent_span: Span) -> ValueId {
-        match node {
-            Node::Text { value, span, .. } => {
-                let dst = self.alloc_val();
-                self.set_val_type(dst, str_ty());
-                self.set_origin(dst, ValOrigin::Expr);
-                self.emit_inst(
-                    *span,
-                    InstKind::ConstStr {
-                        dst,
-                        text: value.clone(),
-                    },
-                );
-                dst
-            }
-            Node::Comment { .. } => self.emit_empty_string(parent_span),
-            Node::InlineExpr { expr, .. } => self.lower_expr(expr),
-            Node::MatchBlock(mb) => self.lower_match_block(mb),
-        }
-    }
-
-    /// A `String`, not the `&str` a text node is: this stands for the text a
-    /// match block produced where an arm matched nothing, so it meets the
-    /// arms' own results at the merge, and those are `String`.
     fn emit_empty_string(&mut self, span: Span) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, Ty::String);
@@ -3538,157 +3469,6 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    // --- Match block lowering ---
-
-    fn lower_match_block(&mut self, mb: &MatchBlock) -> ValueId {
-        // Body-less context bind shorthand.
-        if mb.arms.len() == 1
-            && mb.arms[0].body.is_empty()
-            && let Pattern::ContextBind {
-                name: qref,
-                span: pat_span,
-                ..
-            } = &mb.arms[0].pattern
-        {
-            let src = self.lower_expr(&mb.source);
-            let slot = self.context_slot(*qref);
-            self.emit_assign(*pat_span, RefTarget::Var(slot), vec![], src);
-            return self.emit_empty_string(mb.span);
-        }
-
-        // Body-less binding shorthand (variable write or value binding).
-        if mb.arms.len() == 1
-            && mb.arms[0].body.is_empty()
-            && let Pattern::Binding {
-                name,
-                ref_kind,
-                span: pat_span,
-                ..
-            } = &mb.arms[0].pattern
-        {
-            let src = self.lower_expr(&mb.source);
-            match ref_kind {
-                RefKind::ExternParam => {
-                    // Typeck already reported ExternParamAssign.
-                    let dst = self.alloc_val();
-                    self.emit_inst(*pat_span, InstKind::Poison { dst });
-                    return dst;
-                }
-                RefKind::Value => {
-                    let ty = self
-                        .body
-                        .val_types
-                        .get(&src)
-                        .cloned()
-                        .unwrap_or(Ty::error());
-                    let slot = self.define_var(*name, ty);
-                    self.emit_assign(*pat_span, RefTarget::Var(slot), vec![], src);
-                }
-            }
-            return self.emit_empty_string(mb.span);
-        }
-
-        // Pre-compute indent-adjusted arm bodies and catch-all body.
-        let adjusted_arm_bodies: Option<Vec<Vec<Node>>> = mb.indent.as_ref().map(|modifier| {
-            mb.arms
-                .iter()
-                .map(|arm| apply_indent_to_nodes(&arm.body, modifier))
-                .collect()
-        });
-        let adjusted_catch_all_body: Option<Vec<Node>> = mb.indent.as_ref().and_then(|modifier| {
-            mb.catch_all
-                .as_ref()
-                .map(|ca| apply_indent_to_nodes(&ca.body, modifier))
-        });
-
-        let source_reg = self.pattern_source(&mb.source, mb.arms.iter().map(|arm| &arm.pattern));
-
-        // Match is single-value pattern matching (no iteration).
-        // Try each arm against the source value; first match wins.
-        let end_label = self.alloc_label();
-        let catch_all_label = self.alloc_label();
-
-        let arm_labels: Vec<Label> = mb.arms.iter().map(|_| self.alloc_label()).collect();
-
-        for (i, arm) in mb.arms.iter().enumerate() {
-            let arm_label = arm_labels[i];
-            let next_label = arm_labels.get(i + 1).copied().unwrap_or(catch_all_label);
-
-            self.emit_label(arm.tag_span, arm_label);
-            self.push_scope();
-
-            // Test pattern against source value.
-            let matched = self.lower_pattern_test(&arm.pattern, source_reg.clone(), arm.tag_span);
-
-            // If pattern didn't match, try next arm (or catch-all).
-            let arm_body_label = self.alloc_label();
-            self.emit_inst(
-                arm.tag_span,
-                InstKind::JumpIf {
-                    cond: matched,
-                    then_label: arm_body_label,
-                    then_args: vec![],
-                    else_label: next_label,
-                    else_args: vec![],
-                },
-            );
-            self.emit_label(arm.tag_span, arm_body_label);
-
-            // Bind pattern variables.
-            self.lower_pattern_bind(&arm.pattern, source_reg.clone(), arm.tag_span);
-
-            // Lower arm body (use indent-adjusted body if available).
-            let body = adjusted_arm_bodies
-                .as_ref()
-                .map(|bodies| bodies[i].as_slice())
-                .unwrap_or(&arm.body);
-            let arm_result = self.lower_nodes(body, arm.tag_span);
-
-            self.pop_scope();
-            // After body, jump to end with the arm's concat result.
-            self.emit_inst(
-                arm.tag_span,
-                InstKind::Jump {
-                    label: end_label,
-                    args: vec![arm_result],
-                },
-            );
-        }
-
-        // Catch-all block.
-        self.emit_label(mb.span, catch_all_label);
-        let catch_all_result = if let Some(catch_all) = &mb.catch_all {
-            self.push_scope();
-            let body = adjusted_catch_all_body
-                .as_deref()
-                .unwrap_or(&catch_all.body);
-            let result = self.lower_nodes(body, mb.span);
-            self.pop_scope();
-            result
-        } else {
-            self.emit_empty_string(mb.span)
-        };
-        self.emit_inst(
-            mb.span,
-            InstKind::Jump {
-                label: end_label,
-                args: vec![catch_all_result],
-            },
-        );
-
-        // Merge point: PHI receives the string result from whichever arm/catch-all matched.
-        let merge_result = self.alloc_val();
-        self.set_val_type(merge_result, Ty::String);
-        self.emit_inst(
-            mb.span,
-            InstKind::BlockLabel {
-                label: end_label,
-                params: vec![merge_result],
-            },
-        );
-        merge_result
-    }
-
     // --- Pattern test lowering ---
 
     /// Emit instructions that test whether `src_reg` matches `pattern`.
@@ -4447,6 +4227,24 @@ mod tests {
         module
     }
 
+    /// Each iteration appends onto the one accumulator; nothing rebuilds
+    /// it, so a loop's cost is the text it writes (RFC-0071).
+    #[test]
+    fn a_loop_body_appends_once_per_piece_and_copies_nothing() {
+        let interner = Interner::new();
+        let module = lower(&interner, "% for i in 0..2\n- {{ \"x\" }}\n% end\n");
+        let printed = crate::printer::dump(&interner, &module);
+        let body = printed
+            .split("L1(")
+            .nth(1)
+            .expect("the loop body block")
+            .split("L2:")
+            .next()
+            .expect("the body ends at the exit block");
+        assert_eq!(body.matches("append ").count(), 3, "{printed}");
+        assert!(!printed.contains("string_concat"), "{printed}");
+    }
+
     #[test]
     fn lower_text_node() {
         let interner = Interner::new();
@@ -4469,34 +4267,64 @@ mod tests {
     fn lower_string_emit() {
         let interner = Interner::new();
         let module = lower(&interner, r#"{{ "hello" }}"#);
-        // InlineExpr emits Const only (Yield removed, pending Iterator<String> redesign)
-        assert!(module.main.insts.len() >= 1);
-        assert!(matches!(
-            &module.main.insts[0].kind,
-            InstKind::ConstStr { .. }
-        ));
+        let has_text = module
+            .main
+            .insts
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::ConstStr { text, .. } if text == "hello"));
+        let appends = module
+            .main
+            .insts
+            .iter()
+            .filter(|i| matches!(&i.kind, InstKind::StringAppend { .. }))
+            .count();
+        assert!(has_text);
+        assert_eq!(appends, 1);
     }
 
     #[test]
     fn extern_param_write_rejected() {
         let interner = Interner::new();
-        let result = crate::test::compile_template(&interner, "{{ $count = 42 }}", &[]);
+        let result = crate::test::compile_template(&interner, "% $count = 42", &[]);
         assert!(result.is_err());
     }
 
+    /// A `%` line's block lowers through the script's own lowering: an
+    /// `% if` is the `Diamond` an `if` statement is (RFC-0071).
     #[test]
-    fn lower_match_block() {
+    fn a_template_if_lowers_as_the_scripts_if() {
         let interner = Interner::new();
         let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
-        // Use a non-binding pattern to trigger full match block (no iteration).
-        let module = lower_with(&interner, r#"{{ true = @n == 1 }}matched{{/}}"#, &context);
-        // Should have pattern test and conditional jump.
-        let has_jump_if = module
+        let module = lower_with(&interner, "% if @n == 1\nmatched\n% end\n", &context);
+        assert!(
+            module
+                .main
+                .insts
+                .iter()
+                .any(|i| matches!(&i.kind, InstKind::Diamond { .. } | InstKind::JumpIf { .. }))
+        );
+    }
+
+    /// A text line and a tag each append to the accumulator; nothing joins
+    /// them into a rebuilt `String`.
+    #[test]
+    fn every_part_of_a_template_is_one_append() {
+        let interner = Interner::new();
+        let module = lower(&interner, "a{{ \"b\" }}c");
+        let appends = module
             .main
             .insts
             .iter()
-            .any(|i| matches!(&i.kind, InstKind::JumpIf { .. }));
-        assert!(has_jump_if);
+            .filter(|i| matches!(&i.kind, InstKind::StringAppend { .. }))
+            .count();
+        assert_eq!(appends, 3);
+        assert!(
+            !module
+                .main
+                .insts
+                .iter()
+                .any(|i| matches!(&i.kind, InstKind::StringConcat { .. }))
+        );
     }
 
     #[test]
@@ -4511,76 +4339,5 @@ mod tests {
             .iter()
             .any(|i| matches!(&i.kind, InstKind::FunctionCall { .. }));
         assert!(has_call);
-    }
-
-    #[test]
-    fn adjust_text_indent_decrease() {
-        let text = "first\n    second\n      third";
-        let result = adjust_text_indent(text, &IndentModifier::Decrease(2));
-        assert_eq!(result.as_str(), "first\n  second\n    third");
-    }
-
-    #[test]
-    fn adjust_text_indent_decrease_clamp() {
-        let text = "first\n second\n  third";
-        let result = adjust_text_indent(text, &IndentModifier::Decrease(4));
-        assert_eq!(result.as_str(), "first\nsecond\nthird");
-    }
-
-    #[test]
-    fn adjust_text_indent_increase() {
-        let text = "first\nsecond\n  third";
-        let result = adjust_text_indent(text, &IndentModifier::Increase(3));
-        assert_eq!(result.as_str(), "   first\n   second\n     third");
-    }
-
-    #[test]
-    fn adjust_text_indent_first_line_also_adjusted() {
-        let text = "  first\n  second";
-        let result = adjust_text_indent(text, &IndentModifier::Decrease(2));
-        assert_eq!(result.as_str(), "first\nsecond");
-    }
-
-    #[test]
-    fn adjust_text_indent_no_newline() {
-        let text = "  hello";
-        let result = adjust_text_indent(text, &IndentModifier::Decrease(2));
-        assert_eq!(result.as_str(), "hello");
-    }
-
-    #[test]
-    fn lower_match_block_indent_decrease() {
-        let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
-        let source = "{{ true = @n == 1 }}\n    matched\n    here{{/-2}}";
-        let module = lower_with(&interner, source, &context);
-        let texts: Vec<&str> = module
-            .main
-            .insts
-            .iter()
-            .filter_map(|i| match &i.kind {
-                InstKind::ConstStr { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(texts.iter().any(|t| t.contains("\n  matched\n  here")));
-    }
-
-    #[test]
-    fn lower_match_block_indent_increase() {
-        let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
-        let source = "{{ true = @n == 1 }}\nmatched{{/+4}}";
-        let module = lower_with(&interner, source, &context);
-        let texts: Vec<&str> = module
-            .main
-            .insts
-            .iter()
-            .filter_map(|i| match &i.kind {
-                InstKind::ConstStr { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(texts.iter().any(|t| t.contains("\n    matched")));
     }
 }

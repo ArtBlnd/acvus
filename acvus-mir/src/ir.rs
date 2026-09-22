@@ -312,6 +312,16 @@ pub enum InstKind {
         dst: ValueId,
         parts: Vec<ValueId>,
     },
+    /// A template's append: the bytes of `part` are written onto the end of
+    /// the `String` that `target`, a `&mut String`, names. `part` is a
+    /// `String`, moved in, or a `&str`/`&String`, read through, as a
+    /// `StringConcat` part is. The accumulator is not copied, which is what
+    /// keeps a loop body's appends linear in the text they write
+    /// (RFC-0071).
+    StringAppend {
+        target: ValueId,
+        part: ValueId,
+    },
     /// Whether the two strings `a` and `b` name hold the same bytes.
     StringEq {
         dst: ValueId,

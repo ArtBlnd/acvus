@@ -67,17 +67,45 @@ async fn first_and_last_are_none_on_an_empty_container_and_references_otherwise(
     let i = Interner::new();
     let text = |src: &'static str| run(&i, src, FxHashMap::default());
     assert_eq!(
-        text("{{ d = deque() }}{{ pushed = push_back(&mut d, 1) }}{{ popped = pop_back(&mut d) }}{{ Some(x) = first(&d) }}{{ to_string(x) }}{{_}}none{{/}}").await,
-        "none"
+        text(
+            "% let d = deque()\n\
+             % let pushed = push_back(&mut d, 1)\n\
+             % let popped = pop_back(&mut d)\n\
+             % match first(&d)\n\
+             % Some(x) =>\n\
+             {{ to_string(x) }}\n\
+             % _ =>\n\
+             none\n\
+             % end"
+        )
+        .await,
+        "none\n"
     );
     assert_eq!(
-        text("{{ xs = [4, 5, 6] }}{{ Some(x) = last(&xs) }}{{ to_string(x) }}{{_}}none{{/}}").await,
-        "6"
+        text(
+            "% let xs = [4, 5, 6]\n\
+             % match last(&xs)\n\
+             % Some(x) =>\n\
+             {{ to_string(x) }}\n\
+             % _ =>\n\
+             none\n\
+             % end"
+        )
+        .await,
+        "6\n"
     );
     assert_eq!(
-        text("{{ xs = [4, 5, 6] }}{{ Some(x) = first(&xs) }}{{ to_string(x) }}{{_}}none{{/}}")
-            .await,
-        "4"
+        text(
+            "% let xs = [4, 5, 6]\n\
+             % match first(&xs)\n\
+             % Some(x) =>\n\
+             {{ to_string(x) }}\n\
+             % _ =>\n\
+             none\n\
+             % end"
+        )
+        .await,
+        "4\n"
     );
 }
 

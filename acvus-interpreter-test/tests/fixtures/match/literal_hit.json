@@ -1,5 +1,5 @@
 {
-  "template": "{{ \"admin\" = @role }}admin page{{_}}guest page{{/}}",
+  "template": "% match @role\n% \"admin\" =>\nadmin page\n% _ =>\nguest page\n% end",
   "context": { "role": "admin" },
-  "expected": "admin page"
+  "expected": "admin page\n"
 }

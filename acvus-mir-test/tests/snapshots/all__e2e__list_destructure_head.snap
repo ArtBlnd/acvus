@@ -3,67 +3,82 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "empty"
+  T0 = ""
+  T1 = "\n"
+  T2 = "empty\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @items
      2 |   assign @items = r1
-     3 | L2:
-     5 |   if true (r2) -> L3 else L4 join L5
-     6 | L3:
-     8 |   jump L5(true (r3))
-     9 | L4:
-    11 |   jump L5(false (r4))
-    12 | L5(r5: Bool):
-    13 |   if r5 -> L6 else L7 join L8
-    14 | L6:
-    16 |   jump L8(true (r6))
-    17 | L7:
-    19 |   jump L8(false (r7))
-    20 | L8(r8: Bool):
-    21 |   jump_if r8 then L9 else L1
-    22 | L9:
-    23 |   r9 = take @items[0]
-    24 |   assign a = r9
-    25 |   r10 = take @items[1]
-    26 |   assign b = r10
-    27 |   r11 = ref &a
-    28 |   r12 = call #0(r11)
-    29 |   r13 = string_concat [r12]
-    30 |   jump L0(r13, r10)
-    31 | L1:
-    32 |   r14 = const_str T0
-    33 |   r15 = string_concat [r14]
-    34 |   jump L0(r15, r0)
-    35 | L0(r16: String, r17: i64):
-    36 |   r18 = string_concat [r16]
-    37 |   r19 = take @items
-    38 |   commit @items = r19
-    39 |   return r18
+     4 |   assign <template> = T0
+     5 |   jump L1
+     6 | L1:
+     8 |   if true (r2) -> L2 else L3 join L4
+     9 | L2:
+    11 |   jump L4(true (r3))
+    12 | L3:
+    14 |   jump L4(false (r4))
+    15 | L4(r5: Bool):
+    16 |   if r5 -> L5 else L6 join L7
+    17 | L5:
+    19 |   jump L7(true (r6))
+    20 | L6:
+    22 |   jump L7(false (r7))
+    23 | L7(r8: Bool):
+    24 |   jump_if r8 then L8 else L9
+    25 | L8:
+    26 |   r9 = take @items[0]
+    27 |   assign a = r9
+    28 |   r10 = take @items[1]
+    29 |   assign b = r10
+    30 |   r11 = ref &a
+    31 |   r12 = call #0(r11)
+    32 |   r13 = ref &mut <template>
+    33 |   append r13 r12
+    34 |   r14 = const_str T1
+    35 |   r15 = ref &mut <template>
+    36 |   append r15 r14
+    38 |   jump L0(() (r16), r10)
+    39 | L9:
+    40 |   r17 = const_str T2
+    41 |   r18 = ref &mut <template>
+    42 |   append r18 r17
+    44 |   jump L0(() (r19), r0)
+    45 | L0(r20: Unit, r21: i64):
+    46 |   r22 = take <template>
+    47 |   r23 = take @items
+    48 |   commit @items = r23
+    49 |   return r22
 
-    ; r0 (v22) : i64
+    ; r0 (v28) : i64
     ; r1 (@items) : Array<i64, 3>
-    ; r2 (v3) : Bool
-    ; r3 (v5) : Bool
-    ; r4 (v6) : Bool
-    ; r5 (v4) : Bool
-    ; r6 (v8) : Bool
-    ; r7 (v9) : Bool
-    ; r8 (v7) : Bool
+    ; r2 (v5) : Bool
+    ; r3 (v7) : Bool
+    ; r4 (v8) : Bool
+    ; r5 (v6) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v11) : Bool
+    ; r8 (v9) : Bool
     ; r9 (a) : i64
     ; r10 (b) : i64
     ; r11 (a.) : &i64
     ; r12 (to_string(...)) : String
-    ; r13 (v16) : String
-    ; r14 (v17) : &str
-    ; r15 (v18) : String
-    ; r16 (v19) : String
-    ; r17 (v25) : i64
-    ; r18 (v20) : String
-    ; r19 (v21) : Array<i64, 3>
-    ; r20 (a) : i64
-    ; r21 (b) : i64
-    ; r22 (@items) : Array<i64, 3>
-    ; r23 (v23) : i64
-    ; r24 (v24) : i64
+    ; r13 (<template>.) : &mut String
+    ; r14 (v19) : &str
+    ; r15 (<template>.) : &mut String
+    ; r16 (v21) : Unit
+    ; r17 (v22) : &str
+    ; r18 (<template>.) : &mut String
+    ; r19 (v24) : Unit
+    ; r20 (v25) : Unit
+    ; r21 (v31) : i64
+    ; r22 (v26) : String
+    ; r23 (v27) : Array<i64, 3>
+    ; r24 (v3) : String
+    ; r25 (v30) : i64
+    ; r26 (@items) : Array<i64, 3>
+    ; r27 (b) : i64
+    ; r28 (<template>) : String
+    ; r29 (v29) : i64
+    ; r30 (a) : i64

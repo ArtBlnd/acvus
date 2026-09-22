@@ -14,7 +14,7 @@ expression: ir
 
     ; r0 (@items) : Array<i64, 3>
     ; r1 (@items) : Array<i64, 3>
-    ; r2 (add_n(...)) : Iterator<i64, Pure>
+    ; r2 (add_n(...)) : Map<Items<i64>, i64, i64, Pure>
     ; r3 (v4) : i64
     ; r4 (collect(...)) : Vec<i64>
     ; r5 (v7) : Array<i64, 3>

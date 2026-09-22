@@ -11,41 +11,44 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @users
-     5 |   r4 = list []
-     6 |   r5 = call #0(r4)
+     5 |   assign <template> = T0
+     6 |   r4 = list []
+     7 |   r5 = call #0(r4)
      8 |   r6 = call #1(r3)
      9 |   r7 = closure L0 []
     10 |   r8 = call #2(r6, r7)
-    12 |   r9 = const_str T1
-    13 |   r10 = call #3(r9)
-    14 |   r11 = call #4(r8, r10)
-    15 |   r12 = string_concat [T0, T0, T0, r11]
-    16 |   commit @users = r5
-    17 |   return r12
+    11 |   r9 = const_str T1
+    12 |   r10 = call #3(r9)
+    13 |   r11 = call #4(r8, r10)
+    14 |   r12 = ref &mut <template>
+    15 |   append r12 r11
+    16 |   r13 = take <template>
+    17 |   commit @users = r5
+    18 |   return r13
 
     ; r0 (v21) : Vec<{address: {city: String}}>
     ; r1 (v22) : Vec<{address: {city: String}}>
-    ; r2 (v23) : Iterator<String, Pure>
+    ; r2 (v23) : Map<Items<{address: {city: String}}>, {address: {city: String}}, String, Pure>
     ; r3 (@users) : Vec<{address: {city: String}}>
-    ; r4 (v6) : Array<{address: {city: String}}, 0>
+    ; r4 (v7) : Array<{address: {city: String}}, 0>
     ; r5 (vec(...)) : Vec<{address: {city: String}}>
-    ; r6 (into_iter(...)) : Iterator<{address: {city: String}}, Pure>
+    ; r6 (into_iter(...)) : Items<{address: {city: String}}>
     ; r7 (v11) : Fn({address: {city: String}}) -> String
-    ; r8 (map(...)) : Iterator<String, Pure>
-    ; r9 (v16) : &str
+    ; r8 (map(...)) : Map<Items<{address: {city: String}}>, {address: {city: String}}, String, Pure>
+    ; r9 (v15) : &str
     ; r10 (to_string(...)) : String
     ; r11 (join(...)) : String
-    ; r12 (v19) : String
-    ; r13 (@users) : Vec<{address: {city: String}}>
-    ; r14 (v14) : String
-    ; r15 (v20) : Vec<{address: {city: String}}>
+    ; r12 (<template>.) : &mut String
+    ; r13 (v19) : String
+    ; r14 (v3) : String
+    ; r15 (x) : Map<Items<{address: {city: String}}>, {address: {city: String}}, String, Pure>
     ; r16 (users) : Vec<{address: {city: String}}>
-    ; r17 (x) : Iterator<String, Pure>
+    ; r17 (v20) : Vec<{address: {city: String}}>
     ; r18 (users) : Vec<{address: {city: String}}>
-    ; r19 (x) : Iterator<String, Pure>
-    ; r20 (@users) : Vec<{address: {city: String}}>
-    ; r21 (v5) : String
-    ; r22 (v8) : String
+    ; r19 (<template>) : String
+    ; r20 (x) : Map<Items<{address: {city: String}}>, {address: {city: String}}, String, Pure>
+    ; r21 (@users) : Vec<{address: {city: String}}>
+    ; r22 (@users) : Vec<{address: {city: String}}>
 
 === closure L0 (ValueId(0)) ===
      0 |   assign u = r0

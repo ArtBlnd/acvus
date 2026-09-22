@@ -1,0 +1,10 @@
+{
+  "name": "Ada",
+  "lang": "ko",
+  "mode": "review",
+  "journal": [
+    { "role": "user",      "content": "why does this loop allocate?" },
+    { "role": "assistant", "content": "the accumulator is rebuilt every turn" },
+    { "role": "user",      "content": "show me the fix" }
+  ]
+}

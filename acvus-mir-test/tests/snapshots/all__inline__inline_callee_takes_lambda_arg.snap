@@ -13,5 +13,5 @@ expression: ir
     ; r1 (v1) : i64
     ; r2 (v2) : i64
     ; r3 (v4) : Vec<i64>
-    ; r4 (transform(...)) : Iterator<i64, Pure>
+    ; r4 (transform(...)) : Map<Items<i64>, i64, i64, Pure>
     ; r5 (collect(...)) : Vec<i64>

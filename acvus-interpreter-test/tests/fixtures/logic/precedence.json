@@ -1,5 +1,5 @@
 {
-  "template": "{{ true = @a || @b && @c }}yes{{_}}no{{/}}",
+  "template": "% if @a || @b && @c\nyes\n% else\nno\n% end",
   "context": { "a": true, "b": false, "c": false },
-  "expected": "yes"
+  "expected": "yes\n"
 }

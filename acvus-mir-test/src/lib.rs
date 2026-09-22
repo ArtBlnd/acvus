@@ -998,6 +998,42 @@ pub fn compile_multi_fn_raw(
     contexts: &[(&str, Ty)],
     extern_fns: &[Function],
 ) -> Result<String, String> {
+    let ast = acvus_ast::parse_script(interner, target.1)
+        .map_err(|e| format!("parse error in target '{}': {e:?}", target.0))?;
+    compile_graph_raw(
+        interner,
+        (target.0, ParsedAst::Script(ast)),
+        helpers,
+        contexts,
+        extern_fns,
+    )
+}
+
+pub fn compile_template_with_helpers(
+    interner: &Interner,
+    target: (&str, &str),
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    contexts: &[(&str, Ty)],
+    extern_fns: &[Function],
+) -> Result<String, String> {
+    let ast = acvus_ast::parse(interner, target.1)
+        .map_err(|e| format!("parse error in target '{}': {e:?}", target.0))?;
+    compile_graph_raw(
+        interner,
+        (target.0, ParsedAst::Template(ast)),
+        helpers,
+        contexts,
+        extern_fns,
+    )
+}
+
+fn compile_graph_raw(
+    interner: &Interner,
+    target: (&str, ParsedAst),
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    contexts: &[(&str, Ty)],
+    extern_fns: &[Function],
+) -> Result<String, String> {
     let mut pb = PolyBuilder::new();
     let ctx_vec: Vec<Context> = contexts
         .iter()
@@ -1008,12 +1044,10 @@ pub fn compile_multi_fn_raw(
         .collect();
 
     let target_qref = QualifiedRef::root(interner.intern(target.0));
-    let target_ast = acvus_ast::parse_script(interner, target.1)
-        .map_err(|e| format!("parse error in target '{}': {e:?}", target.0))?;
 
     let mut functions = vec![inferred_function(
         target_qref,
-        FnKind::Local(ParsedAst::Script(target_ast)),
+        FnKind::Local(target.1),
         vec![],
     )];
 

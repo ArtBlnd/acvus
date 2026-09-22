@@ -1,5 +1,5 @@
 {
-  "template": "{{ out = @a + @b }}{{ out.to_string() }}",
+  "template": "% let out = @a + @b\n{{ out.to_string() }}",
   "context": { "a": 3, "b": 7 },
   "expected": "10"
 }

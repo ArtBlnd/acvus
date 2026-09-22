@@ -6,15 +6,20 @@ expression: ir
   T0 = ""
 
 === main ===
-     1 |   assign x = 42 (r0)
-     3 |   r1 = ref &x
-     4 |   r2 = call #0(r1)
-     5 |   r3 = string_concat [T0, r2]
-     6 |   return r3
+     1 |   assign <template> = T0
+     3 |   assign x = 42 (r0)
+     4 |   r1 = ref &x
+     5 |   r2 = call #0(r1)
+     6 |   r3 = ref &mut <template>
+     7 |   append r3 r2
+     8 |   r4 = take <template>
+     9 |   return r4
 
-    ; r0 (v1) : i64
+    ; r0 (v3) : i64
     ; r1 (x.) : &i64
     ; r2 (to_string(...)) : String
-    ; r3 (v6) : String
-    ; r4 (v3) : String
-    ; r5 (x) : i64
+    ; r3 (<template>.) : &mut String
+    ; r4 (v8) : String
+    ; r5 (<template>) : String
+    ; r6 (v1) : String
+    ; r7 (x) : i64

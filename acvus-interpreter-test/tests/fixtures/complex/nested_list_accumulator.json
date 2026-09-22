@@ -1,5 +1,5 @@
 {
-  "template": "{{ result = as_iter(&@matrix) | flat_map(|row| -> collect(as_iter(row))) | fold(0, |acc, x| -> acc + *x) }}{{ result.to_string() }}",
+  "template": "% let result = as_iter(&@matrix) | flat_map(|row| -> collect(as_iter(row))) | fold(0, |acc, x| -> acc + *x)\n{{ result.to_string() }}",
   "context": {
     "matrix": [
       [

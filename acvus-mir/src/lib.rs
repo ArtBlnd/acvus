@@ -57,11 +57,11 @@ mod tests {
     }
 
     #[test]
-    fn integration_match_with_catch_all() {
+    fn integration_match_with_wildcard_arm() {
         let i = Interner::new();
         compile_template(
             &i,
-            r#"{{ x = @n }}{{ "v" }}{{_}}default{{/}}"#,
+            "% match @n\n% 1 =>\n{{ \"v\" }}\n% _ =>\ndefault\n% end\n",
             &[("n", Ty::I64)],
         )
         .unwrap();
@@ -74,7 +74,7 @@ mod tests {
             i.intern("age"),
             Ty::I64,
         )])));
-        let err = compile_template(&i, r#"{{ y = @user }}{{ z = y.age }}"#, &[("user", user)])
+        let err = compile_template(&i, "% let y = @user\n% let z = y.age", &[("user", user)])
             .unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
     }
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn integration_variable_binding() {
         let i = Interner::new();
-        compile_template(&i, r#"{{ x = @n }}{{ "v" }}"#, &[("n", Ty::I64)]).unwrap();
+        compile_template(&i, "% let x = @n\n{{ \"v\" }}", &[("n", Ty::I64)]).unwrap();
     }
 
     #[test]
@@ -92,7 +92,7 @@ mod tests {
             (i.intern("name"), Ty::String),
             (i.intern("age"), Ty::I64),
         ])));
-        compile_template(&i, "{{ x = @user.age }}", &[("user", user_ty)]).unwrap();
+        compile_template(&i, "% let x = @user.age", &[("user", user_ty)]).unwrap();
     }
 
     #[test]
@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn integration_nested_match() {
+    fn integration_nested_pattern() {
         let i = Interner::new();
         let users_ty = Ty::Array(
             Box::new(Ty::Object(ObjectTy::written(FxHashMap::from_iter([
@@ -117,13 +117,13 @@ mod tests {
         );
         compile_template(
             &i,
-            r#"{{ [{ name, }, ..] = &@users }}{{ name }}{{/}}"#,
+            "% if let [{ name, }, ..] = &@users\n{{ name }}\n% end\n",
             &[("users", users_ty.clone())],
         )
         .unwrap();
         let err = compile_template(
             &i,
-            r#"{{ { name, } = @users }}{{ name }}{{/}}"#,
+            "% if let { name, } = @users\n{{ name }}\n% end\n",
             &[("users", users_ty)],
         )
         .unwrap_err();
@@ -145,18 +145,18 @@ mod tests {
         ])));
         compile_template(
             &i,
-            r#"{{ { name, } = @data }}{{ name }}{{/}}"#,
+            "% if let { name, } = @data\n{{ name }}\n% end\n",
             &[("data", data_ty)],
         )
         .unwrap();
     }
 
     #[test]
-    fn integration_multi_arm() {
+    fn integration_match_over_three_arms() {
         let i = Interner::new();
         compile_template(
             &i,
-            r#"{{ "admin" = @role }}admin page{{ "user" }}user page{{_}}guest{{/}}"#,
+            "% match @role\n% \"admin\" =>\nadmin page\n% \"user\" =>\nuser page\n% _ =>\nguest\n% end\n",
             &[("role", Ty::String)],
         )
         .unwrap();

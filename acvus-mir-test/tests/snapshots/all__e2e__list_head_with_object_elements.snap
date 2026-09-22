@@ -3,55 +3,70 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "empty"
+  T0 = ""
+  T1 = "\n"
+  T2 = "empty\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @users
      2 |   assign @users = r1
-     3 |   r2 = ref &@users
-     4 | L2:
-     6 |   r3 = ref &(*r2)[0]
-     7 |   if true (r4) -> L3 else L4 join L5
-     8 | L3:
-    10 |   jump L5(true (r5))
-    11 | L4:
-    13 |   jump L5(false (r6))
-    14 | L5(r7: Bool):
-    15 |   jump_if r7 then L6 else L1
-    16 | L6:
-    17 |   r8 = ref &(*r2)[0]
-    18 |   r9 = take (*r8).name
-    19 |   r10 = string_concat [r9]
-    20 |   jump L0(r10, r8)
-    21 | L1:
-    22 |   r11 = const_str T0
-    23 |   r12 = string_concat [r11]
-    24 |   jump L0(r12, r0)
-    25 | L0(r13: String, r14: &{name: String}):
-    26 |   r15 = string_concat [r13]
-    27 |   r16 = take @users
-    28 |   commit @users = r16
-    29 |   return r15
+     4 |   assign <template> = T0
+     5 |   r2 = ref &@users
+     6 |   jump L1
+     7 | L1:
+     9 |   r3 = ref &(*r2)[0]
+    10 |   if true (r4) -> L2 else L3 join L4
+    11 | L2:
+    13 |   jump L4(true (r5))
+    14 | L3:
+    16 |   jump L4(false (r6))
+    17 | L4(r7: Bool):
+    18 |   jump_if r7 then L5 else L6
+    19 | L5:
+    20 |   r8 = ref &(*r2)[0]
+    21 |   r9 = take (*r8).name
+    22 |   r10 = ref &mut <template>
+    23 |   append r10 r9
+    24 |   r11 = const_str T1
+    25 |   r12 = ref &mut <template>
+    26 |   append r12 r11
+    28 |   jump L0(() (r13), r8)
+    29 | L6:
+    30 |   r14 = const_str T2
+    31 |   r15 = ref &mut <template>
+    32 |   append r15 r14
+    34 |   jump L0(() (r16), r0)
+    35 | L0(r17: Unit, r18: &{name: String}):
+    36 |   r19 = take <template>
+    37 |   r20 = take @users
+    38 |   commit @users = r20
+    39 |   return r19
 
-    ; r0 (v19) : &{name: String}
+    ; r0 (v25) : &{name: String}
     ; r1 (@users) : Array<{name: String}, 3>
     ; r2 (@users.) : &Array<{name: String}, 3>
-    ; r3 ((*r3).[0]) : &{name: String}
-    ; r4 (v4) : Bool
-    ; r5 (v7) : Bool
-    ; r6 (v8) : Bool
-    ; r7 (v6) : Bool
+    ; r3 ((*r5).[0]) : &{name: String}
+    ; r4 (v6) : Bool
+    ; r5 (v9) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v8) : Bool
     ; r8 (first) : &{name: String}
-    ; r9 ((*r11).name) : String
-    ; r10 (v13) : String
-    ; r11 (v14) : &str
-    ; r12 (v15) : String
-    ; r13 (v16) : String
-    ; r14 (v21) : &{name: String}
-    ; r15 (v17) : String
-    ; r16 (v18) : Array<{name: String}, 3>
-    ; r17 (v11) : &{name: String}
-    ; r18 (@users) : Array<{name: String}, 3>
-    ; r19 (v20) : &{name: String}
-    ; r20 (first) : &{name: String}
+    ; r9 ((*r13).name) : String
+    ; r10 (<template>.) : &mut String
+    ; r11 (v16) : &str
+    ; r12 (<template>.) : &mut String
+    ; r13 (v18) : Unit
+    ; r14 (v19) : &str
+    ; r15 (<template>.) : &mut String
+    ; r16 (v21) : Unit
+    ; r17 (v22) : Unit
+    ; r18 (v27) : &{name: String}
+    ; r19 (v23) : String
+    ; r20 (v24) : Array<{name: String}, 3>
+    ; r21 (v3) : String
+    ; r22 (v26) : &{name: String}
+    ; r23 (v13) : &{name: String}
+    ; r24 (@users) : Array<{name: String}, 3>
+    ; r25 (first) : &{name: String}
+    ; r26 (<template>) : String

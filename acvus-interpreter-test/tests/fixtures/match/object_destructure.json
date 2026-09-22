@@ -1,7 +1,7 @@
 {
-  "template": "{{ { name, } = @user }}{{ name }} is here{{_}}no user{{/}}",
+  "template": "% if let { name, } = @user\n{{ name }} is here\n% else\nno user\n% end",
   "context": {
     "user": { "name": "alice", "age": 30, "email": "alice@example.com" }
   },
-  "expected": "alice is here"
+  "expected": "alice is here\n"
 }

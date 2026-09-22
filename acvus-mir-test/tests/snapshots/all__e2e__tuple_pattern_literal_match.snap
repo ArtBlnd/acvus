@@ -3,102 +3,113 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "zero-one"
-  T1 = "one-any"
-  T2 = "other"
+  T0 = ""
+  T1 = "zero-one\n"
+  T2 = "one-any\n"
+  T3 = "other\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @a
      3 |   r3 = fetch @b
-     4 |   r4 = tuple (r2, r3)
-     5 |   assign $source = r4
-     6 | L2:
-     8 |   if true (r5) -> L4 else L5 join L6
-     9 | L4:
-    10 |   r6 = take $source[0]
-    11 |   r7 = test r6 == 0
-    12 |   jump L6(r7)
-    13 | L5:
-    15 |   jump L6(false (r8))
-    16 | L6(r9: Bool):
-    17 |   if r9 -> L7 else L8 join L9
-    18 | L7:
-    19 |   r10 = take $source[1]
-    20 |   r11 = test r10 == 1
-    21 |   jump L9(r11)
-    22 | L8:
-    24 |   jump L9(false (r12))
-    25 | L9(r13: Bool):
-    26 |   jump_if r13 then L10 else L3
-    27 | L10:
-    28 |   r14 = const_str T0
-    29 |   r15 = string_concat [r14]
-    30 |   jump L0(r15)
-    31 | L3:
-    33 |   if true (r16) -> L11 else L12 join L13
-    34 | L11:
-    35 |   r17 = take $source[0]
-    36 |   r18 = test r17 == 1
-    37 |   jump L13(r18)
-    38 | L12:
-    40 |   jump L13(false (r19))
-    41 | L13(r20: Bool):
-    42 |   jump_if r20 then L14 else L1
-    43 | L14:
-    44 |   r21 = const_str T1
-    45 |   r22 = string_concat [r21]
-    46 |   jump L0(r22)
-    47 | L1:
-    48 |   r23 = const_str T2
-    49 |   r24 = string_concat [r23]
-    50 |   jump L0(r24)
-    51 | L0(r25: String):
-    52 |   r26 = string_concat [r25]
-    53 |   commit @a = r2
-    54 |   commit @b = r3
-    55 |   return r26
+     5 |   assign <template> = T0
+     6 |   r4 = tuple (r2, r3)
+     7 |   assign $source = r4
+     8 |   jump L1
+     9 | L1:
+    11 |   if true (r5) -> L2 else L3 join L4
+    12 | L2:
+    13 |   r6 = take $source[0]
+    14 |   r7 = test r6 == 0
+    15 |   jump L4(r7)
+    16 | L3:
+    18 |   jump L4(false (r8))
+    19 | L4(r9: Bool):
+    20 |   if r9 -> L5 else L6 join L7
+    21 | L5:
+    22 |   r10 = take $source[1]
+    23 |   r11 = test r10 == 1
+    24 |   jump L7(r11)
+    25 | L6:
+    27 |   jump L7(false (r12))
+    28 | L7(r13: Bool):
+    29 |   jump_if r13 then L8 else L9
+    30 | L8:
+    31 |   r14 = const_str T1
+    32 |   r15 = ref &mut <template>
+    33 |   append r15 r14
+    35 |   jump L0(() (r16))
+    36 | L9:
+    38 |   if true (r17) -> L10 else L11 join L12
+    39 | L10:
+    40 |   r18 = take $source[0]
+    41 |   r19 = test r18 == 1
+    42 |   jump L12(r19)
+    43 | L11:
+    45 |   jump L12(false (r20))
+    46 | L12(r21: Bool):
+    47 |   jump_if r21 then L13 else L14
+    48 | L13:
+    49 |   r22 = const_str T2
+    50 |   r23 = ref &mut <template>
+    51 |   append r23 r22
+    53 |   jump L0(() (r24))
+    54 | L14:
+    55 |   r25 = const_str T3
+    56 |   r26 = ref &mut <template>
+    57 |   append r26 r25
+    59 |   jump L0(() (r27))
+    60 | L0(r28: Unit):
+    61 |   r29 = take <template>
+    62 |   commit @a = r2
+    63 |   commit @b = r3
+    64 |   return r29
 
-    ; r0 (v33) : i64
-    ; r1 (v34) : i64
+    ; r0 (v38) : i64
+    ; r1 (v39) : i64
     ; r2 (@a) : i64
     ; r3 (@b) : i64
-    ; r4 (v7) : (i64, i64)
-    ; r5 (v9) : Bool
-    ; r6 (v11) : i64
-    ; r7 (v12) : Bool
-    ; r8 (v13) : Bool
-    ; r9 (v10) : Bool
-    ; r10 (v15) : i64
-    ; r11 (v16) : Bool
-    ; r12 (v17) : Bool
-    ; r13 (v14) : Bool
-    ; r14 (v18) : &str
-    ; r15 (v19) : String
-    ; r16 (v20) : Bool
-    ; r17 (v22) : i64
-    ; r18 (v23) : Bool
-    ; r19 (v24) : Bool
-    ; r20 (v21) : Bool
-    ; r21 (v25) : &str
-    ; r22 (v26) : String
-    ; r23 (v27) : &str
-    ; r24 (v28) : String
-    ; r25 (v29) : String
-    ; r26 (v30) : String
-    ; r27 (@b) : i64
-    ; r28 (@b) : i64
-    ; r29 (v31) : i64
-    ; r30 (@a) : i64
-    ; r31 ($source) : (i64, i64)
-    ; r32 (v36) : i64
-    ; r33 (v37) : i64
-    ; r34 (v40) : i64
-    ; r35 (v39) : i64
-    ; r36 (v42) : i64
-    ; r37 (@a) : i64
-    ; r38 (v32) : i64
-    ; r39 (v35) : i64
-    ; r40 (v38) : i64
-    ; r41 (v41) : i64
+    ; r4 (v9) : (i64, i64)
+    ; r5 (v11) : Bool
+    ; r6 (v13) : i64
+    ; r7 (v14) : Bool
+    ; r8 (v15) : Bool
+    ; r9 (v12) : Bool
+    ; r10 (v17) : i64
+    ; r11 (v18) : Bool
+    ; r12 (v19) : Bool
+    ; r13 (v16) : Bool
+    ; r14 (v20) : &str
+    ; r15 (<template>.) : &mut String
+    ; r16 (v22) : Unit
+    ; r17 (v23) : Bool
+    ; r18 (v25) : i64
+    ; r19 (v26) : Bool
+    ; r20 (v27) : Bool
+    ; r21 (v24) : Bool
+    ; r22 (v28) : &str
+    ; r23 (<template>.) : &mut String
+    ; r24 (v30) : Unit
+    ; r25 (v31) : &str
+    ; r26 (<template>.) : &mut String
+    ; r27 (v33) : Unit
+    ; r28 (v34) : Unit
+    ; r29 (v35) : String
+    ; r30 (v44) : i64
+    ; r31 (@b) : i64
+    ; r32 (<template>) : String
+    ; r33 (v47) : i64
+    ; r34 (v43) : i64
+    ; r35 (v46) : i64
+    ; r36 (v5) : String
+    ; r37 (@b) : i64
+    ; r38 (v37) : i64
+    ; r39 (v40) : i64
+    ; r40 (v36) : i64
+    ; r41 (v42) : i64
+    ; r42 (@a) : i64
+    ; r43 (v45) : i64
+    ; r44 ($source) : (i64, i64)
+    ; r45 (@a) : i64
+    ; r46 (v41) : i64

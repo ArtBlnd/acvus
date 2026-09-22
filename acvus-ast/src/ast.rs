@@ -108,6 +108,13 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
+    /// A template's text line or one of its `{{ }}` tags: the value is
+    /// appended to the template's result (RFC-0071 Decisions 2 and 3).
+    Append {
+        id: AstId,
+        expr: Expr,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -270,64 +277,14 @@ pub enum ForHead {
     Range { lo: Expr, hi: Expr },
 }
 
-/// A parsed template.
+/// A parsed template: a script whose text lines are output (RFC-0071).
+/// Its statements are the script's, and a text line or a `{{ }}` tag is
+/// the one statement the script does not write, `Stmt::Append`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Template {
     pub id: AstId,
-    pub body: Vec<Node>,
+    pub body: Vec<Stmt>,
     pub span: Span,
-}
-
-/// A node in the template body.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Node {
-    /// Literal text outside `{{ }}`.
-    Text {
-        id: AstId,
-        value: String,
-        span: Span,
-    },
-    /// A comment `{{-- ... --}}`.
-    Comment {
-        id: AstId,
-        value: String,
-        span: Span,
-    },
-    /// An inline expression `{{ expr }}` with no binding.
-    InlineExpr { id: AstId, expr: Expr, span: Span },
-    /// A match block `{{ pattern = expr }} ... {{/}}`.
-    /// Variable writes (`{{ $name = expr }}`) are also represented as a
-    /// MatchBlock with a single arm whose pattern is
-    /// `Pattern::Binding { ref_kind: Variable, .. }` and an empty body.
-    MatchBlock(MatchBlock),
-}
-
-/// A match block with one or more arms and optional catch-all.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchBlock {
-    pub id: AstId,
-    pub source: Expr,
-    pub arms: Vec<MatchArm>,
-    pub catch_all: Option<CatchAll>,
-    pub indent: Option<IndentModifier>,
-    pub span: Span,
-}
-
-/// A single arm in a match block.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchArm {
-    pub id: AstId,
-    pub pattern: Pattern,
-    pub body: Vec<Node>,
-    pub tag_span: Span,
-}
-
-/// The catch-all `{{_}}` arm.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CatchAll {
-    pub id: AstId,
-    pub body: Vec<Node>,
-    pub tag_span: Span,
 }
 
 /// An expression in the template language.
@@ -743,13 +700,6 @@ pub struct ObjectPatternField {
     pub span: Span,
 }
 
-/// An indent modifier on a close block `{{/+N}}` or `{{/-N}}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndentModifier {
-    Increase(u32),
-    Decrease(u32),
-}
-
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
@@ -909,6 +859,7 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
             }
             Stmt::Break { .. } | Stmt::Continue { .. } => {}
             Stmt::Anyorder { body, .. } => walk_stmts(body, refs),
+            Stmt::Append { expr, .. } => walk_expr(expr, refs),
         }
     }
 }
@@ -927,27 +878,8 @@ fn template_context_refs(
     into_lambdas: bool,
 ) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = ContextRefs::new(into_lambdas);
-    walk_nodes(&template.body, &mut refs);
+    walk_stmts(&template.body, &mut refs);
     refs.set
-}
-
-fn walk_nodes(nodes: &[Node], refs: &mut ContextRefs) {
-    for node in nodes {
-        match node {
-            Node::Text { .. } | Node::Comment { .. } => {}
-            Node::InlineExpr { expr, .. } => walk_expr(expr, refs),
-            Node::MatchBlock(mb) => {
-                walk_expr(&mb.source, refs);
-                for arm in &mb.arms {
-                    walk_pattern(&arm.pattern, refs);
-                    walk_nodes(&arm.body, refs);
-                }
-                if let Some(ca) = &mb.catch_all {
-                    walk_nodes(&ca.body, refs);
-                }
-            }
-        }
-    }
 }
 
 fn walk_pattern(pattern: &Pattern, refs: &mut ContextRefs) {

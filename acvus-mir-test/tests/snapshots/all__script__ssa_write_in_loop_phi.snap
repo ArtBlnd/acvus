@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/script.rs
-assertion_line: 148
 expression: ir
 ---
 === main ===
@@ -36,8 +35,8 @@ expression: ir
     ; r0 (@acc) : i64
     ; r1 (@items) : Array<i64, 3>
     ; r2 (@items) : Array<i64, 3>
-    ; r3 (into_iter(...)) : Iterator<i64, Pure>
-    ; r4 (it.) : &mut Iterator<i64, Pure>
+    ; r3 (into_iter(...)) : Items<i64>
+    ; r4 (it.) : &mut Items<i64>
     ; r5 (next(...)) : Option<i64>
     ; r6 (v10) : Bool
     ; r7 (x) : i64
@@ -50,4 +49,4 @@ expression: ir
     ; r14 (@items) : Array<i64, 3>
     ; r15 (@acc) : i64
     ; r16 (x) : i64
-    ; r17 (it) : Iterator<i64, Pure>
+    ; r17 (it) : Items<i64>

@@ -170,7 +170,8 @@ fn a_template_that_binds_a_string_context_and_emits_it_is_accepted() {
     let i = Interner::new();
     let ir = compile_to_ir(
         &i,
-        r#"{{ x = @items }}{{ x }}"#,
+        "% let x = @items\n\
+         {{ x }}",
         &string_context(&i, "items"),
     )
     .unwrap();

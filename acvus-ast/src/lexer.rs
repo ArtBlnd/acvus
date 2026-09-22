@@ -3,182 +3,207 @@ use std::collections::VecDeque;
 use acvus_utils::Interner;
 use logos::Logos;
 
-use crate::ast::IndentModifier;
 use crate::error::{ParseError, ParseErrorKind};
 use crate::literal::SuffixedInt;
 use crate::span::Span;
 use crate::token::Token;
 
-// -- Phase 1: Template Scanner ------------------------------------------
+// -- Phase 1: Template line scanner -------------------------------------
 
-/// A segment produced by the template scanner.
+/// One piece of a template text line: bytes to append as written, or a
+/// `{{ }}` tag whose expression is appended in their place.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Segment {
-    /// Literal text outside `{{ }}`.
+pub enum Piece {
     Text { value: String, span: Span },
-    /// A comment `{{-- ... --}}`.
-    Comment { value: String, span: Span },
-    /// A close block `{{/}}`, optionally with indent modifier `{{/+2}}` or `{{/-2}}`.
-    CloseBlock {
-        span: Span,
-        indent: Option<IndentModifier>,
-    },
-    /// A catch-all `{{_}}`.
-    CatchAll { span: Span },
-    /// An expression tag `{{ ... }}` (content is the inner text, trimmed).
-    ExprTag {
+    Tag {
         content: String,
         span: Span,
         inner_span: Span,
     },
 }
 
-/// Scan a template source string into segments.
-pub fn scan_template(source: &str) -> Result<Vec<Segment>, ParseError> {
-    let mut segments = Vec::new();
-    // (trim_left, trim_right) per segment; only meaningful for non-Text segments
-    let mut trims: Vec<(bool, bool)> = Vec::new();
-    let bytes = source.as_bytes();
-    let len = bytes.len();
-    let mut pos = 0;
-
-    while pos < len {
-        // Detect opening delimiter: `{-{` (trim) or `{{` (normal)
-        let open = detect_open(bytes, pos);
-        if let Some((trim_left, skip)) = open {
-            let tag_start = pos;
-            pos += skip;
-
-            // Check for comment: `--` immediately after open delimiter
-            if pos + 1 < len && bytes[pos] == b'-' && bytes[pos + 1] == b'-' {
-                pos += 2; // skip `--`
-                let comment_start = pos;
-                loop {
-                    // Try close: `--}-}` or `--}}`
-                    if pos + 1 < len
-                        && bytes[pos] == b'-'
-                        && bytes[pos + 1] == b'-'
-                        && let Some((trim_right, close_skip)) = detect_close(bytes, pos + 2)
-                    {
-                        let comment_end = pos;
-                        pos += 2 + close_skip; // skip `--` + close delimiter
-                        let value = source[comment_start..comment_end].to_string();
-                        segments.push(Segment::Comment {
-                            value,
-                            span: Span::new(tag_start, pos),
-                        });
-                        trims.push((trim_left, trim_right));
-                        break;
-                    }
-                    if pos >= len {
-                        return Err(ParseError::new(
-                            ParseErrorKind::UnclosedComment,
-                            Span::new(tag_start, len),
-                        ));
-                    }
-                    pos += 1;
-                }
-            } else {
-                // Regular tag
-                let inner_start = pos;
-                let inner_end;
-                let trim_right;
-
-                // Scan for close delimiter, respecting string literals
-                loop {
-                    if pos >= len {
-                        return Err(ParseError::new(
-                            ParseErrorKind::UnclosedTag,
-                            Span::new(tag_start, len),
-                        ));
-                    }
-                    if bytes[pos] == b'"' {
-                        pos += 1;
-                        loop {
-                            if pos >= len {
-                                return Err(ParseError::new(
-                                    ParseErrorKind::UnclosedString,
-                                    Span::new(tag_start, len),
-                                ));
-                            }
-                            if bytes[pos] == b'\\' {
-                                pos += 2;
-                                continue;
-                            }
-                            if bytes[pos] == b'"' {
-                                pos += 1;
-                                break;
-                            }
-                            pos += 1;
-                        }
-                    } else if let Some(after) = char_literal_end(bytes, pos) {
-                        pos = after;
-                    } else if let Some((tr, close_skip)) = detect_close(bytes, pos) {
-                        inner_end = pos;
-                        trim_right = tr;
-                        pos += close_skip;
-                        break;
-                    } else {
-                        pos += 1;
-                    }
-                }
-
-                let inner = &source[inner_start..inner_end];
-                let trimmed = inner.trim();
-                let tag_span = Span::new(tag_start, pos);
-
-                if let Some(indent) = parse_close_block(trimmed) {
-                    segments.push(Segment::CloseBlock {
-                        span: tag_span,
-                        indent: indent.1,
-                    });
-                } else if trimmed == "_" {
-                    segments.push(Segment::CatchAll { span: tag_span });
-                } else {
-                    let leading_ws = inner.len() - inner.trim_start().len();
-                    let trailing_ws = inner.len() - inner.trim_end().len();
-                    let trim_start = inner_start + leading_ws;
-                    let trim_end = inner_end - trailing_ws;
-                    segments.push(Segment::ExprTag {
-                        content: trimmed.to_string(),
-                        span: tag_span,
-                        inner_span: Span::new(trim_start, trim_end),
-                    });
-                }
-                trims.push((trim_left, trim_right));
-            }
-        } else {
-            // Literal text
-            let start = pos;
-            while pos < len {
-                if detect_open(bytes, pos).is_some() {
-                    break;
-                }
-                pos += 1;
-            }
-            segments.push(Segment::Text {
-                value: source[start..pos].to_string(),
-                span: Span::new(start, pos),
-            });
-            trims.push((false, false));
-        }
-    }
-
-    apply_whitespace_trimming(&mut segments, &trims);
-    Ok(segments)
+/// One line of a template (RFC-0071).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Line {
+    /// A line whose first non-blank character is `%`: one statement of the
+    /// script grammar, without its `;` and without the braces that would
+    /// open or close a block. `content` is what followed the `%`.
+    Stmt { content: String, span: Span },
+    /// Every other line: text, appended as written.
+    Text { pieces: Vec<Piece>, span: Span },
 }
 
-/// Detect an opening delimiter at `pos`.
-/// Returns `Some((trim_left, bytes_to_skip))` or `None`.
-fn detect_open(bytes: &[u8], pos: usize) -> Option<(bool, usize)> {
-    let len = bytes.len();
-    if pos + 2 < len && bytes[pos] == b'{' && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'{' {
-        Some((true, 3))
-    } else if pos + 1 < len && bytes[pos] == b'{' && bytes[pos + 1] == b'{' {
-        Some((false, 2))
-    } else {
-        None
+/// Classify a template source into lines.
+///
+/// A line whose first non-blank character is `%` is a statement line. A
+/// line beginning with `%%` is a text line holding one `%`. A text line
+/// ending in `\` is appended without its newline; every other text line
+/// carries its newline.
+pub fn scan_template(source: &str) -> Result<Vec<Line>, ParseError> {
+    let mut lines = Vec::new();
+    let mut at = 0;
+
+    while at < source.len() {
+        let newline = source[at..].find('\n').map(|i| at + i);
+        let content_end = newline.unwrap_or(source.len());
+        let line = &source[at..content_end];
+        let indent = line
+            .bytes()
+            .position(|b| b != b' ' && b != b'\t')
+            .unwrap_or(line.len());
+
+        if !line.starts_with("%%") && line.as_bytes().get(indent) == Some(&b'%') {
+            let start = at + indent + 1;
+            lines.push(Line::Stmt {
+                content: source[start..content_end].to_string(),
+                span: Span::new(start, content_end),
+            });
+        } else {
+            let continued = line.ends_with('\\');
+            let escaped_percent = line.starts_with("%%");
+            let start = at + if escaped_percent { 2 } else { 0 };
+            let end = content_end - usize::from(continued);
+            let mut pieces = split_tags(source, start, end)?;
+            let edges = LineEdges {
+                opening: if escaped_percent { "%" } else { "" },
+                closing: match newline.is_some() && !continued {
+                    true => "\n",
+                    false => "",
+                },
+            };
+            edges.wrap(&mut pieces, Span::new(start, end));
+            lines.push(Line::Text {
+                pieces,
+                span: Span::new(at, content_end),
+            });
+        }
+
+        at = newline.map_or(source.len(), |nl| nl + 1);
     }
+
+    Ok(lines)
+}
+
+/// The text a line owns outside its own bytes: the `%` a leading `%%`
+/// stands for, and the newline the line carries where it did not end in
+/// `\` (RFC-0071 Decision 2).
+struct LineEdges {
+    opening: &'static str,
+    closing: &'static str,
+}
+
+impl LineEdges {
+    fn wrap(&self, pieces: &mut Vec<Piece>, span: Span) {
+        if !self.opening.is_empty() {
+            match pieces.first_mut() {
+                Some(Piece::Text { value, .. }) => value.insert_str(0, self.opening),
+                _ => pieces.insert(
+                    0,
+                    Piece::Text {
+                        value: self.opening.to_string(),
+                        span,
+                    },
+                ),
+            }
+        }
+        if !self.closing.is_empty() {
+            match pieces.last_mut() {
+                Some(Piece::Text { value, .. }) => value.push_str(self.closing),
+                _ => pieces.push(Piece::Text {
+                    value: self.closing.to_string(),
+                    span,
+                }),
+            }
+        }
+    }
+}
+
+/// Split `source[start..end]` into text runs and `{{ }}` tags.
+fn split_tags(source: &str, start: usize, end: usize) -> Result<Vec<Piece>, ParseError> {
+    let bytes = source.as_bytes();
+    let mut pieces = Vec::new();
+    let mut text_from = start;
+    let mut at = start;
+
+    while at < end {
+        if !(bytes[at] == b'{' && at + 1 < end && bytes[at + 1] == b'{') {
+            at += 1;
+            continue;
+        }
+        let Some(close) = close_of_tag(bytes, at + 2, end) else {
+            return Err(ParseError::new(
+                ParseErrorKind::UnclosedTag,
+                Span::new(at, end),
+            ));
+        };
+        if text_from < at {
+            pieces.push(Piece::Text {
+                value: source[text_from..at].to_string(),
+                span: Span::new(text_from, at),
+            });
+        }
+        let inner = &source[at + 2..close];
+        let leading = inner.len() - inner.trim_start().len();
+        let trailing = inner.len() - inner.trim_end().len();
+        pieces.push(Piece::Tag {
+            content: inner.trim().to_string(),
+            span: Span::new(at, close + 2),
+            inner_span: Span::new(at + 2 + leading, close - trailing),
+        });
+        at = close + 2;
+        text_from = at;
+    }
+
+    if text_from < end {
+        pieces.push(Piece::Text {
+            value: source[text_from..end].to_string(),
+            span: Span::new(text_from, end),
+        });
+    }
+    Ok(pieces)
+}
+
+/// The offset of the `}}` that closes a tag whose content starts at `from`,
+/// with the content's literals and its nested braces stepped over, so a
+/// `}}` inside a string literal or an object literal's `}` is not the
+/// tag's end (RFC-0071 Decision 3). `None` where no `}}` closes it before
+/// `limit`.
+fn close_of_tag(bytes: &[u8], from: usize, limit: usize) -> Option<usize> {
+    let mut at = from;
+    let mut depth = 0u32;
+    while at < limit {
+        if let Some(after) = char_literal_end(bytes, at) {
+            at = after;
+            continue;
+        }
+        match bytes[at] {
+            b'"' => at = string_literal_end(bytes, at, limit)?,
+            b'{' => {
+                depth += 1;
+                at += 1;
+            }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                at += 1;
+            }
+            b'}' if at + 1 < limit && bytes[at + 1] == b'}' => return Some(at),
+            _ => at += 1,
+        }
+    }
+    None
+}
+
+/// One past the closing quote of the `"…"` starting at `at`.
+fn string_literal_end(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
+    let mut i = at + 1;
+    while i < limit {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// The longest text a `'…'` literal can be: `'\u{10FFFF}'`.
@@ -203,80 +228,6 @@ fn char_literal_end(bytes: &[u8], pos: usize) -> Option<usize> {
         }
     }
     None
-}
-
-/// Detect a closing delimiter at `pos`.
-/// Returns `Some((trim_right, bytes_to_skip))` or `None`.
-fn detect_close(bytes: &[u8], pos: usize) -> Option<(bool, usize)> {
-    let len = bytes.len();
-    if pos + 2 < len && bytes[pos] == b'}' && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'}' {
-        Some((true, 3))
-    } else if pos + 1 < len && bytes[pos] == b'}' && bytes[pos + 1] == b'}' {
-        Some((false, 2))
-    } else {
-        None
-    }
-}
-
-/// Trim trailing whitespace from `s` up to and including the first `\n` encountered
-/// (scanning backwards). Stops at non-whitespace or after consuming `\n`.
-fn trim_trailing(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 {
-        match bytes[i - 1] {
-            b' ' | b'\t' => i -= 1,
-            b'\n' => {
-                i -= 1;
-                break;
-            }
-            _ => break,
-        }
-    }
-    &s[..i]
-}
-
-/// Trim leading whitespace from `s` up to and including the first `\n` encountered
-/// (scanning forwards). Stops at non-whitespace or after consuming `\n`.
-fn trim_leading(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        match bytes[i] {
-            b' ' | b'\t' => i += 1,
-            b'\n' => {
-                i += 1;
-                break;
-            }
-            _ => break,
-        }
-    }
-    &s[i..]
-}
-
-/// Apply whitespace trimming to segments based on trim flags.
-fn apply_whitespace_trimming(segments: &mut Vec<Segment>, trims: &[(bool, bool)]) {
-    let len = segments.len();
-    for i in 0..len {
-        let (trim_left, trim_right) = trims[i];
-
-        if trim_left
-            && i > 0
-            && let Segment::Text { value, .. } = &mut segments[i - 1]
-        {
-            *value = trim_trailing(value).to_string();
-        }
-        if trim_right
-            && i + 1 < len
-            && let Segment::Text { value, .. } = &mut segments[i + 1]
-        {
-            *value = trim_leading(value).to_string();
-        }
-    }
-
-    // Remove empty Text segments
-    segments.retain(|seg| !matches!(seg, Segment::Text { value, .. } if value.is_empty()));
 }
 
 // -- Phase 2: Expression Tokenizer (logos-backed) -----------------------
@@ -478,170 +429,90 @@ impl Iterator for ExprTokenizer<'_> {
     }
 }
 
-/// Expand a format string (e.g. `hello {{ name }}!`) into LALRPOP tokens.
+/// One `{{ … }}` of a format string: the expression's text and where in the
+/// literal's content it began.
+struct Interpolation {
+    at: usize,
+    source: String,
+}
+
+/// Expand a format string (e.g. `hello {{ name }}`) into LALRPOP tokens.
 ///
 /// The input `content` is the undecoded string body (from `StringLit`), so a
 /// segment's offsets are the source's and the grammar decodes each segment
 /// against the one escape table.
 /// `base_start`/`base_end` are absolute offsets of the original `StringLit` token.
 ///
-/// ## Algorithm
-///
-/// 1. Split `content` by `{{ }}` pairs into alternating text/expr segments.
-///    Result is always `[text, expr, text, expr, ..., text]` (starts and ends with text).
-///
-/// 2. Emit tokens:
-///    `FmtStringStart(text0)  <expr0 tokens>  FmtStringMid(text1)  <expr1 tokens>  ...  FmtStringEnd(textn)`
-///
-/// ## `}}` matching
-///
-/// - Brace depth tracked: `{` increments, `}` at depth>0 decrements.
-/// - `}}` at depth==0 closes the interpolation.
-/// - Quoted strings (`"..."`) inside expressions are skipped (with `\"` escape handling).
+/// The tokens are `FmtStringStart(text0) <expr0> FmtStringMid(text1) <expr1>
+/// … FmtStringEnd(textn)`. A `{{` the literal never closes is not an
+/// interpolation: it is the two characters, which is how `{{ "{{" }}`
+/// writes a literal `{{` (RFC-0071 Decision 3). A literal holding no
+/// interpolation at all comes back as the `StringLit` it was.
 fn expand_format_string(
     content: &str,
     base_start: usize,
     base_end: usize,
     interner: &Interner,
 ) -> VecDeque<Result<(usize, Token, usize), ParseError>> {
-    let err_span = Span::new(base_start, base_end);
-
-    // -- Phase 1: split into [text, expr, text, expr, ..., text] --
-
     let mut texts: Vec<String> = Vec::new();
-    let mut exprs: Vec<String> = Vec::new();
+    let mut exprs: Vec<Interpolation> = Vec::new();
     let bytes = content.as_bytes();
     let len = bytes.len();
     let mut pos = 0;
     let mut text_start = 0;
 
     while pos < len {
-        if pos + 1 < len && bytes[pos] == b'{' && bytes[pos + 1] == b'{' {
-            texts.push(content[text_start..pos].to_string());
-
-            let expr_start = pos + 2;
-            let mut scan = expr_start;
-            let mut depth = 0u32;
-
-            loop {
-                if scan >= len {
-                    return VecDeque::from([Err(ParseError::new(
-                        ParseErrorKind::UnclosedTag,
-                        err_span,
-                    ))]);
-                }
-                if let Some(after) = char_literal_end(bytes, scan) {
-                    scan = after;
-                    continue;
-                }
-                match bytes[scan] {
-                    b'"' => {
-                        scan += 1;
-                        while scan < len {
-                            if bytes[scan] == b'\\' {
-                                scan += 2;
-                                continue;
-                            }
-                            if bytes[scan] == b'"' {
-                                scan += 1;
-                                break;
-                            }
-                            scan += 1;
-                        }
-                    }
-                    b'{' => {
-                        depth += 1;
-                        scan += 1;
-                    }
-                    b'}' if depth > 0 => {
-                        depth -= 1;
-                        scan += 1;
-                    }
-                    b'}' if scan + 1 < len && bytes[scan + 1] == b'}' => {
-                        exprs.push(content[expr_start..scan].to_string());
-                        pos = scan + 2;
-                        text_start = pos;
-                        break;
-                    }
-                    _ => scan += 1,
-                }
-            }
-        } else {
+        if !(bytes[pos] == b'{' && pos + 1 < len && bytes[pos + 1] == b'{') {
             pos += 1;
+            continue;
+        }
+        match close_of_tag(bytes, pos + 2, len) {
+            Some(close) => {
+                texts.push(content[text_start..pos].to_string());
+                exprs.push(Interpolation {
+                    at: pos + 2,
+                    source: content[pos + 2..close].to_string(),
+                });
+                pos = close + 2;
+                text_start = pos;
+            }
+            None => pos += 2,
         }
     }
 
+    if exprs.is_empty() {
+        return VecDeque::from([Ok((
+            base_start,
+            Token::StringLit(content.to_string()),
+            base_end,
+        ))]);
+    }
+
     texts.push(content[text_start..].to_string());
-    // Invariant: texts.len() == exprs.len() + 1
 
-    // -- Phase 2: emit tokens --
-    // Pattern: Start(text0) <expr0> Mid(text1) <expr1> ... End(textn)
-
-    let mut out = VecDeque::new();
+    let quote_offset = 1;
     let last_text_idx = texts.len() - 1;
-
-    // Compute byte offsets for each text/expr segment within the source.
-    // base_start points to the opening `"` of the string literal.
-    // Content positions: `"` (1 byte) + content bytes.
-    // Text/expr boundaries were tracked in phase 1 via `pos`.
-    //
-    // Rebuild positions: walk the content structure to assign correct offsets.
-    // The content layout is: text0 {{ expr0 }} text1 {{ expr1 }} ... textn
-    let quote_offset = 1; // opening `"`
+    let mut out = VecDeque::new();
     let mut cursor = base_start + quote_offset;
 
     for (i, text) in texts.into_iter().enumerate() {
-        let text_len = text.len();
-        let tok_start = cursor;
-        let tok_end = cursor + text_len;
-        cursor = tok_end;
-
+        let tok_end = cursor + text.len();
         let tok = match i {
             0 => Token::FmtStringStart(text),
             n if n == last_text_idx => Token::FmtStringEnd(text),
             _ => Token::FmtStringMid(text),
         };
-        out.push_back(Ok((tok_start, tok, tok_end)));
+        out.push_back(Ok((cursor, tok, tok_end)));
+        cursor = tok_end;
 
-        // After each text except the last, emit the corresponding expression tokens
-        if let Some(expr_str) = exprs.get(i) {
-            cursor += 2; // skip `{{`
-            out.extend(Signed::new(expr_str, cursor, interner));
-            cursor += expr_str.len() + 2; // expr content + `}}`
+        if let Some(expr) = exprs.get(i) {
+            let expr_at = base_start + quote_offset + expr.at;
+            out.extend(Signed::new(&expr.source, expr_at, interner));
+            cursor = expr_at + expr.source.len() + 2;
         }
     }
 
     out
-}
-
-/// Try to parse a trimmed tag content as a close block.
-/// Returns `Some(((), indent))` if it matches `/` optionally followed by `+N` or `-N`.
-/// Returns `None` if it's not a close block pattern.
-fn parse_close_block(trimmed: &str) -> Option<((), Option<IndentModifier>)> {
-    if !trimmed.starts_with('/') {
-        return None;
-    }
-    let rest = trimmed[1..].trim();
-    if rest.is_empty() {
-        return Some(((), None));
-    }
-    let (sign, digits) = if let Some(d) = rest.strip_prefix('+') {
-        ('+', d.trim())
-    } else if let Some(d) = rest.strip_prefix('-') {
-        ('-', d.trim())
-    } else {
-        return None;
-    };
-    if digits.is_empty() {
-        return None;
-    }
-    let n: u32 = digits.parse().ok()?;
-    let modifier = match sign {
-        '+' => IndentModifier::Increase(n),
-        '-' => IndentModifier::Decrease(n),
-        _ => unreachable!(),
-    };
-    Some(((), Some(modifier)))
 }
 
 #[cfg(test)]
@@ -649,262 +520,96 @@ mod tests {
     use super::*;
     use crate::literal::IntWidth;
 
-    // -- Scanner Tests --
+    // -- Line scanner --
 
-    #[test]
-    fn scan_literal_text() {
-        let segs = scan_template("hello world").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello world"));
+    fn text_of(line: &Line) -> String {
+        let Line::Text { pieces, .. } = line else {
+            panic!("{line:?}");
+        };
+        pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Text { value, .. } => value.clone(),
+                Piece::Tag { content, .. } => format!("{{{{{content}}}}}"),
+            })
+            .collect()
     }
 
     #[test]
-    fn scan_inline_expr() {
-        let segs = scan_template("{{ name }}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::ExprTag { content, .. } if content == "name"));
+    fn a_line_without_a_percent_is_text_with_its_newline() {
+        let lines = scan_template("hello world\nsecond\n").unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(text_of(&lines[0]), "hello world\n");
+        assert_eq!(text_of(&lines[1]), "second\n");
     }
 
     #[test]
-    fn scan_comment() {
-        let segs = scan_template("{{-- a comment --}}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::Comment { value, .. } if value == " a comment "));
+    fn the_last_line_without_a_newline_carries_none() {
+        let lines = scan_template("hello").unwrap();
+        assert_eq!(text_of(&lines[0]), "hello");
     }
 
     #[test]
-    fn scan_close_block() {
-        let segs = scan_template("{{/}}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::CloseBlock { indent: None, .. }));
+    fn a_first_non_blank_percent_is_a_statement_line() {
+        let lines = scan_template("    % let x = 1\n").unwrap();
+        assert_eq!(
+            lines,
+            vec![Line::Stmt {
+                content: " let x = 1".to_string(),
+                span: Span::new(5, 15),
+            }]
+        );
     }
 
     #[test]
-    fn scan_close_block_indent_increase() {
-        let segs = scan_template("{{/+2}}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(
-            &segs[0],
-            Segment::CloseBlock {
-                indent: Some(IndentModifier::Increase(2)),
-                ..
-            }
-        ));
+    fn a_double_percent_is_a_text_line_holding_one() {
+        let lines = scan_template("%% not a statement\n").unwrap();
+        assert_eq!(text_of(&lines[0]), "% not a statement\n");
     }
 
     #[test]
-    fn scan_close_block_indent_decrease() {
-        let segs = scan_template("{{/-3}}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(
-            &segs[0],
-            Segment::CloseBlock {
-                indent: Some(IndentModifier::Decrease(3)),
-                ..
-            }
-        ));
+    fn a_trailing_backslash_drops_the_newline() {
+        let lines = scan_template("a\\\nb\n").unwrap();
+        assert_eq!(text_of(&lines[0]), "a");
+        assert_eq!(text_of(&lines[1]), "b\n");
     }
 
     #[test]
-    fn scan_close_block_indent_with_spaces() {
-        let segs = scan_template("{{ / + 2 }}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(
-            &segs[0],
-            Segment::CloseBlock {
-                indent: Some(IndentModifier::Increase(2)),
-                ..
-            }
-        ));
+    fn a_blank_line_is_its_newline() {
+        let lines = scan_template("a\n\nb").unwrap();
+        assert_eq!(text_of(&lines[1]), "\n");
     }
 
     #[test]
-    fn scan_catch_all() {
-        let segs = scan_template("{{_}}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::CatchAll { .. }));
+    fn a_tag_splits_the_line() {
+        let lines = scan_template("hello {{ name }} world").unwrap();
+        let Line::Text { pieces, .. } = &lines[0] else {
+            panic!();
+        };
+        assert_eq!(pieces.len(), 3);
+        assert!(matches!(&pieces[0], Piece::Text { value, .. } if value == "hello "));
+        assert!(matches!(&pieces[1], Piece::Tag { content, .. } if content == "name"));
+        assert!(matches!(&pieces[2], Piece::Text { value, .. } if value == " world"));
+    }
+
+    /// The tag's content is tokenized, so a string literal inside it may
+    /// hold `{{` or `}}` and an object literal's `}` is not the end.
+    #[test]
+    fn a_literal_inside_a_tag_does_not_close_it() {
+        assert_eq!(text_of(&scan_template(r#"{{ "a}}b" }}"#).unwrap()[0]), r#"{{"a}}b"}}"#);
+        assert_eq!(text_of(&scan_template(r#"{{ "{{" }}"#).unwrap()[0]), r#"{{"{{"}}"#);
+        assert_eq!(
+            text_of(&scan_template("{{ f({ g: 1, }) }}").unwrap()[0]),
+            "{{f({ g: 1, })}}"
+        );
     }
 
     #[test]
-    fn scan_catch_all_with_spaces() {
-        let segs = scan_template("{{ _ }}").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::CatchAll { .. }));
-    }
-
-    #[test]
-    fn scan_mixed() {
-        let segs = scan_template("hello {{ name }} world").unwrap();
-        assert_eq!(segs.len(), 3);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello "));
-        assert!(matches!(&segs[1], Segment::ExprTag { content, .. } if content == "name"));
-        assert!(matches!(&segs[2], Segment::Text { value, .. } if value == " world"));
-    }
-
-    #[test]
-    fn scan_string_with_braces() {
-        let segs = scan_template(r#"{{ "a}}b" }}"#).unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::ExprTag { content, .. } if content == r#""a}}b""#));
-    }
-
-    #[test]
-    fn scan_unclosed_tag() {
-        let result = scan_template("{{ hello");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err().kind,
+    fn a_tag_the_line_does_not_close_is_refused() {
+        assert_eq!(
+            scan_template("{{ hello").unwrap_err().kind,
             ParseErrorKind::UnclosedTag
-        ));
-    }
-
-    #[test]
-    fn scan_unclosed_comment() {
-        let result = scan_template("{{-- hello");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err().kind,
-            ParseErrorKind::UnclosedComment
-        ));
-    }
-
-    // -- Trim Helper Tests --
-
-    #[test]
-    fn trim_trailing_newline() {
-        assert_eq!(trim_trailing("hello  \n  "), "hello  ");
-    }
-
-    #[test]
-    fn trim_trailing_no_newline() {
-        assert_eq!(trim_trailing("hello  "), "hello");
-    }
-
-    #[test]
-    fn trim_trailing_only_spaces() {
-        assert_eq!(trim_trailing("   "), "");
-    }
-
-    #[test]
-    fn trim_trailing_ends_with_text() {
-        assert_eq!(trim_trailing("hello"), "hello");
-    }
-
-    #[test]
-    fn trim_trailing_tabs() {
-        assert_eq!(trim_trailing("hello\n\t\t"), "hello");
-    }
-
-    #[test]
-    fn trim_leading_newline() {
-        assert_eq!(trim_leading("  \n  world"), "  world");
-    }
-
-    #[test]
-    fn trim_leading_no_newline() {
-        assert_eq!(trim_leading("  world"), "world");
-    }
-
-    #[test]
-    fn trim_leading_only_spaces() {
-        assert_eq!(trim_leading("   "), "");
-    }
-
-    #[test]
-    fn trim_leading_starts_with_text() {
-        assert_eq!(trim_leading("world"), "world");
-    }
-
-    #[test]
-    fn trim_leading_tabs() {
-        assert_eq!(trim_leading("\t\t\nhello"), "hello");
-    }
-
-    // -- Whitespace Trimming Scanner Tests --
-
-    #[test]
-    fn scan_trim_left() {
-        let segs = scan_template("hello  \n  {-{ x }}").unwrap();
-        assert_eq!(segs.len(), 2);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello  "));
-        assert!(matches!(&segs[1], Segment::ExprTag { content, .. } if content == "x"));
-    }
-
-    #[test]
-    fn scan_trim_right() {
-        let segs = scan_template("{{ x }-}  \n  world").unwrap();
-        assert_eq!(segs.len(), 2);
-        assert!(matches!(&segs[0], Segment::ExprTag { content, .. } if content == "x"));
-        assert!(matches!(&segs[1], Segment::Text { value, .. } if value == "  world"));
-    }
-
-    #[test]
-    fn scan_trim_both() {
-        let segs = scan_template("hello  \n  {-{ x }-}  \n  world").unwrap();
-        assert_eq!(segs.len(), 3);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello  "));
-        assert!(matches!(&segs[1], Segment::ExprTag { content, .. } if content == "x"));
-        assert!(matches!(&segs[2], Segment::Text { value, .. } if value == "  world"));
-    }
-
-    #[test]
-    fn scan_trim_removes_empty_text() {
-        // "\n{-{ x }-}\n" - newlines are consumed, leaving empty texts that get removed
-        let segs = scan_template("\n{-{ x }-}\n").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::ExprTag { content, .. } if content == "x"));
-    }
-
-    #[test]
-    fn scan_trim_partial() {
-        // "  \n  " trims to "  " (only up to \n)
-        let segs = scan_template("  \n  {-{ x }-}  \n  ").unwrap();
-        assert_eq!(segs.len(), 3);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "  "));
-        assert!(matches!(&segs[1], Segment::ExprTag { content, .. } if content == "x"));
-        assert!(matches!(&segs[2], Segment::Text { value, .. } if value == "  "));
-    }
-
-    #[test]
-    fn scan_trim_comment() {
-        let segs = scan_template("hello  \n  {-{-- comment --}-}  \n  world").unwrap();
-        assert_eq!(segs.len(), 3);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello  "));
-        assert!(matches!(&segs[1], Segment::Comment { .. }));
-        assert!(matches!(&segs[2], Segment::Text { value, .. } if value == "  world"));
-    }
-
-    #[test]
-    fn scan_trim_close_block() {
-        let segs = scan_template("\n{-{/}-}\n").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::CloseBlock { indent: None, .. }));
-    }
-
-    #[test]
-    fn scan_trim_catch_all() {
-        let segs = scan_template("\n{-{ _ }-}\n").unwrap();
-        assert_eq!(segs.len(), 1);
-        assert!(matches!(&segs[0], Segment::CatchAll { .. }));
-    }
-
-    #[test]
-    fn scan_no_trim_unchanged() {
-        // Normal delimiters should not trim
-        let segs = scan_template("hello  \n  {{ x }}  \n  world").unwrap();
-        assert_eq!(segs.len(), 3);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello  \n  "));
-        assert!(matches!(&segs[1], Segment::ExprTag { content, .. } if content == "x"));
-        assert!(matches!(&segs[2], Segment::Text { value, .. } if value == "  \n  world"));
-    }
-
-    #[test]
-    fn scan_trim_no_whitespace_to_trim() {
-        let segs = scan_template("hello{-{ x }-}world").unwrap();
-        assert_eq!(segs.len(), 3);
-        assert!(matches!(&segs[0], Segment::Text { value, .. } if value == "hello"));
-        assert!(matches!(&segs[1], Segment::ExprTag { content, .. } if content == "x"));
-        assert!(matches!(&segs[2], Segment::Text { value, .. } if value == "world"));
+        );
     }
 
     // -- Tokenizer Tests --

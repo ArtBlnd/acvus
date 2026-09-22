@@ -2,52 +2,111 @@
 
 ## Template Structure
 
-A template is a sequence of segments. The lexer classifies segments first, then the LALRPOP parser handles expression internals.
-
-### Segments (Lexer Level)
-
-```
-Template     = Segment*
-Segment      = Text | Comment | ExprTag | CatchAll | CloseBlock
-
-Text         = (any text outside {{ }})
-Comment      = "{{--" content "--}}"
-ExprTag      = "{{" content "}}"
-CatchAll     = "{{_}}"
-CloseBlock   = "{{/}}" | "{{/+" DIGITS "}}" | "{{/-" DIGITS "}}"
-```
-
-- `Text`: All text outside `{{ }}`.
-- `Comment`: Wrapped in `{{-- --}}`. Not included in output.
-- `ExprTag`: Expression or binding inside `{{ }}`.
-- `CatchAll`: `{{_}}` is detected at the lexer level. Completely separate from `_` inside expressions.
-- `CloseBlock`: `{{/}}` closes a match block. `+N`/`-N` are indent modifiers.
-
-### AST Construction (Parser Level)
-
-The AST is built from the segment sequence:
+A template is a script with one extra rule (RFC-0071): a line that does not
+begin with `%` is text, appended to the result as written. The template's
+value is the accumulated text, a `String`.
 
 ```
-Node         = Text | Comment | InlineExpr | MatchBlock | IterBlock
+Template     = Line*
+Line         = TextLine | StmtLine
 
-InlineExpr   = ExprTag where content has no "=" or "in"
-
-MatchBlock   = ExprTag("pattern = expr") Body Arm* CatchAll? CloseBlock
-IterBlock    = ExprTag("pattern in expr") Body CatchAll? CloseBlock
-
-Arm          = ExprTag("pattern =") Body       ← multi-arm continuation
-Body         = Node*
+StmtLine     = Blank* "%" ScriptLine        ← one statement, no `;`, no braces
+TextLine     = "%%" Text?                   ← text holding one `%`
+             | Text                          ← text as written
+Text         = (TextRun | "{{" Expr "}}")* "\"?      ← a trailing "\" drops the newline
 ```
 
-**MatchBlock vs IterBlock**:
-- `=` (MatchBlock): Pattern matching against a single value. Matches the source value directly against the pattern without iteration.
-- `in` (IterBlock): Converts the source to an iterator and executes the body for each element.
+### `%` lines
 
-**Multi-arm detection**: When `{{ pattern = }}` appears inside a match block, it is treated as a continuation arm. If there is no expression after `=`, it is a continuation arm; if there is, it is a binding. Multi-arm is only available with `=` (MatchBlock).
+A line whose first non-blank character is `%` is one statement of the script
+grammar below, written **without its trailing `;`** and **without the braces**
+that would open or close a block. It leaves nothing in the output, its
+newline included. A block a `%` line opens is closed by `% end`.
 
-**Variable binding**: In `{{ x = expr }}`, if the LHS is a simple variable (`Binding` pattern), it is body-less — no `{{/}}` needed.
+```
+% let x = e                    ← every statement of the script grammar
+% x = e        % @c = e        ← assignment and stores
+% a.b = e      % v[i] = e      % *r = e
+% f(x)                         ← an expression statement
+% break        % continue
+% // a comment, as `//` is in a script
 
-**Iteration pattern**: The pattern in `{{ pattern in expr }}` must be irrefutable (variable, object destructuring, tuple destructuring, etc.). Literal patterns are not allowed.
+% if E                         % if let P = E
+% else if E
+% else
+% end
+
+% for x in ForHead             ← the four heads of RFC-0057
+% while E                      % while let P = E
+% anyorder
+% end
+
+% match E                      ← one `% pattern =>` line per arm
+% P =>
+% _ =>
+% end
+```
+
+A `% match` body begins with its first `% pattern =>` arm; nothing stands
+between the scrutinee line and that arm. The refusals are one per fault:
+`% end` closes no block, block not closed expected `% end`, `% else` needs
+an `% if` to belong to, this `% if` already has an `% else`, `% pattern =>`
+needs a `% match` to belong to.
+
+A `%` line the statement grammar does not admit is a parse error at that
+line. It does not fall back to text.
+
+### Text lines
+
+A text line is appended as written, **with its newline**. There is no other
+whitespace rule:
+
+- A line beginning with `%%` is appended with one `%` in its place.
+- A line ending in `\` is appended without its newline.
+
+`{{ expr }}` inside a text line is the format string of RFC-0062. The
+expression is a `String` or a `&str`; nothing is converted to text
+implicitly, so a number takes `| to_string` or `.to_string()`. The tag's
+content is tokenized as an expression, so a string literal inside it may
+hold `{{` or `}}`: `{{ "{{" }}` writes a literal `{{`. A tag does not span
+lines.
+
+Inline branching is the expression grammar's, not a template form, because
+`if` and `match` are operands: `{{ if c { "a" } else { "b" } }}`.
+
+### `$name` is an injected input
+
+`$name` is a value the host injects, shared by every function of the graph
+and typed by its use; `@name` is a context, as in a script. A call passes
+nothing, `{{ rules() }}`, and the inputs a template requires are the `$`
+names its reachable code reads (RFC-0071 Decisions 4 and 5). There is no
+include and no parameter declaration.
+
+### Example
+
+```
+You are a careful assistant for {{ &@name }}.
+Answer in {{ if @lang == "ko" { "Korean" } else { "English" } }}.
+
+% if @mode == "review"
+Review the code below and list defects.
+% else
+Help with the code below.
+% end
+
+Recent turns:
+% for m in &@journal
+- {{ &m.role }}: {{ &m.content }}
+% end
+```
+
+### Lowering
+
+A text line and a `{{ }}` tag each lower to one append onto the template's
+accumulator, and a block statement lowers through the same lowering the
+script uses for it — an `% if` is the `Diamond` of RFC-0063, a `% for` the
+`For` terminator of RFC-0057. The accumulator is never copied, so a loop's
+cost is the text it writes.
 
 ---
 
@@ -56,7 +115,8 @@ Body         = Node*
 A script is a sequence of semicolon-terminated statements with an optional
 tail expression. There is one statement rule, and it is the rule of every
 block: a script's top level, a lambda's block body, a `while`/`for`/
-`anyorder` body, a tag-form match-bind body, an `if`/`else` block.
+`anyorder` body, a `match` arm's block, an `if`/`else` block, and a
+template's `%` lines.
 
 ```
 Script       = Stmt* Expr?
@@ -255,10 +315,6 @@ The IR has one shape per write: `Assign { target, path }` with
 `IndexSet { slice, index, value }` where the last step is an index, because
 `PathSeg::Index` carries a constant and `v[i]`'s index is a value.
 
-**A template binding is the template's.** `{{ x = expr }}` inside a template
-is a `MatchBlock` with a `Binding` pattern (see *Template Structure* above),
-not a statement: this rule does not reach it.
-
 `@a = 0;` is the place `@a` with no steps: the store writes the context
 itself.
 
@@ -268,11 +324,6 @@ itself.
 LALRPOP-based. Operator precedence (low → high):
 
 ```
-TagContent   = Expr "=" Expr        ← binding / pattern matching
-             | Expr "="             ← continuation arm
-             | Expr "in" Expr       ← iteration
-             | Expr                  ← inline expression
-
 Expr         = LambdaExpr
              | "return" Expr                ← leaves the body; type `!`
 
@@ -445,7 +496,8 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 
 **ObjectPatternField**: `{ key: pattern }` or shorthand `{ name }` / `{ $name }` / `{ @name }`.
 
-**Wildcard `_` scope**: `_` is only available inside tuple patterns (not in general expressions). Separate from the `{{_}}` catch-all, which is detected at the lexer level.
+**Wildcard `_` scope**: `_` stands in a tuple pattern and as a `match` arm's
+pattern, `% _ =>` in a template included. It is not an expression.
 
 **ContextBind in destructure**: a `@name` sub-pattern stores the matched value into the context `@name`. No two names ever denote one storage (RFC-0015): `{ @x, } = @a { body }` copies `@a.x` into `@x`, and `@x` inside the body is the context `@x`.
 
@@ -473,8 +525,8 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 | `!` | logical negation |
 | `&&` `\|\|` | logical AND / OR — short-circuiting: the right operand is evaluated only where the left does not decide (RFC-0020) |
 | `==` `!=` `<` `>` `<=` `>=` | comparison operators |
-| `=` | assignment (a statement), pattern match (a tag / a template) |
-| `in` | iteration |
+| `=` | assignment (a statement) |
+| `in` | a `for` head |
 | `return` | leaves the enclosing body with the expression that follows |
 | `->` | lambda arrow |
 | `..` `..=` `=..` | range operators |

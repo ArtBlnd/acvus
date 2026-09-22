@@ -1,6 +1,5 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1285
 expression: ir
 ---
 === literals ===
@@ -10,34 +9,37 @@ expression: ir
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @items
-     4 |   r3 = list []
-     5 |   r4 = call #0(r3)
+     4 |   assign <template> = T0
+     5 |   r3 = list []
+     6 |   r4 = call #0(r3)
      7 |   r5 = call #1(r2)
      9 |   r6 = call #2(r5, 3 (r7))
     10 |   assign out = r6
-    12 |   r8 = ref &out
-    13 |   r9 = call #3(r8)
-    14 |   r10 = string_concat [T0, T0, T0, r9]
-    15 |   commit @items = r4
-    16 |   return r10
+    11 |   r8 = ref &out
+    12 |   r9 = call #3(r8)
+    13 |   r10 = ref &mut <template>
+    14 |   append r10 r9
+    15 |   r11 = take <template>
+    16 |   commit @items = r4
+    17 |   return r11
 
     ; r0 (v19) : Vec<i64>
     ; r1 (v20) : Vec<i64>
     ; r2 (@items) : Vec<i64>
-    ; r3 (v6) : Array<i64, 0>
+    ; r3 (v7) : Array<i64, 0>
     ; r4 (vec(...)) : Vec<i64>
-    ; r5 (v10) : Iterator<i64, Pure>
+    ; r5 (into_iter(...)) : Items<i64>
     ; r6 (contains(...)) : Bool
     ; r7 (v11) : i64
     ; r8 (out.) : &Bool
     ; r9 (to_string(...)) : String
-    ; r10 (v17) : String
-    ; r11 (@items) : Vec<i64>
-    ; r12 (v14) : String
+    ; r10 (<template>.) : &mut String
+    ; r11 (v17) : String
+    ; r12 (v3) : String
     ; r13 (items) : Vec<i64>
-    ; r14 (@items) : Vec<i64>
-    ; r15 (items) : Vec<i64>
-    ; r16 (v18) : Vec<i64>
-    ; r17 (out) : Bool
-    ; r18 (v5) : String
-    ; r19 (v8) : String
+    ; r14 (items) : Vec<i64>
+    ; r15 (@items) : Vec<i64>
+    ; r16 (<template>) : String
+    ; r17 (v18) : Vec<i64>
+    ; r18 (out) : Bool
+    ; r19 (@items) : Vec<i64>

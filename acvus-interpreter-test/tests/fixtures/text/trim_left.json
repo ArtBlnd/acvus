@@ -1,5 +1,0 @@
-{
-  "template": "hello  \n  {-{ @name }}",
-  "context": { "name": "world" },
-  "expected": "hello  world"
-}

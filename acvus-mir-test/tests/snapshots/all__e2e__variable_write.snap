@@ -7,12 +7,13 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   assign count = 42 (r1)
-     4 |   r2 = string_concat [T0]
-     5 |   return r2
+     1 |   r1 = undef
+     4 |   return T0
 
-    ; r0 (v5) : i64
-    ; r1 (v1) : i64
-    ; r2 (v4) : String
-    ; r3 (v3) : String
-    ; r4 (count) : i64
+    ; r0 (v6) : String
+    ; r1 (v7) : i64
+    ; r2 (v3) : i64
+    ; r3 (v1) : String
+    ; r4 (v5) : String
+    ; r5 (count) : i64
+    ; r6 (<template>) : String

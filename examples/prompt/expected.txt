@@ -1,0 +1,9 @@
+You are a careful assistant for Ada.
+Answer in Korean.
+
+Review the code below and list defects.
+
+Recent turns:
+- user: why does this loop allocate?
+- assistant: the accumulator is rebuilt every turn
+- user: show me the fix

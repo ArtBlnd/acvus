@@ -840,6 +840,10 @@ fn remap_inst(
             index: r(*index),
             value: r(*value),
         },
+        InstKind::StringAppend { target, part } => InstKind::StringAppend {
+            target: r(*target),
+            part: r(*part),
+        },
         InstKind::Fetch { dst, context } => InstKind::Fetch {
             dst: r(*dst),
             context: *context,

@@ -2,17 +2,26 @@
 source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
+=== literals ===
+  T0 = ""
+
 === main ===
      0 |   r0 = fetch @data
      1 |   assign @data = r0
-     2 |   r1 = take @data.user.address.city
-     3 |   r2 = string_concat [r1]
-     4 |   r3 = take @data
-     5 |   commit @data = r3
-     6 |   return r2
+     3 |   assign <template> = T0
+     4 |   r1 = take @data.user.address.city
+     5 |   r2 = ref &mut <template>
+     6 |   append r2 r1
+     7 |   r3 = take <template>
+     8 |   r4 = take @data
+     9 |   commit @data = r4
+    10 |   return r3
 
     ; r0 (@data) : {user: {address: {city: String}}}
     ; r1 (@data.user.address.city) : String
-    ; r2 (v4) : String
-    ; r3 (v5) : {user: {address: {city: String}}}
-    ; r4 (@data) : {user: {address: {city: String}}}
+    ; r2 (<template>.) : &mut String
+    ; r3 (v7) : String
+    ; r4 (v8) : {user: {address: {city: String}}}
+    ; r5 (v3) : String
+    ; r6 (@data) : {user: {address: {city: String}}}
+    ; r7 (<template>) : String

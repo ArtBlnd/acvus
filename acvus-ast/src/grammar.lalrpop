@@ -4,8 +4,8 @@ use crate::ast::*;
 use crate::span::Span;
 use crate::token::Token;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::tag_content::{TagContent, ListElem, build_list};
-use crate::parser::{build_assign, build_call, decoded, expr_to_pattern};
+use crate::list::{ListElem, build_list};
+use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern};
 use crate::literal::{self, IntWidth, SuffixedInt};
 
 grammar(interner: &Interner);
@@ -199,20 +199,46 @@ Stmt: Stmt = {
 
 // `lo..hi` is a `for` head and not a value: there is no `Range` type, so
 // `..` appears in no expression rule (RFC-0057 Decision 1).
-ForHead: ForHead = {
+pub ForHead: ForHead = {
     <lo:Expr> ".." <hi:Expr> => ForHead::Range { lo, hi },
     <e:Expr> => ForHead::Value(e),
 };
 
-// ── Top-level rule ─────────────────────────────────────────────────────
+// ── Template lines (RFC-0071) ──────────────────────────────────────────
+//
+// A `%` line is one statement of the rules above, without its `;` and
+// without the braces that open or close a block. The line's leading
+// keyword names which rule reads the rest of it, so no rule here has to
+// tell a block head from a complete statement.
 
-pub TagContent: TagContent = {
-    <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>
-        TagContent::Binding { lhs, rhs, span: Span::new(l, r) },
-    <l:@L> <lhs:Expr> "=" <r:@R> =>
-        TagContent::ContinuationArm { pattern: lhs, span: Span::new(l, r) },
-    <e:Expr> =>
-        TagContent::Expr(e),
+// A `%` line that opens no block.
+pub TemplateStmt: Stmt = {
+    <l:@L> "let" <name:"ident"> "=" <expr:Expr> <r:@R> =>
+        Stmt::LetBind { id: AstId::alloc(), name, expr, span: Span::new(l, r) },
+    <l:@L> "let" <name:"ident"> <r:@R> =>
+        Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
+    <l:@L> "break" <r:@R> =>
+        Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
+    <l:@L> "continue" <r:@R> =>
+        Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
+    <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>? build_assign(lhs, rhs, Span::new(l, r)),
+    <e:Expr> => Stmt::Expr(e),
+};
+
+// `x in head`, what follows the `for` of a `% for` line.
+pub ForLine: ForLine = {
+    <binding:"ident"> "in" <head:ForHead> => ForLine { binding, head },
+};
+
+// `pattern = source`, what follows the `let` of a `% if let` or
+// `% while let` line.
+pub BindLine: BindLine = {
+    <lhs:Expr> "=" <rhs:Expr> =>? Ok(BindLine { pattern: expr_to_pattern(&lhs)?, source: rhs }),
+};
+
+// The pattern of a `% pattern =>` arm line, `_` included.
+pub ArmLine: Pattern = {
+    ArmPattern,
 };
 
 // ── Expressions (precedence climbing) ──────────────────────────────────

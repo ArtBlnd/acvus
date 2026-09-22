@@ -3,24 +3,37 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "Hello, "
-  T1 = "!"
+  T0 = ""
+  T1 = "Hello, "
+  T2 = "!"
 
 === main ===
      0 |   r0 = fetch @name
      1 |   assign @name = r0
-     2 |   r1 = const_str T0
-     3 |   r2 = ref &@name
-     4 |   r3 = const_str T1
-     5 |   r4 = string_concat [r1, r2, r3]
-     6 |   r5 = take @name
-     7 |   commit @name = r5
-     8 |   return r4
+     3 |   assign <template> = T0
+     4 |   r1 = const_str T1
+     5 |   r2 = ref &mut <template>
+     6 |   append r2 r1
+     7 |   r3 = ref &@name
+     8 |   r4 = ref &mut <template>
+     9 |   append r4 r3
+    10 |   r5 = const_str T2
+    11 |   r6 = ref &mut <template>
+    12 |   append r6 r5
+    13 |   r7 = take <template>
+    14 |   r8 = take @name
+    15 |   commit @name = r8
+    16 |   return r7
 
     ; r0 (@name) : String
-    ; r1 (v3) : &str
-    ; r2 (@name.) : &String
-    ; r3 (v5) : &str
-    ; r4 (v6) : String
-    ; r5 (v7) : String
-    ; r6 (@name) : String
+    ; r1 (v5) : &str
+    ; r2 (<template>.) : &mut String
+    ; r3 (@name.) : &String
+    ; r4 (<template>.) : &mut String
+    ; r5 (v9) : &str
+    ; r6 (<template>.) : &mut String
+    ; r7 (v11) : String
+    ; r8 (v12) : String
+    ; r9 (v3) : String
+    ; r10 (@name) : String
+    ; r11 (<template>) : String

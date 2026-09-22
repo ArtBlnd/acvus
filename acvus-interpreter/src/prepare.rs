@@ -2017,6 +2017,7 @@ impl<'a> Prepare<'a> {
             InstKind::Const { .. }
             | InstKind::ConstStr { .. }
             | InstKind::StringConcat { .. }
+            | InstKind::StringAppend { .. }
             | InstKind::StringEq { .. }
             | InstKind::StringClone { .. }
             | InstKind::Ref { .. }
@@ -3784,6 +3785,21 @@ impl<'a> Prepare<'a> {
                         next,
                     })
                 }
+            }
+            InstKind::StringAppend { target, part } => {
+                let owns_large = self.take_mask(std::slice::from_ref(part));
+                let held = match SlotClass::of(self.ty(*part)) {
+                    SlotClass::Slice => ConcatPart::Lent(LentText::Pair(self.pair(*part))),
+                    _ if self.is_ref(*part) => ConcatPart::Lent(LentText::Through(self.off(*part))),
+                    _ => ConcatPart::Owned(self.off(*part)),
+                };
+                let target = self.off(*target);
+                node(move |next| string::Append {
+                    target,
+                    part: held,
+                    owns_large,
+                    next,
+                })
             }
             InstKind::StringEq { dst, a, b } => {
                 let dst = self.off(*dst);

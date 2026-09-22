@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = as_iter(&@products) | filter(|p| -> (*p).price >= 100) | map(|p| -> clone(&p.name)) | collect }}{{ into_iter(x) | join(\", \".to_string()) }}",
+  "template": "% let x = as_iter(&@products) | filter(|p| -> (*p).price >= 100) | map(|p| -> clone(&p.name)) | collect\n{{ into_iter(x) | join(\", \".to_string()) }}",
   "context": {
     "products": [
       { "name": "apple", "price": 100 },

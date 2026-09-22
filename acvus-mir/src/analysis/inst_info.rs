@@ -63,6 +63,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         InstKind::Commit { .. }
         | InstKind::Drop { .. }
         | InstKind::IndexSet { .. }
+        | InstKind::StringAppend { .. }
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Diamond { .. }
@@ -135,6 +136,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // Composite constructors
         InstKind::MakeArray { elements, .. } => elements.iter().copied().collect(),
         InstKind::StringConcat { parts, .. } => parts.iter().copied().collect(),
+        InstKind::StringAppend { target, part } => smallvec![*target, *part],
         InstKind::StringEq { a, b, .. } => smallvec![*a, *b],
         InstKind::StringClone { src, .. } => smallvec![*src],
         InstKind::MakeObject { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),

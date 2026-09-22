@@ -1,4 +1,4 @@
-pub mod lower;
-pub mod session;
-pub mod spec;
-pub mod test_helpers;
+//! An LLM chat assembled from a manifest whose parts are acvus scripts.
+//! The provider, the journal, sending, and the tool loop are the host's.
+
+pub mod manifest;

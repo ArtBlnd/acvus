@@ -7,14 +7,15 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = variant Some(42 (r2))
-     3 |   assign x = r1
-     5 |   r3 = string_concat [T0]
-     6 |   return r3
+     1 |   r1 = undef
+     4 |   r2 = variant Some(42 (r3))
+     5 |   return T0
 
-    ; r0 (v6) : Option<i64>
-    ; r1 (v2) : Option<i64>
-    ; r2 (v1) : i64
-    ; r3 (v5) : String
-    ; r4 (x) : Option<i64>
-    ; r5 (v4) : String
+    ; r0 (v7) : String
+    ; r1 (v8) : Option<i64>
+    ; r2 (v4) : Option<i64>
+    ; r3 (v3) : i64
+    ; r4 (v6) : String
+    ; r5 (<template>) : String
+    ; r6 (x) : Option<i64>
+    ; r7 (v1) : String

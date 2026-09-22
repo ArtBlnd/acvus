@@ -116,3 +116,4 @@ What the ruling leaves undecided. `none` if empty.
 | [RFC-0068](0068-a-value-is-read-back-only-where-the-checker-decided.md) | A value is read back only where the checker decided | Draft |
 | [RFC-0069](0069-a-closure-is-a-code-word-beside-its-captures.md) | A closure is a code word beside its captures | Draft |
 | [RFC-0070](0070-an-instance-requires-what-its-own-declaration-says.md) | An instance requires what its own declaration says | Accepted |
+| [RFC-0071](0071-a-template-is-a-script-whose-text-lines-are-output.md) | A template is a script whose text lines are output | Proposed |

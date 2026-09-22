@@ -36,10 +36,10 @@ fn byte_context(i: &Interner, value: u8) -> Context {
 
 #[tokio::test]
 async fn to_string_has_an_instance_for_every_scalar() {
-    assert_eq!(text("{{ x = 42 }}{{ x.to_string() }}").await, "42");
-    assert_eq!(text("{{ x = 1.5 }}{{ x.to_string() }}").await, "1.5");
-    assert_eq!(text("{{ x = true }}{{ x.to_string() }}").await, "true");
-    assert_eq!(text("{{ x = \"hi\" }}{{ x.to_string() }}").await, "hi");
+    assert_eq!(text("% let x = 42\n{{ x.to_string() }}").await, "42");
+    assert_eq!(text("% let x = 1.5\n{{ x.to_string() }}").await, "1.5");
+    assert_eq!(text("% let x = true\n{{ x.to_string() }}").await, "true");
+    assert_eq!(text("% let x = \"hi\"\n{{ x.to_string() }}").await, "hi");
 
     let i = Interner::new();
     assert_eq!(

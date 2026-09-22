@@ -8,32 +8,35 @@ expression: ir
 === main ===
      0 |   r0 = undef
      1 |   r1 = fetch @items
-     2 |   assign items = r1
-     4 |   r2 = list []
-     5 |   r3 = call #0(r2)
+     3 |   assign <template> = T0
+     4 |   assign items = r1
+     5 |   r2 = list []
+     6 |   r3 = call #0(r2)
      7 |   r4 = ref &items
      8 |   r5 = call #1(r4)
      9 |   assign out = r5
-    11 |   r6 = ref &out
-    12 |   r7 = call #2(r6)
-    13 |   r8 = string_concat [T0, T0, T0, r7]
-    14 |   commit @items = r3
-    15 |   return r8
+    10 |   r6 = ref &out
+    11 |   r7 = call #2(r6)
+    12 |   r8 = ref &mut <template>
+    13 |   append r8 r7
+    14 |   r9 = take <template>
+    15 |   commit @items = r3
+    16 |   return r9
 
     ; r0 (v17) : Vec<i64>
     ; r1 (@items) : Vec<i64>
-    ; r2 (v6) : Array<i64, 0>
+    ; r2 (v7) : Array<i64, 0>
     ; r3 (vec(...)) : Vec<i64>
     ; r4 (items.) : &Vec<i64>
     ; r5 (len(...)) : u64
     ; r6 (out.) : &u64
     ; r7 (to_string(...)) : String
-    ; r8 (v15) : String
-    ; r9 (@items) : Vec<i64>
-    ; r10 (out) : u64
-    ; r11 (@items) : Vec<i64>
-    ; r12 (v12) : String
-    ; r13 (items) : Vec<i64>
-    ; r14 (v5) : String
-    ; r15 (v16) : Vec<i64>
-    ; r16 (v8) : String
+    ; r8 (<template>.) : &mut String
+    ; r9 (v15) : String
+    ; r10 (v3) : String
+    ; r11 (out) : u64
+    ; r12 (items) : Vec<i64>
+    ; r13 (@items) : Vec<i64>
+    ; r14 (<template>) : String
+    ; r15 (@items) : Vec<i64>
+    ; r16 (v16) : Vec<i64>

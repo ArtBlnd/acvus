@@ -7,13 +7,14 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     1 |   r1 = variant None
-     2 |   assign x = r1
-     4 |   r2 = string_concat [T0]
-     5 |   return r2
+     1 |   r1 = undef
+     3 |   r2 = variant None
+     4 |   return T0
 
-    ; r0 (v5) : Option<!>
-    ; r1 (v1) : Option<!>
-    ; r2 (v4) : String
-    ; r3 (v3) : String
-    ; r4 (x) : Option<!>
+    ; r0 (v6) : String
+    ; r1 (v7) : Option<!>
+    ; r2 (v3) : Option<!>
+    ; r3 (v1) : String
+    ; r4 (v5) : String
+    ; r5 (x) : Option<!>
+    ; r6 (<template>) : String

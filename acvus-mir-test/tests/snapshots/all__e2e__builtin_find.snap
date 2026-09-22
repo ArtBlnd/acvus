@@ -1,72 +1,78 @@
 ---
 source: acvus-mir-test/tests/e2e.rs
-assertion_line: 1298
 expression: ir
 ---
 === literals ===
   T0 = ""
-  T1 = "none"
+  T1 = "\n"
+  T2 = "none\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @items
-     4 |   r3 = list []
-     5 |   r4 = call #0(r3)
+     4 |   assign <template> = T0
+     5 |   r3 = list []
+     6 |   r4 = call #0(r3)
      7 |   r5 = call #1(r2)
      8 |   r6 = closure L0 []
      9 |   r7 = call #2(r5, r6)
     10 |   assign out = r7
-    12 | L2:
-    13 |   r8 = ref &out
-    14 |   r9 = test r8 is Some
-    15 |   jump_if r9 then L3 else L1
-    16 | L3:
-    17 |   r10 = take out.payload
-    18 |   assign v = r10
-    19 |   r11 = ref &v
-    20 |   r12 = call #3(r11)
-    21 |   r13 = string_concat [r12]
-    22 |   jump L0(r13)
-    23 | L1:
-    24 |   r14 = const_str T1
-    25 |   r15 = string_concat [r14]
-    26 |   jump L0(r15)
-    27 | L0(r16: String):
-    28 |   r17 = string_concat [T0, T0, T0, r16]
-    29 |   commit @items = r4
-    30 |   return r17
+    11 |   r8 = ref &out
+    12 |   switch r8 { Some -> L1, _ -> L2 }
+    13 | L1:
+    14 |   r9 = take out.payload
+    15 |   assign v = r9
+    16 |   r10 = ref &v
+    17 |   r11 = call #3(r10)
+    18 |   r12 = ref &mut <template>
+    19 |   append r12 r11
+    20 |   r13 = const_str T1
+    21 |   r14 = ref &mut <template>
+    22 |   append r14 r13
+    24 |   jump L0(() (r15))
+    25 | L2:
+    26 |   r16 = const_str T2
+    27 |   r17 = ref &mut <template>
+    28 |   append r17 r16
+    30 |   jump L0(() (r18))
+    31 | L0(r19: Unit):
+    32 |   r20 = take <template>
+    33 |   commit @items = r4
+    34 |   return r20
 
-    ; r0 (v27) : Vec<i64>
-    ; r1 (v28) : Vec<i64>
+    ; r0 (v29) : Vec<i64>
+    ; r1 (v30) : Vec<i64>
     ; r2 (@items) : Vec<i64>
-    ; r3 (v6) : Array<i64, 0>
+    ; r3 (v7) : Array<i64, 0>
     ; r4 (vec(...)) : Vec<i64>
-    ; r5 (v10) : Iterator<i64, Pure>
+    ; r5 (into_iter(...)) : Items<i64>
     ; r6 (v11) : Fn(&i64) -> Bool
     ; r7 (find(...)) : Option<i64>
     ; r8 (out.) : &Option<i64>
-    ; r9 (v16) : Bool
-    ; r10 (v) : i64
-    ; r11 (v.) : &i64
-    ; r12 (to_string(...)) : String
-    ; r13 (v21) : String
-    ; r14 (v22) : &str
-    ; r15 (v23) : String
-    ; r16 (v24) : String
-    ; r17 (v25) : String
-    ; r18 (@items) : Vec<i64>
-    ; r19 (items) : Vec<i64>
-    ; r20 (v30) : Vec<i64>
-    ; r21 (v14) : String
-    ; r22 (@items) : Vec<i64>
+    ; r9 (v) : i64
+    ; r10 (v.) : &i64
+    ; r11 (to_string(...)) : String
+    ; r12 (<template>.) : &mut String
+    ; r13 (v20) : &str
+    ; r14 (<template>.) : &mut String
+    ; r15 (v22) : Unit
+    ; r16 (v23) : &str
+    ; r17 (<template>.) : &mut String
+    ; r18 (v25) : Unit
+    ; r19 (v26) : Unit
+    ; r20 (v27) : String
+    ; r21 (v3) : String
+    ; r22 (items) : Vec<i64>
     ; r23 (items) : Vec<i64>
-    ; r24 (v) : i64
-    ; r25 (v5) : String
-    ; r26 (v8) : String
-    ; r27 (v26) : Vec<i64>
-    ; r28 (v29) : Vec<i64>
-    ; r29 (out) : Option<i64>
+    ; r24 (v28) : Vec<i64>
+    ; r25 (v31) : Vec<i64>
+    ; r26 (@items) : Vec<i64>
+    ; r27 (<template>) : String
+    ; r28 (@items) : Vec<i64>
+    ; r29 (v32) : Vec<i64>
+    ; r30 (out) : Option<i64>
+    ; r31 (v) : i64
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

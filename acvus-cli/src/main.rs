@@ -686,7 +686,14 @@ async fn run(
         eprintln!("error: {}: {e}", p.display());
         return ExitCode::from(EXIT_RUN);
     }
-    print_result(interner, &value);
+    let mode = match &args.source {
+        Source::File(path) => mode_of(path).map_err(|e| eprintln!("error: {e}")),
+        Source::Expr(_) => Ok(Mode::Expr),
+    };
+    let Ok(mode) = mode else {
+        return ExitCode::from(EXIT_USAGE);
+    };
+    print_result(interner, &value, mode);
     if let Some(timings) = &timings {
         timings.report(rendering);
     }
@@ -695,11 +702,14 @@ async fn run(
 
 /// RFC-0054: this host declares `!`, so it has no type for what comes back
 /// and reads the value by kind.
-fn print_result(interner: &Interner, value: &Value) {
+fn print_result(interner: &Interner, value: &Value, mode: Mode) {
     match value.composite() {
         // SAFETY, both arms: the vtable is the runtime's witness of the type
         // behind the pointer.
-        Some(Composite::String) => println!("{}", unsafe { value.as_str() }),
+        Some(Composite::String) => match mode {
+            Mode::Template => print!("{}", unsafe { value.as_str() }),
+            Mode::Script | Mode::Expr => println!("{}", unsafe { value.as_str() }),
+        },
         Some(Composite::Tuple) if unsafe { value.as_tuple() }.is_empty() => {}
         _ if value.kind() == Kind::Unit => {}
         _ => println!("{}", json::by_kind(interner, value)),

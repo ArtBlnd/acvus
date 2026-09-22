@@ -10,52 +10,53 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = undef
      3 |   r3 = fetch @items
+     5 |   assign <template> = T0
      7 |   r4 = list []
      8 |   r5 = call #0(r4)
-    10 |   r6 = call #1(r3)
-    11 |   r7 = closure L0 [5 (r8)]
-    12 |   r9 = call #2(r6, r7)
-    13 |   r10 = call #3(r9)
-    14 |   assign x = r10
-    16 |   r11 = ref &x
-    17 |   r12 = call #4(r11)
-    18 |   assign out = r12
-    20 |   r13 = ref &out
-    21 |   r14 = call #5(r13)
-    22 |   r15 = string_concat [T0, T0, T0, T0, T0, r14]
-    23 |   commit @items = r5
-    24 |   return r15
+     9 |   r6 = call #1(r3)
+    10 |   r7 = closure L0 [5 (r8)]
+    11 |   r9 = call #2(r6, r7)
+    12 |   r10 = call #3(r9)
+    13 |   assign x = r10
+    14 |   r11 = ref &x
+    15 |   r12 = call #4(r11)
+    16 |   assign out = r12
+    17 |   r13 = ref &out
+    18 |   r14 = call #5(r13)
+    19 |   r15 = ref &mut <template>
+    20 |   append r15 r14
+    21 |   r16 = take <template>
+    22 |   commit @items = r5
+    23 |   return r16
 
-    ; r0 (v28) : Vec<i64>
-    ; r1 (v29) : i64
-    ; r2 (v30) : Vec<i64>
+    ; r0 (v26) : Vec<i64>
+    ; r1 (v27) : i64
+    ; r2 (v28) : Vec<i64>
     ; r3 (@items) : Vec<i64>
     ; r4 (v9) : Array<i64, 0>
     ; r5 (vec(...)) : Vec<i64>
-    ; r6 (into_iter(...)) : Iterator<i64, Pure>
-    ; r7 (v15) : Fn(&i64) -> Bool
-    ; r8 (v3) : i64
-    ; r9 (filter(...)) : Iterator<i64, Pure>
+    ; r6 (into_iter(...)) : Items<i64>
+    ; r7 (v14) : Fn(&i64) -> Bool
+    ; r8 (v5) : i64
+    ; r9 (filter(...)) : Filter<Items<i64>, i64, Pure>
     ; r10 (collect(...)) : Vec<i64>
     ; r11 (x.) : &Vec<i64>
     ; r12 (len(...)) : u64
     ; r13 (out.) : &u64
     ; r14 (to_string(...)) : String
-    ; r15 (v26) : String
-    ; r16 (out) : u64
-    ; r17 (@items) : Vec<i64>
-    ; r18 (items) : Vec<i64>
-    ; r19 (v11) : String
-    ; r20 (threshold) : i64
-    ; r21 (@items) : Vec<i64>
-    ; r22 (threshold) : i64
-    ; r23 (v23) : String
-    ; r24 (x) : Vec<i64>
-    ; r25 (v5) : String
-    ; r26 (v27) : Vec<i64>
-    ; r27 (v8) : String
-    ; r28 (items) : Vec<i64>
-    ; r29 (v19) : String
+    ; r15 (<template>.) : &mut String
+    ; r16 (v24) : String
+    ; r17 (items) : Vec<i64>
+    ; r18 (v3) : String
+    ; r19 (threshold) : i64
+    ; r20 (v25) : Vec<i64>
+    ; r21 (x) : Vec<i64>
+    ; r22 (@items) : Vec<i64>
+    ; r23 (threshold) : i64
+    ; r24 (out) : u64
+    ; r25 (@items) : Vec<i64>
+    ; r26 (<template>) : String
+    ; r27 (items) : Vec<i64>
 
 === closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
      0 |   r0 = undef

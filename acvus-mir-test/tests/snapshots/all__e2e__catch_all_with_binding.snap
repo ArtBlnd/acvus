@@ -3,45 +3,54 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "admin"
-  T1 = "guest"
-  T2 = ""
+  T0 = ""
+  T1 = "admin\n"
+  T2 = "guest"
+  T3 = "\n"
 
 === main ===
      0 |   r0 = undef
      1 |   r1 = undef
      2 |   r2 = fetch @role
-     3 | L2:
-     4 |   r3 = test r2 == "admin"
-     5 |   jump_if r3 then L3 else L1
-     6 | L3:
-     7 |   r4 = const_str T0
-     8 |   r5 = string_concat [r4]
-     9 |   jump L0(r5, r1)
-    10 | L1:
-    11 |   r6 = const_str T1
-    13 |   r7 = string_concat [T2, r6]
-    14 |   jump L0(r7, r6)
-    15 | L0(r8: String, r9: &str):
-    16 |   r10 = string_concat [r8]
-    17 |   commit @role = r2
-    18 |   return r10
+     4 |   assign <template> = T0
+     5 |   switch r2 { "admin" -> L1, _ -> L2 }
+     6 | L1:
+     7 |   r3 = const_str T1
+     8 |   r4 = ref &mut <template>
+     9 |   append r4 r3
+    11 |   jump L0(() (r5), r1)
+    12 | L2:
+    13 |   r6 = const_str T2
+    14 |   r7 = ref &mut <template>
+    15 |   append r7 r6
+    16 |   r8 = const_str T3
+    17 |   r9 = ref &mut <template>
+    18 |   append r9 r8
+    20 |   jump L0(() (r10), r6)
+    21 | L0(r11: Unit, r12: &str):
+    22 |   r13 = take <template>
+    23 |   commit @role = r2
+    24 |   return r13
 
-    ; r0 (v15) : String
-    ; r1 (v16) : &str
+    ; r0 (v19) : String
+    ; r1 (v20) : &str
     ; r2 (@role) : String
-    ; r3 (v4) : Bool
-    ; r4 (v5) : &str
-    ; r5 (v6) : String
-    ; r6 (v7) : &str
-    ; r7 (v11) : String
-    ; r8 (v12) : String
-    ; r9 (v18) : &str
-    ; r10 (v13) : String
-    ; r11 (v3) : String
-    ; r12 (v14) : String
+    ; r3 (v6) : &str
+    ; r4 (<template>.) : &mut String
+    ; r5 (v8) : Unit
+    ; r6 (v9) : &str
+    ; r7 (<template>.) : &mut String
+    ; r8 (v13) : &str
+    ; r9 (<template>.) : &mut String
+    ; r10 (v15) : Unit
+    ; r11 (v16) : Unit
+    ; r12 (v22) : &str
     ; r13 (v17) : String
-    ; r14 (v9) : String
-    ; r15 (@role) : String
+    ; r14 (fallback) : &str
+    ; r15 (v3) : String
     ; r16 (fallback) : &str
-    ; r17 (fallback) : &str
+    ; r17 (v18) : String
+    ; r18 (v21) : String
+    ; r19 (v5) : String
+    ; r20 (@role) : String
+    ; r21 (<template>) : String

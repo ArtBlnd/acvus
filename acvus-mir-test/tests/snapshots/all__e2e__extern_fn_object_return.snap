@@ -7,23 +7,28 @@ expression: ir
 
 === main ===
      0 |   r0 = undef
-     2 |   r1 = call #0(1 (r2)) [r3 -> r4]
-     3 |   assign u = r1
-     5 |   r5 = take u.name
-     6 |   r6 = string_concat [T0, r5]
-     7 |   return r6 [r4]
+     2 |   assign <template> = T0
+     4 |   r1 = call #0(1 (r2)) [r3 -> r4]
+     5 |   assign u = r1
+     6 |   r5 = take u.name
+     7 |   r6 = ref &mut <template>
+     8 |   append r6 r5
+     9 |   r7 = take <template>
+    10 |   return r7 [r4]
 
     ; orders: what the body's yielded Order waits for
-    ;   call@2 #0 <- r3(entry)
+    ;   call@4 #0 <- r3(entry)
 
-    ; r0 (v12) : Order
+    ; r0 (v14) : Order
     ; r1 (get_user(...)) : {age: i64, name: String}
-    ; r2 (v3) : i64
+    ; r2 (v5) : i64
     ; r3 (v1) : Order
-    ; r4 (v6) : Order
+    ; r4 (v8) : Order
     ; r5 (u.name) : String
-    ; r6 (v10) : String
-    ; r7 (u) : {age: i64, name: String}
-    ; r8 (v11) : Order
-    ; r9 (v5) : Order
-    ; r10 (v8) : String
+    ; r6 (<template>.) : &mut String
+    ; r7 (v12) : String
+    ; r8 (v7) : Order
+    ; r9 (v3) : String
+    ; r10 (v13) : Order
+    ; r11 (u) : {age: i64, name: String}
+    ; r12 (<template>) : String

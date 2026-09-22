@@ -1,5 +1,5 @@
 {
-  "template": "{{ x = as_iter(&@items) | map(|i| -> *i + 1) | collect }}{{ into_iter(x) | map(|i| -> i.to_string()) | join(\", \".to_string()) }}",
+  "template": "% let x = as_iter(&@items) | map(|i| -> *i + 1) | collect\n{{ into_iter(x) | map(|i| -> i.to_string()) | join(\", \".to_string()) }}",
   "context": { "items": [1, 2, 3] },
   "expected": "2, 3, 4"
 }

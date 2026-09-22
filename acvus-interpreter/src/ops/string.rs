@@ -140,6 +140,43 @@ impl Op for Concat {
     }
 }
 
+/// A template's append: the part's bytes are written onto the end of the
+/// `String` the `&mut` in `target` names, so the accumulator is extended
+/// rather than rebuilt (RFC-0071).
+pub struct Append {
+    pub target: Off,
+    pub part: ConcatPart,
+    /// The part's mark bit where the part is a `String` this operation
+    /// moves in, as `Concat`'s `owns_large` is.
+    pub owns_large: u64,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for Append {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let reference = regs.read(self.target);
+        // SAFETY: the checker admits only a live `&mut String` here, and
+        // the loans keep the accumulator's storage live across this
+        // operation.
+        let out = unsafe { reference.target_mut().peek_mut::<String>() };
+        match self.part {
+            // SAFETY: the checker keeps the part live over this operation.
+            ConcatPart::Lent(text) => out.push_str(unsafe { lent(regs, text) }),
+            ConcatPart::Owned(slot) => {
+                let held = regs.read(slot);
+                // SAFETY: the type checker admits only a `String` here.
+                out.push_str(unsafe { held.as_str() });
+                held.release();
+            }
+        }
+        regs.take_mask(self.owns_large);
+        self.next.run(m, r0)
+    }
+}
+
 /// One tested arm of a text dispatch: the string it names and the block the
 /// machine enters for it.
 pub struct StrArm {

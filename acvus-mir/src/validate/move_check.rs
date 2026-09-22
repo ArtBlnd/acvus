@@ -1023,6 +1023,11 @@ fn process_inst(
                 scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
         }
+        InstKind::StringAppend { part, .. } => {
+            try_consume_value(
+                scope, inst_idx, plain, *part, val_types, debug, state, errors,
+            );
+        }
         InstKind::UnwrapVariant { dst, src } => {
             if emptied_by(&inst.kind, val_types) == Some(*src) {
                 try_consume_value(

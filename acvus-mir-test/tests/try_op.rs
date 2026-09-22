@@ -17,7 +17,13 @@ fn a_question_mark_in_a_template_is_refused() {
         &i,
         &[("r", Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)))],
     );
-    let err = compile_to_ir(&i, "{{ x = @r? }}{{ x.to_string() }}", &c).unwrap_err();
+    let err = compile_to_ir(
+        &i,
+        "% let x = @r?\n\
+         {{ x.to_string() }}",
+        &c,
+    )
+    .unwrap_err();
     assert!(err.contains("`?` needs a function to return from"), "{err}");
 }
 

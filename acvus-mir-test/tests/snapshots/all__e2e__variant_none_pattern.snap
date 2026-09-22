@@ -3,38 +3,43 @@ source: acvus-mir-test/tests/e2e.rs
 expression: ir
 ---
 === literals ===
-  T0 = "none"
-  T1 = "has value"
+  T0 = ""
+  T1 = "none\n"
+  T2 = "has value\n"
 
 === main ===
      0 |   r0 = fetch @opt
      1 |   assign @opt = r0
-     2 | L2:
-     3 |   r1 = ref &@opt
-     4 |   r2 = test r1 is None
-     5 |   jump_if r2 then L3 else L1
-     6 | L3:
-     7 |   r3 = const_str T0
-     8 |   r4 = string_concat [r3]
-     9 |   jump L0(r4)
-    10 | L1:
-    11 |   r5 = const_str T1
-    12 |   r6 = string_concat [r5]
-    13 |   jump L0(r6)
-    14 | L0(r7: String):
-    15 |   r8 = string_concat [r7]
-    16 |   r9 = take @opt
-    17 |   commit @opt = r9
-    18 |   return r8
+     3 |   assign <template> = T0
+     4 |   r1 = ref &@opt
+     5 |   switch r1 { None -> L1, _ -> L2 }
+     6 | L1:
+     7 |   r2 = const_str T1
+     8 |   r3 = ref &mut <template>
+     9 |   append r3 r2
+    11 |   jump L0(() (r4))
+    12 | L2:
+    13 |   r5 = const_str T2
+    14 |   r6 = ref &mut <template>
+    15 |   append r6 r5
+    17 |   jump L0(() (r7))
+    18 | L0(r8: Unit):
+    19 |   r9 = take <template>
+    20 |   r10 = take @opt
+    21 |   commit @opt = r10
+    22 |   return r9
 
     ; r0 (@opt) : Option<i64>
     ; r1 (@opt.) : &Option<i64>
-    ; r2 (v4) : Bool
-    ; r3 (v5) : &str
-    ; r4 (v6) : String
-    ; r5 (v7) : &str
-    ; r6 (v8) : String
-    ; r7 (v9) : String
-    ; r8 (v10) : String
-    ; r9 (v11) : Option<i64>
-    ; r10 (@opt) : Option<i64>
+    ; r2 (v6) : &str
+    ; r3 (<template>.) : &mut String
+    ; r4 (v8) : Unit
+    ; r5 (v9) : &str
+    ; r6 (<template>.) : &mut String
+    ; r7 (v11) : Unit
+    ; r8 (v12) : Unit
+    ; r9 (v13) : String
+    ; r10 (v14) : Option<i64>
+    ; r11 (v3) : String
+    ; r12 (@opt) : Option<i64>
+    ; r13 (<template>) : String

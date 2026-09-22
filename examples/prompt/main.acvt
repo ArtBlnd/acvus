@@ -1,0 +1,15 @@
+You are a careful assistant for {{ &@name }}.
+Answer in {{ if @lang == "ko" { "Korean" } else { "English" } }}.
+
+% if @mode == "review"
+Review the code below and list defects.
+% else if @mode == "explain"
+Explain the code below.
+% else
+Help with the code below.
+% end
+
+Recent turns:
+% for m in &@journal
+- {{ &m.role }}: {{ &m.content }}
+% end

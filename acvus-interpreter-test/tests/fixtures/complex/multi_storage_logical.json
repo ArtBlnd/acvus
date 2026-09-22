@@ -1,5 +1,5 @@
 {
-  "template": "{{ filtered = as_iter(&@items) | map(|i| -> *i) | filter(|i| -> *i >= @min && *i <= @max) | collect }}{{ out = len(&filtered) }}{{ out.to_string() }}{{_}}{{/}}",
+  "template": "% let filtered = as_iter(&@items) | map(|i| -> *i) | filter(|i| -> *i >= @min && *i <= @max) | collect\n% let out = len(&filtered)\n{{ out.to_string() }}",
   "context": { "items": [3, 7, 1, 9, 4], "min": 2, "max": 8 },
   "expected": "3"
 }
