@@ -1095,6 +1095,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self
     }
 
+    /// Give the `$` names a host has already bound the type their constant
+    /// has, so the body is checked against the value it will hold rather
+    /// than against an open variable. A name the declaration already bound
+    /// keeps the declared type.
+    pub fn with_bound_inputs(mut self, bound: Vec<(Astr, InferTy)>) -> Self {
+        let fresh: Vec<ExternParam> = bound
+            .into_iter()
+            .filter(|(name, _)| !self.param_types.iter().any(|p| p.name == *name))
+            .map(|(name, ty)| ExternParam {
+                name,
+                ty,
+                first_read: None,
+            })
+            .collect();
+        self.param_types.extend(fresh);
+        self
+    }
+
     /// The type a report shows (RFC-0043): as written, a variable
     /// nothing constrained closed to `!`.
     fn type_as_written(&self, ty: &InferTy) -> Ty {

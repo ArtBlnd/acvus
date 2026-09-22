@@ -391,6 +391,11 @@ pub enum MirErrorKind {
         source_ty: Ty,
     },
     ExternParamAssign(String),
+    BindingTypeMismatch {
+        name: String,
+        value: acvus_ast::Literal,
+        ty: Ty,
+    },
     SourceNotIterable {
         actual: Ty,
     },
@@ -1032,6 +1037,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "pattern type {} incompatible with source type {}",
                     pattern_ty.shown(interner),
                     source_ty.shown(interner)
+                )
+            }
+            MirErrorKind::BindingTypeMismatch { name, value, ty } => {
+                write!(
+                    f,
+                    "`${name}` is bound to {value:?}, which is not a value of {}, the type its uses require",
+                    ty.shown(interner)
                 )
             }
             MirErrorKind::ExternParamAssign(name) => {

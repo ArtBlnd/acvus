@@ -174,6 +174,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![add_fn(i), advance_fn(i), drain_fn(i), wrap_fn(i), f]),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
