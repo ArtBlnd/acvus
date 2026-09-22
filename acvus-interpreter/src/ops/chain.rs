@@ -4,18 +4,21 @@
 //! it fixed in the type. Its shape is a field, not a parameter.
 
 use std::marker::PhantomData;
-use std::mem::size_of;
+use std::mem::{MaybeUninit, size_of};
+use std::slice;
 
 use acvus_mir::ty::IntTy;
 
 use crate::code::{
-    Arith, ChainBounds, Compare, Exit, ExprChain, ExprFn, Op, Root, Shape, Where, successor,
+    Arith, ChainBounds, Code, Compare, Entry, Exit, ExprChain, Next, Op, Root, Shape, Where,
+    successor,
 };
 use crate::machine::Machine;
 use crate::ops::arith::{Int, for_int_ty};
 use crate::ops::cast::AsNum;
 use crate::ops::place::Place;
-use crate::regs::Regs;
+use crate::regs::{Cell, FrameState};
+use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 
 /// One numeric type a chain runs at: the integer widths and `f64`.
@@ -229,11 +232,15 @@ impl<'a> Operands<'a> {
         }
     }
 
+    /// The frame's registers, named by the base the operation was handed.
+    /// `len` bounds the debug assertion in `word` alone, so reading it back
+    /// out of the machine costs a release build nothing.
     #[inline(always)]
-    pub(crate) fn of_frame(regs: &'a Regs<'_>) -> Operands<'a> {
+    pub(crate) fn of_frame(m: &mut Machine<'_>, base: *mut Cell) -> Operands<'a> {
+        m.debug_base(base);
         Operands {
-            base: regs.as_ptr(),
-            len: regs.len(),
+            base: base.cast::<Value>(),
+            len: m.regs().len(),
             borrow: PhantomData,
         }
     }
@@ -690,7 +697,7 @@ where
 {
     pub dst: D::At,
     pub plan: Plan,
-    pub next: Box<dyn Op>,
+    pub next: Next,
     pub at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -701,7 +708,7 @@ where
 {
     pub dst: D::At,
     pub plan: Plan,
-    pub next: Box<dyn Op>,
+    pub next: Next,
     pub at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -712,7 +719,7 @@ where
 {
     pub dst: D::At,
     pub plan: Plan,
-    pub next: Box<dyn Op>,
+    pub next: Next,
     pub at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -724,10 +731,13 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
-        let bits = tree1::<T, R, false>(&self.plan, Operands::of_frame(m.regs()));
-        let carried = D::write(m.regs(), self.dst, bits);
-        self.next.run(m, carried)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _r0: u64) -> Exit {
+        let bits = tree1::<T, R, false>(&self.plan, Operands::of_frame(m, regs));
+        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
+        // and `prepare::check_assignment` proves the destination is a
+        // register this frame has.
+        let carried = unsafe { D::write(regs, self.dst, bits) };
+        self.next.run(m, regs, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -747,10 +757,13 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
-        let bits = tree2::<T, O0, R, false>(&self.plan, Operands::of_frame(m.regs()));
-        let carried = D::write(m.regs(), self.dst, bits);
-        self.next.run(m, carried)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _r0: u64) -> Exit {
+        let bits = tree2::<T, O0, R, false>(&self.plan, Operands::of_frame(m, regs));
+        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
+        // and `prepare::check_assignment` proves the destination is a
+        // register this frame has.
+        let carried = unsafe { D::write(regs, self.dst, bits) };
+        self.next.run(m, regs, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -770,10 +783,13 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _r0: u64) -> Exit {
-        let bits = tree3::<T, O0, O1, R, false>(&self.plan, Operands::of_frame(m.regs()));
-        let carried = D::write(m.regs(), self.dst, bits);
-        self.next.run(m, carried)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, _r0: u64) -> Exit {
+        let bits = tree3::<T, O0, O1, R, false>(&self.plan, Operands::of_frame(m, regs));
+        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
+        // and `prepare::check_assignment` proves the destination is a
+        // register this frame has.
+        let carried = unsafe { D::write(regs, self.dst, bits) };
+        self.next.run(m, regs, carried)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -785,31 +801,97 @@ where
     }
 }
 
-fn eval1<T, const R: u8, const PLAIN: bool>(chain: &ExprChain, operands: &[Value]) -> u64
-where
-    T: Num,
-{
-    tree1::<T, R, PLAIN>(&chain.plan, Operands::of(operands))
+/// The chain at the head of `code`, and the assertion that the call brought
+/// the arity its body was prepared with.
+///
+/// # Safety
+/// `code` is one this module's entries was written into, which `Code::expr`
+/// does for an `Expr` whose body is a `Chain`.
+#[inline(always)]
+unsafe fn chain_of(code: &Code, arity: u16) -> &ExprChain {
+    // SAFETY: the caller's contract.
+    let expr = unsafe { code.body.expr_unchecked() };
+    debug_assert_eq!(
+        usize::from(arity),
+        expr.arity as usize,
+        "an expression body is called with the arguments it reads"
+    );
+    // SAFETY: as above.
+    unsafe { expr.chain_unchecked() }
 }
 
-fn eval2<T, const O0: u8, const R: u8, const PLAIN: bool>(
-    chain: &ExprChain,
-    operands: &[Value],
-) -> u64
-where
-    T: Num,
-{
-    tree2::<T, O0, R, PLAIN>(&chain.plan, Operands::of(operands))
+/// The three entries of a body that is one chain (RFC-0069 D5). Each reads
+/// the argument run the caller laid, builds the operand space over it and
+/// evaluates the chain in one body, so a closure call reaches the arithmetic
+/// through the one indirect call at the code's head and none inside.
+macro_rules! chain_entry {
+    ($name:ident, $tree:ident $(, const $node:ident: u8)*) => {
+        /// # Safety
+        /// As `Entry`, and `code`'s body is the `Expr` this entry was picked
+        /// for.
+        unsafe fn $name<T $(, const $node: u8)*, const R: u8, const PLAIN: bool>(
+            code: &Code,
+            _f: Value,
+            _rt: &AcvusRuntime,
+            window: &mut FrameState,
+            arity: u16,
+        ) -> Value
+        where
+            T: Num,
+        {
+            // SAFETY: the caller's contract.
+            let chain = unsafe { chain_of(code, arity) };
+            let space = OperandSpace::of(window.laid(arity), &chain.konsts);
+            let word = $tree::<T $(, $node)*, R, PLAIN>(
+                &chain.plan,
+                Operands::of(space.as_slice()),
+            );
+            Value::inline(chain.kind, word)
+        }
+    };
 }
 
-fn eval3<T, const O0: u8, const O1: u8, const R: u8, const PLAIN: bool>(
-    chain: &ExprChain,
-    operands: &[Value],
-) -> u64
-where
-    T: Num,
-{
-    tree3::<T, O0, O1, R, PLAIN>(&chain.plan, Operands::of(operands))
+chain_entry!(entry1, tree1);
+chain_entry!(entry2, tree2, const O0: u8);
+chain_entry!(entry3, tree3, const O0: u8, const O1: u8);
+
+/// The operands a frameless chain reads: the arguments, then the constants,
+/// which is the order `prepare::expression_body` assigned the chain's leaf
+/// offsets in.
+struct OperandSpace {
+    values: [MaybeUninit<Value>; ExprChain::MAX_OPERANDS],
+    len: usize,
+}
+
+impl OperandSpace {
+    /// The `#[inline]` is a measurement, not a taste. Without it LLVM
+    /// outlines this across the entries' monomorphizations, and an entry
+    /// then spends a frame and a call on the way to arithmetic it already
+    /// holds: `map add fil | sum` measured 13.8–14.5 ns per element that way
+    /// against 13.4–13.5 with it. It costs 535 KB of text in the `accum`
+    /// bench, the copy loop unrolled once per instance.
+    #[inline]
+    fn of(args: &[Value], konsts: &[Value]) -> OperandSpace {
+        let len = args.len() + konsts.len();
+        debug_assert!(
+            len <= ExprChain::MAX_OPERANDS,
+            "an expression body reads {len} operands, past the {} a frameless call builds",
+            ExprChain::MAX_OPERANDS
+        );
+        let mut values = [const { MaybeUninit::uninit() }; ExprChain::MAX_OPERANDS];
+        for (slot, value) in values.iter_mut().zip(args.iter().chain(konsts)) {
+            slot.write(*value);
+        }
+        OperandSpace { values, len }
+    }
+
+    fn as_slice(&self) -> &[Value] {
+        // SAFETY: `prepare::expression_body` refuses a body whose operands
+        // outnumber `ExprChain::MAX_OPERANDS`, and `chain_of` asserts the
+        // call brought the arity that body was prepared with, so `of` wrote
+        // exactly `len` values into an array that holds them.
+        unsafe { slice::from_raw_parts(self.values.as_ptr().cast::<Value>(), self.len) }
+    }
 }
 
 /// What the picker's walk ends in. The walk is one `match` per node, and
@@ -844,7 +926,7 @@ where
 {
     dst: D::At,
     plan: Option<Plan>,
-    next: Option<Box<dyn Op>>,
+    next: Option<Next>,
     at: PhantomData<fn() -> (T, D)>,
 }
 
@@ -853,7 +935,7 @@ where
     T: Num,
     D: Place,
 {
-    fn take(&mut self) -> (Plan, Box<dyn Op>) {
+    fn take(&mut self) -> (Plan, Next) {
         let plan = self
             .plan
             .take()
@@ -871,11 +953,11 @@ where
     T: Num,
     D: Place,
 {
-    type Out = Box<dyn Op>;
+    type Out = Next;
 
-    fn one<const R: u8>(&mut self) -> Box<dyn Op> {
+    fn one<const R: u8>(&mut self) -> Next {
         let (plan, next) = self.take();
-        Box::new(Chain1::<T, D, R> {
+        Next::of(Chain1::<T, D, R> {
             dst: self.dst,
             plan,
             next,
@@ -883,9 +965,9 @@ where
         })
     }
 
-    fn two<const O0: u8, const R: u8>(&mut self) -> Box<dyn Op> {
+    fn two<const O0: u8, const R: u8>(&mut self) -> Next {
         let (plan, next) = self.take();
-        Box::new(Chain2::<T, D, O0, R> {
+        Next::of(Chain2::<T, D, O0, R> {
             dst: self.dst,
             plan,
             next,
@@ -893,9 +975,9 @@ where
         })
     }
 
-    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Box<dyn Op> {
+    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Next {
         let (plan, next) = self.take();
-        Box::new(Chain3::<T, D, O0, O1, R> {
+        Next::of(Chain3::<T, D, O0, O1, R> {
             dst: self.dst,
             plan,
             next,
@@ -904,7 +986,7 @@ where
     }
 }
 
-/// A body that is one chain is called through this function pointer and
+/// A body that is one chain is entered through this function pointer and
 /// does nothing else, so whether its leaves hold a cast is settled here,
 /// once, rather than read on every call.
 struct BuildExpr<T>
@@ -919,26 +1001,26 @@ impl<T> Build<T> for BuildExpr<T>
 where
     T: Num,
 {
-    type Out = ExprFn;
+    type Out = Entry;
 
-    fn one<const R: u8>(&mut self) -> ExprFn {
+    fn one<const R: u8>(&mut self) -> Entry {
         match self.plain {
-            true => eval1::<T, R, true>,
-            false => eval1::<T, R, false>,
+            true => entry1::<T, R, true>,
+            false => entry1::<T, R, false>,
         }
     }
 
-    fn two<const O0: u8, const R: u8>(&mut self) -> ExprFn {
+    fn two<const O0: u8, const R: u8>(&mut self) -> Entry {
         match self.plain {
-            true => eval2::<T, O0, R, true>,
-            false => eval2::<T, O0, R, false>,
+            true => entry2::<T, O0, R, true>,
+            false => entry2::<T, O0, R, false>,
         }
     }
 
-    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> ExprFn {
+    fn three<const O0: u8, const O1: u8, const R: u8>(&mut self) -> Entry {
         match self.plain {
-            true => eval3::<T, O0, O1, R, true>,
-            false => eval3::<T, O0, O1, R, false>,
+            true => entry3::<T, O0, O1, R, true>,
+            false => entry3::<T, O0, O1, R, false>,
         }
     }
 }
@@ -988,7 +1070,7 @@ where
 /// Decision not to build: a leaf has no place of its own. A chain's leaves
 /// read registers the chain did not produce — a one-use value feeding a leaf
 /// was absorbed into the chain instead of reaching it — so no leaf rides.
-fn chain_at<D>(ty: ChainTy, dst: D::At, plan: Plan, next: Box<dyn Op>) -> Box<dyn Op>
+fn chain_at<D>(ty: ChainTy, dst: D::At, plan: Plan, next: Next) -> Next
 where
     D: Place,
 {
@@ -1016,15 +1098,16 @@ where
     }
 }
 
-pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Box<dyn Op>) -> Box<dyn Op> {
+pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Next) -> Next {
     match dst {
         Where::Frame(off) => chain_at::<crate::ops::place::Slot>(ty, off, plan, next),
         Where::Register => chain_at::<crate::ops::place::R0>(ty, (), plan, next),
     }
 }
 
-/// The evaluator a frameless chain body runs (RFC-0044, stage 4).
-pub fn chain_eval(ty: ChainTy, plan: &Plan) -> ExprFn {
+/// The entry a frameless chain body is called through (RFC-0044, stage 4;
+/// RFC-0069 D5).
+pub fn chain_eval(ty: ChainTy, plan: &Plan) -> Entry {
     let nodes = Nodes::of(plan);
     let shape = plan.shape;
     let plain = matches!(plan.reads, Reads::Own);

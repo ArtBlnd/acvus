@@ -5,9 +5,10 @@ use std::marker::PhantomData;
 
 use acvus_extern::FieldAt;
 
-use crate::code::{Exit, Off, Op, successor};
+use crate::code::{Exit, Next, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::{Int, Unary};
+use crate::regs::Cell;
 use crate::value::{Kind, Value};
 
 /// `THROUGH` is what the preparation read from the source's type: a
@@ -30,14 +31,14 @@ where
     slots: Unary,
     want: i128,
     width: PhantomData<fn() -> T>,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<T> TestInt<T>
 where
     T: Int,
 {
-    pub fn new(slots: Unary, want: i128, next: Box<dyn Op>) -> TestInt<T> {
+    pub fn new(slots: Unary, want: i128, next: Next) -> TestInt<T> {
         TestInt {
             slots,
             want,
@@ -53,79 +54,79 @@ where
 {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let matches = T::read(regs.word(self.slots.src.at)).wide() == self.want;
-        regs.set_word(self.slots.dst.at, matches as u64);
-        self.next.run(m, r0)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let matches = T::read(frame.word(self.slots.src.at)).wide() == self.want;
+        frame.set_word(self.slots.dst.at, matches as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
 pub struct TestFloat<const THROUGH: bool> {
     pub slots: Unary,
     pub want: f64,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const THROUGH: bool> Op for TestFloat<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let matches = place::<THROUGH>(regs.peek(self.slots.src.at)).as_float() == self.want;
-        regs.set_word(self.slots.dst.at, matches as u64);
-        self.next.run(m, r0)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let matches = place::<THROUGH>(frame.peek(self.slots.src.at)).as_float() == self.want;
+        frame.set_word(self.slots.dst.at, matches as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
 pub struct TestBool<const THROUGH: bool> {
     pub slots: Unary,
     pub want: bool,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const THROUGH: bool> Op for TestBool<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let matches = place::<THROUGH>(regs.peek(self.slots.src.at)).as_bool() == self.want;
-        regs.set_word(self.slots.dst.at, matches as u64);
-        self.next.run(m, r0)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let matches = place::<THROUGH>(frame.peek(self.slots.src.at)).as_bool() == self.want;
+        frame.set_word(self.slots.dst.at, matches as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
 pub struct TestString<const THROUGH: bool> {
     pub slots: Unary,
     pub want: String,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const THROUGH: bool> Op for TestString<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let source = place::<THROUGH>(frame.peek(self.slots.src.at));
         // SAFETY: the type checker matches a string literal against a string.
         let matches = unsafe { source.as_str() } == self.want.as_str();
-        regs.set_word(self.slots.dst.at, matches as u64);
-        self.next.run(m, r0)
+        frame.set_word(self.slots.dst.at, matches as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
 /// A unit literal matches the one value of its type.
 pub struct TestUnit {
     pub dst: Off,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for TestUnit {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
         m.regs().set_word(self.dst, true as u64);
-        self.next.run(m, r0)
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -135,19 +136,19 @@ impl Op for TestUnit {
 pub struct TestObjectKey<const THROUGH: bool> {
     pub slots: Unary,
     pub at: FieldAt,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const THROUGH: bool> Op for TestObjectKey<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let source = place::<THROUGH>(frame.peek(self.slots.src.at));
         // SAFETY: the preparation read `Object` from the type, and the
         // position is one the settled type's layout has.
         let held = unsafe { source.as_object() }[self.at.index()].kind();
-        regs.set_word(self.slots.dst.at, (held != Kind::Undef) as u64);
-        self.next.run(m, r0)
+        frame.set_word(self.slots.dst.at, (held != Kind::Undef) as u64);
+        self.next.run(m, regs, r0)
     }
 }

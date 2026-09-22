@@ -17,7 +17,10 @@ use crate::ctx::Ctx;
 use crate::instance::InstanceRun;
 use crate::instance::{Instance, Signature};
 use crate::loan::Loan;
-use crate::obj::{Cross, Form, FormKind, Nothing, One, OneValue, Returned, SurvivesSuspension};
+use crate::obj::{
+    Cross, Form, FormKind, Nothing, One, OneRegister, OneValue, OptionOf, Returned,
+    SurvivesSuspension,
+};
 use crate::registry::SharedSignature;
 use crate::runtime::Runtime;
 
@@ -411,7 +414,11 @@ where
     /// How many of the runtime's values the result occupies.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
 
-    fn into_run(value: Self::Of<'_>, rt: &Rt, out: Out<'_, Rt>);
+    fn into_run(
+        value: Self::Of<'_>,
+        rt: &Rt,
+        out: Out<'_, Rt>,
+    ) -> <Self::Form as Returned>::Verdict;
 }
 
 /// The arguments of a closure call, written into the callee's parameter
@@ -476,7 +483,11 @@ where
     type Of<'a>;
     type Form: Returned;
 
-    fn into_run(value: Self::Of<'_>, rt: &Rt, out: Out<'_, Rt>);
+    fn into_run(
+        value: Self::Of<'_>,
+        rt: &Rt,
+        out: Out<'_, Rt>,
+    ) -> <Self::Form as Returned>::Verdict;
 }
 
 impl<L, Rt> LentBack<Rt> for Option<L>
@@ -485,17 +496,14 @@ where
     Rt: Runtime,
 {
     type Of<'a> = Option<L::Of<'a>>;
-    type Form = One;
+    type Form = OptionOf<One>;
 
-    fn into_run(value: Option<L::Of<'_>>, rt: &Rt, out: Out<'_, Rt>) {
+    fn into_run(value: Option<L::Of<'_>>, rt: &Rt, out: Out<'_, Rt>) -> bool {
         let Some(lent) = value else {
-            out[0] = rt.none();
-            return;
+            return false;
         };
-        let mut word = [rt.none()];
-        L::into_run(lent, rt, &mut word);
-        let [word] = word;
-        out[0] = rt.some(word);
+        L::into_run(lent, rt, out);
+        true
     }
 }
 
@@ -511,7 +519,7 @@ where
     type Of<'a> = L::Of<'a>;
     type Form = L::Form;
 
-    fn into_run(value: L::Of<'_>, rt: &Rt, out: Out<'_, Rt>) {
+    fn into_run(value: L::Of<'_>, rt: &Rt, out: Out<'_, Rt>) -> <L::Form as Returned>::Verdict {
         L::into_run(value, rt, out)
     }
 }
@@ -527,7 +535,11 @@ where
     type Of<'a> = T;
     type Form = <T as Cross<Rt>>::ReturnForm;
 
-    fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
+    fn into_run(
+        value: T,
+        rt: &Rt,
+        out: Out<'_, Rt>,
+    ) -> <<T as Cross<Rt>>::ReturnForm as Returned>::Verdict {
         <T as Cross<Rt>>::into_return_run(value, rt, out)
     }
 }
@@ -538,6 +550,9 @@ where
     Rt: Runtime,
 {
     type Of<'a> = T;
+    /// The specialized crossing is the value and nothing beside it, so there
+    /// is no run for a verdict to be returned beside and no `OptionOf` here
+    /// (RFC-0040).
     type Form = One;
 
     fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
@@ -554,6 +569,9 @@ pub struct Width {
     pub args: usize,
     pub ret: usize,
     pub result: FormKind,
+    /// `Returned::ABSENT` of the result form, which is the one fact about
+    /// the result a caller holding no type of the handler cannot project.
+    pub absent: bool,
 }
 
 /// The widest argument run a register form covers: a call of this many of the
@@ -610,7 +628,7 @@ where
         ctx: &mut Ctx<'_, Rt>,
         run: <Self::Args as ArgRun>::Run<'_, Rt>,
         out: <Self::Ret as Returned>::Out<'_, Rt>,
-    );
+    ) -> <Self::Ret as Returned>::Verdict;
 }
 
 /// An argument run of `N` of the runtime's values, one per parameter.
@@ -1206,6 +1224,7 @@ where
         args: <A as Parameters<Rt>>::WIDTH,
         ret: <R as Ret<Rt>>::WIDTH,
         result: <<R as Ret<Rt>>::Form as Form>::KIND,
+        absent: <<R as Ret<Rt>>::Form as Returned>::ABSENT,
     };
 
     #[inline]
@@ -1214,7 +1233,7 @@ where
         ctx: &mut Ctx<'_, Rt>,
         run: <<A as Parameters<Rt>>::Run as ArgRun>::Run<'_, Rt>,
         out: <<R as Ret<Rt>>::Form as Returned>::Out<'_, Rt>,
-    ) {
+    ) -> <<R as Ret<Rt>>::Form as Returned>::Verdict {
         let rt = ctx.rt;
         let run = <<A as Parameters<Rt>>::Run as ArgRun>::as_slice::<Rt>(run);
         // SAFETY: the caller's contract, which is `Parameters::take`'s.
@@ -1242,6 +1261,7 @@ where
             args: <A as Parameters<Rt>>::WIDTH,
             ret: <R as Ret<Rt>>::WIDTH,
             result: <<R as Ret<Rt>>::Form as Form>::KIND,
+            absent: <<R as Ret<Rt>>::Form as Returned>::ABSENT,
         }
     }
 
@@ -1297,7 +1317,7 @@ where
     A: ValueParameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
     F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
-    R: Ret<Rt, Form = One> + 'static,
+    R: Ret<Rt, Form: OneRegister> + 'static,
 {
 }
 
@@ -1316,6 +1336,7 @@ where
         args: <A as Parameters<Rt>>::WIDTH,
         ret: 1,
         result: FormKind::Value,
+        absent: false,
     };
 
     unsafe fn call(&self, rt: Rt, run: &[Rt::Value]) -> BoxFuture<'static, Rt::Value> {
@@ -1352,6 +1373,7 @@ where
             args: <A as Parameters<Rt>>::WIDTH,
             ret: 1,
             result: FormKind::Value,
+            absent: false,
         }
     }
 
@@ -1569,8 +1591,8 @@ where
             // widths, which is what each form's `from_slice` asks.
             unsafe {
                 let run = <H::Args as ArgRun>::from_slice::<Rt>(run);
-                let out = <H::Ret as Returned>::from_slice::<Rt>(out);
-                handler.call(ctx, run, out)
+                let verdict = handler.call(ctx, run, <H::Ret as Returned>::from_slice::<Rt>(out));
+                <H::Ret as Returned>::land_in(rt, verdict, <H::Ret as Returned>::from_slice(out));
             }
         }))
     }

@@ -112,6 +112,10 @@ where
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
         <Self as crate::OneValue<Rt>>::into_run(self, rt, out)
     }
+
+    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+        <Self as crate::OneValue<Rt>>::into_run(self, rt, out)
+    }
 }
 
 /// A closure parameter declared `&T` is passed as Rust's `&T`: the borrow

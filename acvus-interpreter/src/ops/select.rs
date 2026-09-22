@@ -12,11 +12,12 @@ use std::marker::PhantomData;
 
 use acvus_mir::ty::IntTy;
 
-use crate::code::{Exit, Off, Op, Where, successor};
+use crate::code::{Exit, Next, Off, Op, Where, successor};
 use crate::machine::Machine;
 use crate::ops::arith::for_int_ty;
 use crate::ops::chain::{ChainTy, Node, Num, Operands, Plan, Rooted, pick_root, tree1};
 use crate::ops::place::{self, Place};
+use crate::regs::{Cell, word_at};
 
 /// `prepare` read off the lowering which side of the test computes, so this
 /// `run` compares the condition against a constant rather than holding an arm
@@ -31,7 +32,7 @@ where
     pub plan: Plan,
     pub passed: Off,
     pub dst: D::At,
-    pub next: Box<dyn Op>,
+    pub next: Next,
     pub at: PhantomData<fn() -> (T, C, D)>,
 }
 
@@ -44,13 +45,18 @@ where
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let taken = C::read(m.regs(), self.cond, r0) != 0;
-        let computed = tree1::<T, R, true>(&self.plan, Operands::of_frame(m.regs()));
-        let passed = m.regs().word(self.passed);
-        let bits = chosen(taken == COMPUTES_ON_TRUE, computed, passed);
-        let carried = D::write(m.regs(), self.dst, bits);
-        self.next.run(m, carried)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let computed = tree1::<T, R, true>(&self.plan, Operands::of_frame(m, regs));
+        // SAFETY: `regs` is this frame's base, which `of_frame` just checked,
+        // and `prepare::check_assignment` proves the condition, the passed
+        // register and the destination are registers this frame has.
+        let carried = unsafe {
+            let taken = C::read(regs, self.cond, r0) != 0;
+            let passed = word_at(regs, self.passed);
+            let bits = chosen(taken == COMPUTES_ON_TRUE, computed, passed);
+            D::write(regs, self.dst, bits)
+        };
+        self.next.run(m, regs, carried)
     }
 }
 
@@ -91,13 +97,7 @@ where
     dst: D::At,
 }
 
-pub fn select_op(
-    ty: ChainTy,
-    places: Places,
-    plan: Plan,
-    arms: Arms,
-    next: Box<dyn Op>,
-) -> Box<dyn Op> {
+pub fn select_op(ty: ChainTy, places: Places, plan: Plan, arms: Arms, next: Next) -> Next {
     match (places.cond, places.dst) {
         (Where::Frame(cond), Where::Frame(dst)) => at_ty(
             ty,
@@ -130,13 +130,7 @@ pub fn select_op(
     }
 }
 
-fn at_ty<C, D>(
-    ty: ChainTy,
-    chosen: Chosen<C, D>,
-    plan: Plan,
-    arms: Arms,
-    next: Box<dyn Op>,
-) -> Box<dyn Op>
+fn at_ty<C, D>(ty: ChainTy, chosen: Chosen<C, D>, plan: Plan, arms: Arms, next: Next) -> Next
 where
     C: Place,
     D: Place,
@@ -147,7 +141,7 @@ where
     }
 }
 
-fn at_side<T, C, D>(chosen: Chosen<C, D>, plan: Plan, arms: Arms, next: Box<dyn Op>) -> Box<dyn Op>
+fn at_side<T, C, D>(chosen: Chosen<C, D>, plan: Plan, arms: Arms, next: Next) -> Next
 where
     T: Num,
     C: Place,
@@ -175,7 +169,7 @@ where
     chosen: Chosen<C, D>,
     plan: Option<Plan>,
     passed: Off,
-    next: Option<Box<dyn Op>>,
+    next: Option<Next>,
     at: PhantomData<fn() -> T>,
 }
 
@@ -189,7 +183,7 @@ where
         chosen: Chosen<C, D>,
         plan: Plan,
         passed: Off,
-        next: Box<dyn Op>,
+        next: Next,
     ) -> BuildSelect<T, C, D, COMPUTES_ON_TRUE> {
         BuildSelect {
             chosen,
@@ -207,9 +201,9 @@ where
     C: Place,
     D: Place,
 {
-    type Out = Box<dyn Op>;
+    type Out = Next;
 
-    fn of<const R: u8>(&mut self) -> Box<dyn Op> {
+    fn of<const R: u8>(&mut self) -> Next {
         let plan = self
             .plan
             .take()
@@ -218,7 +212,7 @@ where
             .next
             .take()
             .expect("a select instance is built once from its plan");
-        Box::new(Select::<T, C, D, R, COMPUTES_ON_TRUE> {
+        Next::of(Select::<T, C, D, R, COMPUTES_ON_TRUE> {
             cond: self.chosen.cond,
             plan,
             passed: self.passed,

@@ -13,8 +13,9 @@ members = [
     "acvus-ext-llm",
     "acvus-ext-net",
     "acvus-lsp",
-    "kovac-interpreter"
-, "acvus-extern", "acvus-extern-macro"]
+    "acvus-extern",
+    "acvus-extern-macro",
+]
 
 [workspace.dependencies]
 rustc-hash = "2"

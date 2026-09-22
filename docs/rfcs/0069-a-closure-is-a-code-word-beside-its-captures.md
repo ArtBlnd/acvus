@@ -1,4 +1,4 @@
-Ru# RFC-0069: A closure is a code word beside its captures
+# RFC-0069: A closure is a code word beside its captures
 
 Status: Draft
 Extends: RFC-0018, RFC-0044, RFC-0050, RFC-0052, RFC-0067
@@ -76,16 +76,45 @@ lies in the block: a call puts the block's address in the callee's frame
 once, and a capture read is a load at an offset `prepare` fixed. No
 `Value::reference` is written per capture per call.
 
-### D5. One entry, generic in how arguments arrive
+### D5. One synchronous entry, chosen where the `Code` is made
 
-`Callable`'s three entries (`call_in_window`, `call_in`, `start`) are one
-body of work reached three ways, as `Handler`'s `call0..4`, `call_pair1..4`
-and `call_out0..4` are. They become one entry whose argument source and
-result form are type parameters the caller names, which is the shape the
-Runtime contract takes for extern handlers; a closure call and an extern
-call are then the same kind of operation to `prepare`, and the loop
-operation that inlines a stage's `next` can hold a closure's entry the same
-way.
+`Callable`'s two synchronous entries (`call_in_window`, `call_in`) read the
+same thing — the arguments the caller laid in the first `arity` registers of
+a window — and do the same work on it. They are one entry, the `Code`'s head
+word: the caller hands the window and the run it is calling in, and the
+script's `CallIndirect` and a handler's `Closure::call` reach the same
+function. The entry is paired with the body it reads where the `Code` is
+made, so no call tests the shape, and a `Code` that is one chain enters a
+function that binds no frame at all.
+
+The head is chosen as narrowly as the body allows, because a head that only
+dispatches again spends the call twice. A chain body's head is the chain's
+own evaluator — the operand type, the node operators and whether a leaf
+holds a cast are all in the entry's own monomorphization, so the argument
+run, the operand space and the arithmetic are one function body. A body that
+returns one of its arguments has a head that reads that argument and nothing
+else. One indirect call per closure call, and none inside it: a generic head
+that then called the evaluator through a second pointer measured `map id |
+sum` at 2.8 ns per element against 2.3.
+
+The closure value crosses the entry by value. A handler holds its closure in
+its own frame, and the address of a local handed to an indirect callee is an
+address that callee may keep, which costs the operation running the handler
+the tail call to its successor — `benches/asm_probe.rs` reads that off the
+release machine. Two registers cost nothing.
+
+`start` stays a second entry for a framed body. It reads the arguments as
+values into a frame that exists before the future does, and hands back that
+frame rather than a value, so it cannot take the synchronous signature;
+sharing one would mean the synchronous call carrying a result form it never
+produces. A chain body has no frame to fill and no suspension to wait for,
+so `start` lays its arguments in a window of its own and calls the head:
+there is one evaluator for a chain, not one per caller shape.
+
+A closure call and an extern call stay different operations to `prepare`. A
+`loop_op` holds a stage's `next`; a closure inside a stage reaches its entry
+through `Closure::call`, and a closure call in a loop body is one operation
+of that body. Nothing in either needs a closure to be a `Handler`.
 
 ## What it costs
 
@@ -121,9 +150,10 @@ write that half once for `FnValue` and once more for the word.
    three entries stay three for now, reached from the code word instead of
    through an `Arc<dyn>`.
 2. D3, then D4.
-3. The Runtime contract: one generic entry for extern handlers
-   (`Handler::call` with `Arity` and `RetForm`), and D5 with it, so a closure
-   call and an extern call are one kind of operation.
+3. D5: the two synchronous entries fold into the code's head word. It does
+   not wait for the Runtime contract's generic entry for extern handlers
+   (`Handler::call` with `Arity` and `RetForm`), which is a separate step:
+   the two calls are different operations to `prepare`.
 4. The loop operation and the micro-operation machine build on that entry.
 
 Each step is measured alone: `accum`'s closure rows, `logs`'s `closure`
@@ -133,5 +163,3 @@ case, `asm_probe`.
 
 - How a closure word is printed and compared (`Debug`, equality of
   closures) once there is no `Arc` address to show.
-- Whether a suspending closure (`Callable::start`, a `Store` per call) takes
-  the same entry or keeps a second one for the future it returns.

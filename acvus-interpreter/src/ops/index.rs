@@ -9,9 +9,9 @@
 use acvus_extern::{Release, Words};
 use acvus_mir::ir::IndexMode;
 
-use crate::code::{Exit, Marked, Off, Op, SlicePair, successor};
+use crate::code::{Exit, Marked, Next, Off, Op, SlicePair, successor};
 use crate::machine::Machine;
-use crate::regs::Regs;
+use crate::regs::{Cell, Regs};
 use crate::value::{Kind, Value};
 
 /// The run a slice pair names, as the machine reads it: `len` values from
@@ -114,7 +114,7 @@ pub(crate) unsafe fn element<'a, const CHECKED: bool>(
 
 pub struct IndexCopy<const CHECKED: bool> {
     pub read: Read,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
@@ -126,24 +126,24 @@ impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
     }
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let index = regs.word(self.read.index);
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let index = frame.word(self.read.index);
         // SAFETY: the slice holds its container's loan.
-        let value = *unsafe { element::<CHECKED>(regs, self.read.slice, index) };
+        let value = *unsafe { element::<CHECKED>(frame, self.read.slice, index) };
         debug_assert_ne!(
             value.kind(),
             Kind::Large,
             "an indexed copy leaves the container owning the element"
         );
-        regs.put(self.read.dst, value);
-        self.next.run(m, r0)
+        frame.put(self.read.dst, value);
+        self.next.run(m, regs, r0)
     }
 }
 
 pub struct IndexRef<const CHECKED: bool> {
     pub read: Read,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
@@ -155,13 +155,13 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
     }
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let index = regs.word(self.read.index);
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let index = frame.word(self.read.index);
         // SAFETY: as `IndexCopy`.
-        let target = unsafe { element::<CHECKED>(regs, self.read.slice, index) };
-        regs.put(self.read.dst, Value::reference(target));
-        self.next.run(m, r0)
+        let target = unsafe { element::<CHECKED>(frame, self.read.slice, index) };
+        frame.put(self.read.dst, Value::reference(target));
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -171,18 +171,18 @@ pub struct IndexSet<const CHECKED: bool, const LARGE: bool> {
     pub slice: SlicePair,
     pub index: Off,
     pub value: Marked,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let index = regs.word(self.index);
-        let value = regs.take::<LARGE>(self.value);
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let index = frame.word(self.index);
+        let value = frame.take::<LARGE>(self.value);
         // SAFETY: the slice holds its container's loan.
-        let slice = unsafe { run(regs, self.slice) };
+        let slice = unsafe { run(frame, self.slice) };
         let at = position::<CHECKED>(&slice, index);
         // SAFETY: the operand is a `&mut [T]`, so its run is named once
         // here, and `position` put `at` within it.
@@ -190,7 +190,7 @@ impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
         let overwritten = *slot;
         *slot = value;
         release_if::<LARGE>(overwritten);
-        self.next.run(m, r0)
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -202,10 +202,10 @@ fn release_if<const LARGE: bool>(value: Value) {
 }
 
 /// The operation an `Index` instruction prepares to.
-pub fn checked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
+pub fn checked(mode: IndexMode, read: Read, next: Next) -> Next {
     match mode {
-        IndexMode::Copy => Box::new(IndexCopy::<true> { read, next }),
-        IndexMode::Ref => Box::new(IndexRef::<true> { read, next }),
+        IndexMode::Copy => Next::of(IndexCopy::<true> { read, next }),
+        IndexMode::Ref => Next::of(IndexRef::<true> { read, next }),
     }
 }
 
@@ -214,9 +214,9 @@ pub fn checked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
 /// the interval pass carries its own proof the only way to run one is for a
 /// probe to substitute it into a prepared body.
 #[cfg(any(test, feature = "probe"))]
-pub fn unchecked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
+pub fn unchecked(mode: IndexMode, read: Read, next: Next) -> Next {
     match mode {
-        IndexMode::Copy => Box::new(IndexCopy::<false> { read, next }),
-        IndexMode::Ref => Box::new(IndexRef::<false> { read, next }),
+        IndexMode::Copy => Next::of(IndexCopy::<false> { read, next }),
+        IndexMode::Ref => Next::of(IndexRef::<false> { read, next }),
     }
 }

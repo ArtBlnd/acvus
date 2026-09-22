@@ -16,7 +16,7 @@ pub mod space;
 mod value;
 pub mod vtable;
 
-pub use code::{Code, Prepared};
+pub use code::{Code, CodeBody, Prepared};
 pub use executor::{Executor, SequentialExecutor, TokioExecutor};
 pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};

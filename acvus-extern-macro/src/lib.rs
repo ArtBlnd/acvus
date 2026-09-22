@@ -1824,6 +1824,14 @@ fn one_value_run(returns: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
 fn returned_as_one_value() -> proc_macro2::TokenStream {
     quote! {
         type ReturnForm = ::acvus_extern::One;
+
+        fn into_return_run(
+            self,
+            __rt: &__R,
+            __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
+        ) {
+            <Self as ::acvus_extern::OneValue<__R>>::into_run(self, __rt, __out)
+        }
     }
 }
 

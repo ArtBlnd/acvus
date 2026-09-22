@@ -3,7 +3,7 @@
 //! or that a run too long for one tree becomes several, no value can show
 //! it, so those tests read the prepared code as well.
 
-use acvus_interpreter::code::{ChainBounds, Code, ExprBody, Off, Prepared, Shape};
+use acvus_interpreter::code::{ChainBounds, Code, CodeBody, ExprBody, Off, Prepared, Shape};
 use acvus_interpreter::{PrepareCtx, Value, prepare_module};
 use acvus_interpreter_test::listing::{ChainShape, chains_of, chains_of_body};
 use acvus_interpreter_test::*;
@@ -271,8 +271,8 @@ async fn a_lambda_that_is_one_chain_runs_without_a_frame() {
     assert_eq!(v.as_int(), 7);
 
     let module = prepared(&i, source, Context::default(), Ty::I64);
-    let Code::Expr(expr) = only_closure(&module) else {
-        panic!("a lambda that is one chain is a Code::Expr")
+    let CodeBody::Expr(expr) = &only_closure(&module).body else {
+        panic!("a lambda that is one chain is a CodeBody::Expr")
     };
     assert_eq!(expr.arity, 1);
     let ExprBody::Chain(body) = &expr.body else {
@@ -290,8 +290,8 @@ async fn a_lambda_that_is_one_chain_runs_without_a_frame() {
 async fn an_identity_lambda_returns_its_argument_without_a_chain() {
     let i = Interner::new();
     let module = prepared(&i, "let f = |x| -> x; f(3)", Context::default(), Ty::I64);
-    let Code::Expr(expr) = only_closure(&module) else {
-        panic!("an identity lambda is a Code::Expr")
+    let CodeBody::Expr(expr) = &only_closure(&module).body else {
+        panic!("an identity lambda is a CodeBody::Expr")
     };
     assert!(matches!(expr.body, ExprBody::Argument(0)));
 }
@@ -305,8 +305,8 @@ async fn a_lambda_of_two_statements_keeps_its_frame() {
 
     let module = prepared(&i, source, Context::default(), Ty::I64);
     assert!(
-        matches!(only_closure(&module), Code::Body(_)),
-        "a body that is not one chain runs through Code::Body"
+        matches!(only_closure(&module).body, CodeBody::Body(_)),
+        "a body that is not one chain runs through CodeBody::Body"
     );
 }
 

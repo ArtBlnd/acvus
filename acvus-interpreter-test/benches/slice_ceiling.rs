@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Owned};
-use acvus_interpreter::code::{Body, Code, Op, substitute};
+use acvus_interpreter::code::{Body, Code, Next, Op, substitute, substitute_head};
 use acvus_interpreter::{
     AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
@@ -390,18 +390,36 @@ fn drop_the_bound_check(body: &mut Body) {
 /// the node it replaces held.
 fn swap_in_chain(head: &mut Box<dyn Op>) -> usize {
     let mut swapped = 0;
+    if let Some(read) = head.index_read() {
+        substitute_head(head, |next| {
+            acvus_interpreter::index_handlers::unchecked(IndexMode::Copy, read, next)
+        });
+        swapped += 1;
+    }
+    for owned in head.owns_mut() {
+        swapped += swap_in_next(owned);
+    }
+    let Some(next) = head.successor_mut() else {
+        return swapped;
+    };
+    swapped + swap_in_next(next)
+}
+
+/// The same walk, from a successor inward.
+fn swap_in_next(head: &mut Next) -> usize {
+    let mut swapped = 0;
     let mut at = head;
     loop {
-        if let Some(read) = at.index_read() {
+        if let Some(read) = at.op_mut().index_read() {
             substitute(at, |next| {
                 acvus_interpreter::index_handlers::unchecked(IndexMode::Copy, read, next)
             });
             swapped += 1;
         }
-        for owned in at.owns_mut() {
-            swapped += swap_in_chain(owned);
+        for owned in at.op_mut().owns_mut() {
+            swapped += swap_in_next(owned);
         }
-        match at.successor_mut() {
+        match at.op_mut().successor_mut() {
             Some(next) => at = next,
             None => return swapped,
         }

@@ -516,7 +516,7 @@ pub enum ResultCrossing {
     Registers,
     /// Into one `Value` read by kind: a lambda's result, which
     /// `acvus_extern::Runtime::call_now` hands a handler and
-    /// `machine::Callable::call_in_window` is the signature of.
+    /// `interpreter::code::Code::call` is the signature of.
     OneValue,
     /// Into one `Value` the host reads by kind (RFC-0054): the graph's
     /// entry. The value outlives the run, which a closure does not

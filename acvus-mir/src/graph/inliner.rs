@@ -296,8 +296,8 @@ fn direct_target<'a>(
 
 /// Inline a closure only when it is really small and pure. The bound is the
 /// owner's, and it is a count rather than a measurement: what the inlined
-/// call costs is a `Callable::call_in` through a vtable and `chain_value`'s
-/// operand space (RFC-0052 §7 Consequences, RFC-0060).
+/// call costs is a `Code::call` through the code's head word and the operand
+/// space the chain entry builds (RFC-0052 §7 Consequences, RFC-0060).
 const INLINE_MAX_INSTS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

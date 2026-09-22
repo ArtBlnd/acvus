@@ -6,8 +6,9 @@
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, Exit, Marked, Off, Op, successor};
+use crate::code::{BlockId, Exit, Marked, Next, Off, Op, successor};
 use crate::machine::Machine;
+use crate::regs::Cell;
 use crate::value::Value;
 
 pub struct LaidKonst {
@@ -24,64 +25,64 @@ pub struct LaidMove {
 pub struct LayRun {
     pub konsts: Box<[LaidKonst]>,
     pub moved: Box<[LaidMove]>,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for LayRun {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
         for laid in &self.moved {
             match laid.large {
                 true => {
-                    let value = regs.take::<true>(laid.src);
-                    regs.assign::<true>(laid.at, value);
+                    let value = frame.take::<true>(laid.src);
+                    frame.assign::<true>(laid.at, value);
                 }
                 false => {
-                    let value = regs.take::<false>(laid.src);
-                    regs.assign::<false>(laid.at, value);
+                    let value = frame.take::<false>(laid.src);
+                    frame.assign::<false>(laid.at, value);
                 }
             }
         }
         for laid in &self.konsts {
-            regs.assign::<false>(laid.at, laid.value);
+            frame.assign::<false>(laid.at, laid.value);
         }
-        self.next.run(m, r0)
+        self.next.run(m, regs, r0)
     }
 }
 
 pub struct Project {
     pub dst: Off,
     pub at: Off,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for Project {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let projection = regs.projection(self.at);
-        regs.put(self.dst, projection);
-        self.next.run(m, r0)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let projection = frame.projection(self.at);
+        frame.put(self.dst, projection);
+        self.next.run(m, regs, r0)
     }
 }
 
 pub struct DropRun {
     pub registers: Box<[Marked]>,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for DropRun {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
         for at in &self.registers {
-            regs.assign::<false>(*at, Value::UNDEF);
+            frame.assign::<false>(*at, Value::UNDEF);
         }
-        self.next.run(m, r0)
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -89,17 +90,17 @@ pub struct TestRun {
     pub dst: Off,
     pub src: Off,
     pub tag: u64,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for TestRun {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let matches = regs.word(self.src) == self.tag;
-        regs.set_word(self.dst, matches as u64);
-        self.next.run(m, r0)
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let matches = frame.word(self.src) == self.tag;
+        frame.set_word(self.dst, matches as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -134,7 +135,7 @@ pub struct SwitchRun {
 
 impl Op for SwitchRun {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
         let tag = m.regs().word(self.src);
         self.arms
             .iter()
@@ -147,30 +148,30 @@ impl Op for SwitchRun {
 /// One tested arm of a run-resident `match` whose arms all rejoin.
 pub struct RunRegionArm {
     pub tag: u64,
-    pub head: Box<dyn Op>,
+    pub head: Next,
 }
 
 /// The region form of `SwitchRun`.
 pub struct SwitchRunRegion {
     pub src: Off,
     pub arms: Box<[RunRegionArm]>,
-    pub default: Box<dyn Op>,
-    pub next: Box<dyn Op>,
+    pub default: Next,
+    pub next: Next,
 }
 
 impl Op for SwitchRunRegion {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
         let tag = m.regs().word(self.src);
         let arm = self
             .arms
             .iter()
             .find(|arm| arm.tag == tag)
-            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
-        let word = arm.run(m, r0);
-        self.next.run(m, word)
+            .map_or(&self.default, |arm| &arm.head);
+        let word = arm.run(m, regs, r0);
+        self.next.run(m, regs, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -179,17 +180,17 @@ impl Op for SwitchRunRegion {
             .iter()
             .map(|arm| OwnedOps {
                 part: "arm",
-                head: arm.head.as_ref(),
+                head: arm.head.op(),
             })
             .chain([OwnedOps {
                 part: "default",
-                head: self.default.as_ref(),
+                head: self.default.op(),
             }])
             .collect()
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+    fn owns_mut(&mut self) -> Vec<&mut Next> {
         self.arms
             .iter_mut()
             .map(|arm| &mut arm.head)

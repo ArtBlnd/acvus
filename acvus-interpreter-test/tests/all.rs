@@ -96,6 +96,7 @@ mod temporary_borrow;
 mod try_op;
 mod typed_stage_list;
 mod unread_store_drop;
+mod while_let_call;
 
 /// The targets this crate's manifest declares under `[[test]]`, as the paths
 /// of the files that carry them: `path` when it is written, and otherwise the

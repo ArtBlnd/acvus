@@ -7,6 +7,7 @@
 //! variant shapes.
 
 use std::any::{Any, TypeId};
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
@@ -254,21 +255,44 @@ pub struct Pair;
 /// nested aggregate field.
 pub struct Run<const W: usize>;
 
-/// A form a result is written in: `One`, `Pair`, `Run<W>`. `Nothing` is a
-/// parameter form only (`Required`), and the missing impl is the refusal.
+/// A result of form `F` that may be absent: the run is `F`'s, and the verdict
+/// the call returns beside it says whether it was written.
+///
+/// Only `OptionOf<One>` is a `Returned`. The registers hold no representation
+/// of an absent view and none of an absent aggregate — a view is a pointer and
+/// a length the caller reads either way, and an aggregate's components are the
+/// caller's own run — so `OptionOf<Pair>` and `OptionOf<Run<W>>` have no impl,
+/// and that missing impl is the refusal.
+pub struct OptionOf<F>(PhantomData<fn() -> F>);
+
+/// A form a result is written in: `One`, `OptionOf<One>`, `Pair`, `Run<W>`.
+/// `Nothing` is a parameter form only (`Required`), and the missing impl is
+/// the refusal.
 ///
 /// The destination is the run itself, at this form's own length, so a
 /// handler's entry carries the result width in its type and no call of one
 /// measures a slice (RFC-0050 rule 6).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is no form a result is written in",
-    note = "`Nothing` is the form of a parameter that takes none of the call's argument run — a required instance — and a declaration returns no such thing (RFC-0068 D5)."
+    note = "`Nothing` is the form of a parameter that takes none of the call's argument run — a required instance — and a declaration returns no such thing (RFC-0068 D5).",
+    note = "`OptionOf<F>` is a result form only at `F = One`: the registers hold no representation of an absent view or an absent aggregate, so a result that may be absent is one of the runtime's values (RFC-0039)."
 )]
 pub trait Returned: Form {
     /// The destination run a call of this form is lent, `WIDTH` long.
     type Out<'a, Rt>
     where
         Rt: Runtime;
+
+    /// What the call returns beside the run it wrote: `()` for a result that
+    /// is always written, `bool` for one that may be absent.
+    type Verdict: Copy;
+
+    /// Obligation across artifacts: this constant is not read in this
+    /// crate. `Handler::WIDTH` carries it to `acvus-interpreter`, whose
+    /// `prepare` holds no type of the handler when it decides whether a
+    /// loop head's call answers a verdict it can read as the test; drop it
+    /// and this crate still compiles while that decision loses its ground.
+    const ABSENT: bool;
 
     fn as_mut_slice<'a, Rt>(out: Self::Out<'a, Rt>) -> &'a mut [Rt::Value]
     where
@@ -280,6 +304,14 @@ pub trait Returned: Form {
     where
         Rt: Runtime + 'a;
 
+    /// Replaces the run the call wrote with the language's value of it, which
+    /// for a form that is always written is the run itself and for
+    /// `OptionOf<One>` is `OneRegister::land`. This is what a caller holding
+    /// no `OneRegister` bound — the dyn crossing — lands its result through.
+    fn land_in<Rt>(rt: &Rt, verdict: Self::Verdict, out: Self::Out<'_, Rt>)
+    where
+        Rt: Runtime;
+
     /// The type-level match: hands `f` to the one method of `forms` this
     /// form names.
     fn select<Rt, F, H>(forms: F, f: H) -> F::Out
@@ -287,6 +319,28 @@ pub trait Returned: Form {
         Rt: Runtime,
         F: RetForms<Rt>,
         H: crate::handler::Handler<Rt, Args = F::Args, Ret = Self>;
+}
+
+/// A result form landing in one of the runtime's values, which is what
+/// `CallExternN`, `CallWindow`, the fused nodes, `SentCall` and `DirectOp`
+/// build for. `One` lands as itself; `OptionOf<One>` lands as the `some` or
+/// the `none` its verdict names, and that landing is the operation's, not the
+/// handler's (RFC-0069 step 4).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is no result form that lands in one of the runtime's values",
+    note = "a view and an aggregate are wider than one register: a `Pair` is the caller's two, and a `Run<W>` the destination run it lent (RFC-0047 amended, RFC-0050 rule 6)."
+)]
+pub trait OneRegister: Returned {
+    /// The one-register destination, at this form's own `Out`.
+    fn slot<'a, Rt>(slot: &'a mut [Rt::Value; 1]) -> Self::Out<'a, Rt>
+    where
+        Rt: Runtime + 'a;
+
+    /// The language's value of what the call wrote: the register itself, or
+    /// `rt.some(register)` / `rt.none()` by the verdict.
+    fn land<Rt>(rt: &Rt, verdict: Self::Verdict, written: Rt::Value) -> Rt::Value
+    where
+        Rt: Runtime;
 }
 
 /// The three result forms, as methods, for a caller that builds one thing per
@@ -300,9 +354,24 @@ where
     type Args: crate::handler::ArgRun;
     type Out;
 
+    /// Both one-register forms come here: the landing `OneRegister` names is
+    /// the operation's, so one method serves a result that is always there
+    /// and one that may be absent.
     fn one<H>(self, f: H) -> Self::Out
     where
-        H: crate::handler::Handler<Rt, Args = Self::Args, Ret = One>;
+        H: crate::handler::Handler<Rt, Args = Self::Args, Ret: OneRegister>;
+
+    /// The one-register form whose verdict says whether the register was
+    /// written, for a caller that reads that verdict instead of landing it.
+    /// The default lands it and is `one`, which the form's `OneRegister`
+    /// bound admits.
+    fn option<H>(self, f: H) -> Self::Out
+    where
+        H: crate::handler::Handler<Rt, Args = Self::Args, Ret = OptionOf<One>>,
+        Self: Sized,
+    {
+        self.one(f)
+    }
 
     fn pair<H>(self, f: H) -> Self::Out
     where
@@ -313,14 +382,30 @@ where
         H: crate::handler::Handler<Rt, Args = Self::Args, Ret = Run<W>>;
 }
 
-/// The `Returned` of a form whose destination is an array of its own width.
+/// The `Returned` of a form whose destination is an array of its own width,
+/// with the verdict its call returns beside that array and the landing that
+/// verdict picks.
 macro_rules! returned {
-    ($form:ty, $width:expr, $select:ident) => {
+    (
+        $form:ty, $width:expr, $select:ident, $verdict:ty, $absent:literal,
+        |$rt:ident, $held:ident, $out:ident| $land_in:expr
+    ) => {
         impl Returned for $form {
             type Out<'a, Rt>
                 = &'a mut [Rt::Value; $width]
             where
                 Rt: Runtime;
+
+            type Verdict = $verdict;
+
+            const ABSENT: bool = $absent;
+
+            fn land_in<Rt>($rt: &Rt, $held: $verdict, $out: &mut [Rt::Value; $width])
+            where
+                Rt: Runtime,
+            {
+                $land_in
+            }
 
             fn as_mut_slice<'a, Rt>(out: &'a mut [Rt::Value; $width]) -> &'a mut [Rt::Value]
             where
@@ -355,14 +440,62 @@ macro_rules! returned {
     };
 }
 
-returned!(One, 1, one);
-returned!(Pair, 2, pair);
+returned!(One, 1, one, (), false, |_rt, _verdict, _out| ());
+returned!(Pair, 2, pair, (), false, |_rt, _verdict, _out| ());
+returned!(OptionOf<One>, 1, option, bool, true, |rt, verdict, out| {
+    out[0] = <OptionOf<One> as OneRegister>::land(rt, verdict, out[0])
+});
+
+impl OneRegister for One {
+    fn slot<'a, Rt>(slot: &'a mut [Rt::Value; 1]) -> &'a mut [Rt::Value; 1]
+    where
+        Rt: Runtime + 'a,
+    {
+        slot
+    }
+
+    fn land<Rt>(_: &Rt, _: (), written: Rt::Value) -> Rt::Value
+    where
+        Rt: Runtime,
+    {
+        written
+    }
+}
+
+impl OneRegister for OptionOf<One> {
+    fn slot<'a, Rt>(slot: &'a mut [Rt::Value; 1]) -> &'a mut [Rt::Value; 1]
+    where
+        Rt: Runtime + 'a,
+    {
+        slot
+    }
+
+    fn land<Rt>(rt: &Rt, verdict: bool, written: Rt::Value) -> Rt::Value
+    where
+        Rt: Runtime,
+    {
+        match verdict {
+            true => rt.some(written),
+            false => rt.none(),
+        }
+    }
+}
 
 impl<const W: usize> Returned for Run<W> {
     type Out<'a, Rt>
         = &'a mut [Rt::Value; W]
     where
         Rt: Runtime;
+
+    type Verdict = ();
+
+    const ABSENT: bool = false;
+
+    fn land_in<Rt>(_: &Rt, _: (), _: &mut [Rt::Value; W])
+    where
+        Rt: Runtime,
+    {
+    }
 
     fn as_mut_slice<'a, Rt>(out: &'a mut [Rt::Value; W]) -> &'a mut [Rt::Value]
     where
@@ -426,6 +559,19 @@ impl Form for One {
         Run: crate::handler::ArgRun;
 }
 
+impl Form for OptionOf<One> {
+    const WIDTH: usize = <One as Form>::WIDTH;
+    const KIND: FormKind = <One as Form>::KIND;
+
+    /// No `Arg` impl names this form, so this association is never projected:
+    /// an argument that may be absent is `None`'s own value and crosses like
+    /// any other (RFC-0039).
+    type Onto<Run>
+        = <One as Form>::Onto<Run>
+    where
+        Run: crate::handler::ArgRun;
+}
+
 impl Form for Pair {
     const WIDTH: usize = 2;
     const KIND: FormKind = FormKind::View;
@@ -481,9 +627,18 @@ where
     /// `Self` written into a run of `WIDTH` values.
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
 
-    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
-        self.into_run(rt, out)
-    }
+    /// `Self` written into the destination run at `ReturnForm`'s width, and
+    /// the verdict that form's call returns beside it.
+    ///
+    /// There is no default, and that is a decision: a crossing whose return
+    /// form may be absent answers its verdict from the value, and a default
+    /// standing for "always written" would be the wrong answer wherever a new
+    /// crossing forgot to state its own.
+    fn into_return_run(
+        self,
+        rt: &Rt,
+        out: &mut [Rt::Value],
+    ) -> <Self::ReturnForm as Returned>::Verdict;
 }
 
 /// The crossing of a type that is one of the runtime's values, at one of the
@@ -565,20 +720,13 @@ macro_rules! cross_one_value {
             fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
             }
-        }
 
-        impl $crate::Passed<$rt> for $t {
-            type As<'a> = Self;
-
-            fn cross(rt: &$rt, passed: Self) -> <$rt as $crate::Runtime>::Value {
-                <Self as $crate::OneValue<$rt>>::erase(passed, rt)
-            }
-
-            unsafe fn restore<'a>(rt: &$rt, word: <$rt as $crate::Runtime>::Value) -> Self::As<'a> {
-                // SAFETY: the caller's contract, which is `materialize`'s.
-                unsafe { <Self as $crate::OneValue<$rt>>::materialize(rt, word) }
+            fn into_return_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
+                <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
             }
         }
+
+        $crate::passed_as_one_value!($t, at $rt);
     };
     ($t:ty $(, $($g:tt)*)?) => {
         impl<$($($g)*,)? __Rt> $crate::Cross<__Rt> for $t
@@ -599,8 +747,38 @@ macro_rules! cross_one_value {
             fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
             }
+
+            fn into_return_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+                <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
+            }
         }
 
+        $crate::passed_as_one_value!($t $(, $($g)*)?);
+    };
+}
+
+/// How a type whose crossing is one value is passed to a closure. It is its
+/// own macro because `Option<T>` takes this half of `cross_one_value!` and
+/// writes the other half itself: its result may be absent, and no other
+/// crossing's is.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! passed_as_one_value {
+    ($t:ty, at $rt:ty) => {
+        impl $crate::Passed<$rt> for $t {
+            type As<'a> = Self;
+
+            fn cross(rt: &$rt, passed: Self) -> <$rt as $crate::Runtime>::Value {
+                <Self as $crate::OneValue<$rt>>::erase(passed, rt)
+            }
+
+            unsafe fn restore<'a>(rt: &$rt, word: <$rt as $crate::Runtime>::Value) -> Self::As<'a> {
+                // SAFETY: the caller's contract, which is `materialize`'s.
+                unsafe { <Self as $crate::OneValue<$rt>>::materialize(rt, word) }
+            }
+        }
+    };
+    ($t:ty $(, $($g:tt)*)?) => {
         impl<$($($g)*,)? __Rt> $crate::Passed<__Rt> for $t
         where
             __Rt: $crate::Runtime,
@@ -890,7 +1068,35 @@ where
     (stored as &mut dyn Any).downcast_mut::<T>()
 }
 
-crate::cross_one_value!(Option<T>, T: OneValue<__Rt>);
+crate::passed_as_one_value!(Option<T>, T: OneValue<__Rt>);
+
+/// An option's result leaves the verdict to the operation instead of encoding
+/// `some`/`none` in the handler (RFC-0069).
+impl<T, Rt> Cross<Rt> for Option<T>
+where
+    T: OneValue<Rt>,
+    Rt: Runtime,
+{
+    type Form = One;
+    type ReturnForm = OptionOf<One>;
+
+    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+        // SAFETY: the caller's contract, at one value.
+        unsafe { <Self as OneValue<Rt>>::from_run(rt, run) }
+    }
+
+    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+        <Self as OneValue<Rt>>::into_run(self, rt, out)
+    }
+
+    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) -> bool {
+        let Some(value) = self else {
+            return false;
+        };
+        out[0] = value.erase(rt);
+        true
+    }
+}
 
 impl<T, Rep, Rt> OneValue<Rt, Rep> for Option<T>
 where

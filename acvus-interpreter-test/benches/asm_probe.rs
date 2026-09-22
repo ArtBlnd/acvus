@@ -1,3 +1,8 @@
+//! History: when a successor became a (box, fn pointer) pair, reading the
+//! method symbol alone left half the operations unchecked — `T::run`'s only
+//! caller is then the trampoline the pointer names, and LLVM folds it in.
+//! `run_type` is what reads both.
+//!
 //! Every `impl Op`'s `run` ends in the tail call to its successor, and a
 //! region whose body can escape ends there and in a `ret` besides.
 //!
@@ -94,12 +99,6 @@ const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
         stack_address: "the held `Value`, `&held` into the run's tail `Deref`",
     },
     Exception {
-        family: "call::CallIndirect",
-        handler: None,
-        stack_address: "the `FnValue` materialized out of the callee register, `&closure` into \
-                        `call_fn_sync`",
-    },
-    Exception {
         family: "call::CallDirect",
         handler: None,
         stack_address: "the `Arc<Prepared>` the module table hands back, `&prepared` into \
@@ -173,6 +172,13 @@ const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
         family: "call::CallExtern1",
         handler: Some("iterator::__extern_fn_sum"),
         stack_address: DRAINED_PIPELINE,
+    },
+    Exception {
+        family: "control::For",
+        handler: Some("iterator::__extern_fn_last"),
+        stack_address: "the pipeline the consumer drains, as `call::CallExtern1` holds it, and \
+                        the one-value run the loop's own source lends the call besides \
+                        (RFC-0069)",
     },
     Exception {
         family: "call::CallExtern2",
@@ -299,12 +305,22 @@ fn disassembly() -> String {
     String::from_utf8(out.stdout).expect("objdump's disassembly is UTF-8")
 }
 
-/// The `module::Type` a `<T as acvus_interpreter::code::Op>::run` symbol
-/// belongs to; `None` where the symbol is not one.
+/// The `T` a symbol holds the `Op::run` of, in its two forms: the method
+/// itself, and the `erased::<T>` trampoline a `Next` reaches it through,
+/// which is where the body lands once the address has been taken. `None`
+/// where the symbol is neither.
+fn run_type(symbol: &str) -> Option<&str> {
+    if let Some(ty) = symbol.strip_suffix(" as acvus_interpreter::code::Op>::run") {
+        return Some(ty.trim_start_matches('<'));
+    }
+    symbol
+        .strip_prefix("acvus_interpreter::code::erased::<")?
+        .strip_suffix('>')
+}
+
+/// The `module::Type` such a symbol belongs to.
 fn op_of(symbol: &str) -> Option<String> {
-    let ty = symbol
-        .strip_suffix(" as acvus_interpreter::code::Op>::run")?
-        .trim_start_matches('<');
+    let ty = run_type(symbol)?;
     let head = match ty.find('<') {
         Some(angle) => &ty[..angle],
         None => ty,

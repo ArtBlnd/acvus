@@ -5,10 +5,10 @@ use acvus_extern::{Release, StrView, Words};
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, ConcatPart, Exit, LentText, Marked, Off, Op, successor};
+use crate::code::{BlockId, ConcatPart, Exit, LentText, Marked, Next, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
-use crate::regs::Regs;
+use crate::regs::{Cell, Regs};
 use crate::value::Value;
 
 /// `THROUGH` is what the preparation read from the source's type: a
@@ -24,19 +24,19 @@ fn place<const THROUGH: bool>(value: &Value) -> &Value {
 
 pub struct CloneString<const THROUGH: bool> {
     pub slots: Unary,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl<const THROUGH: bool> Op for CloneString<THROUGH> {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
+        let source = place::<THROUGH>(frame.peek(self.slots.src.at));
         // SAFETY: the type checker admits only a `String` here.
         let text = unsafe { source.as_str() }.to_string();
-        regs.define::<true>(self.slots.dst, Value::string(text));
-        self.next.run(m, r0)
+        frame.define::<true>(self.slots.dst, Value::string(text));
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -44,19 +44,19 @@ pub struct StringEq {
     pub dst: Off,
     pub l: LentText,
     pub r: LentText,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for StringEq {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
         // SAFETY: the checker keeps both operands live over this operation,
         // and each one's shape is what `prepare` read from its type.
-        let equal = unsafe { lent(regs, self.l) == lent(regs, self.r) };
-        regs.set_word(self.dst, equal as u64);
-        self.next.run(m, r0)
+        let equal = unsafe { lent(frame, self.l) == lent(frame, self.r) };
+        frame.set_word(self.dst, equal as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -68,18 +68,18 @@ pub struct TestLentText {
     pub dst: Off,
     pub src: LentText,
     pub want: String,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for TestLentText {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
         // SAFETY: the checker keeps the scrutinee live over this operation.
-        let matches = unsafe { lent(regs, self.src) } == self.want.as_str();
-        regs.set_word(self.dst, matches as u64);
-        self.next.run(m, r0)
+        let matches = unsafe { lent(frame, self.src) } == self.want.as_str();
+        frame.set_word(self.dst, matches as u64);
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -112,31 +112,31 @@ pub struct Concat {
     /// Bit `i` is "the slot of part `i` owns a `Large`", as
     /// `composite::Elements`.
     pub owns_large: u64,
-    pub next: Box<dyn Op>,
+    pub next: Next,
 }
 
 impl Op for Concat {
     successor!();
 
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
+        let frame = m.regs();
         let mut out = String::new();
         for part in &self.parts {
             match *part {
                 // SAFETY: the checker keeps the part live over this
                 // operation.
-                ConcatPart::Lent(text) => out.push_str(unsafe { lent(regs, text) }),
+                ConcatPart::Lent(text) => out.push_str(unsafe { lent(frame, text) }),
                 ConcatPart::Owned(slot) => {
-                    let held = regs.read(slot);
+                    let held = frame.read(slot);
                     // SAFETY: the type checker admits only a `String` here.
                     out.push_str(unsafe { held.as_str() });
                     held.release();
                 }
             }
         }
-        regs.take_mask(self.owns_large);
-        regs.define::<true>(self.dst, Value::string(out));
-        self.next.run(m, r0)
+        frame.take_mask(self.owns_large);
+        frame.define::<true>(self.dst, Value::string(out));
+        self.next.run(m, regs, r0)
     }
 }
 
@@ -163,7 +163,7 @@ pub struct SwitchStr {
 
 impl Op for SwitchStr {
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, _regs: *mut Cell, _: u64) -> Exit {
         // SAFETY: the checker keeps the scrutinee live over this operation.
         let text = unsafe { lent(m.regs(), self.src) };
         self.arms
@@ -178,31 +178,31 @@ impl Op for SwitchStr {
 /// the machine runs for it (RFC-0052 §3).
 pub struct StrRegionArm {
     pub key: Box<str>,
-    pub head: Box<dyn Op>,
+    pub head: Next,
 }
 
 /// The region form of [`SwitchStr`].
 pub struct SwitchStrRegion {
     pub src: LentText,
     pub arms: Box<[StrRegionArm]>,
-    pub default: Box<dyn Op>,
-    pub next: Box<dyn Op>,
+    pub default: Next,
+    pub next: Next,
 }
 
 impl Op for SwitchStrRegion {
     successor!();
 
     #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+    fn run(&self, m: &mut Machine<'_>, regs: *mut Cell, r0: u64) -> Exit {
         // SAFETY: the checker keeps the scrutinee live over this operation.
         let text = unsafe { lent(m.regs(), self.src) };
         let arm = self
             .arms
             .iter()
             .find(|arm| &*arm.key == text)
-            .map_or(self.default.as_ref(), |arm| arm.head.as_ref());
-        let word = arm.run(m, r0);
-        self.next.run(m, word)
+            .map_or(&self.default, |arm| &arm.head);
+        let word = arm.run(m, regs, r0);
+        self.next.run(m, regs, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -211,17 +211,17 @@ impl Op for SwitchStrRegion {
             .iter()
             .map(|arm| OwnedOps {
                 part: "arm",
-                head: arm.head.as_ref(),
+                head: arm.head.op(),
             })
             .chain([OwnedOps {
                 part: "default",
-                head: self.default.as_ref(),
+                head: self.default.op(),
             }])
             .collect()
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+    fn owns_mut(&mut self) -> Vec<&mut Next> {
         self.arms
             .iter_mut()
             .map(|arm| &mut arm.head)

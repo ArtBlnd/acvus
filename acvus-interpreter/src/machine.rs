@@ -9,8 +9,6 @@
 
 use std::fmt::Debug;
 use std::future::Future;
-use std::mem::MaybeUninit;
-use std::slice;
 use std::sync::Arc;
 
 use acvus_extern::{Ctx, Words};
@@ -19,12 +17,12 @@ use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
-    BlockId, Body, Code, EntryKonst, Exit, Expr, ExprBody, ExprChain, Marked, Off, Op, Pending,
-    Prepared, RETURN, SENTINEL, SUSPEND, SlicePair,
+    BlockId, Body, Code, CodeBody, EntryKonst, Exit, Marked, Off, Op, Pending, Prepared, RETURN,
+    SENTINEL, SUSPEND, SlicePair,
 };
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
-use crate::regs::{FrameState, Regs, Store};
+use crate::regs::{Cell, FrameState, Regs, RootFrame, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -101,6 +99,7 @@ impl<'c> Machine<'c> {
     /// `heads` array, and the two sentinels are what the compare catches.
     pub fn run(&mut self) -> Exit {
         let body = self.body;
+        let regs = self.regs.cells_ptr();
         let mut at: Exit = self.at.into();
         loop {
             debug_assert!(
@@ -111,7 +110,7 @@ impl<'c> Machine<'c> {
             // index of this array or to a sentinel, and a sentinel leaves the
             // loop at the compare below before it is used as an index.
             let head: &Box<dyn Op> = unsafe { body.heads.get_unchecked(at as usize) };
-            at = head.run(self, 0);
+            at = head.run(self, regs, 0);
             if at >= SENTINEL {
                 return at;
             }
@@ -125,6 +124,19 @@ impl<'c> Machine<'c> {
     #[inline(always)]
     pub fn regs(&mut self) -> &mut Regs<'c> {
         &mut self.regs
+    }
+
+    /// The base an operation was handed against this frame's own. Nothing on
+    /// the release path calls it: the check exists so that an operation which
+    /// moved the frame under a running chain fails here rather than reading a
+    /// stale base.
+    #[inline(always)]
+    pub fn debug_base(&mut self, regs: *mut Cell) {
+        debug_assert_eq!(
+            regs,
+            self.regs.cells_ptr(),
+            "an operation was handed a base that is not its frame's"
+        );
     }
 
     pub fn shared(&self) -> &Arc<InterpreterContext> {
@@ -250,11 +262,6 @@ impl<'c> Machine<'c> {
             return run_frame(callee, named, regs, rt, opened, fill);
         }
         run_rooted(window, callee, named, arity, rt, fill)
-    }
-
-    pub fn call_fn_sync(&mut self, f: &Value, arity: u16) -> Value {
-        // SAFETY: the caller's contract: `f` is a closure.
-        unsafe { f.code_of() }.code().call_in(f, arity, self)
     }
 }
 
@@ -411,41 +418,104 @@ where
     })
 }
 
+/// The entry of a framed body: bind the callee's frame in `window` and run a
+/// `Machine` on it (RFC-0052 rule 7), whether the window is the one above a
+/// calling frame or the one a handler was lent (RFC-0050 rule 6).
+///
+/// The `#[inline(never)]` is a measurement (RFC-0069 D2): a frame inlined
+/// into the caller is part of every call that reaches this `Code`, framed or
+/// not.
+///
+/// # Safety
+/// As `Entry`.
+#[inline(never)]
+pub(crate) unsafe fn entry_body(
+    code: &Code,
+    f: Value,
+    rt: &AcvusRuntime,
+    window: &mut FrameState,
+    arity: u16,
+) -> Value {
+    // SAFETY: `Code::body` is the one constructor that writes this entry, and
+    // it writes it beside the `CodeBody::Body` this reads.
+    let body = unsafe { code.body.body_unchecked() };
+    if !window.fits(body) {
+        return run_rooted(window, body, &body.span, arity, rt, |callee| {
+            bind_captures(body, &f, &mut callee.regs)
+        });
+    }
+    let (mut regs, bound) = window.bind(body);
+    if !bound {
+        open_frame(body, &mut regs);
+    }
+    bind_captures(body, &f, &mut regs);
+    let mut machine = Machine::new(body, regs, rt);
+    let stop = machine.run();
+    debug_assert_eq!(
+        stop, RETURN,
+        "{:?} is typed pure, and its body left the machine at {stop}",
+        body.span
+    );
+    let exit = machine.exit;
+    machine.regs.sweep(body.mark_words);
+    Value::of(exit)
+}
+
+/// The entry of a body that is one of its own arguments: no frame, no
+/// `Machine`, no chain — the value is where the caller laid it.
+///
+/// # Safety
+/// As `Entry`, and `code`'s body is an `Expr` whose body is an `Argument`.
+pub(crate) unsafe fn entry_argument(
+    code: &Code,
+    _f: Value,
+    _rt: &AcvusRuntime,
+    window: &mut FrameState,
+    arity: u16,
+) -> Value {
+    // SAFETY: as `entry_body`, for the `Expr` `Code::expr` took this entry
+    // from.
+    let expr = unsafe { code.body.expr_unchecked() };
+    debug_assert_eq!(
+        usize::from(arity),
+        expr.arity as usize,
+        "an expression body is called with the arguments it reads"
+    );
+    // SAFETY: as above.
+    let at = unsafe { expr.argument_unchecked() };
+    window.laid(arity)[usize::from(at)]
+}
+
 impl Code {
-    /// Run in the window a handler was lent, on the argument run the handler
-    /// laid in its first `arity` registers (RFC-0050 rule 6), in the run the
-    /// handler's `Ctx` names.
-    pub fn call_in_window(
-        &self,
-        f: &Value,
-        rt: &AcvusRuntime,
-        window: &mut FrameState,
-        arity: u16,
-    ) -> Value {
-        match self {
-            Code::Body(body) => body.call_in_window(f, rt, window, arity),
-            Code::Expr(expr) => expr_value(expr, window.laid(arity)),
-        }
-    }
-
-    /// Run in the window above the calling frame, on the argument run the
-    /// caller laid in that window's first `arity` registers (RFC-0052 rule 7).
-    pub fn call_in(&self, f: &Value, arity: u16, m: &mut Machine<'_>) -> Value {
-        match self {
-            Code::Body(body) => m.call_sync(body, &body.span, arity, |callee| {
-                bind_captures(body, f, &mut callee.regs)
-            }),
-            Code::Expr(expr) => expr_value(expr, m.window().laid(arity)),
-        }
-    }
-
     /// The arguments read into the callee's frame before the future exists,
     /// so the caller may lend registers that die at the call.
-    pub fn start<'c>(&'c self, f: &Value, args: &mut [Value]) -> Resume<'c> {
-        match self {
-            Code::Body(body) => body.start(f, args),
-            Code::Expr(expr) => Resume::Done(expr_value(expr, args)),
+    ///
+    /// An `Expr` has no frame to read them into and no suspension to wait
+    /// for, so it runs here, through the same entry a synchronous call
+    /// reaches — on a window of its own, because the arguments arrive as
+    /// values rather than as a run of the caller's registers.
+    pub fn start<'c>(&'c self, f: Value, rt: &AcvusRuntime, args: &mut [Value]) -> Resume<'c> {
+        match &self.body {
+            CodeBody::Body(body) => body.start(&f, args),
+            CodeBody::Expr(_) => Resume::Done(self.expr_now(f, rt, args)),
         }
+    }
+
+    /// The `Expr` entry, on a window of this call's own: `start`'s caller
+    /// hands its arguments as values, and every entry reads them out of a
+    /// window.
+    fn expr_now(&self, f: Value, rt: &AcvusRuntime, args: &[Value]) -> Value {
+        let arity = u16::try_from(args.len()).expect("an argument run is at most one cell wide");
+        let RootFrame { mut state, cells } = RootFrame::new();
+        for (at, arg) in args.iter().enumerate() {
+            let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
+            state.lay(Off::of(slot), *arg);
+        }
+        // SAFETY: the contract `fn_value_call` carries — `f` is a closure of
+        // this `Code` — and the arguments are laid where an entry reads them.
+        let value = unsafe { self.call(f, rt, &mut state, arity) };
+        drop(cells);
+        value
     }
 }
 
@@ -458,37 +528,6 @@ pub enum Resume<'c> {
 }
 
 impl Body {
-    /// A chain (`Code::Expr`) runs with no frame; this arm keeps its own.
-    #[inline(never)]
-    fn call_in_window(
-        &self,
-        f: &Value,
-        rt: &AcvusRuntime,
-        window: &mut FrameState,
-        arity: u16,
-    ) -> Value {
-        if !window.fits(self) {
-            return run_rooted(window, self, &self.span, arity, rt, |callee| {
-                bind_captures(self, f, &mut callee.regs)
-            });
-        }
-        let (mut regs, bound) = window.bind(self);
-        if !bound {
-            open_frame(self, &mut regs);
-        }
-        bind_captures(self, f, &mut regs);
-        let mut machine = Machine::new(self, regs, rt);
-        let stop = machine.run();
-        debug_assert_eq!(
-            stop, RETURN,
-            "{:?} is typed pure, and its body left the machine at {stop}",
-            self.span
-        );
-        let exit = machine.exit;
-        machine.regs.sweep(self.mark_words);
-        Value::of(exit)
-    }
-
     fn start<'c>(&'c self, f: &Value, args: &mut [Value]) -> Resume<'c> {
         let mut store = Store::new();
         {
@@ -506,7 +545,7 @@ pub fn fn_value_call<'f>(
     args: &mut [Value],
 ) -> impl Future<Output = Value> + Send + use<'f> {
     // SAFETY: the caller's contract: `f` is a closure.
-    let resume = unsafe { f.code_of() }.code().start(f, args);
+    let resume = unsafe { f.code_of() }.code().start(*f, rt, args);
     async move {
         match resume {
             Resume::Frame { body, mut store } => {
@@ -517,18 +556,6 @@ pub fn fn_value_call<'f>(
             Resume::Done(value) => value,
         }
     }
-}
-
-pub fn fn_value_call_in_window(
-    f: &Value,
-    rt: &AcvusRuntime,
-    window: &mut FrameState,
-    arity: u16,
-) -> Value {
-    // SAFETY: the caller's contract: `f` is a closure.
-    unsafe { f.code_of() }
-        .code()
-        .call_in_window(f, rt, window, arity)
 }
 
 /// The closure owns its captures; the body sees each through a reference
@@ -551,65 +578,5 @@ fn fill(body: &Body, f: &Value, args: &mut [Value], regs: &mut Regs<'_>) {
     bind_captures(body, f, regs);
     for (slot, arg) in body.params.iter().zip(args) {
         regs.put(*slot, *arg);
-    }
-}
-
-/// A body that is one chain runs with no registers, no `Machine` and no
-/// dispatch loop (RFC-0044, stage 4).
-///
-/// # Panics
-/// The call brought an arity the body was not prepared with.
-#[inline]
-fn expr_value(expr: &Expr, args: &[Value]) -> Value {
-    debug_assert_eq!(
-        args.len(),
-        expr.arity as usize,
-        "an expression body is called with the arguments it reads"
-    );
-    match &expr.body {
-        ExprBody::Argument(at) => args[*at as usize],
-        ExprBody::Chain(chain) => chain_value(chain, args),
-    }
-}
-
-/// The `#[inline(never)]` is a measurement, not a taste. The operand space is
-/// `MAX_OPERANDS` `Value`s wide; while this was inlined, its frame was part of
-/// every frameless call, and `map(|x| -> x) | sum` — which builds no operand
-/// space at all — measured 4.8 ns per iteration instead of 4.1, and
-/// `range | sum` 2.0 instead of 1.8. Splitting it restored both.
-#[inline(never)]
-fn chain_value(chain: &ExprChain, args: &[Value]) -> Value {
-    let space = OperandSpace::of(args, &chain.konsts);
-    Value::inline(chain.kind, (chain.eval)(chain, space.as_slice()))
-}
-
-struct OperandSpace {
-    values: [MaybeUninit<Value>; ExprChain::MAX_OPERANDS],
-    len: usize,
-}
-
-impl OperandSpace {
-    /// The arguments, then the constants, which is the order
-    /// `prepare::expression_body` assigned the chain's leaf offsets in.
-    fn of(args: &[Value], konsts: &[Value]) -> OperandSpace {
-        let len = args.len() + konsts.len();
-        debug_assert!(
-            len <= ExprChain::MAX_OPERANDS,
-            "an expression body reads {len} operands, past the {} a frameless call builds",
-            ExprChain::MAX_OPERANDS
-        );
-        let mut values = [const { MaybeUninit::uninit() }; ExprChain::MAX_OPERANDS];
-        for (slot, value) in values.iter_mut().zip(args.iter().chain(konsts)) {
-            slot.write(*value);
-        }
-        OperandSpace { values, len }
-    }
-
-    fn as_slice(&self) -> &[Value] {
-        // SAFETY: `prepare::expression_body` refuses a body whose operands
-        // outnumber `ExprChain::MAX_OPERANDS`, and `expr_value` asserts the
-        // call brought the arity that body was prepared with, so `of` wrote
-        // exactly `len` values into an array that holds them.
-        unsafe { slice::from_raw_parts(self.values.as_ptr().cast::<Value>(), self.len) }
     }
 }

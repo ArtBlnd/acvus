@@ -10,7 +10,7 @@
 //! operation whose operand rides holds no `Off` for it.
 
 use crate::code::{Off, Where};
-use crate::regs::Regs;
+use crate::regs::{Cell, set_word_at, word_at};
 
 /// One word's place, as the operations that name it are specialized on.
 ///
@@ -22,7 +22,11 @@ pub trait Place: Send + Sync + 'static {
     type At: Copy + Send + Sync + 'static;
 
     /// The word this place holds, given the word the operation was handed.
-    fn read(regs: &Regs<'_>, at: Self::At, r0: u64) -> u64;
+    ///
+    /// # Safety
+    /// As `regs::word_at`: `regs` is the base of the frame the operation runs
+    /// in and `at` names a register that frame has.
+    unsafe fn read(regs: *mut Cell, at: Self::At, r0: u64) -> u64;
 
     /// `bits` put where this place is, and handed on as the word the
     /// successor receives.
@@ -31,7 +35,10 @@ pub trait Place: Send + Sync + 'static {
     /// the *immediately* following operation alone: no word rides past an
     /// operation that does not consume it, so there is nothing here to carry
     /// through.
-    fn write(regs: &mut Regs<'_>, at: Self::At, bits: u64) -> u64;
+    ///
+    /// # Safety
+    /// As `read`.
+    unsafe fn write(regs: *mut Cell, at: Self::At, bits: u64) -> u64;
 
     /// The place read back, for the probes that walk a prepared body.
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -45,13 +52,15 @@ impl Place for Slot {
     type At = Off;
 
     #[inline(always)]
-    fn read(regs: &Regs<'_>, at: Off, _r0: u64) -> u64 {
-        regs.word(at)
+    unsafe fn read(regs: *mut Cell, at: Off, _r0: u64) -> u64 {
+        // SAFETY: the caller's contract.
+        unsafe { word_at(regs, at) }
     }
 
     #[inline(always)]
-    fn write(regs: &mut Regs<'_>, at: Off, bits: u64) -> u64 {
-        regs.set_word(at, bits);
+    unsafe fn write(regs: *mut Cell, at: Off, bits: u64) -> u64 {
+        // SAFETY: the caller's contract.
+        unsafe { set_word_at(regs, at, bits) };
         bits
     }
 
@@ -68,12 +77,12 @@ impl Place for R0 {
     type At = ();
 
     #[inline(always)]
-    fn read(_regs: &Regs<'_>, _at: (), r0: u64) -> u64 {
+    unsafe fn read(_regs: *mut Cell, _at: (), r0: u64) -> u64 {
         r0
     }
 
     #[inline(always)]
-    fn write(_regs: &mut Regs<'_>, _at: (), bits: u64) -> u64 {
+    unsafe fn write(_regs: *mut Cell, _at: (), bits: u64) -> u64 {
         bits
     }
 

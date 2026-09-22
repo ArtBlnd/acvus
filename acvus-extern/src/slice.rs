@@ -279,4 +279,8 @@ where
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
         rt.slice_into_run(self.0.words(), out)
     }
+
+    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+        rt.slice_into_run(self.0.words(), out)
+    }
 }

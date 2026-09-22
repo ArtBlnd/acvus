@@ -459,7 +459,7 @@ async fn a_pipeline_over_a_heavy_extern_is_asynchronous() {
 fn loop_count(body: &Body) -> usize {
     ops_of_anywhere(&body_listing(body))
         .iter()
-        .filter(|name| family_of(name) == "Loop")
+        .filter(|name| matches!(family_of(name), "Loop" | "For"))
         .count()
 }
 
@@ -479,7 +479,7 @@ async fn a_while_let_over_a_sync_iterator_is_one_loop_operation() {
     assert_eq!(
         loop_count(&main),
         1,
-        "the `while let` head is one Loop operation"
+        "the `while let` head is one loop operation"
     );
     assert_eq!(run(source, Ty::I64).await.as_int(), 28);
 }
@@ -496,7 +496,7 @@ async fn a_while_let_over_an_async_iterator_stays_asynchronous() {
     assert_eq!(
         loop_count(&main),
         0,
-        "a head that may suspend is not a Loop operation"
+        "a head that may suspend is no loop operation"
     );
     assert_eq!(run(source, Ty::I64).await.as_int(), 28);
 }

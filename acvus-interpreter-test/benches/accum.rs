@@ -70,8 +70,7 @@ mod next_design {
 
     use acvus_extern::{
         Closure, ClosureFn, Cross, Ctx, ExternType, Instance, PassedByValue, Ref, Registry,
-        Runtime,
-        Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
+        Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
     };
 
     mod sig {
@@ -88,7 +87,6 @@ mod next_design {
                 Rt: Runtime;
         }
     }
-
 
     pub struct NRangeBody {
         at: i64,
@@ -155,10 +153,7 @@ mod next_design {
     }
 
     #[extern_fn(instance_of = sig::next, effect = E)]
-    fn next_nmap<I, T, U, E, Rt>(
-        ctx: &mut Ctx<'_, Rt>,
-        it: &mut NMap<I, T, U, E, Rt>,
-    ) -> Option<U>
+    fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, T, U, E, Rt>) -> Option<U>
     where
         I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
         T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -208,10 +203,7 @@ mod next_design {
     }
 
     #[extern_fn(instance_of = sig::next, effect = E)]
-    fn next_nfilter<I, T, E, Rt>(
-        ctx: &mut Ctx<'_, Rt>,
-        it: &mut NFilter<I, T, E, Rt>,
-    ) -> Option<T>
+    fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, T, E, Rt>) -> Option<T>
     where
         I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
         T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,

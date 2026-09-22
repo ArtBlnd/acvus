@@ -10,9 +10,9 @@ use std::ops::DerefMut;
 
 use acvus_extern::{
     ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType,
-    Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneValue, Owned, PolyTy, Pure, Ref,
-    Registry, Runtime, Shared, Slice, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var, Words,
-    extern_fn, extern_registry, extern_signature, kind,
+    Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneRegister, OneValue, Owned, PolyTy,
+    Pure, Ref, Registry, Runtime, Shared, Slice, Task, TransparentOver, TyArg, TypeArg, TypesOnly,
+    Var, Words, extern_fn, extern_registry, extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------
@@ -132,14 +132,21 @@ where
 /// `Handler::call`'s, at `run`.
 unsafe fn one_of<H>(handler: &H, ctx: &mut Ctx<'_, Tiny>, run: &[V]) -> V
 where
-    H: Handler<Tiny, Ret = One>,
+    H: Handler<Tiny, Ret: OneRegister>,
 {
+    let rt = ctx.rt;
     let mut out = [V::default()];
     // SAFETY: the caller's contract, which carries the width `from_slice`
     // asks of `run`.
-    unsafe { handler.call(ctx, <H::Args as ArgRun>::from_slice(run), &mut out) };
-    let [value] = out;
-    value
+    let verdict = unsafe {
+        handler.call(
+            ctx,
+            <H::Args as ArgRun>::from_slice(run),
+            <H::Ret as OneRegister>::slot(&mut out),
+        )
+    };
+    let [written] = out;
+    <H::Ret as OneRegister>::land(rt, verdict, written)
 }
 
 fn open<T>(value: V) -> T
@@ -1176,6 +1183,7 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
             args: 1,
             ret: 2,
             result: acvus_extern::FormKind::View,
+            absent: false,
         },
         "a slice-returning declaration takes one container and hands back two words"
     );
@@ -1231,6 +1239,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
             args: 2,
             ret: 1,
             result: acvus_extern::FormKind::Value,
+            absent: false,
         },
         "a slice parameter is two of the argument run and the result is one value"
     );
@@ -2394,6 +2403,58 @@ fn an_option_crosses_as_the_host_shaped_it() {
     );
 }
 
+/// The nesting `Value::some` counts is the operation's to build once the
+/// verdict leaves the handler: `Some(None)` is a `some` over the inner
+/// option's own `none`, and the outer `None` is that `none` alone.
+#[test]
+fn an_absent_result_lands_as_the_operation_wraps_it_and_keeps_its_nesting() {
+    use acvus_extern::{ByValue, OptionOf, Val};
+
+    let site = acvus_extern::SitesNoParameterReads::default();
+    let glue =
+        acvus_extern::glue::<Tiny, _, (ByValue<bool>,), Val<Option<Option<i64>>>>(|_, (there,)| {
+            match there {
+                true => Some(None),
+                false => None,
+            }
+        })
+        .at(&acvus_extern::CallSite::of_args(&site.args(1)));
+
+    /// The bound is the assertion that `Option<T>` leaves the handler at
+    /// `OptionOf<One>`: a glue of any other result form does not reach here.
+    ///
+    /// # Safety
+    /// `one_of`'s, at one argument.
+    unsafe fn landed<H>(handler: &H, arg: V) -> V
+    where
+        H: Handler<Tiny, Ret = OptionOf<One>>,
+    {
+        assert_eq!(H::WIDTH.ret, 1);
+        assert_eq!(H::WIDTH.result, acvus_extern::FormKind::Value);
+        // SAFETY: the caller's contract.
+        unsafe { one_of(handler, &mut Ctx::new(&Tiny, ()), &[arg]) }
+    }
+
+    // SAFETY: the width says one argument in and one value out.
+    let some_none = unsafe { landed(&glue, erased(true)) };
+    // SAFETY: as above.
+    let none = unsafe { landed(&glue, erased(false)) };
+
+    let rt = Tiny;
+    assert!(
+        rt.is_none(&none),
+        "the absent result lands as the host's none"
+    );
+    assert!(
+        !rt.is_none(&some_none),
+        "a present result lands as the host's some, whatever it holds"
+    );
+    assert!(
+        rt.is_none(&rt.unwrap_some(some_none)),
+        "the inner option's own none survives under the some the operation built"
+    );
+}
+
 // -- A declaration's task is the ceiling of its handler's (RFC-0046) ---
 
 /// One declaration, built by hand rather than by `#[extern_fn]`, whose
@@ -2532,6 +2593,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 args: 0,
                 ret: 1,
                 result: FormKind::Value,
+                absent: false,
             },
             vec![],
         ),
@@ -2545,6 +2607,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 args: 1,
                 ret: 1,
                 result: FormKind::Value,
+                absent: false,
             },
             vec![erased(1i64)],
         ),
@@ -2560,6 +2623,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 args: 2,
                 ret: 1,
                 result: FormKind::Value,
+                absent: false,
             },
             vec![erased(1i64), erased(2i64)],
         ),
@@ -2582,6 +2646,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 args: 3,
                 ret: 1,
                 result: FormKind::Value,
+                absent: false,
             },
             vec![erased(1i64), lent, erased(3i64)],
         ),
@@ -2602,6 +2667,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 args: 4,
                 ret: 1,
                 result: FormKind::Value,
+                absent: false,
             },
             vec![erased(1i64), erased(2i64), erased(3i64), erased(4i64)],
         ),
@@ -2646,6 +2712,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
             args: 1,
             ret: 1,
             result: FormKind::Value,
+            absent: false,
         }
     );
     assert_eq!(
@@ -2654,6 +2721,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
             args: 1,
             ret: 1,
             result: FormKind::Value,
+            absent: false,
         }
     );
     let site = acvus_extern::SitesNoParameterReads::default();
@@ -2691,6 +2759,7 @@ fn a_state_capture_is_no_argument_of_the_call() {
             args: 1,
             ret: 1,
             result: acvus_extern::FormKind::Value,
+            absent: false,
         }
     );
 }

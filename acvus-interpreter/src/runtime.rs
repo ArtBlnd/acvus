@@ -95,7 +95,7 @@ impl Runtime for AcvusRuntime {
     type Frame<'a> = FrameState;
     type Rooted<'a> = RootedCtx<'a>;
     type CallFuture<'a> = Pin<Box<dyn Future<Output = Value> + Send + 'a>>;
-    type Op = Box<dyn crate::code::Op>;
+    type Op = crate::code::Next;
     type CallShape = call::CallShape;
     type AsyncShape = call::AsyncShape;
     type FusedCall = call::Call;
@@ -121,7 +121,7 @@ impl Runtime for AcvusRuntime {
         &mut rooted.ctx
     }
 
-    fn op<H>(handler: H, shape: call::CallShape) -> Box<dyn crate::code::Op>
+    fn op<H>(handler: H, shape: call::CallShape) -> crate::code::Next
     where
         H: acvus_extern::Handler<AcvusRuntime>,
     {
@@ -135,7 +135,7 @@ impl Runtime for AcvusRuntime {
         call::fused_call(handler, shape)
     }
 
-    fn async_extern_op<H>(handler: H, shape: call::AsyncShape) -> Box<dyn crate::code::Op>
+    fn async_extern_op<H>(handler: H, shape: call::AsyncShape) -> crate::code::Next
     where
         H: acvus_extern::AsyncCall<AcvusRuntime>,
     {
@@ -309,8 +309,14 @@ impl Runtime for AcvusRuntime {
             )
         };
         args.into_run(self, ctx.frame.run_mut(A::WIDTH));
-        // SAFETY: the type checker admits only a closure value here.
-        crate::machine::fn_value_call_in_window(f, ctx.rt, &mut ctx.frame, A::WIDTH as u16)
+        // SAFETY: the type checker admits only a closure value here, so its
+        // code word names the `Code` this enters and the captures the entry
+        // reads.
+        unsafe {
+            f.code_of()
+                .code()
+                .call(*f, ctx.rt, &mut ctx.frame, A::WIDTH as u16)
+        }
     }
 
     unsafe fn call_n<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> Self::CallFuture<'a> {

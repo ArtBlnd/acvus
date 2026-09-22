@@ -390,6 +390,10 @@ macro_rules! stored_extern_type {
             fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
                 <Self as OneValue<Rt>>::into_run(self, rt, out)
             }
+
+            fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+                <Self as OneValue<Rt>>::into_run(self, rt, out)
+            }
         }
 
         impl<$($k,)+ E, Rt> OneValue<Rt> for $t<$($k,)+ E, Rt>

@@ -16,8 +16,7 @@ use std::sync::Arc;
 
 use acvus_extern::{
     Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, OneValue, PassedByValue, Pure,
-    Ref, Registry,
-    Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
+    Ref, Registry, Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::code::Body;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
@@ -42,7 +41,6 @@ mod sig {
             Rt: Runtime;
     }
 }
-
 
 pub struct NRangeBody {
     at: i64,
@@ -109,10 +107,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::next, effect = E)]
-fn next_nmap<I, T, U, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    it: &mut NMap<I, T, U, E, Rt>,
-) -> Option<U>
+fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, T, U, E, Rt>) -> Option<U>
 where
     I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -162,10 +157,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::next, effect = E)]
-fn next_nfilter<I, T, E, Rt>(
-    ctx: &mut Ctx<'_, Rt>,
-    it: &mut NFilter<I, T, E, Rt>,
-) -> Option<T>
+fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,

@@ -29,12 +29,13 @@ use smallvec::SmallVec;
 
 use crate::code::{
     Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
-    ExprBody, ExprChain, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared, Root, Shape,
-    SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
+    ExprBody, ExprChain, Konst, LentText, Literals, Marked, Next, Node, Off, Op, Prepared, Root,
+    Shape, SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Int, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
+use crate::ops::control::Ends;
 use crate::ops::place;
 use crate::ops::run::{LaidKonst, LaidMove};
 use crate::ops::{
@@ -282,10 +283,10 @@ pub fn prepare_closure(
     let regions = prep.regions();
 
     if let Some(expr) = prep.expression_body() {
-        return Code::Expr(Arc::new(expr));
+        return Code::expr(Arc::new(expr));
     }
 
-    Code::Body(Arc::new(framed(
+    Code::body(Arc::new(framed(
         prep,
         literals,
         &regions,
@@ -446,7 +447,7 @@ struct Level {
     blocks_len: BlockId,
     /// One chain per conditional edge that carries a parallel move: the
     /// `Mov`s and a `Goto`. An edge with no move names its target directly.
-    edges: Vec<Box<dyn Op>>,
+    edges: Vec<Next>,
 }
 
 #[derive(Default)]
@@ -472,6 +473,26 @@ struct LoopRegion {
     body_block: Range<usize>,
     body_regions: Vec<Region>,
     back: usize,
+}
+
+/// One `while let Some(x) = f(&mut it)` head the recognizer matched: the
+/// register the call is made on, the call itself, and where its payload
+/// lands once the body's leading unwrap is absorbed.
+struct CallHead {
+    it: Off,
+    call: usize,
+    reference: ValueId,
+    x: Marked,
+    large: bool,
+    word: bool,
+    /// The body's first instruction, which the lowering leaves out.
+    unwrap: usize,
+}
+
+/// The two parallel moves a `while`'s blocks carry, already lowered.
+struct LoopEdges {
+    into_body: Vec<Node>,
+    back: Vec<Node>,
 }
 
 /// One `for` the recognizer matched, as indexes into `MirBody::insts`.
@@ -525,14 +546,6 @@ impl Hands {
     }
 }
 
-/// What the region above a part reads of the word its chain ends with: the
-/// word the chain computed, or the verdict its body reached.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Ends {
-    Word,
-    Verdict,
-}
-
 impl Ends {
     fn of(hands: Hands) -> Ends {
         match hands.any() {
@@ -541,10 +554,10 @@ impl Ends {
         }
     }
 
-    fn node(self) -> Box<dyn Op> {
+    fn node(self) -> Next {
         match self {
-            Ends::Word => Box::new(control::Yield),
-            Ends::Verdict => Box::new(control::Fall),
+            Ends::Word => Next::of(control::Yield),
+            Ends::Verdict => Next::of(control::Fall),
         }
     }
 }
@@ -984,9 +997,9 @@ impl Rides {
 
 /// The block the unit being emitted continues into.
 #[derive(Clone, Copy)]
-struct Next(Option<BlockId>);
+struct Follows(Option<BlockId>);
 
-impl Next {
+impl Follows {
     fn block(self) -> BlockId {
         self.0.expect(
             "an operation continues past the last block of a body, which has to return instead",
@@ -1546,7 +1559,7 @@ impl<'a> Prepare<'a> {
         let at = self.level.blocks_len + made;
         self.level
             .edges
-            .push(chain(moves, Box::new(control::Goto { target })));
+            .push(chain(moves, Next::of(control::Goto { target })));
         at
     }
 
@@ -1589,7 +1602,7 @@ impl<'a> Prepare<'a> {
         tag: ValueId,
         arms: &[(SwitchKey, Label, Vec<ValueId>)],
         default: Option<&(Label, Vec<ValueId>)>,
-    ) -> Box<dyn Op> {
+    ) -> Next {
         let form = self.dispatch_form_of(tag, arms);
         let placed_run = self
             .run_tag(tag)
@@ -1623,14 +1636,14 @@ impl<'a> Prepare<'a> {
                         target: arm.block,
                     })
                     .collect();
-                return for_int_ty!(width, |T| Box::new(switch::SwitchWord::<T>::new(
+                return for_int_ty!(width, |T| Next::of(switch::SwitchWord::<T>::new(
                     src, arms, default
-                )) as Box<dyn Op>);
+                )));
             }
             DispatchForm::Bool => {
                 let on_true = self.bool_side(&placed, default, true);
                 let on_false = self.bool_side(&placed, default, false);
-                return Box::new(control::JumpIf::<place::Slot> {
+                return Next::of(control::JumpIf::<place::Slot> {
                     cond: src,
                     on_true,
                     on_false,
@@ -1646,7 +1659,7 @@ impl<'a> Prepare<'a> {
                         target: arm.block,
                     })
                     .collect();
-                return Box::new(string::SwitchStr { src, arms, default });
+                return Next::of(string::SwitchStr { src, arms, default });
             }
         };
 
@@ -1658,7 +1671,7 @@ impl<'a> Prepare<'a> {
                     target: arm.block,
                 })
                 .collect();
-            return Box::new(run_ops::SwitchRun { src, arms, default });
+            return Next::of(run_ops::SwitchRun { src, arms, default });
         }
 
         match form {
@@ -1666,12 +1679,12 @@ impl<'a> Prepare<'a> {
                 let on_some = self.side(&placed, default, "Some");
                 let on_none = self.side(&placed, default, "None");
                 match through {
-                    true => Box::new(switch::SwitchOption::<true> {
+                    true => Next::of(switch::SwitchOption::<true> {
                         src,
                         on_some,
                         on_none,
-                    }) as Box<dyn Op>,
-                    false => Box::new(switch::SwitchOption::<false> {
+                    }),
+                    false => Next::of(switch::SwitchOption::<false> {
                         src,
                         on_some,
                         on_none,
@@ -1687,8 +1700,8 @@ impl<'a> Prepare<'a> {
                     })
                     .collect();
                 match through {
-                    true => Box::new(switch::Switch::<true> { src, arms, default }) as Box<dyn Op>,
-                    false => Box::new(switch::Switch::<false> { src, arms, default }),
+                    true => Next::of(switch::Switch::<true> { src, arms, default }),
+                    false => Next::of(switch::Switch::<false> { src, arms, default }),
                 }
             }
         }
@@ -1778,10 +1791,9 @@ impl<'a> Prepare<'a> {
                         head,
                     })
                     .collect();
-                return for_int_ty!(width, |T| made(move |next| Box::new(
+                return for_int_ty!(width, |T| made(move |next| Next::of(
                     switch::SwitchWordRegion::<T>::new(src, arms, otherwise, next)
-                )
-                    as Box<dyn Op>));
+                )));
             }
             DispatchForm::Text => {
                 let src = self.text_at(tag);
@@ -1795,12 +1807,12 @@ impl<'a> Prepare<'a> {
                     })
                     .collect();
                 return made(move |next| {
-                    Box::new(string::SwitchStrRegion {
+                    Next::of(string::SwitchStrRegion {
                         src,
                         arms,
                         default: otherwise,
                         next,
-                    }) as Box<dyn Op>
+                    })
                 });
             }
         };
@@ -1812,20 +1824,20 @@ impl<'a> Prepare<'a> {
             let on_none = self.arm_chain(region, on_none, rides);
             return match through {
                 true => made(move |next| {
-                    Box::new(switch::SwitchOptionRegion::<true> {
+                    Next::of(switch::SwitchOptionRegion::<true> {
                         src,
                         on_some,
                         on_none,
                         next,
-                    }) as Box<dyn Op>
+                    })
                 }),
                 false => made(move |next| {
-                    Box::new(switch::SwitchOptionRegion::<false> {
+                    Next::of(switch::SwitchOptionRegion::<false> {
                         src,
                         on_some,
                         on_none,
                         next,
-                    }) as Box<dyn Op>
+                    })
                 }),
             };
         }
@@ -1842,12 +1854,12 @@ impl<'a> Prepare<'a> {
                 })
                 .collect();
             return made(move |next| {
-                Box::new(run_ops::SwitchRunRegion {
+                Next::of(run_ops::SwitchRunRegion {
                     src,
                     arms,
                     default: otherwise,
                     next,
-                }) as Box<dyn Op>
+                })
             });
         }
 
@@ -1860,20 +1872,20 @@ impl<'a> Prepare<'a> {
             .collect();
         match through {
             true => made(move |next| {
-                Box::new(switch::SwitchRegion::<true> {
+                Next::of(switch::SwitchRegion::<true> {
                     src,
                     arms,
                     default: otherwise,
                     next,
-                }) as Box<dyn Op>
+                })
             }),
             false => made(move |next| {
-                Box::new(switch::SwitchRegion::<false> {
+                Next::of(switch::SwitchRegion::<false> {
                     src,
                     arms,
                     default: otherwise,
                     next,
-                }) as Box<dyn Op>
+                })
             }),
         }
     }
@@ -1884,8 +1896,8 @@ impl<'a> Prepare<'a> {
         region: &SwitchRegion,
         tested: &[(SwitchKey, Label, Vec<ValueId>)],
         rides: &Rides,
-    ) -> Vec<(SwitchKey, Box<dyn Op>)> {
-        let mut chains: Vec<(SwitchKey, Box<dyn Op>)> = Vec::with_capacity(tested.len());
+    ) -> Vec<(SwitchKey, Next)> {
+        let mut chains: Vec<(SwitchKey, Next)> = Vec::with_capacity(tested.len());
         for (key, label, args) in tested {
             let head = self.arm_chain(
                 region,
@@ -1917,12 +1929,7 @@ impl<'a> Prepare<'a> {
             })
     }
 
-    fn arm_chain(
-        &mut self,
-        region: &SwitchRegion,
-        edge: JoinEdge<'_>,
-        rides: &Rides,
-    ) -> Box<dyn Op> {
+    fn arm_chain(&mut self, region: &SwitchRegion, edge: JoinEdge<'_>, rides: &Rides) -> Next {
         let arm = region
             .arms
             .iter()
@@ -2598,10 +2605,10 @@ impl<'a> Prepare<'a> {
             edges: Vec::new(),
         };
 
-        let mut blocks: Vec<Box<dyn Op>> = Vec::with_capacity(split.blocks as usize);
+        let mut blocks: Vec<Next> = Vec::with_capacity(split.blocks as usize);
         let mut ops: Vec<Node> = Vec::new();
         for (at, unit) in units.iter().enumerate() {
-            let next = Next(match at + 1 < units.len() {
+            let next = Follows(match at + 1 < units.len() {
                 true => Some(split.block_of[at + 1]),
                 false => None,
             });
@@ -2614,7 +2621,7 @@ impl<'a> Prepare<'a> {
             }
             let end = match (end, split.last_of_block(at)) {
                 (Some(end), _) => end,
-                (None, true) => Box::new(control::Goto {
+                (None, true) => Next::of(control::Goto {
                     target: next.block(),
                 }),
                 (None, false) => continue,
@@ -2633,20 +2640,20 @@ impl<'a> Prepare<'a> {
         );
         blocks.append(&mut self.level.edges);
         assert!(!blocks.is_empty(), "a body prepared to no block at all");
-        blocks.into_boxed_slice()
+        blocks.into_iter().map(Next::into_op).collect()
     }
 
     /// Obligation across artifacts: the assert below is unreachable because
     /// `straight_run` admits a region's part only where every instruction is
-    /// straight-line, and `Next(None)` is what would panic if one of them
+    /// straight-line, and `Follows(None)` is what would panic if one of them
     /// asked for a continuation.
     fn straight(
         &mut self,
         range: Range<usize>,
         nested: &[Region],
         leaving: Vec<Node>,
-        ends: Box<dyn Op>,
-    ) -> Box<dyn Op> {
+        ends: Next,
+    ) -> Next {
         self.part(range, nested, leaving, None, ends).0
     }
 
@@ -2662,13 +2669,13 @@ impl<'a> Prepare<'a> {
         nested: &[Region],
         leaving: Vec<Node>,
         hands: ValueId,
-    ) -> (Box<dyn Op>, Where) {
+    ) -> (Next, Where) {
         let (head, rode) = self.part(
             range,
             nested,
             leaving,
             Some(hands),
-            Box::new(control::Yield),
+            Next::of(control::Yield),
         );
         let at = match rode {
             true => Where::Register,
@@ -2685,8 +2692,8 @@ impl<'a> Prepare<'a> {
         nested: &[Region],
         leaving: Vec<Node>,
         hands: Option<ValueId>,
-        ends: Box<dyn Op>,
-    ) -> (Box<dyn Op>, bool) {
+        ends: Next,
+    ) -> (Next, bool) {
         let (ops, rode) = self.part_ops(range, nested, leaving, hands);
         (chain(ops, ends), rode)
     }
@@ -2715,7 +2722,7 @@ impl<'a> Prepare<'a> {
         }
         let mut ops: Vec<Node> = Vec::new();
         for unit in &units {
-            let end = self.unit(unit, Next(None), &rides, &mut ops);
+            let end = self.unit(unit, Follows(None), &rides, &mut ops);
             assert!(
                 end.is_none(),
                 "a region's part holds a terminator, which `straight_run` does not admit"
@@ -2732,10 +2739,10 @@ impl<'a> Prepare<'a> {
     fn unit(
         &mut self,
         unit: &Unit<'_>,
-        next: Next,
+        next: Follows,
         rides: &Rides,
         ops: &mut Vec<Node>,
-    ) -> Option<Box<dyn Op>> {
+    ) -> Option<Next> {
         match unit {
             Unit::Inst(at) => self.op(*at, next, rides, ops),
             Unit::Region(Region::Loop(region)) => {
@@ -2802,9 +2809,17 @@ impl<'a> Prepare<'a> {
             let entering = self.move_ops(&label, &args);
             ops.extend(entering);
         }
+        let driven = self.call_head(region, *cond);
         let into_body = self.move_ops(then_label, then_args);
         let exit = self.move_ops(else_label, else_args);
         let back = self.move_ops(header, back_args);
+
+        if let Some(head) = driven {
+            let node = self.for_call_node(region, head, LoopEdges { into_body, back });
+            ops.push(node);
+            ops.extend(exit);
+            return;
+        }
 
         let (head, cond) = self.handing(
             region.head_block.clone(),
@@ -2829,16 +2844,16 @@ impl<'a> Prepare<'a> {
 
         ops.push(made(move |next| match (cond, exits) {
             (Where::Frame(off), Ends::Word) => {
-                Box::new(control::Loop::<place::Slot, control::Rejoins> {
+                Next::of(control::Loop::<place::Slot, control::Rejoins> {
                     head,
                     cond: off,
                     body,
                     next,
                     at: PhantomData,
-                }) as Box<dyn Op>
+                })
             }
             (Where::Frame(off), Ends::Verdict) => {
-                Box::new(control::Loop::<place::Slot, control::Escapes> {
+                Next::of(control::Loop::<place::Slot, control::Escapes> {
                     head,
                     cond: off,
                     body,
@@ -2847,7 +2862,7 @@ impl<'a> Prepare<'a> {
                 })
             }
             (Where::Register, Ends::Word) => {
-                Box::new(control::Loop::<place::R0, control::Rejoins> {
+                Next::of(control::Loop::<place::R0, control::Rejoins> {
                     head,
                     cond: (),
                     body,
@@ -2856,7 +2871,7 @@ impl<'a> Prepare<'a> {
                 })
             }
             (Where::Register, Ends::Verdict) => {
-                Box::new(control::Loop::<place::R0, control::Escapes> {
+                Next::of(control::Loop::<place::R0, control::Escapes> {
                     head,
                     cond: (),
                     body,
@@ -2866,6 +2881,204 @@ impl<'a> Prepare<'a> {
             }
         }));
         ops.extend(exit);
+    }
+
+    /// The `while let Some(x) = f(&mut it)` head, as the three instructions
+    /// it is and the unwrap the body starts with.
+    ///
+    /// The match is on the MIR and not on the operations the head lowers to,
+    /// because what the recognition changes is the operation the handler is
+    /// asked to build: `AtSite::into_op` takes the shape once, and a
+    /// `CallExtern1` already built is a `dyn Op` no later reader can reshape.
+    fn call_head(&self, region: &LoopRegion, cond: ValueId) -> Option<CallHead> {
+        if !region.head_regions.is_empty() {
+            return None;
+        }
+        // Refused rather than ordered: the source lays the payload before
+        // the moves the edge into the body carries, where the unwrap it
+        // replaces ran after them, and no lowering here produces such an
+        // edge to measure the reordering against.
+        let InstKind::JumpIf { then_args, .. } = &self.body.insts[region.jump_if].kind else {
+            return None;
+        };
+        if !then_args.is_empty() {
+            return None;
+        }
+        let insts = self.body.insts.as_slice();
+        let [made_reference, called, tested_result] = insts.get(region.head_block.clone())? else {
+            return None;
+        };
+        let call_at = region.head_block.start + 1;
+        let test_at = region.head_block.start + 2;
+
+        let InstKind::Ref {
+            dst: reference,
+            target,
+            path,
+            ..
+        } = &made_reference.kind
+        else {
+            return None;
+        };
+        if !path.is_empty() || through_target(target) || self.reached_run(target).is_some() {
+            return None;
+        }
+
+        let InstKind::FunctionCall {
+            dst: result,
+            callee: Callee::Extern { id, instance },
+            args,
+            order: None,
+            ..
+        } = &called.kind
+        else {
+            return None;
+        };
+        if args.as_slice() != [*reference] {
+            return None;
+        }
+
+        let InstKind::TestVariant {
+            dst: verdict,
+            src: tested,
+            tag,
+        } = &tested_result.kind
+        else {
+            return None;
+        };
+        if *verdict != cond
+            || *tested != *result
+            || !self.tag_is(*tag, "Some")
+            || self.run_tag(*tested).is_some()
+            || self.is_ref(*tested)
+            || !matches!(
+                variant_form(self.scrutinee_ty(*tested)),
+                VariantForm::Option
+            )
+        {
+            return None;
+        }
+
+        let unwrap = region.body_block.start;
+        let InstKind::UnwrapVariant {
+            dst: bound,
+            src: unwrapped,
+        } = &insts.get(unwrap)?.kind
+        else {
+            return None;
+        };
+        if *unwrapped != *result
+            || self.run_tag(*unwrapped).is_some()
+            || !matches!(variant_form(self.ty(*unwrapped)), VariantForm::Option)
+        {
+            return None;
+        }
+
+        let ExternHandler::Sync(f) = self.ctx.chosen(id, *instance).handler else {
+            return None;
+        };
+        let width = f.width();
+        if width.args != 1
+            || width.ret != ONE_VALUE
+            || width.result != FormKind::Value
+            || !width.absent
+        {
+            return None;
+        }
+
+        if !self.used_only_at(*reference, &[call_at])
+            || !self.used_only_at(*result, &[test_at, unwrap])
+            || !self.used_only_at(*verdict, &[region.jump_if])
+        {
+            return None;
+        }
+
+        let Dest {
+            slot: x,
+            large,
+            word,
+            pair,
+        } = self.dest(*bound);
+        if pair {
+            return None;
+        }
+        assert_eq!(
+            self.take_mask(args),
+            0,
+            "a loop head's call takes the reference its own `Ref` made, which owns no `Large`"
+        );
+        Some(CallHead {
+            it: self.walked_under(target, path).base.at,
+            call: call_at,
+            reference: *reference,
+            x,
+            large,
+            word,
+            unwrap,
+        })
+    }
+
+    /// The region a recognized head drives: the call as the loop's source,
+    /// and the body lowered without the unwrap that stood at its head.
+    fn for_call_node(&mut self, region: &LoopRegion, head: CallHead, edges: LoopEdges) -> Node {
+        let LoopEdges { into_body, back } = edges;
+        assert!(
+            region
+                .body_regions
+                .iter()
+                .all(|nested| nested.start() > head.unwrap),
+            "a region of the body starts at the unwrap the head absorbed"
+        );
+        let exits = Ends::of(hands_of(&region.body_regions));
+        let ran = self.straight(
+            head.unwrap + 1..region.body_block.end,
+            &region.body_regions,
+            back,
+            exits.node(),
+        );
+        let body = chain(into_body, ran);
+
+        let InstKind::FunctionCall {
+            callee: Callee::Extern { id, instance },
+            ..
+        } = &self.body.insts[head.call].kind
+        else {
+            panic!("`call_head` matched an instruction that is not an extern call")
+        };
+        let ChosenExtern { handler, requires } = self.ctx.chosen(id, *instance);
+        let ExternHandler::Sync(f) = handler else {
+            panic!("`call_head` matched a handler whose task is not `Sync`")
+        };
+        let f = {
+            let sites = self.arg_sites(&[head.reference]);
+            f.at_site(&acvus_extern::CallSite {
+                args: &sites,
+                requires: requires.as_slice(),
+            })
+        };
+        let CallHead {
+            it, x, large, word, ..
+        } = head;
+        made(move |next| {
+            f.into_op(call::CallShape::ForCall {
+                it,
+                x,
+                large,
+                word,
+                body,
+                next,
+                ends: exits,
+            })
+        })
+    }
+
+    /// Whether every instruction that reads `id` is one of `at`.
+    fn used_only_at(&self, id: ValueId, at: &[usize]) -> bool {
+        self.body
+            .insts
+            .iter()
+            .enumerate()
+            .all(|(index, inst)| at.contains(&index) || !inst_info::uses(&inst.kind).contains(&id))
     }
 
     fn for_op(&mut self, region: &ForRegion, ops: &mut Vec<Node>) {
@@ -2915,16 +3128,16 @@ impl<'a> Prepare<'a> {
         ops.extend(leaving);
     }
 
-    fn for_node(&self, terminator: usize, ran: Box<dyn Op>, exits: Ends) -> Node {
+    fn for_node(&self, terminator: usize, ran: Next, exits: Ends) -> Node {
         for_head!(self, terminator, |src, _Head, _counter| made(move |next| {
             match exits {
-                Ends::Word => Box::new(control::For::<_, control::Rejoins> {
+                Ends::Word => Next::of(control::For::<_, control::Rejoins> {
                     src,
                     body: ran,
                     next,
                     ends: PhantomData,
-                }) as Box<dyn Op>,
-                Ends::Verdict => Box::new(control::For::<_, control::Escapes> {
+                }),
+                Ends::Verdict => Next::of(control::For::<_, control::Escapes> {
                     src,
                     body: ran,
                     next,
@@ -2934,7 +3147,7 @@ impl<'a> Prepare<'a> {
         }))
     }
 
-    fn for_at(&mut self, at: usize) -> Box<dyn Op> {
+    fn for_at(&mut self, at: usize) -> Next {
         let insts = self.body.insts.as_slice();
         let InstKind::For {
             source,
@@ -2955,26 +3168,26 @@ impl<'a> Prepare<'a> {
         let on_body = self.edge(into_body, body_target);
         let on_exit = self.edge(into_exit, exit_target);
 
-        for_head!(self, at, |src, _Head, counter| Box::new(control::ForAt {
+        for_head!(self, at, |src, _Head, counter| Next::of(control::ForAt {
             src,
             counter,
             body: on_body,
             exit: on_exit,
-        }) as Box<dyn Op>)
+        }))
     }
 
     fn counter_op(&self, header: usize, from: usize) -> Node {
         match from < header {
-            true => for_head!(self, header + 1, |src, _Head, counter| made(
-                move |next| Box::new(control::ForStart { src, counter, next }) as Box<dyn Op>
-            )),
-            false => for_head!(self, header + 1, |_src, Head, counter| made(
-                move |next| Box::new(control::ForStep::<Head> {
+            true => for_head!(self, header + 1, |src, _Head, counter| made(move |next| {
+                Next::of(control::ForStart { src, counter, next })
+            })),
+            false => for_head!(self, header + 1, |_src, Head, counter| made(move |next| {
+                Next::of(control::ForStep::<Head> {
                     counter,
                     next,
                     of: PhantomData,
-                }) as Box<dyn Op>
-            )),
+                })
+            })),
         }
     }
 
@@ -3175,16 +3388,16 @@ impl<'a> Prepare<'a> {
 
         made(move |next| match (cond, ends) {
             (Where::Frame(off), Ends::Word) => {
-                Box::new(control::Diamond::<place::Slot, control::Rejoins> {
+                Next::of(control::Diamond::<place::Slot, control::Rejoins> {
                     cond: off,
                     on_true,
                     on_false,
                     next,
                     at: PhantomData,
-                }) as Box<dyn Op>
+                })
             }
             (Where::Frame(off), Ends::Verdict) => {
-                Box::new(control::Diamond::<place::Slot, control::Escapes> {
+                Next::of(control::Diamond::<place::Slot, control::Escapes> {
                     cond: off,
                     on_true,
                     on_false,
@@ -3193,7 +3406,7 @@ impl<'a> Prepare<'a> {
                 })
             }
             (Where::Register, Ends::Word) => {
-                Box::new(control::Diamond::<place::R0, control::Rejoins> {
+                Next::of(control::Diamond::<place::R0, control::Rejoins> {
                     cond: (),
                     on_true,
                     on_false,
@@ -3202,7 +3415,7 @@ impl<'a> Prepare<'a> {
                 })
             }
             (Where::Register, Ends::Verdict) => {
-                Box::new(control::Diamond::<place::R0, control::Escapes> {
+                Next::of(control::Diamond::<place::R0, control::Escapes> {
                     cond: (),
                     on_true,
                     on_false,
@@ -3213,13 +3426,7 @@ impl<'a> Prepare<'a> {
         })
     }
 
-    fn arm(
-        &mut self,
-        region: &ArmRegion,
-        edge: JoinEdge<'_>,
-        rides: &Rides,
-        ends: Ends,
-    ) -> Box<dyn Op> {
+    fn arm(&mut self, region: &ArmRegion, edge: JoinEdge<'_>, rides: &Rides, ends: Ends) -> Next {
         match region {
             ArmRegion::Direct => {
                 let join = self.move_ops(&edge.label, edge.args);
@@ -3292,25 +3499,25 @@ impl<'a> Prepare<'a> {
         made(move |next| {
             let next = chain(carries_on, next);
             match (cond, arm_on) {
-                (Where::Frame(off), true) => Box::new(control::Escape::<place::Slot, true> {
-                    cond: off,
-                    arm,
-                    next,
-                    at: PhantomData,
-                }) as Box<dyn Op>,
-                (Where::Frame(off), false) => Box::new(control::Escape::<place::Slot, false> {
+                (Where::Frame(off), true) => Next::of(control::Escape::<place::Slot, true> {
                     cond: off,
                     arm,
                     next,
                     at: PhantomData,
                 }),
-                (Where::Register, true) => Box::new(control::Escape::<place::R0, true> {
+                (Where::Frame(off), false) => Next::of(control::Escape::<place::Slot, false> {
+                    cond: off,
+                    arm,
+                    next,
+                    at: PhantomData,
+                }),
+                (Where::Register, true) => Next::of(control::Escape::<place::R0, true> {
                     cond: (),
                     arm,
                     next,
                     at: PhantomData,
                 }),
-                (Where::Register, false) => Box::new(control::Escape::<place::R0, false> {
+                (Where::Register, false) => Next::of(control::Escape::<place::R0, false> {
                     cond: (),
                     arm,
                     next,
@@ -3329,24 +3536,24 @@ impl<'a> Prepare<'a> {
         self.move_ops(&label, &args)
     }
 
-    fn escape_arm(&mut self, region: &EscapeRegion, rides: &Rides) -> Box<dyn Op> {
-        let (leaving, ends): (Vec<Node>, Box<dyn Op>) = match region.verdict {
+    fn escape_arm(&mut self, region: &EscapeRegion, rides: &Rides) -> Next {
+        let (leaving, ends): (Vec<Node>, Next) = match region.verdict {
             Verdict::Break(jump) | Verdict::Continue(jump) => {
                 let InstKind::Jump { label, args } = &self.body.insts[jump].kind else {
                     panic!("a recognized escape's `break` or `continue` is not a jump")
                 };
                 let (label, args) = (*label, args.clone());
                 let moves = self.move_ops(&label, &args);
-                let ends: Box<dyn Op> = match region.verdict {
-                    Verdict::Break(_) => Box::new(control::Break),
-                    _ => Box::new(control::Continue),
+                let ends: Next = match region.verdict {
+                    Verdict::Break(_) => Next::of(control::Break),
+                    _ => Next::of(control::Continue),
                 };
                 (moves, ends)
             }
             Verdict::Returns(at) => {
                 let mut before = Vec::new();
                 let ends = self
-                    .op(at, Next(None), rides, &mut before)
+                    .op(at, Follows(None), rides, &mut before)
                     .expect("a `return` prepares to a terminator");
                 (before, ends)
             }
@@ -3354,13 +3561,7 @@ impl<'a> Prepare<'a> {
         self.straight(region.arm_block.clone(), &region.arm_regions, leaving, ends)
     }
 
-    fn op(
-        &mut self,
-        at: usize,
-        next: Next,
-        rides: &Rides,
-        ops: &mut Vec<Node>,
-    ) -> Option<Box<dyn Op>> {
+    fn op(&mut self, at: usize, next: Follows, rides: &Rides, ops: &mut Vec<Node>) -> Option<Next> {
         let body = self.body;
         let inst = &body.insts[at];
         let op: Node = match &inst.kind {
@@ -3379,7 +3580,7 @@ impl<'a> Prepare<'a> {
                 if let Some(header) = self.for_header(&label) {
                     ops.push(self.counter_op(header, at));
                 }
-                return Some(Box::new(control::Goto { target }));
+                return Some(Next::of(control::Goto { target }));
             }
             InstKind::JumpIf {
                 cond,
@@ -3404,13 +3605,13 @@ impl<'a> Prepare<'a> {
                 let on_true = self.edge(then_moves, on_true);
                 let on_false = self.edge(else_moves, on_false);
                 return Some(match cond {
-                    Where::Frame(off) => Box::new(control::JumpIf::<place::Slot> {
+                    Where::Frame(off) => Next::of(control::JumpIf::<place::Slot> {
                         cond: off,
                         on_true,
                         on_false,
                         at: PhantomData,
-                    }) as Box<dyn Op>,
-                    Where::Register => Box::new(control::JumpIf::<place::R0> {
+                    }),
+                    Where::Register => Next::of(control::JumpIf::<place::R0> {
                         cond: (),
                         on_true,
                         on_false,
@@ -3421,15 +3622,13 @@ impl<'a> Prepare<'a> {
             InstKind::Return { value, .. } => {
                 let slot = self.marked(*value);
                 return Some(match SlotClass::of(self.ty(*value)) {
-                    SlotClass::Slice => {
-                        Box::new(control::Return::<false, true> { slot }) as Box<dyn Op>
-                    }
-                    SlotClass::Word(_) => Box::new(control::Return::<true, false> { slot }),
-                    SlotClass::Whole => Box::new(control::Return::<false, false> { slot }),
+                    SlotClass::Slice => Next::of(control::Return::<false, true> { slot }),
+                    SlotClass::Word(_) => Next::of(control::Return::<true, false> { slot }),
+                    SlotClass::Whole => Next::of(control::Return::<false, false> { slot }),
                 });
             }
-            InstKind::Diverge => return Some(Box::new(control::Diverge)),
-            InstKind::Poison { .. } => return Some(Box::new(control::Poison)),
+            InstKind::Diverge => return Some(Next::of(control::Diverge)),
+            InstKind::Poison { .. } => return Some(Next::of(control::Poison)),
 
             InstKind::LoadFunction { .. } => panic!(
                 "a function named as a value has no operation: the machine reaches a body \
@@ -3444,12 +3643,12 @@ impl<'a> Prepare<'a> {
                 let handle = self.marked(*src);
                 let resume = next.block();
                 return Some(match self.owns(*dst) {
-                    true => Box::new(call::Eval::<true> {
+                    true => Next::of(call::Eval::<true> {
                         dst: slot,
                         handle,
                         next: resume,
                     }),
-                    false => Box::new(call::Eval::<false> {
+                    false => Next::of(call::Eval::<false> {
                         dst: slot,
                         handle,
                         next: resume,
@@ -3483,10 +3682,10 @@ impl<'a> Prepare<'a> {
                 let pair = self.pair(*dst);
                 let run = self.literals.run(text);
                 made(move |next| {
-                    Box::new(constant::Const {
+                    Next::of(constant::Const {
                         dst: pair.ptr,
                         word: run.ptr,
-                        next: Box::new(constant::Const {
+                        next: Next::of(constant::Const {
                             dst: pair.len,
                             word: run.len,
                             next,
@@ -3875,6 +4074,7 @@ impl<'a> Prepare<'a> {
                         args: 1,
                         ret: 2,
                         result: FormKind::View,
+                        absent: false,
                     },
                     "an AsSlice names a handler of another shape than the one container in \
                      and the two words of a run out, which is `Handler::call_pair1`'s \
@@ -4070,12 +4270,7 @@ impl<'a> Prepare<'a> {
         ops.push(node(move |next| control::Merge { dst, next }));
     }
 
-    fn call_op(
-        &mut self,
-        site: &CallSite<'_>,
-        next: Next,
-        ops: &mut Vec<Node>,
-    ) -> Option<Box<dyn Op>> {
+    fn call_op(&mut self, site: &CallSite<'_>, next: Follows, ops: &mut Vec<Node>) -> Option<Next> {
         let CallSite {
             at,
             callee,
@@ -4102,7 +4297,7 @@ impl<'a> Prepare<'a> {
                 let resume = next.block();
                 let Operands { slots, takes } = self.taken(args);
                 if pair {
-                    return Some(Box::new(call::CallDirectAsync::<false, true> {
+                    return Some(Next::of(call::CallDirectAsync::<false, true> {
                         dst: slot,
                         callee: id,
                         args: slots,
@@ -4111,14 +4306,14 @@ impl<'a> Prepare<'a> {
                     }));
                 }
                 Some(match large {
-                    true => Box::new(call::CallDirectAsync::<true, false> {
+                    true => Next::of(call::CallDirectAsync::<true, false> {
                         dst: slot,
                         callee: id,
                         args: slots,
                         takes,
                         next: resume,
                     }),
-                    false => Box::new(call::CallDirectAsync::<false, false> {
+                    false => Next::of(call::CallDirectAsync::<false, false> {
                         dst: slot,
                         callee: id,
                         args: slots,
@@ -5725,6 +5920,7 @@ mod call_form_tests {
                 args: 2,
                 ret: 1,
                 result: FormKind::Value,
+                absent: false,
             }
         );
         assert_eq!(CallForm::of(&width), CallForm::Registers(2));
@@ -5741,11 +5937,11 @@ mod call_form_tests {
                 b: Off::of(1),
                 takes: 0,
                 large: false,
-                next: Box::new(crate::ops::control::Return::<false, false> {
+                next: Next::of(crate::ops::control::Return::<false, false> {
                     slot: Marked::of(Off::of(2)),
                 }),
             });
-        let built = crate::listing::last_path_segment(&*op);
+        let built = crate::listing::last_path_segment(op.op());
         assert!(
             built.starts_with("CallExtern2"),
             "a `&str` parameter is two registers, and the operation built for it is {built}"
@@ -6488,7 +6684,7 @@ mod recognizer_tests {
                 body.val_types.insert(id, Ty::Int(IntTy::I64));
             }
             let literals = Arc::new(Literals::of(literal_texts(&body)));
-            Code::Body(Arc::new(prepare_entry(
+            Code::body(Arc::new(prepare_entry(
                 &body,
                 &ctx,
                 &FxHashMap::default(),
@@ -8067,8 +8263,8 @@ fn intern(konsts: &mut Vec<Value>, konst: &Value) -> usize {
 }
 
 impl Prepare<'_> {
-    /// The body as a `Code::Expr`, when it is exactly `params -> one chain
-    /// -> return` or `params -> return`.
+    /// The body as a `CodeBody::Expr`, when it is exactly `params -> one
+    /// chain -> return` or `params -> return`.
     ///
     /// A body with captures is not one: a capture reaches the body as
     /// `Value::reference`, which a chain leaf cannot read as an inline
@@ -8093,6 +8289,7 @@ impl Prepare<'_> {
         if rest.is_empty() {
             return Some(Expr {
                 arity,
+                entry: crate::machine::entry_argument,
                 body: ExprBody::Argument(at_of(value)?),
                 span: last.span,
             });
@@ -8138,13 +8335,13 @@ impl Prepare<'_> {
                 )
             })
         });
-        let eval = chain::chain_eval(run.ty, &plan);
+        let entry = chain::chain_eval(run.ty, &plan);
         Some(Expr {
             arity,
+            entry,
             body: ExprBody::Chain(ExprChain {
                 kind: run.kind(),
                 plan,
-                eval,
                 konsts: konsts.into_boxed_slice(),
             }),
             span: last.span,
@@ -8602,7 +8799,7 @@ fn indirect_call_async(
     callee: Marked,
     operands: Operands,
     next: BlockId,
-) -> Box<dyn Op> {
+) -> Next {
     let Dest {
         slot: dst,
         large,
@@ -8616,28 +8813,28 @@ fn indirect_call_async(
     );
     let Operands { slots: args, takes } = operands;
     match (large, through) {
-        (false, false) => Box::new(call::CallIndirectAsync::<false, false> {
+        (false, false) => Next::of(call::CallIndirectAsync::<false, false> {
             dst,
             callee,
             args,
             takes,
             next,
         }),
-        (false, true) => Box::new(call::CallIndirectAsync::<false, true> {
+        (false, true) => Next::of(call::CallIndirectAsync::<false, true> {
             dst,
             callee,
             args,
             takes,
             next,
         }),
-        (true, false) => Box::new(call::CallIndirectAsync::<true, false> {
+        (true, false) => Next::of(call::CallIndirectAsync::<true, false> {
             dst,
             callee,
             args,
             takes,
             next,
         }),
-        (true, true) => Box::new(call::CallIndirectAsync::<true, true> {
+        (true, true) => Next::of(call::CallIndirectAsync::<true, true> {
             dst,
             callee,
             args,

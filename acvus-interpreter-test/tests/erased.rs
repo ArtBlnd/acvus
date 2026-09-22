@@ -124,7 +124,8 @@ async fn contains_over_inline_elements_reads_them_by_their_tag() {
 }
 
 fn runtime(i: &Interner) -> AcvusRuntime {
-    InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor)).runtime_over_an_empty_page()
+    InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor))
+        .runtime_over_an_empty_page()
 }
 
 #[test]

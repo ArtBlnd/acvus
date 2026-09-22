@@ -50,9 +50,9 @@ pub use instance::{
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use obj::{
-    Cross, FieldAt, Form, FormKind, FromValue, Inline, Nothing, Obj, ObjectShape, One, OneValue,
-    Pair, RetForms, Returned, Run, Stored, SurvivesSuspension, TransparentOver, Variant,
-    erased_description, is_erased_from,
+    Cross, FieldAt, Form, FormKind, FromValue, Inline, Nothing, Obj, ObjectShape, One, OneRegister,
+    OneValue, OptionOf, Pair, RetForms, Returned, Run, Stored, SurvivesSuspension, TransparentOver,
+    Variant, erased_description, is_erased_from,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{

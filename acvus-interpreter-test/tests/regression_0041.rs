@@ -156,7 +156,8 @@ struct Pixel {
 acvus_extern::cross_as_stored!(Pixel);
 
 fn runtime(i: &Interner) -> AcvusRuntime {
-    InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor)).runtime_over_an_empty_page()
+    InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor))
+        .runtime_over_an_empty_page()
 }
 
 #[test]

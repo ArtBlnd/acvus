@@ -9,7 +9,7 @@ use std::sync::Arc;
 use acvus_extern::Registry;
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::LeafRead;
-use acvus_interpreter::code::{Body, Code, Op, Prepared, Shape, Slot, Where};
+use acvus_interpreter::code::{Body, Code, CodeBody, Op, Prepared, Shape, Slot, Where};
 use acvus_interpreter::{PrepareCtx, prepare_module};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -82,7 +82,7 @@ pub fn main_body(prepared: &Prepared) -> &Body {
 /// Every chain operation of a body, those inside its superinstructions
 /// included.
 pub fn chains_of(code: &Code) -> Vec<ChainShape> {
-    let Code::Body(body) = code else {
+    let CodeBody::Body(body) = &code.body else {
         return Vec::new();
     };
     chains_of_body(body)

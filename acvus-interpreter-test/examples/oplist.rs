@@ -5,7 +5,7 @@
 //! parts are printed from `Op::owns`, not guessed.
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::{Body, Code, ExprBody, Named, Op};
+use acvus_interpreter::code::{Body, Code, CodeBody, ExprBody, Named, Op};
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, Value, prepare_module};
 use acvus_interpreter_test::listing::last_path_segment;
 use acvus_interpreter_test::{Context, compile_source_with_externs, split_context, typed};
@@ -106,15 +106,15 @@ fn dump_body(name: &str, code: &Body) {
 }
 
 fn dump(name: &str, code: &Code) {
-    match code {
-        Code::Body(body) => dump_body(name, body),
-        Code::Expr(expr) => match &expr.body {
+    match &code.body {
+        CodeBody::Body(body) => dump_body(name, body),
+        CodeBody::Expr(expr) => match &expr.body {
             ExprBody::Argument(at) => println!(
-                "== {name}: Code::Expr arity={} returns argument {at} (no frame, no Machine)",
+                "== {name}: CodeBody::Expr arity={} returns argument {at} (no frame, no Machine)",
                 expr.arity
             ),
             ExprBody::Chain(body) => println!(
-                "== {name}: Code::Expr arity={} chain shape={:?} root={:?} kind={:?} konsts={:?} \
+                "== {name}: CodeBody::Expr arity={} chain shape={:?} root={:?} kind={:?} konsts={:?} \
                  (no frame, no Machine)",
                 expr.arity, body.plan.shape, body.plan.root, body.kind, body.konsts
             ),
