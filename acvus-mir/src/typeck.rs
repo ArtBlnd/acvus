@@ -95,6 +95,11 @@ struct BoundSite {
 
 /// An integer literal awaiting its width, checked against its value once
 /// the width is known (RFC-0037).
+struct OpenDecision {
+    open: InferTy,
+    span: Span,
+}
+
 struct IntLiteral {
     ty: InferTy,
     value: i128,
@@ -988,6 +993,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Each `?` with the return type it leaves through (RFC-0038).
     try_sites: FxHashMap<AstId, InferTy>,
     int_literals: Vec<IntLiteral>,
+    open_decisions: Vec<OpenDecision>,
+    refused_open: FxHashSet<crate::ty::TypeBoundId>,
     casts: Vec<CastSite>,
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
@@ -1053,6 +1060,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return_ty: None,
             try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
+            open_decisions: Vec::new(),
+            refused_open: FxHashSet::default(),
             casts: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
             conversions: Vec::new(),
@@ -1165,16 +1174,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn freeze_type_map(&self) -> TypeMap {
         self.type_map
             .iter()
-            .map(|(id, ty)| {
-                let resolved = self.solver.resolve_ty(ty);
-                (
-                    *id,
-                    self.solver
-                        .close_ty(&resolved)
-                        .unwrap_or_else(|_| Ty::error()),
-                )
-            })
+            .map(|(id, ty)| (*id, self.closed(ty)))
             .collect()
+    }
+
+    /// A type the solve closed. Freezing runs once no refusal was raised,
+    /// and every variable left open is a decision `report_unsettled`
+    /// refused, so a type that does not close is a checker defect.
+    fn closed(&self, ty: &InferTy) -> Ty {
+        let resolved = self.solver.resolve_ty(ty);
+        match self.solver.close_ty(&resolved) {
+            Ok(closed) => closed,
+            Err(open) => panic!("an admitted body left {resolved:?} open: {open:?}"),
+        }
     }
 
     /// Construct an InferTy error token.
@@ -1425,8 +1437,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 fields,
                 most: ObjectTy::<Infer>::MAX_FIELDS,
             }),
+            MismatchReason::FixedLacks { member } => Some(MirErrorKind::FixedLacks {
+                member: shown(member),
+            }),
             MismatchReason::NoJoin
-            | MismatchReason::UnionWithoutHome
             | MismatchReason::ReprOpen(_)
             | MismatchReason::TaskTooHigh { .. } => None,
         }
@@ -2255,14 +2269,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             }) => {
                 let qref = QualifiedRef::root(*name);
-                self.note_context_use(qref, span);
                 self.note_access(Effect::write(qref), span);
-                let ty = self
-                    .env
-                    .contexts
-                    .get(&qref)
-                    .cloned()
-                    .unwrap_or_else(|| self.solver.fresh_ty_var());
+                let ty = self.resolve_context_type(qref, span);
                 self.record_ret(*id, ty)
             }
             acvus_ast::Place::Base(acvus_ast::PlaceBase::Root {
@@ -2832,6 +2840,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
         self.settle_int_literals();
+        self.refuse_open_decisions();
+    }
+
+    /// Poison rule 3 and one refusal per open variable: a decision whose
+    /// type holds poison, or whose every open variable was already refused
+    /// by its own rule, is not refused again.
+    fn refuse_open_decisions(&mut self) {
+        for OpenDecision { open, span } in std::mem::take(&mut self.open_decisions) {
+            if self.solver.resolve_ty(&open).mentions_error() {
+                continue;
+            }
+            let vars = self.solver.open_vars(&open);
+            if !vars.is_empty() && vars.iter().all(|var| self.refused_open.contains(var)) {
+                continue;
+            }
+            self.refused_open.extend(vars);
+            let resolved_ty = self.type_as_written(&open);
+            self.error(MirErrorKind::AmbiguousType { resolved_ty }, span);
+        }
     }
 
     /// A literal takes a width here or is refused here (solver.md R3).
@@ -2844,7 +2871,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// poison instruction.
     fn settle_int_literals(&mut self) {
         let literals = std::mem::take(&mut self.int_literals);
-        let mut reported: FxHashSet<crate::ty::TypeBoundId> = FxHashSet::default();
         for IntLiteral { ty, value, span } in literals {
             let Ok(Ty::Int(k)) = self.solver.freeze_ty(&ty) else {
                 let TyTerm::Var(var) = self.solver.shallow_resolve_ty(&ty) else {
@@ -2853,7 +2879,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let TyVarBound::Integer { among, .. } = self.solver.bound_of_var(var) else {
                     continue;
                 };
-                if reported.insert(self.solver.find_ty_root(var)) {
+                if self.refused_open.insert(self.solver.find_ty_root(var)) {
                     self.error(MirErrorKind::IntegerLiteralWidthUnsettled { among }, span);
                 }
                 continue;
@@ -3225,10 +3251,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn report_unsettled(&mut self, unsettled: Vec<Unsettled>) {
         let index_decisions = self.index_decisions();
+        let mut refused: Vec<InferTy> = Vec::new();
         for failure in unsettled {
             let decision = failure.decision();
             if index_decisions.contains(&decision) {
                 continue;
+            }
+            if !matches!(
+                failure,
+                Unsettled::AmbiguousInstance { .. } | Unsettled::ConversionOpen { .. }
+            ) {
+                refused.extend(failure.types().into_iter().cloned());
             }
             let mut labels: Vec<Label> = Vec::new();
             let span = self.decision_span(decision);
@@ -3276,10 +3309,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         got: self.type_as_written(&got),
                     }
                 }
-                Unsettled::AmbiguousInstance { .. } | Unsettled::ConversionOpen { .. } => {
-                    // The call's type stayed open: the lowering treats the
-                    // call as unresolved, and the open type is reported
-                    // where it is frozen.
+                Unsettled::AmbiguousInstance { call: open, .. }
+                | Unsettled::ConversionOpen { to: open, .. } => {
+                    self.open_decisions.push(OpenDecision { open, span });
                     continue;
                 }
                 Unsettled::TaskTooHigh {
@@ -3367,6 +3399,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 true => self.error(kind, span),
                 false => self.labeled_error(kind, span, labels),
             }
+        }
+        for ty in refused {
+            self.solver.poison(&ty);
         }
     }
 
@@ -3485,16 +3520,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn named_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
         self.context_uses
             .keys()
-            .map(|qref| (*qref, self.context_type(*qref).unwrap_or_else(Ty::error)))
+            .map(|qref| {
+                let declared = self
+                    .env
+                    .contexts
+                    .get(qref)
+                    .expect("an undeclared context was refused before freezing");
+                (*qref, self.closed(declared))
+            })
             .collect()
     }
 
     /// The type a context resolved to, once every use has been checked.
     /// `None` while it is still open, or when the context is unknown.
-    fn context_type(&self, qref: QualifiedRef) -> Option<Ty> {
+    fn context_type(&self, qref: QualifiedRef) -> Option<Result<Ty, crate::ty::FreezeError>> {
         let ty = self.env.contexts.get(&qref)?;
         let resolved = self.solver.resolve_ty(ty);
-        self.solver.freeze_ty(&resolved).ok()
+        Some(self.solver.close_ty(&resolved))
     }
 
     /// A name a lambda took out of the enclosing closure's capture
@@ -3535,8 +3577,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let uses: Vec<(QualifiedRef, Span)> =
             self.context_uses.iter().map(|(q, s)| (*q, *s)).collect();
         for (qref, span) in uses {
-            let Some(ty) = self.context_type(qref) else {
-                continue;
+            let ty = match self.context_type(qref) {
+                None => continue,
+                Some(Ok(ty)) => ty,
+                Some(Err(_)) => {
+                    let declared = &self.env.contexts[&qref];
+                    let resolved_ty = self.type_as_written(declared);
+                    self.error(MirErrorKind::AmbiguousType { resolved_ty }, span);
+                    continue;
+                }
             };
             if ty.is_error() || ty.is_data() {
                 continue;
@@ -4507,10 +4556,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let mut variants = FxHashMap::default();
         variants.insert(tag, Some(Box::new(payload_ty)));
         self.structural_variant_calls.insert(id);
-        TyTerm::Enum {
+        self.solver.construct(TyTerm::Enum {
             name: enum_name,
             variants,
-        }
+        })
     }
 
     /// An operator on a non-primitive is a call of its shared signature
@@ -4862,10 +4911,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             } => {
                 let source_ty = self.check_expr(source);
-                let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
                 self.loops.push(None);
-                self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
+                self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
                 for s in body {
                     self.check_stmt(s);
                 }
@@ -5785,7 +5833,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                     return self.record_ret(*id, Self::infer_error());
                 }
-                let ty = TyTerm::Object(ObjectTy::written(field_types));
+                let ty = self
+                    .solver
+                    .construct(TyTerm::Object(ObjectTy::written(field_types)));
                 self.record_ret(*id, ty)
             }
 
@@ -5891,10 +5941,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let mut variants = FxHashMap::default();
                 variants.insert(*tag, payload_ty);
-                let ty = TyTerm::Enum {
+                let ty = self.solver.construct(TyTerm::Enum {
                     name: *enum_name,
                     variants,
-                };
+                });
                 self.record_ret(*id, ty)
             }
 
@@ -5976,9 +6026,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let source_ty = self.check_expr(source);
-                let resolved = self.solver.resolve_ty(&source_ty);
                 self.push_scope();
-                self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
+                self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
                 for s in then_body {
                     self.check_stmt(s);
                 }
@@ -6017,10 +6066,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> InferTy {
         let source_ty = self.check_expr(scrutinee);
-        let resolved = self.solver.resolve_ty(&source_ty);
         let mut joined: Option<Branch> = None;
         for arm in arms {
-            let arm_source = self.reachable_arm_source(&arm.pattern, &resolved, arm.span);
+            let arm_source = self.reachable_arm_source(&arm.pattern, &source_ty, arm.span);
             self.push_scope();
             self.check_pattern(
                 &arm.pattern,
@@ -6371,6 +6419,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// A pattern refused against its source still binds its names, as
+    /// poison, so a use of one is not refused a second time (docs/solver.md,
+    /// Poison).
+    fn bind_as_poison(&mut self, pattern: &Pattern, span: Span) {
+        self.check_pattern_inner(pattern, &Self::infer_error(), PatternSource::Member, span);
+    }
+
     fn check_pattern_inner(
         &mut self,
         pattern: &Pattern,
@@ -6389,14 +6444,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     PatternMode::Deferred => self.deferred_context_binds.push(span),
                     PatternMode::Value => {}
                 }
-                self.note_context_use(*qref, span);
                 self.note_access(Effect::write(*qref), span);
-                let ctx_ty = self
-                    .env
-                    .contexts
-                    .get(qref)
-                    .cloned()
-                    .unwrap_or_else(|| self.solver.fresh_ty_var());
+                let ctx_ty = self.resolve_context_type(*qref, span);
                 let joined = match source {
                     PatternSource::Expr(id) => {
                         let site = ConversionSite {
@@ -6490,7 +6539,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 },
                                 span,
                             );
-                            return;
+                            return self.bind_as_poison(pattern, span);
                         }
                         (var, len)
                     }
@@ -6525,26 +6574,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Pattern::Object { fields, .. } => {
                 // If source is already a concrete Object, match fields directly (open/subset).
                 // Otherwise, build an Object from pattern fields and unify to infer the type.
-                let obj_fields = if let TyTerm::Object(object) = &source_resolved {
-                    object.iter().map(|(k, v)| (*k, v.clone())).collect()
-                } else {
-                    let field_vars: FxHashMap<Astr, InferTy> = fields
-                        .iter()
-                        .map(|f| (f.key, self.solver.fresh_ty_var()))
-                        .collect();
-                    let obj_ty = TyTerm::Object(ObjectTy::at_least(field_vars.clone()));
-                    if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
-                        self.error(
-                            MirErrorKind::PatternTypeMismatch {
-                                pattern_ty: self.type_as_written(&obj_ty),
-                                source_ty: self.type_as_written(&source_resolved),
-                            },
-                            span,
-                        );
-                        return;
-                    }
-                    field_vars
-                };
+                let obj_fields =
+                    if let TyTerm::Object(object) = self.solver.shallow_resolve_ty(source_ty) {
+                        object.iter().map(|(k, v)| (*k, v.clone())).collect()
+                    } else {
+                        let field_vars: FxHashMap<Astr, InferTy> = fields
+                            .iter()
+                            .map(|f| (f.key, self.solver.fresh_ty_var()))
+                            .collect();
+                        let obj_ty = TyTerm::Object(ObjectTy::at_least(field_vars.clone()));
+                        if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
+                            self.error(
+                                MirErrorKind::PatternTypeMismatch {
+                                    pattern_ty: self.type_as_written(&obj_ty),
+                                    source_ty: self.type_as_written(&source_resolved),
+                                },
+                                span,
+                            );
+                            return self.bind_as_poison(pattern, span);
+                        }
+                        field_vars
+                    };
                 for ObjectPatternField { key, pattern, .. } in fields {
                     let Some(field_ty) = obj_fields.get(key) else {
                         self.error(
@@ -6560,8 +6610,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         );
                         continue;
                     };
-                    let resolved = self.solver.resolve_ty(field_ty);
-                    self.check_pattern(pattern, &resolved, PatternSource::Member, span);
+                    let field_ty = field_ty.clone();
+                    self.check_pattern(pattern, &field_ty, PatternSource::Member, span);
                 }
             }
 
@@ -6589,7 +6639,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 },
                                 span,
                             );
-                            return;
+                            return self.bind_as_poison(pattern, span);
                         }
                         vars
                     }
@@ -6621,19 +6671,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             },
                             span,
                         );
-                        return;
+                        return self.bind_as_poison(pattern, span);
                     }
 
-                    if let VariantPayload::TypeParam(idx) = &variant_payload {
-                        let resolved_inner = self.solver.resolve_ty(&type_params[*idx]);
-                        if let Some(inner_pat) = payload {
-                            self.check_pattern(
-                                inner_pat,
-                                &resolved_inner,
-                                PatternSource::Member,
-                                span,
-                            );
-                        }
+                    if let (VariantPayload::TypeParam(idx), Some(inner_pat)) =
+                        (&variant_payload, payload)
+                    {
+                        self.check_pattern(
+                            inner_pat,
+                            &type_params[*idx],
+                            PatternSource::Member,
+                            span,
+                        );
                     }
                     return;
                 }
@@ -6672,14 +6721,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         },
                         span,
                     );
-                    return;
+                    return self.bind_as_poison(pattern, span);
                 }
 
                 // Bind payload pattern if present.
                 if let Some(inner_pat) = payload {
-                    let inner_ty = payload_ty
-                        .map(|ty| self.solver.resolve_ty(&ty))
-                        .unwrap_or_else(Self::infer_error);
+                    let inner_ty = payload_ty.map_or_else(Self::infer_error, |ty| *ty);
                     self.check_pattern(inner_pat, &inner_ty, PatternSource::Member, span);
                 }
             }
@@ -6737,7 +6784,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             });
         }
-        self.solver.resolve_ty(&joined)
+        joined
     }
 
     /// `inner?` (RFC-0038): the payload of an `Ok` or a `Some`, while the
@@ -6801,15 +6848,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn frozen_try_returns(&self) -> FxHashMap<AstId, Ty> {
         self.try_sites
             .iter()
-            .map(|(id, ty)| {
-                let resolved = self.solver.resolve_ty(ty);
-                (
-                    *id,
-                    self.solver
-                        .close_ty(&resolved)
-                        .unwrap_or_else(|_| Ty::error()),
-                )
-            })
+            .map(|(id, ty)| (*id, self.closed(ty)))
             .collect()
     }
 
@@ -7048,10 +7087,7 @@ mod tests {
     }
 
     #[test]
-    /// A field the object did not have grows the object (solver.md R1);
-    /// whether it is initialized where it is read is the
-    /// definite-assignment check's question, not the type checker's.
-    fn field_access_grows_the_object() {
+    fn a_field_the_context_type_lacks_is_refused() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(
             i.intern("user"),
@@ -7062,7 +7098,8 @@ mod tests {
         )]);
         let src = "{{ @user.unknown }}";
         let result = check_with_interner(src, &context, &i);
-        assert!(result.is_ok(), "{result:?}");
+        let err = result.expect_err("a host's type does not grow");
+        assert!(err.contains("no field `unknown`"), "{err}");
     }
 
     #[test]

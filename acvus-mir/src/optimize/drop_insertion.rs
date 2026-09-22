@@ -431,7 +431,7 @@ fn terminator_uses_with_storage(term: &Terminator, loans: &Loans) -> FxHashSet<V
 fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
     let mut uses = FxHashSet::default();
     match term {
-        Terminator::Return { value, order } => {
+        Terminator::Return { value, order, .. } => {
             uses.insert(*value);
             uses.extend(order.iter().copied());
         }
@@ -659,7 +659,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
 fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
     match term {
         // Return consumes the value (transferred to caller).
-        Terminator::Return { value, order } => *value == val || *order == Some(val),
+        Terminator::Return { value, order, .. } => *value == val || *order == Some(val),
         // Jump args are transferred to the target block.
         Terminator::Jump { args, .. } => args.contains(&val),
         // A two-way branch transfers its edge args; the cond is read-only.

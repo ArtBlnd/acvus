@@ -323,7 +323,7 @@ fn is_root(kind: &InstKind, loans: &Loans) -> bool {
 /// The values a terminator needs regardless of any block param.
 fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
     match term {
-        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
+        Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
         Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
         // The tag a `Switch` reads is live wherever the dispatch is.
         Terminator::Switch { tag, .. } => vec![*tag],

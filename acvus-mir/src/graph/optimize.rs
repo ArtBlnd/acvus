@@ -465,7 +465,7 @@ fn debug_validate(cfg: &CfgBody) {
 
         // -- Check terminator uses --
         let term_uses = match &block.terminator {
-            crate::cfg::Terminator::Return { value, order } => {
+            crate::cfg::Terminator::Return { value, order, .. } => {
                 std::iter::once(*value).chain(*order).collect()
             }
             crate::cfg::Terminator::Jump { args, .. } => args.clone(),

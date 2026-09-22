@@ -531,7 +531,35 @@ impl CheckCtx {
             }
             return None;
         };
-        let mut at: Ty = inner.ty.clone();
+        let at = self.walk(pc, span, inst_name, inner.ty.clone(), path, errors)?;
+        Some((*m, at))
+    }
+
+    /// The type at `path` below the storage `slot` names directly.
+    fn in_storage(
+        &self,
+        pc: usize,
+        span: Span,
+        inst_name: &str,
+        slot: ValueId,
+        path: &[PathSeg],
+        vt: &FxHashMap<ValueId, Ty>,
+        errors: &mut Vec<ValidationError>,
+    ) -> Option<Ty> {
+        let root = self.ty_of(slot, vt, span, pc, errors)?.clone();
+        self.walk(pc, span, inst_name, root, path, errors)
+    }
+
+    fn walk(
+        &self,
+        pc: usize,
+        span: Span,
+        inst_name: &str,
+        root: Ty,
+        path: &[PathSeg],
+        errors: &mut Vec<ValidationError>,
+    ) -> Option<Ty> {
+        let mut at = root;
         for seg in path {
             let next = match (seg, &at) {
                 (PathSeg::Field(field), Ty::Object(fields)) => fields.get(field).cloned(),
@@ -569,7 +597,7 @@ impl CheckCtx {
             };
             at = next;
         }
-        Some((*m, at))
+        Some(at)
     }
 
     /// A type whose head is not the one the instruction is built on.
@@ -1269,6 +1297,10 @@ impl CheckCtx {
                             },
                         });
                     }
+                } else if let RefTarget::Var(slot) | RefTarget::Param(slot) = target
+                    && let Some(at) = self.in_storage(pc, span, "Take", *slot, path, vt, errors)
+                {
+                    self.assert_match(pc, span, "Take", "dst", &at, dst_ty, errors);
                 }
             }
             InstKind::Assign {
@@ -1295,6 +1327,10 @@ impl CheckCtx {
                             },
                         });
                     }
+                    self.assert_match(pc, span, "Assign", "value", &at, val_ty, errors);
+                } else if let RefTarget::Var(slot) | RefTarget::Param(slot) = target
+                    && let Some(at) = self.in_storage(pc, span, "Assign", *slot, path, vt, errors)
+                {
                     self.assert_match(pc, span, "Assign", "value", &at, val_ty, errors);
                 }
             }
@@ -1328,6 +1364,13 @@ impl CheckCtx {
                             },
                         });
                     }
+                    let expected = Ty::Ref(*mutability, Box::new(TypeArg::uniform(at)));
+                    self.assert_match(pc, span, "Ref", "dst", &expected, dst_ty, errors);
+                    return;
+                }
+                if let RefTarget::Var(slot) | RefTarget::Param(slot) = target
+                    && let Some(at) = self.in_storage(pc, span, "Ref", *slot, path, vt, errors)
+                {
                     let expected = Ty::Ref(*mutability, Box::new(TypeArg::uniform(at)));
                     self.assert_match(pc, span, "Ref", "dst", &expected, dst_ty, errors);
                     return;

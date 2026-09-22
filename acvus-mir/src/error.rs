@@ -379,6 +379,11 @@ pub enum MirErrorKind {
         declared: String,
         field: String,
     },
+    /// A value whose type was laid out outside the body met a type with a
+    /// member it lacks.
+    FixedLacks {
+        member: String,
+    },
     /// An object type with more fields than `ty::ObjectTy::MAX_FIELDS`, whose
     /// positions the machine cannot name.
     ObjectTooWide {
@@ -1006,6 +1011,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "no field `{field}` on type {}{near}",
                     object_ty.shown(interner)
+                )
+            }
+            MirErrorKind::FixedLacks { member } => {
+                write!(
+                    f,
+                    "`{member}` cannot be added to a type laid out outside this body"
                 )
             }
             MirErrorKind::ObjectLacksDeclaredField { declared, field } => {

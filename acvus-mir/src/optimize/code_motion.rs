@@ -1059,7 +1059,7 @@ fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) 
             remap_vec(then_args, remap);
             remap_vec(else_args, remap);
         }
-        Terminator::Return { value, order } => {
+        Terminator::Return { value, order, .. } => {
             remap_val(value, remap);
             if let Some(order) = order {
                 remap_val(order, remap);
@@ -1097,7 +1097,7 @@ fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) 
 fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
     use crate::cfg::Terminator;
     match term {
-        Terminator::Return { value, order } => std::iter::once(*value).chain(*order).collect(),
+        Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Jump { args, .. } => args.clone(),
         Terminator::JumpIf {
             cond,

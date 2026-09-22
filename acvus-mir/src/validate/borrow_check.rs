@@ -571,7 +571,7 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             v.extend(else_args);
             v
         }
-        Terminator::Return { value, order } => {
+        Terminator::Return { value, order, .. } => {
             let mut v = vec![*value];
             v.extend(*order);
             v

@@ -67,7 +67,7 @@ impl DataflowAnalysis for LivenessAnalysis {
 
     fn terminator_uses(&self, term: &Terminator, state: &mut DataflowState<ValueId, Liveness>) {
         match term {
-            Terminator::Return { value, order } => {
+            Terminator::Return { value, order, .. } => {
                 state.set(*value, Liveness::Live);
                 if let Some(o) = order {
                     state.set(*o, Liveness::Live);

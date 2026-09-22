@@ -113,9 +113,10 @@ pub fn lower_one(
 
     // Definite assignment reads the pre-SSA shape the source wrote, so it
     // runs here and not in `validate`, which sees the optimized body.
-    let cfg = crate::cfg::promote(std::mem::take(&mut module.main));
-    errors.extend(crate::validate::init_check::refusals(interner, &cfg));
-    module.main = crate::cfg::demote(cfg);
+    for body in std::iter::once(&module.main).chain(module.closures.values()) {
+        let cfg = crate::cfg::promote(body.clone());
+        errors.extend(crate::validate::init_check::refusals(interner, &cfg));
+    }
 
     Some(Lowered { module, errors })
 }

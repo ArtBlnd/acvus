@@ -1,4 +1,3 @@
-
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::{
     graph::infer,
@@ -1711,7 +1710,7 @@ fn structural_enum_with_payload() {
     let i = Interner::new();
     let src = "% match @r\n\
                % R::Good(v) =>\n\
-               {{ v.to_string() }}\n\
+               {{ v }}\n\
                % _ =>\n\
                err\n\
                % end";
@@ -1725,7 +1724,7 @@ fn structural_enum_mixed_payload_and_unit() {
     let i = Interner::new();
     let src = "% match @r\n\
                % R::Good(v) =>\n\
-               {{ v.to_string() }}\n\
+               {{ v }}\n\
                % R::Bad =>\n\
                fail\n\
                % _ =>\n\
@@ -3259,16 +3258,24 @@ fn object_xy(i: &Interner) -> FxHashMap<Astr, Ty> {
 #[test]
 fn uninit_field_load_rejected() {
     let i = Interner::new();
-    let result = compile_script_ir(
-        &i,
-        "let a = { x: 0, }; a.y.to_string()",
-        &FxHashMap::default(),
-    );
+    let result = compile_script_ir(&i, "let a = { x: 0, }; a.y + 1", &FxHashMap::default());
     let err = result.expect_err("the field is read where nothing stored it");
     assert!(
         err.contains("`a` has no `y` stored on every path that reaches here"),
         "{err}"
     );
+}
+
+#[test]
+fn a_field_whose_type_nothing_decides_is_refused_before_lowering() {
+    let i = Interner::new();
+    let result = compile_script_ir(
+        &i,
+        "let a = { x: 0, }; a.y.to_string()",
+        &FxHashMap::default(),
+    );
+    let err = result.expect_err("no instance of `to_string` is chosen for `a.y`");
+    assert!(err.contains("cannot infer type"), "{err}");
 }
 
 #[test]

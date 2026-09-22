@@ -3,4 +3,3 @@ source: acvus-mir-test/tests/e2e.rs
 expression: result.unwrap_err()
 ---
 [infer:test] [1..52] pattern type (_, _, _) incompatible with source type (i64, i64)
-[infer:test] [30..31] undefined variable `a`

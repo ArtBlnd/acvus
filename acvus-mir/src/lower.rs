@@ -428,8 +428,7 @@ impl<'a> Lowerer<'a> {
         let order_param = self.alloc_val();
         self.set_val_type(order_param, Ty::Order);
         self.body.order_param = Some(order_param);
-        let slot = self.alloc_val();
-        self.set_origin(slot, ValOrigin::Named(self.interner.intern("$order")));
+        let slot = self.alloc_slot(Ty::Order, ValOrigin::Named(self.interner.intern("$order")));
         self.emit_assign(span, RefTarget::Var(slot), vec![], order_param);
         self.order_slot = Some(slot);
     }
@@ -443,9 +442,7 @@ impl<'a> Lowerer<'a> {
                 .get(&qref)
                 .cloned()
                 .unwrap_or_else(|| panic!("context {qref:?} is named but was not typed"));
-            let slot = self.alloc_val();
-            self.set_val_type(slot, ty.clone());
-            self.set_origin(slot, ValOrigin::Context(qref.name));
+            let slot = self.alloc_slot(ty.clone(), ValOrigin::Context(qref.name));
             self.fetch_into(span, qref, slot, ty);
             self.context_slots.insert(qref, slot);
         }
@@ -698,8 +695,10 @@ impl<'a> Lowerer<'a> {
         let outer = self.anyorder;
         if outer.is_none() {
             let entry = self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order);
-            let acc = self.alloc_val();
-            self.set_origin(acc, ValOrigin::Named(self.interner.intern("$anyorder")));
+            let acc = self.alloc_slot(
+                Ty::Order,
+                ValOrigin::Named(self.interner.intern("$anyorder")),
+            );
             self.emit_assign(span, RefTarget::Var(acc), vec![], entry);
             self.anyorder = Some(AnyorderScope { entry, acc });
         }
@@ -1951,10 +1950,15 @@ impl<'a> Lowerer<'a> {
 
     /// Introduce a binding in the current scope with a fresh slot. A name
     /// already bound, here or outside, is shadowed.
+    fn alloc_slot(&mut self, ty: Ty, origin: ValOrigin) -> ValueId {
+        let slot = self.alloc_val();
+        self.set_val_type(slot, ty);
+        self.set_origin(slot, origin);
+        slot
+    }
+
     fn define_var(&mut self, name: Astr, ty: Ty) -> ValueId {
-        let slot = self.body.val_factory.next();
-        self.set_origin(slot, ValOrigin::Named(name));
-        self.set_val_type(slot, ty.clone());
+        let slot = self.alloc_slot(ty.clone(), ValOrigin::Named(name));
         let scope = self.scopes.last_mut().expect("a scope to define in");
         scope.insert(name, Local { ty, slot });
         slot

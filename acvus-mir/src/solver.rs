@@ -18,10 +18,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::ty::{
-    CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, IdentityId, IdentityTerm,
-    IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet,
-    ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty,
-    TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry, could_match_pattern, matches_pattern,
+    CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, ErrorToken, FieldSet,
+    IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm, LenVarId,
+    Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
+    RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
+    could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -30,9 +31,22 @@ use crate::ty::{
 /// and is verified when it freezes (`TyVarBound::admits`).
 #[derive(Debug, Clone)]
 pub enum TypeBound {
-    Resolved { ty: InferTy, bound: TyVarBound },
-    Unresolved { bound: TyVarBound },
+    Resolved {
+        ty: InferTy,
+        bound: TyVarBound,
+        growth: Growth,
+    },
+    Unresolved {
+        bound: TyVarBound,
+    },
     Forward(TypeBoundId),
+}
+
+/// RFC-0042 rule 1 and RFC-0050 rule 8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Growth {
+    Open,
+    Fixed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,9 +185,9 @@ pub struct Mismatch {
 pub enum MismatchReason {
     /// The lattice has no join for the two.
     NoJoin,
-    /// The join is a union neither side is, and no variable names either
-    /// side, so the union has no home.
-    UnionWithoutHome,
+    /// A type the body did not lay out lacks `member`, which the other
+    /// side of the join has.
+    FixedLacks { member: Astr },
     /// A slot's representation is a signature's open variable, which a
     /// flow does not bind: the decision that owns it answers later.
     ReprOpen(ReprVarId),
@@ -203,15 +217,6 @@ pub enum EffectRelation {
 enum Position {
     Value,
     Argument,
-}
-
-/// How a structural type's members relate to its values: an `Object` is a
-/// product whose fields are initialized per path; an `Enum` is a sum, so a
-/// type lacking a variant the value may carry does not hold it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Structure {
-    Product,
-    Sum,
 }
 
 /// What the join is for: a value flowing into a type, a pattern tested
@@ -273,13 +278,13 @@ impl Terms {
         }
     }
 
-    fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy) -> Result<(), Cyclic> {
+    fn bind_ty(&mut self, id: TypeBoundId, ty: InferTy, growth: Growth) -> Result<(), Cyclic> {
         let root = self.find_ty_root(id);
         if self.occurs_in(root, &ty) {
             return Err(Cyclic);
         }
         let bound = self.bound_of(root);
-        self.ty_bounds[root.0 as usize] = TypeBound::Resolved { ty, bound };
+        self.ty_bounds[root.0 as usize] = TypeBound::Resolved { ty, bound, growth };
         Ok(())
     }
 
@@ -832,12 +837,12 @@ impl Terms {
         };
         if let Some(v) = unbound(self, a_root) {
             return self
-                .take_other(v, b, b_root)
+                .take_other(v, b, b_root, kind == JoinKind::Pattern)
                 .map_err(|NoJoin| no_join(self));
         }
         if let Some(v) = unbound(self, b_root) {
             return self
-                .take_other(v, a, a_root)
+                .take_other(v, a, a_root, false)
                 .map_err(|NoJoin| no_join(self));
         }
 
@@ -851,7 +856,10 @@ impl Terms {
         let mismatch = |terms: &Self| mismatch_for(terms, MismatchReason::NoJoin);
 
         match (&ra, &rb) {
-            (TyTerm::Error(_), _) | (_, TyTerm::Error(_)) => Ok(()),
+            (TyTerm::Error(token), other) | (other, TyTerm::Error(token)) => {
+                self.poison(other, *token);
+                Ok(())
+            }
             (TyTerm::Var(_), _) | (_, TyTerm::Var(_)) => {
                 unreachable!("an unbound variable took the other side above")
             }
@@ -874,24 +882,12 @@ impl Terms {
                     }
                 }
                 match ObjectTy::meet(oa, ob) {
-                    ObjectMeet::Joined {
-                        ty,
-                        a_takes,
-                        b_takes,
-                    } => self.write_union(
-                        UnionSide {
-                            root: a_root,
-                            grows: a_takes,
-                        },
-                        UnionSide {
-                            root: b_root,
-                            grows: b_takes,
-                        },
-                        TyTerm::Object(ty),
-                        Structure::Product,
-                        kind,
-                        mismatch,
-                    ),
+                    ObjectMeet::Joined { ty } => {
+                        let pattern = kind == JoinKind::Pattern;
+                        let a_side = self.union_side(a_root, &ra, ty.missing_from(oa), false);
+                        let b_side = self.union_side(b_root, &rb, ty.missing_from(ob), pattern);
+                        self.write_union(a_side, b_side, TyTerm::Object(ty), kind, mismatch)
+                    }
                     ObjectMeet::Lacks { declared, field } => Err(mismatch_for(
                         self,
                         MismatchReason::ObjectLacksDeclaredField { declared, field },
@@ -930,29 +926,28 @@ impl Terms {
                         }
                     }
                 }
-                let a_only = va.keys().any(|k| !vb.contains_key(k));
-                let b_only = vb.keys().any(|k| !va.contains_key(k));
-                if !a_only && !b_only {
-                    return Ok(());
-                }
+                let missing =
+                    |of: &FxHashMap<Astr, Option<Box<InferTy>>>,
+                     from: &FxHashMap<Astr, Option<Box<InferTy>>>| {
+                        of.keys()
+                            .filter(|tag| !from.contains_key(tag))
+                            .min()
+                            .copied()
+                    };
+                let pattern = kind == JoinKind::Pattern;
+                let a_side = self.union_side(a_root, &ra, missing(vb, va), false);
+                let b_side = self.union_side(b_root, &rb, missing(va, vb), pattern);
                 let mut merged: FxHashMap<Astr, Option<Box<InferTy>>> = va.clone();
                 for (tag, payload) in vb {
                     merged.entry(*tag).or_insert_with(|| payload.clone());
                 }
                 self.write_union(
-                    UnionSide {
-                        root: a_root,
-                        grows: b_only,
-                    },
-                    UnionSide {
-                        root: b_root,
-                        grows: a_only,
-                    },
+                    a_side,
+                    b_side,
                     TyTerm::Enum {
                         name: *na,
                         variants: merged,
                     },
-                    Structure::Sum,
                     kind,
                     mismatch,
                 )
@@ -1075,13 +1070,15 @@ impl Terms {
         var: TypeBoundId,
         other: &InferTy,
         other_root: Option<TypeBoundId>,
+        other_is_pattern: bool,
     ) -> Result<(), NoJoin> {
         let Some(root) = other_root else {
             let term = self.shallow_resolve_ty(other);
             if integer_bound_refuses(&self.bound_of(var), &term) {
                 return Err(NoJoin);
             }
-            return self.bind_ty(var, term).map_err(|Cyclic| NoJoin);
+            let growth = Carrier::of_term(&term, other_is_pattern).growth();
+            return self.bind_ty(var, term, growth).map_err(|Cyclic| NoJoin);
         };
         let merged = self
             .bound_of(var)
@@ -1124,52 +1121,129 @@ impl Terms {
                 forwarded
             }
             Some(_) => Ok(()),
-            None => self.bind_ty(root, other.clone()),
+            None => self.bind_ty(root, other.clone(), Carrier::of_term(other, false).growth()),
         }
     }
 
-    /// The union of two structural types: a side that lacks members the
-    /// other has grows into the union, which its variable names now. A
-    /// side that must grow and has no variable cannot: whether that is a
-    /// mismatch follows the structure. An object's fields are initialized
-    /// per path and the definite-assignment check (validate/init_check.rs)
-    /// rejects a read of one that is not, so a value lacking a field is
-    /// not the checker's error. A ground enum type lacking a variant the
-    /// value may carry has no such check, and is. A ground pattern source
-    /// lacking a member the pattern names is.
+    /// Writes the union of two structural types. In a flow or a decision
+    /// the two sides become one variable; a pattern is a view of its
+    /// source and is joined to it only where both are open.
     fn write_union(
         &mut self,
         a: UnionSide,
         b: UnionSide,
         union: InferTy,
-        structure: Structure,
         kind: JoinKind,
         mismatch: impl Fn(&Self) -> Mismatch,
     ) -> Result<(), Mismatch> {
-        let must_grow_without_home = |side: &UnionSide| side.grows && side.root.is_none();
-        let unsound = match (kind, structure) {
-            (JoinKind::Pattern, _) => must_grow_without_home(&a),
-            (JoinKind::Flow | JoinKind::Decision, Structure::Product) => false,
-            (JoinKind::Flow | JoinKind::Decision, Structure::Sum) => must_grow_without_home(&b),
+        let checked: &[&UnionSide] = match kind {
+            JoinKind::Pattern => &[&a],
+            JoinKind::Flow | JoinKind::Decision => &[&a, &b],
         };
-        if unsound {
-            return Err(Mismatch {
-                reason: MismatchReason::UnionWithoutHome,
-                ..mismatch(self)
-            });
+        for side in checked {
+            if let (Carrier::Fixed, Some(member)) = (side.carrier, side.lacks) {
+                return Err(Mismatch {
+                    reason: MismatchReason::FixedLacks { member },
+                    ..mismatch(self)
+                });
+            }
         }
-        if let (Some(ra), true) = (a.root, a.grows) {
-            self.bind_ty(ra, union.clone())
-                .map_err(|Cyclic| mismatch(self))?;
+        match kind {
+            JoinKind::Flow | JoinKind::Decision => {
+                let growth = if a.carrier == Carrier::Fixed || b.carrier == Carrier::Fixed {
+                    Growth::Fixed
+                } else {
+                    Growth::Open
+                };
+                match (a.root, b.root) {
+                    (Some(ra), Some(rb)) => self
+                        .merge_ty(ra, rb, union, growth)
+                        .map_err(|NoJoin| mismatch(self)),
+                    (Some(root), None) | (None, Some(root)) => self
+                        .bind_ty(root, union, growth)
+                        .map_err(|Cyclic| mismatch(self)),
+                    (None, None) => Ok(()),
+                }
+            }
+            JoinKind::Pattern => match (a.open_root(), b.open_root()) {
+                (Some(ra), Some(rb)) => self
+                    .merge_ty(ra, rb, union, Growth::Open)
+                    .map_err(|NoJoin| mismatch(self)),
+                (ra, rb) => {
+                    for root in [ra, rb].into_iter().flatten() {
+                        self.bind_ty(root, union.clone(), Growth::Open)
+                            .map_err(|Cyclic| mismatch(self))?;
+                    }
+                    Ok(())
+                }
+            },
         }
-        if let (Some(rb), true) = (b.root, b.grows)
-            && !a
-                .root
-                .is_some_and(|ra| self.find_ty_root(ra) == self.find_ty_root(rb))
-        {
-            self.bind_ty(rb, union).map_err(|Cyclic| mismatch(self))?;
+    }
+
+    /// Poison rule 1 (docs/solver.md): every variable still open inside a
+    /// type joined with poison is bound to it.
+    fn poison(&mut self, ty: &InferTy, token: ErrorToken) {
+        let mut open = Vec::new();
+        collect_open_vars(&self.resolve_ty(ty), &mut open);
+        for var in open {
+            if matches!(self.ty_bounds[var.0 as usize], TypeBound::Unresolved { .. }) {
+                self.bind_ty(var, TyTerm::Error(token), Growth::Fixed)
+                    .expect("poison contains no variable");
+            }
         }
+    }
+
+    /// Makes two resolved variables one variable naming `union`.
+    fn merge_ty(
+        &mut self,
+        a: TypeBoundId,
+        b: TypeBoundId,
+        union: InferTy,
+        growth: Growth,
+    ) -> Result<(), NoJoin> {
+        let (a, b) = (self.find_ty_root(a), self.find_ty_root(b));
+        let bound = self.bound_of(a).meet(&self.bound_of(b)).ok_or(NoJoin)?;
+        if a != b {
+            self.forward_ty(b, a).map_err(|Cyclic| NoJoin)?;
+        }
+        if self.occurs_in(a, &union) {
+            return Err(NoJoin);
+        }
+        self.ty_bounds[a.0 as usize] = TypeBound::Resolved {
+            ty: union,
+            bound,
+            growth,
+        };
         Ok(())
+    }
+
+    fn union_side(
+        &self,
+        root: Option<TypeBoundId>,
+        term: &InferTy,
+        lacks: Option<Astr>,
+        pattern: bool,
+    ) -> UnionSide {
+        let carrier = match root {
+            Some(root) => match self.growth_of(root) {
+                Growth::Open => Carrier::Open,
+                Growth::Fixed => Carrier::Fixed,
+            },
+            None => Carrier::of_term(term, pattern),
+        };
+        UnionSide {
+            root,
+            lacks,
+            carrier,
+        }
+    }
+
+    fn growth_of(&self, root: TypeBoundId) -> Growth {
+        match &self.ty_bounds[self.find_ty_root(root).0 as usize] {
+            TypeBound::Resolved { growth, .. } => *growth,
+            TypeBound::Unresolved { .. } => Growth::Open,
+            TypeBound::Forward(_) => unreachable!("find_ty_root yields a root"),
+        }
     }
 }
 
@@ -1283,12 +1357,48 @@ struct NoJoin;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Cyclic;
 
-/// One side of a structural union: the variable that names it, if any,
-/// and whether it lacks members the other side has.
 #[derive(Debug, Clone, Copy)]
 struct UnionSide {
     root: Option<TypeBoundId>,
-    grows: bool,
+    /// A member the other side has and this one does not.
+    lacks: Option<Astr>,
+    carrier: Carrier,
+}
+
+impl UnionSide {
+    fn open_root(&self) -> Option<TypeBoundId> {
+        self.root.filter(|_| self.carrier == Carrier::Open)
+    }
+}
+
+/// What a side of a structural join can hold of the union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Carrier {
+    /// A variable that may gain members.
+    Open,
+    /// A layout the body did not choose.
+    Fixed,
+    /// A lower bound, which holds what it names and asks nothing of the
+    /// rest: a read's `AtLeast` object, or a pattern.
+    Bound,
+}
+
+impl Carrier {
+    /// The carrier of a term no variable names.
+    fn of_term(term: &InferTy, pattern: bool) -> Self {
+        match term {
+            _ if pattern => Carrier::Bound,
+            TyTerm::Object(object) if object.field_set() == FieldSet::AtLeast => Carrier::Bound,
+            _ => Carrier::Fixed,
+        }
+    }
+
+    fn growth(self) -> Growth {
+        match self {
+            Carrier::Open | Carrier::Bound => Growth::Open,
+            Carrier::Fixed => Growth::Fixed,
+        }
+    }
 }
 
 /// A `OneOf` bound is passed over here, and that is a decision rather
@@ -1306,6 +1416,15 @@ fn integer_bound_refuses(bound: &TyVarBound, term: &InferTy) -> bool {
         return false;
     }
     !matches!(term, TyTerm::Int(k) if among.contains(k) && (!*signed || k.signed()))
+}
+
+fn collect_open_vars(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
+    if let TyTerm::Var(var) = ty {
+        out.push(*var);
+    }
+    for child in ty.children() {
+        collect_open_vars(child, out);
+    }
 }
 
 fn alloc_ty_var(ty_bounds: &mut Vec<TypeBound>, bound: TyVarBound) -> TypeBoundId {
@@ -1878,6 +1997,27 @@ pub enum Unsettled {
 }
 
 impl Unsettled {
+    pub fn types(&self) -> Vec<&InferTy> {
+        match self {
+            Unsettled::NoInstance { call, .. } | Unsettled::AmbiguousInstance { call, .. } => {
+                vec![call]
+            }
+            Unsettled::InstanceMismatch { expected, got, .. }
+            | Unsettled::LendMismatch { expected, got, .. }
+            | Unsettled::MatchMismatch { expected, got, .. } => vec![expected, got],
+            Unsettled::NoConversion { from, to, .. }
+            | Unsettled::AmbiguousConversion { from, to, .. }
+            | Unsettled::ConversionOpen { from, to, .. }
+            | Unsettled::ConversionNeedsPlace { from, to, .. } => vec![from, to],
+            Unsettled::TaskTooHigh { .. }
+            | Unsettled::NoSignature { .. }
+            | Unsettled::AmbiguousSignature { .. }
+            | Unsettled::EffectExceeded { .. }
+            | Unsettled::ViewCaptured { .. }
+            | Unsettled::MutableBorrowOfShared { .. } => Vec::new(),
+        }
+    }
+
     pub fn decision(&self) -> DecisionId {
         match self {
             Unsettled::NoInstance { decision, .. }
@@ -2010,6 +2150,16 @@ impl<'src> Solver<'src> {
 
     pub fn fresh_var_with(&mut self, bound: TyVarBound) -> InferTy {
         TyTerm::Var(self.terms.alloc_ty_var(bound))
+    }
+
+    /// The type of a value the body constructs: a variable, so that every
+    /// name the value flows to shares whatever the type gains.
+    pub fn construct(&mut self, term: InferTy) -> InferTy {
+        let var = self.terms.alloc_ty_var(TyVarBound::Any);
+        self.terms
+            .bind_ty(var, term, Growth::Open)
+            .expect("a fresh variable occurs in no term");
+        TyTerm::Var(var)
     }
 
     /// A fresh variable for an integer literal: its bound is the set of
@@ -2208,6 +2358,19 @@ impl<'src> Solver<'src> {
         self.terms.find_ty_root(id)
     }
 
+    /// Poison rule 1 (docs/solver.md) for a type a refusal named: what it
+    /// left open is poison from here on.
+    pub fn poison(&mut self, ty: &InferTy) {
+        self.terms.poison(ty, ErrorToken::new());
+    }
+
+    /// The variables still open in `ty`, by their roots.
+    pub fn open_vars(&self, ty: &InferTy) -> Vec<TypeBoundId> {
+        let mut open = Vec::new();
+        collect_open_vars(&self.terms.resolve_ty(ty), &mut open);
+        open
+    }
+
     /// The declared bound a type variable's root carries.
     pub fn bound_of_var(&self, id: TypeBoundId) -> TyVarBound {
         self.terms.bound_of(self.terms.find_ty_root(id))
@@ -2283,6 +2446,7 @@ impl<'src> Solver<'src> {
             self.terms.ty_bounds[index] = TypeBound::Resolved {
                 ty,
                 bound: bound.clone(),
+                growth: Growth::Fixed,
             };
         }
         for index in 0..self.terms.repr_vars.len() {
@@ -3387,7 +3551,9 @@ impl<'src> Solver<'src> {
             &mut |id: TypeBoundId| {
                 let root = self.terms.find_ty_root(id);
                 match &self.terms.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved { ty: inner, bound } => {
+                    TypeBound::Resolved {
+                        ty: inner, bound, ..
+                    } => {
                         let frozen = self.freeze_ty_with(inner, open)?;
                         // A report shows the type the solve bound the
                         // variable to even where the declaration's bound

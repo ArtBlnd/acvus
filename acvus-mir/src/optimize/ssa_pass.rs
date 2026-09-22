@@ -284,7 +284,7 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
                 args.iter_mut().for_each(&s);
             }
         }
-        Terminator::Return { value, order } => {
+        Terminator::Return { value, order, .. } => {
             s(value);
             if let Some(o) = order {
                 s(o);
@@ -790,7 +790,7 @@ mod tests {
                 .flat_map(|i| crate::analysis::inst_info::uses(&i.kind))
                 .all(|u| defs.contains(&u))
                 && match &b.terminator {
-                    Terminator::Return { value, order } => {
+                    Terminator::Return { value, order, .. } => {
                         defs.contains(value) && order.is_none_or(|o| defs.contains(&o))
                     }
                     _ => true,

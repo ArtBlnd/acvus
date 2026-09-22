@@ -2601,23 +2601,29 @@ pub enum ObjectMeet<V>
 where
     V: Phase,
 {
-    /// The join, and which side has to take it: a side that lacks a field
-    /// of the union grows into it, and a side that meets a declaration
-    /// takes the declared type.
     Joined {
         ty: ObjectTy<V>,
-        a_takes: bool,
-        b_takes: bool,
     },
     /// A field `declared` names and an object of its type lacks.
-    Lacks { declared: Astr, field: Astr },
+    Lacks {
+        declared: Astr,
+        field: Astr,
+    },
     /// A field an object has and `declared` does not name.
-    Undeclared { declared: Astr, field: Astr },
+    Undeclared {
+        declared: Astr,
+        field: Astr,
+    },
     /// Two declarations: a value has the fields of one declared struct and
     /// of no other.
-    TwoDeclarations { a: Astr, b: Astr },
+    TwoDeclarations {
+        a: Astr,
+        b: Astr,
+    },
     /// The union has more fields than [`ObjectTy::MAX_FIELDS`].
-    TooWide { fields: usize },
+    TooWide {
+        fields: usize,
+    },
 }
 
 impl<V> ObjectTy<V>
@@ -2689,6 +2695,10 @@ where
 
     /// A field of this object the other lacks. The one that is interned
     /// first, so that two runs of one program refuse it in the same words.
+    pub fn missing_from(&self, other: &Self) -> Option<Astr> {
+        self.only_in(other)
+    }
+
     fn only_in(&self, other: &Self) -> Option<Astr> {
         self.fields
             .keys()
@@ -2708,8 +2718,6 @@ where
             return ObjectMeet::TooWide { fields };
         }
         ObjectMeet::Joined {
-            a_takes: b.only_in(a).is_some(),
-            b_takes: a.only_in(b).is_some(),
             ty: ObjectTy { set, fields },
         }
     }
@@ -2752,24 +2760,16 @@ where
     /// object that is one lacking a field, or carrying a field the struct
     /// does not name, is refused by the field's name.
     pub fn meet(a: &Self, b: &Self) -> ObjectMeet<V> {
-        let joined = |ty: &Self, a_takes: bool, b_takes: bool| ObjectMeet::Joined {
-            ty: ty.clone(),
-            a_takes,
-            b_takes,
-        };
+        let joined = |ty: &Self| ObjectMeet::Joined { ty: ty.clone() };
         match (a.set, b.set) {
             (FieldSet::Declared(x), FieldSet::Declared(y)) if x != y => {
                 ObjectMeet::TwoDeclarations { a: x, b: y }
             }
             (FieldSet::Declared(x), FieldSet::Declared(_)) => {
-                Self::disagreement(x, a, b).unwrap_or_else(|| joined(a, false, false))
+                Self::disagreement(x, a, b).unwrap_or_else(|| joined(a))
             }
-            (FieldSet::Declared(x), _) => {
-                Self::disagreement(x, a, b).unwrap_or_else(|| joined(a, false, true))
-            }
-            (_, FieldSet::Declared(y)) => {
-                Self::disagreement(y, b, a).unwrap_or_else(|| joined(b, true, false))
-            }
+            (FieldSet::Declared(x), _) => Self::disagreement(x, a, b).unwrap_or_else(|| joined(a)),
+            (_, FieldSet::Declared(y)) => Self::disagreement(y, b, a).unwrap_or_else(|| joined(b)),
             (FieldSet::Written, _) | (_, FieldSet::Written) => Self::union(a, b, FieldSet::Written),
             (FieldSet::AtLeast, FieldSet::AtLeast) => Self::union(a, b, FieldSet::AtLeast),
         }
@@ -2943,6 +2943,47 @@ impl<V: Phase> TyTerm<V> {
     /// `MirErrorKind::IdentityMismatch` reports: this order is the pairing
     /// that refusal reads, and `typeck` compares the two lists position by
     /// position.
+    pub fn children(&self) -> Vec<&TyTerm<V>> {
+        match self {
+            TyTerm::Int(_)
+            | TyTerm::Float
+            | TyTerm::Char
+            | TyTerm::String
+            | TyTerm::Bool
+            | TyTerm::Unit
+            | TyTerm::Never
+            | TyTerm::Order
+            | TyTerm::Str
+            | TyTerm::Error(_)
+            | TyTerm::Var(_) => Vec::new(),
+            TyTerm::Array(inner, _)
+            | TyTerm::Slice(inner)
+            | TyTerm::Handle(inner)
+            | TyTerm::Option(inner) => vec![inner],
+            TyTerm::Ref(_, inner) => vec![&inner.ty],
+            TyTerm::Result(ok, err) => vec![ok, err],
+            TyTerm::Tuple(elems) => elems.iter().collect(),
+            TyTerm::Object(object) => object.values().collect(),
+            TyTerm::Enum { variants, .. } => variants.values().flatten().map(|b| &**b).collect(),
+            TyTerm::Fn {
+                params,
+                ret,
+                captures,
+                ..
+            } => params
+                .iter()
+                .map(|param| &param.ty)
+                .chain(std::iter::once(&**ret))
+                .chain(captures.iter())
+                .collect(),
+            TyTerm::UserDefined { type_args, .. } => type_args.iter().map(|arg| &arg.ty).collect(),
+        }
+    }
+
+    pub fn mentions_error(&self) -> bool {
+        matches!(self, TyTerm::Error(_)) || self.children().into_iter().any(TyTerm::mentions_error)
+    }
+
     pub fn for_each_source(&self, on_source: &mut impl FnMut(IdentityId)) {
         self.for_each_identity(&mut |identity| {
             if let IdentityTerm::Known(id) = identity {
@@ -3732,6 +3773,7 @@ mod tests {
             interner.intern("age"),
             TyTerm::I64,
         )])));
+        let (obj1, obj2) = (s.construct(obj1), s.construct(obj2));
         let home = s.fresh_ty_var();
         assert!(s.unify(&obj1, &home).is_ok());
         assert!(s.unify(&obj2, &home).is_ok());
@@ -3832,16 +3874,10 @@ mod tests {
         let i = Interner::new();
         let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
         let written = ObjectTy::written(fields_of(&i, &["a", "b"]));
-        let ObjectMeet::Joined {
-            ty,
-            a_takes,
-            b_takes,
-        } = ObjectTy::meet(&flags, &written)
-        else {
+        let ObjectMeet::Joined { ty } = ObjectTy::meet(&flags, &written) else {
             panic!("the field sets agree")
         };
         assert_eq!(ty.declaration(), Some(i.intern("Flags")));
-        assert_eq!((a_takes, b_takes), (false, true));
     }
 
     /// Reading a field asks the object for it; the object a declaration
@@ -3850,16 +3886,12 @@ mod tests {
     fn asking_a_declared_object_for_one_of_its_fields_joins_to_the_declared_type() {
         let i = Interner::new();
         let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
-        let ObjectMeet::Joined {
-            ty,
-            a_takes,
-            b_takes,
-        } = ObjectTy::meet(&flags, &ObjectTy::at_least(fields_of(&i, &["a"])))
+        let ObjectMeet::Joined { ty } =
+            ObjectTy::meet(&flags, &ObjectTy::at_least(fields_of(&i, &["a"])))
         else {
             panic!("a read of `a` is within the declaration")
         };
         assert_eq!(ty.declaration(), Some(i.intern("Flags")));
-        assert_eq!((a_takes, b_takes), (false, true));
     }
 
     #[test]
@@ -3902,6 +3934,7 @@ mod tests {
             i.intern("b"),
             TyTerm::String,
         )])));
+        let (obj_a, obj_b) = (s.construct(obj_a), s.construct(obj_b));
         assert!(s.unify(&v, &obj_a).is_ok());
         assert!(s.unify(&v, &obj_b).is_ok());
         let resolved = s.resolve_ty(&v);
@@ -3932,6 +3965,7 @@ mod tests {
             (i.intern("b"), TyTerm::String),
             (i.intern("c"), TyTerm::Bool),
         ])));
+        let (obj_ab, obj_bc) = (s.construct(obj_ab), s.construct(obj_bc));
         assert!(s.unify(&v, &obj_ab).is_ok());
         assert!(s.unify(&v, &obj_bc).is_ok());
         let resolved = s.resolve_ty(&v);

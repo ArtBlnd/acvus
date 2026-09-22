@@ -68,7 +68,7 @@ expression: listing
     ; r39 (i) : i64
     ; r40 (v54) : i64
     ; r41 (v35) : Unit
-    ; r42 (v16) : E{A(i64)}
+    ; r42 (v16) : E{A(i64), B(i64)}
     ; r43 (v60) : i64
     ; r44 (v41) : i64
     ; r45 (e) : E{A(i64), B(i64)}
@@ -82,7 +82,7 @@ expression: listing
     ; r53 (v52) : i64
     ; r54 (v) : i64
     ; r55 (v58) : i64
-    ; r56 (v20) : E{B(i64)}
+    ; r56 (v20) : E{A(i64), B(i64)}
     ; r57 (v64) : i64
     ; r58 (@n) : i64
     ; r59 (v45) : i64
