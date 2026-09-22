@@ -109,3 +109,14 @@ async fn a_context_read_inside_a_variant_payload_has_its_slot() {
     .await;
     assert_eq!(value.as_int(), 5);
 }
+
+#[test]
+fn an_unused_owned_element_of_a_loop_by_value_is_dropped_where_it_arrives() {
+    runs_to("let a = [\"a\".to_string()]; for o in a { } 0", "0");
+}
+
+#[test]
+fn a_field_of_a_loop_element_by_value_is_the_element_s() {
+    runs_to("let a = [{ n: 1, }]; let t = 0; for o in a { t = o.n; } t", "1");
+    runs_to("let t = 0; for o in [{ n: 1, }] { t = t + o.n; } t", "1");
+}

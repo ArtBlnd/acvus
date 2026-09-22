@@ -656,6 +656,14 @@ fn whole_assign(
     // parts then need is the one the SSA builder places for them.
     let param = cfg.blocks[at.0].params.iter().position(|p| *p == value)?;
     let label = cfg.blocks[at.0].label;
+    // A `For` fills its body's leading parameters itself (RFC-0057): no
+    // constructor stands behind them, so the slot keeps its aggregate.
+    let filled_by_a_for = cfg.blocks.iter().any(|pred| {
+        matches!(&pred.terminator, Terminator::For { body, .. } if *body == label)
+    });
+    if filled_by_a_for {
+        return None;
+    }
     let mut tails: Vec<Tail> = Vec::new();
     for (pi, pred) in cfg.blocks.iter().enumerate() {
         for args in incoming(&pred.terminator, label) {

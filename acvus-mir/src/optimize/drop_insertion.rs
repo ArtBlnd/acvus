@@ -51,7 +51,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         let block_idx = BlockIdx(bi);
         let block = &cfg.blocks[bi];
 
-        let mut drops_after: Vec<(usize, ValueId)> = Vec::new();
+        let mut drops: Vec<BlockDrop> = Vec::new();
 
         for (ii, inst) in block.insts.iter().enumerate() {
             for u in loans.uses_with_storage(&inst.kind) {
@@ -60,7 +60,10 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                     && needs_drop(u, val_types)
                     && !ends_ownership(&inst.kind, u, val_types)
                 {
-                    drops_after.push((ii, u));
+                    drops.push(BlockDrop {
+                        at: ii + 1,
+                        value: u,
+                    });
                 }
             }
         }
@@ -68,7 +71,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         // Values defined in this block that are never used, or whose last use
         // is the terminator and it consumes them (no Drop needed).
         let term_uses = terminator_uses_with_storage(&block.terminator, &loans);
-        let already_dropped: FxHashSet<ValueId> = drops_after.iter().map(|(_, v)| *v).collect();
+        let already_dropped: FxHashSet<ValueId> = drops.iter().map(|drop| drop.value).collect();
 
         // Collect all defs in this block.
         let mut all_defs: Vec<ValueId> = block.params.clone();
@@ -101,13 +104,15 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 }
 
                 if !is_used_in_block(block, v, &loans) {
-                    // Unused def - insert drop right after definition.
-                    let idx = block
+                    // Unused def - insert drop right after definition; a
+                    // block parameter is defined before the block's first
+                    // instruction.
+                    let at = block
                         .insts
                         .iter()
                         .position(|inst| inst_info::defs(&inst.kind).contains(&v))
-                        .unwrap_or(0);
-                    drops_after.push((idx, v));
+                        .map_or(0, |defined| defined + 1);
+                    drops.push(BlockDrop { at, value: v });
                 }
                 // If used in block but not consumed, it was already handled
                 // in the per-instruction loop above.
@@ -115,15 +120,15 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         }
 
         // Sort by insertion point (reverse order to preserve indices when inserting).
-        drops_after.sort_by(|a, b| b.0.cmp(&a.0));
+        drops.sort_by(|a, b| b.at.cmp(&a.at));
 
         let block = &mut cfg.blocks[bi];
-        for (after_idx, val) in drops_after {
+        for BlockDrop { at, value } in drops {
             let drop_inst = Inst {
                 span: acvus_ast::Span::ZERO,
-                kind: InstKind::Drop { src: val },
+                kind: InstKind::Drop { src: value },
             };
-            block.insts.insert(after_idx + 1, drop_inst);
+            block.insts.insert(at, drop_inst);
         }
     }
 
@@ -560,6 +565,12 @@ fn emptied_in(
         }
     }
     emptied
+}
+
+/// A drop placed inside a block, before the instruction now at `at`.
+struct BlockDrop {
+    at: usize,
+    value: ValueId,
 }
 
 /// Does this value need a Drop instruction?
