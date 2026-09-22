@@ -1,0 +1,2 @@
+// expect 3
+let t = if false { (1, 2) } else { (1, 2) }; match t { (a, b) => a + b, _ => 99, }

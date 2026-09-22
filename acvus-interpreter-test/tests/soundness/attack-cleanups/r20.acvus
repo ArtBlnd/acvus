@@ -1,0 +1,2 @@
+// expect 2
+let f = | | -> vec([10, 20]); f().len()

@@ -14,7 +14,8 @@ use crate::ir::{
     InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey, ValOrigin,
     ValueId, reaches,
 };
-use crate::solver::CaptureRead;
+use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
+use crate::solver::{CaptureRead, MatchMode};
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
 use crate::typeck::{CapturedName, Passing, TypeResolution};
 
@@ -1549,123 +1550,69 @@ impl<'a> Lowerer<'a> {
     }
 
     fn place_or_temporary(&mut self, place: &Expr) -> Place {
-        let ty = self.type_of_id(place.id());
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut root = place;
-        loop {
-            match root {
-                Expr::FieldAccess { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    root = object;
-                }
-                Expr::Paren { inner, .. } => root = inner,
-                _ => break,
-            }
-        }
-        path.reverse();
-        let target = match self.storage_through(root) {
+        let Projected { base, fields } = projected(place);
+        let target = match self.base_target(base) {
             Some(target) => target,
             None => {
-                let value = self.lower_before_coercion(root);
-                self.temporary(root.span(), value, self.type_of_id(root.id()))
+                let value = self.lower_before_coercion(base);
+                self.temporary(base.span(), value, self.type_of_id(base.id()))
             }
         };
-        // A place that is a reference names what the reference names
-        // (RFC-0029).
-        let ty = match ty {
-            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
-                inner.ty
+        let ty = self.place_ty(place.id(), base.id(), &fields);
+        Place {
+            target,
+            path: self::fields(&fields),
+            ty,
+        }
+    }
+
+    fn place_ty(&self, place: AstId, base: AstId, fields: &[Astr]) -> Ty {
+        let ty = self.type_of_id(place);
+        match (self.place_base(base), fields) {
+            (PlaceBase::ThroughReferenceIn(_) | PlaceBase::ThroughReference, []) => {
+                let Ty::Ref(_, referent) = ty else {
+                    panic!("the checker reads a base through a reference only where it is one")
+                };
+                referent.ty
             }
-            ty => ty,
-        };
-        Place { target, path, ty }
+            _ => ty,
+        }
     }
 
     fn store_target(&mut self, place: &acvus_ast::Place) -> Place {
-        let ty = self.type_of_id(place.id());
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut node = place;
-        let base = loop {
-            match node {
-                acvus_ast::Place::Field { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    node = object;
-                }
-                acvus_ast::Place::Base(base) => break base,
+        let (base, fields) = projected_store(place);
+        let target = match self.place_base(base.id()) {
+            PlaceBase::Storage(storage) => self.storage(storage),
+            PlaceBase::ThroughReferenceIn(storage) => {
+                self.through_stored_reference(storage, base.id(), base.span())
+            }
+            PlaceBase::Element(access) => {
+                let element = Element::of_store(base)
+                    .expect("the checker records an element base only on an element store");
+                self.element_reference(access, element)
+            }
+            other @ (PlaceBase::ThroughReference | PlaceBase::Temporary) => {
+                panic!("a store target's base is a storage or an element, not {other:?}")
             }
         };
-        path.reverse();
-        let target = self.store_base(base);
-        // A place that is a reference names what the reference names
-        // (RFC-0029).
-        let ty = match ty {
-            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
-                inner.ty
-            }
-            ty => ty,
-        };
-        Place { target, path, ty }
-    }
-
-    fn store_base(&mut self, base: &acvus_ast::PlaceBase) -> RefTarget {
-        let (id, span) = (base.id(), base.span());
-        let storage = match base {
-            acvus_ast::PlaceBase::Root { root, .. } => match root {
-                acvus_ast::Root::Context(name) => {
-                    RefTarget::Var(self.context_slot(QualifiedRef::root(*name)))
-                }
-                acvus_ast::Root::ExternParam(name) => match self.try_param_slot(*name) {
-                    Some(param_reg) => RefTarget::Param(param_reg),
-                    None => RefTarget::Var(self.var_slot(*name)),
-                },
-                acvus_ast::Root::Local(name) => RefTarget::Var(self.var_slot(*name)),
-            },
-            acvus_ast::PlaceBase::Element {
-                callee_id,
-                container,
-                index,
-                ..
-            } => {
-                let access = IndexAccess {
-                    mode: IndexMode::Ref,
-                    ..self.index_access(id)
-                };
-                let reference =
-                    self.lower_index_as(access, id, *callee_id, container.expr(), index, span);
-                return RefTarget::Through(reference);
-            }
-        };
-        match self.type_of_id(id) {
-            ty @ Ty::Ref(..) => {
-                let reference = self.emit_take(span, storage, vec![], ty);
-                RefTarget::Through(reference)
-            }
-            _ => storage,
+        let ty = self.place_ty(place.id(), base.id(), &fields);
+        Place {
+            target,
+            path: self::fields(&fields),
+            ty,
         }
     }
 
     /// An operator operand borrowed for the expression (RFC-0020).
     fn lend_operand(&mut self, operand: &Expr) -> ValueId {
-        let ty = self.type_of_id(operand.id());
-        if matches!(ty, Ty::Ref(..)) {
+        if let Passing::AsIs = self.passing(operand) {
             return self.lower_expr(operand);
         }
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut root = operand;
-        loop {
-            match root {
-                Expr::FieldAccess { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    root = object;
-                }
-                Expr::Paren { inner, .. } => root = inner,
-                _ => break,
-            }
-        }
-        path.reverse();
+        let ty = self.type_of_id(operand.id());
         let span = operand.span();
-        if let Some(target) = self.storage_through(root) {
-            return self.emit_ref(span, target, path, Mutability::Shared, ty);
+        let Projected { base, fields } = projected(operand);
+        if let Some(target) = self.base_target(base) {
+            return self.emit_ref(span, target, self::fields(&fields), Mutability::Shared, ty);
         }
         let value = self.lower_expr(operand);
         let owned = self.temporary(span, value, ty.clone());
@@ -1783,63 +1730,55 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    /// The storage a root expression names, through the reference it holds
-    /// when it holds one.
-    /// The place a root names: its storage, or, when the root is a
-    /// reference (a storage holding one, or any expression of `&T`), the
-    /// storage through that reference (RFC-0024).
-    fn storage_through(&mut self, root: &Expr) -> Option<RefTarget> {
-        // `a[i]` names the element the `Index` leaves a reference into
-        // (RFC-0047 §3): the place is that reference, as `*r`'s is.
-        if let Expr::Index {
-            id,
-            callee_id,
-            object,
-            index,
-            span,
-        } = root
-        {
-            let access = IndexAccess {
-                mode: IndexMode::Ref,
-                ..self.index_access(*id)
-            };
-            let reference = self.lower_index_as(access, *id, *callee_id, object, index, *span);
-            return Some(RefTarget::Through(reference));
-        }
-        let ty = self.type_of_id(root.id());
-        match (self.storage_of(root), matches!(ty, Ty::Ref(..))) {
-            (Some(target), false) => Some(target),
-            (Some(target), true) => {
-                let reference = self.emit_take(root.span(), target, vec![], ty);
-                Some(RefTarget::Through(reference))
+    fn place_base(&self, base: AstId) -> PlaceBase {
+        *self
+            .resolution
+            .place_bases
+            .get(&base)
+            .expect("the checker settles the base of every place the lowering reads")
+    }
+
+    fn base_target(&mut self, base: &Expr) -> Option<RefTarget> {
+        match self.place_base(base.id()) {
+            PlaceBase::Storage(storage) => Some(self.storage(storage)),
+            PlaceBase::ThroughReferenceIn(storage) => {
+                Some(self.through_stored_reference(storage, base.id(), base.span()))
             }
-            (None, true) => Some(RefTarget::Through(self.lower_expr(root))),
-            (None, false) => None,
+            PlaceBase::ThroughReference => Some(RefTarget::Through(self.lower_expr(base))),
+            PlaceBase::Element(access) => {
+                let element = Element::of(base)
+                    .expect("the checker records an element base only on an index into a place");
+                Some(self.element_reference(access, element))
+            }
+            PlaceBase::Temporary => None,
         }
     }
 
-    /// The storage a root expression names, if it is a local, a parameter,
-    /// or a context.
-    fn storage_of(&mut self, root: &Expr) -> Option<RefTarget> {
-        match root {
-            Expr::ContextRef { name, .. } => Some(RefTarget::Var(self.context_slot(*name))),
-            Expr::Ident {
-                name,
-                ref_kind: RefKind::ExternParam,
-                ..
-            } => match self.try_param_slot(name.name) {
-                Some(param_reg) => Some(RefTarget::Param(param_reg)),
-                None if self.is_defined(name.name) => {
-                    Some(RefTarget::Var(self.var_slot(name.name)))
-                }
-                None => None,
+    fn element_reference(&mut self, access: IndexAccess, element: Element<'_>) -> RefTarget {
+        let Element {
+            id,
+            callee_id,
+            container,
+            index,
+            span,
+        } = element;
+        RefTarget::Through(self.lower_index_as(access, id, callee_id, container, index, span))
+    }
+
+    fn through_stored_reference(&mut self, storage: Storage, base: AstId, span: Span) -> RefTarget {
+        let target = self.storage(storage);
+        let reference = self.emit_take(span, target, vec![], self.type_of_id(base));
+        RefTarget::Through(reference)
+    }
+
+    fn storage(&mut self, storage: Storage) -> RefTarget {
+        match storage {
+            Storage::Local(name) => RefTarget::Var(self.var_slot(name)),
+            Storage::Input(name) => match self.try_param_slot(name) {
+                Some(param) => RefTarget::Param(param),
+                None => RefTarget::Var(self.var_slot(name)),
             },
-            Expr::Ident {
-                name,
-                ref_kind: RefKind::Value,
-                ..
-            } if self.is_defined(name.name) => Some(RefTarget::Var(self.var_slot(name.name))),
-            _ => None,
+            Storage::Context(qref) => RefTarget::Var(self.context_slot(qref)),
         }
     }
 
@@ -2592,44 +2531,31 @@ impl<'a> Lowerer<'a> {
                 field,
                 span,
             } => {
-                /// Walk a FieldAccess chain, collecting field names.
-                /// Returns (root_expr, accumulated_path).
-                fn collect_field_chain(expr: &Expr) -> (&Expr, Vec<Astr>) {
-                    match expr {
-                        Expr::FieldAccess { object, field, .. } => {
-                            let (root, mut path) = collect_field_chain(object);
-                            path.push(*field);
-                            (root, path)
-                        }
-                        Expr::Paren { inner, .. } => collect_field_chain(inner),
-                        other => (other, vec![]),
-                    }
-                }
-
                 let field_ty = self.type_of_id(*id);
-                let (root, mut path) = collect_field_chain(object);
-                path.push(*field);
-                let path = fields(&path);
-
-                if let Some(target) = self.storage_through(root) {
-                    let dst = self.emit_take(*span, target.clone(), path.clone(), field_ty);
-                    self.set_origin(dst, ValOrigin::RefField(target, path));
-                    dst
-                } else {
-                    let obj = self.lower_expr(object);
-                    let dst = self.alloc_val();
-                    self.set_val_type(dst, field_ty);
-                    self.set_origin(dst, ValOrigin::Field(obj, *field));
-                    self.emit_inst(
-                        *span,
-                        InstKind::FieldGet {
-                            dst,
-                            object: obj,
-                            field: *field,
-                            rest: vec![],
-                        },
-                    );
-                    dst
+                let Projected { base, fields } = projected(expr);
+                match self.base_target(base) {
+                    Some(target) => {
+                        let path = self::fields(&fields);
+                        let dst = self.emit_take(*span, target, path.clone(), field_ty);
+                        self.set_origin(dst, ValOrigin::RefField(target, path));
+                        dst
+                    }
+                    None => {
+                        let obj = self.lower_expr(object);
+                        let dst = self.alloc_val();
+                        self.set_val_type(dst, field_ty);
+                        self.set_origin(dst, ValOrigin::Field(obj, *field));
+                        self.emit_inst(
+                            *span,
+                            InstKind::FieldGet {
+                                dst,
+                                object: obj,
+                                field: *field,
+                                rest: vec![],
+                            },
+                        );
+                        dst
+                    }
                 }
             }
 
@@ -3302,14 +3228,17 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
+    fn passing(&self, lent: &Expr) -> Passing {
+        *self
+            .resolution
+            .passing
+            .get(&lent.id())
+            .expect("the checker records how every receiver and operand is passed")
+    }
+
     /// A receiver as the checker decided it reaches its call.
     fn receiver(&mut self, receiver: &Expr, restores: &mut Vec<PlaceRestore>) -> ValueId {
-        let passing = *self
-            .resolution
-            .receiver_passing
-            .get(&receiver.id())
-            .expect("the checker records how every receiver is passed");
-        match passing {
+        match self.passing(receiver) {
             Passing::Value | Passing::AsIs => self.lower_expr(receiver),
             Passing::Lent(mutability) => {
                 let lent = Lent {
@@ -3439,24 +3368,11 @@ impl<'a> Lowerer<'a> {
     where
         P: IntoIterator<Item = &'p Pattern>,
     {
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut root = source;
-        loop {
-            match root {
-                Expr::FieldAccess { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    root = object;
-                }
-                Expr::Paren { inner, .. } => root = inner,
-                _ => break,
-            }
-        }
-        path.reverse();
-        let root_is_a_reference = matches!(self.type_of_id(root.id()), Ty::Ref(..));
-        if !root_is_a_reference && let Some(target) = self.storage_of(root) {
+        let Projected { base, fields } = projected(source);
+        if let PlaceBase::Storage(storage) = self.place_base(base.id()) {
             return PatSrc::Placed(Placed::Place {
-                target,
-                path,
+                target: self.storage(storage),
+                path: self::fields(&fields),
                 ty: self.type_of_id(source.id()),
             });
         }
@@ -3467,7 +3383,15 @@ impl<'a> Lowerer<'a> {
             .get(&value)
             .cloned()
             .expect("a lowered expression has a type");
-        if let Ty::Ref(_, referent) = ty {
+        let mode = *self
+            .resolution
+            .pattern_modes
+            .get(&source.id())
+            .expect("the checker records how every pattern source is read");
+        if mode == MatchMode::Through {
+            let Ty::Ref(_, referent) = ty else {
+                panic!("the checker reads a source through a reference only where it is one")
+            };
             return PatSrc::Placed(Placed::Through {
                 reference: value,
                 ty: referent.ty,

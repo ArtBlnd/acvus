@@ -1,0 +1,2 @@
+// expect 4
+let o = { a: 0, b: 0, }; for i in 0..4 { for j in 0..3 { o = { a: o.a + 1, b: o.b, }; } o = { a: o.a, b: o.b + 1, }; } o.b

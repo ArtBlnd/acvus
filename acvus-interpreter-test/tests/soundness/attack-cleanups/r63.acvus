@@ -1,0 +1,2 @@
+// expect refuse (store through a captured &mut) — consistent with h03 being a hole
+let x = 1; let r = &mut x; let c = | | -> { *r = 5; 0 }; c(); x

@@ -1,0 +1,2 @@
+// expect 30
+let xs = [{ a: 1, b: 2, }, { a: 3, b: 4, }, { a: 5, b: 10, }]; let t = 0; for x in xs { t = t + x.a + x.b; } t + 5

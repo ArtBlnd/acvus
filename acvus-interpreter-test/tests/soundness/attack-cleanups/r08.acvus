@@ -1,0 +1,2 @@
+// expect 3
+let o = { v: vec([1, 2, 3]), }; o.v.len()

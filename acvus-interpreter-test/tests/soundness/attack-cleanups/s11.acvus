@@ -1,0 +1,2 @@
+// expect "b"
+let xs = [{ n: 1, s: "a".to_string(), }, { n: 2, s: "b".to_string(), }]; let r = "".to_string(); for x in xs { r = x.s; } r

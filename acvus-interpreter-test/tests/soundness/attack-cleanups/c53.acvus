@@ -1,0 +1,2 @@
+// expect refuse (by design) — would be "aa"
+let s = "a".to_string(); let r = &s; let rr = &r; clone(*rr) + r

@@ -1,0 +1,2 @@
+// expect 45
+let o = { a: 0, b: 0, }; for i in 0..10 { o = { a: o.a + i, b: o.b, }; } o.a + o.b

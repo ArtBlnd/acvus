@@ -1,0 +1,2 @@
+// expect "aa"
+let s = "a".to_string(); let f = |r| -> r.clone(); let t = f(&mut s); t + &s

@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([vec([1]), vec([2, 3])]); let r = &v; r[1u64].len() + r[0u64].len()

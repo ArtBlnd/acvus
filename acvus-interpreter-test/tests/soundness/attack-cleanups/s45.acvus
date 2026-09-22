@@ -1,0 +1,2 @@
+// expect 0
+let xs = [None, None, Some({ a: 1, })]; 0

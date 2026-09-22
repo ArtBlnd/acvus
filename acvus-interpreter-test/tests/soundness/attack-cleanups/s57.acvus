@@ -1,0 +1,2 @@
+// expect 6
+let o = { a: 1, b: 2, }; for i in 0..3 { let p = o; o = { a: p.b, b: p.a + p.b, }; if o.a > 100 { break; }; } o.a + o.b - 7

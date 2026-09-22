@@ -1,0 +1,2 @@
+// expect 3
+let s = "abc".to_string(); let r = &mut s; let n = r.len(); *r = "x".to_string(); n + r.len() - 1

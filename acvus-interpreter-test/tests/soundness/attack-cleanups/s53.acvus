@@ -1,0 +1,2 @@
+// expect "3:30"
+let xs = [{ a: 1, b: 10, }, { a: 2, b: 20, }, { a: 3, b: 30, }]; let best = { a: 0, b: 0, }; for x in xs { if x.a == 2 { continue; }; best = x; } best.a.to_string() + ":" + &best.b.to_string()

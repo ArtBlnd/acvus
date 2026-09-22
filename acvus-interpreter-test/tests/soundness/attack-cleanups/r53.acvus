@@ -1,0 +1,2 @@
+// expect "ABC"
+let s = "abc".to_string(); let r = &s; r.upper()

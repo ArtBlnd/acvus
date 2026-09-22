@@ -1,0 +1,2 @@
+// expect "yz"
+let xs = [{ s: "x".to_string(), }, { s: "y".to_string(), }, { s: "z".to_string(), }]; let acc = "".to_string(); for x in &xs { if x.s == "x" { continue; }; acc = acc + &x.s; } acc

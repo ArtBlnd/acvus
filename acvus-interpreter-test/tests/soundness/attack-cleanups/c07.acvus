@@ -1,0 +1,2 @@
+// expect "abab"
+let s = "ab".to_string(); let r = &s; let rr = &r; let t = rr.clone(); t + &s

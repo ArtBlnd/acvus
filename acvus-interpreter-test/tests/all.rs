@@ -65,6 +65,7 @@ mod option_payload_drop;
 mod option_string_drop;
 mod pattern_sources;
 mod pattern_through;
+mod place_forms;
 mod prepare_contract;
 mod recursive_summary;
 mod regex;

@@ -1,0 +1,2 @@
+// expect 5
+let xs = [{ a: 1, b: 2, }, { a: 5, b: 4, }]; let last = { a: 0, b: 0, }; for x in xs { last = x; } last.a

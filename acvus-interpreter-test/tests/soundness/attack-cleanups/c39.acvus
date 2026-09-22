@@ -1,0 +1,2 @@
+// expect refuse (two args) 
+let s = "ab".to_string(); clone(&s, &s)

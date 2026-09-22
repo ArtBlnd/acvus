@@ -1,0 +1,2 @@
+// expect 11
+let f = |x| -> x; let o = if true { f({ a: 1, b: 10, }) } else { { a: 3, b: 4, } }; o.a + o.b

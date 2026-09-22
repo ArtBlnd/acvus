@@ -1,0 +1,2 @@
+// expect "b"
+let s = if true { "b".to_string() } else { "c".to_string() }; let t = s.clone(); t

@@ -1,0 +1,2 @@
+// expect "a!b!"
+let v = vec(["a".to_string(), "b".to_string()]); for x in &mut v { *x = x.clone() + "!"; } v[0u64].clone() + &v[1u64]

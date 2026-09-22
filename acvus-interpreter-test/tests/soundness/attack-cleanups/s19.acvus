@@ -1,0 +1,2 @@
+// expect 30
+let xs = [{ a: 1, p: { q: 10, }, }, { a: 2, p: { q: 20, }, }]; let t = 0; for x in xs { let p = x.p; t = t + p.q; } t

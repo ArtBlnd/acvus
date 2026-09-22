@@ -1,0 +1,2 @@
+// expect 0
+let x = if true { Some({ a: 1, }) } else { None }; 0

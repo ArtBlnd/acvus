@@ -1,0 +1,2 @@
+// expect "aa"
+let v = vec(["a".to_string()]); let r = &v; let t = clone(&r[0u64]); t + &v[0u64]

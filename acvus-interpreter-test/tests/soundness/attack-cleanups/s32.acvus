@@ -1,0 +1,2 @@
+// expect 1
+let xs = [{ a: 1, }]; let n = 0; for x in xs { n = n + x.a; } n

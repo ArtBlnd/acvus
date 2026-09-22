@@ -1,0 +1,2 @@
+// expect "xx"
+let o = Some("x".to_string()); match &o { Some(s) => s.clone() + s, None => "".to_string(), }

@@ -11,6 +11,9 @@ use crate::error::{
 };
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, Chosen, ExternCast, ForKind, IndexAccess, IndexMode};
+use crate::place::{
+    Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
+};
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
     Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice,
@@ -95,6 +98,14 @@ struct BoundSite {
 
 /// An integer literal awaiting its width, checked against its value once
 /// the width is known (RFC-0037).
+/// How a pattern source is read: known where it was checked, or the answer
+/// of the match decision its open head opened.
+#[derive(Clone, Copy)]
+enum SourceMode {
+    Read(MatchMode),
+    Decided(DecisionId),
+}
+
 struct OpenDecision {
     open: InferTy,
     span: Span,
@@ -352,14 +363,14 @@ struct ArgSite {
 #[derive(Debug, Clone)]
 struct LentPlace {
     id: AstId,
-    place: Place,
+    loan: Loan,
 }
 
 impl LentPlace {
     fn of(expr: &Expr) -> Option<Self> {
-        place_of(expr).map(|place| Self {
+        Loan::of(expr).map(|loan| Self {
             id: expr.id(),
-            place,
+            loan,
         })
     }
 }
@@ -722,9 +733,16 @@ pub struct TypeResolution {
     pub for_kinds: FxHashMap<AstId, ForKind>,
     /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
     pub structural_variant_calls: FxHashSet<AstId>,
-    /// How each receiver, keyed by its own expression, reaches the call
-    /// that takes it.
-    pub receiver_passing: FxHashMap<AstId, Passing>,
+    /// How each receiver and each operator operand, keyed by its own
+    /// expression, reaches what takes it.
+    pub passing: FxHashMap<AstId, Passing>,
+    /// How each `match` / `if let` / `while let` source, keyed by its own
+    /// expression, is read by its patterns (RFC-0024).
+    pub pattern_modes: FxHashMap<AstId, MatchMode>,
+    /// Where the base of each expression the lowering reads as a place
+    /// lives, keyed by the base's own id. The checker settled it from the
+    /// base's form and type; the lowering reads it and decides nothing.
+    pub place_bases: FxHashMap<AstId, PlaceBase>,
     /// The return type of the function each `?` leaves early from (RFC-0038).
     pub try_returns: FxHashMap<AstId, Ty>,
     pub tail_ty: Ty,
@@ -967,7 +985,10 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Calls `ns::tag(payload)` that resolved to a structural variant
     /// (RFC-0030), for the lowering.
     structural_variant_calls: FxHashSet<AstId>,
-    receiver_passing: FxHashMap<AstId, Passing>,
+    passing: FxHashMap<AstId, Passing>,
+    source_modes: FxHashMap<AstId, SourceMode>,
+    operands: Vec<AstId>,
+    place_bases: FxHashMap<AstId, WrittenBase>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
     /// What a settle inside the body refused, reported with the solve's own:
@@ -1033,7 +1054,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             refused_open: FxHashSet::default(),
             casts: Vec::new(),
             structural_variant_calls: FxHashSet::default(),
-            receiver_passing: FxHashMap::default(),
+            passing: FxHashMap::default(),
+            source_modes: FxHashMap::default(),
+            operands: Vec::new(),
+            place_bases: FxHashMap::default(),
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
             index_uses: Vec::new(),
@@ -1289,6 +1313,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let direct_calls = self.frozen_direct_calls();
         let intrinsic_calls = self.frozen_intrinsic_calls();
         let lambda_captures = self.frozen_lambda_captures();
+        let place_bases = self.frozen_place_bases(&type_map);
+        let passing = self.frozen_passing(&type_map);
+        let pattern_modes = self.frozen_pattern_modes();
         // A second gate, because freezing is itself a check: a type the
         // solve left open is found only where it is closed, and every such
         // type is closed above.
@@ -1304,7 +1331,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             index_access: self.index_access,
             for_kinds: self.for_kinds,
             structural_variant_calls: self.structural_variant_calls,
-            receiver_passing: self.receiver_passing,
+            passing,
+            pattern_modes,
+            place_bases,
             try_returns,
             tail_ty,
             extern_params,
@@ -1312,6 +1341,82 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             effect,
             context_types,
         }))
+    }
+
+    fn frozen_place_bases(&self, type_map: &TypeMap) -> FxHashMap<AstId, PlaceBase> {
+        self.place_bases
+            .iter()
+            .map(|(&id, &written)| {
+                let is_a_reference = || {
+                    let ty = type_map
+                        .get(&id)
+                        .expect("a place's base is checked before it is noted");
+                    matches!(ty, Ty::Ref(..))
+                };
+                let base = match written {
+                    WrittenBase::Storage(storage) if is_a_reference() => {
+                        PlaceBase::ThroughReferenceIn(storage)
+                    }
+                    WrittenBase::Storage(storage) => PlaceBase::Storage(storage),
+                    WrittenBase::Element => {
+                        let access = self
+                            .index_access
+                            .get(&id)
+                            .expect("type checking settles every index expression");
+                        PlaceBase::Element(IndexAccess {
+                            mode: IndexMode::Ref,
+                            ..*access
+                        })
+                    }
+                    WrittenBase::Value if is_a_reference() => PlaceBase::ThroughReference,
+                    WrittenBase::Value => PlaceBase::Temporary,
+                };
+                (id, base)
+            })
+            .collect()
+    }
+
+    fn frozen_pattern_modes(&self) -> FxHashMap<AstId, MatchMode> {
+        self.source_modes
+            .iter()
+            .map(|(&source, &mode)| {
+                let mode = match mode {
+                    SourceMode::Read(mode) => mode,
+                    SourceMode::Decided(decision) => match self.solver.answer(decision) {
+                        Some(Answer::Match(mode)) => mode,
+                        other => panic!("a match decision settles before freezing, not {other:?}"),
+                    },
+                };
+                (source, mode)
+            })
+            .collect()
+    }
+
+    fn frozen_passing(&mut self, type_map: &TypeMap) -> FxHashMap<AstId, Passing> {
+        let mut passing = std::mem::take(&mut self.passing);
+        for &operand in &self.operands {
+            let ty = type_map
+                .get(&operand)
+                .expect("an operand is checked before it is noted");
+            let lent = match ty {
+                Ty::Ref(..) => Passing::AsIs,
+                _ => Passing::Lent(Mutability::Shared),
+            };
+            passing.insert(operand, lent);
+        }
+        passing
+    }
+
+    fn note_place(&mut self, expr: &Expr) {
+        let base = projected(expr).base;
+        self.place_bases.insert(base.id(), WrittenBase::of(base));
+    }
+
+    fn pass_receiver(&mut self, receiver: &Expr, passing: Passing) {
+        if let Passing::Lent(_) = passing {
+            self.note_place(receiver);
+        }
+        self.passing.insert(receiver.id(), passing);
     }
 
     /// A value flows into a position that must have its type (solver.md
@@ -1425,13 +1530,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(mutability, lent_referent) = self.solver.shallow_resolve_ty(arg_ty) else {
             unreachable!("a lent argument is typed by check_borrow, a reference")
         };
-        let Some(root) = self.held_root(&lent.place.root) else {
+        let Some(root) = self.held_root(lent.loan.root) else {
             let TyTerm::Error(_) = self.solver.shallow_resolve_ty(&lent_referent.ty) else {
                 unreachable!("a place whose root is bound nowhere is an undefined name")
             };
             return;
         };
-        let path = &lent.place.path;
+        let path = &lent.loan.fields;
         if let Some(held) = self.held(&root, path) {
             let held_lend_ty =
                 TyTerm::Ref(mutability, Box::new(TypeArg::new(lent_referent.repr, held)));
@@ -1487,7 +1592,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let borrows = self.object_as_written(&projection);
         let has = self.object_as_written(&argument);
         let object = match &site.place {
-            Some(lent) => lent.place.display(self.interner),
+            Some(lent) => lent.loan.display(self.interner),
             None => has.clone(),
         };
         let note =
@@ -1682,17 +1787,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.error(mismatch, span);
     }
 
-    fn held_root(&self, root: &PlaceRoot) -> Option<HeldRoot> {
+    fn held_root(&self, root: Storage) -> Option<HeldRoot> {
         match root {
-            PlaceRoot::Context(qref) => Some(HeldRoot::Context(*qref)),
-            PlaceRoot::Local(name) => {
-                if let Some(scope) = self.scopes.iter().rposition(|s| s.contains_key(name)) {
-                    return Some(HeldRoot::Local { name: *name, scope });
+            Storage::Context(qref) => Some(HeldRoot::Context(qref)),
+            Storage::Local(name) | Storage::Input(name) => {
+                if let Some(scope) = self.scopes.iter().rposition(|s| s.contains_key(&name)) {
+                    return Some(HeldRoot::Local { name, scope });
                 }
                 self.param_types
                     .iter()
-                    .any(|param| param.name == *name)
-                    .then_some(HeldRoot::Param(*name))
+                    .any(|param| param.name == name)
+                    .then_some(HeldRoot::Param(name))
             }
         }
     }
@@ -3578,6 +3683,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let outer = std::mem::replace(&mut self.demand, PlaceDemand::Borrow(mutability));
         let ty = self.check_expr(place);
         self.demand = outer;
+        self.note_place(place);
         self.lend_place(&ty, place, mutability, span)
     }
 
@@ -3730,10 +3836,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> InferTy {
         if mutability == Mutability::Mut
-            && let Some(Place {
-                root: PlaceRoot::Context(qref),
+            && let Some(Loan {
+                root: Storage::Context(qref),
                 ..
-            }) = place_of(place)
+            }) = Loan::of(place)
         {
             self.note_access(Effect::write(qref), span);
         }
@@ -3856,7 +3962,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
         let (first, passing) = match mode {
-            ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => {
+            ReceiverMode::Lent(mutability) if names_a_place(receiver) => {
                 let ty =
                     self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span());
                 let first = FirstArg {
@@ -3893,7 +3999,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (first, Passing::Value)
             }
         };
-        self.receiver_passing.insert(receiver.id(), passing);
+        self.pass_receiver(receiver, passing);
         first
     }
 
@@ -3915,7 +4021,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 candidate,
             })
             .collect();
-        if place_of(receiver).is_none() {
+        if !names_a_place(receiver) {
             let first = self.receiver_arg(receiver, lent_only_if_agreed(&per_candidate), call_span);
             return Some(AdmittedReceiver::taking_every_candidate(
                 per_candidate,
@@ -4050,7 +4156,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (first, Passing::Value)
             }
         };
-        self.receiver_passing.insert(receiver.id(), passing);
+        self.pass_receiver(receiver, passing);
         first
     }
 
@@ -4759,6 +4865,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => {
                 let ty = self.check_expr(expr);
                 let target_ty = self.store_place(place, *span);
+                let (base, _) = projected_store(place);
+                self.place_bases.insert(base.id(), WrittenBase::of_store(base));
                 let site = ConversionSite {
                     id: expr.id(),
                     span: *span,
@@ -4915,6 +5023,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             } => {
                 let source_ty = self.check_expr(source);
+                self.note_place(source);
                 self.push_scope();
                 self.loops.push(None);
                 self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
@@ -5172,7 +5281,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// A demand reaches a place and the places it projects from; any other
     /// expression, and every operand inside it, is read as a value.
     fn check_expr(&mut self, expr: &Expr) -> InferTy {
-        if is_place(expr) {
+        if names_a_place(expr) {
             return self.check_expr_at_demand(expr);
         }
         let outer = std::mem::replace(&mut self.demand, PlaceDemand::Value);
@@ -5314,6 +5423,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
                 self.demand = outer;
+                for operand in [left, right] {
+                    self.note_place(operand);
+                    self.operands.push(operand.id());
+                }
                 let lt = self.read_operand_through(&lt, *op);
                 let rt = self.read_operand_through(&rt, *op);
 
@@ -5579,6 +5692,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let outer = std::mem::replace(&mut self.demand, through);
                 let ot_raw = self.check_expr(object);
                 self.demand = outer;
+                self.note_place(expr);
                 let ot = self.head_once_decided(&ot_raw);
                 if outer == PlaceDemand::Borrow(Mutability::Mut)
                     && let TyTerm::Ref(Mutability::Shared, _) = &ot
@@ -6046,6 +6160,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let source_ty = self.check_expr(source);
+                self.note_place(source);
                 self.push_scope();
                 self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
                 for s in then_body {
@@ -6086,6 +6201,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> InferTy {
         let source_ty = self.check_expr(scrutinee);
+        self.note_place(scrutinee);
         let mut joined: Option<Branch> = None;
         for arm in arms {
             let arm_source = self.reachable_arm_source(&arm.pattern, &source_ty, arm.span);
@@ -6383,19 +6499,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         source: PatternSource,
         span: Span,
     ) {
-        match self.solver.match_mode(source_ty) {
+        let mode = match self.solver.match_mode(source_ty) {
             MatchOutcome::Reads(reads) if reads.mode == MatchMode::Through => {
                 let outer = std::mem::replace(&mut self.pattern_mode, PatternMode::Through);
                 self.check_pattern_inner(pattern, &reads.names, source, span);
                 self.pattern_mode = outer;
+                SourceMode::Read(MatchMode::Through)
             }
-            MatchOutcome::Reads(_) => self.check_pattern_inner(pattern, source_ty, source, span),
+            MatchOutcome::Reads(_) => {
+                self.check_pattern_inner(pattern, source_ty, source, span);
+                SourceMode::Read(MatchMode::Value)
+            }
             MatchOutcome::HeadOpen => match source {
                 PatternSource::Expr(_) => {
-                    self.check_pattern_deferred(pattern, source_ty, source, span)
+                    SourceMode::Decided(self.check_pattern_deferred(pattern, source_ty, source, span))
                 }
-                PatternSource::Member => self.check_pattern_inner(pattern, source_ty, source, span),
+                PatternSource::Member => {
+                    self.check_pattern_inner(pattern, source_ty, source, span);
+                    SourceMode::Read(MatchMode::Value)
+                }
             },
+        };
+        if let PatternSource::Expr(id) = source {
+            self.source_modes.insert(id, mode);
         }
     }
 
@@ -6411,7 +6537,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         source_ty: &InferTy,
         source: PatternSource,
         span: Span,
-    ) {
+    ) -> DecisionId {
         let referent = self.solver.fresh_ty_var();
         let outer_mode = std::mem::replace(&mut self.pattern_mode, PatternMode::Deferred);
         let outer_bindings = std::mem::take(&mut self.deferred_bindings);
@@ -6432,6 +6558,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .into_iter()
                 .map(|span| DeferredContextBind { decision, span }),
         );
+        decision
     }
 
     /// A context holds data, and data holds no reference (RFC-0014): a
@@ -7393,68 +7520,5 @@ mod tests {
         let ctx = FxHashMap::from_iter([(i.intern("msg"), Ty::String)]);
         let src = "% let x = @msg";
         check_with_interner(src, &ctx, &i).unwrap();
-    }
-}
-
-/// Where a lent argument points: a local, a context, or an extern
-/// parameter, and the field path below it (RFC-0015).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Place {
-    root: PlaceRoot,
-    path: Vec<Astr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PlaceRoot {
-    Local(Astr),
-    Context(QualifiedRef),
-}
-
-impl Place {
-    fn display(&self, interner: &Interner) -> String {
-        let mut out = match &self.root {
-            PlaceRoot::Local(name) => interner.resolve(*name).to_string(),
-            PlaceRoot::Context(qref) => format!("@{}", interner.resolve(qref.name)),
-        };
-        for f in &self.path {
-            out.push('.');
-            out.push_str(interner.resolve(*f));
-        }
-        out
-    }
-}
-
-/// The place an expression denotes, if it denotes one. An extern
-/// parameter is a value, not a place.
-/// Whether an expression denotes a place.
-fn is_place(expr: &Expr) -> bool {
-    place_of(expr).is_some()
-}
-
-fn place_of(expr: &Expr) -> Option<Place> {
-    match expr {
-        Expr::Ident {
-            name,
-            ref_kind: RefKind::Value | RefKind::ExternParam,
-            ..
-        } => Some(Place {
-            root: PlaceRoot::Local(name.name),
-            path: Vec::new(),
-        }),
-        Expr::ContextRef { name, .. } => Some(Place {
-            root: PlaceRoot::Context(*name),
-            path: Vec::new(),
-        }),
-        Expr::FieldAccess { object, field, .. } => {
-            let mut place = place_of(object)?;
-            place.path.push(*field);
-            Some(place)
-        }
-        // `a[i]` is the place `a` with the index left off: two elements of
-        // one container are one loan, which is what the slice holds
-        // (RFC-0047 §3).
-        Expr::Index { object, .. } => place_of(object),
-        Expr::Paren { inner, .. } => place_of(inner),
-        _ => None,
     }
 }

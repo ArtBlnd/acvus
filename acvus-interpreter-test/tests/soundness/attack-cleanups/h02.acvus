@@ -1,0 +1,2 @@
+// expect refuse (`*` of object) with a user message
+let xs = [{ a: 1, }]; let r = { a: 0, }; for x in &xs { r = *x; } r.a

@@ -22,6 +22,64 @@ struct Known {
 }
 
 const KNOWN: &[Known] = &[
+    // An `Option` of an aggregate with a `None` element, in an array.
+    Known {
+        program: "attack-cleanups/h01.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s22.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s27.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s33.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s35.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s36.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s37.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s40.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s46.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s47.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s48.acvus",
+        shows: "a double take",
+    },
+    Known {
+        program: "attack-cleanups/s52.acvus",
+        shows: "a double take",
+    },
+    // `*x` of an aggregate element reference from a `for`: the checker admits it.
+    Known {
+        program: "attack-cleanups/h02.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
+    Known {
+        program: "attack-cleanups/s38.acvus",
+        shows: "Take takes a primitive through a reference",
+    },
     // A `String` payload taken out of a variant still in its storage, twice.
     Known {
         program: "b18/w02.acvus",

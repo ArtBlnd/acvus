@@ -5,6 +5,7 @@ pub mod graph;
 pub mod ir;
 pub mod lower;
 pub mod optimize;
+pub mod place;
 pub mod printer;
 pub mod ser_ty;
 pub mod solver;

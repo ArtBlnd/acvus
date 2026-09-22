@@ -1,0 +1,2 @@
+// expect 0
+let o = None; let xs = [Some({ a: 1, }), o]; for x in &xs { } 0
