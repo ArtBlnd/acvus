@@ -1,0 +1,1 @@
+for o in [1] { let x = 1; } 0

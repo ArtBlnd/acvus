@@ -1,0 +1,1 @@
+let o = { a: Some(3), }; match o.a { Some(x) => x, None => 0, }

@@ -1,0 +1,1 @@
+let o = { a: "x".to_string(), }; let f = |k| -> o; f(1).a + &f(2).a

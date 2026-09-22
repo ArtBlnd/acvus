@@ -1,0 +1,1 @@
+let s = "x".to_string(); for i in 0..3 { s = s + "y"; if i == 1 { break; }; } s

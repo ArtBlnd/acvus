@@ -1,0 +1,1 @@
+let o = { s: "a".to_string(), }; let a = o.s; let b = o.s; a + &b

@@ -1,0 +1,1 @@
+let a = ["b".to_string(), "a".to_string()]; a.sort(); a[0u64].to_string()

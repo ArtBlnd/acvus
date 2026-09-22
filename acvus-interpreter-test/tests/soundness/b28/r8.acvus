@@ -1,0 +1,1 @@
+let c = 0; for o in [Some(1), None] { c = c + 1; } c

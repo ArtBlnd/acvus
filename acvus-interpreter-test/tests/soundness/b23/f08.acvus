@@ -1,0 +1,1 @@
+let o = Some("s".to_string()); let a = if let Some(t) = o { t } else { "n".to_string() }; o

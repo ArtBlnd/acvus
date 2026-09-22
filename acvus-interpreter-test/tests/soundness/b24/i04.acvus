@@ -1,0 +1,1 @@
+let d = deque(); d.push_back(1); let e = d; let f = d; 0

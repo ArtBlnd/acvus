@@ -1,0 +1,1 @@
+let v = vec([1]); let r = if true { &v[0u64] } else { &v[0u64] }; v.clear(); *r

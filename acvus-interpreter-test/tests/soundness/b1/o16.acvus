@@ -1,0 +1,1 @@
+let o = { a: 1, }; let set = |r| -> { *r = { a: 42, }; 0 }; set(&mut o); o.a

@@ -1,0 +1,1 @@
+let xs = vec([{ a: 1, }]); for x in &mut xs { x.z = 3; } xs[0u64].z

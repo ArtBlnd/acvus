@@ -1,0 +1,1 @@
+let o = Some(1); let a = match o { Some(t) => t, None => 0, }; let b = match o { Some(t) => t, None => 0, }; a + b

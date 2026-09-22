@@ -1,0 +1,1 @@
+let o = Some({ s: "x".to_string(), }); let a = match o { Some({ s, }) => s, _ => "n".to_string(), }; let b = match o { Some({ s, }) => s, _ => "n".to_string(), }; a + &b

@@ -1,0 +1,1 @@
+let o = { a: 1, }; o.b = 2; o.c = 3; o.d = "x".to_string(); o.d + (o.a + o.b + o.c).to_string()

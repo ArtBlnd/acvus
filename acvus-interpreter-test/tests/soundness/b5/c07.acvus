@@ -1,0 +1,1 @@
+let v = vec([1, 2]); let f = |i| -> v[i]; f(1u64)

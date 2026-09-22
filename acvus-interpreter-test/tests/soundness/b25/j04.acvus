@@ -1,0 +1,1 @@
+let a = [{ s: "a".to_string(), }, { s: "b".to_string(), }]; let r = "".to_string(); for o in a { r = r + &o.s; } r

@@ -1,0 +1,1 @@
+let t = @objs[0u64].k; t

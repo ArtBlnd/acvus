@@ -1,0 +1,1 @@
+let v = vec(["a".to_string()]); v[0u64].to_string() + v[0u64].to_uppercase()

@@ -1,0 +1,1 @@
+let p = { s: "a".to_string(), }; let t = match p { { s, } => s, }; t + &p.s

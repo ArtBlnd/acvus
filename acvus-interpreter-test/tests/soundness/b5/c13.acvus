@@ -1,0 +1,1 @@
+let s = "k".to_string(); let f = |n| -> { let t = s.to_string(); t + n.to_string() }; let g = |n| -> f(n) + f(n + 1); g(1)

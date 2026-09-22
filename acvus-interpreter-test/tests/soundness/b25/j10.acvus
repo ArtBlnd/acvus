@@ -1,0 +1,1 @@
+let f = |xs| -> { let t = 0; for x in &xs { t = t + (*x)?; } Some(t) }; let v = vec([Some(1), Some(2)]); f(v)

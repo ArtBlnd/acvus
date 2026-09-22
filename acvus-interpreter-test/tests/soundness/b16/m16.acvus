@@ -1,0 +1,1 @@
+let v = vec(["b".to_string(), "a".to_string()]); let w = v.clone(); v.sort(); w[0u64].to_string() + &v[0u64]

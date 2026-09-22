@@ -1,0 +1,1 @@
+for o in ["a".to_string()] { let x = 1; } 0

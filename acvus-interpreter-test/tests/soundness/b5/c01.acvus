@@ -1,0 +1,1 @@
+let s = "a".to_string(); let f = || -> s + "b"; f()

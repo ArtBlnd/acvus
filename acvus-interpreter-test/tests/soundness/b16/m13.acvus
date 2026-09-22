@@ -1,0 +1,1 @@
+let v = vec([1]); let f = |w| -> { w.push(5); w }; let v2 = f(v); v2.len()

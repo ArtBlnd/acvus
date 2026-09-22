@@ -1,0 +1,1 @@
+let v = vec([vec([2, 1]), vec([0])]); for r in &mut v { r.sort(); } v[0u64][0u64]

@@ -1,0 +1,1 @@
+let v = vec([vec([1])]); let inner = &v[0u64]; v[0u64] = vec([]); inner.len()

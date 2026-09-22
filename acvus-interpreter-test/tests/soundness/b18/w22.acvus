@@ -1,0 +1,1 @@
+let x = A::X(vec(["a".to_string()])); match &x { A::X(v) => v[0u64].to_string(), }

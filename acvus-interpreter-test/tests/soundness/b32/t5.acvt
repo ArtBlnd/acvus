@@ -1,0 +1,3 @@
+% let s = "a".to_string()
+% let t = s
+{{ s }}{{ t }}

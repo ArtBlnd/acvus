@@ -1,0 +1,3 @@
+% for o in [{ n: 1, }]
+{{ o.n.to_string() }}
+% end

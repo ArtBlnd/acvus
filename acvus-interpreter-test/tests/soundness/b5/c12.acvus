@@ -1,0 +1,1 @@
+let compose = |f, g| -> |x| -> g(f(x)); let h = compose(|x| -> x + 1, |x| -> x * 10); h(2)

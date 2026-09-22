@@ -1,0 +1,1 @@
+let s = "a".to_string(); let t = if true { return s; } else { 1 }; "x".to_string()

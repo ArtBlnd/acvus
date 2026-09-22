@@ -1,0 +1,1 @@
+@objs[0u64].v = 100; @objs[0u64].v + @objs[1u64].v

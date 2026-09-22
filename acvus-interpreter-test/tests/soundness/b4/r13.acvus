@@ -1,0 +1,1 @@
+let a = vec([vec([1]), vec([2])]); a[1u64].push(5); a[1u64].len()

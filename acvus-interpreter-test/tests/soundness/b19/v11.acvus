@@ -1,0 +1,1 @@
+let o = Some(vec([1])); let a = match o { Some(v) => v, None => vec([]), }; let b = match o { Some(v) => v, None => vec([]), }; a.len() + b.len()

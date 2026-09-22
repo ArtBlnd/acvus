@@ -1,0 +1,1 @@
+let mk = |p| -> |k| -> p + k; let adders = vec([mk(1), mk(2)]); 0

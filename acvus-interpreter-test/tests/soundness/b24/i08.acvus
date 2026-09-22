@@ -1,0 +1,1 @@
+let v = vec([1]); let f = |k| -> v; f(1).len() + f(2).len()

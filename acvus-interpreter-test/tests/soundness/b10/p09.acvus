@@ -1,0 +1,1 @@
+let f = |x| -> { let s = "pre".to_string(); if x { return s; }; s + "!" }; f(true) + f(false)

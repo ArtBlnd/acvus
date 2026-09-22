@@ -1,0 +1,1 @@
+let a = ["a".to_string(), "b".to_string()]; let r = &a[1u64]; a[1u64] = "c".to_string(); r.to_string()

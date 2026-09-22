@@ -1,0 +1,1 @@
+let r = Ok(1); let e = Err("x".to_string()); let f = |a| -> Ok(a? + 1); match f(r) { Ok(n) => n, Err(_) => 0, }

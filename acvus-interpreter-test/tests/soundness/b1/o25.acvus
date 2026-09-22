@@ -1,0 +1,1 @@
+let o = { t: (1, 2), }; let (a, b) = o.t; a + b

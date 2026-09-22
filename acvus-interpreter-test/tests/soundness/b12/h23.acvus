@@ -1,0 +1,1 @@
+let o = { a: 1, }; let s = Some(o); o.b = 1; 0

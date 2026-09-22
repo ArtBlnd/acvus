@@ -1,0 +1,1 @@
+let s = 0; for o in [A::X({ n: 2, })] { s = match o { A::X(p) => p.n, _ => 0, }; } s

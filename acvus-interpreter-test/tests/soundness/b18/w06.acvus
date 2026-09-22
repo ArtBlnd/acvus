@@ -1,0 +1,1 @@
+let o = Some("s".to_string()); match &o { Some(t) => { let x = t.len(); }, None => { let y = 0; }, }; o.unwrap()

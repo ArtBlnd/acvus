@@ -1,0 +1,1 @@
+let r = &@objs[1u64]; r.k.to_string()

@@ -1,0 +1,1 @@
+let o = { a: 1, }; o.b = 2; let s = Some(o); match s { Some(x) => x.b, None => 0, }

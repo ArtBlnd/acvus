@@ -1,0 +1,1 @@
+let v = vec([vec([1, 2]), vec([3])]); for row in &mut v { row.push(0); } v[1u64].len()

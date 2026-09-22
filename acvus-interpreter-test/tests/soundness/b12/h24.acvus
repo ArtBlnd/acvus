@@ -1,0 +1,1 @@
+let o = { a: 1, }; let t = o; t.b = 9; t.b + t.a

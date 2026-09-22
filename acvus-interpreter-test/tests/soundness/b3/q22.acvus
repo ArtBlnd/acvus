@@ -1,0 +1,1 @@
+let o = Some(1); let o = o.and_then(|x| -> if x > 0 { Some(x * 10) } else { None }); o.unwrap_or(0)

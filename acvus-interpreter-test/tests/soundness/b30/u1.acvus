@@ -1,0 +1,1 @@
+let t = 0; for o in [(1, 2)] { let (a, b) = o; t = a + b; } t

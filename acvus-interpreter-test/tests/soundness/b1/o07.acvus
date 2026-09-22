@@ -1,0 +1,1 @@
+let o = { s: "hi".to_string(), }; o.s = o.s + "!"; o.s

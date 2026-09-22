@@ -1,0 +1,1 @@
+@xs.push(4); @xs.len()

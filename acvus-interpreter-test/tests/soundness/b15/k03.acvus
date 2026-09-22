@@ -1,0 +1,1 @@
+let r = &mut @xs; @xs[0u64] = 1; r[0u64]

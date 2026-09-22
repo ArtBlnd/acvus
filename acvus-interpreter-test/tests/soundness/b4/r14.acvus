@@ -1,0 +1,1 @@
+let a = vec([vec([1]), vec([2])]); let r = &mut a[0u64]; r[0u64] = 11; a[0u64][0u64]

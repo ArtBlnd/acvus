@@ -1,0 +1,1 @@
+let a = [A::X("a".to_string())]; for o in a { let n = 1; } 0

@@ -1,0 +1,1 @@
+let t = 0; for o in [A::X(1), A::Y(2)] { match o { A::X(s) => { t = t + s; }, A::Y(s) => { t = t + 10 * s; }, }; } t

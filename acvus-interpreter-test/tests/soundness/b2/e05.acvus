@@ -1,0 +1,1 @@
+let e = A::X(Some(5)); match e { A::X(Some(n)) => n, A::X(None) => 1, _ => 0, }

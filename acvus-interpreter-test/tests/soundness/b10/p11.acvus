@@ -1,0 +1,1 @@
+let f = |o| -> { if o.a > 0 { return o.s; }; "neg".to_string() }; f({ a: 1, s: "p".to_string(), })

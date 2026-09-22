@@ -1,0 +1,1 @@
+let o = { a: 1, }; for i in 0..2 { if i == 1 { o.b = i; }; } o.b

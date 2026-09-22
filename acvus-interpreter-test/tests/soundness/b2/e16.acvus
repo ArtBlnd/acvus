@@ -1,0 +1,1 @@
+let mk = |n| -> if n > 0 { A::Pos(n) } else { A::Neg(n) }; match mk(-3) { A::Pos(n) => n, A::Neg(n) => n * 100, }

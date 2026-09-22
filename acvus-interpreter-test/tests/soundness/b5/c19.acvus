@@ -1,0 +1,1 @@
+let v = vec(["a".to_string()]); let f = |x| -> { let w = x; w.len() }; f(v)

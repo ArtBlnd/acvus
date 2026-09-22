@@ -1,0 +1,1 @@
+let x = 1; let r = &mut x; *r = 3; let r2 = &mut x; *r2 = *r2 + 1; x

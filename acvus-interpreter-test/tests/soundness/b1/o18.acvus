@@ -1,0 +1,1 @@
+let o = { a: { b: 1, }, }; let inner = o.a; inner.b = 2; o.a.b

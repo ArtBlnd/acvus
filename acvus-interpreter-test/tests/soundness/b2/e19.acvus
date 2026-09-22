@@ -1,0 +1,1 @@
+let e = A::X(1); if true { e = A::Y("z".to_string()); }; match e { A::X(n) => n.to_string(), A::Y(s) => s, }

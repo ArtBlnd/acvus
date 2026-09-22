@@ -1,0 +1,1 @@
+let x = A::X(1); let y = x; let z = x; 0

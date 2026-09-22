@@ -1,0 +1,1 @@
+let r = 0; for i in 0u8..5u8 { r = r + i as i64; } r

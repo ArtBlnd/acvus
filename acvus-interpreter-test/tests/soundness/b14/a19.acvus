@@ -1,0 +1,1 @@
+let s = Some("x".to_string()); let r = &s; s = None; match r { Some(t) => t.to_string(), None => "n".to_string(), }

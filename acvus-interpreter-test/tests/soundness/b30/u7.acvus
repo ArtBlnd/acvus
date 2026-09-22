@@ -1,0 +1,1 @@
+let t = ""; let s = "".to_string(); for o in [{ n: "q".to_string(), }] { s = o.n; } s

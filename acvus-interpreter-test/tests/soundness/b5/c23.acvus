@@ -1,0 +1,1 @@
+let f = |x| -> if x == 0 { "zero".to_string() } else { "nz".to_string() }; f(0) + f(1)

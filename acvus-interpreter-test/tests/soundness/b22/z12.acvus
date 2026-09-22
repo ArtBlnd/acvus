@@ -1,0 +1,1 @@
+let o = if true { Ok("s".to_string()) } else { Err("e".to_string()) }; match o { Ok(t) => t, Err(e) => e, }

@@ -1,0 +1,1 @@
+@o = { a: 5, b: "q".to_string(), c: { d: 0, }, }; @o.b.to_string()

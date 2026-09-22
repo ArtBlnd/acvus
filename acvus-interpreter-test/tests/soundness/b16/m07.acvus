@@ -1,0 +1,1 @@
+let a = vec([vec(["x".to_string()])]); let p = a[0u64].pop(); p.unwrap() + a[0u64].len().to_string()

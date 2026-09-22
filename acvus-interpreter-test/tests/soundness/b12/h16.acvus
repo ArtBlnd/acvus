@@ -1,0 +1,1 @@
+let o = { a: 1, }; o.b = { c: 2, }; if true { o.b.d = 3; }; o.b.d

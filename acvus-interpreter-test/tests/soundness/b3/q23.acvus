@@ -1,0 +1,1 @@
+let o = Some(1); let p = &mut o; if let Some(x) = p { *x = 50; }; o.unwrap()

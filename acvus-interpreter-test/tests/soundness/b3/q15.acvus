@@ -1,0 +1,1 @@
+let o = Some("hi".to_string()); if let Some(s) = &o { s.len() } else { 0u64 }

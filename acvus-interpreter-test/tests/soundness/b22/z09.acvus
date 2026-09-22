@@ -1,0 +1,1 @@
+let v = vec([1]); let w = v; v.len()

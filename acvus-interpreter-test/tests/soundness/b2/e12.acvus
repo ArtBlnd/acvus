@@ -1,0 +1,1 @@
+let a = A::X(1); let b = A::Y(2u8); match a { A::X(n) => n, _ => 0, }

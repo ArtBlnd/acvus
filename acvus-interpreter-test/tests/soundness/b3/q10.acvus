@@ -1,0 +1,1 @@
+let o = Some(1); match o { Some(n) if n > 0 => n, _ => 0, }

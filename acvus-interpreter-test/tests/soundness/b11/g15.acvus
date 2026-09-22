@@ -1,0 +1,1 @@
+let o = { a: 1, }; let r = &mut o; r.b = 2; o.a

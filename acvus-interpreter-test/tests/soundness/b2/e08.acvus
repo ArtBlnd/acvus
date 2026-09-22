@@ -1,0 +1,1 @@
+let e = A::X((1, "a".to_string())); match e { A::X((n, s)) => s + n.to_string(), _ => "".to_string(), }

@@ -1,0 +1,1 @@
+let o = { n: 1, m: 2, }; let t = 0; while t < 5 { t = t + o.m; } t

@@ -1,0 +1,1 @@
+let o = Some(Some("x".to_string())); match o { Some(Some(s)) => s, _ => "n".to_string(), }

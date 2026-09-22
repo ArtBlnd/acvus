@@ -1,0 +1,1 @@
+let x = 1; let f = |r| -> { *r = *r + 1; 0 }; let r = &mut x; f(r); x

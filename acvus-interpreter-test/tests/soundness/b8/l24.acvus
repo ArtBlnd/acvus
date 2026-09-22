@@ -1,0 +1,1 @@
+let s = "".to_string(); let v = vec([Some(1), None, Some(3)]); for o in &v { match o { Some(n) => { s = s + n.to_string(); }, None => { continue; }, }; s = s + ","; } s

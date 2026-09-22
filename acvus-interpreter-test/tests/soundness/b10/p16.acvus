@@ -1,0 +1,1 @@
+let f = |n| -> { let v = vec(["a".to_string()]); if n > 0 { return v; }; v.push("b".to_string()); v }; f(0).len() + f(1).len()

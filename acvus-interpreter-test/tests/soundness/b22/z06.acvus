@@ -1,0 +1,1 @@
+let s = "abc".to_string(); let f = |x| -> x; let a = f(s); let b = f(s); a + &b

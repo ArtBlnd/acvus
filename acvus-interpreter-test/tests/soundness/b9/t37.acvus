@@ -1,0 +1,1 @@
+let s = "ab".to_string(); s.to_string() + &s.to_string()

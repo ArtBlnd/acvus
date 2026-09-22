@@ -1,0 +1,1 @@
+let v = vec(["a".to_string()]); let r = &v[0u64]; let w = v; r.to_string()

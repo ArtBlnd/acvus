@@ -1,0 +1,1 @@
+let e = if false { A::X({ a: 1, b: "s".to_string(), }) } else { A::Y }; match e { A::X(o) => o.b, A::Y => "y".to_string(), }

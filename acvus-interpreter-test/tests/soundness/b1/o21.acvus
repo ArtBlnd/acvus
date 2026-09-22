@@ -1,0 +1,1 @@
+let o = { a: 1, }; let r = &o; let r2 = &r; (*r2).a

@@ -1,0 +1,1 @@
+"é".substring(0u64, 1u64).to_string()

@@ -1,0 +1,1 @@
+let v = vec([$s, $s]); v[1u64].to_string()

@@ -1,0 +1,1 @@
+let n = 7; match n { 0..5 => "lo", 5..=9 => "mid", _ => "hi", } | to_string

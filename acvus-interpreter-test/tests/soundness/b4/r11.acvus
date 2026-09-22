@@ -1,0 +1,1 @@
+let x = 1; let inc = |r| -> *r + 1; inc(&x)

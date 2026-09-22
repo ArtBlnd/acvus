@@ -1,0 +1,1 @@
+let v = vec(["x".to_string()]); let p = v.pop(); p.unwrap_or("e".to_string()) + v.len().to_string()

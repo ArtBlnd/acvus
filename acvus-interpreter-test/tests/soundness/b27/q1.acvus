@@ -1,0 +1,1 @@
+let a = [Some("a".to_string()), None]; for o in a { if let Some(s) = o { let x = 1; }; } 0

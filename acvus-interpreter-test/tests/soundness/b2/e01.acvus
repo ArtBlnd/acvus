@@ -1,0 +1,1 @@
+let e = Shape::Circle(2); match e { Shape::Circle(r) => r, Shape::Sq(s) => s * 2, }

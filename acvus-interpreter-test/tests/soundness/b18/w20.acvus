@@ -1,0 +1,1 @@
+let e = Ok("a".to_string()); let r = &e; match r { Ok(s) => s.to_string(), Err(n) => (*n + 1).to_string(), }

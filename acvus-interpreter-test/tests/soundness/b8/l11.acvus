@@ -1,0 +1,1 @@
+let x = Some(3); let c = 0; while let Some(n) = x { c = c + n; x = if n > 0 { Some(n - 1) } else { None }; } c

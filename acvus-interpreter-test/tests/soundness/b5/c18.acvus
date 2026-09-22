@@ -1,0 +1,1 @@
+let counter = 0; let bump = |n| -> n + 1; for i in 0..5 { counter = bump(counter); } counter

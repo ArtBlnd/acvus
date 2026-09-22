@@ -1,0 +1,1 @@
+let v = vec([A::X(1), A::Y(2), A::X(3)]); let s = 0; for e in &v { match e { A::X(n) => { s = s + *n; }, A::Y(n) => { s = s - *n; }, }; } s

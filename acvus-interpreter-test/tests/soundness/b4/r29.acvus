@@ -1,0 +1,1 @@
+let v = vec([1]); let r = &mut v; let n = r.len(); r.push(n as i64); v[1u64]

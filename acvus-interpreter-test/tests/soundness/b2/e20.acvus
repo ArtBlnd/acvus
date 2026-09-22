@@ -1,0 +1,1 @@
+let xs = vec([A::X(1)]); xs.push(A::Y(true)); let c = 0; for e in &xs { match e { A::X(n) => { c = c + *n; }, A::Y(b) => { if *b { c = c + 10; }; }, }; } c

@@ -1,0 +1,1 @@
+@nested[1u64].push(4); @nested[1u64].len()

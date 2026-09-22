@@ -1,0 +1,1 @@
+let o = Ok("s".to_string()); let a = match o { Ok(t) => t, Err(e) => e, }; let b = match o { Ok(t) => t, Err(e) => e, }; b

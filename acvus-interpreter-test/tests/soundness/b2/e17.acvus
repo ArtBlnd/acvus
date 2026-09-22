@@ -1,0 +1,1 @@
+let e = A::X(1); let r = &mut e; match r { A::X(n) => { *n = 5; }, }; match e { A::X(n) => n, }

@@ -1,0 +1,1 @@
+let o = { a: 1, }; while o.a < 10 { o.a = o.a * 2; } o.a

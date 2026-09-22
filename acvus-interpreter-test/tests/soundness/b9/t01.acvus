@@ -1,0 +1,1 @@
+let a = "ab".to_string(); let b = a.clone(); b + &a

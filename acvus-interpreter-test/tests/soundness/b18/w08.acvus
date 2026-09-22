@@ -1,0 +1,1 @@
+let p = ("a".to_string(), "b".to_string()); match p { (x, _) => x, }

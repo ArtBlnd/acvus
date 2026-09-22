@@ -1,0 +1,1 @@
+let f = |v| -> { for x in &v { if *x > 1 { return *x; }; } 0 }; f(vec([1, 5, 2]))

@@ -1,0 +1,1 @@
+let o = { a: vec([1]), }; let ra = &mut o.a; let rb = &o.a; ra.push(3); rb.len()

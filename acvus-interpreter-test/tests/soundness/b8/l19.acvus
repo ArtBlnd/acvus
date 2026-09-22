@@ -1,0 +1,1 @@
+let v = vec([{ a: 1, s: "x".to_string(), }]); for o in &mut v { o.s = o.s + "y"; o.a = 5; } v[0u64].s + v[0u64].a.to_string()

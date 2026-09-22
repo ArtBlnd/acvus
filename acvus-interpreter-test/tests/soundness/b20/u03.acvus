@@ -1,0 +1,1 @@
+let e = A::X(vec([1])); let a = match e { A::X(v) => v, }; let b = match e { A::X(v) => v, }; a.len() + b.len()

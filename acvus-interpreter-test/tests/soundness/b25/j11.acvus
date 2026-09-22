@@ -1,0 +1,1 @@
+let mk = |r| -> |k| -> r.len() + k; let s = "abc".to_string(); let g = mk(&s); g(1u64)

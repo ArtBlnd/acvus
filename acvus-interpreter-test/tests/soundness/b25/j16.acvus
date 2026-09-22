@@ -1,0 +1,1 @@
+let a = ["x".to_string()]; let b = a; b[0u64].to_string() + &a[0u64]

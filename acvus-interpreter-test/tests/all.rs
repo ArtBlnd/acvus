@@ -89,6 +89,7 @@ mod slice_hoist_by_write_kind;
 mod slice_index;
 mod slice_pair;
 mod slice_param;
+mod soundness;
 mod space;
 mod spawn_eval;
 mod strength_reduction;

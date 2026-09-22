@@ -1,0 +1,1 @@
+let s = "abc".to_string(); let r = &s; s = "zz".to_string(); r.to_string()

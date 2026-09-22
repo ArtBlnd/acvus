@@ -1,0 +1,1 @@
+for o in &mut @objs { o.v = o.v * 3; } @objs[1u64].v

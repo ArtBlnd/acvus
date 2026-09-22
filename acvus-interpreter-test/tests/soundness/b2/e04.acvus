@@ -1,0 +1,1 @@
+let e = A::X(A2::P(5)); match e { A::X(A2::P(n)) => n, _ => 0, }
