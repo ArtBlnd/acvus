@@ -1545,10 +1545,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let ty = type_map
                 .get(place)
                 .expect("a lent place is checked before it is noted");
-            // A place that holds a reference is lent as that reference
-            // (RFC-0029): the lend reborrows nothing.
+            // A place that holds a shared reference is lent as that
+            // reference: the lend reborrows nothing. A `&mut` is reborrowed,
+            // so exclusion sees the lend (RFC-0029).
             let lent = match ty {
-                Ty::Ref(..) => Passing::AsIs,
+                Ty::Ref(Mutability::Shared, _) => Passing::AsIs,
                 _ => Passing::Lent(*mutability),
             };
             passing.insert(*place, lent);
@@ -2693,11 +2694,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let inst = self
             .solver
             .instantiate_scheme_with(&scheme, compiler_instances);
-        self.bound_sites
-            .extend(inst.bounded.into_iter().map(|var| BoundSite {
-                var,
-                span: site.at,
-            }));
+        self.bound_sites.extend(
+            inst.bounded
+                .into_iter()
+                .map(|var| BoundSite { var, span: site.at }),
+        );
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
             self.decision_sites.insert(decision, site.at);
             self.decision_callees.insert(decision, qref);
@@ -2872,10 +2873,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let Answer::Signature { settled, .. } = self.solver.answer(*decision)? else {
                     unreachable!("a signature decision answers with a signature")
                 };
-                let SettledSignature::Named {
-                    bounded, ..
-                } = settled
-                else {
+                let SettledSignature::Named { bounded, .. } = settled else {
                     return None;
                 };
                 let span = self.decision_sites[decision];
@@ -2998,7 +2996,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) => {
                     self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
                 }
-                Err(_) if !self.solver.resolve_ty(&TyTerm::Var(site.var)).mentions_error() => {
+                Err(_)
+                    if !self
+                        .solver
+                        .resolve_ty(&TyTerm::Var(site.var))
+                        .mentions_error() =>
+                {
                     never_settled.push(site);
                 }
                 Err(_) | Ok(_) => {}
@@ -4992,10 +4995,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Var(var) = self.solver.resolve_ty(operand) else {
             unreachable!("two open variables unify into an open variable");
         };
-        self.bound_sites.push(BoundSite {
-            var,
-            span,
-        });
+        self.bound_sites.push(BoundSite { var, span });
         true
     }
 
@@ -5006,10 +5006,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return false;
         }
         if let TyTerm::Var(var) = self.solver.resolve_ty(open) {
-            self.bound_sites.push(BoundSite {
-                var,
-                span,
-            });
+            self.bound_sites.push(BoundSite { var, span });
         }
         true
     }

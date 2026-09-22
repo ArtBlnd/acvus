@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([1]); let r = &mut v; let o = Some(1); match o { Some(x) => r.push(x), None => r.push(0), }; if let Some(y) = o { r.push(y) }; v.len()

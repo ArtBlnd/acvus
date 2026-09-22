@@ -1,0 +1,2 @@
+// refuse
+let v = vec([3, 1]); let r = &mut v; let s = r.as_slice_mut(); let t = r.as_slice_mut(); s.sort(); t.sort(); v[0u64]

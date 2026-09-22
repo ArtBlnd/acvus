@@ -1,0 +1,2 @@
+// expect 6
+let xs = [1, 2]; let p = &mut xs[0]; *p = 5; let q = &mut xs[0]; *q = *q + 1; xs[0]

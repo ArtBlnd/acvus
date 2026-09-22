@@ -155,6 +155,19 @@ pub struct Region {
     pub via: Vec<ValueId>,
 }
 
+impl Region {
+    /// The region of a value built from `from`: `from`'s loans, held
+    /// through `from`. Every flow of a loan is one, so a value made from a
+    /// holder — read out of it, stored into it, passed on, projected — is
+    /// that holder's own reference, not a second holder beside it.
+    fn through(mut self, from: ValueId) -> Self {
+        if !self.via.contains(&from) {
+            self.via.push(from);
+        }
+        self
+    }
+}
+
 impl SemiLattice for Region {
     fn bottom() -> Self {
         Self::default()
@@ -360,7 +373,7 @@ impl RegionAnalysis<'_> {
             let Some(arg) = args.get(loan.index) else {
                 return None;
             };
-            let mut borrowed = state.get(*arg);
+            let mut borrowed = state.get(*arg).through(*arg);
             if loan.mutability == Mutability::Mut {
                 for held in &mut borrowed.loans {
                     held.mutability = Mutability::Mut;
@@ -394,7 +407,7 @@ impl RegionAnalysis<'_> {
         if !always && !self.carries_ref(to) {
             return;
         }
-        let source = state.get(from);
+        let source = state.get(from).through(from);
         let mut target = state.get(to);
         if target.join_mut(&source) {
             state.set(to, target);
@@ -421,24 +434,14 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                         via: vec![],
                     },
                 ),
-                RefTarget::Through(r) => {
-                    let mut region = state.get(*r);
-                    region.via.push(*r);
-                    state.set(*dst, region);
-                }
+                RefTarget::Through(r) => state.set(*dst, state.get(*r).through(*r)),
             },
             // A reference read out of a storage is the storage's own
-            // reference, not a second holder (RFC-0029).
+            // reference, not a second holder (RFC-0029), and one stored into
+            // a storage is the value's own.
             InstKind::Take { dst, target, .. } => {
-                if let Some(slot) = inst_info::storage(target)
-                    && self.carries_ref(*dst)
-                {
-                    let mut region = state.get(slot);
-                    region.via.push(slot);
-                    let mut target = state.get(*dst);
-                    if target.join_mut(&region) {
-                        state.set(*dst, target);
-                    }
+                if let Some(slot) = inst_info::storage(target) {
+                    self.flow(state, slot, *dst, false);
                 }
             }
             InstKind::Assign { target, value, .. } => {
@@ -519,7 +522,7 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                 continue;
             }
             let mut region = target_entry.get(*param);
-            if region.join_mut(&source_exit.get(*arg)) {
+            if region.join_mut(&source_exit.get(*arg).through(*arg)) {
                 target_entry.set(*param, region);
                 changed = true;
             }
@@ -561,7 +564,7 @@ impl Loans {
         };
         let mut entry = DataflowState::new();
         for storage in cfg.entry_defs() {
-            if let Some(mutability) = cfg.val_types.get(&storage).and_then(entry_loan) {
+            if let Some(mutability) = cfg.val_types.get(&storage).and_then(held_loan) {
                 entry.set(
                     storage,
                     Region {
@@ -721,17 +724,19 @@ impl Loans {
     }
 }
 
-/// The loan a body's entry definition starts, and its mutability.
+/// The loan a value of `ty` holds, and its mutability: what a body's entry
+/// definition starts, and what a read of the value out of a storage takes
+/// again.
 ///
 /// A parameter or capture of reference type names storage outside the body,
 /// and inside the body that storage is the entry itself (RFC-0029). A
 /// parameter that is a lambda holding a loan names storage outside the body
 /// the same way (RFC-0064 Decision 5), so it starts a loan too.
-fn entry_loan(ty: &Ty) -> Option<Mutability> {
+pub fn held_loan(ty: &Ty) -> Option<Mutability> {
     match ty {
         Ty::Ref(mutability, _) => Some(*mutability),
         Ty::Fn { captures, .. } => {
-            let held: Vec<Mutability> = captures.iter().filter_map(entry_loan).collect();
+            let held: Vec<Mutability> = captures.iter().filter_map(held_loan).collect();
             match held.contains(&Mutability::Mut) {
                 true => Some(Mutability::Mut),
                 false => held.first().copied(),

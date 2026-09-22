@@ -1,0 +1,2 @@
+// expect 7
+let v = vec([0]); let r = &mut v; for i in 0..6 { if i % 2 == 0 { r.push(i) } else { r.push(0) }; } v.len()

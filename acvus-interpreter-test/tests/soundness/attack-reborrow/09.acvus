@@ -1,0 +1,2 @@
+// expect 2
+let a = vec([1]); let b = vec([2]); let r = &mut a; let q = &mut b; r = q; r.push(2); b.len()

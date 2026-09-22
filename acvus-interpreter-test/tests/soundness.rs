@@ -40,6 +40,10 @@ const KNOWN: &[Known] = &[
         shows: "a wrong value",
     },
     Known {
+        program: "attack-reborrow/25.acvus",
+        shows: "a wrong value",
+    },
+    Known {
         program: "attack-places/c01.acvus",
         shows: "a wrong value",
     },
@@ -75,11 +79,6 @@ const KNOWN: &[Known] = &[
     Known {
         program: "attack-places/p15.acvus",
         shows: "Take takes a primitive through a reference",
-    },
-    // Two live `&mut` aliases of one storage are admitted.
-    Known {
-        program: "attack-cleanups/r51.acvus",
-        shows: "admitted a program it should refuse",
     },
     // An `Option` of an aggregate with a `None` element, in an array.
     Known {
@@ -189,7 +188,10 @@ const KNOWN: &[Known] = &[
         program: "b27/q3.acvus",
         shows: "a double take",
     },
-    // A structural enum element of `for x in <array>`, matched.
+    // A structural enum element of `for x in <array>`, matched: the element
+    // arrives as a heap variant where the match reads a run's tag word
+    // (`prepare.rs`). `b28/r3` reaches it because its array's two
+    // constructions are one type; before that the checker refused it.
     Known {
         program: "b26/k7.acvus",
         shows: "carries no bits",

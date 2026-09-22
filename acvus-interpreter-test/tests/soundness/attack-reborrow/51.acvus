@@ -1,0 +1,2 @@
+// refuse
+let v = vec([1]); let r = &mut v; let c = |x| -> { r.push(1); x.push(2); 0 }; c(&mut v); v.len()

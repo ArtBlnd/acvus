@@ -1,0 +1,2 @@
+// expect 2
+let a = vec([1]); let b = vec([1, 2]); let r = &a; r = &b; a.push(3); r.len()

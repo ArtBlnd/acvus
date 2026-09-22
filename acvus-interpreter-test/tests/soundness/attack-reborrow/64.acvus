@@ -1,0 +1,2 @@
+// expect 2
+let v = vec([3, 1, 2]); let r = &mut v; r.sort_by(|a, b| -> cmp(a, b)); r.push(0); v[1u64]

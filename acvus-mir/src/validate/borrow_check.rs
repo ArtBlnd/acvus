@@ -9,7 +9,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Loan, Loans, Summaries, Summary};
+use crate::analysis::loans::{Loan, Loans, Summaries, Summary, held_loan};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
@@ -238,19 +238,30 @@ impl Touch {
     }
 }
 
-fn touch(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Option<(RefTarget, Touch)> {
+/// What an instruction does to storages. A loan read out of a storage is
+/// the storage's own reference (RFC-0029), taken again: it touches, through
+/// the storage, what the storage holds, as the loan's mutability does.
+fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(RefTarget, Touch)> {
     match kind {
         InstKind::Ref {
             target, mutability, ..
-        } => Some((target.clone(), Touch::Reference(*mutability))),
-        InstKind::Take { dst, target, .. } => Some((
-            target.clone(),
-            Touch::Take {
-                moves: take_moves(val_types, dst),
-            },
-        )),
-        InstKind::Assign { target, .. } => Some((target.clone(), Touch::Assign)),
-        _ => None,
+        } => vec![(target.clone(), Touch::Reference(*mutability))],
+        InstKind::Take { dst, target, .. } => {
+            let mut touches = vec![(
+                target.clone(),
+                Touch::Take {
+                    moves: take_moves(val_types, dst),
+                },
+            )];
+            if let Some(slot) = inst_info::storage(target)
+                && let Some(mutability) = val_types.get(dst).and_then(held_loan)
+            {
+                touches.push((RefTarget::Through(slot), Touch::Reference(mutability)));
+            }
+            touches
+        }
+        InstKind::Assign { target, .. } => vec![(target.clone(), Touch::Assign)],
+        _ => Vec::new(),
     }
 }
 
@@ -486,6 +497,7 @@ impl Checking {
         }
         let live = liveness::analyze(&self.cfg);
 
+        let mut found: Vec<Conflict> = Vec::new();
         for (bi, block) in self.cfg.blocks.iter().enumerate() {
             // Holders live before each instruction, by a backward walk from
             // the block's live-out set.
@@ -514,41 +526,74 @@ impl Checking {
             }
 
             for (ii, inst) in block.insts.iter().enumerate() {
-                let Some((target, touch)) = touch(&inst.kind, &self.cfg.val_types) else {
-                    continue;
-                };
-                let reach = reached(&target, &self.loans);
-                let mut holders: Vec<ValueId> = live_before[ii]
-                    .iter()
-                    .copied()
-                    .filter(|holder| {
-                        !reach.via.contains(holder)
-                            && self.loans.region(*holder).loans.iter().any(|loan| {
-                                reach.storage.contains(&loan.storage.value())
-                                    && conflicts(loan, &touch)
-                            })
-                    })
-                    .collect();
-                if holders.is_empty() {
-                    continue;
+                for (target, touch) in touches(&inst.kind, &self.cfg.val_types) {
+                    let reach = reached(&target, &self.loans);
+                    let mut holders: Vec<ValueId> = live_before[ii]
+                        .iter()
+                        .copied()
+                        .filter(|holder| {
+                            !reach.via.contains(holder)
+                                && self.loans.region(*holder).loans.iter().any(|loan| {
+                                    reach.storage.contains(&loan.storage.value())
+                                        && conflicts(loan, &touch)
+                                })
+                        })
+                        .collect();
+                    if holders.is_empty() {
+                        continue;
+                    }
+                    holders.sort_unstable_by_key(|holder| {
+                        (self.sites.borrowed_at(*holder).start, *holder)
+                    });
+                    found.push(Conflict {
+                        made: inst_info::defs(&inst.kind).into_vec(),
+                        error: ValidationError {
+                            scope: self.scope.to_string(),
+                            inst_index: ii,
+                            span: inst.span,
+                            kind: ValidationErrorKind::BorrowConflict {
+                                storage: inst_info::storage(&target)
+                                    .and_then(|slot| self.cfg.debug.get(slot).cloned()),
+                                touch: touch.stated(),
+                                labels: self.sites.labels(&holders, inst.span),
+                            },
+                        },
+                        holders,
+                    });
                 }
-                holders.sort_unstable_by_key(|holder| {
-                    (self.sites.borrowed_at(*holder).start, *holder)
-                });
-                errors.push(ValidationError {
-                    scope: self.scope.to_string(),
-                    inst_index: ii,
-                    span: inst.span,
-                    kind: ValidationErrorKind::BorrowConflict {
-                        storage: inst_info::storage(&target)
-                            .and_then(|slot| self.cfg.debug.get(slot).cloned()),
-                        touch: touch.stated(),
-                        labels: self.sites.labels(&holders, inst.span),
-                    },
-                });
             }
         }
+        errors.extend(self.without_consequences(found));
     }
+
+    /// A reference a refused touch made is that refusal's: a later conflict
+    /// whose every holder is built from one is the same conflict again, and
+    /// is not reported beside it. Only an earlier refusal answers for a
+    /// later one, so the first of any chain is always reported.
+    fn without_consequences(&self, found: Vec<Conflict>) -> Vec<ValidationError> {
+        let answered = |conflict: &Conflict| {
+            conflict.holders.iter().all(|holder| {
+                found.iter().any(|earlier| {
+                    earlier.error.span.start < conflict.error.span.start
+                        && earlier.made.iter().any(|made| {
+                            made == holder || self.loans.region(*holder).via.contains(made)
+                        })
+                })
+            })
+        };
+        found
+            .iter()
+            .filter(|conflict| !answered(conflict))
+            .map(|conflict| conflict.error.clone())
+            .collect()
+    }
+}
+
+struct Conflict {
+    /// What the refused instruction defines.
+    made: Vec<ValueId>,
+    holders: Vec<ValueId>,
+    error: ValidationError,
 }
 
 fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
@@ -1020,5 +1065,58 @@ mod tests {
             Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String))),
         );
         assert_eq!(conflict_count(&errors(main)), 1);
+    }
+
+    #[test]
+    fn a_parameter_stored_and_read_back_is_reborrowed_as_itself() {
+        let param = v(9);
+        let mutable = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String)));
+        let mut main = body(
+            vec![
+                store(1, 9),
+                take_slot(2, 1),
+                InstKind::Ref {
+                    dst: v(3),
+                    target: RefTarget::Through(v(2)),
+                    path: vec![],
+                    mutability: Mutability::Shared,
+                },
+                load(4, 3),
+                ret(4),
+            ],
+            vec![(v(1), mutable.clone()), (v(2), mutable.clone())],
+        );
+        main.params
+            .push((acvus_utils::Interner::new().intern("p"), param));
+        main.val_types.insert(param, mutable);
+        assert_eq!(conflict_count(&errors(main)), 0);
+    }
+
+    #[test]
+    fn a_mutable_reference_read_out_of_its_storage_while_another_read_is_live_is_rejected() {
+        let mutable = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String)));
+        let main = body(
+            vec![
+                reference(1, Mutability::Mut),
+                store(2, 1),
+                take_slot(3, 2),
+                take_slot(4, 2),
+                load(5, 3),
+                load(6, 4),
+                ret(5),
+            ],
+            vec![
+                (v(1), mutable.clone()),
+                (v(2), mutable.clone()),
+                (v(3), mutable.clone()),
+                (v(4), mutable),
+                (slot(), Ty::String),
+                (v(5), Ty::String),
+                (v(6), Ty::String),
+            ],
+        );
+        // The second read is refused where it is made, before either
+        // reference is used; the use through the first is the second.
+        assert_eq!(conflict_count(&errors(main)), 2);
     }
 }

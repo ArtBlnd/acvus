@@ -1,0 +1,2 @@
+// expect 1
+let v = vec([3, 1]); let w = vec([9, 8]); let r = &mut v; let s = r.as_slice_mut(); let t = w.as_slice_mut(); t = s; t.sort(); r.push(1); v[0u64]
