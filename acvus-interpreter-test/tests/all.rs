@@ -63,6 +63,7 @@ mod option_form;
 mod option_methods;
 mod option_payload_drop;
 mod option_string_drop;
+mod pattern_sources;
 mod pattern_through;
 mod prepare_contract;
 mod recursive_summary;
