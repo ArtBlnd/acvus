@@ -1,0 +1,3 @@
+// expect 1
+// len of a string element via index of an array reference
+let a = ["x".to_string(), "yy".to_string()]; let r = &a; r[0u64].len()

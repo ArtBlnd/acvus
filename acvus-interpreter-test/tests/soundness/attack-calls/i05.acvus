@@ -1,0 +1,3 @@
+// expect b
+// index into a Vec of String through a ref, then clone
+let v = vec(["a".to_string(), "b".to_string()]); let r = &v; r[1u64].clone()

@@ -1,0 +1,3 @@
+// refuse
+// duplicate binding in a tuple pattern of match
+match (1, 2) { (a, a) => a, _ => 0, }

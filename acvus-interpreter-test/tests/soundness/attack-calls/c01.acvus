@@ -1,0 +1,3 @@
+// expect true
+// &String converted to &str in a two-arg call, both converted
+let a = "xab".to_string(); let b = "ab".to_string(); ends_with(&a, &b)

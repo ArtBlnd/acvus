@@ -1,0 +1,3 @@
+// refuse
+// duplicate in if let Some tuple
+if let Some((a, a)) = Some((1, 2)) { a } else { 0 }

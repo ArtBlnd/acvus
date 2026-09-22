@@ -1,0 +1,3 @@
+// refuse
+// for over &v inside a closure, param settled from an arg
+let f = |r| -> { let t = 0; for x in r { t = t + *x; } t }; f(&vec([2, 3]))

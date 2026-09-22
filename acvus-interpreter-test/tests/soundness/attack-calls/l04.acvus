@@ -1,0 +1,3 @@
+// expect 24
+// loop over & of vec calling a method-called closure on elements
+let dbl = |x| -> x * 2; let v = vec([3, 4, 5]); let t = 0; for x in &v { t = t + (*x).dbl(); } t

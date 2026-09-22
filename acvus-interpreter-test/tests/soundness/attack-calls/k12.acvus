@@ -1,0 +1,3 @@
+// refuse
+// arity: pipe to method-less function with extra
+"ab" | contains("a", "b")

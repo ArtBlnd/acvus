@@ -1,0 +1,3 @@
+// expect 2
+// effectful closure called in a for over &v of a temporary
+let w = |x| -> { @n = @n + *x; 0 }; for x in &vec([1, 1]) { x.w(); } @n

@@ -1,0 +1,3 @@
+// refuse
+// lambda adding its open param, never called
+let g = |a| -> a + a; 0

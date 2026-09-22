@@ -1,0 +1,3 @@
+// refuse
+// unary - on a lambda param that settles to unit, inside a let
+let f = |a| -> { let b = -a; 0 }; f(())

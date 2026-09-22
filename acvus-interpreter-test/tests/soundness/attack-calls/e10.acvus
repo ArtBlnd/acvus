@@ -1,0 +1,3 @@
+// expect 12
+// effectful lambda passed to a higher-order closure
+let ap = |f, x| -> f(f(x)); ap(|y| -> { @n = @n + 1; y * 2 }, 3); @n * 6

@@ -1,0 +1,3 @@
+// expect ab
+// lambda writes a string context then read
+let f = |t| -> { @s = @s + t; 0 }; f("b".to_string()); @s

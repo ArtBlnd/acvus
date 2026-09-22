@@ -1,0 +1,3 @@
+// refuse
+// == lambda param applied first to int then to vec (two uses)
+let eq = |a, b| -> a == b; eq(1, 1); eq(vec([1]), vec([1]))

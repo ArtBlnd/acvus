@@ -1,0 +1,3 @@
+// refuse
+// unary - on a late &i64 not leaving the body
+let f = |a| -> { let b = -a; 0 }; f(&1)

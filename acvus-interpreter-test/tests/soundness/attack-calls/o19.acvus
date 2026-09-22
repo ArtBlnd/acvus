@@ -1,0 +1,3 @@
+// refuse
+// push on a shared reference receiver
+let v = vec([1]); let r = &v; r.push(2); v.len()

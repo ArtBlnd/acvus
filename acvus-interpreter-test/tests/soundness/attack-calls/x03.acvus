@@ -1,0 +1,3 @@
+// refuse
+// lambda subtracting open params, only aliased
+let g = |a, b| -> a - b; let h = g; 0

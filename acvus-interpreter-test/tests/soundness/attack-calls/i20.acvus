@@ -1,0 +1,3 @@
+// expect 3
+// for over @ctx vec by reference
+let t = 0; for x in &@v { t = t + 1; } t

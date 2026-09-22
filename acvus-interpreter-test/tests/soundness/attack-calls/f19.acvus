@@ -1,0 +1,3 @@
+// expect 1
+// effectful call as the receiver of a method, result ignored
+let w = |x| -> { @n = @n + 1; vec([x]) }; w(1).len(); @n

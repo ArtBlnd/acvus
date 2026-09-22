@@ -1,0 +1,3 @@
+// refuse
+// binary + on lambda params that settle to Decimal
+let f = |a, b| -> a + b; f(decimal("1".to_string()).unwrap(), decimal("2".to_string()).unwrap())

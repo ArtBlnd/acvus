@@ -1,0 +1,3 @@
+// expect 8
+// closure with block body calling another closure
+let a = |x| -> x + 1; let b = |x| -> { let y = a(x); a(y) * 2 }; b(2)

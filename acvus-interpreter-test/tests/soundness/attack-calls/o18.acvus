@@ -1,0 +1,3 @@
+// expect 2
+// to_bytes by value on a temporary, len of Vec<u8>
+"ab".to_string().to_bytes().len()

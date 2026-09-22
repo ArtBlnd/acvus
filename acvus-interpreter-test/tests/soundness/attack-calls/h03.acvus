@@ -1,0 +1,3 @@
+// expect 5
+// a local closure named as_slice_mut does not capture the store's hidden call
+let as_slice_mut = |x| -> x; let v = vec([1, 2]); v[0u64] = 5; v[0u64]

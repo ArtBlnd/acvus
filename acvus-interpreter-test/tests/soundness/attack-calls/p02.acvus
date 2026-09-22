@@ -1,0 +1,3 @@
+// expect true
+// < on decimals
+let a = decimal("1.5".to_string()).unwrap(); let b = decimal("2.5".to_string()).unwrap(); a < b

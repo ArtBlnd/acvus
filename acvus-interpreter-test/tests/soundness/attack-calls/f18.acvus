@@ -1,0 +1,3 @@
+// expect 3
+// effectful call inside a block used as an index
+let w = |x| -> { @n = @n + 1; x }; let v = vec([1, 2, 3]); v[w(2u64)]

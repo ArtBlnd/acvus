@@ -1,0 +1,3 @@
+// refuse
+// == inside a lambda whose params settle to &Vec (open operand then non-word)
+let same = |a, b| -> a == b; let v = vec([1]); same(&v, &v)

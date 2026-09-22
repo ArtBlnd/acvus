@@ -1,0 +1,3 @@
+// expect 2
+// String is a copied value: to_bytes by value leaves s usable
+let s = "ab".to_string(); let b = s.to_bytes(); s.len()

@@ -85,10 +85,6 @@ struct ShownSource {
 struct BoundSite {
     var: crate::ty::TypeBoundId,
     span: Span,
-    /// The instance decision that chooses among the shapes the bound is the
-    /// union of (RFC-0027). Its refusal already names the type outside, so a
-    /// violation of the bound is not reported after it.
-    instance: Option<DecisionId>,
 }
 
 /// An integer literal awaiting its width, checked against its value once
@@ -1509,7 +1505,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// word.
     fn refuse_operands_that_settled_late(&mut self) {
         for OpenOperand { operand, op, span } in std::mem::take(&mut self.open_operands) {
-            let settled = self.closed(&operand);
+            let resolved = self.solver.resolve_ty(&operand);
+            let Ok(settled) = self.solver.close_ty(&resolved) else {
+                // An operand that never settles is its bound site's refusal.
+                continue;
+            };
             if settled.is_primitive() || matches!(settled, Ty::String) {
                 continue;
             }
@@ -2693,15 +2693,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let inst = self
             .solver
             .instantiate_scheme_with(&scheme, compiler_instances);
-        let instance = match inst.instance {
-            Some(InstanceChoice::Decided(decision)) => Some(decision),
-            Some(InstanceChoice::Fixed(_)) | None => None,
-        };
         self.bound_sites
             .extend(inst.bounded.into_iter().map(|var| BoundSite {
                 var,
                 span: site.at,
-                instance,
             }));
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
             self.decision_sites.insert(decision, site.at);
@@ -2878,21 +2873,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     unreachable!("a signature decision answers with a signature")
                 };
                 let SettledSignature::Named {
-                    bounded, instance, ..
+                    bounded, ..
                 } = settled
                 else {
                     return None;
                 };
-                let instance = match instance {
-                    Some(InstanceChoice::Decided(decision)) => Some(decision),
-                    Some(InstanceChoice::Fixed(_)) | None => None,
-                };
                 let span = self.decision_sites[decision];
-                Some(bounded.into_iter().map(move |var| BoundSite {
-                    var,
-                    span,
-                    instance,
-                }))
+                Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
             })
             .flatten()
             .collect()
@@ -2999,17 +2986,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let settled = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
         let sites = std::mem::take(&mut self.bound_sites);
+        let mut never_settled: Vec<BoundSite> = Vec::new();
         for site in sites {
-            if site
-                .instance
-                .is_some_and(|instance| refused.contains(&instance))
-            {
+            // A bound that fails where a decision was refused is that
+            // refusal's consequence: the refused call's types are the ones
+            // that reach the bounded variable.
+            if !refused.is_empty() {
                 continue;
             }
-            if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =
-                self.solver.freeze_ty(&TyTerm::Var(site.var))
-            {
-                self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
+            match self.solver.close_ty(&TyTerm::Var(site.var)) {
+                Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) => {
+                    self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
+                }
+                Err(_) if !self.solver.resolve_ty(&TyTerm::Var(site.var)).mentions_error() => {
+                    never_settled.push(site);
+                }
+                Err(_) | Ok(_) => {}
             }
         }
         let casts = std::mem::take(&mut self.casts);
@@ -3041,6 +3033,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         self.settle_int_literals();
         self.refuse_open_decisions();
+        // An operand no use ever settled is refused only in a body nothing
+        // else was refused in: a refused call leaves its arguments' types
+        // open, and that is the refusal the reader was already told.
+        if self.errors.is_empty() {
+            for site in never_settled {
+                let resolved_ty = self.type_as_written(&TyTerm::Var(site.var));
+                self.error(MirErrorKind::AmbiguousType { resolved_ty }, site.span);
+            }
+        }
     }
 
     /// Poison rule 3 and one refusal per open variable: a decision whose
@@ -4975,20 +4976,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Some(bound) = operand_bound(op) else {
             return true;
         };
-        if !matches!(self.solver.resolve_ty(lt), TyTerm::Var(_)) {
+        self.bound_operand(lt, bound, span)
+    }
+
+    /// An operand still open is bounded by the types its operator takes, and
+    /// the bound is checked where the operand settles (`bound_sites`).
+    fn bound_operand(&mut self, operand: &InferTy, bound: TyVarBound, span: Span) -> bool {
+        if !matches!(self.solver.resolve_ty(operand), TyTerm::Var(_)) {
             return true;
         }
         let bounded = self.solver.fresh_var_with(bound);
-        if self.solver.unify(lt, &bounded).is_err() {
+        if self.solver.unify(operand, &bounded).is_err() {
             return false;
         }
-        let TyTerm::Var(var) = self.solver.resolve_ty(lt) else {
+        let TyTerm::Var(var) = self.solver.resolve_ty(operand) else {
             unreachable!("two open variables unify into an open variable");
         };
         self.bound_sites.push(BoundSite {
             var,
             span,
-            instance: None,
         });
         true
     }
@@ -5003,7 +5009,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.bound_sites.push(BoundSite {
                 var,
                 span,
-                instance: None,
             });
         }
         true
@@ -5817,8 +5822,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Neg => match &ot {
                         TyTerm::Int(k) if k.signed() => ot.clone(),
                         TyTerm::Float => TyTerm::Float,
-                        TyTerm::Var(v) => {
-                            self.solver.require_signed(*v);
+                        TyTerm::Var(_) => {
+                            let signed = crate::ty::IntTy::ALL
+                                .iter()
+                                .copied()
+                                .filter(|width| width.signed())
+                                .map(TyTerm::Int)
+                                .chain([TyTerm::Float])
+                                .collect();
+                            if !self.bound_operand(&ot, TyVarBound::one_of(signed), *span) {
+                                self.binop_error("-", ot.clone(), Self::infer_error(), *span);
+                                return self.record_ret(*id, Self::infer_error());
+                            }
                             ot.clone()
                         }
                         _ => {

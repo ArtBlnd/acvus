@@ -1,0 +1,3 @@
+// refuse
+// lambda ordering its open params, never called: check must refuse or admit, not panic
+let g = |a, b| -> a < b; 1

@@ -1,0 +1,3 @@
+// refuse
+// arity: closure called with too few
+let f = |a, b| -> a + b; f(1)

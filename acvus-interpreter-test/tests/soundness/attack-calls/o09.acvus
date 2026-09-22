@@ -1,0 +1,3 @@
+// expect 7
+// max on two ints (function), max on array (method)
+let a = [4, 5]; let m = max(2, 7); if a.max().unwrap() == 5 { m } else { 0 }

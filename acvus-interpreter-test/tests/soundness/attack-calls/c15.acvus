@@ -1,0 +1,3 @@
+// expect true
+// closure param settles to &String, method contains with &str
+let f = |s| -> s.contains("a"); f(&"ab".to_string())

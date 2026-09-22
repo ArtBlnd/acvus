@@ -1,0 +1,3 @@
+// expect true
+// == of references to Vec
+let a = vec([1]); let b = vec([1]); &a == &b

@@ -1,0 +1,3 @@
+// refuse
+// for over &String
+let s = "abc".to_string(); let n = 0; for c in &s { n = n + 1; } n

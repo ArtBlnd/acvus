@@ -160,3 +160,18 @@ fn an_operator_on_an_operand_that_settles_late_is_refused() {
         "is decided where it is written",
     );
 }
+
+/// An operator on an operand still open where it is checked bounds the
+/// operand by the types it takes, and the bound is checked when the operand
+/// settles: never settling, or settling outside it, is refused.
+#[test]
+fn an_operator_bounds_an_open_operand_and_the_bound_is_checked() {
+    refused_with("let g = |a, b| -> a < b; 1", "");
+    refused_with("let g = |a| -> a + a; 0", "");
+    refused_with("let f = |a| -> -a; f(true)", "");
+    refused_with("let f = |a| -> -a; f(\"s\".to_string())", "");
+    refused_with(
+        "let f = |a, b| -> a + b; f(decimal(\"1\".to_string()).unwrap(), decimal(\"2\".to_string()).unwrap())",
+        "",
+    );
+}

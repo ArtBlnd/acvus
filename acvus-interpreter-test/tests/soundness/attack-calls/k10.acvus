@@ -1,0 +1,3 @@
+// refuse
+// arity: free function too few
+max(1)

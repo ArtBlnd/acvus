@@ -1,0 +1,3 @@
+// expect true
+// a local closure named eq does not capture ==
+let eq = |a, b| -> false; let v = vec([1]); v == v

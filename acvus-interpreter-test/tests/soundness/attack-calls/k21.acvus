@@ -1,0 +1,3 @@
+// expect 6
+// closure passed as argument to closure then called inside
+let ap = |f, x| -> f(x); ap(|y| -> y * 2, 3)

@@ -1,0 +1,3 @@
+// expect 1
+// unwrap by value on Option from an Option method chain
+Some(1).unwrap()

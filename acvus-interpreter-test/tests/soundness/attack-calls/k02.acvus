@@ -1,0 +1,3 @@
+// expect 7
+// closure with two params called as method and piped with extra arg
+let f = |a, b| -> a + b * 2; 1.f(2) + (0 | f(1))

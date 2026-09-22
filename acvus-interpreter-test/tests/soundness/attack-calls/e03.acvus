@@ -1,0 +1,3 @@
+// expect 7
+// context write in a lambda called via pipe
+let f = |x| -> { @n = @n + x; x }; 3 | f; 4 | f; @n

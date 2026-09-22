@@ -1,0 +1,3 @@
+// expect 4
+// two effectful closures ordered by argument evaluation
+let a = |u| -> { @n = @n * 2 + 1; @n }; let b = |u| -> { @n = @n * 2 + 2; @n }; let s = max(a(0), b(0)); @n + s - 4

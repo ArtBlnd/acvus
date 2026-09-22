@@ -1,0 +1,3 @@
+// refuse
+// arity: returned closure called with two args
+let mk = |k| -> |x| -> x * k; mk(3)(4, 5)

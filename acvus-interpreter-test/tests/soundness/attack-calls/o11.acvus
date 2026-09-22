@@ -1,0 +1,3 @@
+// expect 2
+// first on Vec (by ref) and on array (by ref), then deref
+let v = vec([2, 3]); let a = [4, 5]; *v.first().unwrap()

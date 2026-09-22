@@ -1,0 +1,3 @@
+// expect 7
+// closure passed then piped
+let ap = |f, x| -> x | f; ap(|y| -> y + 5, 2)

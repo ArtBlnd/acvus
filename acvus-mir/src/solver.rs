@@ -1135,8 +1135,9 @@ impl Terms {
             return Err(NoJoin);
         }
         self.forward_ty(var, root).map_err(|Cyclic| NoJoin)?;
-        if let TypeBound::Unresolved { bound } = &mut self.ty_bounds[root.0 as usize] {
-            *bound = merged;
+        match &mut self.ty_bounds[root.0 as usize] {
+            TypeBound::Unresolved { bound } | TypeBound::Resolved { bound, .. } => *bound = merged,
+            TypeBound::Forward(_) => unreachable!("find_ty_root yields a root"),
         }
         Ok(())
     }

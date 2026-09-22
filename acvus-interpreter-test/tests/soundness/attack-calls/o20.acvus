@@ -1,0 +1,3 @@
+// expect 3
+// push through &mut named reference, method and function form
+let v = vec([1]); let r = &mut v; r.push(2); push(r, 3); v.len()

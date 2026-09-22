@@ -1,0 +1,3 @@
+// expect 20
+// closure returned from closure piped
+let mk = |k| -> |x| -> x + k; let g = mk(10); 10 | g

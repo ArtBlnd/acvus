@@ -1,0 +1,3 @@
+// refuse
+// unary - on an Option param reached through a returned closure
+let mk = |u| -> |a| -> -a; mk(0)(Some(1))

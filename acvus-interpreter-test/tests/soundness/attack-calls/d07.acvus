@@ -1,0 +1,3 @@
+// expect 3
+// same name in different arms is fine
+match (1, 2) { (a, 1) => a, (b, a) => a + b, _ => 0, }

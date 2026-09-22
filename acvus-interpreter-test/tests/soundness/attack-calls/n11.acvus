@@ -1,0 +1,3 @@
+// expect -3
+// unary - on a param that settles to i64 (control)
+let f = |a| -> -a; f(3)

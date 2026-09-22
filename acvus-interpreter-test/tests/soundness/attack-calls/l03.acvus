@@ -1,0 +1,3 @@
+// expect 6
+// closure mutating a vec through &mut param in a loop
+let v = vec([0]); let add = |r, x| -> { r.push(x); 0 }; for i in 0..5 { add(&mut v, i); } v.len()

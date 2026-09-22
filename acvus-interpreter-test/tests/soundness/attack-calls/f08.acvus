@@ -1,0 +1,3 @@
+// expect 2
+// effectful closure in a loop body, discarded, loop result unused
+let w = |x| -> { @n = @n + 1; x }; for i in 0..2 { w(i); } @n

@@ -1,0 +1,3 @@
+// refuse
+// index on a String (not Vec or Array)
+let s = "abc".to_string(); s[0u64]
