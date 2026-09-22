@@ -90,6 +90,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![pick_fn(i), text_fn(i), f]),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);

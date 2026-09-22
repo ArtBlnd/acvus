@@ -17,6 +17,36 @@ fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
     }
 }
 
+/// Each spelling once, in the order first met: two instances that differ
+/// only in what a shown type leaves out, an identity or a requirement, are
+/// one line to a reader.
+fn spelled_once<I>(spellings: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut once: Vec<String> = Vec::new();
+    for spelling in spellings {
+        if !once.contains(&spelling) {
+            once.push(spelling);
+        }
+    }
+    once
+}
+
+/// The alternatives a refusal enumerates, one per line under the sentence
+/// that introduces them: the instances a call could reach, the shapes a
+/// bound admits, the declarations sharing a name.
+fn listed<I>(f: &mut fmt::Formatter<'_>, items: I) -> fmt::Result
+where
+    I: IntoIterator,
+    I::Item: fmt::Display,
+{
+    for item in items {
+        write!(f, "\n  {item}")?;
+    }
+    Ok(())
+}
+
 /// Whose instance a refused instance decision was looking for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstanceWanted {
@@ -483,6 +513,59 @@ impl MirError {
     }
 }
 
+/// Everything one compilation refused, whichever stage raised it: the stages
+/// that read the source and its types speak `MirError`, and the validator
+/// that reads a lowered body speaks `ValidationError`.
+#[derive(Debug, Clone)]
+pub enum Refusal {
+    Mir(MirError),
+    Invalid(crate::validate::ValidationError),
+}
+
+impl Refusal {
+    pub fn span(&self) -> Span {
+        match self {
+            Refusal::Mir(error) => error.span,
+            Refusal::Invalid(error) => error.span,
+        }
+    }
+
+    pub fn labels(&self) -> &[Label] {
+        match self {
+            Refusal::Mir(error) => &error.labels,
+            Refusal::Invalid(error) => error.labels(),
+        }
+    }
+
+    pub fn primary(&self) -> Option<String> {
+        match self {
+            Refusal::Mir(error) => error.primary(),
+            Refusal::Invalid(_) => None,
+        }
+    }
+
+    pub fn display<'a>(&'a self, interner: &'a Interner) -> RefusalDisplay<'a> {
+        RefusalDisplay {
+            refusal: self,
+            interner,
+        }
+    }
+}
+
+pub struct RefusalDisplay<'a> {
+    refusal: &'a Refusal,
+    interner: &'a Interner,
+}
+
+impl fmt::Display for RefusalDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.refusal {
+            Refusal::Mir(error) => error.display(self.interner).fmt(f),
+            Refusal::Invalid(error) => error.display(self.interner).fmt(f),
+        }
+    }
+}
+
 pub struct MirErrorDisplay<'a> {
     error: &'a MirError,
     interner: &'a Interner,
@@ -703,7 +786,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::AmbiguousFunction { name, candidates } => {
-                write!(f, "`{name}` is declared by {}", candidates.join(" and "))
+                write!(f, "`{name}` is declared by")?;
+                listed(f, candidates)
             }
             MirErrorKind::NoMatchingFunction { name, ty } => {
                 write!(
@@ -755,20 +839,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     ty.shown(interner),
                     view_in(ty)
                 )?;
-                let InstanceWanted::Requirement { .. } = of else {
-                    return Ok(());
-                };
-                if instances.is_empty() {
+                let spelled = spelled_once(instances.iter().map(|t| t.shown(interner).to_string()));
+                if spelled.is_empty() {
                     return Ok(());
                 }
-                write!(f, "; the instances it could reach are ")?;
-                for (i, t) in instances.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", t.shown(interner))?;
-                }
-                Ok(())
+                write!(f, "; the instances it could reach are")?;
+                listed(f, &spelled)
             }
             MirErrorKind::NoOperatorInstance { op, signature, ty } => {
                 write!(
@@ -789,34 +865,25 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )
             }
             MirErrorKind::TypeOutOfBound { ty, bound } => {
-                let shapes = |f: &mut fmt::Formatter<'_>, tys: &[crate::ty::PolyTy]| {
-                    for (i, t) in tys.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}", t.shown(interner))?;
-                    }
-                    Ok(())
-                };
                 write!(
                     f,
-                    "type {} is outside the declared bound ",
+                    "type {} is outside the declared bound",
                     ty.shown(interner)
                 )?;
                 match bound {
-                    crate::ty::TyVarBound::Any => write!(f, "(any)"),
-                    crate::ty::TyVarBound::OneOf { shapes: tys, .. } => {
-                        write!(f, "one of ")?;
-                        shapes(f, tys)
+                    crate::ty::TyVarBound::Any => write!(f, " (any)"),
+                    crate::ty::TyVarBound::OneOf { shapes, .. } => {
+                        write!(f, ", one of")?;
+                        listed(f, shapes.iter().map(|t| t.shown(interner)))
                     }
                     crate::ty::TyVarBound::Integer { signed, among } => {
                         if among.len() == crate::ty::IntTy::ALL.len() {
-                            write!(f, "an integer")
+                            write!(f, ", an integer")
                         } else if *signed && among.iter().all(|k| k.signed()) && among.len() == 4 {
-                            write!(f, "a signed integer")
+                            write!(f, ", a signed integer")
                         } else {
-                            let names: Vec<&str> = among.iter().map(|k| k.name()).collect();
-                            write!(f, "one of {}", names.join(", "))
+                            write!(f, ", one of")?;
+                            listed(f, among.iter().map(|k| k.name()))
                         }
                     }
                 }

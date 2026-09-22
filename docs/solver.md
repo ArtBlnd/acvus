@@ -140,6 +140,8 @@ by the least element of what it admits, in this order:
 1. an integer width, if its bound has a default: `i64` where the bound
    admits `i64`, else the one width if exactly one remains, else the
    variable stays open and is reported — see the literal's width below;
+   a text, where the bound is `String` or `str` and nothing else, as `==`
+   against text leaves an open operand: `String`;
 2. a representation: `Uniform`;
 3. a pattern's mode, *before* a lend's — a binding closed to a value is what
    a later lend of that name lends, and closing the lend first would name a

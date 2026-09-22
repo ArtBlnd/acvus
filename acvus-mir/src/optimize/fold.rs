@@ -18,7 +18,7 @@
 //! compares bit patterns here, so a folded NaN would carry the compiler's
 //! pattern where the machine's belongs.
 
-use acvus_ast::{BinOp, Literal};
+use acvus_ast::{BinOp, Literal, UnaryOp};
 use rustc_hash::FxHashMap;
 
 use crate::analysis::inst_info;
@@ -57,6 +57,7 @@ struct Split {
 /// stands now.
 struct Facts {
     consts: FxHashMap<ValueId, Literal>,
+    texts: FxHashMap<ValueId, String>,
     uses: FxHashMap<ValueId, usize>,
     defs: FxHashMap<ValueId, Site>,
 }
@@ -73,6 +74,8 @@ fn rewrite_once(cfg: &mut CfgBody) -> bool {
     for site in sites.collect::<Vec<Site>>() {
         if fold_constant(cfg, &facts, site)
             || fold_cast(cfg, &facts, site)
+            || fold_not(cfg, &facts, site)
+            || fold_string_eq(cfg, &facts, site)
             || join_constants(cfg, &facts, site)
         {
             return true;
@@ -84,6 +87,7 @@ fn rewrite_once(cfg: &mut CfgBody) -> bool {
 impl Facts {
     fn of(cfg: &CfgBody) -> Facts {
         let mut consts = FxHashMap::default();
+        let mut texts = FxHashMap::default();
         let mut uses: FxHashMap<ValueId, usize> = FxHashMap::default();
         let mut defs = FxHashMap::default();
         for (block, held) in cfg.blocks.iter().enumerate() {
@@ -92,8 +96,14 @@ impl Facts {
                     block: BlockIdx(block),
                     at,
                 };
-                if let InstKind::Const { dst, value } = &inst.kind {
-                    consts.insert(*dst, value.clone());
+                match &inst.kind {
+                    InstKind::Const { dst, value } => {
+                        consts.insert(*dst, value.clone());
+                    }
+                    InstKind::ConstStr { dst, text } => {
+                        texts.insert(*dst, text.clone());
+                    }
+                    _ => {}
                 }
                 for def in inst_info::defs(&inst.kind) {
                     defs.insert(def, site);
@@ -106,7 +116,12 @@ impl Facts {
                 *uses.entry(read).or_default() += 1;
             }
         }
-        Facts { consts, uses, defs }
+        Facts {
+            consts,
+            texts,
+            uses,
+            defs,
+        }
     }
 
     fn literal(&self, v: ValueId) -> Option<&Literal> {
@@ -203,6 +218,43 @@ fn fold_constant(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
         return false;
     };
     *kind_mut(cfg, site) = InstKind::Const { dst, value };
+    true
+}
+
+// -- A negation of a constant is the constant -------------------------
+
+fn fold_not(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
+    let InstKind::UnaryOp {
+        dst,
+        op: UnaryOp::Not,
+        operand,
+    } = kind_at(cfg, site)
+    else {
+        return false;
+    };
+    let Some(Literal::Bool(held)) = facts.literal(operand) else {
+        return false;
+    };
+    *kind_mut(cfg, site) = InstKind::Const {
+        dst,
+        value: Literal::Bool(!held),
+    };
+    true
+}
+
+// -- A comparison of two constant strings is the constant --------------
+
+fn fold_string_eq(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
+    let InstKind::StringEq { dst, a, b } = kind_at(cfg, site) else {
+        return false;
+    };
+    let (Some(left), Some(right)) = (facts.texts.get(&a), facts.texts.get(&b)) else {
+        return false;
+    };
+    *kind_mut(cfg, site) = InstKind::Const {
+        dst,
+        value: Literal::Bool(left == right),
+    };
     true
 }
 
@@ -501,6 +553,8 @@ fn bool_result(op: BinOp, a: bool, b: bool) -> Option<Literal> {
         BinOp::Eq => Some(Literal::Bool(a == b)),
         BinOp::Neq => Some(Literal::Bool(a != b)),
         BinOp::Xor => Some(Literal::Bool(a ^ b)),
+        BinOp::And => Some(Literal::Bool(a && b)),
+        BinOp::Or => Some(Literal::Bool(a || b)),
         BinOp::Add
         | BinOp::Sub
         | BinOp::Mul
@@ -513,8 +567,6 @@ fn bool_result(op: BinOp, a: bool, b: bool) -> Option<Literal> {
         | BinOp::BitAnd
         | BinOp::BitOr
         | BinOp::Shl
-        | BinOp::Shr
-        | BinOp::And
-        | BinOp::Or => None,
+        | BinOp::Shr => None,
     }
 }

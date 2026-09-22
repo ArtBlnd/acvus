@@ -1,5 +1,6 @@
 //! One binary: `cargo test -p acvus-cli --test all <file>::<test>`.
 
+mod bound_input;
 mod cli;
 mod examples;
 mod parameter_binding;

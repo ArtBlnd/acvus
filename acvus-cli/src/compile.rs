@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, Prepared, prepare_module};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
-    CompilationGraph, Context, FnKind, Function, ParsedAst, QualifiedRef, extract, infer, lower,
-    optimize,
+    Bindings, CompilationGraph, Context, ContextInfo, FnKind, Function, ParsedAst, QualifiedRef,
+    extract, infer, lower, optimize,
 };
 use acvus_mir::ir::MirModule;
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
@@ -112,6 +112,7 @@ impl Stages {
 /// one more stage, `prepare`, which belongs to the interpreter.
 pub struct Checked {
     entry: QualifiedRef,
+    inputs: Vec<ContextInfo>,
     modules: FxHashMap<QualifiedRef, MirModule>,
     externs: FxHashMap<QualifiedRef, Executable>,
     instances: acvus_extern::InstanceTable,
@@ -126,9 +127,15 @@ impl Checked {
         &self.mir
     }
 
+    /// A `$` a binding fixed is not among these (RFC-0071 Decision 5).
+    pub fn inputs(&self) -> &[ContextInfo] {
+        &self.inputs
+    }
+
     pub fn prepare(self, interner: &Interner) -> Compiled {
         let Checked {
             entry,
+            inputs: _,
             modules,
             mut externs,
             instances,
@@ -181,6 +188,19 @@ impl Compiled {
     }
 }
 
+/// One host injects the `$` names of the whole graph (RFC-0071 Decision 4),
+/// so a run requires the union over its functions.
+fn required_inputs(by_function: &FxHashMap<QualifiedRef, Vec<ContextInfo>>) -> Vec<ContextInfo> {
+    let mut inputs: Vec<ContextInfo> = Vec::new();
+    for held in by_function.values().flatten() {
+        if !inputs.iter().any(|input| input.name == held.name) {
+            inputs.push(held.clone());
+        }
+    }
+    inputs.sort_by_key(|input| input.name.name.bits());
+    inputs
+}
+
 fn span_of(span: Span) -> Option<Span> {
     (span.start != 0 || span.end != 0).then_some(span)
 }
@@ -190,6 +210,7 @@ pub fn check(
     source: &str,
     mode: Mode,
     context_types: &FxHashMap<Astr, Ty>,
+    bindings: Bindings,
     registries: Vec<Registry<AcvusRuntime>>,
     timed: Timed,
     opt: Opt,
@@ -252,6 +273,7 @@ pub fn check(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings,
         entry: Some(entry),
     };
 
@@ -279,7 +301,7 @@ pub fn check(
         .collect();
 
     let watch = Stopwatch::start(timed);
-    let lowered = lower::lower(interner, &graph, &ext, &inf);
+    let lowered = lower::lower(interner, &graph, &ext.view(), &inf);
     stages.lower = watch.stop();
 
     diagnostics.extend(
@@ -299,7 +321,7 @@ pub fn check(
     }
 
     let watch = Stopwatch::start(timed);
-    let optimized = optimize::optimize(lowered.modules, opt);
+    let optimized = optimize::optimize(interner, lowered.modules, opt);
     stages.optimize = watch.stop();
 
     diagnostics.extend(
@@ -333,9 +355,11 @@ pub fn check(
         .iter()
         .map(|c| (c.qref, c.qref.name))
         .collect();
+    let inputs = required_inputs(&optimized.inputs);
     Ok((
         Checked {
             entry,
+            inputs,
             modules: optimized.modules,
             externs,
             instances,

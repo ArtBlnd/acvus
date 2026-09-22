@@ -6,6 +6,22 @@ live in `acvus-cli/tests/refusals/` and their rendered diagnostics are
 pinned there byte for byte, so this catalogue is checked rather than
 claimed.
 
+A refusal of a call names the instances the call could have reached, as
+their declarations spell them: `Fn(Array<T, N>) -> Vec<T>` says the element
+must be the array's. A placeholder is a letter of its kind (`T`, `U` for
+types; `N`, `M` for lengths; `E`, `F` for effects), the same letter wherever
+that placeholder recurs. A call whose instances refused it is refused once:
+the bound its declaration states is the union of those instances' shapes, so
+a type outside it is not reported again after the instances are.
+
+What a refusal enumerates — the instances a call could reach, the shapes a
+bound admits, the declarations that share a name — is one alternative per
+line under the sentence that introduces them, indented two spaces. A clause
+that offers at most three names, `did you mean`, stays in the sentence.
+
+A pipeline stage `a | f(b)` is a call of `f`, and a refusal of it marks
+`f(b)`, not the pipeline that feeds it.
+
 Three devices carry the fix:
 
 - **the sentence** says what is wrong and, where one spelling settles it,
@@ -57,6 +73,7 @@ them — a deferred decision settles after the text after it was read.
 | `v.into_iter() \| map(\|x\| -> x + 1) \| colect` | undefined function `colect`; did you mean `collect`? |
 | `frobnicate(1)` | undefined function `frobnicate` |
 | `let total = 1; totl + 1` | undefined variable `totl`; did you mean `total`? |
+| `let q = [1.0]; let len = \|k\| -> 7.0; len(&q)` | `len` is declared by<br>&nbsp;&nbsp;array::len<br>&nbsp;&nbsp;the binding `len` |
 | `let p = { name: "x".to_string(), age: 3, }; p.nmae` | `p` has no `nmae` stored on every path that reaches here; did you mean `name`? |
 | `match shape { Shape::Circl(r) => r, _ => 0.0, }` | unreachable pattern: `Shape::Circl(_)` is not a variant of `Shape{Circle(Float)}`; did you mean `Shape::Circle`? |
 | `total = 1; total` | cannot assign to `total`: no binding named `total` is in scope; `let total = ...;` binds it |
@@ -84,7 +101,7 @@ it keeps the sentence it had.
 
 | program | what it says |
 | --- | --- |
-| `let v = vec(["a".to_string()]); v.push("b")` | no instance of the signature has the call type Fn(Array\<String, 1>) -> Vec\<&str>; write `.to_string()` for the owned text |
+| `let v = vec(["a".to_string()]); v.push("b")` | no instance of std::vec has the call type Fn(Array\<String, 1>) -> Vec\<&str>; write `.to_string()` for the owned text; the instances it could reach are<br>&nbsp;&nbsp;Fn(Array\<T, N>) -> Vec\<T><br>&nbsp;&nbsp;Fn(Deque\<T>) -> Vec\<T> |
 | `let s = "  abc  ".to_string(); s.trim()` as the body's value | a body does not return a reference; write `.to_string()` for the owned text |
 | `let v = s.trim(); let f = \|k\| -> len(v); f(1)` | a lambda cannot capture a string or slice view; write `.to_string()` for the owned text |
 | `let r = &v; { inner: r, }` | a reference cannot be stored in a list, object, or tuple |
@@ -99,7 +116,8 @@ it keeps the sentence it had.
 | `1 == "a"` | type mismatch in `==`: i64 vs str |
 | `let n = 1; while n { … }` | type mismatch: expected Bool, got i64 |
 | `[1, "a"]` | heterogeneous list: expected i64, got &str |
-| `let v = vec([1, 2]); v.push("b".to_string())` | no instance of the signature has the call type Fn(Array\<i64, 2>) -> Vec\<String> |
+| `let v = vec([1, 2]); v.push("b".to_string())` | no instance of std::vec has the call type Fn(Array\<i64, 2>) -> Vec\<String>; the instances it could reach are<br>&nbsp;&nbsp;Fn(Array\<T, N>) -> Vec\<T><br>&nbsp;&nbsp;Fn(Deque\<T>) -> Vec\<T> |
+| `range(1, 100) \| into_iter() \| sum()` | no instance of iter::into_iter has the call type Fn(Range) -> _; the instances it could reach are<br>&nbsp;&nbsp;Fn(Deque\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(HashSet\<T, E>) -> Items\<T><br>&nbsp;&nbsp;Fn(Option\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(Result\<T, U>) -> Items\<T><br>&nbsp;&nbsp;Fn(Vec\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(Array\<T, N>) -> Items\<T> |
 | `let x = 1; x.len()` | no `len` takes a call of type Fn(_) -> u64 |
 | `1 as Integer` | `as` converts to i8, i16, i32, i64, u8, u16, u32, u64, f64 or char, not to `Integer` |
 | `let x = 1; x[0u64]` | no `as_slice` takes a call of type Fn(&i64) -> &[_] |

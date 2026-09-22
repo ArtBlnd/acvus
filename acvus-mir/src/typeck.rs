@@ -87,6 +87,10 @@ struct ShownSource {
 struct BoundSite {
     var: crate::ty::TypeBoundId,
     span: Span,
+    /// The instance decision that chooses among the shapes the bound is the
+    /// union of (RFC-0027). Its refusal already names the type outside, so a
+    /// violation of the bound is not reported after it.
+    instance: Option<DecisionId>,
 }
 
 /// An integer literal awaiting its width, checked against its value once
@@ -2460,11 +2464,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let inst = self
             .solver
             .instantiate_scheme_with(&scheme, compiler_instances);
-        self.bound_sites.extend(
-            inst.bounded
-                .into_iter()
-                .map(|var| BoundSite { var, span: site.at }),
-        );
+        let instance = match inst.instance {
+            Some(InstanceChoice::Decided(decision)) => Some(decision),
+            Some(InstanceChoice::Fixed(_)) | None => None,
+        };
+        self.bound_sites
+            .extend(inst.bounded.into_iter().map(|var| BoundSite {
+                var,
+                span: site.at,
+                instance,
+            }));
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
             self.decision_sites.insert(decision, site.at);
             self.decision_callees.insert(decision, qref);
@@ -2584,11 +2593,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let Answer::Signature { settled, .. } = self.solver.answer(*decision)? else {
                     unreachable!("a signature decision answers with a signature")
                 };
-                let SettledSignature::Named { bounded, .. } = settled else {
+                let SettledSignature::Named {
+                    bounded, instance, ..
+                } = settled
+                else {
                     return None;
                 };
+                let instance = match instance {
+                    Some(InstanceChoice::Decided(decision)) => Some(decision),
+                    Some(InstanceChoice::Fixed(_)) | None => None,
+                };
                 let span = self.decision_sites[decision];
-                Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
+                Some(bounded.into_iter().map(move |var| BoundSite {
+                    var,
+                    span,
+                    instance,
+                }))
             })
             .flatten()
             .collect()
@@ -2705,6 +2725,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn solve_body(&mut self) {
         let mut unsettled = std::mem::take(&mut self.refused_in_body);
         unsettled.extend(self.solver.solve());
+        let refused: FxHashSet<DecisionId> = unsettled.iter().map(Unsettled::decision).collect();
         self.place_begun_sources();
         self.place_opened_children();
         self.report_unsettled(unsettled);
@@ -2725,6 +2746,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.bound_sites.extend(settled);
         let sites = std::mem::take(&mut self.bound_sites);
         for site in sites {
+            if site
+                .instance
+                .is_some_and(|instance| refused.contains(&instance))
+            {
+                continue;
+            }
             if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =
                 self.solver.freeze_ty(&TyTerm::Var(site.var))
             {
@@ -4441,7 +4468,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Var(var) = self.solver.resolve_ty(lt) else {
             unreachable!("two open variables unify into an open variable");
         };
-        self.bound_sites.push(BoundSite { var, span });
+        self.bound_sites.push(BoundSite {
+            var,
+            span,
+            instance: None,
+        });
         true
     }
 
@@ -4452,7 +4483,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return false;
         }
         if let TyTerm::Var(var) = self.solver.resolve_ty(open) {
-            self.bound_sites.push(BoundSite { var, span });
+            self.bound_sites.push(BoundSite {
+                var,
+                span,
+                instance: None,
+            });
         }
         true
     }
@@ -5440,26 +5475,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 id,
                 left,
                 right,
-                span,
+                span: _,
             } => {
                 // Desugar: `a | f(b, c)` -> `f(a, b, c)`
                 // `a | f` -> `f(a)`
+                // The call is the stage, so a refusal of it marks `f(b, c)`
+                // and not the pipeline that feeds it.
                 let pipe_left = Some(left.as_ref());
+                let stage = right.span();
                 let ty = match right.as_ref() {
                     Expr::FuncCall { func, args, .. } => {
-                        self.check_func_call(*id, func, args, pipe_left, *span)
+                        self.check_func_call(*id, func, args, pipe_left, stage)
                     }
                     Expr::Ident {
                         ref_kind: RefKind::Value,
                         ..
-                    } => self.check_func_call(*id, right, &[], pipe_left, *span),
+                    } => self.check_func_call(*id, right, &[], pipe_left, stage),
                     _ => {
                         let first = FirstArg {
                             ty: self.check_expr(left),
-                            site: ArgSite::of(left, *span),
+                            site: ArgSite::of(left, stage),
                         };
                         let rt = self.check_expr(right);
-                        self.check_callable(&rt, &[], Some(&first), *span)
+                        self.check_callable(&rt, &[], Some(&first), stage)
                     }
                 };
                 self.record_ret(*id, ty)

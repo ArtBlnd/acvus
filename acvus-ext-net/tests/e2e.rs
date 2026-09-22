@@ -97,6 +97,7 @@ fn reissue_of(source: &str) -> Reissue {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: Some(entry),
     };
     let ext = extract::extract(&i, &graph);

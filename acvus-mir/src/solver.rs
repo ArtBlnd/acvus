@@ -2265,7 +2265,7 @@ impl<'src> Solver<'src> {
     }
 
     /// Settle, then close every decision still open by its least element
-    /// (solver.md R3): a width is `i64`, a representation `Uniform`, a lend
+    /// (solver.md R3): a width is `i64`, a text `String`, a representation `Uniform`, a lend
     /// a reference, a capture a word, an identity a source of its own;
     /// then settle again, and report every decision that neither settled
     /// nor could take a least element.
@@ -2275,11 +2275,13 @@ impl<'src> Solver<'src> {
             let TypeBound::Unresolved { bound } = &self.terms.ty_bounds[index] else {
                 continue;
             };
-            let Some(width) = bound.integer_default() else {
-                continue;
+            let ty = match bound.integer_default() {
+                Some(width) => TyTerm::Int(width),
+                None if bound.is_text() => TyTerm::String,
+                None => continue,
             };
             self.terms.ty_bounds[index] = TypeBound::Resolved {
-                ty: TyTerm::Int(width),
+                ty,
                 bound: bound.clone(),
             };
         }

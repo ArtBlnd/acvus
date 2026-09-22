@@ -91,6 +91,7 @@ async fn run_parsed(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: Some(entry_qref),
     };
 
@@ -102,7 +103,7 @@ async fn run_parsed(
         &FxHashMap::default(),
         Freeze::new(type_registry),
     );
-    let lowered = graph_lower::lower(interner, &graph, &ext, &inf);
+    let lowered = graph_lower::lower(interner, &graph, &ext.view(), &inf);
 
     let errs: Vec<String> = inf
         .errors()
@@ -119,6 +120,7 @@ async fn run_parsed(
     // value the frame does not drop trips `Machine::define_slot` when the
     // slot is written again. A run here is the run the CLI does.
     let result = graph_optimize::optimize(
+        interner,
         lowered.modules.into_iter().collect(),
         graph_optimize::Opt::Full,
     );

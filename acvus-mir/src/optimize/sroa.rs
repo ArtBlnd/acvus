@@ -35,7 +35,7 @@ use super::ssa::{ENTRY_BLOCK, Part, SSABuilder, SsaVar};
 use super::ssa_pass::{apply_subst, apply_subst_terminator, patch_instructions};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::{escape, inst_info};
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{Inst, InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
 use crate::ty::Ty;
 
@@ -976,36 +976,6 @@ fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
         } => leave(exit, exit_args),
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}
     }
-}
-
-fn reachable(cfg: &CfgBody) -> Vec<bool> {
-    let mut seen = vec![false; cfg.blocks.len()];
-    let mut work = vec![BlockIdx(0)];
-    while let Some(at) = work.pop() {
-        if std::mem::replace(&mut seen[at.0], true) {
-            continue;
-        }
-        work.extend(cfg.successors(at));
-    }
-    seen
-}
-
-fn prune(cfg: &mut CfgBody, alive: &[bool]) {
-    if alive.iter().all(|alive| *alive) {
-        return;
-    }
-    let mut bi = 0;
-    cfg.blocks.retain(|_| {
-        let keep = alive[bi];
-        bi += 1;
-        keep
-    });
-    cfg.label_to_block = cfg
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(bi, block)| (block.label, BlockIdx(bi)))
-        .collect();
 }
 
 fn kept_compare(decision: &Option<Decision>) -> Option<&Compare> {

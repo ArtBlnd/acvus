@@ -1,4 +1,6 @@
-error: no instance of std::vec has the call type Fn(Array<i64, 2>) -> Vec<String>
+error: no instance of std::vec has the call type Fn(Array<i64, 2>) -> Vec<String>; the instances it could reach are
+         Fn(Array<T, N>) -> Vec<T>
+         Fn(Deque<T>) -> Vec<T>
   --> 11-an-element-of-another-type-pushed.acvus:1:9
   |
 1 | let v = vec([1, 2]);

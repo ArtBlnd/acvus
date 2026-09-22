@@ -49,16 +49,16 @@ fn diamonds_innermost_first(source: &str, page: fn(&Interner) -> Context) -> Vec
 }
 
 fn loop_count(source: &str) -> usize {
+    loop_count_on_page(source, |_| Context::default())
+}
+
+fn loop_count_on_page(source: &str, page: fn(&Interner) -> Context) -> usize {
     let interner = Interner::new();
-    ops_of_anywhere(&script_listing(
-        &interner,
-        source,
-        Context::default(),
-        Ty::I64,
-    ))
-    .iter()
-    .filter(|name| family_of(name) == "Loop")
-    .count()
+    let page = page(&interner);
+    ops_of_anywhere(&script_listing(&interner, source, page, Ty::I64))
+        .iter()
+        .filter(|name| family_of(name) == "Loop")
+        .count()
 }
 
 fn shape(on_true_ops: usize, on_false_ops: usize, join_moves: usize) -> String {
@@ -168,13 +168,13 @@ async fn a_diamond_in_a_body_leaves_the_while_recognizable() {
 
 #[tokio::test]
 async fn a_while_in_an_arm_is_one_operation_inside_the_diamond() {
-    let source = "let n = 5; let acc = 0; if n > 3 { let k = 0; while k < n { acc = acc + k; k = k + 1; } } else { acc = 1; }; acc";
+    let source = "let acc = 0; if @n > 3 { let k = 0; while k < @n { acc = acc + k; k = k + 1; } } else { acc = 1; }; acc";
     let i = Interner::new();
-    let v = run_script(&i, source, Context::default(), Ty::I64).await;
+    let v = run_script(&i, source, int_context(&i, "n", 5), Ty::I64).await;
     assert_eq!(v.as_int(), 10);
-    assert_eq!(loop_count(source), 1);
+    assert_eq!(loop_count_on_page(source, |i| int_context(i, "n", 5)), 1);
     assert_eq!(
-        diamonds_innermost_first(source, |_| Context::default()).len(),
+        diamonds_innermost_first(source, |i| int_context(i, "n", 5)).len(),
         1
     );
 }

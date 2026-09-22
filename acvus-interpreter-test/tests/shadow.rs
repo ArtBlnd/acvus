@@ -18,7 +18,7 @@ async fn a_binding_alone_takes_a_call_no_declared_len_takes() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "`len` is declared by array::len and the binding `len`")]
+#[should_panic(expected = "`len` is declared by\n  array::len\n  the binding `len`")]
 async fn a_method_receiver_two_candidates_take_in_different_modes_is_ambiguous() {
     run(
         "let q = [1.0, 2.0]; let len = |k| -> 7.0; q.len()",
@@ -28,7 +28,7 @@ async fn a_method_receiver_two_candidates_take_in_different_modes_is_ambiguous()
 }
 
 #[tokio::test]
-#[should_panic(expected = "`len` is declared by array::len and the binding `len`")]
+#[should_panic(expected = "`len` is declared by\n  array::len\n  the binding `len`")]
 async fn a_binding_and_an_extern_that_both_take_the_call_are_ambiguous() {
     run(
         "let q = [1.0, 2.0]; let len = |k| -> 7.0; len(&q)",

@@ -247,8 +247,8 @@ fn a_refusal_names_the_signature_the_requirement_asked_of() {
     assert!(
         errs.contains(
             &"no instance of probe::advance required by drain has the call type Fn(i64) -> \
-              i64; the instances it could reach are Fn(Counter) -> Counter, Fn(Doubled<'1>) \
-              -> Doubled<'1>"
+              i64; the instances it could reach are\n  Fn(Counter) -> Counter\n  Fn(Doubled<U>) \
+              -> Doubled<U>"
                 .to_string()
         ),
         "{errs:?}"

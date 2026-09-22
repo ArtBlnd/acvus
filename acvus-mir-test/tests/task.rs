@@ -64,6 +64,7 @@ fn graph_of(functions: Vec<Function>) -> CompilationGraph {
     CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     }
 }
@@ -114,7 +115,7 @@ fn instances_taken(i: &Interner, functions: Vec<Function>, name: &str) -> Vec<us
     let graph = graph_of(functions);
     let (ext, inf) = inferred(i, &graph);
     assert!(!inf.has_errors(), "infer errors: {:?}", inf.errors());
-    let lowered = graph_lower::lower(i, &graph, &ext, &inf);
+    let lowered = graph_lower::lower(i, &graph, &ext.view(), &inf);
     let module = lowered.module(target).expect("a module for the target");
     module
         .main

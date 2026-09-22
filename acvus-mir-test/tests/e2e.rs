@@ -69,6 +69,7 @@ fn compile_analysis(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
 
@@ -96,7 +97,7 @@ fn compile_analysis(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {

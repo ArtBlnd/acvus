@@ -8,17 +8,28 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const EXAMPLES: [&str; 7] = [
+const EXAMPLES: [&str; 8] = [
     "collatz",
     "grades",
     "ledger",
     "log-parse",
+    "prompt",
     "queue",
     "shapes",
     "word-count",
 ];
 
-const FILES: [&str; 3] = ["ctx.json", "expected.txt", "main.acvus"];
+const DATA: [&str; 2] = ["ctx.json", "expected.txt"];
+const SOURCES: [&str; 2] = ["main.acvus", "main.acvt"];
+
+fn source_of(name: &str) -> String {
+    let dir = root().join("examples").join(name);
+    let mut sources = SOURCES.iter().filter(|s| dir.join(s).exists());
+    let (Some(source), None) = (sources.next(), sources.next()) else {
+        panic!("examples/{name} holds one of {SOURCES:?}, not several and not none");
+    };
+    format!("examples/{name}/{source}")
+}
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,7 +67,7 @@ fn sorted_names(dir: &Path) -> Vec<String> {
 
 fn example(name: &str) {
     let dir = root().join("examples").join(name);
-    let script = format!("examples/{name}/main.acvus");
+    let script = source_of(name);
     let context = format!("examples/{name}/ctx.json");
     let expected = std::fs::read(dir.join("expected.txt"))
         .unwrap_or_else(|e| panic!("examples/{name}/expected.txt: {e}"));
@@ -106,6 +117,11 @@ fn log_parse() {
 }
 
 #[test]
+fn prompt() {
+    example("prompt");
+}
+
+#[test]
 fn queue() {
     example("queue");
 }
@@ -130,10 +146,11 @@ fn every_example_directory_is_covered() {
     );
 
     for name in found {
-        assert_eq!(
-            sorted_names(&examples.join(&name)),
-            FILES,
-            "the files in examples/{name}"
-        );
+        let source = source_of(&name);
+        let data: Vec<String> = sorted_names(&examples.join(&name))
+            .into_iter()
+            .filter(|file| !source.ends_with(file.as_str()))
+            .collect();
+        assert_eq!(data, DATA, "the files beside the source in examples/{name}");
     }
 }

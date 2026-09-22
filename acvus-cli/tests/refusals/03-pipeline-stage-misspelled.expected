@@ -1,5 +1,5 @@
 error: undefined function `colect`; did you mean `collect`?
-  --> 03-pipeline-stage-misspelled.acvus:2:1
+  --> 03-pipeline-stage-misspelled.acvus:2:37
   |
 2 | v.into_iter() | map(|x| -> x + 1) | colect
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |                                     ^^^^^^

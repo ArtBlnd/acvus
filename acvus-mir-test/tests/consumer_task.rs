@@ -335,6 +335,7 @@ fn effect_of(i: &Interner, functions: Vec<Function>, name: &str) -> Effect {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);

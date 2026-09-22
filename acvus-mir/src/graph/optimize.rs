@@ -2,14 +2,17 @@
 //!
 //! Runs the full optimization pipeline on lowered MIR modules.
 
+use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::inst_info;
 use crate::analysis::loans::{ParamLoan, Summaries, Summary};
 use crate::cfg::{self, CfgBody};
-use crate::graph::QualifiedRef;
 use crate::graph::inliner;
-use crate::ir::{Callee, InstKind, MirModule};
+use crate::graph::{ContextInfo, QualifiedRef};
+use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
 use crate::optimize;
+use crate::ty::Ty;
 
 #[cfg(debug_assertions)]
 use crate::validate::type_check::ValidationErrorKind;
@@ -21,6 +24,9 @@ pub struct OptimizeResult {
     pub modules: FxHashMap<QualifiedRef, MirModule>,
     /// Validation errors per function (empty = valid).
     pub errors: Vec<(QualifiedRef, Vec<ValidationError>)>,
+    /// Read off the code that survived the passes, which is what makes this
+    /// the set RFC-0071 Decision 5 calls required.
+    pub inputs: FxHashMap<QualifiedRef, Vec<ContextInfo>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,7 +38,11 @@ pub enum Opt {
     Full,
 }
 
-pub fn optimize(modules: FxHashMap<QualifiedRef, MirModule>, opt: Opt) -> OptimizeResult {
+pub fn optimize(
+    interner: &Interner,
+    modules: FxHashMap<QualifiedRef, MirModule>,
+    opt: Opt,
+) -> OptimizeResult {
     // -- Pass 0: moves, borrows and exhaustiveness as the source wrote
     // them (RFC-0029, RFC-0051) --
 
@@ -79,12 +89,14 @@ pub fn optimize(modules: FxHashMap<QualifiedRef, MirModule>, opt: Opt) -> Optimi
 
     let refused: FxHashSet<QualifiedRef> = all_errors.iter().map(|(qref, _)| *qref).collect();
     let mut result_modules = FxHashMap::default();
+    let mut inputs = FxHashMap::default();
 
     for (qref, mut module) in inlined.modules {
-        run_pass2_body(&mut module.main, opt);
+        run_pass2_body(interner, &mut module.main, opt);
         for closure in module.closures.values_mut() {
-            run_pass2_body(closure, opt);
+            run_pass2_body(interner, closure, opt);
         }
+        inputs.insert(qref, required_inputs(&module.main));
 
         let errors = validate::type_check::check_types(&module);
         if !errors.is_empty() {
@@ -100,7 +112,36 @@ pub fn optimize(modules: FxHashMap<QualifiedRef, MirModule>, opt: Opt) -> Optimi
     OptimizeResult {
         modules: result_modules,
         errors: all_errors,
+        inputs,
     }
+}
+
+/// A name every read of which a fold removed is absent here: it constrains
+/// nothing, so its type closes to `!` and it is not required (RFC-0071
+/// Decision 5).
+fn required_inputs(body: &MirBody) -> Vec<ContextInfo> {
+    let mut read: FxHashSet<ValueId> = FxHashSet::default();
+    for inst in &body.insts {
+        read.extend(inst_info::uses(&inst.kind));
+        if let InstKind::Ref { target, .. } | InstKind::Take { target, .. } = &inst.kind {
+            read.extend(inst_info::storage(target));
+        }
+    }
+    body.params
+        .iter()
+        .filter(|(_, slot)| read.contains(slot))
+        .map(|(name, slot)| ContextInfo {
+            name: QualifiedRef::root(*name),
+            ty: input_ty(body, *slot),
+        })
+        .collect()
+}
+
+fn input_ty(body: &MirBody, slot: ValueId) -> Ty {
+    body.val_types
+        .get(&slot)
+        .cloned()
+        .expect("lowering gives every parameter of a body its type")
 }
 
 fn named_callees(module: &MirModule) -> Vec<QualifiedRef> {
@@ -255,25 +296,31 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-fn run_pass2_body(body: &mut crate::ir::MirBody, opt: Opt) {
+fn run_pass2_body(interner: &Interner, body: &mut crate::ir::MirBody, opt: Opt) {
     let mut cfg = cfg::promote(std::mem::take(body));
     match opt {
-        Opt::None => run_pass2_required(&mut cfg),
-        Opt::Full => run_pass2(&mut cfg),
+        Opt::None => run_pass2_required(interner, &mut cfg),
+        Opt::Full => run_pass2(interner, &mut cfg),
     }
     *body = cfg::demote(cfg);
     optimize::rejoin::run(body);
 }
 
-fn run_pass2_required(cfg: &mut CfgBody) {
+/// Which inputs a body requires is a fact about the language and not an
+/// optimization, so the two folds that decide it run at every level: a bound
+/// `$` is a constant here as well, and the arms it decides against are gone
+/// from both bodies alike (RFC-0071 Decision 5).
+fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::ssa_pass::run(cfg);
     optimize::reborrow::run(cfg);
+    optimize::fold::run(cfg);
+    optimize::branch::run(interner, cfg);
     optimize::dce::run(cfg);
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
-fn run_pass2(cfg: &mut CfgBody) {
+fn run_pass2(interner: &Interner, cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     // RFC-0053: an aggregate no use lets out of the body never exists.
@@ -286,6 +333,9 @@ fn run_pass2(cfg: &mut CfgBody) {
     // into one body; before `dse`/`dce`, which sweep the operands a fold
     // left with no reader.
     optimize::fold::run(cfg);
+    // RFC-0071: after the fold, which is what makes a condition constant;
+    // before `dse`/`dce`, which sweep what the arms it dropped had read.
+    optimize::branch::run(interner, cfg);
     optimize::reborrow::run(cfg);
     optimize::dse::run(cfg);
     optimize::dce::run(cfg);

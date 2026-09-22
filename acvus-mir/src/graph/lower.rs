@@ -10,10 +10,20 @@ use crate::error::MirError;
 use crate::ir::MirModule;
 
 use super::extract::{ExtractResult, ParsedSource};
-use super::infer::InferResult;
+use super::infer::{FnInferOutcome, InferResult};
 use super::types::*;
 
 // -- Phase 3 output --------------------------------------------------
+
+/// The parsed source of each function to lower, borrowed from the cache that
+/// holds it. Lowering only reads the AST, so neither caller clones one.
+pub type ParsedView<'a> = FxHashMap<QualifiedRef, &'a ParsedSource>;
+
+impl ExtractResult {
+    pub fn view(&self) -> ParsedView<'_> {
+        self.parsed.iter().map(|(&qref, p)| (qref, p)).collect()
+    }
+}
 
 #[derive(Debug)]
 pub struct LowerError {
@@ -44,52 +54,70 @@ impl LowerResult {
 pub fn lower(
     interner: &Interner,
     graph: &CompilationGraph,
-    extract: &ExtractResult,
+    parsed: &ParsedView<'_>,
     infer_result: &InferResult,
 ) -> LowerResult {
     let mut modules = FxHashMap::default();
     let mut errors = Vec::new();
 
     for func in graph.functions.iter() {
-        if matches!(func.kind, FnKind::Extern { .. }) {
-            continue;
-        }
-        let Some(parsed) = extract.parsed.get(&func.qref) else {
+        let Some(source) = parsed.get(&func.qref) else {
             continue;
         };
-        // Only lower Complete functions.
-        let Some(resolution) = infer_result.try_resolution(func.qref) else {
+        let Some(outcome) = infer_result.outcomes.get(&func.qref) else {
             continue;
         };
-
-        let ret = match &infer_result.outcomes[&func.qref].meta().ty {
-            crate::ty::Ty::Fn { ret, .. } => (**ret).clone(),
-            other => other.clone(),
+        let Some(lowered) = lower_one(interner, source, outcome, &graph.bindings) else {
+            continue;
         };
-        let lowerer = crate::lower::Lowerer::new(interner, resolution, ret);
-        let mut module = match parsed {
-            ParsedSource::Script(script) => lowerer.lower_script(script),
-            ParsedSource::Template(template) => lowerer.lower_template(template),
-        };
-
-        // Definite assignment reads the pre-SSA shape the source wrote, so
-        // it runs here and not in `validate`, which sees the optimized body.
-        let cfg = crate::cfg::promote(std::mem::take(&mut module.main));
-        let uninit = crate::validate::init_check::refusals(interner, &cfg);
-        module.main = crate::cfg::demote(cfg);
-        if !uninit.is_empty() {
+        if !lowered.errors.is_empty() {
             errors.push(LowerError {
                 fn_id: func.qref,
-                errors: uninit,
+                errors: lowered.errors,
             });
         }
-
-        // SSA + validate are handled by the optimize pipeline (graph/optimize.rs).
-        // Lower outputs pre-SSA MIR.
-        modules.insert(func.qref, module);
+        modules.insert(func.qref, lowered.module);
     }
 
     LowerResult { modules, errors }
+}
+
+/// A lowered body and what lowering refused in it. The module is pre-SSA:
+/// `graph::optimize` runs SSA and every validation that reads the optimized
+/// shape.
+pub struct Lowered {
+    pub module: MirModule,
+    pub errors: Vec<MirError>,
+}
+
+/// `None` for a function inference left `Incomplete`, which has no resolution
+/// to lower against.
+pub fn lower_one(
+    interner: &Interner,
+    parsed: &ParsedSource,
+    outcome: &FnInferOutcome,
+    bindings: &Bindings,
+) -> Option<Lowered> {
+    let resolution = outcome.resolution()?;
+    let ret = match &outcome.meta().ty {
+        crate::ty::Ty::Fn { ret, .. } => (**ret).clone(),
+        other => other.clone(),
+    };
+    let lowerer = crate::lower::Lowerer::new(interner, resolution, ret);
+    let mut module = match parsed {
+        ParsedSource::Script(script) => lowerer.lower_script(script),
+        ParsedSource::Template(template) => lowerer.lower_template(template),
+    };
+
+    let mut errors = super::bind::substitute(interner, &mut module.main, bindings);
+
+    // Definite assignment reads the pre-SSA shape the source wrote, so it
+    // runs here and not in `validate`, which sees the optimized body.
+    let cfg = crate::cfg::promote(std::mem::take(&mut module.main));
+    errors.extend(crate::validate::init_check::refusals(interner, &cfg));
+    module.main = crate::cfg::demote(cfg);
+
+    Some(Lowered { module, errors })
 }
 
 #[cfg(test)]
@@ -130,6 +158,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            bindings: Bindings::default(),
             entry: None,
         }
     }
@@ -147,7 +176,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let inf =
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-        let result = lower(&i, &graph, &ext, &inf);
+        let result = lower(&i, &graph, &ext.view(), &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let uid = first_fn_ref(&graph);
@@ -161,7 +190,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let inf =
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-        let result = lower(&i, &graph, &ext, &inf);
+        let result = lower(&i, &graph, &ext.view(), &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let uid = first_fn_ref(&graph);
@@ -179,7 +208,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let inf =
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-        let result = lower(&i, &graph, &ext, &inf);
+        let result = lower(&i, &graph, &ext.view(), &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
     }
@@ -197,7 +226,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let inf =
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-        let result = lower(&i, &graph, &ext, &inf);
+        let result = lower(&i, &graph, &ext.view(), &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
         // An irrefutable pattern has no test and no branch.
@@ -222,7 +251,7 @@ mod tests {
         let ext = extract::extract(&i, &graph);
         let inf =
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-        let result = lower(&i, &graph, &ext, &inf);
+        let result = lower(&i, &graph, &ext.view(), &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
         // A refutable pattern is a test and a branch.
@@ -247,7 +276,7 @@ mod tests {
             crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
         // Infer should produce Incomplete for this function (type mismatch).
         // Lower should produce no module for this unit.
-        let result = lower(&i, &graph, &ext, &inf);
+        let result = lower(&i, &graph, &ext.view(), &inf);
         let uid = first_fn_ref(&graph);
         assert!(result.module(uid).is_none());
     }

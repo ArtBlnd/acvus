@@ -255,6 +255,15 @@ impl TyVarBound {
         (!among.is_empty()).then_some(Self::Integer { signed, among })
     }
 
+    pub fn is_text(&self) -> bool {
+        let Self::OneOf { shapes } = self else {
+            return false;
+        };
+        shapes.len() == 2
+            && shapes.iter().any(|s| matches!(s, TyTerm::String))
+            && shapes.iter().any(|s| matches!(s, TyTerm::Str))
+    }
+
     /// The width an integer literal takes where its uses left more than one:
     /// `i64` when it remains, the only one when one remains, none otherwise.
     pub fn integer_default(&self) -> Option<IntTy> {
@@ -1870,16 +1879,12 @@ where
 impl<'a, V> fmt::Display for ArgDisplay<'a, V>
 where
     V: Phase,
-    V::TyVar: fmt::Display,
-    V::EffectVar: fmt::Display,
-    V::LenVar: fmt::Display,
-    V::IdentityVar: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.arg.repr {
             Repr::Uniform => {}
             Repr::Specialized => write!(f, "#")?,
-            Repr::Var(_) => write!(f, "#?")?,
+            Repr::Var(_) => V::spell_open_repr(f)?,
         }
         write!(
             f,
@@ -1893,25 +1898,9 @@ where
     }
 }
 
-/// A variable of a displayed type: `'n` for the n-th of its kind.
-struct VarDisplay<T>(T);
-
-impl<T> fmt::Display for VarDisplay<T>
-where
-    T: fmt::Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}", self.0)
-    }
-}
-
 impl<'a, V> fmt::Display for TyDisplay<'a, V>
 where
     V: Phase,
-    V::TyVar: fmt::Display,
-    V::EffectVar: fmt::Display,
-    V::LenVar: fmt::Display,
-    V::IdentityVar: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.ty {
@@ -1966,7 +1955,10 @@ where
                 write!(f, ") -> {}", self.nested(ret))?;
                 let effect = match effect {
                     EffectTerm::Known(effect) => effect,
-                    EffectTerm::Var(v) => return write!(f, " with {}", VarDisplay(v)),
+                    EffectTerm::Var(v) => {
+                        write!(f, " with ")?;
+                        return V::spell_effect_var(v, f);
+                    }
                 };
                 if effect.is_empty() {
                     return Ok(());
@@ -1994,7 +1986,10 @@ where
                 write!(f, "Array<{}, ", self.nested(inner))?;
                 match len {
                     LenTerm::Known(n) => write!(f, "{n}>"),
-                    LenTerm::Var(v) => write!(f, "{}>", VarDisplay(v)),
+                    LenTerm::Var(v) => {
+                        V::spell_len_var(v, f)?;
+                        write!(f, ">")
+                    }
                 }
             }
             TyTerm::Handle(inner) => {
@@ -2035,7 +2030,7 @@ where
                         first = false;
                         match arg {
                             EffectTerm::Known(e) => write!(f, "{e}")?,
-                            EffectTerm::Var(v) => write!(f, "{}", VarDisplay(v))?,
+                            EffectTerm::Var(v) => V::spell_effect_var(v, f)?,
                         }
                     }
                     write!(f, ">")?;
@@ -2059,7 +2054,7 @@ where
             }
             TyTerm::Ref(m, inner) => write!(f, "{}{}", m.prefix(), self.nested_arg(inner)),
             TyTerm::Error(_) => write!(f, "<error>"),
-            TyTerm::Var(v) => write!(f, "{}", VarDisplay(v)),
+            TyTerm::Var(v) => V::spell_ty_var(v, f),
         }
     }
 }
@@ -2300,6 +2295,15 @@ pub trait Phase: 'static + Clone {
     /// Representation variable: the `ρ` of a type variable's binding
     /// (hash-types.md). `Infallible` for concrete (uninhabitable).
     type ReprVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
+
+    /// How a shown type spells a type variable of this phase, so that two
+    /// occurrences of one variable read as one.
+    fn spell_ty_var(var: &Self::TyVar, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn spell_effect_var(var: &Self::EffectVar, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn spell_len_var(var: &Self::LenVar, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+
+    /// How a shown type marks an argument whose representation is open.
+    fn spell_open_repr(f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
 
 /// Post-inference phase - all types fully resolved.
@@ -2313,6 +2317,22 @@ impl Phase for Concrete {
     type LenVar = Infallible;
     type IdentityVar = Infallible;
     type ReprVar = Infallible;
+
+    fn spell_ty_var(var: &Infallible, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *var {}
+    }
+
+    fn spell_effect_var(var: &Infallible, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *var {}
+    }
+
+    fn spell_len_var(var: &Infallible, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *var {}
+    }
+
+    fn spell_open_repr(_: &mut fmt::Formatter<'_>) -> fmt::Result {
+        unreachable!("a concrete type has no open representation")
+    }
 }
 
 /// Polymorphic declaration phase - type templates stored in the graph.
@@ -2327,6 +2347,42 @@ impl Phase for Poly {
     type LenVar = u32;
     type IdentityVar = u32;
     type ReprVar = u32;
+
+    /// A placeholder is spelled as a declaration would name it, `T` and
+    /// `N` and `E`, so `Fn(Array<T, N>) -> Vec<T>` reads as the shape it
+    /// is; the letters continue as `T7` past the alphabet each kind has.
+    fn spell_ty_var(var: &u32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        spell_placeholder(*var, "TUVWXYZ", f)
+    }
+
+    fn spell_effect_var(var: &u32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        spell_placeholder(*var, "EF", f)
+    }
+
+    fn spell_len_var(var: &u32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        spell_placeholder(*var, "NM", f)
+    }
+
+    /// A declaration whose argument's representation is open takes
+    /// either, and that is nothing to show.
+    fn spell_open_repr(_: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
+/// The `index`-th placeholder of a kind: its letter among `letters`, or the
+/// kind's first letter and the index past them.
+fn spell_placeholder(index: u32, letters: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match letters.chars().nth(index as usize) {
+        Some(letter) => write!(f, "{letter}"),
+        None => {
+            let first = letters
+                .chars()
+                .next()
+                .expect("every placeholder kind has at least one letter");
+            write!(f, "{first}{index}")
+        }
+    }
 }
 
 /// During-inference phase - types may contain unresolved variables.
@@ -2340,6 +2396,22 @@ impl Phase for Infer {
     type LenVar = LenVarId;
     type IdentityVar = IdentityVarId;
     type ReprVar = ReprVarId;
+
+    fn spell_ty_var(var: &TypeBoundId, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}", var.0)
+    }
+
+    fn spell_effect_var(var: &EffectVarId, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}", var.0)
+    }
+
+    fn spell_len_var(var: &LenVarId, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}", var.0)
+    }
+
+    fn spell_open_repr(f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#?")
+    }
 }
 
 /// Polymorphic type - template with positional placeholders.

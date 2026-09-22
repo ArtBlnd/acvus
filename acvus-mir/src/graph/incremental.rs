@@ -2,16 +2,19 @@
 //!
 //! Manages per-function extract/infer caches with dirty tracking.
 //! On source change: re-extract -> diff call edges -> re-SCC if needed ->
-//! re-infer dirty SCCs (with early cutoff).
+//! re-infer dirty SCCs (with early cutoff), then lower and optimize.
 
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::error::MirError;
+use crate::error::Refusal;
+use crate::ir::MirModule;
 use crate::ty::{PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
 
-use super::extract::{ExtractResult, ParsedSource, extract_one};
-use super::infer::{SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
+use super::extract::{ParsedSource, extract_one};
+use super::infer::{FnInferOutcome, SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
+use super::lower::lower_one;
+use super::optimize::{Opt, optimize};
 use super::types::*;
 
 // -- Cached entries --------------------------------------------------
@@ -20,23 +23,35 @@ struct ExtractEntry {
     parsed: ParsedSource,
 }
 
-// -- Context info (public output) ------------------------------------
+/// A pre-SSA body, lowered and bound, kept so that a change elsewhere in the
+/// graph re-optimizes this function without re-lowering it.
+struct LowerEntry {
+    module: MirModule,
+    refusals: Vec<Refusal>,
+}
 
-/// Information about a context/param that must be injected externally.
-#[derive(Debug, Clone)]
-pub struct ContextInfo {
-    pub name: QualifiedRef,
-    pub ty: Ty,
+struct OptimizedEntry {
+    /// Read off the code the passes left, which is what makes this the set
+    /// RFC-0071 Decision 5 calls required.
+    inputs: Vec<ContextInfo>,
+    refusals: Vec<Refusal>,
 }
 
 // -- IncrementalGraph ------------------------------------------------
 
+/// Inference is per-SCC, and optimization is whole-graph on every change.
+/// A compilation here is one editor's open documents and the library they
+/// call, so re-running the passes over all of them costs less than the
+/// cross-module invalidation a per-function optimization cache would need,
+/// and `graph::optimize::optimize` inlines and borrow-checks across modules
+/// in one call regardless.
 pub struct IncrementalGraph {
     interner: Interner,
     /// The sources of this compilation, shared by every solver it runs.
     sources: Sources,
     /// The user-defined types and cast rules of this compilation.
     type_registry: TypeRegistry,
+    bindings: Bindings,
 
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
@@ -57,8 +72,14 @@ pub struct IncrementalGraph {
     // -- Phase 1: Infer cache (per SCC index) --
     infer_cache: Vec<Option<SccInferResult>>,
 
+    // -- Phase 3: Lower cache --
+    lower_cache: FxHashMap<QualifiedRef, LowerEntry>,
+
+    // -- Phase 5: Optimize --
+    optimized: FxHashMap<QualifiedRef, OptimizedEntry>,
+
     // -- Diagnostics --
-    diagnostics: FxHashMap<QualifiedRef, Vec<MirError>>,
+    diagnostics: FxHashMap<QualifiedRef, Vec<Refusal>>,
 }
 
 impl IncrementalGraph {
@@ -71,6 +92,7 @@ impl IncrementalGraph {
             interner: interner.clone(),
             sources: Sources::new(),
             type_registry,
+            bindings: Bindings::default(),
             functions: FxHashMap::default(),
             contexts: FxHashMap::default(),
             entry: None,
@@ -80,6 +102,8 @@ impl IncrementalGraph {
             scc_order: Vec::new(),
             fn_to_scc: FxHashMap::default(),
             infer_cache: Vec::new(),
+            lower_cache: FxHashMap::default(),
+            optimized: FxHashMap::default(),
             diagnostics: FxHashMap::default(),
         }
     }
@@ -112,7 +136,8 @@ impl IncrementalGraph {
 
     pub fn set_entry(&mut self, qref: QualifiedRef) {
         self.entry = Some(qref);
-        self.infer_cache.iter_mut().for_each(|slot| *slot = None);
+        self.invalidate_all_infer();
+        self.recompile();
     }
 
     pub fn add_function(&mut self, func: Function) {
@@ -127,9 +152,28 @@ impl IncrementalGraph {
             self.extract_cache.remove(&qref);
             self.call_edges.remove(&qref);
             self.diagnostics.remove(&qref);
+            self.lower_cache.remove(&qref);
+            self.optimized.remove(&qref);
             self.remove_reverse_edges(qref);
             self.rebuild_graph();
         }
+    }
+
+    /// Bind a `$` name to a constant. Every function is re-inferred: the
+    /// binding gives the name a type, which is what the bodies reading it
+    /// were checked against.
+    pub fn bind_input(&mut self, name: Astr, value: acvus_ast::Literal) {
+        self.bindings.bind(name, value);
+        self.invalidate_all_infer();
+        self.recompile();
+    }
+
+    /// The arms a fold of this name decided against are code again, so every
+    /// name they read is required once more (RFC-0071 Decision 5).
+    pub fn unbind_input(&mut self, name: Astr) {
+        self.bindings.unbind(name);
+        self.invalidate_all_infer();
+        self.recompile();
     }
 
     pub fn add_context(&mut self, ctx: Context) {
@@ -137,13 +181,13 @@ impl IncrementalGraph {
         self.contexts.insert(qref, ctx);
         // Context change can affect all infer - full rebuild.
         self.invalidate_all_infer();
-        self.run_infer();
+        self.recompile();
     }
 
     pub fn remove_context(&mut self, qref: QualifiedRef) {
         if self.contexts.remove(&qref).is_some() {
             self.invalidate_all_infer();
-            self.run_infer();
+            self.recompile();
         }
     }
 
@@ -172,35 +216,86 @@ impl IncrementalGraph {
         } else {
             // SCC unchanged - only re-infer the affected SCC + propagate.
             self.dirty_propagate(qref);
+            self.settle();
         }
     }
 
     // -- Queries -----------------------------------------------------
 
-    pub fn diagnostics(&self, qref: QualifiedRef) -> &[MirError] {
+    /// What every stage that can refuse this function refused: typeck, lower
+    /// and validate, the set `acvus check` reports for the same source
+    /// (RFC-0031). `acvus-lsp/tests/equivalence.rs` holds the two equal.
+    pub fn diagnostics(&self, qref: QualifiedRef) -> &[Refusal] {
         self.diagnostics
             .get(&qref)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
     }
 
-    pub fn all_diagnostics(&self) -> impl Iterator<Item = (QualifiedRef, &[MirError])> {
+    pub fn all_diagnostics(&self) -> impl Iterator<Item = (QualifiedRef, &[Refusal])> {
         self.diagnostics
             .iter()
             .map(|(&qref, errs)| (qref, errs.as_slice()))
     }
 
-    /// Get context/param info that must be injected externally for a function.
-    pub fn context_info(&self, _qref: QualifiedRef) -> Vec<ContextInfo> {
-        // TODO: context param inference removed - reconstruct from fn_metas if needed.
-        vec![]
+    /// The inputs this one function requires: neither a `$` a binding fixed
+    /// nor one whose type closed to `!` is among them (RFC-0071 Decision 5).
+    ///
+    /// A function that lowered answers with the set its surviving code reads,
+    /// which is the fold's and is what `acvus check` reports. A function
+    /// inference left `Incomplete`, or lowering refused, has no body for the
+    /// fold to run on, so it answers with the wider set the solve closed: a
+    /// name only the arm a binding decided against reads is still among them.
+    pub fn context_info(&self, qref: QualifiedRef) -> Vec<ContextInfo> {
+        if let Some(entry) = self.optimized.get(&qref) {
+            return entry.inputs.clone();
+        }
+        let Some(meta) = self.fn_meta(qref) else {
+            return Vec::new();
+        };
+        meta.params
+            .iter()
+            .filter(|param| param.ty != Ty::Never)
+            .filter(|param| self.bindings.get(param.name).is_none())
+            .map(|param| ContextInfo {
+                name: QualifiedRef::root(param.name),
+                ty: param.ty.clone(),
+            })
+            .collect()
     }
 
-    // TODO: resolution now comes from InferResult outcomes.
-    // SccInferResult needs to store resolutions for this to work.
-    // For now, always returns None.
-    pub fn resolution(&self, _qref: QualifiedRef) -> Option<()> {
-        None
+    /// The inputs a run starting at `qref` requires: `context_info` of it
+    /// and of every function it reaches through calls, since a `$` is shared
+    /// by the whole graph (RFC-0071 Decision 4).
+    pub fn required_inputs(&self, qref: QualifiedRef) -> Vec<ContextInfo> {
+        let mut seen: FxHashSet<QualifiedRef> = FxHashSet::default();
+        let mut work = vec![qref];
+        let mut required: Vec<ContextInfo> = Vec::new();
+        while let Some(at) = work.pop() {
+            if !seen.insert(at) {
+                continue;
+            }
+            for input in self.context_info(at) {
+                if !required.iter().any(|held| held.name == input.name) {
+                    required.push(input);
+                }
+            }
+            work.extend(self.call_edges.get(&at).into_iter().flatten());
+        }
+        required
+    }
+
+    fn outcome(&self, qref: QualifiedRef) -> Option<&FnInferOutcome> {
+        let &scc = self.fn_to_scc.get(&qref)?;
+        self.infer_cache[scc].as_ref()?.outcomes.get(&qref)
+    }
+
+    fn fn_meta(&self, qref: QualifiedRef) -> Option<&super::infer::FunctionMeta> {
+        Some(self.outcome(qref)?.meta())
+    }
+
+    pub fn resolution(&self, qref: QualifiedRef) -> Option<Freeze<crate::typeck::TypeResolution>> {
+        self.outcome(qref)?.resolution()
     }
 
     pub fn function(&self, qref: QualifiedRef) -> Option<&Function> {
@@ -330,9 +425,9 @@ impl IncrementalGraph {
 
         // Rebuild all infer caches.
         self.infer_cache = vec![None; self.scc_order.len()];
-        self.diagnostics.clear();
+        self.lower_cache.clear();
 
-        self.run_infer();
+        self.recompile();
     }
 
     // -- Internal: Infer ---------------------------------------------
@@ -384,6 +479,7 @@ impl IncrementalGraph {
                 &self.interner,
                 scc,
                 self.entry,
+                &self.bindings,
                 &fn_by_id,
                 &parsed_owned,
                 &known_ctx,
@@ -399,9 +495,6 @@ impl IncrementalGraph {
                     .iter()
                     .map(|(&k, v)| (k, lift_to_poly(v))),
             );
-            for (qref, errs) in &result.errors {
-                self.diagnostics.insert(*qref, errs.clone());
-            }
             self.infer_cache[scc_idx] = Some(result);
         }
     }
@@ -481,6 +574,7 @@ impl IncrementalGraph {
                 &self.interner,
                 scc,
                 self.entry,
+                &self.bindings,
                 &fn_by_id,
                 &parsed_for_scc,
                 &known_ctx,
@@ -511,12 +605,9 @@ impl IncrementalGraph {
                 }
             }
 
-            // Update diagnostics: clear old errors for this SCC, add new ones.
+            // A re-inferred body is lowered again: its resolution is new.
             for &fid in scc {
-                self.diagnostics.remove(&fid);
-            }
-            for (qref, errs) in &result.errors {
-                self.diagnostics.insert(*qref, errs.clone());
+                self.lower_cache.remove(&fid);
             }
 
             resolved_fn_types.extend(
@@ -527,6 +618,118 @@ impl IncrementalGraph {
             );
             self.infer_cache[scc_idx] = Some(result);
         }
+    }
+
+    // -- Internal: Lower + optimize -----------------------------------
+
+    fn recompile(&mut self) {
+        self.run_infer();
+        self.settle();
+    }
+
+    /// The modules are optimized at `Opt::Full`, the level `acvus check`
+    /// reads the required inputs at: a constant a bound `$` puts behind a
+    /// field or a loop is what `sroa` and the motion passes expose, and a
+    /// set read at a lower level would be wider than the one the batch
+    /// path reports.
+    fn settle(&mut self) {
+        let lowerable: FxHashSet<QualifiedRef> = self
+            .extract_cache
+            .keys()
+            .copied()
+            .filter(|&qref| matches!(self.outcome(qref), Some(FnInferOutcome::Complete { .. })))
+            .collect();
+        self.lower_cache.retain(|qref, _| lowerable.contains(qref));
+
+        let to_lower: Vec<QualifiedRef> = self
+            .extract_cache
+            .keys()
+            .copied()
+            .filter(|qref| !self.lower_cache.contains_key(qref))
+            .collect();
+        for qref in to_lower {
+            let lowered = {
+                let Some(outcome) = self.outcome(qref) else {
+                    continue;
+                };
+                lower_one(
+                    &self.interner,
+                    &self.extract_cache[&qref].parsed,
+                    outcome,
+                    &self.bindings,
+                )
+            };
+            let Some(lowered) = lowered else {
+                continue;
+            };
+            self.lower_cache.insert(
+                qref,
+                LowerEntry {
+                    module: lowered.module,
+                    refusals: lowered.errors.into_iter().map(Refusal::Mir).collect(),
+                },
+            );
+        }
+
+        // A body lowering refused is not optimized, as `acvus check` does not
+        // optimize a graph a stage before it refused.
+        let modules: FxHashMap<QualifiedRef, MirModule> = self
+            .lower_cache
+            .iter()
+            .filter(|(_, entry)| entry.refusals.is_empty())
+            .map(|(&qref, entry)| (qref, entry.module.clone()))
+            .collect();
+        let result = optimize(&self.interner, modules, Opt::Full);
+
+        let mut refused: FxHashMap<QualifiedRef, Vec<Refusal>> = FxHashMap::default();
+        for (qref, errors) in result.errors {
+            refused
+                .entry(qref)
+                .or_default()
+                .extend(errors.into_iter().map(Refusal::Invalid));
+        }
+        self.optimized = result
+            .inputs
+            .into_iter()
+            .map(|(qref, inputs)| {
+                let refusals = refused.remove(&qref).unwrap_or_default();
+                (qref, OptimizedEntry { inputs, refusals })
+            })
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "optimize refused {:?}, which it reported no inputs for",
+            refused.keys().collect::<Vec<_>>()
+        );
+
+        self.rebuild_diagnostics();
+    }
+
+    fn rebuild_diagnostics(&mut self) {
+        let stages = self
+            .infer_cache
+            .iter()
+            .flatten()
+            .flat_map(|scc| scc.errors())
+            .map(|(qref, errors)| {
+                let refusals: Vec<Refusal> = errors.iter().cloned().map(Refusal::Mir).collect();
+                (qref, refusals)
+            });
+        let mut diagnostics: FxHashMap<QualifiedRef, Vec<Refusal>> = stages.collect();
+        for (&qref, entry) in &self.lower_cache {
+            diagnostics
+                .entry(qref)
+                .or_default()
+                .extend(entry.refusals.iter().cloned());
+        }
+        for (&qref, entry) in &self.optimized {
+            diagnostics
+                .entry(qref)
+                .or_default()
+                .extend(entry.refusals.iter().cloned());
+        }
+        diagnostics.retain(|_, refusals| !refusals.is_empty());
+        self.diagnostics = diagnostics;
     }
 
     // -- Helpers -----------------------------------------------------
@@ -542,36 +745,18 @@ impl IncrementalGraph {
         for slot in &mut self.infer_cache {
             *slot = None;
         }
-        self.diagnostics.clear();
-    }
-
-    /// Build a snapshot ExtractResult for compatibility with batch APIs.
-    pub fn extract_result(&self) -> ExtractResult {
-        let parsed = FxHashMap::default();
-        // ParsedSource is not Clone - we need to handle this.
-        // For now, skip parsed in snapshot (batch lower can re-extract if needed).
-        ExtractResult { parsed }
+        self.lower_cache.clear();
     }
 
     /// Build a snapshot InferResult for compatibility with batch APIs.
     pub fn infer_result(&mut self) -> super::infer::InferResult {
-        let mut outcomes: FxHashMap<QualifiedRef, super::infer::FnInferOutcome> =
-            FxHashMap::default();
-
-        for scc_result in self.infer_cache.iter().flatten() {
-            // Convert SccInferResult metas to Incomplete outcomes (temporary).
-            for (&fid, meta) in &scc_result.fn_metas {
-                outcomes.insert(
-                    fid,
-                    super::infer::FnInferOutcome::Incomplete {
-                        unknown_contexts: vec![],
-                        unknown_extern_params: vec![],
-                        meta: meta.clone(),
-                        errors: vec![],
-                    },
-                );
-            }
-        }
+        let outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = self
+            .infer_cache
+            .iter()
+            .flatten()
+            .flat_map(|scc| scc.outcomes.iter())
+            .map(|(&fid, outcome)| (fid, outcome.clone()))
+            .collect();
 
         super::infer::InferResult {
             outcomes,

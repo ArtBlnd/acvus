@@ -79,6 +79,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            bindings: Bindings::default(),
             entry: None,
         };
         (graph, fn_qref)
@@ -116,6 +117,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            bindings: Bindings::default(),
             entry: None,
         };
         let result = extract(&i, &graph);

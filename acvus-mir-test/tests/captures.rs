@@ -47,6 +47,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);

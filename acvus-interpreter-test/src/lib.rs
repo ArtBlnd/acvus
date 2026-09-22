@@ -278,6 +278,7 @@ where
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(entry_qref),
     };
 
@@ -305,7 +306,7 @@ where
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
 
     // Report lower-level errors.
     for e in result.errors.iter().flat_map(|e| e.errors.iter()) {
@@ -319,7 +320,7 @@ where
         });
     }
 
-    let opt_result = graph_optimize::optimize(result.modules.clone(), opt);
+    let opt_result = graph_optimize::optimize(interner, result.modules.clone(), opt);
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {

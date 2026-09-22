@@ -94,7 +94,7 @@ fn run_pipeline_with_registry(
         }
     }
 
-    let result = graph_lower::lower(interner, graph, &ext, &inf);
+    let result = graph_lower::lower(interner, graph, &ext.view(), &inf);
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
@@ -191,6 +191,7 @@ pub fn compile_to_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
     let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
@@ -273,6 +274,7 @@ pub fn compile_script_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
     let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
@@ -307,6 +309,7 @@ pub fn compile_script_raw(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
@@ -327,7 +330,7 @@ pub fn compile_script_raw(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -411,6 +414,7 @@ pub fn refuse_script_mode_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
@@ -437,7 +441,7 @@ pub fn refuse_script_mode_ir_with(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         refusals.push(Refusal {
             stage: "lower".to_string(),
@@ -526,6 +530,7 @@ fn lower_script_returning(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
@@ -545,7 +550,7 @@ fn lower_script_returning(
             errors.push(format!("[infer:{fn_name}] {}", e.display(interner)));
         }
     }
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -583,6 +588,7 @@ pub fn optimized_script_module(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
@@ -602,7 +608,7 @@ pub fn optimized_script_module(
             errors.push(format!("[infer:{fn_name}] {}", e.display(interner)));
         }
     }
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -615,7 +621,7 @@ pub fn optimized_script_module(
         return Err(errors.join("\n"));
     }
 
-    let opt = acvus_mir::graph::optimize::optimize(result.modules, Opt::Full);
+    let opt = acvus_mir::graph::optimize::optimize(interner, result.modules, Opt::Full);
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
@@ -660,6 +666,7 @@ pub fn compile_script_optimized(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
@@ -680,7 +687,7 @@ pub fn compile_script_optimized(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -693,7 +700,7 @@ pub fn compile_script_optimized(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -792,6 +799,7 @@ pub fn refuse_script_mode_optimized(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
@@ -818,7 +826,7 @@ pub fn refuse_script_mode_optimized(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         refusals.push(Refusal {
             stage: "lower".to_string(),
@@ -832,7 +840,7 @@ pub fn refuse_script_mode_optimized(
         return Err(refusals);
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -938,6 +946,7 @@ pub fn compile_inline_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        bindings: Bindings::default(),
         entry: None,
     };
 
@@ -965,7 +974,7 @@ pub fn compile_inline_ir_with(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -1068,6 +1077,7 @@ fn compile_graph_raw(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        bindings: Bindings::default(),
         entry: None,
     };
 
@@ -1088,7 +1098,7 @@ fn compile_graph_raw(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -1181,6 +1191,7 @@ fn compile_multi_fn_at(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        bindings: Bindings::default(),
         entry: None,
     };
 
@@ -1201,7 +1212,7 @@ fn compile_multi_fn_at(
         }
     }
 
-    let result = graph_lower::lower(interner, &graph, &ext, &inf);
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
         errors.push(format!(
             "[lower] [{}..{}] {}",
@@ -1214,7 +1225,7 @@ fn compile_multi_fn_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(result.modules, opt);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1231,4 +1242,98 @@ fn compile_multi_fn_at(
         .get(&target_qref)
         .ok_or_else(|| "no module for target".to_string())?;
     Ok(dump_with(interner, module))
+}
+
+/// `inputs` is read off the code that survived the passes, which is what
+/// makes it the set RFC-0071 Decision 5 calls required.
+#[derive(Debug)]
+pub struct BoundTemplate {
+    pub ir: String,
+    pub inputs: Vec<ShownInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ShownInput {
+    pub name: String,
+    pub ty: String,
+}
+
+pub fn compile_template_bound(
+    interner: &Interner,
+    source: &str,
+    bound: &[(&str, acvus_ast::Literal)],
+    opt: Opt,
+) -> Result<BoundTemplate, String> {
+    let test_qref = QualifiedRef::root(interner.intern("test"));
+    let ast = acvus_ast::parse(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
+    let mut functions = vec![inferred_function(
+        test_qref,
+        FnKind::Local(ParsedAst::Template(ast)),
+        vec![],
+    )];
+    let type_registry = extend_with_std(interner, &mut functions);
+    let mut bindings = Bindings::default();
+    for (name, value) in bound {
+        bindings.bind(interner.intern(name), value.clone());
+    }
+    let graph = CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(vec![]),
+        bindings,
+        entry: Some(test_qref),
+    };
+
+    let ext = extract::extract(interner, &graph);
+    let inf = infer::infer(
+        interner,
+        &graph,
+        &ext,
+        &FxHashMap::default(),
+        Freeze::new(type_registry),
+    );
+
+    let mut errors: Vec<String> = Vec::new();
+    for (qref, errs) in inf.errors() {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[infer:{fn_name}] {}", e.display(interner)));
+        }
+    }
+    let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
+    for e in result.errors.iter().flat_map(|le| le.errors.iter()) {
+        errors.push(format!("[lower] {}", e.display(interner)));
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, opt);
+    for (qref, errs) in &opt_result.errors {
+        let fn_name = interner.resolve(qref.name);
+        for e in errs {
+            errors.push(format!("[validate:{fn_name}] {}", e.display(interner)));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let module = opt_result
+        .modules
+        .get(&test_qref)
+        .ok_or_else(|| "no module produced for target".to_string())?;
+    let inputs = opt_result
+        .inputs
+        .get(&test_qref)
+        .ok_or_else(|| "no input list produced for target".to_string())?
+        .iter()
+        .map(|input| ShownInput {
+            name: interner.resolve(input.name.name).to_string(),
+            ty: input.ty.display(interner).to_string(),
+        })
+        .collect();
+    Ok(BoundTemplate {
+        ir: dump_with(interner, module),
+        inputs,
+    })
 }

@@ -49,6 +49,7 @@ pub(crate) fn make_graph(
             to_string(interner),
         ]),
         contexts: Freeze::new(contexts),
+        bindings: Bindings::default(),
         entry: None,
     };
     (graph, test_qref)
@@ -111,7 +112,7 @@ fn run_pipeline(
         }
     }
 
-    let result = graph_lower::lower(interner, graph, &ext, &inf);
+    let result = graph_lower::lower(interner, graph, &ext.view(), &inf);
 
     // Collect lower errors.
     for e in result.errors.iter().flat_map(|le| le.errors.iter()) {

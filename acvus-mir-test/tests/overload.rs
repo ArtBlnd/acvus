@@ -243,7 +243,7 @@ fn calls(checked: &Checked, callee: &str) -> usize {
         .count()
 }
 
-const AMBIGUOUS_PROBE: &str = "`probe` is declared by fx_a::probe and fx_b::probe";
+const AMBIGUOUS_PROBE: &str = "`probe` is declared by\n  fx_a::probe\n  fx_b::probe";
 
 // -- 1: arity ---------------------------------------------------------------
 

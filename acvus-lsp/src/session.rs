@@ -8,8 +8,9 @@
 //! - Completion logic (context, pipe, keyword)
 
 use acvus_ast::report::Label;
-use acvus_mir::error::MirError;
-use acvus_mir::graph::incremental::{ContextInfo, IncrementalGraph};
+use acvus_mir::error::Refusal;
+use acvus_mir::graph::ContextInfo;
+use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
 use acvus_mir::ty::{PolyBuilder, PolyTy, TyTerm};
 use acvus_utils::{Astr, Interner};
@@ -68,6 +69,7 @@ pub struct LspSession {
     doc_to_fn: FxHashMap<DocId, QualifiedRef>,
     fn_to_doc: FxHashMap<QualifiedRef, DocId>,
     doc_sources: FxHashMap<DocId, String>,
+    doc_parse_errors: FxHashMap<DocId, acvus_ast::ParseError>,
     next_doc_id: u32,
 }
 
@@ -78,6 +80,7 @@ impl LspSession {
             doc_to_fn: FxHashMap::default(),
             fn_to_doc: FxHashMap::default(),
             doc_sources: FxHashMap::default(),
+            doc_parse_errors: FxHashMap::default(),
             next_doc_id: 0,
         }
     }
@@ -138,7 +141,9 @@ impl LspSession {
 
     // -- Document lifecycle ------------------------------------------
 
-    /// Open a document. Creates a Function in the graph.
+    /// A source that does not parse is registered all the same, with the
+    /// parse error as its only diagnostic, no function in the graph and no
+    /// inputs, until an update parses.
     pub fn open(&mut self, name: &str, source: &str, namespace: Option<Astr>) -> DocId {
         let doc_id = DocId(self.next_doc_id);
         self.next_doc_id += 1;
@@ -150,36 +155,51 @@ impl LspSession {
             None => QualifiedRef::root(fn_name),
         };
 
-        // Always parse as template for LSP (templates are the primary document type).
-        let ast = acvus_ast::parse(&interner, source).expect("parse error in LSP open");
-        let mut pb = PolyBuilder::new();
-        let func = Function {
-            qref,
-            kind: FnKind::Local(ParsedAst::Template(ast)),
-            ty: TyTerm::Fn {
-                params: vec![],
-                ret: Box::new(pb.fresh_ty_var()),
-                captures: vec![],
-                effect: acvus_mir::ty::Effect::OPAQUE.into(),
-            },
-        };
-
-        self.graph.add_function(func);
         self.doc_to_fn.insert(doc_id, qref);
         self.fn_to_doc.insert(qref, doc_id);
-        self.doc_sources.insert(doc_id, source.to_string());
+        self.reparse(doc_id, qref, source);
         doc_id
     }
 
-    /// Update a document's source.
+    /// A source that stops parsing leaves the document registered with the
+    /// parse error as its only diagnostic and takes its function out of the
+    /// graph; the next source that parses puts it back.
     pub fn update_source(&mut self, id: DocId, source: &str) {
         let Some(&qref) = self.doc_to_fn.get(&id) else {
             return;
         };
+        self.reparse(id, qref, source);
+    }
+
+    /// Always parsed as a template: that is the document kind an editor opens.
+    fn reparse(&mut self, id: DocId, qref: QualifiedRef, source: &str) {
         let interner = self.graph.interner().clone();
-        let ast = acvus_ast::parse(&interner, source).expect("parse error in LSP update_source");
-        self.graph.update_ast(qref, ParsedAst::Template(ast));
         self.doc_sources.insert(id, source.to_string());
+        let ast = match acvus_ast::parse(&interner, source) {
+            Ok(ast) => ast,
+            Err(error) => {
+                self.doc_parse_errors.insert(id, error);
+                self.graph.remove_function(qref);
+                return;
+            }
+        };
+        self.doc_parse_errors.remove(&id);
+        match self.graph.function(qref) {
+            Some(_) => self.graph.update_ast(qref, ParsedAst::Template(ast)),
+            None => {
+                let mut pb = PolyBuilder::new();
+                self.graph.add_function(Function {
+                    qref,
+                    kind: FnKind::Local(ParsedAst::Template(ast)),
+                    ty: TyTerm::Fn {
+                        params: vec![],
+                        ret: Box::new(pb.fresh_ty_var()),
+                        captures: vec![],
+                        effect: acvus_mir::ty::Effect::OPAQUE.into(),
+                    },
+                });
+            }
+        }
     }
 
     /// Close a document. Removes the Function from the graph.
@@ -189,6 +209,31 @@ impl LspSession {
             self.graph.remove_function(qref);
         }
         self.doc_sources.remove(&id);
+        self.doc_parse_errors.remove(&id);
+    }
+
+    // -- Inputs ------------------------------------------------------
+
+    /// The binding is the whole graph's, not this document's (RFC-0071
+    /// Decision 4).
+    pub fn bind_input(&mut self, name: &str, value: acvus_ast::Literal) {
+        let interned = self.graph.interner().intern(name);
+        self.graph.bind_input(interned, value);
+    }
+
+    pub fn unbind_input(&mut self, name: &str) {
+        let interned = self.graph.interner().intern(name);
+        self.graph.unbind_input(interned);
+    }
+
+    /// The inputs a run starting at this document requires: its own and those
+    /// of every function it calls, since one host injects the `$` names of
+    /// the whole graph (RFC-0071 Decision 4).
+    pub fn required_inputs(&self, id: DocId) -> Vec<ContextInfo> {
+        let Some(&qref) = self.doc_to_fn.get(&id) else {
+            return vec![];
+        };
+        self.graph.required_inputs(qref)
     }
 
     /// Get the QualifiedRef for a document.
@@ -200,6 +245,9 @@ impl LspSession {
 
     /// Diagnostics for a document.
     pub fn diagnostics(&self, id: DocId) -> Vec<LspError> {
+        if let Some(error) = self.doc_parse_errors.get(&id) {
+            return vec![parse_error_to_lsp(error)];
+        }
         let Some(&qref) = self.doc_to_fn.get(&id) else {
             return vec![];
         };
@@ -207,7 +255,7 @@ impl LspSession {
         self.graph
             .diagnostics(qref)
             .iter()
-            .map(|e| mir_error_to_lsp(e, interner))
+            .map(|refusal| refusal_to_lsp(refusal, interner))
             .collect()
     }
 
@@ -343,20 +391,30 @@ fn keyword_completions(prefix: &str) -> Vec<CompletionItem> {
         .collect()
 }
 
-// -- MirError -> LspError --------------------------------------------
+// -- Refusal -> LspError ---------------------------------------------
 
-fn mir_error_to_lsp(error: &MirError, interner: &Interner) -> LspError {
+fn refusal_to_lsp(refusal: &Refusal, interner: &Interner) -> LspError {
     LspError {
         category: LspErrorCategory::Type,
-        message: format!("{}", error.display(interner)),
+        message: format!("{}", refusal.display(interner)),
         span: {
-            let s = error.span;
+            let s = refusal.span();
             if s.start != 0 || s.end != 0 {
                 Some((s.start, s.end))
             } else {
                 None
             }
         },
-        related: error.labels.clone(),
+        related: refusal.labels().to_vec(),
+    }
+}
+
+fn parse_error_to_lsp(error: &acvus_ast::ParseError) -> LspError {
+    LspError {
+        category: LspErrorCategory::Parse,
+        message: error.kind.to_string(),
+        span: (error.span.start != 0 || error.span.end != 0)
+            .then_some((error.span.start, error.span.end)),
+        related: Vec::new(),
     }
 }

@@ -140,5 +140,5 @@ tag.
 
 ## Open questions
 
-- Where the fold of a bound `$` runs: before typeck on the AST, or on
-  the MIR with the required set read back from what survived.
+none. The fold of a bound `$` runs on the MIR, with the analyses already
+there; the required set is read from the code that survives it.

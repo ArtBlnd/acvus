@@ -1,3 +1,4 @@
+pub mod bind;
 pub mod extract;
 pub mod incremental;
 pub mod infer;

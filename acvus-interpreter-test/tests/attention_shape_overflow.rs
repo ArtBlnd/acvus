@@ -25,7 +25,9 @@ fn context(i: &Interner) -> Context {
 }
 
 #[tokio::test]
-#[should_panic(expected = "type &Float is outside the declared bound one of i64, Float")]
+#[should_panic(
+    expected = "no instance of iter::max has the call type Fn(Refs<Vec<Float>>) -> Option<&Float>"
+)]
 async fn a_reference_captured_after_if_let_over_max_is_reported_not_overflowed() {
     let i = Interner::new();
     let _: Value = run_script_mode(

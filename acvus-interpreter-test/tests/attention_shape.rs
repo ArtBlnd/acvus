@@ -323,7 +323,7 @@ async fn a_qualified_call_inside_a_lambda_is_unaffected_by_a_binding_of_the_same
 }
 
 #[tokio::test]
-#[should_panic(expected = "`len` is declared by array::len and the binding `len`")]
+#[should_panic(expected = "`len` is declared by\n  array::len\n  the binding `len`")]
 async fn a_method_receiver_a_binding_and_an_extern_take_in_different_modes_is_ambiguous() {
     run("let len = |k| -> k + 7; len(@query.len())", Ty::Never).await;
 }

@@ -3,6 +3,7 @@
 mod array;
 mod body_summary;
 mod bound;
+mod bound_input;
 mod captures;
 mod cast;
 mod code_motion;

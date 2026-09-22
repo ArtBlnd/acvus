@@ -49,6 +49,9 @@ types; after it, every variable is frozen concrete. Results are cached per
 SCC by `IncrementalGraph`, with early cutoff: an SCC whose types did not
 change does not re-infer its callers. The LSP is a wrapper over that same
 graph — diagnostics and build errors come from one pipeline, not two.
+`IncrementalGraph` also lowers and optimizes, so the inputs it reports are
+the ones the fold leaves and its diagnostics reach the validator; inference
+stays per SCC, while optimization runs over the whole graph on each change.
 
 **Lower** (`graph/lower.rs`, `lower.rs`) turns the typed AST into flat MIR.
 A read of a variable is a `Take`, an assignment an `Assign`, `&place` a

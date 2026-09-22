@@ -307,33 +307,43 @@ pub fn promote(body: MirBody) -> CfgBody {
     })
 }
 
-/// Drops every block no path from the entry reaches: the code the source
-/// wrote after an expression typed `!` (RFC-0038). A pass that walks
-/// predecessors never sees a block without any.
-fn prune_unreachable(mut cfg: CfgBody) -> CfgBody {
-    let mut reachable = vec![false; cfg.blocks.len()];
-    let mut worklist = vec![BlockIdx(0)];
-    while let Some(idx) = worklist.pop() {
-        if std::mem::replace(&mut reachable[idx.0], true) {
+/// Which blocks a path from the entry reaches.
+pub fn reachable(cfg: &CfgBody) -> Vec<bool> {
+    let mut seen = vec![false; cfg.blocks.len()];
+    let mut work = vec![BlockIdx(0)];
+    while let Some(at) = work.pop() {
+        if std::mem::replace(&mut seen[at.0], true) {
             continue;
         }
-        worklist.extend(cfg.successors(idx));
+        work.extend(cfg.successors(at));
     }
-    if reachable.iter().all(|r| *r) {
-        return cfg;
+    seen
+}
+
+/// Drop the blocks `alive` marks dead: the code the source wrote after an
+/// expression typed `!` (RFC-0038), and the arms a pass decided against. A
+/// pass that walks predecessors never sees a block without any.
+pub fn prune(cfg: &mut CfgBody, alive: &[bool]) {
+    if alive.iter().all(|alive| *alive) {
+        return;
     }
-    let blocks: Vec<Block> = cfg
+    let mut bi = 0;
+    cfg.blocks.retain(|_| {
+        let keep = alive[bi];
+        bi += 1;
+        keep
+    });
+    cfg.label_to_block = cfg
         .blocks
-        .into_iter()
-        .zip(reachable)
-        .filter_map(|(block, keep)| keep.then_some(block))
-        .collect();
-    cfg.label_to_block = blocks
         .iter()
         .enumerate()
-        .map(|(i, block)| (block.label, BlockIdx(i)))
+        .map(|(bi, block)| (block.label, BlockIdx(bi)))
         .collect();
-    cfg.blocks = blocks;
+}
+
+fn prune_unreachable(mut cfg: CfgBody) -> CfgBody {
+    let alive = reachable(&cfg);
+    prune(&mut cfg, &alive);
     cfg
 }
 

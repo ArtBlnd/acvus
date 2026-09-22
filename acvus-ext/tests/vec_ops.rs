@@ -48,6 +48,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: Some(entry_qref),
     };
 
@@ -59,7 +60,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         &FxHashMap::default(),
         Freeze::new(type_registry),
     );
-    let lowered = graph_lower::lower(interner, &graph, &ext, &inf);
+    let lowered = graph_lower::lower(interner, &graph, &ext.view(), &inf);
 
     let errs: Vec<String> = inf
         .errors()
@@ -74,7 +75,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
 
     // Drops are inserted by the optimize pipeline, so a leaked element
     // trips the machine rather than passing quietly (RFC-0041).
-    let result = graph_optimize::optimize(lowered.modules.into_iter().collect(), opt);
+    let result = graph_optimize::optimize(interner, lowered.modules.into_iter().collect(), opt);
     assert!(
         result.errors.is_empty(),
         "validation failed: {:?}",

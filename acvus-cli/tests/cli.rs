@@ -78,7 +78,7 @@ fn a_template_prints_its_text_and_an_expression_prints_its_value() {
     write(dir.path(), "hi.acvt", "Hello {{ @name }}!");
     write(dir.path(), "hi.json", "{\"name\": \"acvus\"}");
     let out = acvus(dir.path(), &["run", "hi.acvt", "--context", "hi.json"]);
-    assert_eq!(text(&out.stdout), "Hello acvus!\n");
+    assert_eq!(text(&out.stdout), "Hello acvus!");
     assert_eq!(text(&out.stderr), "");
     let out = acvus(dir.path(), &["run", "-e", "let xs = [1, 2]; xs.len() * 10"]);
     assert_eq!(text(&out.stdout), "20\n");
@@ -379,12 +379,15 @@ fn json_puts_the_diagnostics_on_stdout_and_nothing_else() {
     assert_eq!(array[0]["span"], serde_json::json!([19, 26]));
 
     write(dir.path(), "ok.acvus", "let x = 1;\nx\n");
-    for command in ["check", "mir"] {
-        let out = acvus(dir.path(), &[command, "--json", "ok.acvus"]);
-        assert_eq!(out.status.code(), Some(0));
-        assert_eq!(text(&out.stdout), "[]\n");
-        assert_eq!(text(&out.stderr), "");
-    }
+    let out = acvus(dir.path(), &["check", "--json", "ok.acvus"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(text(&out.stdout), "[]\n{\"inputs\":[]}\n");
+    assert_eq!(text(&out.stderr), "");
+
+    let out = acvus(dir.path(), &["mir", "--json", "ok.acvus"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(text(&out.stdout), "[]\n");
+    assert_eq!(text(&out.stderr), "");
 }
 
 /// A template goes through the stages a script does, and a tag's diagnostic
@@ -824,17 +827,17 @@ fn a_comment_runs_to_the_end_of_its_line_and_a_string_keeps_its_slashes() {
 }
 
 #[test]
-fn a_comment_inside_a_template_tag_runs_to_the_tags_line_end() {
+fn a_comment_line_of_a_template_leaves_nothing_in_the_output() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
         "hi.acvt",
-        "Hello {{ @name // the context carries it\n}}!",
+        "% // the context carries the name\nHello {{ @name }}!",
     );
     write(dir.path(), "hi.json", "{\"name\": \"world\"}");
     let out = acvus(dir.path(), &["run", "hi.acvt", "--context", "hi.json"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    assert_eq!(text(&out.stdout), "Hello world!\n");
+    assert_eq!(text(&out.stdout), "Hello world!");
 }
 
 /// `regex` and `datetime` are in the set `acvus run` registers, so a script

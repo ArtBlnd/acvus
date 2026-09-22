@@ -31,7 +31,7 @@ pub struct FunctionMeta {
 }
 
 /// Per-function inference outcome.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FnInferOutcome {
     /// Type fully resolved. Lowerable.
     Complete {
@@ -41,8 +41,6 @@ pub enum FnInferOutcome {
     },
     /// Type incomplete. Cannot lower.
     Incomplete {
-        unknown_contexts: Vec<(QualifiedRef, Ty)>,
-        unknown_extern_params: Vec<(Astr, Ty)>,
         meta: FunctionMeta,
         errors: Vec<crate::error::MirError>,
     },
@@ -470,12 +468,25 @@ pub fn tarjan_scc(
 /// Result of inferring a single SCC.
 #[derive(Debug, Clone)]
 pub struct SccInferResult {
-    /// Per-function metadata (type, params).
-    pub fn_metas: FxHashMap<QualifiedRef, FunctionMeta>,
+    /// Per-function outcome, carrying everything lowering reads: the frozen
+    /// resolution, the tail type and the metadata whose `ty` is the return
+    /// type `graph::lower` takes.
+    pub outcomes: FxHashMap<QualifiedRef, FnInferOutcome>,
     /// QualifiedRef -> resolved Ty::Fn (for passing to next SCC).
     pub resolved_types: FxHashMap<QualifiedRef, Ty>,
-    /// Per-function type errors from typechecker.
-    pub errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>>,
+}
+
+impl SccInferResult {
+    pub fn errors(&self) -> impl Iterator<Item = (QualifiedRef, &[crate::error::MirError])> {
+        self.outcomes
+            .iter()
+            .filter_map(|(&qref, outcome)| match outcome {
+                FnInferOutcome::Incomplete { errors, .. } if !errors.is_empty() => {
+                    Some((qref, errors.as_slice()))
+                }
+                _ => None,
+            })
+    }
 }
 
 /// Infer types for a single SCC.
@@ -603,10 +614,21 @@ fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck
     }
 }
 
+/// The bound `$` names as the checker takes them. A literal that is no
+/// scalar has no input type and is left out; lowering refuses it there,
+/// where the body that reads the name is at hand.
+fn bound_inputs(bindings: &Bindings) -> Vec<(Astr, InferTy)> {
+    bindings
+        .iter()
+        .filter_map(|(name, value)| Some((name, lift_ty(&bound_input_ty(value)?))))
+        .collect()
+}
+
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
     entry: Option<QualifiedRef>,
+    bindings: &Bindings,
     fn_by_id: &FxHashMap<QualifiedRef, &Function>,
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
     known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
@@ -628,7 +650,10 @@ pub fn infer_scc(
         FxHashMap::default();
     let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
     let mut fn_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
-    let mut fn_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> = FxHashMap::default();
+    let mut fn_checked: FxHashMap<
+        QualifiedRef,
+        Result<Freeze<crate::typeck::TypeResolution>, Vec<crate::error::MirError>>,
+    > = FxHashMap::default();
 
     // Build PolyTy::Fn templates for functions in this SCC.
     // Solver ret vars are kept separately for unification.
@@ -702,6 +727,7 @@ pub fn infer_scc(
         };
         let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
             .with_declared_params(fn_declared_params[&fid].clone())
+            .with_bound_inputs(bound_inputs(bindings))
             .with_body_effect(fn_effect_vars[&fid].clone());
         let result = match parsed {
             ParsedSource::Script(script) => {
@@ -711,7 +737,7 @@ pub fn infer_scc(
         };
 
         match result {
-            Ok(ref unchecked) => {
+            Ok(unchecked) => {
                 // Unify ret var with tail ty (for inferred return types).
                 if expected_tail_ty.is_none() {
                     if let Some(ret_var) = fn_ret_vars.get(&fid) {
@@ -734,16 +760,17 @@ pub fn infer_scc(
                     .map(|(name, ty)| Param::new(*name, ty.clone()))
                     .collect();
                 fn_bind_params.insert(fid, bind);
+                fn_checked.insert(fid, Ok(unchecked));
             }
             Err(errors) => {
-                fn_errors.insert(fid, errors);
+                fn_checked.insert(fid, Err(errors));
             }
         }
     }
 
     // Resolve all functions in this SCC - freeze InferTy -> Ty at the boundary.
     let mut resolved_types: FxHashMap<QualifiedRef, Ty> = FxHashMap::default();
-    let mut fn_metas: FxHashMap<QualifiedRef, FunctionMeta> = FxHashMap::default();
+    let mut outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = FxHashMap::default();
 
     for &fid in scc {
         let func = fn_by_id[&fid];
@@ -765,19 +792,28 @@ pub fn infer_scc(
             effect,
         };
         resolved_types.insert(func.qref, fn_ty.clone());
-        fn_metas.insert(
-            fid,
-            FunctionMeta {
-                ty: fn_ty,
-                params: bind,
+        let meta = FunctionMeta {
+            ty: fn_ty,
+            params: bind,
+        };
+        let outcome = match fn_checked.remove(&fid) {
+            Some(Ok(resolution)) => FnInferOutcome::Complete {
+                tail_ty: resolution.tail_ty.clone(),
+                resolution,
+                meta,
             },
-        );
+            Some(Err(errors)) => FnInferOutcome::Incomplete { meta, errors },
+            None => FnInferOutcome::Incomplete {
+                meta,
+                errors: Vec::new(),
+            },
+        };
+        outcomes.insert(fid, outcome);
     }
 
     SccInferResult {
-        fn_metas,
+        outcomes,
         resolved_types,
-        errors: fn_errors,
     }
 }
 
@@ -937,6 +973,7 @@ pub fn infer(
 
             let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
                 .with_declared_params(scc_declared_params[&fid].clone())
+                .with_bound_inputs(bound_inputs(&graph.bindings))
                 .with_body_effect(scc_effect_vars[&fid].clone());
             let result = match parsed {
                 ParsedSource::Script(script) => checker.check_script(
@@ -1021,25 +1058,15 @@ pub fn infer(
 
         // If typeck failed, this function is Incomplete.
         if let Some(errors) = fn_typeck_errors.remove(&fid) {
-            outcomes.insert(
-                fid,
-                FnInferOutcome::Incomplete {
-                    unknown_contexts: vec![],
-                    unknown_extern_params: vec![],
-                    meta,
-                    errors,
-                },
-            );
+            outcomes.insert(fid, FnInferOutcome::Incomplete { meta, errors });
             continue;
         }
 
         // If no unchecked resolution (e.g., skipped function), Incomplete.
-        let Some(unchecked) = fn_unchecked.remove(&fid) else {
+        let Some(checked) = fn_unchecked.remove(&fid) else {
             outcomes.insert(
                 fid,
                 FnInferOutcome::Incomplete {
-                    unknown_contexts: vec![],
-                    unknown_extern_params: vec![],
                     meta,
                     errors: vec![],
                 },
@@ -1047,13 +1074,11 @@ pub fn infer(
             continue;
         };
 
-        let checked = unchecked;
-        let tail_ty = checked.tail_ty.clone();
         outcomes.insert(
             fid,
             FnInferOutcome::Complete {
+                tail_ty: checked.tail_ty.clone(),
                 resolution: checked,
-                tail_ty,
                 meta,
             },
         );
@@ -1117,6 +1142,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            bindings: Bindings::default(),
             entry: None,
         }
     }
@@ -1149,6 +1175,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            bindings: Bindings::default(),
             entry: None,
         }
     }
@@ -1242,6 +1269,7 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            bindings: Bindings::default(),
             entry: None,
         }
     }
@@ -1322,6 +1350,7 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            bindings: Bindings::default(),
             entry: None,
         };
         let ext = extract::extract(interner, &graph);
@@ -2515,6 +2544,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            bindings: Bindings::default(),
             entry: None,
         };
         let ext = extract::extract(&i, &graph);

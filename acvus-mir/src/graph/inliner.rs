@@ -282,6 +282,12 @@ fn direct_target<'a>(
     if makes_a_closure(&callee.main) {
         return None;
     }
+    // A `$` the callee reads is an input the host injects rather than an
+    // argument the call carries (RFC-0071 Decision 4), so this call supplies
+    // no value for it and the callee is left standing.
+    if callee.main.params.len() > args.len() {
+        return None;
+    }
     Some(InlineTarget {
         dst: *dst,
         callee_body: &callee.main,

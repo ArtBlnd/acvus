@@ -117,7 +117,7 @@ fn a_binding_and_an_extern_that_both_take_the_call_are_ambiguous() {
     let errors = errors_of(&i, "let q = [1.0, 2.0]; let len = |k| -> 7.0; len(&q)");
     assert_eq!(
         errors,
-        vec!["`len` is declared by array::len and the binding `len`"]
+        vec!["`len` is declared by\n  array::len\n  the binding `len`"]
     );
 }
 
@@ -194,7 +194,7 @@ fn a_method_receiver_two_candidates_take_in_different_modes_is_ambiguous() {
     let errors = errors_of(&i, "let q = [1.0, 2.0]; let len = |k| -> 7.0; q.len()");
     assert_eq!(
         errors,
-        vec!["`len` is declared by array::len and the binding `len`"]
+        vec!["`len` is declared by\n  array::len\n  the binding `len`"]
     );
 }
 
@@ -208,7 +208,7 @@ fn a_method_call_of_a_shadowed_name_inside_a_call_of_it_is_ambiguous() {
     );
     assert_eq!(
         errors,
-        vec!["`len` is declared by array::len and the binding `len`"]
+        vec!["`len` is declared by\n  array::len\n  the binding `len`"]
     );
 }
 
@@ -280,7 +280,7 @@ fn a_parameter_and_an_extern_that_both_take_the_call_are_ambiguous() {
     );
     assert_eq!(
         errors,
-        vec!["`len` is declared by array::len and the binding `len`"]
+        vec!["`len` is declared by\n  array::len\n  the binding `len`"]
     );
 }
 
@@ -356,7 +356,7 @@ fn a_receiver_one_mode_whose_candidates_both_take_the_call_is_ambiguous_at_the_d
     );
     assert_eq!(
         errors,
-        vec!["`len` is declared by array::len and the binding `len`"]
+        vec!["`len` is declared by\n  array::len\n  the binding `len`"]
     );
 }
 

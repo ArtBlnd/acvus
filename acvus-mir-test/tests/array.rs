@@ -30,6 +30,7 @@ fn return_type(i: &Interner, source: &str) -> Ty {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![f]),
         contexts: Freeze::new(vec![]),
+        bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);

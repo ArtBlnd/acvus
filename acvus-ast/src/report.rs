@@ -128,7 +128,7 @@ impl Report<'_> {
             head: '^',
             text: match (&self.primary, another_place) {
                 (Some(text), _) => text,
-                (None, true) => &self.message,
+                (None, true) => self.message.lines().next().unwrap_or_default(),
                 (None, false) => "",
             },
         }];
@@ -174,7 +174,12 @@ fn write_marker(
 
 impl fmt::Display for Report<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}: {}", self.severity, self.message)?;
+        let head = format!("{}: ", self.severity);
+        let mut lines = self.message.lines();
+        writeln!(f, "{head}{}", lines.next().unwrap_or_default())?;
+        for line in lines {
+            writeln!(f, "{:width$}{line}", "", width = head.len())?;
+        }
         let Some(span) = self.span else {
             return writeln!(f, "  --> {}", self.path);
         };
@@ -286,6 +291,35 @@ mod tests {
                 "...",
                 "10 | let e = x;",
                 "   |         ^ twice",
+                "",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_message_of_several_lines_keeps_them_under_its_first_and_marks_with_the_first() {
+        let source = "let n = len(q);\n";
+        let report = Report {
+            severity: Severity::Error,
+            message: "`len` is declared by\n  array::len\n  the binding `len`".to_string(),
+            primary: None,
+            path: "l.acvus",
+            source,
+            span: Some(Span::new(8, 14)),
+            labels: vec![Label::at(Span::new(12, 13), "this argument")],
+        };
+        assert_eq!(
+            report.to_string(),
+            [
+                "error: `len` is declared by",
+                "         array::len",
+                "         the binding `len`",
+                "  --> l.acvus:1:9",
+                "  |",
+                "1 | let n = len(q);",
+                "  |         ^^^^^^ `len` is declared by",
+                "  |             - this argument",
                 "",
             ]
             .join("\n")

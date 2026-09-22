@@ -153,8 +153,8 @@ fn an_array_never_reaches_a_multiplication_through_an_open_operand() {
     let err = script(&i, "let f = |k| -> k * k; f([1.0, 2.0])").unwrap_err();
     assert!(
         err.contains(
-            "type Array<Float, 2> is outside the declared bound \
-             one of i8, i16, i32, i64, u8, u16, u32, u64, Float"
+            "type Array<Float, 2> is outside the declared bound, one of\n  i8\n  i16\n  i32\n  i64\n  \
+             u8\n  u16\n  u32\n  u64\n  Float"
         ),
         "{err}"
     );
@@ -166,8 +166,8 @@ fn an_array_never_reaches_a_comparison_through_an_open_operand() {
     let err = script(&i, "let f = |k, m| -> k < m; f([1.0], [2.0])").unwrap_err();
     assert!(
         err.contains(
-            "type Array<Float, 1> is outside the declared bound \
-             one of i8, i16, i32, i64, u8, u16, u32, u64, Float"
+            "type Array<Float, 1> is outside the declared bound, one of\n  i8\n  i16\n  i32\n  i64\n  \
+             u8\n  u16\n  u32\n  u64\n  Float"
         ),
         "{err}"
     );

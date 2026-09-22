@@ -1,4 +1,6 @@
-error: no instance of std::vec has the call type Fn(Array<String, 1>) -> Vec<&str>; write `.to_string()` for the owned text
+error: no instance of std::vec has the call type Fn(Array<String, 1>) -> Vec<&str>; write `.to_string()` for the owned text; the instances it could reach are
+         Fn(Array<T, N>) -> Vec<T>
+         Fn(Deque<T>) -> Vec<T>
   --> 07-str-where-string-is-stored.acvus:1:9
   |
 1 | let v = vec(["a".to_string()]);
