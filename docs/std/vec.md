@@ -27,6 +27,7 @@ view, so the element operations — `sort`, `contains`, `binary_search`,
 | --- | --- | --- | --- |
 | `vec` | `vec(items: C) -> Vec<T>` | `Vec::from` | a shared signature; any container demotes to a vec (RFC-0019) |
 | `filled` | `filled(n: u64, x: T) -> Vec<T>` | `vec![x; n]` | instances for `i64`, `f64`, `bool`, `String` |
+| `new` | `new() -> Vec<T>` | `Vec::new` | none |
 | `with_capacity` | `with_capacity(n: u64) -> Vec<T>` | `Vec::with_capacity` | none |
 | `len` | `len(c: &Vec<T>) -> u64` | `Vec::len` | `u64`, not `usize` |
 | `is_empty` | `is_empty(c: &Vec<T>) -> bool` | `Vec::is_empty` | none |

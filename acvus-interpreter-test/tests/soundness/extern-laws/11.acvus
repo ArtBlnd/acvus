@@ -1,0 +1,2 @@
+// expect 255
+let s = 0u8; for x in [100u8, 100u8, 100u8] { s = saturating_add(s, x); } s

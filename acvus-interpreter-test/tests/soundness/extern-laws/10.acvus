@@ -1,0 +1,2 @@
+// expect 123
+let v = new(); for x in 1..4 { v.push(x); } let t = 0; for y in &v { t = t * 10 + *y; } t

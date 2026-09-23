@@ -159,6 +159,13 @@ async fn a_vec_made_with_a_capacity_takes_pushes_and_gives_the_last_back() {
 }
 
 #[tokio::test]
+async fn a_new_vec_is_empty_and_takes_a_push() {
+    assert_eq!(int_of("let v = new(); v.push(1); v.len()").await, 1);
+    assert_eq!(int_of("let v = vec::new(); v.push(1); v.len()").await, 1);
+    assert!(bool_of("let v = new(); v.push(1); v.pop(); v.is_empty()").await);
+}
+
+#[tokio::test]
 async fn a_pop_of_an_empty_vec_is_none() {
     assert_eq!(
         int_of("let v = vec([7]); v.pop(); if let Some(x) = v.pop() { x } else { -1 }").await,

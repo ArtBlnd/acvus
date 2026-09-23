@@ -265,23 +265,6 @@ fn a_write_through_the_element_is_weak_and_one_elsewhere_is_strong() {
     assert_eq!(state.strength(), Strength::Strong);
 }
 
-#[test]
-fn a_push_in_a_loop_is_a_storage_write_and_strong() {
-    let a = Analyzed::of("let v = vec([1, 2, 3]); let w = vec([0]); for x in &v { w.push(*x); } 0");
-    let loop_ = a.sole_loop();
-    let state = a.state(loop_);
-    assert!(
-        state.params.is_empty(),
-        "nothing is carried through the header"
-    );
-    assert!(
-        matches!(state.dependences[..], [Dependence::StorageWrite(_)]),
-        "the merge goes through `w`'s storage: {:?}",
-        state.dependences
-    );
-    assert_eq!(state.strength(), Strength::Strong);
-}
-
 struct Nested {
     analyzed: Analyzed,
     inner: LoopId,
@@ -553,4 +536,41 @@ fn a_fold_storage_the_loop_also_reads_is_a_strong_write() {
         "{:?}",
         state.dependences
     );
+}
+
+/// std `Vec::push` declares `fold(combine = extend, identity = new)`
+/// (RFC-0082 rule 3), so a loop whose one write of `v` is a push merges
+/// through `v`'s storage and stays weak.
+#[test]
+fn a_std_push_in_a_loop_is_a_weak_storage_merge() {
+    let a = Analyzed::of("let n = 3; let v = new(); for x in 0..n { v.push(x); } v.len()");
+    let loop_ = a.sole_loop();
+    let state = a.state(loop_);
+    assert!(state.params.is_empty(), "nothing is carried through the header");
+    let [StorageMerge { fold, .. }] = state.storage_merges[..] else {
+        panic!("`v` is merged through its storage: {:?}", state.storage_merges);
+    };
+    assert!(!fold.commutative, "`push` keeps order");
+    assert!(state.dependences.is_empty(), "{:?}", state.dependences);
+    assert_eq!(state.strength(), Strength::Weak);
+    assert!(!state.runs_apart(), "a storage merge carries state");
+}
+
+#[test]
+fn a_std_push_storage_the_loop_also_reads_is_a_strong_write() {
+    let a = Analyzed::of(
+        "let n = 3; let v = new(); let t = 0u64; for x in 0..n { v.push(x); t = t + v.len(); } t",
+    );
+    let loop_ = a.sole_loop();
+    let state = a.state(loop_);
+    assert!(state.storage_merges.is_empty(), "{:?}", state.storage_merges);
+    assert!(
+        state
+            .dependences
+            .iter()
+            .any(|d| matches!(d, Dependence::StorageWrite(_))),
+        "{:?}",
+        state.dependences
+    );
+    assert_eq!(state.strength(), Strength::Strong);
 }

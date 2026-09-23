@@ -63,6 +63,15 @@ pub(crate) fn as_len(n: u64) -> usize {
     n
 }
 
+/// The empty vec, `Vec::new`. It is `push`'s fold identity.
+#[extern_fn(effect = pure)]
+fn new<T>() -> Vec<T>
+where
+    T: Var<kind::Type>,
+{
+    Vec::new()
+}
+
 #[extern_fn(effect = pure)]
 fn with_capacity<T>(n: u64) -> Vec<T>
 where
@@ -145,7 +154,9 @@ where
     c.last()
 }
 
-#[extern_fn(effect = pure)]
+/// Pushing a run of items onto `c` equals extending `c` by the vecs that
+/// pushing each part of the run onto `new()` builds, in the run's order.
+#[extern_fn(effect = pure, law(fold(combine = extend, identity = new)))]
 fn push<T>(c: &mut Vec<T>, item: T)
 where
     T: Var<kind::Type>,
@@ -503,12 +514,63 @@ where
         types: [Vec<_>],
         signatures: [vec, filled],
         fns: [
-            reverse, vec_array, with_capacity,
+            reverse, vec_array, new, with_capacity,
             filled_int, filled_float, filled_bool, filled_str,
             len, is_empty, as_slice, as_slice_mut, first, last,
             push, pop, insert, remove, clear, truncate, extend, swap,
             sort_by, sort_by_key, capacity, shrink_to_fit, split_off,
             get, eq_vec, clone_vec, cmp_vec, hash_vec,
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fixed-seed linear congruential sequence (Knuth's MMIX constants),
+    /// as in `num`'s law tests, so a failing law names the same inputs on
+    /// every run.
+    struct Samples(u64);
+
+    impl Samples {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0
+        }
+    }
+
+    fn pushed(onto: Vec<i64>, items: &[i64]) -> Vec<i64> {
+        let mut state = onto;
+        for &x in items {
+            push(&mut state, x);
+        }
+        state
+    }
+
+    /// `push`'s fold law: over sampled runs `xs`, each split at every point
+    /// into `a ++ b`, pushing `xs` onto `new()` equals `extend`-combining,
+    /// in order, the states pushing `a` and pushing `b` onto `new()` reach.
+    #[test]
+    fn push_folds_by_extend_from_new() {
+        let mut samples = Samples(0x5eed_1a55_0c1a_7e00);
+        let edges = [i64::MIN, i64::MAX, 0, 1, -1];
+        let mut runs: Vec<Vec<i64>> = vec![Vec::new(), edges.to_vec()];
+        for len in 1..=24 {
+            runs.push((0..len).map(|_| samples.next() as i64).collect());
+        }
+        for xs in &runs {
+            let whole = pushed(new(), xs);
+            assert_eq!(&whole, xs, "pushing onto `new()` builds the run itself");
+            for at in 0..=xs.len() {
+                let (a, b) = xs.split_at(at);
+                let mut combined = pushed(new(), a);
+                extend(&mut combined, pushed(new(), b));
+                assert_eq!(combined, whole, "split of {xs:?} at {at}");
+            }
+        }
     }
 }

@@ -286,20 +286,12 @@ macro_rules! int_common {
         }
 
         // -- saturating -------------------------------------------------
-
-        #[extern_fn(instance_of = crate::num::sig::saturating_add, effect = pure)]
-        pub fn saturating_add(a: $t, b: $t) -> $t {
-            a.saturating_add(b)
-        }
+        // `saturating_add` and `saturating_mul` are declared per signedness,
+        // in `int_signed` and `int_unsigned`: their laws differ.
 
         #[extern_fn(instance_of = crate::num::sig::saturating_sub, effect = pure)]
         pub fn saturating_sub(a: $t, b: $t) -> $t {
             a.saturating_sub(b)
-        }
-
-        #[extern_fn(instance_of = crate::num::sig::saturating_mul, effect = pure)]
-        pub fn saturating_mul(a: $t, b: $t) -> $t {
-            a.saturating_mul(b)
         }
 
         #[extern_fn(instance_of = crate::num::sig::saturating_div, effect = pure)]
@@ -456,6 +448,20 @@ macro_rules! int_pow_unsigned {
 
 macro_rules! int_signed {
     () => {
+        /// No law: a signed saturating sum is not associative, since
+        /// `(MAX + 1) + -1` is `MAX - 1` and `MAX + (1 + -1)` is `MAX`.
+        #[extern_fn(instance_of = crate::num::sig::saturating_add, effect = pure)]
+        pub fn saturating_add(a: Width, b: Width) -> Width {
+            a.saturating_add(b)
+        }
+
+        /// No law: a signed saturating product is not associative, since
+        /// `(MAX × 2) × -1` is `-MAX` and `MAX × (2 × -1)` is `MIN`.
+        #[extern_fn(instance_of = crate::num::sig::saturating_mul, effect = pure)]
+        pub fn saturating_mul(a: Width, b: Width) -> Width {
+            a.saturating_mul(b)
+        }
+
         #[extern_fn(instance_of = crate::num::sig::abs, effect = pure)]
         pub fn abs(a: Width) -> Width {
             a.wrapping_abs()
@@ -481,6 +487,31 @@ macro_rules! int_signed {
 
 macro_rules! int_unsigned {
     () => {
+        /// An unsigned saturating sum is the true sum clamped to `MAX`, and
+        /// clamping above commutes with a sum of nonnegative terms, so it
+        /// associates.
+        #[extern_fn(
+            instance_of = crate::num::sig::saturating_add,
+            effect = pure,
+            law(associative, commutative, identity = 0)
+        )]
+        pub fn saturating_add(a: Width, b: Width) -> Width {
+            a.saturating_add(b)
+        }
+
+        /// An unsigned saturating product is the true product clamped to
+        /// `MAX`: a product with a `0` factor is `0` either way, and one
+        /// that clamps stays at or above `MAX` once multiplied by nonzero
+        /// terms, so it associates.
+        #[extern_fn(
+            instance_of = crate::num::sig::saturating_mul,
+            effect = pure,
+            law(associative, commutative, identity = 1)
+        )]
+        pub fn saturating_mul(a: Width, b: Width) -> Width {
+            a.saturating_mul(b)
+        }
+
         #[extern_fn(instance_of = crate::num::sig::isqrt, effect = pure)]
         pub fn isqrt(a: Width) -> Width {
             a.isqrt()
@@ -916,9 +947,10 @@ mod tests {
     }
 
     /// Each declared law of `min`, `max`, `wrapping_add` and `wrapping_mul`
-    /// at one width, over the width's edges and a sample of its words.
+    /// at one width, and of the functions named after it with their
+    /// identities, over the width's edges and a sample of its words.
     macro_rules! laws_hold_at {
-        ($test:ident, $m:ident: $t:ident) => {
+        ($test:ident, $m:ident: $t:ident $(, $more:ident = $identity:expr)* $(,)?) => {
             #[test]
             fn $test() {
                 let edges: [$t; 5] = [$t::MIN, $t::MAX, 0, 1, $t::MAX / 2];
@@ -927,11 +959,12 @@ mod tests {
                     .into_iter()
                     .chain((0..SAMPLED).map(|_| samples.next() as $t))
                     .collect();
-                let declared: [Declared<$t>; 4] = [
+                let declared: Vec<Declared<$t>> = vec![
                     Declared { name: "min", f: $m::min, identity: $t::MAX },
                     Declared { name: "max", f: $m::max, identity: $t::MIN },
                     Declared { name: "wrapping_add", f: $m::wrapping_add, identity: 0 },
                     Declared { name: "wrapping_mul", f: $m::wrapping_mul, identity: 1 },
+                    $(Declared { name: stringify!($more), f: $m::$more, identity: $identity },)*
                 ];
                 for Declared { name, f, identity } in declared {
                     for &a in &words {
@@ -957,10 +990,10 @@ mod tests {
     laws_hold_at!(declared_laws_hold_at_i16, i16s: i16);
     laws_hold_at!(declared_laws_hold_at_i32, i32s: i32);
     laws_hold_at!(declared_laws_hold_at_i64, i64s: i64);
-    laws_hold_at!(declared_laws_hold_at_u8, u8s: u8);
-    laws_hold_at!(declared_laws_hold_at_u16, u16s: u16);
-    laws_hold_at!(declared_laws_hold_at_u32, u32s: u32);
-    laws_hold_at!(declared_laws_hold_at_u64, u64s: u64);
+    laws_hold_at!(declared_laws_hold_at_u8, u8s: u8, saturating_add = 0, saturating_mul = 1);
+    laws_hold_at!(declared_laws_hold_at_u16, u16s: u16, saturating_add = 0, saturating_mul = 1);
+    laws_hold_at!(declared_laws_hold_at_u32, u32s: u32, saturating_add = 0, saturating_mul = 1);
+    laws_hold_at!(declared_laws_hold_at_u64, u64s: u64, saturating_add = 0, saturating_mul = 1);
 
     /// The identities the laws name resolve to the constants the property
     /// tests above sample against.
@@ -1007,6 +1040,56 @@ mod tests {
                 widths.push(width);
             }
             assert_eq!(widths.len(), 8, "{sig}: {widths:?}");
+        }
+    }
+
+    /// `saturating_add` and `saturating_mul` state their laws at the four
+    /// unsigned widths and none at the four signed ones.
+    #[test]
+    fn saturating_add_and_mul_declare_laws_at_the_unsigned_widths_alone() {
+        use acvus_extern::{BinaryLaws, FnKind, Identity, Laws, Literal, QualifiedRef};
+        let i = Interner::new();
+        let mut registries = vec![num_registry::<TypesOnly>()];
+        registries.extend(num_width_registries());
+        registries.extend(num_constant_registries());
+        let reg = Externs::combine(registries, &i).expect("registries combine");
+        for (sig, identity) in [("saturating_add", 0), ("saturating_mul", 1)] {
+            let qref = QualifiedRef::qualified(i.intern("num"), i.intern(sig));
+            let function = reg
+                .functions
+                .iter()
+                .find(|f| f.qref == qref)
+                .expect("the signature is declared");
+            let FnKind::Extern { instances, .. } = &function.kind else {
+                panic!("{sig} is an extern")
+            };
+            let mut unsigned = 0;
+            let mut signed = 0;
+            for instance in &instances.concrete {
+                let acvus_extern::PolyTy::Fn { ret, .. } = &instance.ty else {
+                    panic!("an instance is a function")
+                };
+                let acvus_extern::PolyTy::Int(width) = &**ret else {
+                    panic!("{sig} at {ret:?}")
+                };
+                if width.signed() {
+                    assert_eq!(instance.laws, Laws::None, "{sig} at {}", width.name());
+                    signed += 1;
+                    continue;
+                }
+                assert_eq!(
+                    instance.laws,
+                    Laws::Binary(BinaryLaws {
+                        associative: true,
+                        commutative: true,
+                        identity: Some(Identity::Const(Literal::Int(identity))),
+                    }),
+                    "{sig} at {}",
+                    width.name()
+                );
+                unsigned += 1;
+            }
+            assert_eq!((signed, unsigned), (4, 4), "{sig}");
         }
     }
 }
