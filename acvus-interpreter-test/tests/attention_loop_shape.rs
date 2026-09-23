@@ -1,7 +1,7 @@
 //! What the register selector makes of the attention loops: how many
 //! operations one iteration of each loop prepares, and how many slot moves
 //! its back edge carries. Every `while` in the kernel counts by one to an
-//! invariant bound, so each is a range `for` (RFC-0079): its terminator is
+//! invariant bound, so each is a range `for` (RFC-0081): its terminator is
 //! the condition, and its body is its one chain.
 //!
 //! `optimize::code_motion` moves work between blocks in two directions that

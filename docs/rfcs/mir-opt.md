@@ -580,7 +580,7 @@ the machine offers an explicitly reassociable float reduction, which is a
 language decision. What a failed join drops and in what order, which is
 answered in rule 10's operation family.
 
-## RFC-0079: a `while` that counts by one to an invariant bound is a range `for`
+## RFC-0081: a `while` that counts by one to an invariant bound is a range `for`
 
 Status: Proposed
 

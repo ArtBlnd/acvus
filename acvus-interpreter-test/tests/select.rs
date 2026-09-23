@@ -32,7 +32,7 @@ fn count_on_page(source: &str, family: &str, page: fn(&Interner) -> Context) -> 
     named_on_page(source, family, page).len()
 }
 
-/// Tested with `<=` so that it stays a `while`: RFC-0079 turns `i < 6` into
+/// Tested with `<=` so that it stays a `while`: RFC-0081 turns `i < 6` into
 /// a range `for`.
 const ADDS_WHEN_EVEN: &str =
     "let acc = 0; let i = 0; while i <= 5 { if i % 2 == 0 { acc = acc + i; }; i = i + 1; } acc";

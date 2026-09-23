@@ -1,4 +1,4 @@
-//! `optimize::while_to_for` (RFC-0079): which `while` loops become a range
+//! `optimize::while_to_for` (RFC-0081): which `while` loops become a range
 //! `for`, what the rewrite leaves as it was, and the forms it declines.
 //!
 //! These tests read `i` as a header parameter after the full pipeline,

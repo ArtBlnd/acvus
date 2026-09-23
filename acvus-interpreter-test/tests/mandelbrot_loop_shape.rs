@@ -3,7 +3,7 @@
 //! many of them the short-circuit diamond in the innermost head holds.
 //!
 //! The two outer `while`s count by one to an invariant bound, so each is a
-//! range `for` (RFC-0079): its terminator is the condition, and its body is
+//! range `for` (RFC-0081): its terminator is the condition, and its body is
 //! its one chain. The innermost one tests `&&` and stays a `Loop`.
 //!
 //! Under RFC-0052 rule 3 a region is an operation of the list it sits in, so

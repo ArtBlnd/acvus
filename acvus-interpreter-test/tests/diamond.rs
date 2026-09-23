@@ -154,7 +154,7 @@ async fn the_dividing_arm_runs_when_it_is_the_one_taken() {
 }
 
 /// This and the next loop test with `<=` so that they stay `while`s:
-/// RFC-0079 turns `n < 8` into a range `for`.
+/// RFC-0081 turns `n < 8` into a range `for`.
 #[tokio::test]
 async fn a_diamond_in_a_body_leaves_the_while_recognizable() {
     let source = "let acc = 0; let n = 0; while n <= 7 { if n % 3 == 0 { acc = acc + 1; } else if n % 3 == 1 { acc = acc + 10; } else { acc = acc + 100; }; n = n + 1; } acc";
@@ -218,7 +218,7 @@ async fn a_threaded_matchs_arms_leave_one_diamond_in_the_loop() {
             .filter(|name| family_of(name) == "For")
             .count(),
         1,
-        "`i < @n` counting by one is a range `for` (RFC-0079)"
+        "`i < @n` counting by one is a range `for` (RFC-0081)"
     );
     let diamonds = regions_named(&listing, "Diamond");
     assert_eq!(

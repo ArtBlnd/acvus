@@ -26,7 +26,7 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// A `while` whose body holds an `if` and nothing after it that reads an arm.
-/// Both loops here test with `<=` because RFC-0079 turns `n < 6` into a range
+/// Both loops here test with `<=` because RFC-0081 turns `n < 6` into a range
 /// `for`, which has no head part.
 const TAIL_ABOVE_THE_BRANCH: &str =
     "let acc = 0; let n = 0; while n <= 5 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";

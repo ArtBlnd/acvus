@@ -57,7 +57,7 @@ fn a_bound_and_a_factor_no_loop_assigns_are_not_block_params() {
             ("L4".to_string(), 1)
         ],
         "each header carries the accumulator and each body the counter its \
-         `for` fills, nothing else. Both `while`s are range `for`s (RFC-0079), \
+         `for` fills, nothing else. Both `while`s are range `for`s (RFC-0081), \
          and nothing reads `t` or `i` once the comparisons are gone:\n{listing}"
     );
 }

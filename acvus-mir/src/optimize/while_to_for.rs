@@ -1,5 +1,5 @@
 //! A `while` that is a counted traversal becomes a `for` over a range
-//! (RFC-0079).
+//! (RFC-0081).
 //!
 //! In `let i = b; while i < n { …; i = i + 1; }` the header's `jump_if`
 //! becomes `For { source: Range { at: b, hi: n }, … }` and the body block
