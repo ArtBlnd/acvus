@@ -1,0 +1,3 @@
+// refuse
+// two widths
+let a = 1u8; let b = 1u16; a + b

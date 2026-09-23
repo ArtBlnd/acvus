@@ -146,3 +146,15 @@ fn a_nested_element_and_field_chain_is_one_place() {
     runs_to(&format!("{o} let r = &mut o.v[0].c[0]; r.d = 5; o.v[0].c[0].d"), "5");
     runs_to(&format!("{o} let r = &mut o; r.v[0].c[0].d = 6; o.v[0].c[0].d"), "6");
 }
+
+/// A `String` element of a `for x in &mut v` loop is replaced whole through
+/// its `&mut` (RFC-0018 rule 2), and `+` on the `String`s concatenates
+/// through `core::add`'s text instances (RFC-0020).
+#[test]
+fn a_mutable_loop_over_strings_replaces_each_whole() {
+    runs_to(
+        "let v = vec([\"a\".to_string(), \"b\".to_string()]); \
+         for x in &mut v { *x = x.clone() + \"!\"; } v[0u64].clone() + &v[1u64]",
+        "\"a!b!\"",
+    );
+}

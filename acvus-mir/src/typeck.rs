@@ -550,53 +550,29 @@ pub enum Passing {
     AsIs,
 }
 
-/// RFC-0020: `StringEq` and `StringConcat` lend their operand places
-/// instead of copying them.
+/// RFC-0020: an operator's `core` signature takes its operands by
+/// reference, and `StringEq` and `StringConcat` lend them too, so the
+/// operand places are lent instead of copied.
 fn operand_stays_lent(op: BinOp) -> bool {
     match op {
-        BinOp::Eq | BinOp::Neq | BinOp::Add => true,
-        BinOp::Sub
+        BinOp::Eq
+        | BinOp::Neq
+        | BinOp::Add
+        | BinOp::Sub
         | BinOp::Mul
         | BinOp::Div
         | BinOp::Mod
         | BinOp::Lt
         | BinOp::Gt
         | BinOp::Lte
-        | BinOp::Gte
-        | BinOp::Xor
+        | BinOp::Gte => true,
+        BinOp::Xor
         | BinOp::BitAnd
         | BinOp::BitOr
         | BinOp::Shl
         | BinOp::Shr
         | BinOp::And
         | BinOp::Or => false,
-    }
-}
-
-/// The bound an operator imposes on an operand still open at the operator
-/// (RFC-0020, RFC-0043). `Add` admits `String` because `+` on strings is
-/// the concatenation.
-fn operand_bound(op: BinOp) -> Option<TyVarBound> {
-    let integers = || crate::ty::IntTy::ALL.iter().copied().map(TyTerm::Int);
-    match op {
-        BinOp::Add => Some(TyVarBound::one_of(
-            integers().chain([TyTerm::Float, TyTerm::String]).collect(),
-        )),
-        BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => Some(TyVarBound::one_of(
-            integers().chain([TyTerm::Float, TyTerm::Char]).collect(),
-        )),
-        BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-            Some(TyVarBound::one_of(integers().collect()))
-        }
-        // `core::cmp`'s instances are what an ordering takes (RFC-0020).
-        BinOp::Lt
-        | BinOp::Gt
-        | BinOp::Lte
-        | BinOp::Gte
-        | BinOp::Eq
-        | BinOp::Neq
-        | BinOp::And
-        | BinOp::Or => None,
     }
 }
 
@@ -634,6 +610,21 @@ pub struct OperatorCall<C, T> {
     pub signature: OperatorSignature,
     pub ty: T,
     pub at: Span,
+}
+
+/// The operator a decision was opened for, as its refusal names it.
+#[derive(Clone, Copy)]
+struct OperatorSite {
+    op: &'static str,
+    signature: OperatorSignature,
+}
+
+/// An operator's operand as its call takes it: its type, and the
+/// expression a conversion to the parameter is recorded at.
+#[derive(Clone, Copy)]
+struct Operand<'t> {
+    ty: &'t InferTy,
+    at: AstId,
 }
 
 /// Keyed by the id `lower.rs` reads each call at: a named call's name, the
@@ -1163,9 +1154,10 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
-    /// The operator each operand's head decision was opened for: its failure
-    /// is that operator's mismatch.
-    operand_decisions: FxHashMap<DecisionId, &'static str>,
+    /// The operator each of its operands' head decisions and its call's
+    /// instance decision was opened for: a failure of one is that
+    /// operator's refusal.
+    operator_decisions: FxHashMap<DecisionId, OperatorSite>,
     requirer_of: FxHashMap<DecisionId, DecisionId>,
     /// The declaration whose scheme opened each instance decision: the
     /// callee for a call's own instance, and the declaration that carries
@@ -1222,7 +1214,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
-            operand_decisions: FxHashMap::default(),
+            operator_decisions: FxHashMap::default(),
             requirer_of: FxHashMap::default(),
             decision_callees: FxHashMap::default(),
             source_begins_by_decision: FxHashMap::default(),
@@ -2961,8 +2953,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect()
     }
 
-    /// `core::eq` and `core::cmp` as `acvus_extern::core` declares them, for
-    /// an environment that registers neither: an operator over a word or
+    /// An operator's `core` signature as `acvus_extern::core` declares it,
+    /// for an environment that registers none: an operator over a word or
     /// text needs only the language's own instances.
     fn operator_scheme(&self, signature: OperatorSignature) -> crate::ty::Scheme {
         let taken = || {
@@ -2971,21 +2963,34 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Box::new(TypeArg::uniform(TyTerm::Var(0))),
             )
         };
-        let ret = match signature {
-            OperatorSignature::Eq => TyTerm::Bool,
-            OperatorSignature::Cmp => TyTerm::Int(crate::ty::IntTy::I64),
+        let operands = self.operand_names(signature.operand_count());
+        let (ret, bounds) = match signature {
+            OperatorSignature::Eq => (TyTerm::Bool, vec![TyVarBound::one_of(vec![])]),
+            OperatorSignature::Cmp => (
+                TyTerm::Int(crate::ty::IntTy::I64),
+                vec![TyVarBound::one_of(vec![])],
+            ),
+            OperatorSignature::Add
+            | OperatorSignature::Sub
+            | OperatorSignature::Mul
+            | OperatorSignature::Div
+            | OperatorSignature::Rem
+            | OperatorSignature::Neg => (
+                TyTerm::Var(1),
+                vec![TyVarBound::one_of(vec![]), TyVarBound::Any],
+            ),
         };
         crate::ty::Scheme {
             ty: TyTerm::Fn {
-                params: vec![
-                    ParamTerm::new(self.interner.intern("a"), taken()),
-                    ParamTerm::new(self.interner.intern("b"), taken()),
-                ],
+                params: operands
+                    .into_iter()
+                    .map(|name| ParamTerm::new(name, taken()))
+                    .collect(),
                 ret: Box::new(ret),
                 captures: vec![],
                 effect: Effect::PURE.into(),
             },
-            bounds: vec![TyVarBound::one_of(vec![])],
+            bounds,
             instances: Some(crate::ty::Instances {
                 concrete: Vec::new(),
                 generic: false,
@@ -2994,15 +2999,40 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// The language's instances of `core::eq` and `core::cmp` at an operator
-    /// over a word or text (RFC-0020): the operator's instruction. A named call of the
-    /// signature does not see them and reaches the registry's instances.
+    /// `a`, `b`: the parameters of an operator's signature, as
+    /// `acvus_extern::core` names them.
+    fn operand_names(&self, count: usize) -> Vec<Astr> {
+        ["a", "b"]
+            .into_iter()
+            .take(count)
+            .map(|name| self.interner.intern(name))
+            .collect()
+    }
+
+    /// The language's instances of an operator's `core` signature over a
+    /// word or text (RFC-0020): the operator's instruction. A named call of
+    /// the signature does not see them and reaches the registry's instances.
     fn operator_instances(&self, signature: OperatorSignature) -> Vec<Candidate> {
-        let (words, ret): (Vec<crate::ty::PolyTy>, crate::ty::PolyTy) = match signature {
-            OperatorSignature::Eq => (
-                crate::ty::IntTy::ALL
-                    .iter()
-                    .map(|width| TyTerm::Int(*width))
+        let integers = || {
+            crate::ty::IntTy::ALL
+                .iter()
+                .map(|width| TyTerm::Int(*width))
+        };
+        let at = |words: Vec<crate::ty::PolyTy>, ret: crate::ty::PolyTy| {
+            words
+                .into_iter()
+                .map(|word| (word, ret.clone()))
+                .collect::<Vec<_>>()
+        };
+        let answered_at_the_operand = |words: Vec<crate::ty::PolyTy>| {
+            words
+                .into_iter()
+                .map(|word| (word.clone(), word))
+                .collect::<Vec<_>>()
+        };
+        let instances = match signature {
+            OperatorSignature::Eq => at(
+                integers()
                     .chain([
                         TyTerm::Float,
                         TyTerm::Bool,
@@ -3014,28 +3044,44 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     .collect(),
                 TyTerm::Bool,
             ),
-            OperatorSignature::Cmp => (
-                crate::ty::IntTy::ALL
-                    .iter()
-                    .map(|width| TyTerm::Int(*width))
-                    .chain([TyTerm::Float, TyTerm::Char])
-                    .collect(),
+            OperatorSignature::Cmp => at(
+                integers().chain([TyTerm::Float, TyTerm::Char]).collect(),
                 TyTerm::Int(crate::ty::IntTy::I64),
             ),
+            OperatorSignature::Add => {
+                let mut instances =
+                    answered_at_the_operand(integers().chain([TyTerm::Float]).collect());
+                instances.extend(at(vec![TyTerm::String, TyTerm::Str], TyTerm::String));
+                instances
+            }
+            OperatorSignature::Sub
+            | OperatorSignature::Mul
+            | OperatorSignature::Div
+            | OperatorSignature::Rem => {
+                answered_at_the_operand(integers().chain([TyTerm::Float]).collect())
+            }
+            OperatorSignature::Neg => answered_at_the_operand(
+                integers()
+                    .filter(|word| matches!(word, TyTerm::Int(width) if width.signed()))
+                    .chain([TyTerm::Float])
+                    .collect(),
+            ),
         };
-        let a = self.interner.intern("a");
-        let b = self.interner.intern("b");
-        words
+        let operands = self.operand_names(signature.operand_count());
+        instances
             .into_iter()
-            .map(|word| {
+            .map(|(word, ret)| {
                 let taken =
                     || TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(word.clone())));
                 Candidate {
                     instance: InstanceKind::Operator,
                     requires: Vec::new(),
                     ty: TyTerm::Fn {
-                        params: vec![ParamTerm::new(a, taken()), ParamTerm::new(b, taken())],
-                        ret: Box::new(ret.clone()),
+                        params: operands
+                            .iter()
+                            .map(|name| ParamTerm::new(*name, taken()))
+                            .collect(),
+                        ret: Box::new(ret),
                         captures: vec![],
                         effect: Effect::PURE.into(),
                     },
@@ -3647,6 +3693,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .map(|c| c.site.report);
             let kind = match failure {
                 Unsettled::NoInstance {
+                    call: TyTerm::Fn { ref params, .. },
+                    ..
+                } if let Some(&OperatorSite { op, signature }) =
+                    self.operator_decisions.get(&decision)
+                    && let Some(first) = params.first() =>
+                {
+                    MirErrorKind::NoOperatorInstance {
+                        op,
+                        signature,
+                        ty: referent_shown(self.type_as_written(&first.ty)),
+                    }
+                }
+                Unsettled::NoInstance {
                     call,
                     instances,
                     required,
@@ -3768,7 +3827,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     subject: ShownValue::Anonymous,
                 },
                 Unsettled::MatchMismatch { expected, got, .. }
-                    if let Some(&op) = self.operand_decisions.get(&decision) =>
+                    if let Some(&OperatorSite { op, .. }) =
+                        self.operator_decisions.get(&decision) =>
                 {
                     MirErrorKind::TypeMismatchBinOp {
                         op,
@@ -5070,8 +5130,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         })
     }
 
-    /// An operator on a non-primitive is a call of its shared signature
-    /// (RFC-0020).
     /// What an operand whose head is still open names: itself, or what it
     /// references, as the solve settles it — the decision a pattern opens on
     /// an open source (RFC-0024 rule 5). An operator borrows its operands,
@@ -5079,7 +5137,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn named_by_open_operand(
         &mut self,
         operand: &InferTy,
-        op: &'static str,
+        operator: OperatorSite,
         span: Span,
     ) -> InferTy {
         let named = self.solver.fresh_ty_var();
@@ -5089,19 +5147,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             bindings: Vec::new(),
         });
         self.decision_sites.insert(decision, span);
-        self.operand_decisions.insert(decision, op);
+        self.operator_decisions.insert(decision, operator);
         named
     }
 
+    /// An operator is a call of its `core` signature (RFC-0020).
     fn check_operator_call(
         &mut self,
         id: AstId,
         op: &'static str,
         signature: OperatorSignature,
         operand: &InferTy,
-        operands: [(&InferTy, AstId); 2],
+        operands: &[Operand<'_>],
         span: Span,
-    ) {
+    ) -> Option<InferTy> {
         let qref = QualifiedRef::qualified(
             self.interner.intern("core"),
             self.interner.intern(signature.name()),
@@ -5121,10 +5180,31 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             withholds: Withholds::LanguageOwned,
         };
         let (call_type, callee) = self.instantiate_call_with(qref, &scheme, site, compiler);
-        for ((given, at), param) in operands.into_iter().zip(&call_type.params) {
+        let operator = OperatorSite { op, signature };
+        if let Some(InstanceChoice::Decided(decision)) = callee.instance {
+            self.operator_decisions.insert(decision, operator);
+        }
+        let no_instance = |this: &mut Self| {
+            let shown = this.type_as_written(operand);
+            this.error(
+                MirErrorKind::NoOperatorInstance {
+                    op,
+                    signature,
+                    ty: shown,
+                },
+                span,
+            );
+        };
+        if call_type.params.len() != operands.len() {
+            no_instance(self);
+            return None;
+        }
+        for (&Operand { ty: given, at }, param) in operands.iter().zip(&call_type.params) {
             let named = match self.solver.shallow_resolve_ty(given) {
                 TyTerm::Ref(_, named) => named.ty,
-                TyTerm::Var(_) => self.named_by_open_operand(given, op, span),
+                TyTerm::Var(var) if self.solver.bound_of_var(var).admits_a_reference() => {
+                    self.named_by_open_operand(given, operator, span)
+                }
                 other => other,
             };
             let borrowed = TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(named)));
@@ -5134,16 +5214,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 report: ConversionReport::Operand { op },
             };
             if self.flow(&borrowed, param, site).is_err() {
-                let shown = self.type_as_written(operand);
-                self.error(
-                    MirErrorKind::NoOperatorInstance {
-                        op,
-                        signature,
-                        ty: shown,
-                    },
-                    span,
-                );
-                return;
+                no_instance(self);
+                return None;
             }
         }
         self.note_call_effect(&call_type.effect, span);
@@ -5156,6 +5228,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 at: span,
             }),
         );
+        Some(call_type.ret)
     }
 
     /// The type an operand is read at. A reference the program wrote is
@@ -5164,22 +5237,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// keeps the reference. A referent still open is read through as well,
     /// because the operand bound the operator then imposes leaves it a
     /// word.
-    fn read_operand_through(&mut self, operand: &InferTy, op: BinOp) -> InferTy {
+    fn read_operand_through(&mut self, operand: &InferTy, stays_lent: bool) -> InferTy {
         let resolved = self.solver.resolve_ty(operand);
         let TyTerm::Ref(_, inner) = &resolved else {
             return resolved;
         };
         let referent = self.solver.resolve_ty(&inner.ty);
         let word = referent.is_primitive() || matches!(referent, TyTerm::Var(_) | TyTerm::Error(_));
-        if operand_stays_lent(op) || word {
+        if stays_lent || word {
             referent
         } else {
             resolved
         }
     }
 
-    /// RFC-0043: `false` where no type satisfies both operands and the
-    /// operator's bound.
     /// The two operands of one operator meet at one type. An open
     /// representation a signature left on either side is the operator's
     /// instance decision to join, as a call argument's is (RFC-0042 rule 4).
@@ -5192,16 +5263,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }) => true,
             Err(_) => false,
         }
-    }
-
-    fn unify_operands(&mut self, op: BinOp, lt: &InferTy, rt: &InferTy, span: Span) -> bool {
-        if !self.operands_meet(lt, rt) {
-            return false;
-        }
-        let Some(bound) = operand_bound(op) else {
-            return true;
-        };
-        self.bound_operand(lt, bound, span)
     }
 
     /// An operand still open is bounded by the types its operator takes, and
@@ -5219,6 +5280,38 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         self.bound_sites.push(BoundSite { var, span });
         true
+    }
+
+    fn open_beside_text(&self, lt: &InferTy, rt: &InferTy) -> Option<InferTy> {
+        match (self.solver.resolve_ty(lt), self.solver.resolve_ty(rt)) {
+            (TyTerm::Var(_), text) if is_text(&text) => Some(lt.clone()),
+            (text, TyTerm::Var(_)) if is_text(&text) => Some(rt.clone()),
+            _ => None,
+        }
+    }
+
+    /// `+`, `-`, `*`, `/` and `%` over operands that are not both text:
+    /// the two operands meet, and the operator's value is its call's answer.
+    fn check_arithmetic(
+        &mut self,
+        id: AstId,
+        op: &'static str,
+        signature: OperatorSignature,
+        [left, right]: [Operand<'_>; 2],
+        span: Span,
+    ) -> InferTy {
+        if !self.operands_meet(left.ty, right.ty) {
+            self.binop_error(
+                op,
+                self.solver.resolve_ty(left.ty),
+                self.solver.resolve_ty(right.ty),
+                span,
+            );
+            return Self::infer_error();
+        }
+        let operand = self.solver.resolve_ty(left.ty);
+        self.check_operator_call(id, op, signature, &operand, &[left, right], span)
+            .unwrap_or_else(Self::infer_error)
     }
 
     fn bound_to_text(&mut self, open: &InferTy, span: Span) -> bool {
@@ -5827,8 +5920,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         mutability: Mutability::Shared,
                     });
                 }
-                let lt = self.read_operand_through(&lt, *op);
-                let rt = self.read_operand_through(&rt, *op);
+                let lt = self.read_operand_through(&lt, operand_stays_lent(*op));
+                let rt = self.read_operand_through(&rt, operand_stays_lent(*op));
 
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if Self::is_error(&lt) || Self::is_error(&rt) {
@@ -5854,47 +5947,70 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 // (RFC-0062 rule 3).
                 let both_text =
                     is_text(&self.solver.resolve_ty(&lt)) && is_text(&self.solver.resolve_ty(&rt));
+                let operands = [
+                    Operand {
+                        ty: &lt,
+                        at: left.id(),
+                    },
+                    Operand {
+                        ty: &rt,
+                        at: right.id(),
+                    },
+                ];
                 let ty = match op {
                     BinOp::Add if both_text => TyTerm::String,
                     BinOp::Eq | BinOp::Neq if both_text => TyTerm::Bool,
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        if !self.unify_operands(*op, &lt, &rt, *span) {
-                            self.binop_error(
-                                op_str(*op),
-                                self.solver.resolve_ty(&lt),
-                                self.solver.resolve_ty(&rt),
-                                *span,
-                            );
-                            return self.record_ret(*id, Self::infer_error());
+                    // Text's `+` and `==` read `String` and `str` alike, so
+                    // an operand still open beside text is bound to text
+                    // rather than met with the other operand: meeting would
+                    // fix it to that one representation (RFC-0062 rule 3).
+                    BinOp::Add | BinOp::Eq | BinOp::Neq
+                        if let Some(open) = self.open_beside_text(&lt, &rt) =>
+                    {
+                        if !self.bound_to_text(&open, *span) {
+                            self.binop_error(op_str(*op), lt, rt, *span);
                         }
-                        let rl = self.solver.resolve_ty(&lt);
-                        match &rl {
-                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Var(_) => rl,
-                            TyTerm::String if *op == BinOp::Add => TyTerm::String,
-                            _ => {
-                                self.binop_error(
-                                    op_str(*op),
-                                    rl,
-                                    self.solver.resolve_ty(&rt),
-                                    *span,
-                                );
-                                Self::infer_error()
-                            }
+                        match op {
+                            BinOp::Add => TyTerm::String,
+                            _ => TyTerm::Bool,
                         }
                     }
+                    BinOp::Add => self.check_arithmetic(
+                        *id,
+                        op_str(*op),
+                        OperatorSignature::Add,
+                        operands,
+                        *span,
+                    ),
+                    BinOp::Sub => self.check_arithmetic(
+                        *id,
+                        op_str(*op),
+                        OperatorSignature::Sub,
+                        operands,
+                        *span,
+                    ),
+                    BinOp::Mul => self.check_arithmetic(
+                        *id,
+                        op_str(*op),
+                        OperatorSignature::Mul,
+                        operands,
+                        *span,
+                    ),
+                    BinOp::Div => self.check_arithmetic(
+                        *id,
+                        op_str(*op),
+                        OperatorSignature::Div,
+                        operands,
+                        *span,
+                    ),
+                    BinOp::Mod => self.check_arithmetic(
+                        *id,
+                        op_str(*op),
+                        OperatorSignature::Rem,
+                        operands,
+                        *span,
+                    ),
                     BinOp::Eq | BinOp::Neq => {
-                        let (rl, rr) = (self.solver.resolve_ty(&lt), self.solver.resolve_ty(&rt));
-                        let open_side = match (&rl, &rr) {
-                            (TyTerm::Var(_), text) if is_text(text) => Some(&lt),
-                            (text, TyTerm::Var(_)) if is_text(text) => Some(&rt),
-                            _ => None,
-                        };
-                        if let Some(open) = open_side {
-                            if !self.bound_to_text(open, *span) {
-                                self.binop_error(op_str(*op), lt, rt, *span);
-                            }
-                            return self.record_ret(*id, TyTerm::Bool);
-                        }
                         if !self.operands_meet(&lt, &rt) {
                             self.binop_error(op_str(*op), lt, rt, *span);
                             return self.record_ret(*id, TyTerm::Bool);
@@ -5906,7 +6022,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 op_str(*op),
                                 OperatorSignature::Eq,
                                 &operand,
-                                [(&lt, left.id()), (&rt, right.id())],
+                                &operands,
                                 *span,
                             );
                         }
@@ -5926,7 +6042,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
-                        let ok = self.unify_operands(*op, &lt, &rt, *span)
+                        let integers = TyVarBound::one_of(
+                            crate::ty::IntTy::ALL
+                                .iter()
+                                .copied()
+                                .map(TyTerm::Int)
+                                .collect(),
+                        );
+                        let ok = self.operands_meet(&lt, &rt)
+                            && self.bound_operand(&lt, integers, *span)
                             && matches!(
                                 self.solver.resolve_ty(&lt),
                                 TyTerm::Int(_) | TyTerm::Var(_)
@@ -5956,7 +6080,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         TyTerm::Bool
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                        if !self.unify_operands(*op, &lt, &rt, *span) {
+                        if !self.operands_meet(&lt, &rt) {
                             self.binop_error(
                                 op_str(*op),
                                 self.solver.resolve_ty(&lt),
@@ -5970,14 +6094,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             TyTerm::Bool | TyTerm::Unit => {
                                 self.no_ordering(op_str(*op), operand.clone(), *span)
                             }
-                            _ => self.check_operator_call(
-                                *id,
-                                op_str(*op),
-                                OperatorSignature::Cmp,
-                                &operand,
-                                [(&lt, left.id()), (&rt, right.id())],
-                                *span,
-                            ),
+                            _ => {
+                                self.check_operator_call(
+                                    *id,
+                                    op_str(*op),
+                                    OperatorSignature::Cmp,
+                                    &operand,
+                                    &operands,
+                                    *span,
+                                );
+                            }
                         }
                         TyTerm::Bool
                     }
@@ -5991,8 +6117,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 operand,
                 span,
             } => {
+                let outer = match op {
+                    acvus_ast::UnaryOp::Neg => Some(std::mem::replace(
+                        &mut self.demand,
+                        PlaceDemand::Borrow(Mutability::Shared),
+                    )),
+                    acvus_ast::UnaryOp::Not | acvus_ast::UnaryOp::Deref => None,
+                };
                 let ot = self.check_expr(operand);
-                let ot = self.solver.resolve_ty(&ot);
+                let ot = match outer {
+                    Some(outer) => {
+                        self.demand = outer;
+                        self.note_place(operand);
+                        self.lent_places.push(LentWhole {
+                            place: operand.id(),
+                            mutability: Mutability::Shared,
+                        });
+                        self.read_operand_through(&ot, true)
+                    }
+                    None => self.solver.resolve_ty(&ot),
+                };
 
                 // Early guard: if operand is Error, suppress cascading errors.
                 if Self::is_error(&ot) {
@@ -6042,28 +6186,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             Self::infer_error()
                         }
                     },
-                    acvus_ast::UnaryOp::Neg => match &ot {
-                        TyTerm::Int(k) if k.signed() => ot.clone(),
-                        TyTerm::Float => TyTerm::Float,
-                        TyTerm::Var(_) => {
-                            let signed = crate::ty::IntTy::ALL
-                                .iter()
-                                .copied()
-                                .filter(|width| width.signed())
-                                .map(TyTerm::Int)
-                                .chain([TyTerm::Float])
-                                .collect();
-                            if !self.bound_operand(&ot, TyVarBound::one_of(signed), *span) {
-                                self.binop_error("-", ot.clone(), Self::infer_error(), *span);
-                                return self.record_ret(*id, Self::infer_error());
-                            }
-                            ot.clone()
-                        }
-                        _ => {
-                            self.binop_error("-", ot, Self::infer_error(), *span);
-                            Self::infer_error()
-                        }
-                    },
+                    acvus_ast::UnaryOp::Neg => self
+                        .check_operator_call(
+                            *id,
+                            "-",
+                            OperatorSignature::Neg,
+                            &ot,
+                            &[Operand {
+                                ty: &ot,
+                                at: operand.id(),
+                            }],
+                            *span,
+                        )
+                        .unwrap_or_else(Self::infer_error),
                     acvus_ast::UnaryOp::Not => {
                         match &ot {
                             TyTerm::Bool => {}

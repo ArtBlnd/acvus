@@ -18,6 +18,7 @@ mod container;
 mod container_contains;
 mod container_read;
 mod conversion;
+mod core_arithmetic;
 mod core_instances;
 mod deque;
 mod diamond;

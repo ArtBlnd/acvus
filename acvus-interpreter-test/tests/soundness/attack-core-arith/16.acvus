@@ -1,0 +1,3 @@
+// expect 0.25
+// f64 / on open params settled by &
+let p = 1.0; let q = 4.0; let f = |a, b| -> a / b; f(&p, &q)

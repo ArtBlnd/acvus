@@ -152,10 +152,7 @@ fn an_array_never_reaches_a_multiplication_through_an_open_operand() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k * k; f([1.0, 2.0])").unwrap_err();
     assert!(
-        err.contains(
-            "type Array<Float, 2> is outside the declared bound, one of\n  i8\n  i16\n  i32\n  i64\n  \
-             u8\n  u16\n  u32\n  u64\n  Float"
-        ),
+        err.contains("`*` has no instance of core::mul for Array<Float, 2>"),
         "{err}"
     );
 }
@@ -165,7 +162,7 @@ fn an_array_never_reaches_a_comparison_through_an_open_operand() {
     let i = Interner::new();
     let err = script(&i, "let f = |k, m| -> k < m; f([1.0], [2.0])").unwrap_err();
     assert!(
-        err.contains("no instance of core::cmp has the call type Fn(&Array<Float, 1>, &Array<Float, 1>)"),
+        err.contains("`<` has no instance of core::cmp for Array<Float, 1>"),
         "{err}"
     );
 }
@@ -488,7 +485,7 @@ fn a_type_with_eq_and_no_cmp_refuses_a_comparison_by_naming_core_cmp() {
     )
     .unwrap_err();
     assert!(
-        err.contains("no instance of core::cmp has the call type Fn(&Unranked, &Unranked) -> i64"),
+        err.contains("`<` has no instance of core::cmp for Unranked"),
         "{err}"
     );
 }

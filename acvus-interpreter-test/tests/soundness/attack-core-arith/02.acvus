@@ -1,0 +1,3 @@
+// expect 1
+// the call settles the width, and u8 addition wraps
+let f = |k| -> k + 7; f(250u8)

@@ -100,9 +100,12 @@ The compiler holds one operator table with two entries per operator.
 - **Extension-type operands** — the operator is a call of a `core`
   signature with borrowed operands: `==` calls `core::eq`, `!=` is its
   negation, and `<`, `<=`, `>`, `>=` call `core::cmp<T>(&T, &T) -> i64`,
-  whose `-1`/`0`/`1` is read by its sign. No `Ordering` type exists. An
-  operator with no signature, or a signature with no instance at the
-  operand type, is a type error at the expression.
+  whose `-1`/`0`/`1` is read by its sign. No `Ordering` type exists. `+`,
+  `-`, `*`, `/` and `%` call `core::add`, `core::sub`, `core::mul`,
+  `core::div` and `core::rem`, each `<T, O>(&T, &T) -> O`, and unary `-`
+  calls `core::neg<T, O>(&T) -> O`; the instance fixes `O`, and its answer
+  is the operator's value. An operator with no signature, or a signature
+  with no instance at the operand type, is a type error at the expression.
 
 The meaning on words:
 
@@ -130,25 +133,32 @@ meaning by a test.
 
 Borrowing the operands is the operator's rule and reaches no function
 call: `f(x)` with `f: Fn(&T)` stays a type error (RFC-0018). A `&word`
-operand is read through the reference; `==`, `!=` and `+` read what a
-reference names at any size.
+operand is read through the reference; every operator that is a call of a
+`core` signature, and `+` on text, reads what a reference names at any
+size, because the call lends its operands.
 
-`==`, `!=`, `<`, `<=`, `>` and `>=` are calls of `core::eq` and `core::cmp`
-at every operand type. At a word or text the language's own instance is
-the operator's instruction; a registry's instance at a language-owned type
-is kept for requirement sites and named calls, and an operator does not
-reach it, so a type with no ordering (`Bool`, `Unit`, text) has none at an
-operator. An operand whose type is still open leaves the choice of
-instance to the solve (RFC-0042 rule 2), and an operand that settles to a
-reference is read through it (RFC-0029 rule 3). An operand of the other
-operators still unresolved carries the operator's bound (RFC-0011 rule 4):
-`+` bounds it by every integer width, `f64` and `String`; `-`, `*`, `/` and
-`%` by every integer width, `f64` and `char`; the bit operators by the
-integer widths. Where one side of `==`/`!=` is text and
-the other still a variable, the variable is bounded by `String` and `str`
-and closes on `String` (RFC-0042 rule 3). The integer bound meets a literal's,
-so `k + 7` leaves `k` an integer and `k + 7.0` an `f64`. Nothing converts
-implicitly: `1 + 2.0` is a type error.
+`==`, `!=`, `<`, `<=`, `>`, `>=`, `+`, `-`, `*`, `/`, `%` and unary `-` are
+calls of their `core` signature at every operand type. At a word or text
+the language's own instance is the operator's instruction, `StringEq` and
+`StringConcat` at text; a registry's instance at a
+language-owned type is kept for requirement sites and named calls, and an
+operator does not reach it, so a type with no ordering (`Bool`, `Unit`,
+text) has none at an operator. The language's arithmetic instances are at
+every integer width and `f64`, each answering at its operand type, `+`'s
+also at `String` and `str`, answering `String`, and negation's at the
+signed widths and `f64`; `Bool` and `char` have none, so
+`true + 1` and `'a' - 'b'` are type errors. An operand whose type is still
+open leaves the choice of instance to the solve (RFC-0042 rule 2), and an
+operand that settles to a reference is read through it (RFC-0029 rule 3).
+An operand of the bit operators still unresolved carries the operator's
+bound, the integer widths (RFC-0011 rule 4). Text's `==` and `+` read
+`String` and `str` alike, so where one side of `==`, `!=` or `+` is text
+and the other still a variable, the variable is bounded by `String` and
+`str` and closes on `String` (RFC-0042 rule 3): `|x| -> x + "b"` applied
+to a `String` concatenates. The two operands of an operator meet at one
+type before the instance is chosen, so `k + 7` leaves `k` an integer and
+`k + 7.0` an `f64`. Nothing converts implicitly: `1 + 2.0` and
+`1u8 + 1u16` are type errors.
 
 **Why.** `==` is the one operation a tagless word means without a
 definition; every other meaning is a definition, and a definition has a

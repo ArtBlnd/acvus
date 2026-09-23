@@ -47,7 +47,10 @@ fn negation_needs_a_signed_integer() {
     let i = Interner::new();
     let c = ctx(&i, &[("b", Ty::U8)]);
     let err = compile_script_ir(&i, "-@b", &c).unwrap_err();
-    assert!(err.contains("type mismatch in `-`"), "{err}");
+    assert!(
+        err.contains("`-` has no instance of core::neg for u8"),
+        "{err}"
+    );
     let err = compile_script_ir(&i, "@b + -1", &c).unwrap_err();
     assert!(
         err.contains("u8"),

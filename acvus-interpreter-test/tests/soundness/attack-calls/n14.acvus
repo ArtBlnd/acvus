@@ -1,3 +1,3 @@
-// refuse
+// expect 0
 // binary / on late Decimal called in a loop, result discarded
 let h = |a, b| -> a / b; for i in 0..2 { h(decimal("2".to_string()).unwrap(), decimal("3".to_string()).unwrap()); } 0

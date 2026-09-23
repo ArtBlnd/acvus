@@ -97,13 +97,46 @@ pub enum OperatorSignature {
     /// `cmp<T>(a: &T, b: &T) -> i64`, whose answer is `-1`, `0` or `1`, and
     /// lowering reads the operator off the sign of that answer.
     Cmp,
+    /// `+`. `acvus_extern::core` declares it as
+    /// `add<T, O>(a: &T, b: &T) -> O`, whose answer is the operator's value.
+    Add,
+    /// `-`, declared as `add` is.
+    Sub,
+    /// `*`, declared as `add` is.
+    Mul,
+    /// `/`, declared as `add` is.
+    Div,
+    /// `%`, declared as `add` is.
+    Rem,
+    /// Unary `-`. `acvus_extern::core` declares it as
+    /// `neg<T, O>(a: &T) -> O`, whose answer is the operator's value.
+    Neg,
 }
 
 impl OperatorSignature {
+    pub fn operand_count(self) -> usize {
+        match self {
+            OperatorSignature::Neg => 1,
+            OperatorSignature::Eq
+            | OperatorSignature::Cmp
+            | OperatorSignature::Add
+            | OperatorSignature::Sub
+            | OperatorSignature::Mul
+            | OperatorSignature::Div
+            | OperatorSignature::Rem => 2,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             OperatorSignature::Eq => "eq",
             OperatorSignature::Cmp => "cmp",
+            OperatorSignature::Add => "add",
+            OperatorSignature::Sub => "sub",
+            OperatorSignature::Mul => "mul",
+            OperatorSignature::Div => "div",
+            OperatorSignature::Rem => "rem",
+            OperatorSignature::Neg => "neg",
         }
     }
 }

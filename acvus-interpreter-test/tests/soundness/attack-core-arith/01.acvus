@@ -1,0 +1,3 @@
+// expect 10
+// an integer literal meets an open operand
+let f = |k| -> k + 7; f(3)

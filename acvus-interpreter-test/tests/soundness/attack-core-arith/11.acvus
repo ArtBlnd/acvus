@@ -1,0 +1,3 @@
+// refuse
+// Object has no core::add
+let o = { a: 1, }; o + o

@@ -1,3 +1,3 @@
-// refuse
+// expect 6
 // binary * on lambda params that settle to Decimal, called as a method
-let f = |a, b| -> a * b; let d = decimal("2".to_string()).unwrap(); let e = decimal("3".to_string()).unwrap(); d.f(e)
+let f = |a, b| -> a * b; let d = decimal("2".to_string()).unwrap(); let e = decimal("3".to_string()).unwrap(); d.f(e).to_string()

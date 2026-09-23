@@ -1,0 +1,3 @@
+// expect ab
+// + on an open param beside text
+let f = |x| -> x + "b"; f("a".to_string())

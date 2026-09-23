@@ -1,0 +1,3 @@
+// expect -5
+// unary - on an open param settled by &
+let n = 5; let f = |a| -> -a; f(&n)

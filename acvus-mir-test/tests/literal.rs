@@ -143,5 +143,8 @@ fn a_char_is_its_own_type_and_compares() {
 
 #[test]
 fn a_char_is_not_an_integer() {
-    assert_eq!(refusal("'a' + 'b'"), "type mismatch in `+`: char vs char");
+    assert_eq!(
+        refusal("'a' + 'b'"),
+        "`+` has no instance of core::add for char"
+    );
 }

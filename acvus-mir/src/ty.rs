@@ -248,6 +248,17 @@ impl TyVarBound {
         Self::OneOf { shapes }
     }
 
+    /// Whether a variable under this bound may still become a reference.
+    pub fn admits_a_reference(&self) -> bool {
+        match self {
+            TyVarBound::Any => true,
+            TyVarBound::OneOf { shapes } => shapes
+                .iter()
+                .any(|shape| matches!(shape, TyTerm::Ref(..) | TyTerm::Var(_))),
+            TyVarBound::Integer { .. } => false,
+        }
+    }
+
     /// An integer bound over the widths `among` yields, signed-only where
     /// `signed`; `None` when no width remains.
     pub fn integer(signed: bool, among: impl Iterator<Item = IntTy>) -> Option<Self> {

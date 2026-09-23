@@ -58,6 +58,39 @@ fn cmp_decimal(a: &Decimal, b: &Decimal) -> i64 {
     verdict(a.0.cmp(&b.0))
 }
 
+// The arithmetic instances are rust_decimal's own operators, and no checked
+// form answering a value on overflow or a zero divisor is built: the panic
+// is the program's failure, as an integer operator's is (RFC-0037 rule 2).
+#[extern_fn(instance_of = acvus_extern::core::add, effect = pure)]
+fn add_decimal(a: &Decimal, b: &Decimal) -> Decimal {
+    Decimal(a.0 + b.0)
+}
+
+#[extern_fn(instance_of = acvus_extern::core::sub, effect = pure)]
+fn sub_decimal(a: &Decimal, b: &Decimal) -> Decimal {
+    Decimal(a.0 - b.0)
+}
+
+#[extern_fn(instance_of = acvus_extern::core::mul, effect = pure)]
+fn mul_decimal(a: &Decimal, b: &Decimal) -> Decimal {
+    Decimal(a.0 * b.0)
+}
+
+#[extern_fn(instance_of = acvus_extern::core::div, effect = pure)]
+fn div_decimal(a: &Decimal, b: &Decimal) -> Decimal {
+    Decimal(a.0 / b.0)
+}
+
+#[extern_fn(instance_of = acvus_extern::core::rem, effect = pure)]
+fn rem_decimal(a: &Decimal, b: &Decimal) -> Decimal {
+    Decimal(a.0 % b.0)
+}
+
+#[extern_fn(instance_of = acvus_extern::core::neg, effect = pure)]
+fn neg_decimal(a: &Decimal) -> Decimal {
+    Decimal(-a.0)
+}
+
 pub fn decimal_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "std",
@@ -65,6 +98,7 @@ pub fn decimal_registry<R: Runtime>() -> Registry<R> {
         fns: [
             decimal, to_string_decimal, decimal_to_float,
             eq_decimal, clone_decimal, cmp_decimal,
+            add_decimal, sub_decimal, mul_decimal, div_decimal, rem_decimal, neg_decimal,
         ],
     }
 }

@@ -1,3 +1,8 @@
+error: cannot infer type: resolved to Fn(&_, &_) -> _ which contains unresolved type variables
+  --> 18-a-closure-called-with-the-wrong-arity.acvus:1:19
+  |
+1 | let f = |a, b| -> a + b;
+  |                   ^^^^^
 error: this closure expects 2 arguments, got 1
   --> 18-a-closure-called-with-the-wrong-arity.acvus:2:1
   |

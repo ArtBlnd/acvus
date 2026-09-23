@@ -125,13 +125,6 @@ fn a_reassigned_reference_releases_its_old_loan() {
     );
 }
 
-/// RFC-0062 rule 3: an operand of `+` whose type is still open stays bound
-/// to `String`.
-#[test]
-fn a_concatenation_on_a_lambda_parameter() {
-    runs_to("let f = |x| -> x + \"b\"; f(\"a\".to_string())", "\"ab\"");
-}
-
 /// RFC-0018 rule 10: a captured `String` is seen as `&String`; RFC-0020:
 /// `==` reads text operands and references to them alike. The comparison
 /// runs when `k` is a `let`.
@@ -162,16 +155,6 @@ fn an_option_of_a_word_is_read_through_a_reference() {
     runs_to("let o = Some(2); let r = &o; match *r { Some(x) => x, None => 0, }", "2");
 }
 
-/// RFC-0020: a `&word` operand is read through the reference, and an open
-/// operand's bound is on what it names.
-#[test]
-fn an_open_operand_bound_is_on_what_a_reference_names() {
-    runs_to(
-        "let x = 1; let y = 2; let f = |a, b| -> a + b; f(&x, &y)",
-        "3",
-    );
-}
-
 /// RFC-0029 rules 3-4: a pattern against a `&mut T` binding binds as it does
 /// against `&T`, each part a shared reborrow.
 #[test]
@@ -190,18 +173,6 @@ fn parts_of_an_element_a_mutable_iterator_yields() {
         "let v = vec([(1, 2)]); let it = as_iter(&v); let n = 0; \
          while let Some(x) = next(&mut it) { n = match x { (a, _b) => *a, _ => 0, }; } n",
         "1",
-    );
-}
-
-/// RFC-0047 rule 6: `&mut v` at a `&mut [T]` parameter is the container's own
-/// `as_slice_mut`, whose element is the container's; a `String` element is
-/// replaced whole through its `&mut` (RFC-0018 rule 2).
-#[test]
-fn a_mutable_loop_over_strings_replaces_each_whole() {
-    runs_to(
-        "let v = vec([\"a\".to_string(), \"b\".to_string()]); \
-         for x in &mut v { *x = x.clone() + \"!\"; } v[0u64].clone() + &v[1u64]",
-        "\"a!b!\"",
     );
 }
 

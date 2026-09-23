@@ -2488,6 +2488,15 @@ impl<'a> Lowerer<'a> {
                             );
                             dst
                         }
+                        OperatorSignature::Add
+                        | OperatorSignature::Sub
+                        | OperatorSignature::Mul
+                        | OperatorSignature::Div
+                        | OperatorSignature::Rem
+                        | OperatorSignature::Neg => {
+                            self.emit_call(*span, dst, callee, fn_ty, vec![l, r]);
+                            dst
+                        }
                     };
                 }
                 let l = self.lower_expr(left);
@@ -2513,7 +2522,17 @@ impl<'a> Lowerer<'a> {
                 operand,
                 span,
             } => {
+                if let Some(CallTarget::Operator(call)) = self.resolution.calls.get(id).cloned() {
+                    let o = self.lend_operand(operand);
+                    let dst = self.alloc_expr(*id);
+                    self.emit_call(*span, dst, call.callee, call.ty, vec![o]);
+                    return dst;
+                }
                 let o = self.lower_expr(operand);
+                let o = match op {
+                    UnaryOp::Neg => self.read_word_through(*span, o),
+                    UnaryOp::Not | UnaryOp::Deref => o,
+                };
                 let dst = self.alloc_expr(*id);
                 let kind = match op {
                     UnaryOp::Deref => InstKind::Take {

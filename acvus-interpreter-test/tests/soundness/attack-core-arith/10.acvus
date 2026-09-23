@@ -1,0 +1,3 @@
+// refuse
+// Vec has no core::add
+vec([1]) + vec([2])
