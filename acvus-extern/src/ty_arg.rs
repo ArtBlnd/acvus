@@ -241,7 +241,12 @@ where
     }
 }
 
-impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N> where Rt: crate::Runtime {}
+impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N>
+where
+    Rt: crate::Runtime,
+{
+    crate::stored_as_itself!();
+}
 
 impl<const N: usize, Rt> crate::Borrowable<Rt> for Nth<kind::Type, N> where Rt: crate::Runtime {}
 
@@ -273,6 +278,7 @@ where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,
 {
+    crate::stored_as_itself!();
 }
 
 impl<T, Rt> crate::Borrowable<Rt> for Spec<T>

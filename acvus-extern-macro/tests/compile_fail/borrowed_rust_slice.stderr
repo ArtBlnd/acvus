@@ -1,9 +1,12 @@
-error[E0277]: the trait bound `i64: TransparentOver<__R>` is not satisfied
+error[E0277]: `i64` is not the runtime's value under another name, so a run of the runtime's values is not a `[i64]`
  --> tests/compile_fail/borrowed_rust_slice.rs:8:1
   |
 8 | #[extern_fn(effect = pure)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TransparentOver<__R>` is not implemented for `i64`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ a run of `i64` read in place
   |
+  = help: the trait `TransparentOver<__R>` is not implemented for `i64`
+  = note: a slice whose elements read as `i64` in place is `Slice<Erased<Rt, i64>, Shared, Rt>` or `Slice<Erased<Rt, i64>, Mut, Rt>` (a Rust `&[Erased<Rt, i64>]` or `&mut [Erased<Rt, i64>]` parameter is the same): each element reads as `&i64` by `as_ref(rt)` and as `&mut i64` by `as_mut(rt)`, where `i64: Stored<Rt>`, as a scalar and an extension type are (RFC-0047).
+  = note: a type that is not `Stored`, as a derived struct or enum is not, has no element read in place: a `Vec` of it taken by value materializes each element.
 help: the following other types implement trait `TransparentOver<Rt>`
  --> $WORKSPACE/acvus-extern/src/erased.rs
   |
@@ -32,12 +35,15 @@ help: the following other types implement trait `TransparentOver<Rt>`
   = note: required for `BySlice<i64, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `i64: TransparentOver<__R>` is not satisfied
+error[E0277]: `i64` is not the runtime's value under another name, so a run of the runtime's values is not a `[i64]`
   --> tests/compile_fail/borrowed_rust_slice.rs:13:1
    |
 13 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TransparentOver<__R>` is not implemented for `i64`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ a run of `i64` read in place
    |
+   = help: the trait `TransparentOver<__R>` is not implemented for `i64`
+   = note: a slice whose elements read as `i64` in place is `Slice<Erased<Rt, i64>, Shared, Rt>` or `Slice<Erased<Rt, i64>, Mut, Rt>` (a Rust `&[Erased<Rt, i64>]` or `&mut [Erased<Rt, i64>]` parameter is the same): each element reads as `&i64` by `as_ref(rt)` and as `&mut i64` by `as_mut(rt)`, where `i64: Stored<Rt>`, as a scalar and an extension type are (RFC-0047).
+   = note: a type that is not `Stored`, as a derived struct or enum is not, has no element read in place: a `Vec` of it taken by value materializes each element.
 help: the following other types implement trait `TransparentOver<Rt>`
   --> $WORKSPACE/acvus-extern/src/erased.rs
    |

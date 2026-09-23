@@ -77,3 +77,24 @@ where
     // SAFETY: as `deref`, with the caller's exclusive loan.
     unsafe { &mut *(rt.deref_mut::<P>(reference) as *mut P).cast::<T>() }
 }
+
+/// The payload's bytes named as the `T` they were erased from: the derive's
+/// `Stored::from_payload`.
+pub fn from_payload<T, P>(payload: &P) -> &T
+where
+    T: Transparent<P>,
+{
+    const { T::SAME_SIZE };
+    // SAFETY: `Transparent<P>` licenses the cast and `SAME_SIZE` the extent.
+    unsafe { &*(payload as *const P).cast::<T>() }
+}
+
+/// As `from_payload`, exclusively.
+pub fn from_payload_mut<T, P>(payload: &mut P) -> &mut T
+where
+    T: Transparent<P>,
+{
+    const { T::SAME_SIZE };
+    // SAFETY: as `from_payload`'s; `&mut P` is the exclusive name.
+    unsafe { &mut *(payload as *mut P).cast::<T>() }
+}

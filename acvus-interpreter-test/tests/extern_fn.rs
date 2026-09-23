@@ -1107,3 +1107,111 @@ async fn a_lambda_calling_a_captured_parameter_takes_its_effect() {
         assert_eq!(TICKS.load(Ordering::SeqCst) - before, 1, "{source}");
     }
 }
+
+// =======================================================================
+//  A container of an extension type, handed to an extern
+// =======================================================================
+
+/// An extension type stored as its payload: a `Vec<Tag>` is kept as a
+/// `Vec<Owned<Rt>>` of erased `i64`s, which is no `Vec<Tag>`, so no extern
+/// borrows one as `&Vec<Tag>`, and no `Slice<Tag, _, Rt>` reads one;
+/// `acvus-extern-macro`'s `borrowed_vec_of_converted` and
+/// `slice_of_a_payload_type` compile-fail cases pin both refusals.
+#[derive(ExternType)]
+#[repr(transparent)]
+struct Tag(i64);
+
+type TagSlice<M, Rt> = acvus_extern::Slice<acvus_extern::Erased<Rt, Tag>, M, Rt>;
+
+#[extern_fn(effect = pure)]
+fn make_tags(n: i64) -> Vec<Tag> {
+    (1..=n).map(Tag).collect()
+}
+
+#[extern_fn(effect = pure)]
+fn sum_tag_slice<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<acvus_extern::Shared, Rt>) -> i64
+where
+    Rt: acvus_extern::Runtime,
+{
+    let rt = ctx.rt;
+    xs.with(|tags| tags.iter().map(|t| t.as_ref(rt).0).sum())
+}
+
+#[extern_fn(effect = pure)]
+fn bump_tags<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<acvus_extern::Mut, Rt>)
+where
+    Rt: acvus_extern::Runtime,
+{
+    let rt = ctx.rt;
+    let mut xs = xs;
+    xs.with(|tags| {
+        for t in tags {
+            t.as_mut(rt).0 += 10;
+        }
+    });
+}
+
+#[extern_fn(effect = pure)]
+fn grow_tags<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<acvus_extern::Shared, Rt>) -> Vec<Tag>
+where
+    Rt: acvus_extern::Runtime,
+{
+    let rt = ctx.rt;
+    xs.with(|tags| {
+        tags.iter()
+            .map(|t| Tag(t.as_ref(rt).0 + 1))
+            .chain([Tag(1)])
+            .collect()
+    })
+}
+
+/// By value, each element is materialized from its own value, and an
+/// `async` declaration may take it, which it may not a slice.
+#[extern_fn(effect = pure)]
+async fn sum_tags(xs: Vec<Tag>) -> i64 {
+    xs.iter().map(|t| t.0).sum()
+}
+
+fn tag_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "tag",
+        types: [Tag],
+        fns: [make_tags, sum_tag_slice, bump_tags, grow_tags, sum_tags],
+    }
+}
+
+async fn run_tags(source: &str) -> i64 {
+    let i = Interner::new();
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(tag_registry());
+    let result = run_script_with_externs(&i, source, ctx(&i, vec![]), regs, Ty::I64).await;
+    result.value.as_int()
+}
+
+#[tokio::test]
+async fn a_vec_of_an_extension_type_is_lent_as_a_slice() {
+    assert_eq!(run_tags("let v = make_tags(3); sum_tag_slice(&v)").await, 6);
+}
+
+#[tokio::test]
+async fn a_vec_of_an_extension_type_is_edited_through_a_mut_slice() {
+    assert_eq!(
+        run_tags("let v = make_tags(3); bump_tags(&mut v); sum_tag_slice(&v)").await,
+        36
+    );
+}
+
+/// [1] -> [2, 1] -> [3, 2, 1] -> [4, 3, 2, 1].
+#[tokio::test]
+async fn a_vec_is_reassigned_from_a_call_that_borrows_it() {
+    assert_eq!(
+        run_tags("let v = make_tags(1); for i in 0..3 { v = grow_tags(&v); } sum_tag_slice(&v)")
+            .await,
+        10
+    );
+}
+
+#[tokio::test]
+async fn a_vec_of_an_extension_type_is_read_by_value() {
+    assert_eq!(run_tags("sum_tags(make_tags(3))").await, 6);
+}

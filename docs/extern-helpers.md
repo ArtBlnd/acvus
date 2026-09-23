@@ -95,7 +95,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `OneValue` | a crossing that is exactly one of the runtime's values | atom — `erase`/`materialize` are one value's, and `deref` reads a `Self` through a reference, which only a type stored as itself can answer |
 | `Uniform` | the representation every slot takes unless a member says otherwise (RFC-0041) | atom — the tag that picks the crossing |
 | `Specialized` | the representation of a `Monomorphize` member's slot | atom — the other representation; the run is the value at every impl |
-| `Stored` | a type the runtime keeps as itself | atom — the runtime's box holds the Rust value, which is what makes `value_as_ref::<T>` sound |
+| `Stored` | a type the runtime reads back as itself in place | atom — the runtime's box holds `Payload`, the Rust value itself or an extension type's `repr(transparent)` payload, which is what makes `value_as_ref::<T::Payload>` and `from_payload` sound |
 | `TransparentOver` | a name for the runtime's value with its layout | atom — the unsafe promise that a run of values is a run of `Self` in place |
 | `Inline` | a stored type that lives in the value word | atom — read with no runtime in hand |
 | `FromValue` | the `Value -> Self` step a body takes outside the glue | atom — the recursion through a container, ending in a checked materialize |
@@ -375,9 +375,10 @@ repository root at `0d308c5e`.
    it in the `where` clause of the `Borrowable` impl it emits.
    `acvus-extern/src/projection.rs:453` (why), `:468` (the trait).
 6. **`Stored` and `FromValue` each carry a fact `OneValue` lacks.**
-   `Stored` says the runtime's box holds the Rust value itself, which is
-   what makes `Runtime::value_as_ref::<T>` sound and is exactly what
-   `OneValue` does not say. `FromValue` is not `materialize_checked` under
+   `Stored` says the runtime's box holds `T::Payload` — the Rust value
+   itself, or an extension type's `repr(transparent)` payload — which is
+   what makes `Runtime::value_as_ref::<T::Payload>` sound and is exactly
+   what `OneValue` does not say. `FromValue` is not `materialize_checked` under
    another name: its impl for the runtime's own value is the identity, and
    its impl for `Vec<E>` calls the checked materialize for the buffer and
    then its own element step. `acvus-extern/src/obj.rs:424` and `:428`;

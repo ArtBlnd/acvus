@@ -258,9 +258,15 @@ where
 /// field or an element that names one is a compile error. The two words
 /// themselves are the runtime's to build and to read, because only the
 /// runtime knows what one of its values is made of.
+///
+/// `T: TransparentOver<Rt>` is a decision: the crossing is the one maker of
+/// a `Slice`, and a slice over any other `T` would be taken and could only
+/// say its length, since `with` reads the run as `[T]` under that layout
+/// alone. Such a parameter is refused at its declaration, where
+/// `TransparentOver`'s diagnostic names `Slice<Erased<Rt, T>, _, Rt>`.
 impl<T, M, Rt> Cross<Rt> for Slice<T, M, Rt>
 where
-    T: Send + Sync + 'static,
+    T: TransparentOver<Rt>,
     M: Loan,
     Rt: Runtime,
 {

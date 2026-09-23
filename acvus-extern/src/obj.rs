@@ -805,17 +805,45 @@ macro_rules! passed_as_one_value {
 const NO_STORAGE: &str =
     "a value converted at the boundary has no storage of its own type to read through";
 
-/// A type the runtime stores as itself: its `erase` is `rt.erase::<Self>`,
-/// so the runtime reads a value erased from it back as a `Self` in place.
+pub(crate) const NOT_IN_PLACE: &str = "a Vec or an array was read through a reference at an element that is not `InPlaceElement`: its storage is a `Vec<Owned<Rt>>`, and the reader did not ask for `Borrowable`";
+
+/// A type whose value the runtime reads back as a `Self` in place: its
+/// `erase` is `rt.erase::<Self::Payload>` of the value's own bytes, and
+/// `from_payload` names those bytes as a `Self`. A type stored as itself has
+/// `Payload = Self` (`stored_as_itself!`); an extension type has its
+/// `#[repr(transparent)]` payload (RFC-0039), which `Transparent` licenses.
 ///
 /// This is what `OneValue` does not say. `Option<T>::erase` is `rt.some(..)`
-/// and a derived struct's is a heap object, so `Runtime::value_as_ref::<T>`
-/// — which `Erased::as_ref` calls and `Erased::deref` reads out of the value
-/// word — is sound for a `Stored` type and for no other.
+/// and a derived struct's is a heap object, so `Runtime::value_as_ref` at
+/// `Self::Payload` — which `Erased::as_ref` calls — is sound for a `Stored`
+/// type and for no other.
 pub trait Stored<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
 {
+    /// The Rust type `erase` hands the runtime.
+    type Payload: Send + Sync + 'static;
+
+    fn from_payload(payload: &Self::Payload) -> &Self;
+
+    fn from_payload_mut(payload: &mut Self::Payload) -> &mut Self;
+}
+
+/// The body of a `Stored` impl for a type the runtime stores as itself.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! stored_as_itself {
+    () => {
+        type Payload = Self;
+
+        fn from_payload(payload: &Self) -> &Self {
+            payload
+        }
+
+        fn from_payload_mut(payload: &mut Self) -> &mut Self {
+            payload
+        }
+    };
 }
 
 /// A name for the runtime's value with its layout, so a `[Rt::Value]` in
@@ -824,6 +852,12 @@ where
 /// # Safety
 /// `Self` is `#[repr(transparent)]` with `Rt::Value` as its one
 /// non-zero-sized field.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not the runtime's value under another name, so a run of the runtime's values is not a `[{Self}]`",
+    label = "a run of `{Self}` read in place",
+    note = "a slice whose elements read as `{Self}` in place is `Slice<Erased<Rt, {Self}>, Shared, Rt>` or `Slice<Erased<Rt, {Self}>, Mut, Rt>` (a Rust `&[Erased<Rt, {Self}>]` or `&mut [Erased<Rt, {Self}>]` parameter is the same): each element reads as `&{Self}` by `as_ref(rt)` and as `&mut {Self}` by `as_mut(rt)`, where `{Self}: Stored<Rt>`, as a scalar and an extension type are (RFC-0047).",
+    note = "a type that is not `Stored`, as a derived struct or enum is not, has no element read in place: a `Vec` of it taken by value materializes each element."
+)]
 pub unsafe trait TransparentOver<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
@@ -941,6 +975,7 @@ macro_rules! cross_as_stored {
         where
             __Rt: $crate::Runtime,
         {
+            $crate::stored_as_itself!();
         }
 
         impl<$($($g)*,)? __Rt> $crate::Borrowable<__Rt> for $t
@@ -1066,6 +1101,38 @@ where
     T: 'static,
 {
     (stored as &mut dyn Any).downcast_mut::<T>()
+}
+
+/// An element whose borrowed `Vec<Self>` or `Arr<Self, N>` is read in place:
+/// the `Vec<Owned<Rt>>` the runtime keeps for either container is a
+/// `Vec<Self>`, which `storage_as` confirms by type.
+///
+/// The compile-time stand-ins `Nth` and `Spec` have no impl, and that is a
+/// decision: the glue borrows a parameter at its run-time instantiation, where
+/// a type variable is `Owned<Rt>`, so no borrow is ever asked of a container
+/// of a stand-in, and an impl would admit a `Vec<Nth<..>>` whose `deref`
+/// finds no storage.
+///
+/// `Erased<Rt, T>` has no impl either, though it is `repr(transparent)` over
+/// `Owned<Rt>`: reading a `Vec<Owned<Rt>>` as a `Vec<Erased<Rt, T>>` relies
+/// on two instantiations of `Vec` sharing a layout, which Rust does not
+/// promise and which specialization could split. A slice of `repr(transparent)`
+/// elements is promised, so a borrowed container of them is taken as
+/// `Slice<Erased<Rt, T>, _, Rt>`.
+#[diagnostic::on_unimplemented(
+    message = "a borrowed `Vec<{Self}>` or `Arr<{Self}, N>` has no storage of its own type: the container's storage holds the runtime's values, not `{Self}`s",
+    label = "this parameter borrows a container of `{Self}`",
+    note = "borrow the elements as a slice: the language's `&[{Self}]` and `&mut [{Self}]` are taken as `Slice<Erased<Rt, {Self}>, Shared, Rt>` and `Slice<Erased<Rt, {Self}>, Mut, Rt>`, whose elements read in place as `{Self}` by `as_ref(rt)` and `as_mut(rt)` where `{Self}: Stored<Rt>`; a `{Self}` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<{Self}, Shared, Rt>` and `Slice<{Self}, Mut, Rt>` (RFC-0047).",
+    note = "a `Vec<{Self}>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice."
+)]
+pub trait InPlaceElement<Rt>: OneValue<Rt> + sealed::Sealed
+where
+    Rt: Runtime,
+{
+}
+
+pub(crate) mod sealed {
+    pub trait Sealed {}
 }
 
 crate::passed_as_one_value!(Option<T>, T: OneValue<__Rt>);
@@ -1243,7 +1310,7 @@ where
         // `Arr<Owned<Rt>, ()>`.
         let stored = unsafe { rt.deref::<Arr<Owned<Rt>, ()>>(reference) };
         let Some(items) = storage_as::<_, Vec<T>>(&stored.0) else {
-            panic!("{NO_STORAGE}")
+            panic!("{NOT_IN_PLACE}")
         };
         // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
         unsafe { &*(items as *const Vec<T> as *const Self) }
@@ -1254,18 +1321,16 @@ where
         // `Arr<Owned<Rt>, ()>`.
         let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
         let Some(items) = storage_as_mut::<_, Vec<T>>(&mut stored.0) else {
-            panic!("{NO_STORAGE}")
+            panic!("{NOT_IN_PLACE}")
         };
         // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
         unsafe { &mut *(items as *mut Vec<T> as *mut Self) }
     }
 }
 
-/// The language's array keeps a `Vec` of the runtime's values, which is the
-/// storage an `Arr<T, N>` reference reads in place.
 impl<T, N, Rt> crate::Borrowable<Rt> for Arr<T, N>
 where
-    T: OneValue<Rt>,
+    T: InPlaceElement<Rt>,
     N: Var<kind::Length>,
     Rt: Runtime,
 {

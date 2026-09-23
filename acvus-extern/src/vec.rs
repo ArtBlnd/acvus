@@ -8,7 +8,9 @@ use std::mem::ManuallyDrop;
 
 use acvus_mir::ty::{Ty, TypeArg};
 
-use crate::obj::{OneValue, storage_as, storage_as_mut, stored_as_container_of};
+use crate::obj::{
+    InPlaceElement, NOT_IN_PLACE, OneValue, storage_as, storage_as_mut, stored_as_container_of,
+};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
 use crate::runtime::Runtime;
@@ -82,7 +84,7 @@ where
         // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
         let values = unsafe { rt.deref::<Vec<Owned<Rt>>>(reference) };
         let Some(same) = storage_as::<_, Self>(values) else {
-            panic!("{NO_VEC_STORAGE}")
+            panic!("{NOT_IN_PLACE}")
         };
         same
     }
@@ -92,25 +94,18 @@ where
         // `Vec<Owned<Rt>>`.
         let values = unsafe { rt.deref_mut::<Vec<Owned<Rt>>>(reference) };
         let Some(same) = storage_as_mut::<_, Self>(values) else {
-            panic!("{NO_VEC_STORAGE}")
+            panic!("{NOT_IN_PLACE}")
         };
         same
     }
 }
 
-/// A container's storage is the `Vec<Owned<Rt>>` the runtime keeps, which a
-/// `Vec<T>` reference reads in place when `T` is the runtime's own value.
 impl<T, Rt> crate::Borrowable<Rt> for Vec<T>
 where
-    T: OneValue<Rt>,
+    T: InPlaceElement<Rt>,
     Rt: Runtime,
 {
 }
-
-/// The message a `Vec<T>` gives when read through a reference and `T` is not
-/// the runtime's value: the storage is a `Vec<Owned<Rt>>`, and only a slice
-/// of a `repr(transparent)` element is a promised view of it.
-const NO_VEC_STORAGE: &str = "a Vec whose element is not the runtime's value has no Vec of its own type to read through; a transparent element is read as a slice by `Ref::as_slice`";
 
 crate::cross_whole!(crate::Specialized, Vec<T>, T: Send + Sync + 'static);
 

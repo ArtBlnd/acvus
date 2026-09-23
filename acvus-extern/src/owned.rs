@@ -163,9 +163,18 @@ where
     unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<R::Value>(), len) }
 }
 
-impl<R> crate::Stored<R> for Owned<R> where R: Runtime {}
+impl<R> crate::Stored<R> for Owned<R>
+where
+    R: Runtime,
+{
+    crate::stored_as_itself!();
+}
 
 impl<R> crate::Borrowable<R> for Owned<R> where R: Runtime {}
+
+impl<R> crate::obj::sealed::Sealed for Owned<R> where R: Runtime {}
+
+impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
 
 // SAFETY: `Owned<R>` is `#[repr(transparent)]` with `ManuallyDrop<R::Value>`
 // — itself `repr(transparent)` over `R::Value` — as its one field.

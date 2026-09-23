@@ -20,9 +20,11 @@
 //! closure does not compile. What the borrow reads is a `T` in live storage by the
 //! premise above — the crossing made the `Ref`, and the loans analysis keeps
 //! what a reference names alive for every use of it (RFC-0018), an
-//! exclusive loan being the only live name. `with` adds nothing to that
-//! premise and takes nothing from it; its shape is what keeps the proof
-//! inside Rust.
+//! exclusive loan being the only live name. The storage the language keeps
+//! for a `T` is a Rust `T` only where `T: Borrowable<Rt>`, which `with` asks
+//! for: a `Vec<i64>` is kept as a `Vec<Owned<Rt>>`. `with` adds nothing
+//! else to that premise and takes nothing from it; its shape is what keeps
+//! the proof inside Rust.
 //!
 //! Nothing else is here on purpose. `map` and `try_map` made a `Ref<U>` from
 //! a Rust `&U` borrowed inside `with`: a reference value over a part the
@@ -37,8 +39,9 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::handler::Borrowable;
 use crate::loan::{Loan, Mut, Shared};
-use crate::obj::{OneValue, TransparentOver};
+use crate::obj::TransparentOver;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
@@ -50,7 +53,7 @@ where
 
 impl<T, Rt> Ref<T, Shared, Rt>
 where
-    T: OneValue<Rt>,
+    T: Borrowable<Rt>,
     Rt: Runtime,
 {
     /// Read through the reference, at the storage `T`'s own crossing wrote.
@@ -62,7 +65,7 @@ where
 
 impl<T, Rt> Ref<T, Mut, Rt>
 where
-    T: OneValue<Rt>,
+    T: Borrowable<Rt>,
     Rt: Runtime,
 {
     /// Read and write through the reference.

@@ -1621,6 +1621,22 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         {
         }
 
+        impl<#impl_params __R> ::acvus_extern::Stored<__R> for #ident #ty_generics
+        where
+            __R: ::acvus_extern::Runtime,
+            #where_predicates
+        {
+            type Payload = #payload_ty;
+
+            fn from_payload(__payload: &#payload_ty) -> &Self {
+                ::acvus_extern::derive::transparent::from_payload::<Self, #payload_ty>(__payload)
+            }
+
+            fn from_payload_mut(__payload: &mut #payload_ty) -> &mut Self {
+                ::acvus_extern::derive::transparent::from_payload_mut::<Self, #payload_ty>(__payload)
+            }
+        }
+
         impl #impl_generics ::acvus_extern::ExternTypeDecl for #ident #ty_generics #where_clause {
             fn type_decl(__i: &::acvus_extern::Interner) -> ::acvus_extern::UserDefinedDecl {
                 ::acvus_extern::UserDefinedDecl {

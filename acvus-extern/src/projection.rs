@@ -491,7 +491,7 @@ macro_rules! borrowed_as_self {
         impl<$($($g)*,)? __Rt> $crate::Project<__Rt> for $t
         where
             __Rt: $crate::Runtime,
-            Self: $crate::Stored<__Rt>,
+            Self: $crate::Stored<__Rt, Payload = Self>,
         {
             type Table = ();
 
@@ -502,8 +502,8 @@ macro_rules! borrowed_as_self {
                 __value: &'__a <__Rt as $crate::Runtime>::Value,
                 _: &(),
             ) -> &'__a Self {
-                // SAFETY: the caller's contract, and a `Stored` type is the
-                // type its own value was erased from.
+                // SAFETY: the caller's contract, and a `Stored` type whose
+                // payload is itself is the type its own value was erased from.
                 unsafe { __rt.value_as_ref::<Self>(__value) }
             }
 

@@ -393,6 +393,7 @@ macro_rules! stored_extern_type {
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
+            acvus_extern::stored_as_itself!();
         }
 
         impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<$($k,)+ E, Rt>

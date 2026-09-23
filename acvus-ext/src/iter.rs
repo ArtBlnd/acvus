@@ -27,7 +27,7 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use acvus_extern::{Arr, OneValue, PassedByValue};
+use acvus_extern::{Arr, InPlaceElement, PassedByValue};
 use acvus_extern::{
     Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared,
     Stored, TransparentOver, Var, core, extern_fn, kind,
@@ -166,7 +166,7 @@ where
         at: impl FnOnce(&'a C, usize) -> Option<&'a T>,
     ) -> Option<&'a T>
     where
-        C: OneValue<Rt>,
+        C: Borrowable<Rt>,
         T: 'a,
     {
         let index = self.0.at;
@@ -181,7 +181,7 @@ pub(crate) fn next_refs_vec<'a, T, I, Rt>(
     it: &'a mut Refs<Vec<T>, I, Rt>,
 ) -> Option<&'a T>
 where
-    T: Var<kind::Type> + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
@@ -194,7 +194,7 @@ pub(crate) fn next_refs_array<'a, T, N, I, Rt>(
     it: &'a mut Refs<Arr<T, N>, I, Rt>,
 ) -> Option<&'a T>
 where
-    T: Var<kind::Type> + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
     N: Var<kind::Length>,
     I: Var<kind::Identity>,
     Rt: Runtime,

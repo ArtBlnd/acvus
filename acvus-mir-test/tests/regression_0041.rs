@@ -87,15 +87,17 @@ where
 }
 
 /// Two reference parameters that demand two representations of one
-/// element type: a member slot beside a plain concrete one.
+/// element type: a member slot beside a uniform one. The uniform slot is
+/// generic because a `&Vec` is lent in place only over the runtime's values.
 #[extern_fn(effect = pure)]
-fn mixed<T>(a: &Vec<T>, b: &Vec<f64>) -> T
+fn mixed<T, U>(a: &Vec<T>, b: &Vec<U>) -> T
 where
     T: Monomorphize<(f64,)> + Float,
+    U: acvus_extern::Var<acvus_extern::kind::Type>,
 {
     a.iter()
-        .zip(b.iter())
-        .fold(T::ZERO, |acc, (x, _)| acc.mul_add(*x, *x))
+        .take(b.len())
+        .fold(T::ZERO, |acc, x| acc.mul_add(*x, *x))
 }
 
 fn member_registry() -> acvus_extern::Registry<TypesOnly> {

@@ -13,7 +13,9 @@ use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
 /// The bound is `Stored`, not `Cross`, and there is no check in `as_ref`:
 /// a type converted on the way in (a derived struct, stored as an `Obj`)
-/// has no `T` in storage to read, so it is refused at the type.
+/// has no `T` in storage to read, so it is refused at the type. An
+/// extension type is `Stored` at its payload, whose bytes are the `T`'s, so
+/// an `Erased<R, X>` reads an `X` in place like any stored type.
 #[repr(transparent)]
 pub struct Erased<R, T>(Owned<R>, PhantomData<T>)
 where
@@ -31,13 +33,13 @@ where
 
     pub fn as_ref<'a>(&'a self, rt: &'a R) -> &'a T {
         // SAFETY: `new` erased the value from a `T`, and `T: Stored<R>`
-        // makes that the runtime's own `erase::<T>`.
-        unsafe { rt.value_as_ref::<T>(&self.0) }
+        // makes that the runtime's own `erase::<T::Payload>`.
+        T::from_payload(unsafe { rt.value_as_ref::<T::Payload>(&self.0) })
     }
 
     pub fn as_mut<'a>(&'a mut self, rt: &'a R) -> &'a mut T {
         // SAFETY: as in `as_ref`; `&mut self` is the exclusive name.
-        unsafe { rt.value_as_mut::<T>(&mut self.0) }
+        T::from_payload_mut(unsafe { rt.value_as_mut::<T::Payload>(&mut self.0) })
     }
 
     pub fn into_inner(self, rt: &R) -> T {
@@ -164,7 +166,7 @@ where
     T: Stored<R>,
 {
     unsafe fn from_value(rt: &R, value: R::Value) -> Self {
-        crate::debug_assert_erased_from!(rt, &value, T);
+        crate::debug_assert_erased_from!(rt, &value, <T as Stored<R>>::Payload);
         Self(Owned::from_value(value), PhantomData)
     }
 }
