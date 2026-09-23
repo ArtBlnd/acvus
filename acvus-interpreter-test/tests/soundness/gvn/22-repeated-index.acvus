@@ -1,0 +1,2 @@
+// expect 22
+let v = vec([1, 2, 3]); let a = v[1]; let b = v[1]; a * 10 + b

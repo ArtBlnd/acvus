@@ -267,10 +267,11 @@ and writes none, so the repetition ends. `i % 2 == 0` still runs a division.
   shift operators and `enum match` and `collatz while` do not regress.
 - Folding through a chain's leaves — couples the fold to the recognizer's
   shape language. The fold runs first and leaves whole instructions.
-- A general algebraic simplifier (`x * 1`, `x - x`, reassociation across
-  operators, distribution) — each rule is its own correctness argument, and
-  together they are a rewrite engine with a termination proof to maintain. A
-  further rule earns its place by a bench that names it.
+- A general algebraic simplifier (`x - x`, reassociation across operators,
+  distribution) — each rule is its own correctness argument, and together
+  they are a rewrite engine with a termination proof to maintain. A further
+  rule earns its place by a bench that names it, as `collatz` named the
+  integer identities of RFC-0083.
 
 ## RFC-0056: a loop's `i * k + x` becomes its own counter
 
@@ -691,3 +692,112 @@ move than its `while` did.
   `while` where it now sees a `for`.
 - Moving a `pure` call whose storage the loop does not write — the
   effect does not say the call returns, so a panic could move.
+
+## RFC-0083: a pure operation computed on every path to it is the value computed first
+
+Status: Proposed
+
+One pass, `optimize::gvn`, numbers the values of a body by one walk of its
+dominator tree. It carries a scoped table from an operation and the numbers
+of its operands to the value that first computed it. Before the lookup it
+simplifies the integer identities below.
+
+1. **What is numbered.** An SSA value is defined once and never written, so
+   an operation that reads only its operands' words and writes only its
+   destination gives the same value wherever the same operands reach it.
+   - `Const` of a word type: an integer, a float, a `bool` or a `char`,
+     keyed by its type and its bits. A float is keyed by its bit pattern,
+     so `0.0` and `-0.0` are two constants. A constant equal to a
+     dominating one takes that one's number, so operations over the two
+     are one entry, but its instruction is never replaced. Writing a
+     constant costs nothing, while a constant read from a block above is a
+     value the machine carries there: where it fills a loop header's
+     parameter it is copied in by a move.
+   - `BinOp` at any operand type: the machine computes it from the two
+     words alone (RFC-0037). A division or remainder that traps traps at
+     the dominating copy first, so the copy it replaces is never reached
+     with another outcome.
+   - `Cast`: total, and a function of its operand's word (RFC-0049).
+   - A read of a scalar part of an aggregate held by value: `FieldGet` and
+     `ObjectGet` of an object, `TupleIndex` of a tuple, `ArrayIndex` of an
+     array. The aggregate is an SSA value and nothing writes it. A part that
+     is not a scalar is not numbered, because two reads made one would be
+     two owners of it (RFC-0018).
+
+   Nothing else is numbered: a `Take`, a `Ref`, an `Index` and every other
+   read of storage, any `UnaryOp`, whose `Deref` reads storage and whose
+   `-` and `!` no measured program repeats, every call and `Spawn` and
+   `Eval` whatever its effect, `ConstStr`, and a constant of a `String`, a
+   list or `()`. An operation with an operand named as a storage by a
+   `Ref`, a `Take` or an `Assign`, and a constant written to such a name,
+   are not numbered either, since a write through the storage changes what
+   the name holds. A block parameter, a body parameter and every value an
+   unnumbered operation defines are their own number.
+
+2. **Dominance.** The walk visits the dominator tree in preorder. An entry a
+   block makes is visible to the rest of that block and to every block it
+   dominates, and is forgotten when the walk leaves the block's subtree. A
+   value is replaced only by an entry's value, which a dominating block or
+   an earlier instruction of its own block defined, so the replacement
+   dominates every use it takes over. Two sibling branches never share an
+   entry. A block the entry does not reach is not walked.
+
+3. **Simplification.** Before the lookup, an integer `+`, `-` or `*` whose
+   operand is a numbered constant is simplified: `x + 0`, `0 + x`, `x - 0`,
+   `x * 1` and `1 * x` are `x`, and `x * 0` and `0 * x` are the `0` the
+   operation reads. At width `w` wrapping arithmetic is arithmetic modulo
+   `2^w` (RFC-0037), where `0` is the additive identity and the absorbing
+   element of multiplication, and `1` is the multiplicative identity, at
+   every width and signedness. None of the three operations traps. No float operation
+   is simplified: `-0.0 + 0.0` is `0.0`, `inf * 0.0` is NaN, and a
+   signaling NaN times `1.0` comes out quiet.
+
+4. **Commutativity.** The operands of a commutative operation are ordered by
+   number in its key, so `a + b` and `b + a` are one entry. The instruction
+   keeps the order it was written in. At an integer type `+`, `*`, `==`,
+   `!=`, `&`, `|` and `^` commute, at `bool` `==`, `!=` and `^`, and at a
+   float or a `char` `==` and `!=`. A float `+` and `*` are not ordered:
+   given two NaN operands the machine returns the payload of one of them,
+   chosen by operand order.
+
+5. **Replacement.** Every use of a replaced value, in instructions and
+   terminators, reads its replacement, which has the same type. The pass
+   removes nothing. What it leaves unread is swept by a `dce` that runs
+   right after it. A `Const` is not replaced (rule 1).
+
+6. **Placement.** The pass runs after `lsr`, and so after IV
+   canonicalization (RFC-0066 rule 7). Both write arithmetic that rule 3
+   simplifies: the canonical `base + k · step`, and a reduction's start and
+   step products (RFC-0056). It runs before `forward` and `reorder`. No
+   `dce` followed the loop passes before, so one is added after this pass.
+   It also sweeps what the header arguments IV canonicalization removes
+   leave unread, which that pass swept itself before, and an induction
+   variable that `lsr` replaced and that nothing reads but its own
+   advance.
+
+**Why.** IV canonicalization writes `base + (counter − at) · step`, which
+is `0 + (c − 0) * 1` for a loop that starts at 0 and counts by 1, and equals
+`c`. The fold needs two constants, and no pass merged equal values, so
+`collatz`'s loop body went from one operation to three. The same
+redundancy follows inlining and folding. With this pass the body is `i % 2
+== 0` and nothing else.
+**Cost.** A dominator tree, one walk and one hash table per body, and one
+more `dce`: 0.002 to 0.3 ms of optimization per program on the bench
+kernels and examples. No loop of the attention and mandelbrot kernels
+gains or loses a move.
+**Rejected.**
+- A heavier value numbering now — congruent block parameters, a
+  partition-based numbering, or partial redundancy elimination. Each is a
+  fixpoint with its own correctness argument, and every redundancy measured
+  so far lies within dominance. One of them may replace this pass.
+- A special case in IV canonicalization that skips `- 0`, `* 1` and `0 +`
+  — the same redundancy follows inlining and folding, and two passes would
+  each decide one identity.
+- Float identities — none is exact bit for bit, as rule 3 states.
+- Replacing a constant by an equal dominating one — it saves an
+  instruction that costs nothing and makes the machine carry the value
+  down to its use. Mandelbrot's pixel loop left with two moves where it
+  had none.
+- Numbering storage reads and calls — a storage read needs to know that no
+  write reaches it in between, and a call's declared effect does not say
+  that it returns (RFC-0081 rule 3).

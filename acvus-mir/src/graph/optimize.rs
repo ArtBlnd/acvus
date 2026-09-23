@@ -357,6 +357,10 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // header and leaves the preheader a block of its own; before the
     // reorder, which schedules within a block.
     optimize::lsr::run(cfg, laws);
+    // RFC-0083: after both loop passes, whose arithmetic it simplifies and
+    // merges; before a `dce` of its own, which sweeps what it leaves unread.
+    optimize::gvn::run(cfg);
+    optimize::dce::run(cfg);
     // A block that only jumps is its target: after `lsr`, which writes a
     // reduction into the preheader `code_motion` may have left empty;
     // before `reorder`, which schedules within a block.

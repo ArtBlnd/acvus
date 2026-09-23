@@ -1,0 +1,2 @@
+// expect true
+let z = -@f; let s = z + 0.0; let p = z * 1.0; let q = z * 0.0; 1.0 / (s + p + q) > 0.0

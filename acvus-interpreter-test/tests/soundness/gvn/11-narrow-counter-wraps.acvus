@@ -1,0 +1,2 @@
+// expect 4
+let j = 250u8; for i in 0..10 { j = j + 1u8; } j

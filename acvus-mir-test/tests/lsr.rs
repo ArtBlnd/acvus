@@ -133,13 +133,10 @@ fn the_reduced_body_multiplies_and_the_unreduced_one_still_does() {
 
     assert_eq!(
         where_it_multiplies(&listing),
-        [
-            format!("{ENTRY}: 2"),
-            "L1: 1".to_string(),
-            "L6: 2".to_string()
-        ],
-        "the reduction's start and step stand above the first loop, whose body \
-         keeps only `reduced * 2`; under the `if`, `j * @k` stays beside \
+        ["L1: 1".to_string(), "L6: 2".to_string()],
+        "the first loop's body keeps only `reduced * 2`, and the reduction's \
+         start `0 * @k + @x` and step `1 * @k` are `@x` and `@k` (RFC-0083), so \
+         nothing multiplies above it; under the `if`, `j * @k` stays beside \
          `unreduced * 2`:\n{listing}"
     );
 }
@@ -236,9 +233,11 @@ fn a_weak_loop_is_left_as_written_and_a_strong_one_is_reduced() {
     );
     assert_eq!(
         where_it_multiplies(&strong),
-        [format!("{ENTRY}: 2"), "L1: 1".to_string()],
-        "`acc * 2` is a recurrence, so the loop is strong: the reduction's \
-         start and step stand above it and the body keeps only `acc * 2`:\n{strong}"
+        ["L1: 1".to_string()],
+        "`acc * 2` is a recurrence, so the loop is strong and the body keeps \
+         only `acc * 2`. The reduction's start `0 * @k + @x` is `@x` and its \
+         step `1 * @k` is `@k` (RFC-0083), so nothing multiplies above the \
+         header:\n{strong}"
     );
 }
 

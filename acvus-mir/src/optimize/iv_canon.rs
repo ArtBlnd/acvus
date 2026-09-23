@@ -30,7 +30,7 @@
 //! runs before `lsr` (`graph/optimize.rs`), so no loop is rewritten by both.
 
 use acvus_ast::{BinOp, Span};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::{AffineValues, Derivation, for_body};
 use crate::analysis::carried::{Carried, CarriedParam, CarriedState, Strength};
@@ -74,8 +74,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
             after: rewrite_after(cfg, loop_, &shape, &ivs),
         };
         substitute(cfg, loop_, &shape, &replacements);
-        let sent = drop_header_params(cfg, &shape, &ivs);
-        sweep(cfg, loop_, sent);
+        drop_header_params(cfg, &shape, &ivs);
     }
 }
 
@@ -379,13 +378,10 @@ fn trip_count_on_exit(cfg: &mut CfgBody, shape: &Shape) -> ValueId {
     }
 }
 
-struct SentArgs(Vec<ValueId>);
-
-fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> SentArgs {
+fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) {
     let header_label = cfg.blocks[shape.header.0].label;
     let mut dropped: Vec<usize> = ivs.iter().map(|iv| iv.header_index).collect();
     dropped.sort_unstable_by(|a, b| b.cmp(a));
-    let mut sent = Vec::new();
     for block in &mut cfg.blocks {
         for edge in edges_into(&mut block.terminator, header_label) {
             for index in &dropped {
@@ -395,7 +391,7 @@ fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> SentArgs 
                          and an `Iv` is a parameter every edge sends"
                     )
                 });
-                sent.push(edge.args.remove(at));
+                edge.args.remove(at);
             }
         }
     }
@@ -403,7 +399,6 @@ fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> SentArgs 
     for index in dropped {
         params.remove(index);
     }
-    SentArgs(sent)
 }
 
 struct EdgeInto<'a> {
@@ -475,41 +470,4 @@ fn edges_into(term: &mut Terminator, label: Label) -> Vec<EdgeInto<'_>> {
         }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }
-}
-
-/// `dce` runs before this pass and not after it, so what the removed
-/// arguments leave unread inside the loop is removed here.
-fn sweep(cfg: &mut CfgBody, loop_: &Loop, sent: SentArgs) {
-    let SentArgs(mut unread) = sent;
-    let mut swept: FxHashSet<ValueId> = FxHashSet::default();
-    while let Some(value) = unread.pop() {
-        if swept.contains(&value) || cfg.blocks.iter().any(|block| reads(block, value)) {
-            continue;
-        }
-        let defined = loop_.natural.blocks().find_map(|block| {
-            cfg.blocks[block.0]
-                .insts
-                .iter()
-                .position(|inst| inst_info::defs(&inst.kind).contains(&value))
-                .map(|inst| InstAt { block, inst })
-        });
-        let Some(InstAt { block, inst }) = defined else {
-            continue;
-        };
-        let kind = &mut cfg.blocks[block.0].insts[inst].kind;
-        let operands: Vec<ValueId> = match kind {
-            InstKind::BinOp { left, right, .. } => vec![*left, *right],
-            InstKind::Cast { src, .. } => vec![*src],
-            InstKind::Const { .. } => Vec::new(),
-            _ => continue,
-        };
-        *kind = InstKind::Nop;
-        swept.insert(value);
-        unread.extend(operands);
-    }
-}
-
-struct InstAt {
-    block: BlockIdx,
-    inst: usize,
 }

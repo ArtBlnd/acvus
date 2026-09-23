@@ -73,9 +73,9 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     assert_eq!(
         shapes,
         [
-            "body 4 back 0",
+            "body 3 back 0",
             "body 9 back 0",
-            "body 7 back 0",
+            "body 6 back 0",
             "body 7 back 1",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"

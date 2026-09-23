@@ -1,0 +1,2 @@
+// expect 33
+let x = @a; opaque(x) * 10 + opaque(x)

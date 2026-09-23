@@ -1,0 +1,2 @@
+// expect false
+let z = -@f; let inf = 1.0 / z; let p = inf * 0.0; let q = 0.0 * inf; p == 0.0 || q == 0.0

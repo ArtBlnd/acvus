@@ -1,0 +1,2 @@
+// expect 255000
+let x = @max as u8; let y = @min as i8; (x * 1u8 + 0u8) as i64 * 1000 + ((x + 0u8) * 0u8) as i64 * 100 + (y - 0i8) as i64

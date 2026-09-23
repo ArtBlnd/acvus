@@ -1,0 +1,2 @@
+// expect 16
+let x = @a; let y = @b; if @c { x * y + 1 } else { x * y - 1 }

@@ -4,17 +4,16 @@ expression: listing
 ---
 === main ===
      0 |   r0 = fetch @n
-     3 |   jump L0
-     4 | L0:
-     5 |   for range(0 (r1)..r0) -> L1 else L2(trip)
-     6 | L1(r2: i64):
-     7 |   jump L0
-     8 | L2(r3: u64):
-     9 |   r4 = r3 as i64
-    11 |   r5 = r4 * 3 (r6)
-    12 |   r7 = 0 (r8) + r5
-    13 |   commit @n = r0
-    14 |   return r7
+     2 |   jump L0
+     3 | L0:
+     4 |   for range(0 (r1)..r0) -> L1 else L2(trip)
+     5 | L1(r2: i64):
+     6 |   jump L0
+     7 | L2(r3: u64):
+     8 |   r4 = r3 as i64
+    10 |   r5 = r4 * 3 (r6)
+    11 |   commit @n = r0
+    12 |   return r5
 
     ; r0 (@n) : i64
     ; r1 (v9) : i64
@@ -23,33 +22,33 @@ expression: listing
     ; r4 (v40) : i64
     ; r5 (v42) : i64
     ; r6 (v41) : i64
-    ; r7 (v43) : i64
-    ; r8 (v7) : i64
-    ; r9 (v3) : i64
-    ; r10 (acc) : i64
-    ; r11 (v25) : i64
-    ; r12 (p) : {x: i64, y: i64}
-    ; r13 (v28) : i64
-    ; r14 (@n) : i64
-    ; r15 (v31) : i64
-    ; r16 (v5) : {x: i64, y: i64}
-    ; r17 (v24) : i64
-    ; r18 (acc) : i64
-    ; r19 (v27) : i64
-    ; r20 (i) : i64
-    ; r21 (v30) : i64
-    ; r22 (acc) : i64
-    ; r23 (v33) : i64
-    ; r24 (p.x) : i64
-    ; r25 (v37) : i64
-    ; r26 (v18) : i64
-    ; r27 (v21) : i64
-    ; r28 (v36) : i64
-    ; r29 (p.y) : i64
-    ; r30 (v20) : i64
-    ; r31 (@n) : i64
-    ; r32 (v23) : i64
-    ; r33 (v4) : i64
+    ; r7 (v3) : i64
+    ; r8 (acc) : i64
+    ; r9 (v25) : i64
+    ; r10 (p) : {x: i64, y: i64}
+    ; r11 (v28) : i64
+    ; r12 (@n) : i64
+    ; r13 (v31) : i64
+    ; r14 (v5) : {x: i64, y: i64}
+    ; r15 (v24) : i64
+    ; r16 (acc) : i64
+    ; r17 (v27) : i64
+    ; r18 (i) : i64
+    ; r19 (v30) : i64
+    ; r20 (acc) : i64
+    ; r21 (v33) : i64
+    ; r22 (p.x) : i64
+    ; r23 (v37) : i64
+    ; r24 (v18) : i64
+    ; r25 (v21) : i64
+    ; r26 (v43) : i64
+    ; r27 (v36) : i64
+    ; r28 (p.y) : i64
+    ; r29 (v20) : i64
+    ; r30 (@n) : i64
+    ; r31 (v23) : i64
+    ; r32 (v4) : i64
+    ; r33 (v7) : i64
     ; r34 (v26) : i64
     ; r35 (i) : i64
     ; r36 (v29) : i64

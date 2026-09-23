@@ -1,0 +1,2 @@
+// expect 58
+let x = @a; let y = @b; let t = 0; for i in 0..4 { t = t + if i % 2 == 0 { x * y + i } else { x * y - i }; } t

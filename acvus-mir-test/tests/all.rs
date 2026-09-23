@@ -23,6 +23,7 @@ mod error_types;
 mod exclusion;
 mod fold;
 mod for_loop;
+mod gvn;
 mod hash_types;
 mod identity;
 mod identity_sources;

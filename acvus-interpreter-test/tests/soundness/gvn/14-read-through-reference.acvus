@@ -1,0 +1,2 @@
+// expect 34
+let v = @a; let r = &mut v; let p = *r; *r = *r + 1; let q = *r; p * 10 + q

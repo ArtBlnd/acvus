@@ -1,0 +1,2 @@
+// expect 0
+let x = @max; let z = x * 0; let w = 0 * x; z + w

@@ -222,9 +222,17 @@ fn a_second_counter_is_computed_from_the_first() {
     let body = for_body(&full.cfg, loop_.natural.header);
     let counter = full.cfg.blocks[body.0].params[0];
     let insts = full.insts(body);
-    let k = binop(insts, BinOp::Sub, counter, at)
-        .unwrap_or_else(|| panic!("the body takes `k = counter − at`:\n{}", full.listing));
-    let advanced = scaled(&full, insts, k).unwrap_or_else(|| panic!("`k · 2`:\n{}", full.listing));
+    assert_eq!(full.word(at), Some(0), "the range starts at 0:\n{}", full.listing);
+    let subtracts = insts
+        .iter()
+        .any(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Sub, .. }));
+    assert!(
+        !subtracts,
+        "`k = counter − 0` is the counter (RFC-0083):\n{}",
+        full.listing
+    );
+    let advanced =
+        scaled(&full, insts, counter).unwrap_or_else(|| panic!("`k · 2`:\n{}", full.listing));
     assert_eq!(advanced.factor, 2);
     assert!(
         binop(insts, BinOp::Add, base, advanced.product).is_some(),
@@ -298,8 +306,10 @@ fn a_strong_loop_is_left_to_lsr() {
     assert_eq!(none.ivs(before), 1, "`j`:\n{}", none.listing);
     assert_eq!(
         full.ivs(loop_),
-        2,
-        "`j` is still carried, and `lsr` added `j·base + 1` beside it:\n{}",
+        1,
+        "`lsr` carries `j·base + 1` in `j`'s place: once the product is \
+         reduced nothing reads `j` but its own `j + 1`, and the `dce` after \
+         GVN sweeps both (RFC-0083):\n{}",
         full.listing
     );
     let body = for_body(&full.cfg, loop_.natural.header);
@@ -352,8 +362,10 @@ fn no_loop_is_rewritten_by_both_passes() {
             Strength::Strong => {
                 assert_eq!(
                     full.ivs(after),
-                    none.ivs(before) + 1,
-                    "a strong loop keeps its `Iv`s, and `lsr` adds one:\n{}",
+                    none.ivs(before),
+                    "`lsr` adds one `Iv` to a strong loop, and the `dce` after \
+                     GVN sweeps the one it replaced, which nothing reads but \
+                     its own advance (RFC-0083):\n{}",
                     full.listing
                 );
                 assert_eq!(full.exit_trip(after), ExitTrip::Absent);

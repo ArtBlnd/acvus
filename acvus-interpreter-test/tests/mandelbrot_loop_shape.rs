@@ -17,7 +17,12 @@
 //! it ran once per escape step instead of once per pixel, because a loop's
 //! exit post-dominates its header and post-dominance was the whole hoist
 //! condition. That hoist would show here as an innermost head of three and
-//! a middle body of eleven.
+//! a middle body of ten.
+//!
+//! Each body's moves are counted as well. Value numbering once made a
+//! constant in the pixel loop read an equal one from the row loop's entry
+//! instead of writing its own, and the pixel loop then left with two moves
+//! (RFC-0083 rule 1).
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::listing::{RegionListing, family_of, script_listing};
@@ -59,9 +64,11 @@ enum LoopShape {
         head_ops: usize,
         body_ops: usize,
         diamonds_in_head: usize,
+        back_moves: usize,
     },
     For {
         body_ops: usize,
+        back_moves: usize,
     },
 }
 
@@ -106,10 +113,12 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
                             .iter()
                             .filter(|name| family_of(name) == "Diamond")
                             .count(),
+                        back_moves: body.leaves_with,
                     }
                 }
                 _ => LoopShape::For {
                     body_ops: body.ops.len(),
+                    back_moves: body.leaves_with,
                 },
             }
         })
@@ -125,9 +134,16 @@ fn every_while_is_one_loop_operation_and_the_diamond_is_one_more() {
                 head_ops: 2,
                 body_ops: 5,
                 diamonds_in_head: 1,
+                back_moves: 1,
             },
-            LoopShape::For { body_ops: 12 },
-            LoopShape::For { body_ops: 4 },
+            LoopShape::For {
+                body_ops: 11,
+                back_moves: 0,
+            },
+            LoopShape::For {
+                body_ops: 4,
+                back_moves: 1,
+            },
         ],
         "the loops are listed innermost first: `i < @max` and the short-circuit \
          diamond, then the pixel loop whose body ends in `total = total + i`, \

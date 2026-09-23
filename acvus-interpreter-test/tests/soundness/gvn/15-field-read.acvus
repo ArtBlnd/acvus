@@ -1,0 +1,2 @@
+// expect 835
+let o = { x: @a, y: @b, }; let s = 0; if @c { s = o.x + o.y; }; s * 100 + o.x * 10 + o.y
