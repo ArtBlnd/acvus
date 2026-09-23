@@ -539,3 +539,88 @@ its tail call.
 - A panicking one-value crossing for a slice — "has none" is a missing impl,
   and rule 2's split makes the same mistake a compile error.
 - A future stored in the operation — rule 6.
+
+## RFC-0075: The contract gains `sleep` alone; a handler joins its concurrency in its own future
+
+Status: Proposed
+
+1. **`Runtime` carries `sleep`.**
+
+       fn sleep(&self, d: Duration)
+           -> impl Future<Output = ()> + Send + use<Self>;
+
+   The `use<Self>` bound keeps `&self` out of the future: in edition 2024 a
+   return-position `impl Trait` in a trait captures every lifetime in scope
+   unless it lists the ones it captures, and an impl repeats its own list.
+   `Send` is stated because a handler's future is `Send` and a generic
+   caller sees only the bounds the trait names. There is no default: a timer
+   is the host's, and a `wasm32` host has no thread to sleep.
+2. **Concurrency inside a handler is joined in the handler's own future.**
+   An async handler that calls a closure more than once at a time roots one
+   frame per call (`Runtime::rooted`, `Runtime::ctx_of`) and polls the calls
+   together, with `join_all` or `FuturesUnordered`. Nothing leaves the
+   handler's future, so every borrow is Rust's, and a run dropped while it
+   waits drops the calls with it.
+
+   `unordered` is such a stage. It takes a `map` stage, `Map`, and is the
+   script author's statement that the order of the map's calls and of the
+   draws below it is irrelevant, as `anyorder` states it for a region
+   (RFC-0007): no declaration of the closure is asked to commute. Its first
+   pull draws the whole input below the map in order, calls the closure on
+   every element with the calls joined, and keeps the results; each pull
+   hands out the next one in input order. Every call the pipeline makes
+   after the first pull comes after every call of the closure. It stands at
+   an effect `E: Suspends` (RFC-0011 rule 5) that the map's input, its
+   closure and its `next` share, so it is refused on a pipeline that cannot
+   suspend, where it would join nothing. It takes a `Map` by type, because
+   only a map separates drawing an element from the work done on it: a
+   stage's `next` holds its input exclusively and draws one element at a
+   time, so an `unordered` over any other stage could not overlap anything.
+
+3. **Parallelism is the handler's own.** A handler that wants threads brings
+   its own pool and joins it before it returns, as `rayon::scope` does: the
+   call is synchronous, so the borrows keep their Rust lifetimes and there is
+   no await at which a run could be dropped. It is declared `heavy`, so it
+   runs on the blocking pool rather than on the thread that drives the run.
+4. **In the interpreter, `sleep` is the executor's.** `TokioExecutor` uses
+   tokio's timer. `SequentialExecutor`, which runs nothing else while a run
+   waits, sleeps the thread.
+
+**Why.** The one thing a handler cannot build without the host is a timer.
+Concurrency over awaited calls needs no second task, and a second task that
+borrows is what makes a spawn unsound when a run is dropped mid-call.
+
+**Cost.**
+- `unordered` holds every result of its input at once, and its closure runs
+  for elements a later `take` or `find` never reads.
+- `unordered` stands after a `map` and nowhere else.
+- `SequentialExecutor`'s `sleep` blocks the thread it runs on, including
+  other tasks a host runs there.
+- Every `Runtime` implementation, the test runtimes included, implements
+  `sleep`.
+
+**Rejected.**
+- `pmap`, a map stage at an effect bounded to commute: the order a
+  script may ignore is the script author's intent (RFC-0007 rule 1), and an
+  extern that does not declare itself commutative, such as an `idempotent`
+  HTTP `get`, could not be mapped concurrently at all.
+- `unordered` before the `map` it affects, marking the pipeline below: a
+  map would change behavior by the type of its input, and a stage between
+  the two would drop the mark with no error.
+- Yielding in completion order: with every call finished at the first
+  pull it saves no time, and streaming them needs calls held across pulls,
+  borrowing the stage that holds them and polled by no one while the loop
+  body runs.
+- `spawn` and `spawn_blocking` on the contract as `'static` tasks: a
+  closure whose capture references a frame (RFC-0064 rule 5) is then read by
+  a task after a dropped run has freed that frame, unless the checker
+  refuses every such closure.
+- The same two confined to a scope the async glue owns, whose `Drop` waits
+  for the tasks it started: sound, but it needs one `unsafe` that erases the
+  scope's lifetime, a gate on every poll, and a thread blocked in `Drop` when
+  a run is cancelled. That buys parallelism a handler already has through
+  its own pool (rule 3) and concurrency it already has through a join
+  (rule 2).
+- A scope the handler makes and owns, as a local or around an `async`
+  closure: whatever a handler owns it can `mem::forget`, and its tasks then
+  run past the call.

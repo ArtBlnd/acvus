@@ -77,6 +77,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0041: `#τ` is the representation of a slot, and an extension holds values through `Erased`
 - RFC-0054: The host declares what `main` returns
 - RFC-0059: The macro emits only calls; the runtime owns the ABI
+- RFC-0075: The contract gains `sleep` alone; a handler joins its concurrency in its own future (Proposed)
 
 ### [identity.md](identity.md)
 

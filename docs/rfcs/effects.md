@@ -118,7 +118,9 @@ Status: Accepted
    outside the order chain, runs on a blocking pool and is awaited.
    Independent Pure `Heavy` calls therefore hoist without `commutative`.
 5. An extern generic in its effect (`effect = E`) takes its task from `E`,
-   and must name its synchronous twin (`sync = <fn>`) or is refused.
+   and must name its synchronous twin (`sync = <fn>`) or is refused, unless
+   `E: Suspends` (RFC-0011 rule 5): no site of it is `Sync`, so no site
+   takes a twin.
 6. A closure's effect is its body's, computed where the closure is made. A
    lambda parameter with an unknown body carries an effect variable resolved
    by its uses.

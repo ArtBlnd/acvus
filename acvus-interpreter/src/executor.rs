@@ -6,9 +6,11 @@
 //! - `spawn_async`: async ExternFn (future, no interpreter access)
 //!
 //! All paths return `HandleValue`, eval'd to the value the work produced.
+//! `sleep` is the timer `Runtime::sleep` waits on (RFC-0075 rule 4).
 
 use std::panic::resume_unwind;
 use std::pin::Pin;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use sync_wrapper::SyncWrapper;
@@ -35,6 +37,9 @@ pub trait Executor: Send + Sync {
     /// Force a handle to completion and return its value. A panic in the
     /// spawned work is resumed here, on the awaiting run's thread.
     fn eval(&self, handle: HandleValue) -> BoxFuture<'_, Value>;
+
+    /// A future that waits `d`.
+    fn sleep(&self, d: Duration) -> BoxFuture<'static, ()>;
 }
 
 // -- SequentialExecutor -----------------------------------------------
@@ -78,6 +83,13 @@ impl Executor for SequentialExecutor {
             }
         })
     }
+
+    /// Sleeps the thread: this executor runs nothing else while a run
+    /// waits, so there is no other work to yield to. The thread is blocked
+    /// for `d`, and so is any other task a host runs on it.
+    fn sleep(&self, d: Duration) -> BoxFuture<'static, ()> {
+        Box::pin(async move { std::thread::sleep(d) })
+    }
 }
 
 // -- TokioExecutor ----------------------------------------------------
@@ -113,5 +125,9 @@ impl Executor for TokioExecutor {
                 Err(joined) => panic!("spawned task failed: {joined}"),
             }
         })
+    }
+
+    fn sleep(&self, d: Duration) -> BoxFuture<'static, ()> {
+        Box::pin(tokio::time::sleep(d))
     }
 }

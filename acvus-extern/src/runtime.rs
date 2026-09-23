@@ -209,6 +209,11 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// closure it is passed to keeps it no longer than the call.
     unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
+    /// A future that waits `d` (RFC-0075 rule 1). It borrows nothing of
+    /// `&self`: `use<Self>` is its whole capture, so a handler holds it past
+    /// the call that made it. A timer is the host's, so there is no default.
+    fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send + use<Self>;
+
     /// Whether running `f` reaches its result without suspending.
     /// `Closure` asks once, when it is built. A runtime whose closures
     /// can always suspend answers `false`, which is the default.
@@ -370,6 +375,10 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
+    /// Nothing runs here, so nothing waits beside it; the thread sleeps.
+    fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send + use<> {
+        async move { std::thread::sleep(d) }
+    }
     fn none(&self) {
         no_values()
     }

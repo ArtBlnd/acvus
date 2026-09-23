@@ -23,6 +23,12 @@ Status: Accepted
 4. The checker itself bounds a variable at an integer literal (RFC-0037)
    and at an operator's operand (RFC-0020); every other constraint arises
    from unification.
+5. An effect variable's declared bound is a floor on its task. The one a
+   declaration states is `E: Suspends`: `E`'s task is `Async` or `Heavy`.
+   It is verified when the variable freezes, as a type variable's bound is
+   (rule 3), because an effect variable's lower end only rises: a floor
+   asserted at instantiation would lift a `Sync` effect to `Async` rather
+   than refuse it. A violation names the task the variable froze at.
 
 **Why.** The solver already carries a finite-domain bound and meets bounds
 when it unifies; declared polymorphism uses that mechanism instead of a

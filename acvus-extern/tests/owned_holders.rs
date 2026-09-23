@@ -343,6 +343,12 @@ impl Runtime for Counted {
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
+    fn sleep(
+        &self,
+        d: std::time::Duration,
+    ) -> impl std::future::Future<Output = ()> + Send + use<> {
+        async move { std::thread::sleep(d) }
+    }
 
     fn call_is_sync(&self, _: &V) -> bool {
         true

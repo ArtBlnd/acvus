@@ -236,6 +236,10 @@ impl Runtime for AcvusRuntime {
         Value::reference(target)
     }
 
+    fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send + use<> {
+        self.shared.executor.sleep(d)
+    }
+
     fn none(&self) -> Value {
         Value::NONE
     }
