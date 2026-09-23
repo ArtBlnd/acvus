@@ -1671,6 +1671,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         reach: Reach,
     ) {
         let joins = match reach {
+            Reach::Viewed(DeferredView::Asked(viewed)) => {
+                match self.coerce_viewed(arg_ty, param_ty, site, viewed) {
+                    SliceCoercion::Coerced => {}
+                    SliceCoercion::NoDeclaration => {
+                        self.meet_settled_argument(arg_ty, param_ty, site.span)
+                    }
+                }
+                return;
+            }
             Reach::Viewed(view) => {
                 self.slice_args.push(SliceArg {
                     at: site.id,
@@ -1820,35 +1829,42 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if view == View::Str && mutability != Mutability::Shared {
             return false;
         }
-        let TyTerm::Ref(lent, container) = self.solver.shallow_resolve_ty(arg_ty) else {
+        let TyTerm::Ref(lent, _) = self.solver.shallow_resolve_ty(arg_ty) else {
             return false;
         };
         if lent != mutability {
             return false;
         }
+        match self.coerce_viewed(arg_ty, param_ty, site, Viewed { view, mutability }) {
+            SliceCoercion::Coerced => true,
+            SliceCoercion::NoDeclaration => false,
+        }
+    }
+
+    /// The argument's coercion to the view, recorded where the referent's
+    /// head is named and held until it is where it is not.
+    fn coerce_viewed(
+        &mut self,
+        arg_ty: &InferTy,
+        param_ty: &InferTy,
+        site: &ArgSite,
+        viewed: Viewed,
+    ) -> SliceCoercion {
         if self.solver.lends_an_unnamed_head(arg_ty) {
             self.slice_args.push(SliceArg {
                 at: site.id,
                 span: site.span,
                 arg: arg_ty.clone(),
                 param: param_ty.clone(),
-                view: DeferredView::Asked(Viewed { view, mutability }),
+                view: DeferredView::Asked(viewed),
             });
-            return true;
+            return SliceCoercion::Coerced;
         }
-
+        let TyTerm::Ref(_, container) = self.solver.shallow_resolve_ty(arg_ty) else {
+            return SliceCoercion::NoDeclaration;
+        };
         let referent = self.solver.resolve_ty(&container.ty);
-        match self.slice_coercion(
-            &referent,
-            Viewed { view, mutability },
-            arg_ty,
-            param_ty,
-            site.id,
-            site.span,
-        ) {
-            SliceCoercion::Coerced => true,
-            SliceCoercion::NoDeclaration => false,
-        }
+        self.slice_coercion(&referent, viewed, arg_ty, param_ty, site.id, site.span)
     }
 
     /// The declaration the referent's evidence settles on, recorded as the
@@ -4446,10 +4462,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return None;
         }
         if views {
-            return Some(Reach::Viewed(DeferredView::Asked(Viewed {
-                view: View::Str,
-                mutability: Mutability::Shared,
-            })));
+            let known = self.solver.lent_view(ty).filter(|_| !converts);
+            return Some(Reach::Viewed(match known {
+                Some(viewed) => DeferredView::Asked(viewed),
+                None => DeferredView::OfSettledParam,
+            }));
         }
         Some(match converts {
             true => Reach::Converted,

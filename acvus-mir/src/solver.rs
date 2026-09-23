@@ -22,7 +22,7 @@ use crate::ty::{
     Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm,
     LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
     RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
-    could_match_pattern, matches_pattern,
+    View, Viewed, could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -3133,8 +3133,10 @@ impl<'src> Solver<'src> {
                     .is_ok()
         });
         let takes_viewed = option.viewed.iter().all(|argument| {
-            borrows_a_str(&trial.resolve_ty(&instance_params[argument.index].ty))
-                && self.borrows_a_string(&argument.ty)
+            self.views_as(
+                &argument.ty,
+                &trial.resolve_ty(&instance_params[argument.index].ty),
+            )
         });
         let takes_unjoined = awaiting_head.iter().all(|argument| {
             if self.admission_waits(&option.candidate, argument.index, &argument.ty) {
@@ -3143,9 +3145,7 @@ impl<'src> Solver<'src> {
             let param = &instance_params[argument.index].ty;
             match self.admits(&option.candidate, argument.index, &argument.ty) {
                 Admission::Refused => false,
-                Admission::Viewed => {
-                    borrows_a_str(&trial.resolve_ty(param)) && self.borrows_a_string(&argument.ty)
-                }
+                Admission::Viewed => self.views_as(&argument.ty, &trial.resolve_ty(param)),
                 Admission::Direct | Admission::Converted => trial
                     .join(
                         &argument.ty,
@@ -3200,14 +3200,7 @@ impl<'src> Solver<'src> {
         if self.term_within_shapes(arg, &shapes) {
             return Admission::Direct;
         }
-        if shapes.iter().any(borrows_a_str) && self.borrows_a_string(arg) {
-            return Admission::Viewed;
-        }
-        if shapes
-            .iter()
-            .filter_map(borrowed_slice)
-            .any(|mutability| self.lends_a_slice(arg, mutability))
-        {
+        if shapes.iter().any(|shape| self.views_as(arg, shape)) {
             return Admission::Viewed;
         }
         let converts = shapes.iter().any(|shape| {
@@ -3253,20 +3246,36 @@ impl<'src> Solver<'src> {
         matches!(self.terms.resolve_ty(&lent.ty), TyTerm::Var(_))
     }
 
-    fn lends_a_slice(&self, arg: &InferTy, mutability: Mutability) -> bool {
-        let TyTerm::Ref(lent, storage) = self.terms.resolve_ty(arg) else {
-            return false;
+    /// RFC-0047 rule 6, RFC-0062 rule 3.
+    pub fn lent_view(&self, arg: &InferTy) -> Option<Viewed> {
+        let TyTerm::Ref(mutability, storage) = self.terms.resolve_ty(arg) else {
+            return None;
         };
-        lent == mutability
-            && crate::ty::SliceableHead::of(&storage.ty)
-                .is_some_and(|head| self.registry.lends_a_slice(head, mutability))
+        let storage = self.terms.resolve_ty(&storage.ty);
+        if mutability == Mutability::Shared && matches!(storage, TyTerm::String) {
+            return Some(Viewed {
+                view: View::Str,
+                mutability,
+            });
+        }
+        crate::ty::SliceableHead::of(&storage)
+            .is_some_and(|head| self.registry.lends_a_slice(head, mutability))
+            .then_some(Viewed {
+                view: View::Slice,
+                mutability,
+            })
     }
 
-    fn borrows_a_string(&self, arg: &InferTy) -> bool {
-        let TyTerm::Ref(Mutability::Shared, pointee) = self.terms.resolve_ty(arg) else {
+    fn views_as<V>(&self, arg: &InferTy, shape: &TyTerm<V>) -> bool
+    where
+        V: Phase,
+    {
+        let TyTerm::Ref(mutability, pointee) = shape else {
             return false;
         };
-        matches!(self.terms.resolve_ty(&pointee.ty), TyTerm::String)
+        self.lent_view(arg).is_some_and(|lent| {
+            lent.mutability == *mutability && View::of(&pointee.ty) == Some(lent.view)
+        })
     }
 
     /// `take_other` binds a `OneOf`-bounded variable to any term and leaves
@@ -4195,30 +4204,6 @@ fn conversion_rules(
     rules
 }
 
-/// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
-/// the value is cast back when the call ends (RFC-0041).
-/// `&str`, the one parameter a `&String` argument reaches by the view the
-/// checker takes at the argument (RFC-0062 rule 3).
-fn borrows_a_str<V>(shape: &TyTerm<V>) -> bool
-where
-    V: Phase,
-{
-    matches!(shape, TyTerm::Ref(Mutability::Shared, pointee) if matches!(pointee.ty, TyTerm::Str))
-}
-
-/// The mutability of a parameter that is `&[T]` or `&mut [T]`.
-fn borrowed_slice<V>(shape: &TyTerm<V>) -> Option<Mutability>
-where
-    V: Phase,
-{
-    match shape {
-        TyTerm::Ref(mutability, pointee) if matches!(pointee.ty, TyTerm::Slice(_)) => {
-            Some(*mutability)
-        }
-        _ => None,
-    }
-}
-
 /// A parameter that takes a run of what its argument lends rather than the
 /// storage itself: `&[T]` or `&mut [T]` (RFC-0047 rule 6), `&str` (RFC-0062
 /// rule 3).
@@ -4229,6 +4214,8 @@ where
     matches!(shape, TyTerm::Ref(_, pointee) if matches!(pointee.ty, TyTerm::Slice(_) | TyTerm::Str))
 }
 
+/// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
+/// the value is cast back when the call ends (RFC-0041).
 fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy) -> bool {
     let from_r = terms.resolve_ty(from);
     let to_r = terms.resolve_ty(to);

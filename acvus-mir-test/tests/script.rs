@@ -269,7 +269,7 @@ fn a_lending_parameter_rejects_a_value_argument() {
     let err = compile_script_mode_raw(&i, "let it = @items | into_iter; next(it)", &items_ctx(&i))
         .unwrap_err();
     assert!(err.contains("type mismatch"), "{err}");
-    assert!(err.contains(", got Iterator<"), "{err}");
+    assert!(err.contains(", got Items<"), "{err}");
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn a_lending_parameter_rejects_the_other_mode() {
     let err = compile_script_mode_raw(&i, "let it = @items | into_iter; next(&it)", &items_ctx(&i))
         .unwrap_err();
     assert!(err.contains("type mismatch"), "{err}");
-    assert!(err.contains(", got &Iterator<"), "{err}");
+    assert!(err.contains(", got &Items<"), "{err}");
 }
 
 #[test]

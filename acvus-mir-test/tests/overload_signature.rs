@@ -4,7 +4,7 @@
 //! the rest of the call has already emptied the set.
 //!
 //! `fx_p::f(&str, &str)` is the plain one, `fx_q::f<T>(&Vec<T>, &Vec<T>)`
-//! the signature, with an `i64` instance. `vec::max` stands beside
+//! the signature, with an `i64` instance. `slice::max` stands beside
 //! `iter::max` for the same question over a consumer — the real
 //! declaration, which is why no fixture does — and `fx_p::map` beside
 //! `iter::map` for one over a closure argument.
@@ -278,20 +278,20 @@ fn contains_of_a_lent_vec_settles_vec_contains_beside_iter_contains() {
 }
 
 #[test]
-fn max_of_an_iterator_settles_iter_max_beside_a_vec_max_signature() {
+fn max_of_an_iterator_settles_iter_max_beside_a_slice_max_signature() {
     let i = Interner::new();
     let c = checked(&i, "into_iter(vec([3, 1, 2])) | max");
     assert_eq!(c.ret, Ty::Option(Box::new(Ty::I64)));
     assert_eq!(calls(&c, "iter::max"), 1, "{:?}", c.callees);
-    assert_eq!(calls(&c, "vec::max"), 0, "{:?}", c.callees);
+    assert_eq!(calls(&c, "slice::max"), 0, "{:?}", c.callees);
 }
 
 #[test]
-fn max_of_a_lent_vec_settles_the_vec_max_signature() {
+fn max_of_a_lent_vec_settles_the_slice_max_signature() {
     let i = Interner::new();
     let c = checked(&i, "let v = vec([3, 1, 2]); max(&v)");
     assert_eq!(c.ret, Ty::Option(Box::new(Ty::I64)));
-    assert_eq!(calls(&c, "vec::max"), 1, "{:?}", c.callees);
+    assert_eq!(calls(&c, "slice::max"), 1, "{:?}", c.callees);
     assert_eq!(calls(&c, "iter::max"), 0, "{:?}", c.callees);
 }
 

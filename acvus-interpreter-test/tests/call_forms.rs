@@ -66,6 +66,29 @@ fn a_method_of_several_signatures() {
     runs_to("let v = [4, 5]; v.max()", "5");
 }
 
+/// The view a lent argument reaches is the one it lends, whichever form
+/// the call is written in and however many signatures the name has.
+#[test]
+fn a_lent_container_reaches_a_slice_parameter_in_every_call_form() {
+    for source in [
+        "let v = vec([3, 1, 2]); v.max()",
+        "let v = vec([3, 1, 2]); max(&v)",
+        "let v = vec([3, 1, 2]); slice::max(&v)",
+        "let a = [3, 1, 2]; max(&a)",
+        "let v = vec([3, 1, 2]); let r = &v; max(r)",
+    ] {
+        runs_to(source, "3");
+    }
+    for source in [
+        "let v = vec([3, 1, 2]); v.contains(&2)",
+        "let v = vec([3, 1, 2]); let x = 2; contains(&v, &x)",
+        "let s = \"ab\".to_string(); contains(&s, \"a\")",
+        "let s = \"ab\".to_string(); let r = &s; contains(r, \"a\")",
+    ] {
+        runs_to(source, "true");
+    }
+}
+
 #[test]
 fn a_local_closure_is_called_directly_and_as_a_method() {
     runs_to("let v = [1, 2]; let f = |x| -> x.len(); f(&v) + v.f()", "4");
