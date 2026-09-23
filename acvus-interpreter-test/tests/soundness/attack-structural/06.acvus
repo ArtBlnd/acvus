@@ -1,0 +1,3 @@
+// expect true
+// field grown by a store before the compare
+let o = { a: 1, }; o.b = 2; let p = { a: 1, b: 2, }; o == p

@@ -1,0 +1,3 @@
+// refuse
+// contains on a Vec of objects
+let v = vec([{ a: 1, }]); let x = { a: 1, }; contains(&v, &x)

@@ -16,5 +16,6 @@ pub mod run;
 pub mod select;
 pub mod storage;
 pub mod string;
+pub mod structural;
 pub mod switch;
 pub mod variant;

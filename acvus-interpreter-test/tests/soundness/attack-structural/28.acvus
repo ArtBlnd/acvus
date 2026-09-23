@@ -1,0 +1,3 @@
+// expect true
+// an opaque word inside an object
+let n = opaque(3); { a: n, } == { a: 3, }

@@ -1,0 +1,3 @@
+// refuse
+// nested object grown by the meet
+let o = { x: { a: 1, }, }; let p = { x: { a: 1, b: 2, }, }; o == p

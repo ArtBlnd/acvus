@@ -10,6 +10,7 @@
 //! `decide`), then solved once (`solve`), then frozen.
 
 use std::convert::Infallible;
+use std::rc::Rc;
 
 use acvus_ast::Span;
 use acvus_utils::Astr;
@@ -17,6 +18,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
+use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, ErrorToken, FieldSet,
     Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm,
@@ -1531,6 +1533,8 @@ pub enum InstanceKind {
     /// The language's own instance at an operator over a word or text: the
     /// operator's instruction (RFC-0020).
     Operator,
+    /// The language's own instance at a structural type (RFC-0020).
+    Structural,
 }
 
 /// The compiler's instances of a shared signature at one use, and which of
@@ -1538,6 +1542,7 @@ pub enum InstanceKind {
 pub struct CompilerInstances {
     pub candidates: Vec<Candidate>,
     pub withholds: Withholds,
+    pub structural: Option<ComponentOffer>,
 }
 
 impl CompilerInstances {
@@ -1545,8 +1550,60 @@ impl CompilerInstances {
         Self {
             candidates: Vec::new(),
             withholds: Withholds::SameType,
+            structural: None,
         }
     }
+}
+
+/// Obligation across modules: `typeck` fills `candidates` with the
+/// language's word and text instances and the registry's instances at every
+/// other type, since a component's decision offers this same set and
+/// `Structural` again (RFC-0020).
+#[derive(Debug)]
+pub struct ComponentOffer {
+    pub signature: QualifiedRef,
+    pub shape: StructuralSignature,
+    pub params: Vec<Astr>,
+    pub candidates: Vec<Candidate>,
+}
+
+impl ComponentOffer {
+    fn call_at(&self, component: &InferTy) -> InferTy {
+        let taken = || {
+            TyTerm::Ref(
+                Mutability::Shared,
+                Box::new(TypeArg::uniform(component.clone())),
+            )
+        };
+        let ret = match self.shape {
+            StructuralSignature::Eq => TyTerm::Bool,
+            StructuralSignature::Clone => component.clone(),
+        };
+        TyTerm::Fn {
+            params: self
+                .params
+                .iter()
+                .map(|name| ParamTerm::new(*name, taken()))
+                .collect(),
+            ret: Box::new(ret),
+            captures: vec![],
+            effect: Effect::PURE.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StructuralHead {
+    Takes,
+    Open,
+    Refuses,
+}
+
+#[derive(Debug)]
+pub struct SettledStructural {
+    pub call: InferTy,
+    pub offer: Rc<ComponentOffer>,
+    pub children: Vec<(Component, DecisionId)>,
 }
 
 /// The declared instances a use does not reach beside the compiler's own.
@@ -1561,7 +1618,7 @@ pub enum Withholds {
 }
 
 /// Whether an instance's first parameter takes a word or text.
-fn takes_a_language_owned_type(ty: &PolyTy) -> bool {
+pub fn takes_a_language_owned_type(ty: &PolyTy) -> bool {
     let TyTerm::Fn { params, .. } = ty else {
         return false;
     };
@@ -1679,6 +1736,7 @@ pub enum Decision {
         /// a call's own decision is named by its site.
         required: Option<QualifiedRef>,
         tie: InstanceTie,
+        structural: Option<Rc<ComponentOffer>>,
     },
     /// Which conversion takes an argument to its parameter (RFC-0023):
     /// identity where the two join, else a declared cast.
@@ -2215,6 +2273,7 @@ pub struct RequiredDecision {
 pub struct OpenedChild {
     pub parent: DecisionId,
     pub child: DecisionId,
+    pub component: Option<Component>,
 }
 
 struct RequiredCall {
@@ -2227,6 +2286,7 @@ pub struct Solver<'src> {
     decisions: Vec<DecisionSlot>,
     begun_by_decisions: Vec<BegunSource>,
     children: FxHashMap<DecisionId, Vec<RequiredDecision>>,
+    structural: FxHashMap<DecisionId, SettledStructural>,
     opened_children: Vec<OpenedChild>,
     /// Mints a new source for every identity a declaration introduces;
     /// lent by the compilation for this solver's lifetime.
@@ -2252,6 +2312,7 @@ impl<'src> Solver<'src> {
             decisions: Vec::new(),
             begun_by_decisions: Vec::new(),
             children: FxHashMap::default(),
+            structural: FxHashMap::default(),
             opened_children: Vec::new(),
             sources,
             registry,
@@ -2564,6 +2625,9 @@ impl<'src> Solver<'src> {
                     }
                 }
             }
+            if !progressed {
+                progressed = self.open_grown_components();
+            }
         }
         failures
     }
@@ -2606,6 +2670,8 @@ impl<'src> Solver<'src> {
         self.close_captures_by_least_element(&mut failures);
         failures.extend(self.settle());
         self.close_instances_by_task();
+        failures.extend(self.settle());
+        self.close_components_by_least_element();
         failures.extend(self.settle());
         for index in 0..self.decisions.len() {
             let id = DecisionId(index as u32);
@@ -2705,7 +2771,16 @@ impl<'src> Solver<'src> {
                 generic,
                 required,
                 tie,
-            } => self.step_instance(id, &call, candidates, generic, required, tie),
+                structural,
+            } => self.step_instance(
+                id,
+                &call,
+                candidates,
+                generic,
+                required,
+                tie,
+                structural,
+            ),
             Decision::Conversion { from, to } => self.step_conversion(id, &from, &to),
             Decision::Signature {
                 name,
@@ -3519,6 +3594,7 @@ impl<'src> Solver<'src> {
         generic: Option<GenericInstance>,
         required: Option<QualifiedRef>,
         tie: InstanceTie,
+        structural: Option<Rc<ComponentOffer>>,
     ) -> Progress {
         let ty = self.terms.resolve_ty(call);
         let bound = EffectBoundedBy::of(required);
@@ -3540,6 +3616,17 @@ impl<'src> Solver<'src> {
         } else {
             Progress::Unchanged
         };
+        let head = match &structural {
+            Some(_) => self.structural_head(call),
+            None => StructuralHead::Refuses,
+        };
+        match (head, structural) {
+            (StructuralHead::Takes, Some(offer)) if remaining.is_empty() && generic.is_none() => {
+                return self.settle_structural(id, call, bound, &offer);
+            }
+            (StructuralHead::Takes | StructuralHead::Open, _) => return progress_without_answer,
+            (StructuralHead::Refuses, _) => {}
+        }
         match (remaining.as_slice(), generic) {
             ([], None) => Progress::Failed(Unsettled::NoInstance {
                 decision: id,
@@ -3605,6 +3692,144 @@ impl<'src> Solver<'src> {
                 }
             }
             _ => progress_without_answer,
+        }
+    }
+
+    fn lent_referent(&self, call: &InferTy) -> Option<InferTy> {
+        let TyTerm::Fn { params, .. } = self.terms.shallow_resolve_ty(call) else {
+            return None;
+        };
+        let TyTerm::Ref(_, taken) = self.terms.shallow_resolve_ty(&params.first()?.ty) else {
+            return None;
+        };
+        Some(self.terms.shallow_resolve_ty(&taken.ty))
+    }
+
+    fn structural_head(&self, call: &InferTy) -> StructuralHead {
+        match self.lent_referent(call) {
+            Some(TyTerm::Var(_)) => StructuralHead::Open,
+            Some(head) if components(&head).is_some() => StructuralHead::Takes,
+            Some(_) | None => StructuralHead::Refuses,
+        }
+    }
+
+    fn settle_structural(
+        &mut self,
+        id: DecisionId,
+        call: &InferTy,
+        bound: EffectBoundedBy,
+        offer: &Rc<ComponentOffer>,
+    ) -> Progress {
+        let instance = offer.call_at(&self.fresh_ty_var());
+        if let Err(refused) = self.settle_instance(
+            id,
+            CallOfInstance {
+                call,
+                instance: &instance,
+            },
+            bound,
+        ) {
+            return Progress::Failed(refused);
+        }
+        self.structural.insert(
+            id,
+            SettledStructural {
+                call: call.clone(),
+                offer: Rc::clone(offer),
+                children: Vec::new(),
+            },
+        );
+        self.open_undecided_components(id);
+        Progress::Settled(Answer::Instance(InstanceKind::Structural))
+    }
+
+    fn open_undecided_components(&mut self, id: DecisionId) -> bool {
+        let SettledStructural {
+            call,
+            offer,
+            children,
+        } = &self.structural[&id];
+        let offer = Rc::clone(offer);
+        let Some(referent) = self.lent_referent(call) else {
+            return false;
+        };
+        let Some(parts) = components(&referent) else {
+            return false;
+        };
+        let decided: Vec<Component> = children.iter().map(|(component, _)| *component).collect();
+        let fresh: Vec<(Component, InferTy)> = parts
+            .into_iter()
+            .filter(|(component, _)| !decided.contains(component))
+            .map(|(component, part)| (component, part.clone()))
+            .collect();
+        let opened = !fresh.is_empty();
+        for (component, part) in fresh {
+            let child = self.decide(Decision::Instance {
+                call: offer.call_at(&part),
+                candidates: offer.candidates.clone(),
+                generic: None,
+                required: Some(offer.signature),
+                tie: InstanceTie::Types,
+                structural: Some(Rc::clone(&offer)),
+            });
+            self.opened_children.push(OpenedChild {
+                parent: id,
+                child,
+                component: Some(component),
+            });
+            if let Some(settled) = self.structural.get_mut(&id) {
+                settled.children.push((component, child));
+            }
+        }
+        opened
+    }
+
+    fn open_grown_components(&mut self) -> bool {
+        let settled: Vec<DecisionId> = self.structural.keys().copied().collect();
+        let mut opened = false;
+        for id in settled {
+            opened |= self.open_undecided_components(id);
+        }
+        opened
+    }
+
+    pub fn settled_structural(&self, decision: DecisionId) -> Option<&SettledStructural> {
+        self.structural.get(&decision)
+    }
+
+    /// A component whose type nothing constrained holds no value, so its
+    /// least element is `!` (RFC-0042 rule 3): `None == None` compares no
+    /// payload.
+    fn close_components_by_least_element(&mut self) {
+        let open: Vec<TypeBoundId> = self
+            .decisions
+            .iter()
+            .filter(|slot| matches!(slot.state, DecisionState::Open))
+            .filter_map(|slot| match &slot.decision {
+                Decision::Instance {
+                    call,
+                    required: Some(_),
+                    structural: Some(_),
+                    ..
+                } => self.lent_referent(call),
+                _ => None,
+            })
+            .filter_map(|referent| match referent {
+                TyTerm::Var(var) => Some(self.terms.find_ty_root(var)),
+                _ => None,
+            })
+            .collect();
+        for root in open {
+            if let TypeBound::Unresolved {
+                bound: TyVarBound::Any,
+            } = &self.terms.ty_bounds[root.0 as usize]
+            {
+                self.terms.ty_bounds[root.0 as usize] = TypeBound::Resolved {
+                    ty: TyTerm::Never,
+                    bound: TyVarBound::Any,
+                    growth: Growth::Fixed,
+                };
+            }
         }
     }
 
@@ -3930,8 +4155,13 @@ impl<'src> Solver<'src> {
                 generic: None,
                 required: Some(signature),
                 tie: InstanceTie::Types,
+                structural: None,
             });
-            self.opened_children.push(OpenedChild { parent, child: id });
+            self.opened_children.push(OpenedChild {
+                parent,
+                child: id,
+                component: None,
+            });
             children.push(RequiredDecision { signature, id });
         }
         self.children.insert(parent, children);
@@ -3955,10 +4185,14 @@ impl<'src> Solver<'src> {
         let CompilerInstances {
             candidates: compiler_instances,
             withholds,
+            structural,
         } = compiler;
         let mut bounded: Vec<TypeBoundId> = Vec::new();
         let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
-            instances.concrete.is_empty() && !instances.generic && compiler_instances.is_empty()
+            instances.concrete.is_empty()
+                && !instances.generic
+                && compiler_instances.is_empty()
+                && structural.is_none()
         });
         let reprs = if fixed_generic {
             Reprs::Uniform
@@ -4002,6 +4236,7 @@ impl<'src> Solver<'src> {
                     generic: None,
                     required: Some(req.signature),
                     tie: InstanceTie::Types,
+                    structural: None,
                 });
                 RequiredDecision {
                     signature: req.signature,
@@ -4041,6 +4276,7 @@ impl<'src> Solver<'src> {
                 }),
                 required: None,
                 tie: InstanceTie::Types,
+                structural: structural.map(Rc::new),
             });
             InstanceChoice::Decided(id)
         });
@@ -4659,6 +4895,7 @@ mod requirement_tests {
             generic: None,
             required: None,
             tie: InstanceTie::Types,
+            structural: None,
         }
     }
 

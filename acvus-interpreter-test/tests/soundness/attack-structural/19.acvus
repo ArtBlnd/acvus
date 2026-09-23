@@ -1,0 +1,3 @@
+// refuse
+// a function field has no instance
+let o = { f: |x| -> x, g: 1, }; o == o

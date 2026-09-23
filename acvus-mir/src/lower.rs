@@ -17,7 +17,8 @@ use crate::ir::{
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
 use crate::solver::{CaptureRead, MatchMode};
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
-use crate::typeck::{CallTarget, CapturedName, Passing, TypeResolution};
+use crate::structural::StructuralSignature;
+use crate::typeck::{CallTarget, CapturedName, Passing, StructuralCall, TypeResolution};
 
 /// The name of a template's accumulator. A source name cannot collide with
 /// it: the lexer admits no `<` in an identifier.
@@ -2432,6 +2433,46 @@ impl<'a> Lowerer<'a> {
                     }
                     return dst;
                 }
+                if let Some(CallTarget::Structural(call)) = self.resolution.calls.get(id).cloned() {
+                    let l = self.lend_operand(left);
+                    let r = self.lend_operand(right);
+                    let dst = self.alloc_expr(*id);
+                    let StructuralCall {
+                        signature: StructuralSignature::Eq,
+                        leaves,
+                    } = call
+                    else {
+                        panic!("an operator offers the structural instance of `eq` alone, got {call:?}")
+                    };
+                    let eq = match op {
+                        BinOp::Neq => {
+                            let v = self.alloc_val();
+                            self.set_val_type(v, Ty::Bool);
+                            v
+                        }
+                        _ => dst,
+                    };
+                    self.emit_inst(
+                        *span,
+                        InstKind::StructuralEq {
+                            dst: eq,
+                            a: l,
+                            b: r,
+                            leaves,
+                        },
+                    );
+                    if eq != dst {
+                        self.emit_inst(
+                            *span,
+                            InstKind::UnaryOp {
+                                dst,
+                                op: UnaryOp::Not,
+                                operand: eq,
+                            },
+                        );
+                    }
+                    return dst;
+                }
                 if let Some(CallTarget::Operator(call)) = self.resolution.calls.get(id).cloned() {
                     let (callee, fn_ty) = (call.callee, call.ty);
                     let l = self.lend_operand(left);
@@ -3061,6 +3102,31 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
+    fn emit_structural(
+        &mut self,
+        structural: StructuralCall,
+        call: CallArgs,
+        call_id: AstId,
+        call_span: Span,
+    ) -> ValueId {
+        assert!(
+            call.restores.is_empty(),
+            "the structural instance takes no argument through a conversion"
+        );
+        let dst = self.alloc_expr(call_id);
+        let StructuralCall { signature, leaves } = structural;
+        let kind = match (signature, call.values.as_slice()) {
+            (StructuralSignature::Eq, &[a, b]) => InstKind::StructuralEq { dst, a, b, leaves },
+            (StructuralSignature::Clone, &[src]) => InstKind::StructuralClone { dst, src, leaves },
+            (signature, values) => panic!(
+                "{signature:?} is checked at its signature's parameters, and got {} arguments",
+                values.len()
+            ),
+        };
+        self.emit_inst(call_span, kind);
+        dst
+    }
+
     /// The arguments of a call: a `&place` argument is lent, any other is
     /// a value.
     fn lower_call_args<'e, I>(&mut self, args: I) -> CallArgs
@@ -3242,6 +3308,9 @@ impl<'a> Lowerer<'a> {
         if let Some(CallTarget::Intrinsic(intrinsic)) = target {
             return self.emit_intrinsic(intrinsic, call, call_id, call_span);
         }
+        if let Some(CallTarget::Structural(structural)) = target {
+            return self.emit_structural(structural, call, call_id, call_span);
+        }
         let dst = self.alloc_typed(call_id);
         match target {
             Some(CallTarget::Declared(callee)) => {
@@ -3261,7 +3330,8 @@ impl<'a> Lowerer<'a> {
             Some(
                 other @ (CallTarget::Intrinsic(_)
                 | CallTarget::StructuralVariant
-                | CallTarget::Operator(_)),
+                | CallTarget::Operator(_)
+                | CallTarget::Structural(_)),
             ) => panic!("a method call is checked as a named call, never {other:?}"),
             None => {
                 self.emit_inst(call_span, InstKind::Poison { dst });
@@ -3311,6 +3381,10 @@ impl<'a> Lowerer<'a> {
         if let Some(CallTarget::Intrinsic(intrinsic)) = target {
             let call = self.lower_call_args(written.iter().copied());
             return self.emit_intrinsic(intrinsic, call, call_id, call_span);
+        }
+        if let Some(CallTarget::Structural(structural)) = target {
+            let call = self.lower_call_args(written.iter().copied());
+            return self.emit_structural(structural, call, call_id, call_span);
         }
         if let Some(CallTarget::StructuralVariant) = target
             && let [payload] = written.as_slice()
@@ -3365,7 +3439,8 @@ impl<'a> Lowerer<'a> {
                         Some(
                             other @ (CallTarget::Intrinsic(_)
                             | CallTarget::StructuralVariant
-                            | CallTarget::Operator(_)),
+                            | CallTarget::Operator(_)
+                            | CallTarget::Structural(_)),
                         ) => panic!("a call of a name lowers as its target above, never {other:?}"),
                         None => {
                             self.emit_inst(call_span, InstKind::Poison { dst });

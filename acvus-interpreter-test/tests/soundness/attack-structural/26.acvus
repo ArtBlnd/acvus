@@ -1,0 +1,3 @@
+// expect true
+// clone then compare equals the source
+let o = { a: [Some(1), None], b: Ok(2), s: "z".to_string(), }; clone(&o) == o

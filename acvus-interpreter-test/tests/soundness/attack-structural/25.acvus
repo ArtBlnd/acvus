@@ -1,0 +1,3 @@
+// expect false
+// nested options by depth differ
+Some(Some(1)) == Some(None)

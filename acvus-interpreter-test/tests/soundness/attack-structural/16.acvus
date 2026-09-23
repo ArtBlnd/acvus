@@ -1,0 +1,3 @@
+// expect true
+// structural compare through a lambda by reference
+let f = |a, b| -> a == b; let o = { x: [1, 2], }; f(&o, &o)

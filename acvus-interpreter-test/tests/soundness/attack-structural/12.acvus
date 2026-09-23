@@ -1,0 +1,3 @@
+// expect 1
+// a clone through an option owns its Vec
+let o = Some({ v: vec([1]), }); let c = clone(&o); match c { Some(x) => { let y = x; y.v.push(5); 0 }, None => 0, }; match o { Some(x) => x.v.len(), None => 9, }

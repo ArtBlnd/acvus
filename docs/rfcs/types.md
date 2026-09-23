@@ -91,7 +91,7 @@ checked; the runtime never asks a value.
 
 Status: Accepted
 
-The compiler holds one operator table with two entries per operator.
+The compiler holds one operator table with three entries per operator.
 
 - **Language-owned operands** — the words (integers, `f64`, `Bool`, `char`,
   `Unit`) and text: the operator is an IR instruction. On words it is
@@ -106,6 +106,10 @@ The compiler holds one operator table with two entries per operator.
   calls `core::neg<T, O>(&T) -> O`; the instance fixes `O`, and its answer
   is the operator's value. An operator with no signature, or a signature
   with no instance at the operand type, is a type error at the expression.
+- **Structural operands** — an object, a tuple, an array, an enum, an
+  `Option` or a `Result`: `==` and `!=` take the language's structural
+  instance of `core::eq`, which is the signature at each component. The
+  ordering and arithmetic operators have none.
 
 The meaning on words:
 
@@ -160,10 +164,39 @@ type before the instance is chosen, so `k + 7` leaves `k` an integer and
 `k + 7.0` an `f64`. Nothing converts implicitly: `1 + 2.0` and
 `1u8 + 1u16` are type errors.
 
+The structural instance answers `==`, `!=`, and a named `eq(&a, &b)` or
+`clone(&a)`, at every structural type. Each component of the operand type
+is decided as an instance of its own: at a word or text the language's,
+at a structural type the structural instance again, at an extension type
+the registry's. A component with no instance, a function or a reference,
+refuses the whole operation with the no-instance error at that component's
+type. `==` compares an object field by field, a tuple and an array
+position by position, and an enum, an `Option` or a `Result` by its tag
+and then by the payload at that tag's type; a word compares by its bits
+and text by its bytes, as at the top. `clone` copies a word, clones text,
+calls the registry's `clone` at an extension type and rebuilds each
+aggregate, so a clone shares no storage with its source. The two operands
+meet as every operator's do, and a meet grows an object to the union of
+the two field sets; a value built without a field the other side has is
+then refused where it is lent, since its construction never stored that
+field (RFC-0042 rule 1), so two objects compare only at one field set. An
+enum is one type across any variant sets, and its values compare by tag.
+A component whose type nothing constrains holds no value and closes to
+`!`, which has nothing to compare, so `None == None` is `true`. A
+registry instance that requires `eq` or `clone` at a structural type, as
+`eq` at `Vec<{a: i64}>` requires `eq` at `{a: i64}`, reaches only the
+registry's instances and is refused. This is a decision, not a gap: an
+extern that compares states the exact type it compares and reads it
+through its projection, so a structural instance, which is the language's
+own, never crosses into a handler.
+
 **Why.** `==` is the one operation a tagless word means without a
 definition; every other meaning is a definition, and a definition has a
 name. Defining the language's operators in the compiler keeps one
 definition per operation. Text is language-owned because its literals are.
+A structure's equality and copy are its components', which its type
+fixes, so they need no definition of their own; an ordering of a
+structure would choose an order of its fields, which is a definition.
 
 **Rejected.**
 - Language operators as `core::add` instances a host inlines — two
@@ -174,6 +207,10 @@ definition per operation. Text is language-owned because its literals are.
   definition the language does not name.
 - User-declared operators — the names are fixed; a type joins one by
   declaring an instance.
+- A registry instance per structural shape — the shapes are unbounded,
+  and each would restate the component rule.
+- An object `==` at the union of two field sets — the side that never
+  stored a field would be read there.
 
 ## RFC-0037: Integers have Rust's widths, and a literal takes the width its use demands
 

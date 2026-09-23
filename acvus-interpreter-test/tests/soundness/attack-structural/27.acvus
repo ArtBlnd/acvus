@@ -1,0 +1,3 @@
+// expect true
+// named eq through a lambda over lent tuples
+let f = |a, b| -> eq(a, b); let o = (1, "a".to_string()); f(&o, &(1, "a".to_string()))

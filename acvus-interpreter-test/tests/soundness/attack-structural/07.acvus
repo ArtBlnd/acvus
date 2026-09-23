@@ -1,0 +1,3 @@
+// expect true
+// decimal leaf compared by its instance, not its bits
+let x = decimal("1.0".to_string()).unwrap(); let y = decimal("1.00".to_string()).unwrap(); { d: x, } == { d: y, }

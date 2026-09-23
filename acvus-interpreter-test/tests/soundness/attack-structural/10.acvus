@@ -1,0 +1,3 @@
+// expect 1
+// a clone owns its Vec: a push to the clone leaves the source
+let o = { v: vec([1]), }; let c = clone(&o); c.v.push(2); o.v.len()

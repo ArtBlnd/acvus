@@ -1,0 +1,3 @@
+// refuse
+// field set grown on one branch
+let o = if true { { a: 1, } } else { { a: 1, b: 2, } }; o == o

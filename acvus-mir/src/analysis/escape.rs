@@ -169,6 +169,8 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         | InstKind::Merge { .. }
         | InstKind::StringEq { .. }
         | InstKind::StringClone { .. }
+        | InstKind::StructuralEq { .. }
+        | InstKind::StructuralClone { .. }
         | InstKind::TupleIndex { .. }
         | InstKind::TestLiteral { .. }
         | InstKind::TestObjectKey { .. }

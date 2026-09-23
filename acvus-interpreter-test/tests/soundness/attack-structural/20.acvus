@@ -1,0 +1,3 @@
+// refuse
+// ordering on objects has no structural instance
+{ a: 1, } <= { a: 1, }

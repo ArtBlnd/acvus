@@ -1,0 +1,3 @@
+// refuse
+// a Vec of objects requires eq at the object, which only the registry decides
+let v = vec([{ a: 1, }]); let w = vec([{ a: 1, }]); v == w

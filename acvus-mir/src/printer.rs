@@ -494,6 +494,21 @@ fn write_body(
                 vn.fmt_use(*a, &consts, &texts),
                 vn.fmt_use(*b, &consts, &texts)
             )?,
+            InstKind::StructuralEq { dst, a, b, leaves } => writeln!(
+                f,
+                "{} = structural_eq {} {} leaves={}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*a, &consts, &texts),
+                vn.fmt_use(*b, &consts, &texts),
+                leaves.len()
+            )?,
+            InstKind::StructuralClone { dst, src, leaves } => writeln!(
+                f,
+                "{} = structural_clone {} leaves={}",
+                vn.fmt_val(*dst),
+                vn.fmt_use(*src, &consts, &texts),
+                leaves.len()
+            )?,
             InstKind::StringConcat { dst, parts } => writeln!(
                 f,
                 "{} = string_concat [{}]",

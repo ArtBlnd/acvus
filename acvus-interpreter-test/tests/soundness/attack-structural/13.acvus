@@ -1,0 +1,3 @@
+// expect x
+// a clone of a String field is its own
+let o = { s: "x".to_string(), }; let c = clone(&o); c.s = "y".to_string(); o.s

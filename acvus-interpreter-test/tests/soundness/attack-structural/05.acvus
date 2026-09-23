@@ -1,0 +1,3 @@
+// refuse
+// a field set grown through a lambda's result: the construction inside never stored b
+let mk = |n| -> { a: n, }; let o = mk(1); let p = { a: 1, b: 2, }; o == p

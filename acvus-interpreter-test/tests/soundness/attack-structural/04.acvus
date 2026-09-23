@@ -1,0 +1,3 @@
+// refuse
+// object inside a tuple grown by the meet
+let o = ({ a: 1, }, 1); let p = ({ a: 1, b: 2, }, 1); o == p

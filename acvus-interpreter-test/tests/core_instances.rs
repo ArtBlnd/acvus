@@ -198,9 +198,11 @@ fn hash_at_a_vec_is_the_elements_in_the_order_they_are_in() {
 
 #[test]
 fn a_clone_of_a_type_with_no_instance_is_refused_with_the_type_named() {
-    let messages = refusal("let p = { x: 1, }; let q = clone(&p); q.x", Ty::I64);
+    let messages = refusal("let f = |x| -> x + 1; let g = clone(&f); 1", Ty::I64);
     assert!(
-        messages.contains("no instance of core::clone has the call type Fn(&{x: i64}) -> {x: i64}"),
+        messages.contains(
+            "no instance of core::clone has the call type Fn(&Fn(i64) -> i64) -> Fn(i64) -> i64"
+        ),
         "the refusal names the signature and the type: {messages}"
     );
 }

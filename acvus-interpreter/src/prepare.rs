@@ -41,7 +41,7 @@ use crate::ops::place;
 use crate::ops::run::{LaidKonst, LaidMove};
 use crate::ops::{
     call, cast, composite, constant, control, index, pattern, run as run_ops, select, storage,
-    string, switch, variant,
+    string, structural, switch, variant,
 };
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
@@ -1336,6 +1336,36 @@ impl<'a> Prepare<'a> {
         matches!(self.ty(id), Ty::Ref(..))
     }
 
+    fn structural_shape(&self, lent: ValueId, leaves: &[Chosen]) -> structural::Shape {
+        let Ty::Ref(_, referent) = self.ty(lent) else {
+            panic!(
+                "a structural instruction's operand is typed {:?}, which lends nothing",
+                self.ty(lent)
+            )
+        };
+        let interner = self.ctx.interner;
+        let order = acvus_mir::structural::structural_leaves(&referent.ty, interner);
+        assert_eq!(
+            order.len(),
+            leaves.len(),
+            "the lowering writes one instance per leaf of {:?}",
+            referent.ty
+        );
+        let mut entries = self.entries.borrow_mut();
+        let words: Vec<Value> = leaves
+            .iter()
+            .map(|chosen| entries.word(self.ctx.instances, chosen))
+            .collect();
+        let found = |path: &[acvus_mir::structural::Component]| {
+            let at = order
+                .iter()
+                .position(|leaf| leaf.path == path)
+                .unwrap_or_else(|| panic!("{path:?} is no leaf of {:?}", referent.ty));
+            words[at]
+        };
+        structural_shape_of(&referent.ty, interner, &mut Vec::new(), &found)
+    }
+
     /// A call into a body — another module's or a closure's — suspends
     /// where the callee's own type puts its task above `Sync`. Read per
     /// call site; `prepare_body` asserts the join of these against
@@ -2018,6 +2048,8 @@ impl<'a> Prepare<'a> {
             | InstKind::StringAppend { .. }
             | InstKind::StringEq { .. }
             | InstKind::StringClone { .. }
+            | InstKind::StructuralEq { .. }
+            | InstKind::StructuralClone { .. }
             | InstKind::Ref { .. }
             | InstKind::Take { .. }
             | InstKind::Assign { .. }
@@ -3812,6 +3844,38 @@ impl<'a> Prepare<'a> {
                 match self.is_ref(*src) {
                     true => node(move |next| string::CloneString::<true> { slots, next }),
                     false => node(move |next| string::CloneString::<false> { slots, next }),
+                }
+            }
+            InstKind::StructuralEq { dst, a, b, leaves } => {
+                let shape = self.structural_shape(*a, leaves);
+                let dst = self.off(*dst);
+                let a = self.off(*a);
+                let b = self.off(*b);
+                node(move |next| structural::StructuralEq {
+                    dst,
+                    a,
+                    b,
+                    shape,
+                    next,
+                })
+            }
+            InstKind::StructuralClone { dst, src, leaves } => {
+                let shape = self.structural_shape(*src, leaves);
+                let src_at = self.off(*src);
+                let dst_at = self.marked(*dst);
+                match self.owns(*dst) {
+                    true => node(move |next| structural::StructuralClone::<true> {
+                        dst: dst_at,
+                        src: src_at,
+                        shape,
+                        next,
+                    }),
+                    false => node(move |next| structural::StructuralClone::<false> {
+                        dst: dst_at,
+                        src: src_at,
+                        shape,
+                        next,
+                    }),
                 }
             }
 
@@ -8589,6 +8653,65 @@ fn nth(slots: &[Off], k: usize) -> Off {
 
 /// Whether a register holding a value of this type owns a `Large` the frame
 /// has to release (RFC-0048 rule 4).
+fn structural_shape_of(
+    ty: &Ty,
+    interner: &Interner,
+    path: &mut Vec<acvus_mir::structural::Component>,
+    leaf: &dyn Fn(&[acvus_mir::structural::Component]) -> Value,
+) -> structural::Shape {
+    use acvus_mir::structural::{Component, ordered_components};
+    use structural::{Shape, VariantArm};
+    let mut part = |component: Component, part_ty: &Ty| {
+        path.push(component);
+        let shape = structural_shape_of(part_ty, interner, path, leaf);
+        path.pop();
+        shape
+    };
+    match ty {
+        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Char | Ty::Unit => Shape::Word,
+        Ty::String => Shape::Text,
+        Ty::Never => Shape::Never,
+        Ty::Str | Ty::Slice(_) => panic!(
+            "a view has no storage of its own to compare or copy: it reaches a register under \
+             a reference (RFC-0047, RFC-0062)"
+        ),
+        _ => match ordered_components(ty, interner) {
+            None => Shape::Leaf {
+                instance_entry: leaf(path),
+            },
+            Some(parts) => {
+                let mut shapes = parts
+                    .into_iter()
+                    .map(|(component, part_ty)| (component, part(component, part_ty)));
+                match ty {
+                    Ty::Array(..) => Shape::Array(Box::new(
+                        shapes.next().expect("an array has its element").1,
+                    )),
+                    Ty::Option(_) => Shape::Option(Box::new(
+                        shapes.next().expect("an option has its payload").1,
+                    )),
+                    Ty::Tuple(_) => Shape::Tuple(shapes.map(|(_, shape)| shape).collect()),
+                    Ty::Object(_) => Shape::Object(shapes.map(|(_, shape)| shape).collect()),
+                    Ty::Enum { .. } | Ty::Result(..) => Shape::Variant(
+                        shapes
+                            .map(|(component, payload)| VariantArm {
+                                tag: match component {
+                                    Component::VariantPayload(tag) => tag,
+                                    Component::Ok => interner.intern("Ok"),
+                                    Component::Err => interner.intern("Err"),
+                                    other => panic!("{other:?} is no variant's payload"),
+                                },
+                                payload,
+                            })
+                            .collect(),
+                    ),
+                    other => panic!("{other:?} has components but no structural walk"),
+                }
+            }
+        },
+    }
+}
+
 fn owns_large(ty: &Ty) -> bool {
     match ty {
         Ty::Int(_) | Ty::Float | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,

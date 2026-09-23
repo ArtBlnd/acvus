@@ -27,6 +27,8 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::StringConcat { dst, .. }
         | InstKind::StringEq { dst, .. }
         | InstKind::StringClone { dst, .. }
+        | InstKind::StructuralEq { dst, .. }
+        | InstKind::StructuralClone { dst, .. }
         | InstKind::MakeObject { dst, .. }
         | InstKind::MakeTuple { dst, .. }
         | InstKind::TupleIndex { dst, .. }
@@ -139,6 +141,8 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::StringAppend { target, part } => smallvec![*target, *part],
         InstKind::StringEq { a, b, .. } => smallvec![*a, *b],
         InstKind::StringClone { src, .. } => smallvec![*src],
+        InstKind::StructuralEq { a, b, .. } => smallvec![*a, *b],
+        InstKind::StructuralClone { src, .. } => smallvec![*src],
         InstKind::MakeObject { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
         InstKind::MakeTuple { elements, .. } => elements.iter().copied().collect(),
         InstKind::TupleIndex { tuple, .. } => smallvec![*tuple],

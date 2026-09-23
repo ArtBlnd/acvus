@@ -650,6 +650,30 @@ impl CheckCtx {
         }
     }
 
+    fn assert_lends_structural(
+        &self,
+        pc: usize,
+        span: Span,
+        inst_name: &str,
+        operand_ty: &Ty,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        let lends_structural = operand_ty.is_error()
+            || matches!(operand_ty, Ty::Ref(_, lent) if crate::structural::components(&lent.ty).is_some());
+        if !lends_structural {
+            errors.push(ValidationError {
+                scope: self.scope_name.clone(),
+                inst_index: pc,
+                span,
+                kind: ValidationErrorKind::InvalidConstructor {
+                    inst_name: inst_name.to_string(),
+                    expected_constructor: "a reference to a structural type".to_string(),
+                    actual: operand_ty.clone(),
+                },
+            });
+        }
+    }
+
     /// Get block params for a label.
     /// One edge's arguments against the parameters they fill: as many, and
     /// each of the parameter's type.
@@ -880,6 +904,26 @@ impl CheckCtx {
                             },
                         });
                     }
+                }
+            }
+            InstKind::StructuralEq { dst, a, b, .. } => {
+                let dst_ty = ty!(*dst);
+                self.assert_match(pc, span, "StructuralEq", "dst", &Ty::Bool, dst_ty, errors);
+                let a_ty = ty!(*a);
+                let b_ty = ty!(*b);
+                for operand_ty in [a_ty, b_ty] {
+                    self.assert_lends_structural(pc, span, "StructuralEq", operand_ty, errors);
+                }
+                if let (Ty::Ref(_, a_lent), Ty::Ref(_, b_lent)) = (a_ty, b_ty) {
+                    self.assert_match(pc, span, "StructuralEq", "b", &a_lent.ty, &b_lent.ty, errors);
+                }
+            }
+            InstKind::StructuralClone { dst, src, .. } => {
+                let src_ty = ty!(*src);
+                self.assert_lends_structural(pc, span, "StructuralClone", src_ty, errors);
+                if let Ty::Ref(_, lent) = src_ty {
+                    let dst_ty = ty!(*dst);
+                    self.assert_match(pc, span, "StructuralClone", "dst", &lent.ty, dst_ty, errors);
                 }
             }
             InstKind::StringConcat { dst, parts } => {

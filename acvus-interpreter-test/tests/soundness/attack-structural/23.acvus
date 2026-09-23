@@ -1,0 +1,3 @@
+// expect true
+// None against None closes the payload to never
+let o = (None, { a: None, }); o == o

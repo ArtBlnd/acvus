@@ -175,35 +175,3 @@ fn parts_of_an_element_a_mutable_iterator_yields() {
         "1",
     );
 }
-
-/// `==` and `clone` on a structural value are its fields' (a word, a
-/// `String`, an extension type's own instance), field by field.
-#[test]
-fn a_structural_value_compares_and_clones_field_by_field() {
-    runs_to("let o = { a: 1, }; let p = { a: 1, }; o == p", "true");
-    runs_to(
-        "let o = { a: { b: 1, }, }; let p = { a: { b: 2, }, }; o == p",
-        "false",
-    );
-    runs_to("let t = (1, 2); t == (1, 2)", "true");
-    runs_to("[1, 2] == [1, 2]", "true");
-    runs_to("let o = { a: 1, }; clone(&o).a", "1");
-    runs_to(
-        "let o = { a: 1, s: \"x\".to_string(), }; let c = clone(&o); c.s",
-        "\"x\"",
-    );
-    runs_to(
-        "let o = { v: vec([1]), }; let c = clone(&o); c.v.push(2); o.v.len() + c.v.len()",
-        "3",
-    );
-}
-
-/// Two objects compare only where their field sets are one: `==` grows
-/// neither side. Two enum values compare by tag whatever variants each
-/// side's type names.
-#[test]
-fn objects_compare_at_one_field_set_and_enums_at_any_variant_set() {
-    refused("let o = { a: 1, }; let p = { a: 1, b: 2, }; o == p");
-    runs_to("A::X(1) == A::Y(2)", "false");
-    runs_to("A::X(1) == A::X(1)", "true");
-}

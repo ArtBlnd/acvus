@@ -162,6 +162,11 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             s(b);
         }
         InstKind::StringClone { src, .. } => s(src),
+        InstKind::StructuralEq { a, b, .. } => {
+            s(a);
+            s(b);
+        }
+        InstKind::StructuralClone { src, .. } => s(src),
         InstKind::MakeObject { fields, .. } => fields.iter_mut().for_each(|(_, v)| s(v)),
         InstKind::MakeTuple { elements, .. } => elements.iter_mut().for_each(|v| s(v)),
         InstKind::TupleIndex { tuple, .. } => s(tuple),

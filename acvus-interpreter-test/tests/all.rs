@@ -99,6 +99,7 @@ mod space;
 mod spawn_eval;
 mod strength_reduction;
 mod string_std;
+mod structural_eq_clone;
 mod structural_growth;
 mod sync_call_is_an_operation;
 mod task_instances;

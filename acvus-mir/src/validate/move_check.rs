@@ -936,7 +936,10 @@ fn process_inst(
         }
 
         // Constructors - elements are consumed
-        InstKind::StringEq { dst, .. } | InstKind::StringClone { dst, .. } => {
+        InstKind::StringEq { dst, .. }
+        | InstKind::StringClone { dst, .. }
+        | InstKind::StructuralEq { dst, .. }
+        | InstKind::StructuralClone { dst, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::StringConcat { dst, parts } => {

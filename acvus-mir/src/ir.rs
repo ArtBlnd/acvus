@@ -336,6 +336,22 @@ pub enum InstKind {
         dst: ValueId,
         src: ValueId,
     },
+    /// RFC-0020. `leaves` is in `structural::structural_leaves` order over
+    /// the type `a` lends, the order `acvus_interpreter::prepare` reads it in.
+    StructuralEq {
+        dst: ValueId,
+        a: ValueId,
+        b: ValueId,
+        leaves: Vec<Chosen>,
+    },
+    /// RFC-0020. `leaves` is in `structural::structural_leaves` order over
+    /// the type `src` lends, the order `acvus_interpreter::prepare` reads it
+    /// in.
+    StructuralClone {
+        dst: ValueId,
+        src: ValueId,
+        leaves: Vec<Chosen>,
+    },
 
     // -- Storage (RFC-0018) -----------------------------------------
     /// A reference to a storage: `dst` is a `&T` or `&mut T` naming the

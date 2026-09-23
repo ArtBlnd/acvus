@@ -1,0 +1,3 @@
+// expect false
+// decimal leaf that differs
+let x = decimal("2.5".to_string()).unwrap(); let y = decimal("2.6".to_string()).unwrap(); ({ d: x, }, 1) == ({ d: y, }, 1)

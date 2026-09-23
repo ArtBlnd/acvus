@@ -17,11 +17,12 @@ use crate::place::{
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
     CompilerInstances, Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation,
-    InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode, MatchOutcome,
-    Mismatch, MismatchReason, ReceiverMode, ReferencePair, RequiredDecision, SettledSignature,
-    SignatureCandidate, SignatureName, SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
-    Withholds,
+    ComponentOffer, InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode,
+    MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair, RequiredDecision,
+    SettledSignature, SignatureCandidate, SignatureName, SignatureOption, UndecidedCall,
+    UnjoinedArgument, Unsettled, Withholds, takes_a_language_owned_type,
 };
+use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm,
@@ -641,6 +642,17 @@ pub enum CallTarget {
     StructuralVariant,
     /// RFC-0020.
     Operator(OperatorCall<Callee, Ty>),
+    /// RFC-0020.
+    Structural(StructuralCall),
+}
+
+/// Obligation across artifacts: `leaves` is in `structural_leaves` order over
+/// the type the call's first parameter lends, which is the order
+/// `acvus_interpreter::prepare` reads them in.
+#[derive(Debug, Clone)]
+pub struct StructuralCall {
+    pub signature: StructuralSignature,
+    pub leaves: Vec<Chosen>,
 }
 
 pub type CallMap = FxHashMap<AstId, CallTarget>;
@@ -2017,8 +2029,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     fn place_opened_children(&mut self) {
-        for crate::solver::OpenedChild { parent, child } in self.solver.take_opened_children() {
+        for crate::solver::OpenedChild {
+            parent,
+            child,
+            component,
+        } in self.solver.take_opened_children()
+        {
             self.requirer_of.insert(child, parent);
+            if component.is_some()
+                && let Some(site) = self.operator_decisions.get(&parent).copied()
+            {
+                self.operator_decisions.insert(child, site);
+            }
         }
     }
 
@@ -2718,10 +2740,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         scheme: &crate::ty::Scheme,
         site: SchemeUse,
     ) -> SchemeAt {
-        let compiler = CompilerInstances {
-            candidates: self.compiler_instances(qref),
-            withholds: Withholds::SameType,
-        };
+        let compiler = self.compiler_offer(qref, scheme);
         self.instantiate_with_instances(qref, scheme, site, compiler)
     }
 
@@ -2738,7 +2757,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     ) -> SchemeAt {
         let mut scheme = scheme.clone();
         let compiler_instances = &compiler.candidates;
-        if !compiler_instances.is_empty()
+        if compiler.structural.is_some()
+            && let Some(first) = scheme.bounds.first_mut()
+        {
+            *first = TyVarBound::Any;
+        } else if !compiler_instances.is_empty()
             && let Some(TyVarBound::OneOf { shapes, .. }) = scheme.bounds.first_mut()
         {
             shapes.extend(compiler_instances.iter().filter_map(|c| match &c.ty {
@@ -2783,10 +2806,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         scheme: &crate::ty::Scheme,
         site: SchemeUse,
     ) -> (CallType, ResolvedCallee) {
-        let compiler = CompilerInstances {
-            candidates: self.compiler_instances(qref),
-            withholds: Withholds::SameType,
-        };
+        let compiler = self.compiler_offer(qref, scheme);
         self.instantiate_call_with(qref, scheme, site, compiler)
     }
 
@@ -2839,7 +2859,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn settled_instance(&self, decision: DecisionId) -> Option<usize> {
         match self.solver.answer(decision)? {
             Answer::Instance(InstanceKind::Extern(instance)) => Some(instance),
-            Answer::Instance(InstanceKind::Intrinsic(_) | InstanceKind::Operator) => None,
+            Answer::Instance(
+                InstanceKind::Intrinsic(_) | InstanceKind::Operator | InstanceKind::Structural,
+            ) => None,
             Answer::Conversion(_)
             | Answer::Signature { .. }
             | Answer::Lend(_)
@@ -2896,6 +2918,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             CallChoice::Binding => Some(CallTarget::Binding),
             CallChoice::StructuralVariant => Some(CallTarget::StructuralVariant),
             CallChoice::Operator(call) => {
+                if let Some(structural) = self.structural_call(&call.callee) {
+                    return Some(CallTarget::Structural(structural));
+                }
                 let callee = self.callee_of(&call.callee)?;
                 let resolved = self.solver.resolve_ty(&call.ty);
                 let ty = self.closed_or_refused(&resolved, call.at);
@@ -2917,7 +2942,49 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             return Some(CallTarget::Intrinsic(intrinsic));
         }
+        if let Some(structural) = self.structural_call(resolved) {
+            return Some(CallTarget::Structural(structural));
+        }
         self.callee_of(resolved).map(CallTarget::Declared)
+    }
+
+    /// `None` also where a leaf's decision did not settle: the solve
+    /// reported that refusal.
+    fn structural_call(&self, resolved: &ResolvedCallee) -> Option<StructuralCall> {
+        let Some(InstanceChoice::Decided(decision)) = resolved.instance else {
+            return None;
+        };
+        let settled = self.solver.settled_structural(decision)?;
+        let TyTerm::Fn { params, .. } = self.solver.resolve_ty(&settled.call) else {
+            return None;
+        };
+        let TyTerm::Ref(_, lent) = &params.first()?.ty else {
+            return None;
+        };
+        let ty = self.solver.close_ty(&lent.ty).ok()?;
+        let leaves = structural_leaves(&ty, self.interner)
+            .into_iter()
+            .map(|leaf| {
+                let mut at = decision;
+                for component in &leaf.path {
+                    let (_, child) = self
+                        .solver
+                        .settled_structural(at)?
+                        .children
+                        .iter()
+                        .find(|(held, _)| held == component)?;
+                    at = *child;
+                }
+                self.chosen_of(RequiredDecision {
+                    signature: settled.offer.signature,
+                    id: at,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(StructuralCall {
+            signature: settled.offer.shape,
+            leaves,
+        })
     }
 
     fn frozen_calls(&mut self) -> CallMap {
@@ -3087,6 +3154,91 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     },
                     admits: Task::Heavy,
                 }
+            })
+            .collect()
+    }
+
+    fn compiler_offer(&self, qref: QualifiedRef, scheme: &crate::ty::Scheme) -> CompilerInstances {
+        let core = |name: &str| {
+            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern(name))
+        };
+        let shape = [
+            (core("eq"), StructuralSignature::Eq),
+            (core("clone"), StructuralSignature::Clone),
+        ]
+        .into_iter()
+        .find_map(|(named, shape)| (named == qref).then_some(shape));
+        CompilerInstances {
+            candidates: self.compiler_instances(qref),
+            withholds: Withholds::SameType,
+            structural: shape.map(|shape| self.structural_offer(shape, qref, scheme)),
+        }
+    }
+
+    /// Each component of a structural type is decided among the language's
+    /// own instances at a word or text and the registry's at every other
+    /// type, whether the structural type was reached by an operator or by
+    /// name: the component has no site of its own to withhold by. A
+    /// component's instance is called from inside the language's own
+    /// instruction, which does not suspend, so an instance that does is not
+    /// offered.
+    fn structural_offer(
+        &self,
+        shape: StructuralSignature,
+        signature: QualifiedRef,
+        scheme: &crate::ty::Scheme,
+    ) -> ComponentOffer {
+        let (params, own) = match shape {
+            StructuralSignature::Eq => (
+                self.operand_names(2),
+                self.operator_instances(OperatorSignature::Eq),
+            ),
+            StructuralSignature::Clone => (self.operand_names(1), self.language_clones()),
+        };
+        let declared = scheme
+            .instances
+            .iter()
+            .flat_map(|instances| instances.concrete.iter().enumerate())
+            .filter(|(_, sig)| sig.task <= Task::Sync && !takes_a_language_owned_type(&sig.ty))
+            .map(|(instance, sig)| Candidate {
+                instance: InstanceKind::Extern(instance),
+                ty: sig.ty.clone(),
+                admits: sig.admits,
+                requires: sig.requires.clone(),
+            });
+        ComponentOffer {
+            signature,
+            shape,
+            params,
+            candidates: own.into_iter().chain(declared).collect(),
+        }
+    }
+
+    fn language_clones(&self) -> Vec<Candidate> {
+        let a = self.interner.intern("a");
+        crate::ty::IntTy::ALL
+            .iter()
+            .map(|width| TyTerm::Int(*width))
+            .chain([
+                TyTerm::Float,
+                TyTerm::Bool,
+                TyTerm::Char,
+                TyTerm::Unit,
+                TyTerm::String,
+            ])
+            .map(|word| Candidate {
+                instance: InstanceKind::Operator,
+                requires: Vec::new(),
+                ty: TyTerm::Fn {
+                    params: vec![ParamTerm::new(
+                        a,
+                        TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(word.clone()))),
+                    )],
+                    ret: Box::new(word),
+                    captures: vec![],
+                    effect: Effect::PURE.into(),
+                },
+                admits: Task::Heavy,
             })
             .collect()
     }
@@ -5175,9 +5327,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             at: span,
             source_begins: span,
         };
+        let structural = (signature == OperatorSignature::Eq)
+            .then(|| self.structural_offer(StructuralSignature::Eq, qref, &scheme));
         let compiler = CompilerInstances {
             candidates: self.operator_instances(signature),
             withholds: Withholds::LanguageOwned,
+            structural,
         };
         let (call_type, callee) = self.instantiate_call_with(qref, &scheme, site, compiler);
         let operator = OperatorSite { op, signature };

@@ -1,0 +1,3 @@
+// refuse
+// object field set grown by the meet: the narrower side never stored b
+let o = { a: 1, }; let p = { a: 1, b: 2, }; o == p

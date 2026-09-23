@@ -9,6 +9,7 @@ pub mod place;
 pub mod printer;
 pub mod ser_ty;
 pub mod solver;
+pub mod structural;
 pub mod ty;
 pub mod typeck;
 pub mod validate;

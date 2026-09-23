@@ -982,6 +982,17 @@ fn remap_inst(
             dst: r(*dst),
             src: r(*src),
         },
+        InstKind::StructuralEq { dst, a, b, leaves } => InstKind::StructuralEq {
+            dst: r(*dst),
+            a: r(*a),
+            b: r(*b),
+            leaves: leaves.clone(),
+        },
+        InstKind::StructuralClone { dst, src, leaves } => InstKind::StructuralClone {
+            dst: r(*dst),
+            src: r(*src),
+            leaves: leaves.clone(),
+        },
         InstKind::MakeObject { dst, fields } => InstKind::MakeObject {
             dst: r(*dst),
             fields: fields.iter().map(|(name, v)| (*name, r(*v))).collect(),
