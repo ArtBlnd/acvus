@@ -1,0 +1,2 @@
+// expect "xyz"
+let s = "ab".to_string(); let s2 = "cd".to_string(); let c = true; let q = if c { &mut s } else { &mut s2 }; *q = "xyz".to_string(); s

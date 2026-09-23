@@ -198,6 +198,7 @@ fn check_functions(
                 format!("[{}]", i.resolve(as_slice.fn_ref.name))
             }
             CastKind::Str { as_str } => format!("str[{}]", i.resolve(as_str.fn_ref.name)),
+            CastKind::Reborrow { .. } => "reborrow".to_string(),
         })
         .collect();
     casts.sort();

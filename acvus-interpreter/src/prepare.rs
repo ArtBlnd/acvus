@@ -3826,6 +3826,17 @@ impl<'a> Prepare<'a> {
                 let dst = self.off(*dst);
                 node(move |next| run_ops::Project { dst, at, next })
             }
+            // A reference through a view names what the view names, so it is
+            // the view's own pair (RFC-0029 rule 3: no `&&T`).
+            InstKind::Ref {
+                dst,
+                target: RefTarget::Through(view),
+                path,
+                ..
+            } if path.is_empty() && is_slice(self.ty(*view)) => {
+                let (dst, src) = (self.pair(*dst), self.pair(*view));
+                node(move |next| control::MovWide { dst, src, next })
+            }
             InstKind::Ref {
                 dst, target, path, ..
             } => {

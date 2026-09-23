@@ -97,6 +97,9 @@ pub enum CastKind {
     /// `String`'s own `as_str` of the reference, which the lowering emits as
     /// an `AsSlice` and not a call (RFC-0062 rule 3).
     Str { as_str: ExternCast },
+    /// A `&mut` where the `&` `shared` is taken: the shared reborrow `&r`
+    /// gives (RFC-0029 rule 3).
+    Reborrow { shared: Ty },
 }
 
 /// A cast function at the type of one call of it.

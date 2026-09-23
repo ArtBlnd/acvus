@@ -1,0 +1,2 @@
+// expect true
+let v = vec([1, 3]); let w = vec([2]); let c = true; let r = if c { &mut v } else { &w }; contains(r, &3)

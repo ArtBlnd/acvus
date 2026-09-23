@@ -25,6 +25,18 @@ fn runs_to(source: &str, value: &str) {
     }
 }
 
+fn refused(source: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        match outcome(source, opt) {
+            Outcome::Refused(why) => assert!(
+                !why.contains("[validate:"),
+                "at {opt:?}, the MIR validator refused what the checker admitted: {why}"
+            ),
+            other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
+        }
+    }
+}
+
 #[test]
 fn corpus_child() {
     corpus::child();
@@ -117,7 +129,7 @@ fn a_reassigned_reference_releases_its_old_loan() {
 /// to `String`.
 #[test]
 fn a_concatenation_on_a_lambda_parameter() {
-    runs_to("let f = |x| -> x + \"b\"; f(\"a\".to_string())", "ab");
+    runs_to("let f = |x| -> x + \"b\"; f(\"a\".to_string())", "\"ab\"");
 }
 
 /// RFC-0018 rule 10: a captured `String` is seen as `&String`; RFC-0020:
@@ -189,6 +201,38 @@ fn a_mutable_loop_over_strings_replaces_each_whole() {
     runs_to(
         "let v = vec([\"a\".to_string(), \"b\".to_string()]); \
          for x in &mut v { *x = x.clone() + \"!\"; } v[0u64].clone() + &v[1u64]",
-        "a!b!",
+        "\"a!b!\"",
     );
+}
+
+/// `==` and `clone` on a structural value are its fields' (a word, a
+/// `String`, an extension type's own instance), field by field.
+#[test]
+fn a_structural_value_compares_and_clones_field_by_field() {
+    runs_to("let o = { a: 1, }; let p = { a: 1, }; o == p", "true");
+    runs_to(
+        "let o = { a: { b: 1, }, }; let p = { a: { b: 2, }, }; o == p",
+        "false",
+    );
+    runs_to("let t = (1, 2); t == (1, 2)", "true");
+    runs_to("[1, 2] == [1, 2]", "true");
+    runs_to("let o = { a: 1, }; clone(&o).a", "1");
+    runs_to(
+        "let o = { a: 1, s: \"x\".to_string(), }; let c = clone(&o); c.s",
+        "\"x\"",
+    );
+    runs_to(
+        "let o = { v: vec([1]), }; let c = clone(&o); c.v.push(2); o.v.len() + c.v.len()",
+        "3",
+    );
+}
+
+/// Two objects compare only where their field sets are one: `==` grows
+/// neither side. Two enum values compare by tag whatever variants each
+/// side's type names.
+#[test]
+fn objects_compare_at_one_field_set_and_enums_at_any_variant_set() {
+    refused("let o = { a: 1, }; let p = { a: 1, b: 2, }; o == p");
+    runs_to("A::X(1) == A::Y(2)", "false");
+    runs_to("A::X(1) == A::X(1)", "true");
 }

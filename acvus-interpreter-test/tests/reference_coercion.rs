@@ -46,8 +46,12 @@ fn corpus_child() {
 #[test]
 fn a_mutable_reference_is_passed_where_a_shared_one_is_taken() {
     runs_to("let v = vec([1]); let t = &mut v; len(t)", "1");
-    runs_to("let s = \"a\".to_string(); let t = &mut s; clone(t)", "a");
-    runs_to("let o = { a: 7, }; let t = &mut o; clone(t).a", "7");
+    runs_to("let s = \"a\".to_string(); let t = &mut s; clone(t)", "\"a\"");
+    runs_to("let v = vec([1, 2]); let t = &mut v; contains(t, &2)", "true");
+    runs_to(
+        "let s = \"ab\".to_string(); let t = &mut s; contains(t, \"a\")",
+        "true",
+    );
 }
 
 #[test]
@@ -94,4 +98,26 @@ fn a_mutable_reference_joined_as_shared_stays_mutable_where_it_was_bound() {
 fn a_shared_reference_never_reaches_a_mutable_position() {
     refused_with("let v = vec([1]); let t = &v; t.push(2); 0", "");
     refused_with("let v = vec([1]); let t = &v; push(t, 2); 0", "");
+}
+
+#[test]
+fn a_mutable_view_is_reborrowed_as_itself() {
+    runs_to(
+        "let v = vec([1, 2]); let s = v.as_slice_mut(); let r = &s; len(r)",
+        "2",
+    );
+    runs_to("let v = vec([1, 2]); let s = v.as_slice_mut(); s.len()", "2");
+    runs_to("let v = vec([1, 2]); let s = v.as_slice_mut(); len(s)", "2");
+}
+
+#[test]
+fn a_trapping_arm_leaves_the_references_to_meet() {
+    for source in [
+        "let a = vec([1]); let e = vec([1, 2]); let c = 0; \
+         let r = match c { 0 => &mut a, 1 => &e, _ => panic(\"no\".to_string()), }; r.len()",
+        "let a = vec([1]); let e = vec([1, 2]); let c = 1; \
+         let r = match c { 0 => panic(\"no\".to_string()), 1 => &mut a, _ => &e, }; r.len()",
+    ] {
+        runs_to(source, "1");
+    }
 }

@@ -135,6 +135,13 @@ Status: Accepted
    settled to a reborrow or a plain reference when the type resolves; it
    still carries a parameter's type back to the place. A lend nothing
    resolves closes on its least element, a plain reference.
+5. A `&mut T` reaches a position of type `&T` — an argument, a flow, a view
+   (`&[T]`, `&str`) of what it names — as the shared reborrow of rule 3, and
+   the value it came from keeps `&mut T`. A candidate taking the `&T` takes
+   such an argument directly (RFC-0043 rule 1). Where references meet — the
+   branches of an `if`, the arms of a `match` — a `&T` and a `&mut T` meet
+   at a `&T`, which each `&mut` reaches by that reborrow. A `&T` never
+   reaches a `&mut T`.
 
 **Why.** A check that needs an optimization to see a conflict is not a check
 of the source. Typing `&r` as `&&T` while lowering it as a reborrow left the

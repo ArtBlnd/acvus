@@ -1,0 +1,2 @@
+// refuse
+let x = 1; let y = 2; let c = true; let p = &mut x; let q = if c { p } else { &y }; *p = 5; *q

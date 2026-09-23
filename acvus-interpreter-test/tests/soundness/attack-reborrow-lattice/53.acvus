@@ -1,0 +1,2 @@
+// refuse
+let a = vec([1]); let b = vec([1, 2]); for k in 0..3 { let r = match k { 0 => &mut a, _ => &b }; r.push(1); } a.len()

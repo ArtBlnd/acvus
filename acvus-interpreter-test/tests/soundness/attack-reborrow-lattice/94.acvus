@@ -1,0 +1,2 @@
+// refuse
+let a = vec([1]); let e = vec([3]); let k = 2; let r = match k { 0 => std::panic("no".to_string()), 1 => &e, _ => &mut a }; r.push(1); a.len()

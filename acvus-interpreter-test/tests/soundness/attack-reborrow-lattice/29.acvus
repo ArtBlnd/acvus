@@ -1,0 +1,2 @@
+// expect 12
+let v = vec([1]); let w = vec([2]); let c = true; let t = &mut v; let u = clone(t); t.push(9); u.len() * 10 + v.len()

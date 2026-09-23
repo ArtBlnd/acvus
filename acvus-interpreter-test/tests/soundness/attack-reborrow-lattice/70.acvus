@@ -1,0 +1,2 @@
+// refuse
+let x = 1; let y = 2; let c = true; let f = |p| -> { *p = 9; 0 }; let q = if c { &mut x } else { &y }; f(q); x

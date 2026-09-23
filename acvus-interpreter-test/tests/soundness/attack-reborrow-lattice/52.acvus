@@ -1,0 +1,2 @@
+// expect 6
+let a = vec([1]); let b = vec([1, 2]); let e = vec([1, 2, 3]); let total = 0u64; for k in 0..3 { let r = match k { 0 => &mut a, 1 => &b, _ => &mut e }; total = total + r.len(); } total

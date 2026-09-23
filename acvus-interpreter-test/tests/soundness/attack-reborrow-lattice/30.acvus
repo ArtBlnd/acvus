@@ -1,0 +1,2 @@
+// refuse
+let v = vec([1]); let w = vec([2]); let c = true; let t = &mut v; let xs = [if c { t } else { &w }]; xs[0].len()

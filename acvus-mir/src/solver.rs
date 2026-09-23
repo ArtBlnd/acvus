@@ -21,8 +21,8 @@ use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, ErrorToken, FieldSet,
     Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm,
     LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
-    RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry,
-    View, Viewed, could_match_pattern, matches_pattern,
+    RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry, View,
+    Viewed, could_match_pattern, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -200,6 +200,9 @@ pub enum MismatchReason {
     ObjectFieldNotDeclared { declared: Astr, field: Astr },
     /// The union of the two field sets is wider than `ObjectTy::MAX_FIELDS`.
     ObjectTooWide { fields: usize },
+    /// The first side is a `&mut` and the second a `&`: a flow of the first
+    /// into the second reborrows it shared (RFC-0029 rule 3).
+    Weakens,
 }
 
 /// How two effects are related by a constraint.
@@ -1025,7 +1028,11 @@ impl Terms {
             }
             (TyTerm::Ref(ma, ia), TyTerm::Ref(mb, ib)) => {
                 if ma != mb {
-                    return Err(mismatch(self));
+                    let reason = match (ma, mb) {
+                        (Mutability::Mut, Mutability::Shared) => MismatchReason::Weakens,
+                        _ => MismatchReason::NoJoin,
+                    };
+                    return Err(mismatch_for(self, reason));
                 }
                 self.join(&ia.ty, &ib.ty, Position::Argument, kind, registry)?;
                 self.unify_repr(ia.repr, ib.repr, kind)
@@ -1883,12 +1890,44 @@ pub struct UndecidedCall {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
     Direct,
+    /// A `&mut` reaching a `&` parameter: as direct as `Direct` (RFC-0029
+    /// rule 3), and not joined, since the argument keeps its `&mut`.
+    Reborrowed,
     Converted,
     /// The argument reaches the parameter as a view of the storage it
     /// lends, which the checker takes at the argument and the decision
     /// therefore cannot unify (RFC-0062 rule 3).
     Viewed,
     Refused,
+}
+
+impl Admission {
+    fn is_direct(self) -> bool {
+        matches!(self, Admission::Direct | Admission::Reborrowed)
+    }
+}
+
+/// RFC-0043 rule 1: a candidate that takes the argument only by conversion
+/// or by view leaves the set where another takes it directly.
+#[derive(Clone, Copy)]
+pub struct Kept {
+    direct: bool,
+}
+
+impl Kept {
+    pub fn among(admissions: &[Admission]) -> Self {
+        Self {
+            direct: admissions.iter().any(|admission| admission.is_direct()),
+        }
+    }
+
+    pub fn keeps(self, admission: Admission) -> bool {
+        match admission {
+            Admission::Direct | Admission::Reborrowed => true,
+            Admission::Converted | Admission::Viewed => !self.direct,
+            Admission::Refused => false,
+        }
+    }
 }
 
 impl Decision {
@@ -1940,6 +1979,9 @@ pub enum Conversion {
         cast: QualifiedRef,
         back: QualifiedRef,
     },
+    /// A `&mut` reaches a `&` of what it names as the shared reborrow `&r`
+    /// gives (RFC-0029 rule 3).
+    Reborrow,
 }
 
 /// Why a decision did not settle.
@@ -2974,15 +3016,11 @@ impl<'src> Solver<'src> {
             .iter()
             .map(|option| self.admits(&option.candidate, argument.index, &argument.ty))
             .collect();
-        let direct = admissions.contains(&Admission::Direct);
+        let kept = Kept::among(&admissions);
         options
             .into_iter()
             .zip(admissions)
-            .filter(|(_, admission)| match admission {
-                Admission::Direct => true,
-                Admission::Converted | Admission::Viewed => !direct,
-                Admission::Refused => false,
-            })
+            .filter(|(_, admission)| kept.keeps(*admission))
             .map(|(option, _)| option)
             .collect()
     }
@@ -3146,6 +3184,7 @@ impl<'src> Solver<'src> {
             match self.admits(&option.candidate, argument.index, &argument.ty) {
                 Admission::Refused => false,
                 Admission::Viewed => self.views_as(&argument.ty, &trial.resolve_ty(param)),
+                Admission::Reborrowed => converts(&trial, self.registry, &argument.ty, param),
                 Admission::Direct | Admission::Converted => trial
                     .join(
                         &argument.ty,
@@ -3200,6 +3239,12 @@ impl<'src> Solver<'src> {
         if self.term_within_shapes(arg, &shapes) {
             return Admission::Direct;
         }
+        if self
+            .shared_reborrow(arg)
+            .is_some_and(|shared| self.term_within_shapes(&shared, &shapes))
+        {
+            return Admission::Reborrowed;
+        }
         if shapes.iter().any(|shape| self.views_as(arg, shape)) {
             return Admission::Viewed;
         }
@@ -3252,18 +3297,29 @@ impl<'src> Solver<'src> {
             return None;
         };
         let storage = self.terms.resolve_ty(&storage.ty);
-        if mutability == Mutability::Shared && matches!(storage, TyTerm::String) {
+        if matches!(storage, TyTerm::String) {
             return Some(Viewed {
                 view: View::Str,
                 mutability,
             });
         }
-        crate::ty::SliceableHead::of(&storage)
-            .is_some_and(|head| self.registry.lends_a_slice(head, mutability))
-            .then_some(Viewed {
+        let head = crate::ty::SliceableHead::of(&storage)?;
+        [mutability, Mutability::Shared]
+            .into_iter()
+            .filter(|lent| mutability.reaches(*lent))
+            .find(|lent| self.registry.lends_a_slice(head, *lent))
+            .map(|mutability| Viewed {
                 view: View::Slice,
                 mutability,
             })
+    }
+
+    /// The `&` a `&mut` argument reaches a shared position as.
+    fn shared_reborrow(&self, arg: &InferTy) -> Option<InferTy> {
+        let TyTerm::Ref(Mutability::Mut, named) = self.terms.shallow_resolve_ty(arg) else {
+            return None;
+        };
+        Some(TyTerm::Ref(Mutability::Shared, named))
     }
 
     fn views_as<V>(&self, arg: &InferTy, shape: &TyTerm<V>) -> bool
@@ -3274,7 +3330,30 @@ impl<'src> Solver<'src> {
             return false;
         };
         self.lent_view(arg).is_some_and(|lent| {
-            lent.mutability == *mutability && View::of(&pointee.ty) == Some(lent.view)
+            lent.mutability.reaches(*mutability) && View::of(&pointee.ty) == Some(lent.view)
+        })
+    }
+
+    /// The view the candidate's parameter at `index` takes the argument as,
+    /// where it takes it as one.
+    pub fn view_wanted(
+        &self,
+        candidate: &SignatureCandidate,
+        index: usize,
+        arg: &InferTy,
+    ) -> Option<Viewed> {
+        let TyVarBound::OneOf { shapes, .. } = candidate.param_bound(index) else {
+            return None;
+        };
+        shapes.iter().find_map(|shape| {
+            let TyTerm::Ref(mutability, pointee) = shape else {
+                return None;
+            };
+            let view = View::of(&pointee.ty)?;
+            self.views_as(arg, shape).then_some(Viewed {
+                view,
+                mutability: *mutability,
+            })
         })
     }
 
@@ -3507,6 +3586,20 @@ impl<'src> Solver<'src> {
         let to_r = self.terms.shallow_resolve_ty(to);
         if matches!(from_r, TyTerm::Var(_)) || matches!(to_r, TyTerm::Var(_)) {
             return Progress::Unchanged;
+        }
+        if let Some(Reborrowed {
+            from: named_from,
+            to: named_to,
+        }) = reborrowed(&from_r, &to_r)
+        {
+            return match self.settle_join(&named_from.ty, &named_to.ty) {
+                Ok(()) => Progress::Settled(Answer::Conversion(Conversion::Reborrow)),
+                Err(_) => Progress::Failed(Unsettled::NoConversion {
+                    decision: id,
+                    from: self.terms.resolve_ty(from),
+                    to: self.terms.resolve_ty(to),
+                }),
+            };
         }
         let rules = self.conversion_rules(from, to);
         let [rule] = rules.as_slice() else {
@@ -4216,9 +4309,40 @@ where
 
 /// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
 /// the value is cast back when the call ends (RFC-0041).
+/// A `&mut` reaching a `&` by a reborrow: what each names.
+struct Reborrowed<'a> {
+    from: &'a TypeArg<Infer>,
+    to: &'a TypeArg<Infer>,
+}
+
+fn reborrowed<'a>(from: &'a InferTy, to: &'a InferTy) -> Option<Reborrowed<'a>> {
+    match (from, to) {
+        (TyTerm::Ref(Mutability::Mut, from), TyTerm::Ref(Mutability::Shared, to)) => {
+            Some(Reborrowed { from, to })
+        }
+        _ => None,
+    }
+}
+
 fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy) -> bool {
     let from_r = terms.resolve_ty(from);
     let to_r = terms.resolve_ty(to);
+    if let Some(Reborrowed {
+        from: named_from,
+        to: named_to,
+    }) = reborrowed(&from_r, &to_r)
+    {
+        let mut trial = terms.clone();
+        return trial
+            .join(
+                &named_from.ty,
+                &named_to.ty,
+                Position::Value,
+                JoinKind::Decision,
+                registry,
+            )
+            .is_ok();
+    }
     let Some(references) = ReferencePair::of(&from_r, &to_r) else {
         return !conversion_rules(terms, registry, from, to).is_empty();
     };

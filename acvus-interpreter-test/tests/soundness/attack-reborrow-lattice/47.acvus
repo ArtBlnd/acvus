@@ -1,0 +1,2 @@
+// expect 3
+let a = [1, 2, 3]; let b = [4, 5, 6]; let c = false; let r = if c { &mut a } else { &b }; len(r)

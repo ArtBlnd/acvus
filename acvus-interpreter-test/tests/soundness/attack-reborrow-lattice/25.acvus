@@ -1,0 +1,2 @@
+// expect 34
+let v = vec([3, 1, 2]); let t = &mut v; let m = max(t); t.push(9); let x = match m { Some(x) => x, None => 0 }; x * 10 + v[3u64] - 5

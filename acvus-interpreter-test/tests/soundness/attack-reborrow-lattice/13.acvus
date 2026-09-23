@@ -1,0 +1,2 @@
+// expect "abcd"
+let s = "ab".to_string(); let t = &mut s; let u = clone(t); *t = "cd".to_string(); concat(&u, t)

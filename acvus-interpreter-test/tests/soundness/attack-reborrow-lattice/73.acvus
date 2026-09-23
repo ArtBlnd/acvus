@@ -1,0 +1,2 @@
+// refuse
+let a = vec([1]); let b = vec([2]); let e = vec([3]); let k = 1; let d = true; let r = match k { 0 => &mut a, 1 => if d { &mut b } else { &e }, 2 => std::panic("no".to_string()), _ => &mut e }; r.push(1); b.len()

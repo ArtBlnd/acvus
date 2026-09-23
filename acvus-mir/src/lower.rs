@@ -2196,6 +2196,20 @@ impl<'a> Lowerer<'a> {
             Some(CastKind::ThroughRef { .. }) => {
                 unreachable!("a cast through a reference is lowered where the argument is lent")
             }
+            Some(CastKind::Reborrow { shared }) => {
+                let dst = self.alloc_val();
+                self.set_val_type(dst, shared);
+                self.emit_inst(
+                    span,
+                    InstKind::Ref {
+                        dst,
+                        target: RefTarget::Through(val),
+                        path: vec![],
+                        mutability: Mutability::Shared,
+                    },
+                );
+                dst
+            }
             None => val,
         }
     }
@@ -3114,6 +3128,9 @@ impl<'a> Lowerer<'a> {
             Some(CastKind::Str { as_str }) => {
                 let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
                 self.emit_as_slice(span, reference, Mutability::Shared, &as_str)
+            }
+            Some(CastKind::Reborrow { .. }) => {
+                self.emit_ref(span, place.target, place.path, Mutability::Shared, place.ty)
             }
             None => self.emit_ref(span, place.target, place.path, mutability, place.ty),
         }

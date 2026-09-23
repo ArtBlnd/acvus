@@ -1,0 +1,2 @@
+// expect 11
+let x = 1; let y = 2; let c = true; let p = &mut x; let q = if c { p } else { &y }; let n = *q; *p = n + 10; x

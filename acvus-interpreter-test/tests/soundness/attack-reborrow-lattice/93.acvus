@@ -1,0 +1,2 @@
+// expect 1
+let a = vec([1]); let e = vec([3]); let k = 2; let r = match k { 0 => std::panic("no".to_string()), 1 => &mut a, _ => &e }; r.len()

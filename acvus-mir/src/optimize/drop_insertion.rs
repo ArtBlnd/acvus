@@ -929,9 +929,7 @@ mod tests {
 
         insert_drops(&mut cfg, &val_types);
         let kinds: Vec<&InstKind> = cfg.blocks[0].insts.iter().map(|i| &i.kind).collect();
-        let dropped_after = |write: usize| {
-            matches!(kinds.get(write + 1), Some(InstKind::Drop { src }) if *src == v(5))
-        };
+        let dropped_after = |write: usize| matches!(kinds.get(write + 1), Some(InstKind::Drop { src }) if *src == v(5));
         let writes: Vec<usize> = kinds
             .iter()
             .enumerate()

@@ -1,0 +1,2 @@
+// expect 21
+let v = vec([1]); let w = vec([2]); let c = true; let r = if c { &mut v } else { &mut w }; r.push(3); v.len() * 10 + w.len()

@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([3, 1, 2]); let w = vec([5]); let c = true; let r = if c { &mut v } else { &w }; match max(r) { Some(k) => k, None => 0 }

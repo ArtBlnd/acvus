@@ -1,0 +1,2 @@
+// refuse
+let v = vec([1]); let w = vec([2]); let c = true; let f = |x| -> as_slice(x); let r = &mut v; let s = f(r); r.push(1); s.len()

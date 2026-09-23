@@ -1,0 +1,2 @@
+// refuse
+let v = vec([1]); let w = vec([2]); let c = true; let total = 0u64; let r = &mut v; let s = &w; for i in 0..2 { r.push(i); total = total + s.len(); s = if c { r } else { &w }; } total

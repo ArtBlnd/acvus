@@ -1,0 +1,2 @@
+// expect true
+let s = "ab".to_string(); let t = &mut s; let a = contains(t, "b"); let b = t.contains("a"); *t = "q".to_string(); a && b && len(t) == 1

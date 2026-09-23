@@ -1,0 +1,2 @@
+// refuse
+let xs = [1, 2]; let c = true; let p = &mut xs[0]; let q = if c { p } else { &xs[1] }; *p = 5; *q

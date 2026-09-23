@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([1]); let w = vec([2]); let c = true; let r = &mut v; let s = as_slice(r); let n = s.len(); r.push(1); n + v.len()

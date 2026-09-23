@@ -1,0 +1,2 @@
+// refuse
+let s = "ab".to_string(); let s2 = "cd".to_string(); let c = true; let q = if c { &mut s } else { &s2 }; s = "z".to_string(); len(q)

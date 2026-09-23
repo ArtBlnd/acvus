@@ -1,0 +1,2 @@
+// expect 4
+let v = vec([1]); let w = vec([2]); let c = true; let k = 0; let r = &mut v; let s = match k { 0 => r, _ => &w }; let n = s.len(); r.push(5); r.push(6); n + v.len()

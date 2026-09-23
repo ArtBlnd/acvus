@@ -1,0 +1,2 @@
+// expect 1
+let v = vec([1]); let w = vec([2]); let c = true; let d = false; let r = if c { &mut v } else if d { std::panic("no".to_string()) } else { &w }; r.len()

@@ -1,0 +1,2 @@
+// expect 1
+let v = vec([3, 1, 2]); let t = &mut v; let s = t.as_slice_mut(); s.sort(); let n = len(s); let m = max(s); t.push(7); let base = if n == 3u64 { 0 } else { 100 }; match m { Some(k) => base + v[0u64] + k - 3, None => 0 }

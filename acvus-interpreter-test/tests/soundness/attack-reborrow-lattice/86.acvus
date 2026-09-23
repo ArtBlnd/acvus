@@ -1,0 +1,2 @@
+// expect "x!"
+let s = "ab".to_string(); let t = &mut s; let q = if true { t } else { t }; *q = "x".to_string(); *q = concat(q, "!"); s

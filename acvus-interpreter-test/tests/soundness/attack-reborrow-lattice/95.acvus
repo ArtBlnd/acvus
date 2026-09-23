@@ -1,0 +1,2 @@
+// expect true
+let v = vec([3, 1, 2]); let s = v.as_slice_mut(); s.sort(); contains(s, &1)

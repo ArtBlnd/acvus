@@ -17,9 +17,9 @@ use crate::place::{
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
     Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice,
-    InstanceKind, LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch, MismatchReason,
-    ReceiverMode, ReferencePair, RequiredDecision, SettledSignature, SignatureCandidate,
-    SignatureName, SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
+    InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch,
+    MismatchReason, ReceiverMode, ReferencePair, RequiredDecision, SettledSignature,
+    SignatureCandidate, SignatureName, SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -842,6 +842,9 @@ enum PendingCast {
     Str {
         as_str: PendingExternCast,
     },
+    Reborrow {
+        shared: InferTy,
+    },
 }
 
 /// A cast function at the type of one call of it, its instance still the
@@ -1585,7 +1588,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     ) -> Result<(), Mismatch> {
         match self.solver.unify(value_ty, expected_ty) {
             Err(Mismatch {
-                reason: MismatchReason::ReprOpen(_),
+                reason: MismatchReason::ReprOpen(_) | MismatchReason::Weakens,
                 ..
             }) => {
                 self.convert_at(value_ty, expected_ty, site);
@@ -1654,7 +1657,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }),
             MismatchReason::NoJoin
             | MismatchReason::ReprOpen(_)
-            | MismatchReason::TaskTooHigh { .. } => None,
+            | MismatchReason::TaskTooHigh { .. }
+            | MismatchReason::Weakens => None,
         }
     }
 
@@ -1809,11 +1813,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// `&v` at a `&[T]` parameter is the container's own `as_slice` of it,
     /// and `&s` at a `&str` parameter is the `String`'s own `as_str`,
-    /// recorded at the argument (RFC-0047 rule 6, RFC-0062 rule 3). The
-    /// two mutabilities must agree, so `&v` at a `&mut [T]` parameter is
-    /// refused where every other argument mismatch is; so is a container
-    /// that declares no `as_slice`, and an argument already of the
-    /// parameter's own type unifies as it is.
+    /// recorded at the argument (RFC-0047 rule 6, RFC-0062 rule 3). A `&v`
+    /// at a `&mut [T]` parameter is refused where every other argument
+    /// mismatch is; so is a container that declares no `as_slice`, and an
+    /// argument already of the parameter's own type unifies as it is.
     fn meet_slice_parameter(
         &mut self,
         arg_ty: &InferTy,
@@ -1832,7 +1835,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(lent, _) = self.solver.shallow_resolve_ty(arg_ty) else {
             return false;
         };
-        if lent != mutability {
+        if !lent.reaches(mutability) {
             return false;
         }
         match self.coerce_viewed(arg_ty, param_ty, site, Viewed { view, mutability }) {
@@ -1864,7 +1867,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return SliceCoercion::NoDeclaration;
         };
         let referent = self.solver.resolve_ty(&container.ty);
-        self.slice_coercion(&referent, viewed, arg_ty, param_ty, site.id, site.span)
+        let lent_as = TyTerm::Ref(viewed.mutability, container);
+        self.slice_coercion(&referent, viewed, &lent_as, param_ty, site.id, site.span)
     }
 
     /// The declaration the referent's evidence settles on, recorded as the
@@ -2951,6 +2955,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     PendingCast::Str { as_str } => CastKind::Str {
                         as_str: self.frozen_cast(as_str)?,
                     },
+                    PendingCast::Reborrow { shared } => CastKind::Reborrow {
+                        shared: self.solver.close_ty(shared).ok()?,
+                    },
                 };
                 Some((coercion.at, kind))
             })
@@ -3185,6 +3192,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             let cast = match answer {
                 Conversion::Identity => continue,
+                Conversion::Reborrow => PendingCast::Reborrow {
+                    shared: conversion.to.clone(),
+                },
                 Conversion::Cast(fn_ref) => {
                     PendingCast::Value(self.cast_at(fn_ref, &conversion.from, &conversion.to, span))
                 }
@@ -4430,16 +4440,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .map(|option| self.solver.admits(&option.candidate, index, ty))
             .collect();
-        let direct = admissions.contains(&Admission::Direct);
+        let kept = Kept::among(&admissions);
         let mut converts = false;
         let mut views = false;
         *options = std::mem::take(options)
             .into_iter()
             .zip(admissions)
             .filter_map(|(mut option, admission)| match admission {
+                _ if !kept.keeps(admission) => None,
                 Admission::Direct => Some(option),
-                Admission::Converted | Admission::Viewed if direct => None,
-                Admission::Converted => {
+                Admission::Reborrowed | Admission::Converted => {
                     option.converted.push(ConvertedArgument {
                         index,
                         ty: ty.clone(),
@@ -4462,10 +4472,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return None;
         }
         if views {
-            let known = self.solver.lent_view(ty).filter(|_| !converts);
-            return Some(Reach::Viewed(match known {
-                Some(viewed) => DeferredView::Asked(viewed),
-                None => DeferredView::OfSettledParam,
+            let mut wanted: Vec<Viewed> = options
+                .iter()
+                .filter_map(|option| self.solver.view_wanted(&option.candidate, index, ty))
+                .collect();
+            wanted.dedup();
+            return Some(Reach::Viewed(match wanted.as_slice() {
+                [viewed] if !converts => DeferredView::Asked(*viewed),
+                _ => DeferredView::OfSettledParam,
             }));
         }
         Some(match converts {
@@ -4554,16 +4568,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 seen_as,
             })
             .collect();
-        let direct = admitted
-            .iter()
-            .any(|one| one.admission == Admission::Direct);
+        let admissions: Vec<Admission> = admitted.iter().map(|one| one.admission).collect();
+        let kept_among = Kept::among(&admissions);
         let kept: Vec<(CandidateReceiver, InferTy)> = admitted
             .into_iter()
-            .filter(|one| match one.admission {
-                Admission::Direct => true,
-                Admission::Converted | Admission::Viewed => !direct,
-                Admission::Refused => false,
-            })
+            .filter(|one| kept_among.keeps(one.admission))
             .map(|one| (one.seen, one.seen_as))
             .collect();
         let Some(mode) = self.one_receiver_mode(&kept) else {
@@ -6336,7 +6345,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let result_ty = match else_branch {
                     Some(eb) => {
                         let else_ = self.check_else_branch(eb);
-                        self.join_branches(&then, &else_, *span)
+                        self.join_branches(&[then, else_], *span)
                     }
                     None => TyTerm::Unit,
                 };
@@ -6383,7 +6392,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let result_ty = match else_branch {
                     Some(eb) => {
                         let else_ = self.check_else_branch(eb);
-                        self.join_branches(&then, &else_, *span)
+                        self.join_branches(&[then, else_], *span)
                     }
                     None => TyTerm::Unit,
                 };
@@ -6405,7 +6414,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     ) -> InferTy {
         let source_ty = self.check_expr(scrutinee);
         self.note_place(scrutinee);
-        let mut joined: Option<Branch> = None;
+        let mut branches: Vec<Branch> = Vec::with_capacity(arms.len());
         for arm in arms {
             let arm_source = self.reachable_arm_source(&arm.pattern, &source_ty, arm.span);
             self.push_scope();
@@ -6429,21 +6438,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 },
             };
             self.pop_scope();
-            joined = Some(match joined {
-                None => branch,
-                Some(acc) => Branch {
-                    ty: self.join_branches(&acc, &branch, span),
-                    value: None,
-                },
-            });
+            branches.push(branch);
         }
+        let joined = match branches.as_slice() {
+            [] => TyTerm::Unit,
+            [only] => only.ty.clone(),
+            all => self.join_branches(all, span),
+        };
         if !crate::lower::Dispatch::is_decidable(arms, self.interner) {
             self.error(MirErrorKind::MatchIsNotADispatch, span);
         }
         if let Some(key) = crate::lower::Dispatch::repeated_key(arms, self.interner) {
             self.error(MirErrorKind::MatchArmKeyRepeated { key }, span);
         }
-        joined.map_or(TyTerm::Unit, |b| b.ty)
+        joined
     }
 
     /// RFC-0051 rule 2: an arm contributes no variant. A pattern naming a tag
@@ -7030,34 +7038,63 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Some((name, type_params, payload))
     }
 
-    /// The type of an `if` with both branches: each flows into one fresh
-    /// variable, so a branch typed `!` (a call that traps) leaves the other
-    /// branch's type standing (RFC-0038). The `then` branch fills the
-    /// variable; the `else` branch meets it, and a conversion there is a
-    /// cast of the `else` value.
-    fn join_branches(&mut self, then: &Branch, else_: &Branch, span: Span) -> InferTy {
-        let joined = self.solver.fresh_ty_var();
-        let then_ok = self.solver.unify(&then.ty, &joined).is_ok();
-        let else_ok = then_ok
-            && match else_.value {
+    /// The type the branches of an `if` or the arms of a `match` meet at:
+    /// each branch flows into one variable, so a branch typed `!` (a call
+    /// that traps) leaves the others' type standing (RFC-0038), and a
+    /// conversion is a cast of that branch's value. References of both
+    /// mutabilities meet at a `&` of their own, which a `&mut` branch
+    /// reaches by a reborrow (RFC-0029 rule 3).
+    fn join_branches(&mut self, branches: &[Branch], span: Span) -> InferTy {
+        let joined = match self.shared_meeting(branches) {
+            Some(shared) => shared,
+            None => self.solver.fresh_ty_var(),
+        };
+        let failed = branches.iter().find(|branch| {
+            let met = match branch.value {
                 Some(id) => {
                     let site = ConversionSite {
                         id,
                         span,
                         report: ConversionReport::Value,
                     };
-                    self.flow(&else_.ty, &joined, site).is_ok()
+                    self.flow(&branch.ty, &joined, site)
                 }
-                None => self.solver.unify(&else_.ty, &joined).is_ok(),
+                None => self.solver.unify(&branch.ty, &joined),
             };
-        if !else_ok {
+            met.is_err()
+        });
+        if let (Some(first), Some(failed)) = (branches.first(), failed) {
             self.branch_mismatches.push(BranchMismatch {
-                then: then.ty.clone(),
-                else_: else_.ty.clone(),
+                then: first.ty.clone(),
+                else_: failed.ty.clone(),
                 span,
             });
         }
         joined
+    }
+
+    /// A `&` of a fresh referent where every branch is a reference or `!`
+    /// and the references do not agree on their mutability.
+    fn shared_meeting(&mut self, branches: &[Branch]) -> Option<InferTy> {
+        let mut mutabilities = Vec::with_capacity(branches.len());
+        let mut repr = None;
+        for branch in branches {
+            match self.solver.shallow_resolve_ty(&branch.ty) {
+                TyTerm::Ref(mutability, named) => {
+                    mutabilities.push(mutability);
+                    repr.get_or_insert(named.repr);
+                }
+                TyTerm::Never => {}
+                _ => return None,
+            }
+        }
+        if !mutabilities.contains(&Mutability::Shared) || !mutabilities.contains(&Mutability::Mut) {
+            return None;
+        }
+        Some(TyTerm::Ref(
+            Mutability::Shared,
+            Box::new(TypeArg::new(repr?, self.solver.fresh_ty_var())),
+        ))
     }
 
     /// `inner?` (RFC-0038): the payload of an `Ok` or a `Some`, while the

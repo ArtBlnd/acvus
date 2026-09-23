@@ -1,0 +1,2 @@
+// refuse
+let v = vec([1]); let w = vec([2]); let c = true; let f = |x| -> { x.push(1); 0 }; let r = if c { &mut v } else { &w }; f(r)

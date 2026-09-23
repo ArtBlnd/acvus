@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([1]); let w = vec([2]); let c = true; let r = if c { &mut v } else { &w }; let n = r.len(); v.push(1); n + v.len()

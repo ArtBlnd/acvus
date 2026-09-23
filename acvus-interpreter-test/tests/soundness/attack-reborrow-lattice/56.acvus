@@ -1,0 +1,2 @@
+// expect 2
+let v = vec([1]); let w = vec([2]); let c = true; let t = &mut v; let b = t.contains(&1); t.push(2); if b { v.len() } else { 0u64 }

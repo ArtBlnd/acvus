@@ -1,0 +1,2 @@
+// expect 10
+let v = vec([1]); let w = vec([2]); let c = true; let total = 0u64; let r = &mut v; for i in 0..3 { let s = if c { r } else { &w }; total = total + s.len(); r.push(i); } total + v.len()

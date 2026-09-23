@@ -2964,6 +2964,13 @@ pub enum Mutability {
 }
 
 impl Mutability {
+    /// Whether a reference of this mutability reaches a position of
+    /// `wanted`'s: a `&mut` reaches a `&` by the reborrow `&r` gives
+    /// (RFC-0029 rule 3), and a `&` never reaches a `&mut`.
+    pub fn reaches(self, wanted: Mutability) -> bool {
+        self == wanted || wanted == Mutability::Shared
+    }
+
     pub fn prefix(self) -> &'static str {
         match self {
             Mutability::Shared => "&",
