@@ -29,6 +29,7 @@ mod identity_sources;
 mod index;
 mod inline;
 mod integers;
+mod iv_canonical;
 mod lambda_summary;
 mod lend;
 mod lent_iterator_liveness;

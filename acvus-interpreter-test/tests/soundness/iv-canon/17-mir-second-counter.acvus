@@ -1,0 +1,2 @@
+// expect 45
+let j = @base; let s = 0; for i in 0..@n { s = s + j; j = j + 2; } s + j

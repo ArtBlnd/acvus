@@ -1,0 +1,2 @@
+// expect 30020
+let j = 0; let s = 0; for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j

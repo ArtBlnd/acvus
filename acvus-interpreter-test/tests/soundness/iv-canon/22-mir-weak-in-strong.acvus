@@ -1,0 +1,2 @@
+// expect 135
+let t = 0; for i in 0..@n { let q = 0; for k in 0..@m { q = q + 3; } t = t * 2 + q; } t

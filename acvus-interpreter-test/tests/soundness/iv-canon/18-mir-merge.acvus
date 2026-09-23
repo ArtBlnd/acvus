@@ -1,0 +1,2 @@
+// expect 30
+let s = 0; let j = 1; for i in 0..@n { s = s + j * 3; j = j + 1; } s

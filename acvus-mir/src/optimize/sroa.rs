@@ -36,7 +36,7 @@ use super::ssa_pass::{apply_subst, apply_subst_terminator, patch_instructions};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::{escape, inst_info};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
-use crate::ir::{Inst, InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
+use crate::ir::{ExitTrip, Inst, InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
 use crate::ty::Ty;
 
 /// The registers one storage slot is replaced by, and -- for an enum --
@@ -533,6 +533,18 @@ fn thread_one(
     at: BlockIdx,
     pred: BlockIdx,
 ) -> Option<Threaded> {
+    // An exit edge that defines the trip count fills the target's first
+    // parameter itself, so its arguments are not indexed by the target's
+    // parameters, and it is not threaded (RFC-0057 rule 9).
+    if let Terminator::For {
+        exit,
+        exit_trip: ExitTrip::Defined,
+        ..
+    } = &graph.cfg.blocks[pred.0].terminator
+        && *exit == graph.cfg.blocks[at.0].label
+    {
+        return None;
+    }
     let params = &graph.cfg.blocks[at.0].params;
     let carry = edge
         .args
@@ -838,11 +850,20 @@ fn incoming(term: &Terminator, label: Label) -> Vec<Incoming<'_>> {
             .filter(|(to, _)| **to == label)
             .map(|(_, args)| Incoming::Carries(args))
             .collect(),
-        // A `For`'s exit edge carries its target's whole parameter list; its
-        // body edge fills the body's leading parameters itself (RFC-0057).
+        // A `For`'s exit edge carries its target's whole parameter list
+        // unless it defines the trip count, which it fills as its body edge
+        // fills the body's leading parameters (RFC-0057 rules 2 and 9).
         Terminator::For {
-            exit, exit_args, ..
+            exit,
+            exit_trip: ExitTrip::Absent,
+            exit_args,
+            ..
         } if *exit == label => vec![Incoming::Carries(exit_args)],
+        Terminator::For {
+            exit,
+            exit_trip: ExitTrip::Defined,
+            ..
+        } if *exit == label => vec![Incoming::Fills],
         Terminator::For { body, .. } if *body == label => vec![Incoming::Fills],
         Terminator::For { .. }
         | Terminator::Jump { .. }

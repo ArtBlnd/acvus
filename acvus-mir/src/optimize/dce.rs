@@ -494,10 +494,11 @@ pub fn run(cfg: &mut CfgBody) {
                                 body,
                                 body_args,
                                 exit,
+                                exit_trip,
                                 exit_args,
                             } => [
                                 (body, source.supplied_params(), body_args),
-                                (exit, 0, exit_args),
+                                (exit, exit_trip.supplied_params(), exit_args),
                             ]
                             .into_iter()
                             .filter(|(label, _, _)| **label == block_label)
@@ -548,15 +549,27 @@ pub fn run(cfg: &mut CfgBody) {
     // would carry a second copy of a move-only value.
     //
     // A `For`'s body takes its element and its counter by position from the
-    // terminator, so those parameters stay whether anything reads them: the
-    // machine's `For` writes them there (RFC-0057).
+    // terminator, and its exit the trip count where the edge defines one,
+    // so those parameters stay whether anything reads them: the machine's
+    // `For` writes them there (RFC-0057 rules 2 and 9).
     let supplied: FxHashMap<Label, usize> = cfg
         .blocks
         .iter()
         .filter_map(|block| match &block.terminator {
-            Terminator::For { source, body, .. } => Some((*body, source.supplied_params())),
+            Terminator::For {
+                source,
+                body,
+                exit,
+                exit_trip,
+                ..
+            } => Some([
+                (*body, source.supplied_params()),
+                (*exit, exit_trip.supplied_params()),
+            ]),
             _ => None,
         })
+        .flatten()
+        .filter(|(_, pinned)| *pinned > 0)
         .collect();
     let dead_params: Vec<(Label, Vec<usize>)> = cfg
         .blocks
@@ -625,6 +638,7 @@ pub fn run(cfg: &mut CfgBody) {
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
                 let first = source.supplied_params();
@@ -633,7 +647,9 @@ pub fn run(cfg: &mut CfgBody) {
                     prune(body_args, &shifted);
                 }
                 if let Some(dead) = dead_of(*exit) {
-                    prune(exit_args, dead);
+                    let first = exit_trip.supplied_params();
+                    let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
+                    prune(exit_args, &shifted);
                 }
             }
             Terminator::Switch { arms, default, .. } => {

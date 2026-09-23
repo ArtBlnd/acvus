@@ -1,0 +1,2 @@
+// expect 430065
+let j = 100; let s = 0; for i in 0..5 { s = s + j; j = j + -7; } s * 1000 + j

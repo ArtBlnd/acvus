@@ -1,0 +1,2 @@
+// expect 28012
+let j = @n; let s = 0; for i in 0..@n { s = s + j; j = j + 2; } s * 1000 + j

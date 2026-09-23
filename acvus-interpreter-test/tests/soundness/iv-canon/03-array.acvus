@@ -1,0 +1,2 @@
+// expect 45998
+let a = [2, 3, 4]; let j = 10; let s = 0; for x in a { s = s + x * j; j = j + -4; } s * 1000 + j

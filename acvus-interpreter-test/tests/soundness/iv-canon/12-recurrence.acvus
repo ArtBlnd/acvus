@@ -1,0 +1,2 @@
+// expect 234
+let acc = 0; let j = 0; for i in 0..6 { acc = acc * 2 + (j * 3 + 1); j = j + 1; } acc

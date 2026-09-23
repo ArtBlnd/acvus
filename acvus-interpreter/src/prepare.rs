@@ -21,8 +21,8 @@ use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, Require
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, Chosen, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget,
-    SwitchKey, TwoWay, ValueId, two_way,
+    Callee, Chosen, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
+    RefTarget, SwitchKey, TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -55,11 +55,23 @@ macro_rules! for_head {
     ($prep:expr, $at:expr, |$src:ident, $head:ident, $counter:ident| $make:expr) => {{
         let prep: &Prepare<'_> = $prep;
         let terminator: usize = $at;
-        let InstKind::For { source, body, .. } = &prep.body.insts[terminator].kind else {
+        let InstKind::For {
+            source,
+            body,
+            exit_trip,
+            ..
+        } = &prep.body.insts[terminator].kind
+        else {
             panic!("instruction {terminator} is not a `For`")
         };
         let params: &[ValueId] = prep.block_params(body);
         let $counter: Off = prep.off(params[source.counter_param()]);
+        // The count is laid in the counter's register, and the exit edge's
+        // moves carry it to the exit block's first parameter (`exit_moves`).
+        let trip: Option<Off> = match exit_trip {
+            ExitTrip::Absent => None,
+            ExitTrip::Defined => Some($counter),
+        };
         match source {
             ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
                 type $head = control::Slice;
@@ -67,6 +79,7 @@ macro_rules! for_head {
                     slice: prep.pair(*slice),
                     elem: prep.off(params[0]),
                     index: $counter,
+                    trip,
                 };
                 $make
             }
@@ -78,17 +91,32 @@ macro_rules! for_head {
                 match (owns_large(prep.ty(element)), word_kind(prep.ty(element))) {
                     (true, None) => {
                         type $head = control::Array<true, false>;
-                        let $src = $head { array, elem, index };
+                        let $src = $head {
+                            array,
+                            elem,
+                            index,
+                            trip,
+                        };
                         $make
                     }
                     (false, Some(_)) => {
                         type $head = control::Array<false, true>;
-                        let $src = $head { array, elem, index };
+                        let $src = $head {
+                            array,
+                            elem,
+                            index,
+                            trip,
+                        };
                         $make
                     }
                     (false, None) => {
                         type $head = control::Array<false, false>;
-                        let $src = $head { array, elem, index };
+                        let $src = $head {
+                            array,
+                            elem,
+                            index,
+                            trip,
+                        };
                         $make
                     }
                     (true, Some(kind)) => panic!(
@@ -113,6 +141,7 @@ macro_rules! for_head {
                         hi,
                         elem: $counter,
                         from,
+                        trip,
                         width: PhantomData,
                     };
                     $make
@@ -1600,6 +1629,16 @@ impl<'a> Prepare<'a> {
     }
 
     fn moves_past(&mut self, label: &Label, args: &[ValueId], supplied_params: usize) -> Vec<Node> {
+        let pairs = self.carried_pairs(label, args, supplied_params);
+        self.ordered_moves(pairs)
+    }
+
+    fn carried_pairs(
+        &self,
+        label: &Label,
+        args: &[ValueId],
+        supplied_params: usize,
+    ) -> Vec<Carried> {
         let params = self.block_params(label);
         assert!(
             params.len() >= supplied_params,
@@ -1607,7 +1646,7 @@ impl<'a> Prepare<'a> {
              does not carry because its terminator fills them",
             params.len()
         );
-        let pairs: Vec<Carried> = params[supplied_params..]
+        params[supplied_params..]
             .iter()
             .zip(args)
             .map(|(param, arg)| Carried {
@@ -1617,10 +1656,47 @@ impl<'a> Prepare<'a> {
                 },
                 moved: self.moved(*arg),
             })
-            .collect();
+            .collect()
+    }
+
+    fn ordered_moves(&mut self, pairs: Vec<Carried>) -> Vec<Node> {
         let ordered = order_moves(pairs, self.scratch_slot());
         self.scratch_used = self.scratch_used.max(ordered.scratch_used);
         ordered.moves.iter().map(mov_op).collect()
+    }
+
+    /// The moves the exit edge of the `For` at `terminator` makes: its
+    /// carried values, and where the edge defines the trip count, the count
+    /// the source's `ended` laid in the counter's register (RFC-0057 rule
+    /// 9). One parallel move holds both, so the count is read before any
+    /// carried value can overwrite it. The counter is live from above the
+    /// loop to its terminator (`Edges::for_counter`), so its register is
+    /// none that an exit argument is read from.
+    fn exit_moves(&mut self, terminator: usize) -> Vec<Node> {
+        let body = self.body;
+        let InstKind::For {
+            source,
+            body: body_label,
+            exit,
+            exit_trip,
+            exit_args,
+            ..
+        } = &body.insts[terminator].kind
+        else {
+            panic!("instruction {terminator} is not a `For`")
+        };
+        let mut pairs = self.carried_pairs(exit, exit_args, exit_trip.supplied_params());
+        if let Some(trip) = exit_trip.trip_param(self.block_params(exit)) {
+            let counter = self.block_params(body_label)[source.counter_param()];
+            pairs.push(Carried {
+                at: Pair {
+                    from: self.slot(counter),
+                    to: self.slot(trip),
+                },
+                moved: Moved::Word,
+            });
+        }
+        self.ordered_moves(pairs)
     }
 
     /// The block a conditional edge goes to: its own, holding the edge's
@@ -3177,8 +3253,7 @@ impl<'a> Prepare<'a> {
             source,
             body: body_label,
             body_args,
-            exit,
-            exit_args,
+            ..
         } = &body.insts[region.terminator].kind
         else {
             panic!("a recognized `for`'s terminator is not a `For`")
@@ -3202,7 +3277,7 @@ impl<'a> Prepare<'a> {
         ops.extend(entering);
 
         let into_body = self.moves_past(body_label, body_args, source.supplied_params());
-        let leaving = self.move_ops(exit, exit_args);
+        let leaving = self.exit_moves(region.terminator);
         let back = self.move_ops(header, back_args);
 
         let exits = Ends::of(hands_of(&region.body_regions));
@@ -3244,7 +3319,7 @@ impl<'a> Prepare<'a> {
             body,
             body_args,
             exit,
-            exit_args,
+            ..
         } = &insts[at].kind
         else {
             panic!("`for_at` was handed instruction {at}, which is not a `For`")
@@ -3252,7 +3327,7 @@ impl<'a> Prepare<'a> {
         self.header_edges_carry_the_counter(at);
 
         let into_body = self.moves_past(body, body_args, source.supplied_params());
-        let into_exit = self.move_ops(exit, exit_args);
+        let into_exit = self.exit_moves(at);
         let body_target = self.target(body);
         let exit_target = self.target(exit);
         let on_body = self.edge(into_body, body_target);
@@ -5972,9 +6047,14 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
-                edge(exit, exit_args);
+                carried_moves(
+                    &mut moves,
+                    exit_trip.carried_params(edges.block_params(exit)),
+                    exit_args,
+                );
                 carried_moves(
                     &mut moves,
                     source.carried_params(edges.block_params(body)),

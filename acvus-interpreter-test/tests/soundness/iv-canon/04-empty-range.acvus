@@ -1,0 +1,2 @@
+// expect 7
+let j = 7; let s = 0; for i in 5..5 { s = s + j; j = j + 2; } s * 1000 + j

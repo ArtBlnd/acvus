@@ -709,7 +709,9 @@ pub(super) fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa
             }
             // A `For` fills the leading parameters of its body itself, so a
             // phi at that block is one of the parameters after them
-            // (RFC-0057); the exit's are all phis.
+            // (RFC-0057); the exit's phis follow the trip count where the
+            // edge defines one (rule 9), and are all its parameters where
+            // it does not.
             Terminator::For {
                 body,
                 body_args,

@@ -1,0 +1,2 @@
+// expect 54
+let s = 0; let j = 2; for i in 0..4 { s = s + j * j; j = j + 1; } s

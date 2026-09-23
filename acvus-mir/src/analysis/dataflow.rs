@@ -358,12 +358,14 @@ fn propagate_to_successors<A: DataflowAnalysis>(
         // Both edges of a `For` are taken on some path: the source decides
         // which, and no analysis here reads a source. The body's leading
         // parameters are the terminator's own, so only the carried ones
-        // take arguments from this edge (RFC-0057).
+        // take arguments from this edge (RFC-0057), and so is the exit's
+        // first where the edge defines the trip count (rule 9).
         Terminator::For {
             source,
             body,
             body_args,
             exit,
+            exit_trip,
             exit_args,
         } => {
             if let Some(&t) = cfg.label_to_block.get(body) {
@@ -382,7 +384,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                 let changed = analysis.propagate_forward(
                     exit_state,
                     &cfg.blocks[t.0].params,
-                    0,
+                    exit_trip.supplied_params(),
                     exit_args,
                     &mut block_entry[t.0],
                 );
@@ -501,6 +503,7 @@ fn propagate_from_successors<A: DataflowAnalysis>(
             body,
             body_args,
             exit,
+            exit_trip,
             exit_args,
         } => {
             if let Some(&t) = cfg.label_to_block.get(body) {
@@ -516,7 +519,7 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                 analysis.propagate_backward(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,
-                    0,
+                    exit_trip.supplied_params(),
                     exit_args,
                     exit_state,
                 );

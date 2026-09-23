@@ -1,0 +1,2 @@
+// expect 90
+let j = 0; let s = 0; for i in 0..@n { s = s + j; j = j + 2; } let acc = 0; let q = 0; for i in 0..@n { acc = acc * 2 + (q * @base + 1); q = q + 1; } s + j + acc

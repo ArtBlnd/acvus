@@ -1165,6 +1165,7 @@ fn remap_inst(
             body,
             body_args,
             exit,
+            exit_trip,
             exit_args,
         } => {
             let mut source = *source;
@@ -1174,6 +1175,7 @@ fn remap_inst(
                 body: rl(*body),
                 body_args: rv(body_args),
                 exit: rl(*exit),
+                exit_trip: *exit_trip,
                 exit_args: rv(exit_args),
             }
         }

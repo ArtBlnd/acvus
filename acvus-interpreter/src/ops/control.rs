@@ -420,6 +420,12 @@ pub trait Source: Send + Sync + 'static {
     /// The counter alone, for the edge that advances it and reads nothing
     /// else (`ForStep`).
     fn advance(regs: &mut Regs<'_>, counter: Off);
+
+    /// The traversal's test failed, so the loop leaves by its exit edge.
+    /// Where that edge defines the trip count (RFC-0057 rule 9), the count
+    /// is laid in the register the source was built with for it, and the
+    /// edge's moves take it from there.
+    fn ended(&self, m: &mut Machine<'_>, cursor: Self::Cursor);
 }
 
 /// A counted source's cursor.
@@ -438,6 +444,8 @@ pub struct Slice {
     pub slice: SlicePair,
     pub elem: Off,
     pub index: Off,
+    /// Where `ended` lays the trip count, when the exit edge defines one.
+    pub trip: Option<Off>,
 }
 
 impl Slice {
@@ -505,6 +513,15 @@ impl Source for Slice {
     fn advance(regs: &mut Regs<'_>, counter: Off) {
         regs.set_word(counter, Self::next(regs.word(counter)));
     }
+
+    /// The test fails first where the counter reaches the length it was
+    /// measured against, so the counter is the count.
+    #[inline(always)]
+    fn ended(&self, m: &mut Machine<'_>, cursor: Counted<u64>) {
+        if let Some(trip) = self.trip {
+            m.regs().set_word(trip, cursor.at);
+        }
+    }
 }
 
 /// Cross-artifact obligation: this operation does not release the array, and
@@ -521,6 +538,8 @@ pub struct Array<const LARGE: bool, const WORD: bool> {
     pub array: Off,
     pub elem: Marked,
     pub index: Off,
+    /// Where `ended` lays the trip count, when the exit edge defines one.
+    pub trip: Option<Off>,
 }
 
 impl<const LARGE: bool, const WORD: bool> Array<LARGE, WORD> {
@@ -588,6 +607,15 @@ impl<const LARGE: bool, const WORD: bool> Source for Array<LARGE, WORD> {
     fn advance(regs: &mut Regs<'_>, counter: Off) {
         regs.set_word(counter, Self::next(regs.word(counter)));
     }
+
+    /// The test fails first where the counter reaches the length it was
+    /// measured against, so the counter is the count.
+    #[inline(always)]
+    fn ended(&self, m: &mut Machine<'_>, cursor: Counted<u64>) {
+        if let Some(trip) = self.trip {
+            m.regs().set_word(trip, cursor.at);
+        }
+    }
 }
 
 pub struct Range<T>
@@ -597,6 +625,8 @@ where
     pub hi: Off,
     pub elem: Off,
     pub from: Off,
+    /// Where `ended` lays the trip count, when the exit edge defines one.
+    pub trip: Option<Off>,
     pub width: PhantomData<fn() -> T>,
 }
 
@@ -661,6 +691,21 @@ where
     #[inline(always)]
     fn advance(regs: &mut Regs<'_>, counter: Off) {
         regs.set_word(counter, Self::next(regs.word(counter)));
+    }
+
+    /// The counter starts at `from` and steps by one while it is below `hi`,
+    /// so where the test fails it is `from` when `hi ≤ from` and `hi`
+    /// otherwise, and the count is its distance from `from`: `max(hi − from,
+    /// 0)`. That distance is taken over the integers, where it lies in
+    /// `[0, 2^64)` at every width up to 64, so it is the count exactly and
+    /// not a residue at `T`'s width.
+    #[inline(always)]
+    fn ended(&self, m: &mut Machine<'_>, cursor: Counted<T>) {
+        if let Some(trip) = self.trip {
+            let regs = m.regs();
+            let ran = T::read(cursor.at).wide() - T::read(regs.word(self.from)).wide();
+            regs.set_word(trip, ran as u64);
+        }
     }
 }
 
@@ -731,6 +776,11 @@ where
 
     #[inline(always)]
     fn advance(_regs: &mut Regs<'_>, _counter: Off) {}
+
+    /// A call's head is a `while let`, and a `while` states no trip count
+    /// (RFC-0066 rule 2), so no exit edge asks this source for one.
+    #[inline(always)]
+    fn ended(&self, _m: &mut Machine<'_>, _cursor: ()) {}
 }
 
 /// The shape `prepare::recognize_for` finds in the IR (RFC-0057 rule 3).
@@ -760,11 +810,12 @@ where
         while self.src.probe(m, &mut cursor) {
             match handed::<E>(self.body.run(m, r0)) {
                 Handed::Iterate => {}
-                Handed::Leave => break,
+                Handed::Leave => return self.next.run(m, r0),
                 Handed::Over(word) => return word,
             }
             S::step(&mut cursor);
         }
+        self.src.ended(m, cursor);
         self.next.run(m, r0)
     }
 
@@ -836,7 +887,10 @@ where
         let mut cursor = self.src.load(m, self.counter);
         match self.src.probe(m, &mut cursor) {
             true => self.body.into(),
-            false => self.exit.into(),
+            false => {
+                self.src.ended(m, cursor);
+                self.exit.into()
+            }
         }
     }
 }

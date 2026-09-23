@@ -1,0 +1,2 @@
+// expect 1
+let v = vec([1, 1, 1]); let j = -5; for x in &v { j = j + 2; } j

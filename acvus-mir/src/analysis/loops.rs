@@ -44,7 +44,7 @@
 
 use crate::analysis::domtree::DomTree;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ForSource, InstKind, Label, ValueId};
+use crate::ir::{ExitTrip, ForSource, InstKind, Label, ValueId};
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
@@ -240,7 +240,9 @@ impl Invariants {
 /// `term` has no such edge or more than one. A `For`'s body edge is not
 /// among them: it carries only the parameters after the ones the
 /// terminator fills, so its arguments do not line up with its target's
-/// parameters (RFC-0057). Its exit edge carries its target's whole list.
+/// parameters (RFC-0057). Nor is its exit edge where that edge defines the
+/// trip count (rule 9); where it does not, it carries its target's whole
+/// list.
 pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
     let mut edges: Vec<&[ValueId]> = Vec::new();
     match term {
@@ -283,12 +285,19 @@ pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
             }
         }
         Terminator::For {
-            exit, exit_args, ..
+            exit,
+            exit_trip: ExitTrip::Absent,
+            exit_args,
+            ..
         } => {
             if *exit == label {
                 edges.push(exit_args);
             }
         }
+        Terminator::For {
+            exit_trip: ExitTrip::Defined,
+            ..
+        } => {}
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
     }
     match edges[..] {

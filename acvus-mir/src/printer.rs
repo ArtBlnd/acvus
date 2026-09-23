@@ -4,7 +4,9 @@ use acvus_ast::{BinOp, Literal, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::ir::{Callee, ForSource, IndexMode, InstKind, Label, MirBody, MirModule, ValueId};
+use crate::ir::{
+    Callee, ExitTrip, ForSource, IndexMode, InstKind, Label, MirBody, MirModule, ValueId,
+};
 
 /// Normalizes ValueIds to sequential order of first appearance.
 struct ValNormalizer {
@@ -702,12 +704,15 @@ fn write_body(
             }
             // `for slice(r3) -> L1 else L2` (RFC-0057). The element and the
             // counter are the body block's leading parameters, printed where
-            // that block's label is.
+            // that block's label is. An exit edge that defines the trip count
+            // prints it as `trip` where the exit block's first parameter
+            // takes it: `else L2(trip, r5)` (RFC-0057 rule 9).
             InstKind::For {
                 source,
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
                 let over = match source {
@@ -738,8 +743,19 @@ fn write_body(
                     }
                 };
                 let taken = edge(body, body_args);
-                let left = edge(exit, exit_args);
                 drop(edge);
+                let carried =
+                    (!exit_args.is_empty()).then(|| vn.fmt_uses(exit_args, &consts, &texts));
+                let left = match (exit_trip, carried) {
+                    (ExitTrip::Absent, None) => fmt_label(*exit),
+                    (ExitTrip::Absent, Some(carried)) => {
+                        format!("{}({carried})", fmt_label(*exit))
+                    }
+                    (ExitTrip::Defined, None) => format!("{}(trip)", fmt_label(*exit)),
+                    (ExitTrip::Defined, Some(carried)) => {
+                        format!("{}(trip, {carried})", fmt_label(*exit))
+                    }
+                };
                 writeln!(f, "for {over} -> {taken} else {left}")?
             }
             // `switch r5 { A -> L1, B -> L2, _ -> L3 }`, and a literal

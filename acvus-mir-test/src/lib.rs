@@ -610,6 +610,18 @@ pub fn compile_script_optimized(
     source: &str,
     context: &FxHashMap<Astr, Ty>,
 ) -> Result<String, String> {
+    let module = compile_script_module_at(interner, source, context, Opt::Full)?;
+    Ok(dump_with(interner, &module))
+}
+
+/// Compile a **script** through the optimization pipeline at `opt`, returning
+/// the module rather than its listing.
+pub fn compile_script_module_at(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+    opt: Opt,
+) -> Result<MirModule, String> {
     let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
@@ -661,7 +673,7 @@ pub fn compile_script_optimized(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -673,11 +685,11 @@ pub fn compile_script_optimized(
         return Err(errors.join("\n"));
     }
 
-    let module = opt_result
+    opt_result
         .modules
         .get(&test_qref)
-        .ok_or_else(|| "no module produced for target".to_string())?;
-    Ok(dump_with(interner, module))
+        .cloned()
+        .ok_or_else(|| "no module produced for target".to_string())
 }
 
 /// One stage's refusal of a source: the stage that raised it, the words, the

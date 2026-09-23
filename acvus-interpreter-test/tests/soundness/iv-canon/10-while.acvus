@@ -1,0 +1,2 @@
+// expect 10
+let j = 0; let i = 0; while i < 5 { j = j + 2; i = i + 1; } j

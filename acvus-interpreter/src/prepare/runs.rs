@@ -470,9 +470,11 @@ impl Edges<'_> {
                     body,
                     body_args,
                     exit,
+                    exit_trip,
                     exit_args,
                 } => {
-                    self.edge(exit, exit_args, &mut out);
+                    let leaving = exit_trip.carried_params(self.params(exit));
+                    self.carried(leaving, exit_args, &mut out);
                     let carried = source.carried_params(self.params(body));
                     self.carried(carried, body_args, &mut out);
                 }
@@ -716,14 +718,25 @@ fn candidates(
         sites.refuse(*id);
     }
     // A `For` defines the parameters it supplies itself — the element and the
-    // counter — as the machine writes them, which no instruction's `defs`
-    // names; an element is written as a heap value, so it has no run.
+    // counter, and the trip count on an exit edge that defines one — as the
+    // machine writes them, which no instruction's `defs` names; an element
+    // is written as a heap value, so it has no run.
     let edges = Edges { body, labels };
     for inst in &body.insts {
-        if let InstKind::For { source, body, .. } = &inst.kind {
+        if let InstKind::For {
+            source,
+            body,
+            exit,
+            exit_trip,
+            ..
+        } = &inst.kind
+        {
             let params = edges.params(body);
             for supplied in &params[..params.len() - source.carried_params(params).len()] {
                 sites.refuse(*supplied);
+            }
+            if let Some(trip) = exit_trip.trip_param(edges.params(exit)) {
+                sites.refuse(trip);
             }
         }
     }

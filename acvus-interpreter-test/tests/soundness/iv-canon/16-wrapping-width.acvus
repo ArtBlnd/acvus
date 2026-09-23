@@ -1,0 +1,2 @@
+// expect 442100
+let a = 0u8; let b = 0; for i in 0..300 { a = a + 1u8; b = b + 7; } (a as i64) * 10000 + b

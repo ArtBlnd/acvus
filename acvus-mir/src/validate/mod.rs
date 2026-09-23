@@ -137,6 +137,12 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                  the terminator a `jump_if`",
                 join.0
             ),
+            ValidationErrorKind::TripBesideExitEdge { exit, entries } => write!(
+                f,
+                "a `for` defines the trip count on its exit edge into L{}, which {entries} \
+                 edges enter; the exit edge is the one edge that may define it",
+                exit.0
+            ),
             ValidationErrorKind::ForRangeWidths { at, hi } => write!(
                 f,
                 "a `for` over `{}..{}` needs one integer width at both bounds",

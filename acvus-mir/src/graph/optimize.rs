@@ -343,6 +343,10 @@ fn run_pass2(interner: &Interner, cfg: &mut CfgBody) {
     optimize::dse::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);
+    // RFC-0066 rule 7: the weak loops' normal form, before `lsr` reduces
+    // the strong ones; after the hoist, which leaves each loop's invariants
+    // above its header.
+    optimize::iv_canon::run(cfg);
     // RFC-0056: after the hoist, which puts a loop's invariants above the
     // header and leaves the preheader a block of its own; before the
     // reorder, which schedules within a block.

@@ -10,9 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::error::OperatorSignature;
 use crate::graph::QualifiedRef;
 use crate::ir::{
-    Callee, CastKind, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess, IndexMode, Inst,
-    InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey, ValOrigin,
-    ValueId, reaches,
+    Callee, CastKind, ExitTrip, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess,
+    IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey,
+    ValOrigin, ValueId, reaches,
 };
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
 use crate::solver::{CaptureRead, MatchMode};
@@ -1156,6 +1156,7 @@ impl<'a> Lowerer<'a> {
                 body: body_label,
                 body_args: vec![],
                 exit,
+                exit_trip: ExitTrip::Absent,
                 exit_args: vec![],
             },
         );

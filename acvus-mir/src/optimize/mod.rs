@@ -8,6 +8,7 @@ pub mod drop_insertion;
 pub mod dse;
 pub mod fold;
 pub mod forward;
+pub mod iv_canon;
 pub mod lsr;
 pub mod reborrow;
 pub mod rejoin;

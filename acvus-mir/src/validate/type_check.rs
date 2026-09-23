@@ -109,6 +109,14 @@ pub enum ValidationErrorKind {
         at: Ty,
         hi: Ty,
     },
+    /// A `for` that defines the trip count on its exit edge fills the exit
+    /// block's first parameter, and another edge into that block would
+    /// define it too (RFC-0057 rule 9). `entries` counts every edge into
+    /// the block, the exit edge among them.
+    TripBesideExitEdge {
+        exit: Label,
+        entries: usize,
+    },
     /// RFC-0063 rule 1.
     DiamondArmMissesJoin {
         side: &'static str,
@@ -1402,7 +1410,8 @@ impl CheckCtx {
                             span,
                             kind: ValidationErrorKind::InvalidConstructor {
                                 inst_name: "Take".to_string(),
-                                expected_constructor: "a word or a String through a reference".to_string(),
+                                expected_constructor: "a word or a String through a reference"
+                                    .to_string(),
                                 actual: at.clone(),
                             },
                         });
@@ -1940,6 +1949,7 @@ impl CheckCtx {
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
                 let element = match source {
@@ -2038,7 +2048,45 @@ impl CheckCtx {
                     );
                 }
                 if let Some(params) = self.block_params(exit, insts) {
-                    self.check_edge_args(pc, span, "For(exit)", &params, exit_args, vt, errors);
+                    let supplied = exit_trip.supplied_params();
+                    if params.len() < supplied {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::ArityMismatch {
+                                inst_name: "For(exit)".to_string(),
+                                expected: supplied,
+                                got: params.len(),
+                            },
+                        });
+                        return;
+                    }
+                    if let Some(trip) = exit_trip.trip_param(&params) {
+                        let trip_ty = ty!(trip);
+                        self.assert_match(pc, span, "For(exit)", "trip", &Ty::U64, trip_ty, errors);
+                        let entries = entries_into(*exit, insts);
+                        if entries != 1 {
+                            errors.push(ValidationError {
+                                scope: self.scope_name.clone(),
+                                inst_index: pc,
+                                span,
+                                kind: ValidationErrorKind::TripBesideExitEdge {
+                                    exit: *exit,
+                                    entries,
+                                },
+                            });
+                        }
+                    }
+                    self.check_edge_args(
+                        pc,
+                        span,
+                        "For(exit)",
+                        exit_trip.carried_params(&params),
+                        exit_args,
+                        vt,
+                        errors,
+                    );
                 }
             }
 
@@ -2228,6 +2276,56 @@ fn slice_of(ty: &Ty) -> Option<(Mutability, Ty)> {
         return None;
     };
     Some((*mutability, *element))
+}
+
+/// How many edges enter the block `label` heads: every terminator edge that
+/// names it, and the fall from the block above where that block ends in no
+/// terminator. A `Diamond`'s `join` names where its arms meet and is not an
+/// edge of its own.
+fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
+    let named: usize = insts
+        .iter()
+        .map(|inst| match &inst.kind {
+            InstKind::Jump { label: to, .. } => usize::from(*to == label),
+            InstKind::JumpIf {
+                then_label,
+                else_label,
+                ..
+            }
+            | InstKind::Diamond {
+                then_label,
+                else_label,
+                ..
+            } => usize::from(*then_label == label) + usize::from(*else_label == label),
+            InstKind::Switch { arms, default, .. } => arms
+                .iter()
+                .map(|(_, to, _)| to)
+                .chain(default.iter().map(|(to, _)| to))
+                .filter(|to| **to == label)
+                .count(),
+            InstKind::For { body, exit, .. } => {
+                usize::from(*body == label) + usize::from(*exit == label)
+            }
+            _ => 0,
+        })
+        .sum();
+    let heads_at = insts.iter().position(
+        |inst| matches!(&inst.kind, InstKind::BlockLabel { label: at, .. } if *at == label),
+    );
+    let falls_in = match heads_at {
+        Some(at) if at > 0 => !matches!(
+            insts[at - 1].kind,
+            InstKind::Jump { .. }
+                | InstKind::JumpIf { .. }
+                | InstKind::Diamond { .. }
+                | InstKind::Switch { .. }
+                | InstKind::For { .. }
+                | InstKind::Return { .. }
+                | InstKind::Diverge
+        ),
+        _ => false,
+    };
+    named + usize::from(falls_in)
 }
 
 #[cfg(test)]

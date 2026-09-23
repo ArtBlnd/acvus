@@ -31,7 +31,7 @@ instances of this rule.
    value and is consumed by `while let Some(x) = next(&mut it)`.
 
 2. **MIR: the loop is one terminator.** The header block ends in
-   `Terminator::For { source, body, body_args, exit, exit_args }`, with
+   `Terminator::For { source, body, body_args, exit, exit_trip, exit_args }`, with
    `source` one of `Slice(s)`, `SliceMut(s)`, `Array(a)` or `Range { at, hi }`.
    The terminator is the condition. No instruction writes `index < len`,
    `i = i + 1` or the element read. The terminator fills the body block's
@@ -102,13 +102,28 @@ instances of this rule.
    `break` does: the return's drop block stands between the terminator and the
    body.
 
+9. **The exit edge defines the trip count where a pass reads it.** With
+   `exit_trip: Defined` the terminator fills the exit block's first parameter
+   with the number of times the body ran, a `u64`: `max(hi − at, 0)` for a
+   range and the source's length for a slice or an array, the count RFC-0066
+   rule 2 states. `exit_args` follow it. Only a pass that reads the count sets
+   it, so every other loop keeps the exit edge it was lowered with. The
+   validator refuses a count that is not a `u64`, and an exit block another
+   edge also enters, which would define the parameter a second way. The
+   machine takes the count from its counter as the test fails: the counter
+   less `at` for a range, the counter itself otherwise.
+
 **Why.** An index loop makes every pass rediscover the traversal the source
 stated: the back edge, the bound proof, the induction variable, the borrow's
 extent, iteration independence. The machine would also run a condition chain
 and a counter move per iteration that the terminator removes.
+An exit value `base + trip·step` (RFC-0066 rule 7) needs the count after the
+loop, and the terminator is what knows it, as it knows the body's element.
 **Cost.** One terminator arm in every reader of `Terminator`. The enum is
 closed, so the compiler enumerates the sites. There are two loop forms:
-`while` remains for a loop whose condition is not a traversal.
+`while` remains for a loop whose condition is not a traversal. Every reader
+that pairs the exit edge's arguments with its target's parameters skips the
+count where the edge defines one.
 **Rejected.**
 - Lowering `for` to `while` with an index — every pass rediscovers the
   traversal, and the machine runs the condition chain.
@@ -125,6 +140,14 @@ closed, so the compiler enumerates the sites. There are two loop forms:
   would be two answers to one question.
 - Tail duplication for `break` (copying the loop's tail into each arm so every
   branch rejoins) — 2^k code for k exits.
+- A length instruction for the trip count — it answers a slice, and a range's
+  `max` would still need a branch the exit block grows.
+- A count found per source (an array's `N`, a branch for a range, nothing for
+  a slice) — three rules for one question, and a slice's length is no MIR
+  value.
+- The count as a value the terminator defines rather than a parameter — a
+  definition on one edge of a two-edge terminator is a kind of definition
+  every dominance check would have to learn.
 
 ## RFC-0063: an `if` whose arms rejoin is a `Diamond` terminator
 
@@ -488,8 +511,12 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
 
 7. **One normalization per loop.** Strength reduction (RFC-0056) applies to
    strong loops, which run in order anyway. IV canonicalization applies to
-   weak loops, and keeps each iteration computed from its own counter. A
-   loop gets one or the other.
+   weak `for` loops: each `Iv` becomes `base + k·step` in the body, `k` read
+   off the counter, and `base + trip·step` where it is read after the loop,
+   from the count the exit edge defines (RFC-0057 rule 9). A loop gets one
+   or the other, and a weak `for` then carries only its counter and its
+   merges. A `while` is declined, since it states no count; a later exact
+   recognizer makes it a `for`, and this pass applies to that unchanged.
 
 8. **A cost table is measured, not written.** At first compilation on a
    target, the runtime measures every operation kind it can emit (each `Op`
@@ -539,6 +566,8 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - Constant costs in source — true on one machine on one day.
 - Scalar evolution alone — it answers the trip count and nothing when that
   fails.
+- Leaving an `Iv` read after the loop carried — that loop keeps the
+  dependence the normal form removes, which then holds per variable.
 - A `while` trip count derived from its recurrence — the door to general
   scalar evolution. A `while` is promoted to `for` only by a recognizer that
   is exact, or it stays undivided.

@@ -10,7 +10,9 @@ use acvus_utils::{Astr, LocalFactory};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use crate::ir::{DebugInfo, ForSource, Inst, InstKind, Label, MirBody, SwitchKey, ValueId};
+use crate::ir::{
+    DebugInfo, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, SwitchKey, ValueId,
+};
 use crate::ty::{Task, Ty};
 
 // -- BlockIdx ------------------------------------------------------
@@ -76,12 +78,16 @@ pub enum Terminator {
     /// instruction writes the comparison, the element read or the advance.
     /// It fills the leading parameters of `body` itself -- the element and
     /// the counter, which `ForSource::supplied_params` counts -- and
-    /// `body_args` and `exit_args` are the carried values that follow them.
+    /// `body_args` are the carried values that follow them. Where
+    /// `exit_trip` is `Defined` it fills the exit block's leading parameter
+    /// with the trip count the same way (RFC-0057 rule 9), and `exit_args`
+    /// follow it.
     For {
         source: ForSource,
         body: Label,
         body_args: Vec<ValueId>,
         exit: Label,
+        exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
     },
     Return {
@@ -410,6 +416,7 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
                 let term = Terminator::For {
@@ -417,6 +424,7 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                     body: *body,
                     body_args: body_args.clone(),
                     exit: *exit,
+                    exit_trip: *exit_trip,
                     exit_args: exit_args.clone(),
                 };
                 insts.pop();
@@ -525,6 +533,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
                 insts.push(Inst {
@@ -534,6 +543,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                         body,
                         body_args,
                         exit,
+                        exit_trip,
                         exit_args,
                     },
                 });

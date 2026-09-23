@@ -447,12 +447,14 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
             // A `For` leaves through two edges. The body's leading
             // parameters are the terminator's own, so only what follows them
             // takes an argument from that edge; the exit takes the loop's
-            // carried values (RFC-0057).
+            // carried values, after the trip count where the edge defines
+            // one (RFC-0057 rules 2 and 9).
             Terminator::For {
                 source,
                 body,
                 body_args,
                 exit,
+                exit_trip,
                 exit_args,
             } => {
                 for (label, args) in [(body, body_args), (exit, exit_args)] {
@@ -460,7 +462,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                         let params = &cfg.blocks[target_idx.0].params;
                         let taking: &[ValueId] = match label == body {
                             true => source.carried_params(params),
-                            false => params,
+                            false => exit_trip.carried_params(params),
                         };
                         propagate_args(
                             scope,

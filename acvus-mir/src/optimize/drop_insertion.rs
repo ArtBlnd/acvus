@@ -28,7 +28,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::loans::{Loans, Summaries};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, ValueId};
+use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
 use crate::validate::move_check::{emptied_by, is_move_only};
 
@@ -232,10 +232,13 @@ enum EdgeSlot {
 }
 
 /// One outgoing edge of a block's terminator. `forwarded` keeps the order of
-/// the jump's arguments: they are the target block's parameters, by position.
+/// the jump's arguments: they are the target block's parameters, by position,
+/// after the trip count where the edge is a `For`'s exit that defines one
+/// (RFC-0057 rule 9).
 struct OutEdge {
     slot: EdgeSlot,
     target: Label,
+    trip: ExitTrip,
     forwarded: Vec<ValueId>,
 }
 
@@ -299,13 +302,24 @@ fn apply_edge_splits(cfg: &mut CfgBody, splits: Vec<EdgeSplit>) {
     for split in splits {
         let label = Label(next_label);
         next_label += 1;
+        // The terminator still fills the first parameter of the block it
+        // exits to, which is now this one, and this one hands it on.
+        let params: Vec<ValueId> = match split.edge.trip {
+            ExitTrip::Absent => vec![],
+            ExitTrip::Defined => {
+                let trip = cfg.val_factory.next();
+                cfg.val_types.insert(trip, Ty::U64);
+                vec![trip]
+            }
+        };
+        let args = params.iter().copied().chain(split.edge.forwarded).collect();
         inserted.entry(split.from).or_default().push(Block {
             label,
-            params: vec![],
+            params,
             insts: drop_seq(split.dying),
             terminator: Terminator::Jump {
                 label: split.edge.target,
-                args: split.edge.forwarded,
+                args,
             },
         });
         retarget(
@@ -505,6 +519,7 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
     let edge = |slot: EdgeSlot, target: &Label, args: &Vec<ValueId>| OutEdge {
         slot,
         target: *target,
+        trip: ExitTrip::Absent,
         forwarded: args.clone(),
     };
     match term {
@@ -530,11 +545,15 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
             body,
             body_args,
             exit,
+            exit_trip,
             exit_args,
             ..
         } => vec![
             edge(EdgeSlot::ForBody, body, body_args),
-            edge(EdgeSlot::ForExit, exit, exit_args),
+            OutEdge {
+                trip: *exit_trip,
+                ..edge(EdgeSlot::ForExit, exit, exit_args)
+            },
         ],
         Terminator::Switch { arms, default, .. } => arms
             .iter()
