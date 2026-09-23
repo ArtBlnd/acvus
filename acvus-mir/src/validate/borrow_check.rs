@@ -9,7 +9,9 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Loan, Loans, RegionsAt, Summaries, Summary, held_loan};
+use crate::analysis::loans::{
+    Loan, Loans, RegionsAt, Summaries, Summary, held_positions,
+};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
@@ -178,7 +180,7 @@ impl Checking {
             let Terminator::Return { value, .. } = block.terminator else {
                 continue;
             };
-            let leaving = self.loans.leaving(value);
+            let leaving = self.loans.leaving(value, &self.cfg.val_types);
             for loan in leaving.summary.loans {
                 if !summary.loans.contains(&loan) {
                     summary.loans.push(loan);
@@ -216,6 +218,7 @@ fn take_moves(val_types: &FxHashMap<ValueId, Ty>, dst: &ValueId) -> bool {
 }
 
 /// What an instruction does to a storage.
+#[derive(Clone, Copy)]
 enum Touch {
     Reference(Mutability),
     /// A move out; `false` when the storage keeps a copy (a primitive).
@@ -226,6 +229,17 @@ enum Touch {
 }
 
 impl Touch {
+    /// This touch made through a loan of `mutability`.
+    fn bounded(&self, mutability: Mutability) -> Touch {
+        match (mutability, self) {
+            (Mutability::Mut, touch) => *touch,
+            (Mutability::Shared, Touch::Reference(_) | Touch::Assign) => {
+                Touch::Reference(Mutability::Shared)
+            }
+            (Mutability::Shared, Touch::Take { .. }) => Touch::Take { moves: false },
+        }
+    }
+
     /// A `&mut` may write through the reference it takes, so it is stated as
     /// a write; a `&` and a copying `Take` only read.
     fn stated(&self) -> ConflictTouch {
@@ -238,29 +252,40 @@ impl Touch {
     }
 }
 
+/// Where a touch lands: a place, or the storages a slot's position names.
+enum Touched {
+    Place(RefTarget),
+    Held { slot: ValueId, position: usize },
+}
+
 /// What an instruction does to storages. A loan read out of a storage is
 /// the storage's own reference (RFC-0029), taken again: it touches, through
-/// the storage, what the storage holds, as the loan's mutability does.
-fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(RefTarget, Touch)> {
+/// the storage, what each position of the storage the value is read from
+/// names, as the loan's mutability does.
+fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched, Touch)> {
     match kind {
         InstKind::Ref {
             target, mutability, ..
-        } => vec![(target.clone(), Touch::Reference(*mutability))],
-        InstKind::Take { dst, target, .. } => {
+        } => vec![(Touched::Place(target.clone()), Touch::Reference(*mutability))],
+        InstKind::Take { dst, target, path, .. } => {
             let mut touches = vec![(
-                target.clone(),
+                Touched::Place(target.clone()),
                 Touch::Take {
                     moves: take_moves(val_types, dst),
                 },
             )];
             if let Some(slot) = inst_info::storage(target)
-                && let Some(mutability) = val_types.get(dst).and_then(held_loan)
+                && let (Some(slot_ty), Some(taken)) = (val_types.get(&slot), val_types.get(dst))
             {
-                touches.push((RefTarget::Through(slot), Touch::Reference(mutability)));
+                touches.extend(held_positions(slot_ty, path, taken).into_iter().map(
+                    |(position, mutability)| {
+                        (Touched::Held { slot, position }, Touch::Reference(mutability))
+                    },
+                ));
             }
             touches
         }
-        InstKind::Assign { target, .. } => vec![(target.clone(), Touch::Assign)],
+        InstKind::Assign { target, .. } => vec![(Touched::Place(target.clone()), Touch::Assign)],
         _ => Vec::new(),
     }
 }
@@ -276,22 +301,35 @@ fn conflicts(live: &Loan, touch: &Touch) -> bool {
     }
 }
 
+/// The storages a touch reaches, each by the loan it is reached through: a
+/// touch through a shared loan only reads, as `Loans::storage_effect` bounds
+/// it.
 struct Reached {
-    storage: Vec<ValueId>,
+    storage: Vec<Loan>,
     via: Vec<ValueId>,
 }
 
-fn reached(target: &RefTarget, regions: &RegionsAt<'_>) -> Reached {
-    match target {
-        RefTarget::Var(s) | RefTarget::Param(s) => Reached {
-            storage: vec![*s],
+fn reached(touched: &Touched, loans: &Loans, regions: &RegionsAt<'_>) -> Reached {
+    match touched {
+        Touched::Place(RefTarget::Var(s) | RefTarget::Param(s)) => Reached {
+            storage: vec![Loan {
+                storage: loans.storage_of(*s),
+                mutability: Mutability::Mut,
+            }],
             via: vec![],
         },
-        RefTarget::Through(r) => {
-            let region = regions.region(*r);
+        Touched::Place(RefTarget::Through(r)) => {
+            let held = regions.regions(*r);
             Reached {
-                storage: region.loans.iter().map(|l| l.storage.value()).collect(),
-                via: region.via.iter().copied().chain([*r]).collect(),
+                storage: held.names().to_vec(),
+                via: held.via().iter().copied().chain([*r]).collect(),
+            }
+        }
+        Touched::Held { slot, position } => {
+            let held = regions.regions(*slot);
+            Reached {
+                storage: held.position(*position).to_vec(),
+                via: held.via().iter().copied().chain([*slot]).collect(),
             }
         }
     }
@@ -334,10 +372,9 @@ fn called_by(loans: &Loans, kind: &InstKind) -> Vec<ValueId> {
     let mut names = vec![callee];
     let mut at = 0;
     while at < names.len() {
-        for loan in &loans.region(names[at]).loans {
-            let storage = loan.storage.value();
-            if !names.contains(&storage) {
-                names.push(storage);
+        for slot in loans.holds(names[at]).filter_map(|loan| loan.storage.slot()) {
+            if !names.contains(&slot) {
+                names.push(slot);
             }
         }
         at += 1;
@@ -489,7 +526,7 @@ impl Checking {
             .cfg
             .val_types
             .keys()
-            .filter(|v| !self.loans.region(**v).loans.is_empty())
+            .filter(|v| self.loans.regions(**v).holds_any())
             .copied()
             .collect();
         if holders.is_empty() {
@@ -530,15 +567,17 @@ impl Checking {
             let mut regions = self.loans.at_entry(BlockIdx(bi));
             for (ii, inst) in block.insts.iter().enumerate() {
                 for (target, touch) in touches(&inst.kind, &self.cfg.val_types) {
-                    let reach = reached(&target, &regions);
+                    let reach = reached(&target, &self.loans, &regions);
                     let mut holders: Vec<ValueId> = live_before[ii]
                         .iter()
                         .copied()
                         .filter(|holder| {
                             !reach.via.contains(holder)
-                                && regions.region(*holder).loans.iter().any(|loan| {
-                                    reach.storage.contains(&loan.storage.value())
-                                        && conflicts(loan, &touch)
+                                && regions.regions(*holder).holds().any(|loan| {
+                                    reach.storage.iter().any(|through| {
+                                        through.storage == loan.storage
+                                            && conflicts(loan, &touch.bounded(through.mutability))
+                                    })
                                 })
                         })
                         .collect();
@@ -555,8 +594,11 @@ impl Checking {
                             inst_index: ii,
                             span: inst.span,
                             kind: ValidationErrorKind::BorrowConflict {
-                                storage: inst_info::storage(&target)
-                                    .and_then(|slot| self.cfg.debug.get(slot).cloned()),
+                                storage: match &target {
+                                    Touched::Place(target) => inst_info::storage(target)
+                                        .and_then(|slot| self.cfg.debug.get(slot).cloned()),
+                                    Touched::Held { .. } => None,
+                                },
                                 touch: touch.stated(),
                                 labels: self.sites.labels(&holders, inst.span),
                             },
@@ -580,7 +622,7 @@ impl Checking {
                 found.iter().any(|earlier| {
                     earlier.error.span.start < conflict.error.span.start
                         && earlier.made.iter().any(|made| {
-                            made == holder || self.loans.region(*holder).via.contains(made)
+                            made == holder || self.loans.regions(*holder).via().contains(made)
                         })
                 })
             })

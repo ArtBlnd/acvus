@@ -1,16 +1,15 @@
 //! Regions: the storage a value may name, as a trivial lifetime (RFC-0018,
-//! RFC-0064). A region is a set of loans; join is union; bottom names
-//! nothing. A `Ref` starts a region at its slot, a parameter or capture of
-//! reference type starts one at itself (RFC-0029), and a value whose type
-//! contains a reference takes the join of the regions it is built from:
-//! a call's result from its arguments, a closure from its captures, a
-//! block parameter from the jump arguments that reach it, a slot from
-//! what is assigned into it, a spawn's handle from its arguments whatever
-//! its type says. A call that takes a value reads or writes that value's
-//! region for the call's duration, and a spawned call holds it until its
-//! `Eval`. Every pass that orders, moves, removes, or allocates around
-//! storage asks here rather than reading the instruction on its own.
+//! RFC-0064, RFC-0079). A region is a set of loans; join is union; bottom
+//! names nothing. A value holds one region per position of its type
+//! (`positions`), and the storage holds the positions: a read through a
+//! reference reads what the storage it names holds now. Every pass that
+//! orders, moves, removes, or allocates around storage asks here rather than
+//! reading the instruction on its own, through two readers: `names`, the
+//! storage a reference points at, and `holds`, every loan in any position.
 
+use std::ops::Range;
+
+use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -19,26 +18,352 @@ use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, ForSource, Inst, InstKind, Label, RefTarget, ValueId};
+use crate::ir::{Callee, ForSource, IndexMode, Inst, InstKind, Label, PathSeg, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
+
+// -- Positions (RFC-0079 rule 2) ------------------------------------
+
+/// What one position of a type is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionKind {
+    /// A reference: its loans name the storage it points at, and the pointee's
+    /// positions follow it.
+    Ref(Mutability),
+    /// What a function value captured, and the mutability `held_loan` gives
+    /// its captures.
+    Captures(Option<Mutability>),
+    /// A region parameter an extension type declares.
+    RegionParam,
+    /// The arguments of a spawned call still in flight.
+    InFlight,
+}
+
+/// How many positions a value of `ty` has.
+pub fn positions(ty: &Ty) -> usize {
+    match ty {
+        Ty::Ref(_, inner) => 1 + positions(&inner.ty()),
+        Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => positions(inner),
+        Ty::Handle(inner) => 1 + positions(inner),
+        Ty::Result(ok, err) => positions(ok) + positions(err),
+        Ty::Tuple(items) => items.iter().map(positions).sum(),
+        Ty::Object(fields) => fields.values().map(positions).sum(),
+        Ty::Enum { variants, .. } => variants.values().flatten().map(|t| positions(t)).sum(),
+        Ty::Fn { .. } => 1,
+        Ty::UserDefined {
+            type_args,
+            region_params,
+            ..
+        } => *region_params + type_args.iter().map(|a| positions(&a.ty())).sum::<usize>(),
+        Ty::Int(_)
+        | Ty::Float
+        | Ty::Char
+        | Ty::String
+        | Ty::Bool
+        | Ty::Unit
+        | Ty::Never
+        | Ty::Order
+        | Ty::Str
+        | Ty::Error(_)
+        | Ty::Var(_) => 0,
+    }
+}
+
+/// The kind of each of `ty`'s positions, in order.
+pub fn layout(ty: &Ty) -> Vec<PositionKind> {
+    let mut out = Vec::new();
+    lay_out(ty, &mut out);
+    out
+}
+
+fn lay_out(ty: &Ty, out: &mut Vec<PositionKind>) {
+    match ty {
+        Ty::Ref(mutability, inner) => {
+            out.push(PositionKind::Ref(*mutability));
+            lay_out(&inner.ty(), out);
+        }
+        Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => lay_out(inner, out),
+        Ty::Handle(inner) => {
+            out.push(PositionKind::InFlight);
+            lay_out(inner, out);
+        }
+        Ty::Result(ok, err) => {
+            lay_out(ok, out);
+            lay_out(err, out);
+        }
+        Ty::Tuple(items) => items.iter().for_each(|item| lay_out(item, out)),
+        Ty::Object(_) | Ty::Enum { .. } => {
+            for part in parts_in_order(ty) {
+                lay_out(&part.ty, out);
+            }
+        }
+        Ty::Fn { .. } => out.push(PositionKind::Captures(held_loan(ty))),
+        Ty::UserDefined {
+            type_args,
+            region_params,
+            ..
+        } => {
+            out.extend(std::iter::repeat_n(PositionKind::RegionParam, *region_params));
+            for arg in type_args {
+                lay_out(&arg.ty(), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A field of an object or a payload of an enum's variant.
+struct NamedPart {
+    name: Astr,
+    ty: Ty,
+}
+
+/// An object's fields or an enum's payloads, in the order their positions
+/// are laid out: by name.
+fn parts_in_order(ty: &Ty) -> Vec<NamedPart> {
+    let mut parts: Vec<NamedPart> = match ty {
+        Ty::Object(fields) => fields
+            .iter()
+            .map(|(name, ty)| NamedPart {
+                name: *name,
+                ty: ty.clone(),
+            })
+            .collect(),
+        Ty::Enum { variants, .. } => variants
+            .iter()
+            .filter_map(|(name, payload)| {
+                Some(NamedPart {
+                    name: *name,
+                    ty: (**payload.as_ref()?).clone(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    parts.sort_by_key(|part| part.name);
+    parts
+}
+
+/// A part of a value: the position it starts at among the whole's, and its
+/// type.
+struct Part {
+    at: usize,
+    ty: Ty,
+}
+
+/// The parts a path step names in a value of `ty`. A payload of a result or
+/// an enum is any one of its variants'.
+fn steps(ty: &Ty, seg: &PathSeg) -> Vec<Part> {
+    match (ty, seg) {
+        (Ty::Object(_), PathSeg::Field(name)) => {
+            let mut at = 0;
+            for part in parts_in_order(ty) {
+                if part.name == *name {
+                    return vec![Part { at, ty: part.ty }];
+                }
+                at += positions(&part.ty);
+            }
+            Vec::new()
+        }
+        (Ty::Enum { .. }, PathSeg::Field(tag)) => {
+            let mut at = 0;
+            for part in parts_in_order(ty) {
+                if part.name == *tag {
+                    return vec![Part { at, ty: part.ty }];
+                }
+                at += positions(&part.ty);
+            }
+            Vec::new()
+        }
+        (Ty::Tuple(items), PathSeg::Index(index)) => {
+            let at = items.iter().take(*index).map(positions).sum();
+            items
+                .get(*index)
+                .map(|item| Part {
+                    at,
+                    ty: item.clone(),
+                })
+                .into_iter()
+                .collect()
+        }
+        (Ty::Array(inner, _) | Ty::Slice(inner), PathSeg::Index(_))
+        | (Ty::Option(inner), PathSeg::Payload) => vec![Part {
+            at: 0,
+            ty: (**inner).clone(),
+        }],
+        (Ty::Result(ok, err), PathSeg::Payload) => vec![
+            Part {
+                at: 0,
+                ty: (**ok).clone(),
+            },
+            Part {
+                at: positions(ok),
+                ty: (**err).clone(),
+            },
+        ],
+        (Ty::Enum { .. }, PathSeg::Payload) => {
+            let mut at = 0;
+            let mut out = Vec::new();
+            for part in parts_in_order(ty) {
+                let width = positions(&part.ty);
+                out.push(Part { at, ty: part.ty });
+                at += width;
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Where each part `path` may name starts among `ty`'s positions, for the
+/// parts `width` positions wide.
+fn offsets(ty: &Ty, path: &[PathSeg], width: usize) -> Vec<usize> {
+    let mut parts: Vec<Part> = vec![Part {
+        at: 0,
+        ty: ty.clone(),
+    }];
+    for seg in path {
+        parts = parts
+            .into_iter()
+            .flat_map(|outer| {
+                steps(&outer.ty, seg).into_iter().map(move |inner| Part {
+                    at: outer.at + inner.at,
+                    ty: inner.ty,
+                })
+            })
+            .collect();
+    }
+    parts
+        .into_iter()
+        .filter(|part| positions(&part.ty) == width)
+        .map(|part| part.at)
+        .collect()
+}
+
+/// The positions of a storage of type `slot` at which a value of type
+/// `taken` read out of it at `path` holds a loan, with the loan's mutability:
+/// where the value has a reference or a closure's captures. Every position of
+/// the storage stands for the value when its place in it is not known.
+pub fn held_positions(slot: &Ty, path: &[PathSeg], taken: &Ty) -> Vec<(usize, Mutability)> {
+    let held: Vec<(usize, Mutability)> = layout(taken)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(k, kind)| match kind {
+            PositionKind::Ref(mutability) | PositionKind::Captures(Some(mutability)) => {
+                Some((k, mutability))
+            }
+            PositionKind::Captures(None) | PositionKind::RegionParam | PositionKind::InFlight => {
+                None
+            }
+        })
+        .collect();
+    if held.is_empty() {
+        return held;
+    }
+    let at = offsets(slot, path, positions(taken));
+    match at.is_empty() {
+        true => {
+            let mutability = match held.iter().any(|(_, m)| *m == Mutability::Mut) {
+                true => Mutability::Mut,
+                false => Mutability::Shared,
+            };
+            (0..positions(slot)).map(|k| (k, mutability)).collect()
+        }
+        false => at
+            .into_iter()
+            .flat_map(|offset| held.iter().map(move |(k, m)| (offset + k, *m)))
+            .collect(),
+    }
+}
+
+/// The type of what a reference at position `k` of `ty` points at, when
+/// position `k` is a reference.
+fn pointee_at(ty: &Ty, k: usize) -> Option<Ty> {
+    fn walk(ty: &Ty, k: usize) -> Result<Option<Ty>, usize> {
+        match ty {
+            Ty::Ref(_, inner) => match k {
+                0 => Ok(Some(inner.ty().into_owned())),
+                _ => walk(&inner.ty(), k - 1).map_err(|n| n + 1),
+            },
+            Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => walk(inner, k),
+            Ty::Handle(inner) => match k {
+                0 => Ok(None),
+                _ => walk(inner, k - 1).map_err(|n| n + 1),
+            },
+            Ty::Result(ok, err) => walk_all([&**ok, &**err], k),
+            Ty::Tuple(items) => walk_all(items.iter(), k),
+            Ty::Object(_) | Ty::Enum { .. } => {
+                let parts: Vec<Ty> = parts_in_order(ty).into_iter().map(|part| part.ty).collect();
+                walk_all(parts.iter(), k)
+            }
+            Ty::Fn { .. } => match k {
+                0 => Ok(None),
+                _ => Err(1),
+            },
+            Ty::UserDefined {
+                type_args,
+                region_params,
+                ..
+            } => match k < *region_params {
+                true => Ok(None),
+                false => {
+                    let args: Vec<Ty> = type_args.iter().map(|a| a.ty().into_owned()).collect();
+                    walk_all(args.iter(), k - region_params).map_err(|n| n + region_params)
+                }
+            },
+            _ => Err(0),
+        }
+    }
+    fn walk_all<'t>(parts: impl IntoIterator<Item = &'t Ty>, k: usize) -> Result<Option<Ty>, usize> {
+        let mut seen = 0;
+        for part in parts {
+            match walk(part, k - seen) {
+                Ok(found) => return Ok(found),
+                Err(n) => seen += n,
+            }
+        }
+        Err(seen)
+    }
+    walk(ty, k).ok().flatten()
+}
+
+// -- Loans ----------------------------------------------------------
+
+/// Storage outside the body that position `position` of an entry
+/// definition names (RFC-0079 rule 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Outside {
+    pub entry: ValueId,
+    pub position: usize,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoanStorage {
     Local(ValueId),
     Param { index: usize, value: ValueId },
+    Outside(Outside),
 }
 
 impl LoanStorage {
-    pub fn value(self) -> ValueId {
+    /// The slot of this body the storage is, if it is one.
+    pub fn slot(self) -> Option<ValueId> {
         match self {
-            Self::Local(value) | Self::Param { value, .. } => value,
+            Self::Local(value) | Self::Param { value, .. } => Some(value),
+            Self::Outside(_) => None,
         }
     }
 
     pub fn param(self) -> Option<usize> {
         match self {
-            Self::Local(_) => None,
             Self::Param { index, .. } => Some(index),
+            Self::Local(_) | Self::Outside(_) => None,
+        }
+    }
+
+    /// The value whose positions hold what this storage holds.
+    fn holder(self) -> ValueId {
+        match self {
+            Self::Local(value) | Self::Param { value, .. } => value,
+            Self::Outside(outside) => outside.entry,
         }
     }
 }
@@ -46,9 +371,10 @@ impl LoanStorage {
 /// The parameters of one body, and so the only entry definitions whose loan a
 /// summary can name.
 ///
-/// `EntryStorage::loan` is the only place a `LoanStorage` is built, which is
-/// how step 1 of RFC-0064 settled the question of which parameter a loan
-/// names: derive the form from the body, never from the call site.
+/// `EntryStorage::loan` is the only place a `Local` or `Param` storage is
+/// built, which is how step 1 of RFC-0064 settled the question of which
+/// parameter a loan names: derive the form from the body, never from the call
+/// site.
 ///
 /// A closure's capture register is deliberately not among them.
 /// `machine::bind_captures` points the register at the word the closure owns,
@@ -56,7 +382,7 @@ impl LoanStorage {
 /// own storage and dies with the closure: `LoanStorage::Local`, which the
 /// result rule already refuses. A capture of a reference is read one level
 /// through the register instead, and what the body then holds is the caller's
-/// reference, carrying no loan of this body at all.
+/// reference, whose loans are the register's `Outside` positions.
 struct EntryStorage {
     params: FxHashMap<ValueId, usize>,
 }
@@ -73,13 +399,16 @@ impl EntryStorage {
         }
     }
 
-    fn loan(&self, value: ValueId, mutability: Mutability) -> Loan {
-        let storage = match self.params.get(&value) {
+    fn storage(&self, value: ValueId) -> LoanStorage {
+        match self.params.get(&value) {
             Some(&index) => LoanStorage::Param { index, value },
             None => LoanStorage::Local(value),
-        };
+        }
+    }
+
+    fn loan(&self, value: ValueId, mutability: Mutability) -> Loan {
         Loan {
-            storage,
+            storage: self.storage(value),
             mutability,
         }
     }
@@ -91,17 +420,34 @@ pub struct Loan {
     pub mutability: Mutability,
 }
 
+/// Which of a parameter's positions a summary loan stands for: one position,
+/// or every position of a by-value parameter a reference to its own slot
+/// names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamPosition {
+    At(usize),
+    Whole,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParamLoan {
     pub index: usize,
+    pub position: ParamPosition,
     pub mutability: Mutability,
 }
 
-/// What a body's result borrows from the body's parameters: the object
-/// RFC-0064 rule 2 calls a body's summary.
+/// A loan the body's result holds at result position `at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResultLoan {
+    pub at: usize,
+    pub loan: ParamLoan,
+}
+
+/// What a body's result borrows from the body's parameters, position by
+/// position: the object RFC-0064 rule 2 calls a body's summary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Summary {
-    pub loans: Vec<ParamLoan>,
+    pub loans: Vec<ResultLoan>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -147,15 +493,77 @@ impl<'a> Summaries<'a> {
     }
 }
 
-/// The loans a value holds, and the references it was built through: a
-/// touch through one of those is the value's own access.
+/// One position's loans.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Region {
     pub loans: Vec<Loan>,
-    pub via: Vec<ValueId>,
 }
 
 impl Region {
+    fn join_mut(&mut self, other: &Region) -> bool {
+        let mut changed = false;
+        for loan in &other.loans {
+            if !self.loans.contains(loan) {
+                self.loans.push(*loan);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn without(mut self, storage: LoanStorage) -> Self {
+        self.loans.retain(|loan| loan.storage != storage);
+        self
+    }
+
+    fn shared(mut self) -> Self {
+        for loan in &mut self.loans {
+            loan.mutability = Mutability::Shared;
+        }
+        self
+    }
+}
+
+/// The regions a value holds, one per position of its type, and the
+/// references it was built through: a touch through one of those is the
+/// value's own access.
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct Regions {
+    positions: Vec<Region>,
+    via: Vec<ValueId>,
+}
+
+impl Regions {
+    /// What a reference points at: its first position.
+    pub fn names(&self) -> &[Loan] {
+        self.positions.first().map_or(&[], |region| &region.loans)
+    }
+
+    /// Every loan in any position (RFC-0079 rule 10).
+    pub fn holds(&self) -> impl Iterator<Item = &Loan> {
+        self.positions.iter().flat_map(|region| &region.loans)
+    }
+
+    pub fn holds_any(&self) -> bool {
+        self.positions.iter().any(|region| !region.loans.is_empty())
+    }
+
+    pub fn via(&self) -> &[ValueId] {
+        &self.via
+    }
+
+    pub fn position(&self, k: usize) -> &[Loan] {
+        self.positions.get(k).map_or(&[], |region| &region.loans)
+    }
+
+    fn folded(&self) -> Region {
+        let mut all = Region::default();
+        for region in &self.positions {
+            all.join_mut(region);
+        }
+        all
+    }
+
     /// The region of a value built from `from`: `from`'s loans, held
     /// through `from`. Every flow of a loan is one, so a value made from a
     /// holder — read out of it, stored into it, passed on, projected — is
@@ -166,20 +574,27 @@ impl Region {
         }
         self
     }
+
+    fn with_via(positions: Vec<Region>, via: &[ValueId]) -> Self {
+        Self {
+            positions,
+            via: via.to_vec(),
+        }
+    }
 }
 
-impl SemiLattice for Region {
+impl SemiLattice for Regions {
     fn bottom() -> Self {
         Self::default()
     }
 
     fn join_mut(&mut self, other: &Self) -> bool {
         let mut changed = false;
-        for loan in &other.loans {
-            if !self.loans.contains(loan) {
-                self.loans.push(*loan);
-                changed = true;
-            }
+        if self.positions.len() < other.positions.len() {
+            self.positions.resize_with(other.positions.len(), Region::default);
+        }
+        for (mine, theirs) in self.positions.iter_mut().zip(&other.positions) {
+            changed |= mine.join_mut(theirs);
         }
         for v in &other.via {
             if !self.via.contains(v) {
@@ -189,6 +604,33 @@ impl SemiLattice for Region {
         }
         changed
     }
+}
+
+fn fill(width: usize, region: Region) -> Vec<Region> {
+    vec![region; width]
+}
+
+fn fold(positions: &[Region]) -> Region {
+    let mut all = Region::default();
+    for region in positions {
+        all.join_mut(region);
+    }
+    all
+}
+
+/// `from` read as a value of `width` positions: the same positions when the
+/// widths agree, since a part as wide as the whole starts at its first
+/// position, and every loan in every position otherwise.
+fn reshape(from: &[Region], width: usize) -> Vec<Region> {
+    match from.len() == width {
+        true => from.to_vec(),
+        false => fill(width, fold(from)),
+    }
+}
+
+fn padded(mut positions: Vec<Region>, width: usize) -> Vec<Region> {
+    positions.resize_with(width, Region::default);
+    positions
 }
 
 #[derive(Default, Debug)]
@@ -209,10 +651,13 @@ impl StorageEffect {
             || hits(&self.reads, &other.writes)
     }
 
-    fn add(&mut self, storage: ValueId, mutability: Mutability) {
+    fn add(&mut self, storage: LoanStorage, mutability: Mutability) {
+        let Some(slot) = storage.slot() else {
+            return;
+        };
         match mutability {
-            Mutability::Shared => self.reads.push(storage),
-            Mutability::Mut => self.writes.push(storage),
+            Mutability::Shared => self.reads.push(slot),
+            Mutability::Mut => self.writes.push(slot),
         }
     }
 }
@@ -322,6 +767,8 @@ fn carried(kind: &InstKind) -> Option<Carried> {
 
 // -- The dataflow ---------------------------------------------------
 
+type State = DataflowState<ValueId, Regions>;
+
 struct RegionAnalysis<'a> {
     val_types: &'a FxHashMap<ValueId, Ty>,
     cfg: &'a CfgBody,
@@ -330,14 +777,291 @@ struct RegionAnalysis<'a> {
     summaries: Summaries<'a>,
 }
 
-/// A value with no type entry is taken to carry a reference: the stricter
-/// reading, so a missing type never hides a loan. The pipeline types every
-/// defined value; only a hand-built body lacks one.
-const UNTYPED_CARRIES_REFERENCE: bool = true;
+/// A value with no type entry is read as one position holding every loan
+/// it is given: the stricter reading, so a missing type never hides a loan.
+/// The pipeline types every defined value; only a hand-built body lacks one.
+const UNTYPED_POSITIONS: usize = 1;
+
+/// Where the loans a storage holds live among its holder's positions.
+enum Contents {
+    /// The positions of the value the storage holds.
+    Positions(Range<usize>),
+    /// One position standing for everything behind it: a region parameter, a
+    /// closure's captures or a call in flight, whose parts have no type here.
+    Summarized(usize),
+}
+
+/// A part of a value written into storage: the offsets it may start at in
+/// the pointee, which is `pointee_width` positions wide, and its positions.
+/// No offset is a part whose place is not known.
+struct WrittenPart<'v> {
+    pointee_width: usize,
+    at: &'v [usize],
+    values: &'v [Region],
+}
+
+/// A value to place into a built value, at the part `seg` names.
+struct Placed {
+    seg: PathSeg,
+    value: ValueId,
+}
+
+/// What a callee can reach from the values a call hands it.
+#[derive(Default)]
+struct Reach {
+    loans: Region,
+    via: Vec<ValueId>,
+    storages: Vec<LoanStorage>,
+    writable: Vec<LoanStorage>,
+}
+
+impl Reach {
+    /// `kind` is `None` for a value with no type entry.
+    fn take(&mut self, kind: Option<PositionKind>, region: &Region) {
+        for loan in &region.loans {
+            if !self.loans.loans.contains(loan) {
+                self.loans.loans.push(*loan);
+            }
+            if !self.storages.contains(&loan.storage) {
+                self.storages.push(loan.storage);
+            }
+            let written = match kind {
+                Some(PositionKind::Ref(mutability)) => mutability == Mutability::Mut,
+                Some(
+                    PositionKind::Captures(_)
+                    | PositionKind::RegionParam
+                    | PositionKind::InFlight,
+                )
+                | None => loan.mutability == Mutability::Mut,
+            };
+            if written && !self.writable.contains(&loan.storage) {
+                self.writable.push(loan.storage);
+            }
+        }
+    }
+}
+
+/// The values a transfer gave new regions.
+type Changed = Vec<ValueId>;
+
+fn add_via(via: &mut Vec<ValueId>, held: &Regions, from: ValueId) {
+    for v in held.via.iter().chain([&from]) {
+        if !via.contains(v) {
+            via.push(*v);
+        }
+    }
+}
 
 impl RegionAnalysis<'_> {
-    fn loan(&self, storage: ValueId, mutability: Mutability) -> Loan {
-        self.entry.loan(storage, mutability)
+    fn width(&self, v: ValueId) -> usize {
+        self.val_types.get(&v).map_or(UNTYPED_POSITIONS, positions)
+    }
+
+    fn pointee(&self, reference: ValueId) -> Option<Ty> {
+        match self.val_types.get(&reference)? {
+            Ty::Ref(_, inner) => Some(inner.ty().into_owned()),
+            _ => None,
+        }
+    }
+
+    fn pointee_width(&self, reference: ValueId) -> usize {
+        self.pointee(reference)
+            .as_ref()
+            .map_or(UNTYPED_POSITIONS, positions)
+    }
+
+    /// The width of what a `Handle` carries.
+    fn handled_width(&self, handle: ValueId) -> usize {
+        match self.val_types.get(&handle) {
+            Some(Ty::Handle(inner)) => positions(inner),
+            _ => UNTYPED_POSITIONS,
+        }
+    }
+
+    /// `regions` given to `v`: a position `regions` lacks holds nothing, and
+    /// more positions than `v` has put every loan in each of `v`'s.
+    fn put(&self, state: &mut State, v: ValueId, regions: Regions, changed: &mut Changed) {
+        let width = self.width(v);
+        let positions = match regions.positions.len() > width {
+            true => fill(width, fold(&regions.positions)),
+            false => padded(regions.positions, width),
+        };
+        let mut regions = Regions {
+            positions,
+            via: regions.via,
+        };
+        self.read_only_shared(v, &mut regions.positions);
+        state.set(v, regions);
+        changed.push(v);
+    }
+
+    fn join_at(&self, state: &mut State, v: ValueId, at: usize, region: &Region, changed: &mut Changed) {
+        let mut regions = state.get(v);
+        if regions.positions.len() <= at {
+            regions.positions.resize_with(at + 1, Region::default);
+        }
+        if regions.positions[at].join_mut(region) {
+            self.read_only_shared(v, &mut regions.positions);
+            state.set(v, regions);
+            changed.push(v);
+        }
+    }
+
+    /// A loan at a `&T` position of `v` is shared, whatever it was where it
+    /// came from: nothing writes through a `&T`.
+    fn read_only_shared(&self, v: ValueId, positions: &mut [Region]) {
+        let holds_mut = positions
+            .iter()
+            .any(|region| region.loans.iter().any(|loan| loan.mutability == Mutability::Mut));
+        if !holds_mut {
+            return;
+        }
+        let Some(ty) = self.val_types.get(&v) else {
+            return;
+        };
+        for (region, kind) in positions.iter_mut().zip(layout(ty)) {
+            if kind == PositionKind::Ref(Mutability::Shared) {
+                let mut shared = Region::default();
+                shared.join_mut(&std::mem::take(region).shared());
+                *region = shared;
+            }
+        }
+    }
+
+    /// Where what `storage` holds lives among its holder's positions. A
+    /// storage of reference type is what the reference points at, since `&r`
+    /// of a reference is a reborrow (RFC-0029 rule 3) and never names the
+    /// slot holding it.
+    fn contents(&self, storage: LoanStorage) -> Contents {
+        match storage {
+            LoanStorage::Local(value) | LoanStorage::Param { value, .. } => {
+                match self.val_types.get(&value) {
+                    Some(Ty::Ref(_, inner)) => Contents::Positions(1..1 + positions(&inner.ty())),
+                    Some(ty) => Contents::Positions(0..positions(ty)),
+                    None => Contents::Positions(0..UNTYPED_POSITIONS),
+                }
+            }
+            LoanStorage::Outside(Outside { entry, position }) => {
+                let pointee = self
+                    .val_types
+                    .get(&entry)
+                    .and_then(|ty| pointee_at(ty, position));
+                match pointee {
+                    Some(pointee) => {
+                        Contents::Positions(position + 1..position + 1 + positions(&pointee))
+                    }
+                    None => Contents::Summarized(position),
+                }
+            }
+        }
+    }
+
+    /// RFC-0079 rule 3: what a reference naming `storage` reads, as a value
+    /// of `width` positions.
+    fn storage_view(&self, state: &State, storage: LoanStorage, width: usize) -> Vec<Region> {
+        let held = state.get(storage.holder());
+        let at = |k: usize| held.positions.get(k).cloned().unwrap_or_default();
+        match self.contents(storage) {
+            Contents::Positions(range) => reshape(&range.map(at).collect::<Vec<_>>(), width),
+            Contents::Summarized(position) => fill(width, at(position)),
+        }
+    }
+
+    fn content_range(&self, storage: LoanStorage) -> Range<usize> {
+        match self.contents(storage) {
+            Contents::Positions(range) => range,
+            Contents::Summarized(position) => position..position + 1,
+        }
+    }
+
+    /// RFC-0079 rule 4: a written part joined into what `storage` holds, or
+    /// into every position it holds when the part's place is not known. A
+    /// storage never takes a loan on itself.
+    fn storage_write(&self, state: &mut State, storage: LoanStorage, part: &WrittenPart, changed: &mut Changed) {
+        let holder = storage.holder();
+        let range = self.content_range(storage);
+        match range.len() == part.pointee_width && !part.at.is_empty() {
+            true => {
+                for offset in part.at {
+                    for (k, region) in part.values.iter().enumerate() {
+                        let region = region.clone().without(storage);
+                        self.join_at(state, holder, range.start + offset + k, &region, changed);
+                    }
+                }
+            }
+            false => {
+                let all = fold(part.values).without(storage);
+                for k in range {
+                    self.join_at(state, holder, k, &all, changed);
+                }
+            }
+        }
+    }
+
+    /// What `reference` points at now: its own tail, and what every storage
+    /// it names holds (RFC-0079 rule 3).
+    fn deref(&self, state: &State, reference: ValueId) -> Vec<Region> {
+        let width = self.pointee_width(reference);
+        let held = state.get(reference);
+        let mut out: Vec<Region> = (1..1 + width)
+            .map(|k| held.positions.get(k).cloned().unwrap_or_default())
+            .collect();
+        for loan in held.names() {
+            for (mine, theirs) in out.iter_mut().zip(self.storage_view(state, loan.storage, width)) {
+                mine.join_mut(&theirs);
+            }
+        }
+        out
+    }
+
+    /// The part of `from`, a value of type `ty`, that `path` names, as a value
+    /// of `width` positions; every loan of `from` when the part is not known.
+    fn project(&self, from: &[Region], ty: Option<&Ty>, path: &[PathSeg], width: usize) -> Vec<Region> {
+        if path.is_empty() {
+            return reshape(from, width);
+        }
+        let at = ty.map_or(Vec::new(), |ty| offsets(ty, path, width));
+        if at.is_empty() {
+            return fill(width, fold(from));
+        }
+        let mut out = fill(width, Region::default());
+        for offset in at {
+            for (k, mine) in out.iter_mut().enumerate() {
+                if let Some(region) = from.get(offset + k) {
+                    mine.join_mut(region);
+                }
+            }
+        }
+        out
+    }
+
+    /// Every position of `dst` holds every loan any of `uses` holds.
+    fn gather(&self, state: &mut State, dst: ValueId, uses: &[ValueId], changed: &mut Changed) {
+        let mut all = Region::default();
+        let mut via: Vec<ValueId> = Vec::new();
+        for u in uses {
+            let held = state.get(*u);
+            all.join_mut(&held.folded());
+            add_via(&mut via, &held, *u);
+        }
+        let regions = Regions::with_via(fill(self.width(dst), all), &via);
+        self.put(state, dst, regions, changed);
+    }
+
+    /// A value built from `parts`, each placed at every offset its path step
+    /// may name among `dst`'s positions.
+    fn build_from(&self, state: &mut State, dst: ValueId, parts: &[Placed], changed: &mut Changed) {
+        let ty = self.val_types.get(&dst);
+        let mut out = fill(self.width(dst), Region::default());
+        let mut via: Vec<ValueId> = Vec::new();
+        for Placed { seg, value } in parts {
+            let held = state.get(*value);
+            add_via(&mut via, &held, *value);
+            let part_width = self.width(*value);
+            let at = ty.map_or(Vec::new(), |ty| offsets(ty, std::slice::from_ref(seg), part_width));
+            join_part(&mut out, &at, &padded(held.positions, part_width));
+        }
+        self.put(state, dst, Regions::with_via(out, &via), changed);
     }
 
     /// An extern declares its summary in its signature, and reading it is
@@ -354,157 +1078,517 @@ impl RegionAnalysis<'_> {
         }
     }
 
-    /// RFC-0064 rule 3: a call substitutes each `Param(i)` of the
-    /// callee's summary with argument `i`'s region, and a lambda's call adds
-    /// the region of the closure value itself. That addition is what a
-    /// captured reference travels on: inside the closure the value read out
-    /// of a capture register carries no loan, so the loan the result names
-    /// reaches the caller here and nowhere else.
-    fn substituted(
-        &self,
-        state: &DataflowState<ValueId, Region>,
-        callee: &Callee,
-        args: &[ValueId],
-        dst: ValueId,
-    ) -> Option<Region> {
+    /// RFC-0064 rule 3, position by position: each result position is the
+    /// argument positions its summary names, as the argument holds them now,
+    /// and a lambda's call adds what the closure reaches through its
+    /// captures. `None` is a callee with no summary, or a summary naming an
+    /// argument or position the call does not have.
+    fn substituted(&self, state: &State, callee: &Callee, args: &[ValueId], width: usize) -> Option<Regions> {
         let summary = self.summary_of(callee)?;
-        let mut region = Region::default();
-        for loan in &summary.loans {
-            let Some(arg) = args.get(loan.index) else {
-                return None;
+        let mut out = fill(width, Region::default());
+        let mut via: Vec<ValueId> = Vec::new();
+        for ResultLoan { at, loan } in &summary.loans {
+            let arg = *args.get(loan.index)?;
+            let current = self.current(state, arg);
+            let mut borrowed = match loan.position {
+                ParamPosition::At(k) => current.get(k)?.clone(),
+                ParamPosition::Whole => fold(&current),
             };
-            let mut borrowed = state.get(*arg).through(*arg);
             if loan.mutability == Mutability::Mut {
                 for held in &mut borrowed.loans {
                     held.mutability = Mutability::Mut;
                 }
             }
-            region.join_mut(&borrowed);
+            out.get_mut(*at)?.join_mut(&borrowed);
+            add_via(&mut via, &state.get(arg), arg);
         }
         if let Callee::Indirect(f) = callee
-            && self.carries_ref(dst)
             && let Some(made) = self.closures.made_by(*f)
         {
-            region.join_mut(&state.get(made.closure));
+            join_part(&mut out, &[], &[self.reach(state, &[made.closure]).loans]);
         }
-        Some(region)
+        Some(Regions::with_via(out, &via))
     }
 
-    fn carries_ref(&self, v: ValueId) -> bool {
-        self.val_types
-            .get(&v)
-            .map_or(UNTYPED_CARRIES_REFERENCE, contains_ref)
+    /// `v`'s positions with what each of its references points at read from
+    /// the storage it names now (RFC-0079 rule 3).
+    fn current(&self, state: &State, v: ValueId) -> Vec<Region> {
+        let mut held = padded(state.get(v).positions, self.width(v));
+        let Some(ty) = self.val_types.get(&v) else {
+            return held;
+        };
+        for (k, kind) in layout(ty).into_iter().enumerate() {
+            let (PositionKind::Ref(_), Some(pointee)) = (kind, pointee_at(ty, k)) else {
+                continue;
+            };
+            let width = positions(&pointee);
+            for loan in held[k].loans.clone() {
+                let view = self.storage_view(state, loan.storage, width);
+                for (mine, theirs) in held[k + 1..k + 1 + width].iter_mut().zip(&view) {
+                    mine.join_mut(theirs);
+                }
+            }
+        }
+        held
     }
 
-    /// `to ⊒ from`, when `to` can hold a reference or `always` says so.
-    fn flow(
-        &self,
-        state: &mut DataflowState<ValueId, Region>,
-        from: ValueId,
-        to: ValueId,
-        always: bool,
-    ) {
-        if !always && !self.carries_ref(to) {
-            return;
+    /// Every loan `values` hold, and every loan the storages those name hold
+    /// now, to any depth; with the storages a callee handed them may write
+    /// into.
+    fn reach(&self, state: &State, values: &[ValueId]) -> Reach {
+        let mut reach = Reach::default();
+        for v in values {
+            let held = state.get(*v);
+            add_via(&mut reach.via, &held, *v);
+            let kinds = self.val_types.get(v).map(layout);
+            for (k, region) in held.positions.iter().enumerate() {
+                let kind = kinds.as_ref().and_then(|kinds| kinds.get(k).copied());
+                reach.take(kind, region);
+            }
         }
-        let source = state.get(from).through(from);
-        let mut target = state.get(to);
-        if target.join_mut(&source) {
-            state.set(to, target);
+        let mut at = 0;
+        while at < reach.storages.len() {
+            let storage = reach.storages[at];
+            let holder = state.get(storage.holder());
+            let kinds = self.val_types.get(&storage.holder()).map(layout);
+            for k in self.content_range(storage) {
+                let Some(region) = holder.positions.get(k) else {
+                    continue;
+                };
+                let kind = kinds.as_ref().and_then(|kinds| kinds.get(k).copied());
+                reach.take(kind, region);
+            }
+            at += 1;
+        }
+        reach
+    }
+
+    /// The call's outputs besides its result (RFC-0079 rule 5, in this step's
+    /// conservative form): every storage the callee may write into, and what
+    /// each `&mut` position of a value handed to it points at. Each takes
+    /// every loan the callee can reach and keeps what it held.
+    fn write_outputs(&self, state: &mut State, values: &[ValueId], reach: &Reach, changed: &mut Changed) {
+        let unknown_place = WrittenPart {
+            pointee_width: 0,
+            at: &[],
+            values: std::slice::from_ref(&reach.loans),
+        };
+        for storage in &reach.writable {
+            self.storage_write(state, *storage, &unknown_place, changed);
+        }
+        for v in values {
+            let Some(ty) = self.val_types.get(v) else {
+                continue;
+            };
+            for (k, kind) in layout(ty).into_iter().enumerate() {
+                let (PositionKind::Ref(Mutability::Mut), Some(pointee)) = (kind, pointee_at(ty, k))
+                else {
+                    continue;
+                };
+                for position in k + 1..k + 1 + positions(&pointee) {
+                    self.join_at(state, *v, position, &reach.loans, changed);
+                }
+            }
+        }
+    }
+
+    /// A call's result, and every loan the call hands its callee.
+    fn call(&self, state: &mut State, callee: &Callee, args: &[ValueId], width: usize, changed: &mut Changed) -> (Regions, Reach) {
+        let values: Vec<ValueId> = args.iter().chain(callee_value(callee)).copied().collect();
+        let reach = self.reach(state, &values);
+        let result = match self.substituted(state, callee, args, width) {
+            Some(substituted) => substituted,
+            None => Regions::with_via(fill(width, reach.loans.clone()), &reach.via),
+        };
+        self.write_outputs(state, &values, &reach, changed);
+        (result, reach)
+    }
+
+    /// A reference: what it names, then the positions of what it points at.
+    fn reference(&self, names: Region, pointee: Vec<Region>, via: &[ValueId]) -> Regions {
+        Regions::with_via(std::iter::once(names).chain(pointee).collect(), via)
+    }
+
+    fn step(&self, inst: &Inst, state: &mut State, changed: &mut Changed) {
+        match &inst.kind {
+            InstKind::Ref {
+                dst,
+                target,
+                path,
+                mutability,
+            } => {
+                let width = self.pointee_width(*dst);
+                let regions = match target {
+                    RefTarget::Var(s) | RefTarget::Param(s) => {
+                        let storage = self.entry.storage(*s);
+                        let names = Region {
+                            loans: vec![Loan {
+                                storage,
+                                mutability: *mutability,
+                            }],
+                        };
+                        let held = state.get(*s);
+                        let contents: Vec<Region> = self
+                            .content_range(storage)
+                            .map(|k| held.positions.get(k).cloned().unwrap_or_default())
+                            .collect();
+                        let contents_ty = match self.val_types.get(s) {
+                            Some(Ty::Ref(_, inner)) => Some(inner.ty().into_owned()),
+                            ty => ty.cloned(),
+                        };
+                        let pointee = self.project(&contents, contents_ty.as_ref(), path, width);
+                        self.reference(names, pointee, &[])
+                    }
+                    // A shared reborrow holds what it reborrows as shared
+                    // (RFC-0029 rule 3).
+                    RefTarget::Through(r) => {
+                        let held = state.get(*r).through(*r);
+                        let names = Region {
+                            loans: held.names().to_vec(),
+                        };
+                        let names = match mutability {
+                            Mutability::Shared => names.shared(),
+                            Mutability::Mut => names,
+                        };
+                        let whole = self.deref(state, *r);
+                        let pointee = self.project(&whole, self.pointee(*r).as_ref(), path, width);
+                        self.reference(names, pointee, &held.via)
+                    }
+                };
+                self.put(state, *dst, regions, changed);
+            }
+            InstKind::Take {
+                dst, target, path, ..
+            } => {
+                let width = self.width(*dst);
+                let regions = match target {
+                    RefTarget::Var(s) | RefTarget::Param(s) => {
+                        let held = state.get(*s).through(*s);
+                        let part = self.project(&held.positions, self.val_types.get(s), path, width);
+                        Regions::with_via(part, &held.via)
+                    }
+                    RefTarget::Through(r) => {
+                        let held = state.get(*r).through(*r);
+                        let whole = self.deref(state, *r);
+                        let part = self.project(&whole, self.pointee(*r).as_ref(), path, width);
+                        Regions::with_via(part, &held.via)
+                    }
+                };
+                self.put(state, *dst, regions, changed);
+            }
+            InstKind::Assign {
+                target,
+                path,
+                value,
+                ..
+            } => {
+                let held = state.get(*value).through(*value);
+                let value_width = self.width(*value);
+                let values = padded(held.positions.clone(), value_width);
+                match target {
+                    // RFC-0079 rule 4: nothing names a slot while it is
+                    // assigned whole (RFC-0029), so the assign replaces.
+                    RefTarget::Var(s) | RefTarget::Param(s) if path.is_empty() => {
+                        let positions = reshape(&values, self.width(*s));
+                        self.put(state, *s, Regions::with_via(positions, &held.via), changed);
+                    }
+                    RefTarget::Var(s) | RefTarget::Param(s) => {
+                        let at = self
+                            .val_types
+                            .get(s)
+                            .map_or(Vec::new(), |ty| offsets(ty, path, value_width));
+                        let part = WrittenPart {
+                            pointee_width: self.width(*s),
+                            at: &at,
+                            values: &values,
+                        };
+                        self.write_part(state, *s, self.entry.storage(*s), &part, changed);
+                    }
+                    RefTarget::Through(m) => {
+                        let at = self
+                            .pointee(*m)
+                            .map_or(Vec::new(), |ty| offsets(&ty, path, value_width));
+                        let part = WrittenPart {
+                            pointee_width: self.pointee_width(*m),
+                            at: &at,
+                            values: &values,
+                        };
+                        self.write_through(state, *m, &part, changed);
+                    }
+                }
+            }
+            InstKind::Spawn {
+                dst,
+                callee,
+                args,
+                ..
+            } => {
+                let (result, reach) =
+                    self.call(state, callee, args, self.handled_width(*dst), changed);
+                let positions = std::iter::once(reach.loans).chain(result.positions).collect();
+                self.put(state, *dst, Regions::with_via(positions, &reach.via), changed);
+            }
+            InstKind::FunctionCall {
+                dst, callee, args, ..
+            } => {
+                let (result, _) = self.call(state, callee, args, self.width(*dst), changed);
+                self.put(state, *dst, result, changed);
+            }
+            // RFC-0064 rule 5: a lambda that captures a reference is a
+            // holder of that loan, so its one position is the join of what
+            // it captured whatever its type says about the captures.
+            InstKind::MakeClosure { dst, captures, .. } => {
+                self.gather(state, *dst, captures, changed);
+            }
+            InstKind::Eval { dst, src, .. } => {
+                let held = state.get(*src).through(*src);
+                let carried: Vec<Region> = (1..1 + self.handled_width(*src))
+                    .map(|k| held.positions.get(k).cloned().unwrap_or_default())
+                    .collect();
+                let positions = reshape(&carried, self.width(*dst));
+                self.put(state, *dst, Regions::with_via(positions, &held.via), changed);
+            }
+            InstKind::FieldGet {
+                dst,
+                object,
+                field,
+                rest,
+            } => {
+                let path: Vec<PathSeg> = std::iter::once(*field)
+                    .chain(rest.iter().copied())
+                    .map(PathSeg::Field)
+                    .collect();
+                self.read_part(state, *dst, *object, &path, changed);
+            }
+            InstKind::ObjectGet { dst, object, key } => {
+                self.read_part(state, *dst, *object, &[PathSeg::Field(*key)], changed);
+            }
+            InstKind::TupleIndex { dst, tuple, index } => {
+                self.read_part(state, *dst, *tuple, &[PathSeg::Index(*index)], changed);
+            }
+            InstKind::ArrayIndex { dst, array, index } => {
+                self.read_part(state, *dst, *array, &[PathSeg::Index(*index)], changed);
+            }
+            InstKind::UnwrapVariant { dst, src } => {
+                self.read_part(state, *dst, *src, &[PathSeg::Payload], changed);
+            }
+            InstKind::FieldSet {
+                dst,
+                object,
+                field,
+                rest,
+                value,
+            } => {
+                let path: Vec<PathSeg> = std::iter::once(*field)
+                    .chain(rest.iter().copied())
+                    .map(PathSeg::Field)
+                    .collect();
+                let object_held = state.get(*object).through(*object);
+                let value_held = state.get(*value).through(*value);
+                let value_width = self.width(*value);
+                let mut positions = reshape(&object_held.positions, self.width(*dst));
+                let at = self
+                    .val_types
+                    .get(dst)
+                    .map_or(Vec::new(), |ty| offsets(ty, &path, value_width));
+                join_part(&mut positions, &at, &padded(value_held.positions.clone(), value_width));
+                let mut regions = Regions::with_via(positions, &object_held.via);
+                regions.join_mut(&Regions::with_via(Vec::new(), &value_held.via));
+                self.put(state, *dst, regions, changed);
+            }
+            InstKind::MakeVariant { dst, tag, payload } => {
+                let Some(payload) = payload else {
+                    self.put(state, *dst, Regions::default(), changed);
+                    return;
+                };
+                let seg = match self.val_types.get(dst) {
+                    Some(Ty::Enum { .. }) => PathSeg::Field(*tag),
+                    _ => PathSeg::Payload,
+                };
+                let parts = [Placed {
+                    seg,
+                    value: *payload,
+                }];
+                self.build_from(state, *dst, &parts, changed);
+            }
+            InstKind::MakeArray { dst, elements } => {
+                let parts: Vec<Placed> = elements
+                    .iter()
+                    .map(|value| Placed {
+                        seg: PathSeg::Index(0),
+                        value: *value,
+                    })
+                    .collect();
+                self.build_from(state, *dst, &parts, changed);
+            }
+            InstKind::MakeTuple { dst, elements } => {
+                let parts: Vec<Placed> = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| Placed {
+                        seg: PathSeg::Index(index),
+                        value: *value,
+                    })
+                    .collect();
+                self.build_from(state, *dst, &parts, changed);
+            }
+            InstKind::MakeObject { dst, fields } => {
+                let parts: Vec<Placed> = fields
+                    .iter()
+                    .map(|(name, value)| Placed {
+                        seg: PathSeg::Field(*name),
+                        value: *value,
+                    })
+                    .collect();
+                self.build_from(state, *dst, &parts, changed);
+            }
+            // A slice is a borrow of what its container names, with the
+            // container's elements as its own (RFC-0047).
+            InstKind::AsSlice { dst, container, .. } => {
+                let held = state.get(*container).through(*container);
+                let names = Region {
+                    loans: held.names().to_vec(),
+                };
+                let elements = reshape(&self.deref(state, *container), self.pointee_width(*dst));
+                self.put(state, *dst, self.reference(names, elements, &held.via), changed);
+            }
+            InstKind::Index {
+                dst, slice, mode, ..
+            } => {
+                let held = state.get(*slice).through(*slice);
+                let element = self.deref(state, *slice);
+                let regions = match mode {
+                    IndexMode::Ref => {
+                        let names = Region {
+                            loans: held.names().to_vec(),
+                        };
+                        let pointee = reshape(&element, self.pointee_width(*dst));
+                        self.reference(names, pointee, &held.via)
+                    }
+                    IndexMode::Copy => {
+                        Regions::with_via(reshape(&element, self.width(*dst)), &held.via)
+                    }
+                };
+                self.put(state, *dst, regions, changed);
+            }
+            InstKind::IndexSet { slice, value, .. } => {
+                let values = padded(state.get(*value).positions, self.width(*value));
+                let part = WrittenPart {
+                    pointee_width: self.pointee_width(*slice),
+                    at: &[0],
+                    values: &values,
+                };
+                self.write_through(state, *slice, &part, changed);
+            }
+            InstKind::StructuralClone { dst, src, .. } => {
+                let held = state.get(*src).through(*src);
+                let from = match self.pointee(*src) {
+                    Some(_) => self.deref(state, *src),
+                    None => held.positions.clone(),
+                };
+                let positions = reshape(&from, self.width(*dst));
+                self.put(state, *dst, Regions::with_via(positions, &held.via), changed);
+            }
+            InstKind::Const { .. }
+            | InstKind::ConstStr { .. }
+            | InstKind::LoadFunction { .. }
+            | InstKind::Fetch { .. }
+            | InstKind::Commit { .. }
+            | InstKind::Undef { .. }
+            | InstKind::Poison { .. }
+            | InstKind::Merge { .. }
+            | InstKind::Drop { .. }
+            | InstKind::Nop
+            | InstKind::StringAppend { .. } => {}
+            kind => {
+                let uses = inst_info::uses(kind);
+                for dst in inst_info::defs(kind) {
+                    self.gather(state, dst, &uses, changed);
+                }
+            }
+        }
+    }
+
+    fn read_part(&self, state: &mut State, dst: ValueId, src: ValueId, path: &[PathSeg], changed: &mut Changed) {
+        let held = state.get(src).through(src);
+        let part = self.project(&held.positions, self.val_types.get(&src), path, self.width(dst));
+        self.put(state, dst, Regions::with_via(part, &held.via), changed);
+    }
+
+    /// `*m = v` (RFC-0079 rule 4): the part joined into every storage `m`
+    /// names, and into `m`'s own tail.
+    fn write_through(&self, state: &mut State, m: ValueId, part: &WrittenPart, changed: &mut Changed) {
+        for loan in state.get(m).names().to_vec() {
+            self.storage_write(state, loan.storage, part, changed);
+        }
+        let tail: Vec<usize> = part.at.iter().map(|offset| offset + 1).collect();
+        let own = WrittenPart {
+            pointee_width: 1 + part.pointee_width,
+            at: &tail,
+            values: part.values,
+        };
+        self.write_part(state, m, LoanStorage::Local(m), &own, changed);
+    }
+
+    /// The part joined into `v`'s own positions, without a loan on `storage`.
+    fn write_part(&self, state: &mut State, v: ValueId, storage: LoanStorage, part: &WrittenPart, changed: &mut Changed) {
+        let before = state.get(v);
+        let mut positions = padded(before.positions.clone(), part.pointee_width);
+        let values: Vec<Region> = part.values.iter().map(|r| r.clone().without(storage)).collect();
+        join_part(&mut positions, part.at, &values);
+        self.read_only_shared(v, &mut positions);
+        let after = Regions {
+            positions,
+            via: before.via.clone(),
+        };
+        if after != before {
+            state.set(v, after);
+            changed.push(v);
+        }
+    }
+}
+
+fn callee_value(callee: &Callee) -> Option<&ValueId> {
+    match callee {
+        Callee::Indirect(f) => Some(f),
+        Callee::Direct(_) | Callee::Extern { .. } => None,
+    }
+}
+
+fn join_part(positions: &mut [Region], at: &[usize], values: &[Region]) {
+    match at.is_empty() {
+        true => {
+            let all = fold(values);
+            positions.iter_mut().for_each(|mine| {
+                mine.join_mut(&all);
+            });
+        }
+        false => {
+            for offset in at {
+                for (k, region) in values.iter().enumerate() {
+                    if let Some(mine) = positions.get_mut(offset + k) {
+                        mine.join_mut(region);
+                    }
+                }
+            }
         }
     }
 }
 
 impl DataflowAnalysis for RegionAnalysis<'_> {
     type Key = ValueId;
-    type Domain = Region;
+    type Domain = Regions;
 
-    fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<ValueId, Region>) {
-        match &inst.kind {
-            InstKind::Ref {
-                dst,
-                target,
-                mutability,
-                ..
-            } => match target {
-                RefTarget::Var(s) | RefTarget::Param(s) => state.set(
-                    *dst,
-                    Region {
-                        loans: vec![self.loan(*s, *mutability)],
-                        via: vec![],
-                    },
-                ),
-                // A shared reborrow holds what it reborrows as shared
-                // (RFC-0029 rule 3).
-                RefTarget::Through(r) => {
-                    let mut region = state.get(*r).through(*r);
-                    if *mutability == Mutability::Shared {
-                        for loan in &mut region.loans {
-                            loan.mutability = Mutability::Shared;
-                        }
-                    }
-                    state.set(*dst, region);
-                }
-            },
-            // A reference read out of a storage is the storage's own
-            // reference, not a second holder (RFC-0029), and one stored into
-            // a storage is the value's own.
-            InstKind::Take { dst, target, .. } => {
-                if let Some(slot) = inst_info::storage(target) {
-                    self.flow(state, slot, *dst, false);
-                }
-            }
-            InstKind::Assign { target, value, .. } => {
-                if let Some(slot) = inst_info::storage(target) {
-                    self.flow(state, *value, slot, false);
-                }
-            }
-            InstKind::Spawn { dst, args, .. } => {
-                for a in args {
-                    self.flow(state, *a, *dst, true);
-                }
-            }
-            // RFC-0064 rule 5: a lambda that captures a reference is a
-            // holder of that loan, so its region is the join of what it
-            // captured whatever its type says about the captures.
-            InstKind::MakeClosure { dst, captures, .. } => {
-                for c in captures {
-                    self.flow(state, *c, *dst, true);
-                }
-            }
-            InstKind::FunctionCall {
-                dst, callee, args, ..
-            } => {
-                let Some(region) = self.substituted(state, callee, args, *dst) else {
-                    for a in args {
-                        self.flow(state, *a, *dst, false);
-                    }
-                    if let Callee::Indirect(f) = callee {
-                        self.flow(state, *f, *dst, false);
-                    }
-                    return;
-                };
-                state.set(*dst, region);
-            }
-            kind => {
-                for dst in inst_info::defs(kind) {
-                    for u in inst_info::uses(kind) {
-                        self.flow(state, u, dst, false);
-                    }
-                }
-            }
-        }
+    fn transfer_inst(&self, inst: &Inst, state: &mut State) {
+        self.step(inst, state, &mut Changed::new());
     }
 
     /// A `For` over a slice hands the body a reference into it, so the
     /// element holds the source's loan for as long as the loop runs, which
-    /// is the terminator's own extent (RFC-0057 rule 2). An array's
-    /// element is moved out and a range's is a number: neither is a loan.
-    fn terminator_uses(&self, term: &Terminator, state: &mut DataflowState<ValueId, Region>) {
+    /// is the terminator's own extent (RFC-0057 rule 2). An array's element
+    /// is moved out of it, and holds the array's element positions.
+    fn terminator_uses(&self, term: &Terminator, state: &mut State) {
         let Terminator::For { source, body, .. } = term else {
-            return;
-        };
-        let (ForSource::Slice(slice) | ForSource::SliceMut(slice)) = source else {
             return;
         };
         let Some(&target) = self.cfg.label_to_block.get(body) else {
@@ -513,41 +1597,58 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
         let Some(&element) = self.cfg.blocks[target.0].params.first() else {
             return;
         };
-        let mut region = state.get(*slice);
-        region.via.push(*slice);
-        state.set(element, region);
+        let regions = match source {
+            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
+                let held = state.get(*slice).through(*slice);
+                let names = Region {
+                    loans: held.names().to_vec(),
+                };
+                let items = self.deref(state, *slice);
+                let positions = std::iter::once(names)
+                    .chain(reshape(&items, self.pointee_width(element)))
+                    .collect();
+                Regions::with_via(positions, &held.via)
+            }
+            ForSource::Array(array) => {
+                let held = state.get(*array).through(*array);
+                let positions = reshape(&held.positions, self.width(element));
+                Regions::with_via(positions, &held.via)
+            }
+            ForSource::Range { .. } => return,
+        };
+        self.put(state, element, regions, &mut Changed::new());
     }
 
     fn propagate_forward(
         &self,
-        source_exit: &DataflowState<ValueId, Region>,
+        source_exit: &State,
         params: &[ValueId],
         first: usize,
         args: &[ValueId],
-        target_entry: &mut DataflowState<ValueId, Region>,
+        target_entry: &mut State,
     ) -> bool {
         let mut changed = target_entry.join_from(source_exit);
         for (param, arg) in params.iter().skip(first).zip(args) {
-            if !self.carries_ref(*param) {
+            let width = self.width(*param);
+            if width == 0 {
                 continue;
             }
-            let mut region = target_entry.get(*param);
-            if region.join_mut(&source_exit.get(*arg).through(*arg)) {
-                target_entry.set(*param, region);
+            let from = source_exit.get(*arg).through(*arg);
+            let incoming = Regions {
+                positions: reshape(&padded(from.positions, self.width(*arg)), width),
+                via: from.via,
+            };
+            let mut regions = target_entry.get(*param);
+            if regions.join_mut(&incoming) {
+                self.read_only_shared(*param, &mut regions.positions);
+                target_entry.set(*param, regions);
                 changed = true;
             }
         }
         changed
     }
 
-    fn propagate_backward(
-        &self,
-        _: &DataflowState<ValueId, Region>,
-        _: &[ValueId],
-        _: usize,
-        _: &[ValueId],
-        _: &mut DataflowState<ValueId, Region>,
-    ) {
+    fn propagate_backward(&self, _: &State, _: &[ValueId], _: usize, _: &[ValueId], _: &mut State) {
         unreachable!("regions flow forward")
     }
 }
@@ -555,22 +1656,23 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
 // -- The result -----------------------------------------------------
 
 pub struct Loans {
-    region: FxHashMap<ValueId, Region>,
-    entry: Vec<DataflowState<ValueId, Region>>,
+    regions: FxHashMap<ValueId, Regions>,
+    entry: Vec<State>,
     given: Vec<Vec<Given>>,
+    storage: EntryStorage,
 }
 
-/// The region an instruction gave a value it defines. A transfer writes only
-/// the values the instruction defines, so a block's entry state and these
-/// give the regions before each of its instructions.
+/// The regions an instruction gave a value it wrote: one it defines, or a
+/// storage written through a reference or by a call. A block's entry state
+/// and these give the regions before each of its instructions.
 struct Given {
     at: usize,
     value: ValueId,
-    region: Region,
+    regions: Regions,
 }
 
-static NOTHING: Region = Region {
-    loans: Vec::new(),
+static NOTHING: Regions = Regions {
+    positions: Vec::new(),
     via: Vec::new(),
 };
 
@@ -584,22 +1686,16 @@ impl Loans {
             summaries,
         };
         let mut entry = DataflowState::new();
-        for storage in cfg.entry_defs() {
-            if let Some(mutability) = cfg.val_types.get(&storage).and_then(held_loan) {
-                entry.set(
-                    storage,
-                    Region {
-                        loans: vec![analysis.loan(storage, mutability)],
-                        via: vec![],
-                    },
-                );
+        for value in cfg.entry_defs() {
+            if let Some(ty) = cfg.val_types.get(&value) {
+                entry.set(value, entry_regions(&analysis.entry, value, ty));
             }
         }
         let result = forward_analysis(cfg, &analysis, entry);
-        let mut region: FxHashMap<ValueId, Region> = FxHashMap::default();
-        for exit in &result.block_exit {
-            for (v, r) in &exit.values {
-                region.entry(*v).or_default().join_mut(r);
+        let mut regions: FxHashMap<ValueId, Regions> = FxHashMap::default();
+        for state in result.block_entry.iter().chain(&result.block_exit) {
+            for (v, r) in &state.values {
+                regions.entry(*v).or_default().join_mut(r);
             }
         }
         let mut given: Vec<Vec<Given>> = Vec::with_capacity(cfg.blocks.len());
@@ -607,21 +1703,27 @@ impl Loans {
             let mut state = entry.clone();
             let mut block_given = Vec::new();
             for (at, inst) in block.insts.iter().enumerate() {
-                analysis.transfer_inst(inst, &mut state);
-                for value in inst_info::defs(&inst.kind) {
+                let mut changed = Changed::new();
+                analysis.step(inst, &mut state, &mut changed);
+                changed.sort_unstable();
+                changed.dedup();
+                for value in changed {
+                    let now = state.get(value);
+                    regions.entry(value).or_default().join_mut(&now);
                     block_given.push(Given {
                         at,
                         value,
-                        region: state.get(value),
+                        regions: now,
                     });
                 }
             }
             given.push(block_given);
         }
         Self {
-            region,
+            regions,
             entry: result.block_entry,
             given,
+            storage: analysis.entry,
         }
     }
 
@@ -636,31 +1738,77 @@ impl Loans {
         }
     }
 
-    /// The region of a value; a value that names no storage has the empty
-    /// region.
-    pub fn region(&self, value: ValueId) -> &Region {
-        self.region.get(&value).unwrap_or(&NOTHING)
+    /// Every region a value holds anywhere in the body; a value that names
+    /// no storage holds none.
+    pub fn regions(&self, value: ValueId) -> &Regions {
+        self.regions.get(&value).unwrap_or(&NOTHING)
     }
 
-    /// RFC-0064 rules 2 and 5: a body's summary is the region of its result
-    /// over `Param` loans, and a local loan in the result is refused.
-    pub fn leaving(&self, value: ValueId) -> Leaving {
+    /// The storage a reference points at, anywhere in the body.
+    pub fn names(&self, value: ValueId) -> &[Loan] {
+        self.regions(value).names()
+    }
+
+    /// Every loan a value holds in any position, anywhere in the body.
+    pub fn holds(&self, value: ValueId) -> impl Iterator<Item = &Loan> {
+        self.regions(value).holds()
+    }
+
+    /// The storage `&slot` names.
+    pub fn storage_of(&self, slot: ValueId) -> LoanStorage {
+        self.storage.storage(slot)
+    }
+
+    /// RFC-0064 rules 2 and 5: a body's summary is its result's `Param`
+    /// loans, position by position, and a local loan in the result is
+    /// refused. A loan on what a capture names is the closure's own, which
+    /// its caller joins from the closure value.
+    pub fn leaving(&self, value: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> Leaving {
         let mut leaving = Leaving::default();
-        for loan in &self.region(value).loans {
-            match loan.storage {
-                LoanStorage::Local(local) => leaving.locals.push(local),
-                LoanStorage::Param { index, .. } => leaving.summary.loans.push(ParamLoan {
-                    index,
-                    mutability: loan.mutability,
-                }),
+        let regions = self.regions(value);
+        for (at, region) in regions.positions.iter().enumerate() {
+            for loan in &region.loans {
+                let param_loan = match loan.storage {
+                    LoanStorage::Local(local) => {
+                        if !leaving.locals.contains(&local) {
+                            leaving.locals.push(local);
+                        }
+                        continue;
+                    }
+                    LoanStorage::Param { index, value } => ParamLoan {
+                        index,
+                        position: match val_types.get(&value) {
+                            Some(Ty::Ref(..) | Ty::Fn { .. }) => ParamPosition::At(0),
+                            _ => ParamPosition::Whole,
+                        },
+                        mutability: loan.mutability,
+                    },
+                    LoanStorage::Outside(Outside { entry, position }) => {
+                        let Some(index) = self.storage.params.get(&entry) else {
+                            continue;
+                        };
+                        ParamLoan {
+                            index: *index,
+                            position: ParamPosition::At(position),
+                            mutability: loan.mutability,
+                        }
+                    }
+                };
+                let result_loan = ResultLoan {
+                    at,
+                    loan: param_loan,
+                };
+                if !leaving.summary.loans.contains(&result_loan) {
+                    leaving.summary.loans.push(result_loan);
+                }
             }
         }
         leaving
     }
 
-    fn add_loans(&self, effect: &mut StorageEffect, value: ValueId) {
-        for loan in &self.region(value).loans {
-            effect.add(loan.storage.value(), loan.mutability);
+    fn add_holds(&self, effect: &mut StorageEffect, value: ValueId) {
+        for loan in self.holds(value) {
+            effect.add(loan.storage, loan.mutability);
         }
     }
 
@@ -681,21 +1829,25 @@ impl Loans {
                 }
                 self.touch(&mut effect, target, Mutability::Mut);
             }
+            // A callee may read or write through any reference an argument
+            // holds, in any position.
             InstKind::FunctionCall { args, callee, .. } | InstKind::Spawn { args, callee, .. } => {
                 for a in args {
-                    self.add_loans(&mut effect, *a);
+                    self.add_holds(&mut effect, *a);
                 }
                 // A lambda called uses what it captured at the captures'
                 // own mutability, as an argument would: the callee is the
                 // lambda, or a reference to the storage holding it.
                 if let Callee::Indirect(f) = callee {
-                    self.add_loans(&mut effect, *f);
-                    for loan in &self.region(*f).loans {
-                        self.add_loans(&mut effect, loan.storage.value());
+                    self.add_holds(&mut effect, *f);
+                    for loan in self.holds(*f) {
+                        if let Some(slot) = loan.storage.slot() {
+                            self.add_holds(&mut effect, slot);
+                        }
                     }
                 }
             }
-            InstKind::Eval { src, .. } => self.add_loans(&mut effect, *src),
+            InstKind::Eval { src, .. } => self.add_holds(&mut effect, *src),
             // A slice is a borrow of its container taken with the slice's
             // own mutability; indexing touches the run that borrow names
             // (RFC-0047).
@@ -703,15 +1855,15 @@ impl Loans {
                 container,
                 mutability,
                 ..
-            } => self.touch_region(&mut effect, *container, *mutability),
+            } => self.touch_named(&mut effect, *container, *mutability),
             InstKind::Index { slice, .. } => {
-                self.touch_region(&mut effect, *slice, Mutability::Shared)
+                self.touch_named(&mut effect, *slice, Mutability::Shared)
             }
             InstKind::IndexSet { slice, .. } => {
-                self.touch_region(&mut effect, *slice, Mutability::Mut)
+                self.touch_named(&mut effect, *slice, Mutability::Mut)
             }
             InstKind::StringAppend { target, .. } => {
-                self.touch_region(&mut effect, *target, Mutability::Mut)
+                self.touch_named(&mut effect, *target, Mutability::Mut)
             }
             _ => {}
         }
@@ -740,9 +1892,9 @@ impl Loans {
         all
     }
 
-    /// The storage `values` keep alive, which a use of a reference reaches
-    /// through its loans: the half of [`Self::uses_with_storage`] a reader
-    /// that has its own use list needs.
+    /// The storage `values` keep alive, which a use of a holder reaches
+    /// through the loans it holds: the half of [`Self::uses_with_storage`] a
+    /// reader that has its own use list needs.
     pub fn storage_behind(&self, values: &[ValueId]) -> SmallVec<[ValueId; 4]> {
         let mut storage: SmallVec<[ValueId; 4]> = SmallVec::new();
         for value in values {
@@ -752,11 +1904,20 @@ impl Loans {
     }
 
     fn reachable_storage(&self, value: ValueId, out: &mut SmallVec<[ValueId; 4]>) {
-        for loan in &self.region(value).loans {
-            let storage = loan.storage.value();
-            if !out.contains(&storage) {
-                out.push(storage);
-                self.reachable_storage(storage, out);
+        let mut work: Vec<ValueId> = vec![value];
+        let mut seen: Vec<ValueId> = vec![value];
+        while let Some(at) = work.pop() {
+            for loan in self.holds(at) {
+                let holder = loan.storage.holder();
+                if let Some(slot) = loan.storage.slot()
+                    && !out.contains(&slot)
+                {
+                    out.push(slot);
+                }
+                if !seen.contains(&holder) {
+                    seen.push(holder);
+                    work.push(holder);
+                }
             }
         }
     }
@@ -768,37 +1929,73 @@ impl Loans {
     /// `&mut` and may empty it.
     fn touch(&self, effect: &mut StorageEffect, target: &RefTarget, mutability: Mutability) {
         match target {
-            RefTarget::Var(s) | RefTarget::Param(s) => effect.add(*s, mutability),
-            RefTarget::Through(r) => self.touch_region(effect, *r, mutability),
+            RefTarget::Var(s) | RefTarget::Param(s) => {
+                effect.add(self.storage_of(*s), mutability)
+            }
+            RefTarget::Through(r) => self.touch_named(effect, *r, mutability),
         }
     }
 
-    /// As `touch`, for a storage reached only through `reference`.
-    fn touch_region(&self, effect: &mut StorageEffect, reference: ValueId, mutability: Mutability) {
-        for loan in &self.region(reference).loans {
+    /// As `touch`, for the storage `reference` names.
+    fn touch_named(&self, effect: &mut StorageEffect, reference: ValueId, mutability: Mutability) {
+        for loan in self.names(reference) {
             let bounded = match (mutability, loan.mutability) {
                 (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
                 (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
             };
-            effect.add(loan.storage.value(), bounded);
+            effect.add(loan.storage, bounded);
         }
     }
 }
 
+/// An entry definition's positions (RFC-0079 rule 3): a parameter or capture
+/// of reference or function type names itself first, as RFC-0064 rule 1
+/// states, and every other position names one outside storage.
+fn entry_regions(storage: &EntryStorage, value: ValueId, ty: &Ty) -> Regions {
+    let names_itself = matches!(ty, Ty::Ref(..) | Ty::Fn { .. });
+    let positions = layout(ty)
+        .into_iter()
+        .enumerate()
+        .map(|(position, kind)| {
+            let mutability = match kind {
+                PositionKind::Ref(mutability) => mutability,
+                PositionKind::Captures(Some(mutability)) => mutability,
+                PositionKind::Captures(None) => return Region::default(),
+                PositionKind::RegionParam | PositionKind::InFlight => Mutability::Shared,
+            };
+            let loan = match position == 0 && names_itself {
+                true => storage.loan(value, mutability),
+                false => Loan {
+                    storage: LoanStorage::Outside(Outside {
+                        entry: value,
+                        position,
+                    }),
+                    mutability,
+                },
+            };
+            Region { loans: vec![loan] }
+        })
+        .collect();
+    Regions {
+        positions,
+        via: Vec::new(),
+    }
+}
+
 /// The regions a body's values hold before one instruction of a block: what
-/// a holder lends where it is used, where `Loans::region` is what it lends
+/// a holder lends where it is used, where `Loans::regions` is what it lends
 /// anywhere in the body. A storage is given loans by the assignments that
 /// reach it, so before the first of them it lends only what it held
 /// (RFC-0064: a reference's extent is per instruction).
 pub struct RegionsAt<'a> {
-    state: DataflowState<ValueId, Region>,
+    state: State,
     given: &'a [Given],
     next: usize,
     at: usize,
 }
 
 impl RegionsAt<'_> {
-    pub fn region(&self, value: ValueId) -> Region {
+    pub fn regions(&self, value: ValueId) -> Regions {
         self.state.get(value)
     }
 
@@ -809,16 +2006,16 @@ impl RegionsAt<'_> {
             .get(self.next)
             .filter(|given| given.at == self.at)
         {
-            self.state.set(given.value, given.region.clone());
+            self.state.set(given.value, given.regions.clone());
             self.next += 1;
         }
         self.at += 1;
     }
 }
 
-/// The loan a value of `ty` holds, and its mutability: what a body's entry
-/// definition starts, and what a read of the value out of a storage takes
-/// again.
+/// The loan a value of `ty` holds on what it names, and its mutability: what
+/// a body's entry definition starts, and what a read of the value out of a
+/// storage takes again.
 ///
 /// A parameter or capture of reference type names storage outside the body,
 /// and inside the body that storage is the entry itself (RFC-0029). A
@@ -835,27 +2032,6 @@ pub fn held_loan(ty: &Ty) -> Option<Mutability> {
             }
         }
         _ => None,
-    }
-}
-
-pub fn contains_ref(ty: &Ty) -> bool {
-    match ty {
-        Ty::Ref(..) => true,
-        Ty::Array(inner, _) | Ty::Option(inner) | Ty::Handle(inner) => contains_ref(inner),
-        Ty::Result(ok, err) => contains_ref(ok) || contains_ref(err),
-        Ty::Object(fields) => fields.values().any(contains_ref),
-        Ty::Tuple(items) => items.iter().any(contains_ref),
-        Ty::Fn { captures, ret, .. } => captures.iter().any(contains_ref) || contains_ref(ret),
-        // An extension type holds a reference in a region parameter its
-        // declaration states, and otherwise only what its type arguments
-        // show (RFC-0079 rule 2).
-        Ty::UserDefined {
-            type_args,
-            region_params,
-            ..
-        } => *region_params > 0 || type_args.iter().any(|a| contains_ref(&a.ty())),
-        Ty::Enum { variants, .. } => variants.values().flatten().any(|t| contains_ref(t)),
-        _ => false,
     }
 }
 
@@ -920,11 +2096,11 @@ mod tests {
         let loans = Loans::build(&cfg, Summaries::NONE);
         let mut seen = 0;
         for value in cfg.val_types.keys() {
-            for loan in &loans.region(*value).loans {
+            for loan in loans.holds(*value) {
                 let Some(index) = loan.storage.param() else {
                     panic!("a body of only parameters holds {:?}", loan.storage);
                 };
-                assert_eq!(cfg.params[index].1, loan.storage.value());
+                assert_eq!(Some(cfg.params[index].1), loan.storage.slot());
                 seen += 1;
             }
         }
@@ -941,13 +2117,17 @@ mod tests {
             .keys()
             .find(|v| **v != cfg.params[0].1 && **v != returned)
             .expect("the reborrow");
-        let leaving = loans.leaving(dst);
+        let leaving = loans.leaving(dst, &cfg.val_types);
         assert_eq!(leaving.locals, []);
         assert_eq!(
             leaving.summary.loans,
-            [ParamLoan {
-                index: 1,
-                mutability: Mutability::Shared,
+            [ResultLoan {
+                at: 0,
+                loan: ParamLoan {
+                    index: 1,
+                    position: ParamPosition::At(0),
+                    mutability: Mutability::Shared,
+                },
             }]
         );
     }

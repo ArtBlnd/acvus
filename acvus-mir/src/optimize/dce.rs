@@ -269,7 +269,7 @@ fn storage_reached(loans: &Loans, values: impl IntoIterator<Item = ValueId>) -> 
         if !reached.insert(v) {
             continue;
         }
-        work.extend(loans.region(v).loans.iter().map(|l| l.storage.value()));
+        work.extend(loans.holds(v).filter_map(|l| l.storage.slot()));
     }
     reached
 }

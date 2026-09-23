@@ -363,10 +363,8 @@ impl Body<'_> {
         let (&lender, rest) = args.split_first()?;
         let lends = |value: ValueId, mutability: Mutability| {
             loans
-                .region(value)
-                .loans
-                .iter()
-                .any(|loan| loan.storage.value() == storage && loan.mutability == mutability)
+                .holds(value)
+                .any(|loan| loan.storage.slot() == Some(storage) && loan.mutability == mutability)
         };
         let lent_by_the_state_alone = lends(lender, Mutability::Mut)
             && !rest
@@ -427,11 +425,10 @@ fn lent_by_source(loop_: &Loop, loans: &Loans) -> Vec<ValueId> {
         return Vec::new();
     };
     loans
-        .region(slice)
-        .loans
+        .names(slice)
         .iter()
         .filter(|loan| loan.mutability == Mutability::Mut)
-        .map(|loan| loan.storage.value())
+        .filter_map(|loan| loan.storage.slot())
         .collect()
 }
 
