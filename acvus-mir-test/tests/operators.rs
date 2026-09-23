@@ -253,7 +253,7 @@ fn a_value_mode_receiver_does_not_move_a_large_out_of_a_reference() {
         script_with_value_overloads(&i, "let o = { v: vec([1]), }; let r = &o; r.v.consume()")
             .unwrap_err();
     assert!(
-        err.contains("reads only a primitive")
+        err.contains("cannot move Vec<")
             && err.contains("used through the reference or cloned"),
         "{err}"
     );

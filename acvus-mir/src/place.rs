@@ -162,6 +162,17 @@ pub enum PlaceBase {
     Temporary,
 }
 
+impl PlaceBase {
+    /// Whether a place on this base is reached through a reference, so a
+    /// read of it by value copies out of what the reference names.
+    pub fn is_through_a_reference(self) -> bool {
+        match self {
+            Self::ThroughReferenceIn(_) | Self::ThroughReference | Self::Element(_) => true,
+            Self::Storage(_) | Self::Temporary => false,
+        }
+    }
+}
+
 /// An index is left off: two elements of one container are one loan, the
 /// one the container's slice holds (RFC-0047 rule 3).
 #[derive(Debug, Clone, PartialEq, Eq)]

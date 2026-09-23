@@ -173,6 +173,65 @@ fn a_field_under_a_head_the_call_settles_is_checked_as_under_a_known_one() {
     );
     refused_with(
         "let o = { v: vec([1]), }; let f = |r| -> r.v; f(&o).len()",
-        "reads only a primitive",
+        "cannot move",
+    );
+}
+
+/// RFC-0018 rule 1: an `Option` copies exactly when its payload does, so
+/// an `Option` of a word is a word to `*` (rule 4) and an index (RFC-0047
+/// rule 5).
+#[test]
+fn an_option_of_a_word_is_read_through_a_reference() {
+    runs_to("let o = Some(2); let r = &o; match *r { Some(x) => x, None => 0, }", "2");
+}
+
+/// RFC-0018 rule 4: `*r` yields a word and nothing else. An `Option` of a
+/// word, at any depth, is one; an `Option` of a `String`, an object and a
+/// tuple are not.
+#[test]
+fn deref_reads_a_word_and_refuses_every_other_type() {
+    runs_to(
+        "let o = Some(Some(true)); let r = &o; match *r { Some(Some(b)) => b, _ => false, }",
+        "true",
+    );
+    refused_with(
+        "let o = Some(\"a\".to_string()); let r = &o; match *r { Some(s) => s, None => \"\".to_string(), }",
+        "`*` reads only a word",
+    );
+    refused_with(
+        "let o = { a: 1, }; let r = &o; let c = *r; c.a",
+        "`*` reads only a word",
+    );
+    refused_with(
+        "let t = (1, 2); let r = &t; match *r { (a, b) => a + b, _ => 0, }",
+        "`*` reads only a word",
+    );
+}
+
+/// RFC-0047 rule 5: a place path under an element read by value copies out
+/// of the element's reference, so the path must end at a type that copies.
+#[test]
+fn a_field_of_an_element_is_read_by_value_only_where_it_copies() {
+    runs_to(
+        "let xs = [{ k: Some(3), }]; let y = xs[0].k; y.unwrap_or(0)",
+        "3",
+    );
+    refused_with(
+        "let xs = [{ k: { m: 1, }, }]; let y = xs[0].k; y.m",
+        "cannot move",
+    );
+}
+
+/// A `for` over `&xs` binds each element's reference, and `*x` reads the
+/// element only where it is a word (RFC-0018 rule 4).
+#[test]
+fn deref_of_a_loop_element_reference_reads_only_a_word() {
+    runs_to(
+        "let xs = [Some(1), Some(2), None]; let s = 0; for x in &xs { s = s + (*x).unwrap_or(10); } s",
+        "13",
+    );
+    refused_with(
+        "let xs = [{ a: 1, }]; let r = { a: 0, }; for x in &xs { r = *x; } r.a",
+        "`*` reads only a word",
     );
 }

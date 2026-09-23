@@ -9,12 +9,13 @@ frames is RFC-0048.
 
 Status: Accepted
 
-1. **The copy set.** A value of a word type copies: the eight integer widths
-   (RFC-0037), `Float`, `Char` (RFC-0058), `Bool`, `Unit`, `Never`, `Order`,
-   and a bare reference `&T`/`&mut T`. An `Option` copies exactly when its
-   payload does, since it has no representation of its own (RFC-0039). A
-   view (`&str`, `&[T]`) moves. Every other value moves: a binding used after
-   it moved is a type error at the use.
+1. **The copy set.** A value of a word type copies. The words are the eight
+   integer widths (RFC-0037), `Float`, `Char` (RFC-0058), `Bool`, `Unit`,
+   `Never`, `Order`, a bare reference `&T`/`&mut T`, and an `Option` of a
+   word, since an `Option` has no representation of its own (RFC-0039);
+   `String` copies by rule 2 and is not a word, and neither is an `Option`
+   of one. A view (`&str`, `&[T]`) moves. Every other value moves: a
+   binding used after it moved is a type error at the use.
 2. **String.** `String` is language-owned and immutable: there is no
    in-place string operation, and a `&mut String` replaces the value whole.
    A use of a `String` value that is not its last use copies it: the

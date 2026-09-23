@@ -26,7 +26,7 @@ use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm,
-    Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed, lift_ty,
+    Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed, lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -1056,6 +1056,40 @@ enum ReadThrough {
     Deref,
 }
 
+impl ReadThrough {
+    /// Whether a read of `ty` out of what a reference names is a copy:
+    /// `*r` needs a word (RFC-0018 rule 4), a place under the reference a
+    /// word or a `String` (rule 2).
+    fn copies<V>(self, ty: &TyTerm<V>) -> Option<bool>
+    where
+        V: Phase,
+    {
+        match self {
+            Self::Field => ty.copies(),
+            Self::Deref => ty.is_word(),
+        }
+    }
+
+    fn refusal(self, ty: Ty) -> MirErrorKind {
+        match self {
+            Self::Field => MirErrorKind::MoveOutOfReference(ty),
+            Self::Deref => MirErrorKind::DerefOfNonWord(ty),
+        }
+    }
+}
+
+/// A read by value that the lowering takes out of what a reference names
+/// where its source is one, checked once every type and every place's base
+/// is frozen.
+#[derive(Clone, Copy)]
+enum ValueRead {
+    /// `*r`.
+    Deref { span: Span },
+    /// A place path read by value, through a reference where `base`
+    /// settles to one (RFC-0047 rule 5).
+    Place { base: AstId, span: Span },
+}
+
 /// A branch of an `if`: its type and the expression whose value it is.
 struct Branch {
     ty: InferTy,
@@ -1168,6 +1202,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Every `a[i]`, kept for the refusals that can only name their type
     /// once the body is solved (RFC-0047 rules 3 and 5).
     index_uses: Vec<IndexUse>,
+    /// Every read by value that may copy out of what a reference names, at
+    /// the read's own id; drained by `check_value_reads`.
+    value_reads: FxHashMap<AstId, ValueRead>,
     /// RFC-0047 rule 6, drained by `settle_slice_args`.
     slice_args: Vec<SliceArg>,
     /// The places the calls being checked have consumed, innermost last.
@@ -1233,6 +1270,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
             index_uses: Vec::new(),
+            value_reads: FxHashMap::default(),
             slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
@@ -1487,6 +1525,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let coercion_map = self.frozen_coercions();
         let lambda_captures = self.frozen_lambda_captures();
         let place_bases = self.frozen_place_bases(&type_map);
+        self.check_value_reads(&type_map, &place_bases);
         let passing = self.frozen_passing(&type_map);
         let pattern_modes = self.frozen_pattern_modes();
         // A second gate, because freezing is itself a check: a type the
@@ -1546,6 +1585,37 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect()
     }
 
+    /// A read by value out of what a reference names copies, so its type
+    /// must be one that does (RFC-0018 rules 2 and 4). Checked here, where
+    /// a place's base is the one the lowering reads, so a type or a base
+    /// still open where the read was written is checked as it settled.
+    fn check_value_reads(
+        &mut self,
+        type_map: &TypeMap,
+        place_bases: &FxHashMap<AstId, PlaceBase>,
+    ) {
+        for (read, value_read) in std::mem::take(&mut self.value_reads) {
+            let (through, span) = match value_read {
+                ValueRead::Deref { span } => (ReadThrough::Deref, span),
+                ValueRead::Place { base, span } => {
+                    let base = place_bases
+                        .get(&base)
+                        .expect("a place read by value notes its base");
+                    if !base.is_through_a_reference() {
+                        continue;
+                    }
+                    (ReadThrough::Field, span)
+                }
+            };
+            let ty = type_map
+                .get(&read)
+                .expect("a read is checked before it is noted");
+            if through.copies(ty) == Some(false) {
+                self.error(through.refusal(ty.clone()), span);
+            }
+        }
+    }
+
     fn frozen_pattern_modes(&self) -> FxHashMap<AstId, MatchMode> {
         self.source_modes
             .iter()
@@ -1583,6 +1653,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn note_place(&mut self, expr: &Expr) {
         let base = projected(expr).base;
         self.place_bases.insert(base.id(), WrittenBase::of(base));
+    }
+
+    fn note_value_read(&mut self, place: &Expr) {
+        let path = projected(place);
+        if path.fields.is_empty() {
+            return;
+        }
+        self.value_reads.insert(
+            place.id(),
+            ValueRead::Place {
+                base: path.base.id(),
+                span: place.span(),
+            },
+        );
     }
 
     fn pass_receiver(&mut self, receiver: &Expr, passing: Passing) {
@@ -5123,8 +5207,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (first, Passing::Lent(mutability))
             }
             ReceiverMode::Value => {
+                self.note_value_read(receiver);
                 let refused = self.reads_through_reference(receiver)
-                    && self.refuse_deref_of_non_primitive(&owned, receiver.span());
+                    && self.refuse_read_through(&owned, ReadThrough::Field, receiver.span());
                 let first = FirstArg {
                     ty: if refused { Self::infer_error() } else { owned },
                     site: ArgSite::value(receiver, taken_by),
@@ -5136,16 +5221,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         first
     }
 
-    /// RFC-0018: a read that takes a non-primitive out of a place named
-    /// through a reference is not a copy. `true` where it was refused.
-    fn refuse_deref_of_non_primitive(&mut self, read: &InferTy, span: Span) -> bool {
+    /// RFC-0018 rules 2 and 4: a read out of what a reference names is a
+    /// copy, refused where the type read is known not to copy. `true` where
+    /// it was refused; a type still open is checked by `check_value_reads`.
+    fn refuse_read_through(&mut self, read: &InferTy, through: ReadThrough, span: Span) -> bool {
         let read = self.solver.resolve_ty(read);
-        if read.is_primitive() || matches!(read, TyTerm::String | TyTerm::Var(_) | TyTerm::Error(_))
-        {
+        if through.copies(&read) != Some(false) {
             return false;
         }
         let shown = self.type_as_written(&read);
-        self.error(MirErrorKind::DerefOfNonPrimitive(shown), span);
+        self.error(through.refusal(shown), span);
         true
     }
 
@@ -5454,7 +5539,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return resolved;
         };
         let referent = self.solver.resolve_ty(&inner.ty);
-        let word = referent.is_primitive() || matches!(referent, TyTerm::Var(_) | TyTerm::Error(_));
+        let word = referent.is_word() != Some(false);
         if stays_lent || word {
             referent
         } else {
@@ -6358,6 +6443,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     return self.record_ret(*id, ty);
                 }
 
+                if let acvus_ast::UnaryOp::Deref = op {
+                    self.value_reads.insert(*id, ValueRead::Deref { span: *span });
+                }
                 let ty = match op {
                     acvus_ast::UnaryOp::Deref => match &ot {
                         TyTerm::Var(_) => {
@@ -6381,14 +6469,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                         TyTerm::Ref(_, inner) => {
                             let inner = self.solver.resolve_ty(&inner.ty);
-                            if inner.is_primitive()
-                                || matches!(inner, TyTerm::Var(_) | TyTerm::Ref(..))
-                            {
-                                inner
-                            } else {
-                                let shown = self.type_as_written(&inner);
-                                self.error(MirErrorKind::DerefOfNonPrimitive(shown), *span);
-                                Self::infer_error()
+                            match self.refuse_read_through(&inner, ReadThrough::Deref, *span) {
+                                true => Self::infer_error(),
+                                false => inner,
                             }
                         }
                         _ => {
@@ -6451,6 +6534,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ot_raw = self.check_expr(object);
                 self.demand = outer;
                 self.note_place(expr);
+                if outer == PlaceDemand::Value {
+                    self.note_value_read(expr);
+                }
                 let ot = self.head_once_decided(&ot_raw);
                 if outer == PlaceDemand::Borrow(Mutability::Mut)
                     && let TyTerm::Ref(Mutability::Shared, _) = &ot
@@ -6504,7 +6590,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                     };
                     if self.demand == PlaceDemand::Value
-                        && self.refuse_deref_of_non_primitive(&field_ty, *span)
+                        && self.refuse_read_through(&field_ty, ReadThrough::Field, *span)
                     {
                         return self.record_ret(*id, Self::infer_error());
                     }
@@ -7290,7 +7376,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                 }
                 PlaceDemand::Value => {
-                    self.refuse_deref_of_non_primitive(&read.read, read.span);
+                    self.refuse_read_through(&read.read, read.through, read.span);
                 }
                 PlaceDemand::Borrow(_) => {}
             }

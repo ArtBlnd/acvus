@@ -1676,7 +1676,7 @@ pub enum Withholds {
     LanguageOwned,
 }
 
-/// Whether an instance's first parameter takes a word or text.
+/// Whether an instance's first parameter takes a scalar or text.
 pub fn takes_a_language_owned_type(ty: &PolyTy) -> bool {
     let TyTerm::Fn { params, .. } = ty else {
         return false;
@@ -1688,7 +1688,7 @@ pub fn takes_a_language_owned_type(ty: &PolyTy) -> bool {
         TyTerm::Ref(_, named) => &named.ty,
         other => other,
     };
-    taken.is_primitive() || matches!(taken, TyTerm::String | TyTerm::Str)
+    taken.is_scalar() || matches!(taken, TyTerm::String | TyTerm::Str)
 }
 
 /// A concrete instance an instance decision may still settle on.
@@ -3030,9 +3030,9 @@ impl<'src> Solver<'src> {
     }
 
     /// What a lambda's body reads a captured name of type `of` at, once
-    /// that type's head is known. `lookup_var` reads this directly for a
-    /// head it already knows, so the decision only carries the case where
-    /// it does not.
+    /// that type says whether it is a word. `lookup_var` reads this
+    /// directly for a type that already says, so the decision only carries
+    /// the case where it does not.
     pub fn capture_read(&self, of: &InferTy) -> CaptureOutcome {
         match self.terms.shallow_resolve_ty(of) {
             TyTerm::Var(_) => CaptureOutcome::HeadOpen,
@@ -3044,13 +3044,16 @@ impl<'src> Solver<'src> {
                     seen: of.clone(),
                 },
             },
-            head if head.is_primitive() => CaptureOutcome::Reads {
-                read: CaptureRead::Word,
-                seen: of.clone(),
-            },
-            _ => CaptureOutcome::Reads {
-                read: CaptureRead::Lent,
-                seen: TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(of.clone()))),
+            _ => match self.resolve_ty(of).is_word() {
+                Some(true) => CaptureOutcome::Reads {
+                    read: CaptureRead::Word,
+                    seen: of.clone(),
+                },
+                Some(false) => CaptureOutcome::Reads {
+                    read: CaptureRead::Lent,
+                    seen: TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(of.clone()))),
+                },
+                None => CaptureOutcome::HeadOpen,
             },
         }
     }

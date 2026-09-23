@@ -1326,17 +1326,14 @@ impl CheckCtx {
                         return;
                     };
                     self.assert_match(pc, span, "Take", "dst", &at, dst_ty, errors);
-                    if !at.is_primitive()
-                        && !matches!(at, Ty::String | Ty::Ref(..))
-                        && !at.is_error()
-                    {
+                    if at.copies() == Some(false) {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
                             span,
                             kind: ValidationErrorKind::InvalidConstructor {
                                 inst_name: "Take".to_string(),
-                                expected_constructor: "a primitive through a reference".to_string(),
+                                expected_constructor: "a word or a String through a reference".to_string(),
                                 actual: at.clone(),
                             },
                         });

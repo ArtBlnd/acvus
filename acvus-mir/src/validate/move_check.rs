@@ -32,39 +32,11 @@ use super::type_check::{ValidationError, ValidationErrorKind};
 // is_move_only
 // ---------------------------------------------------------------------------
 
-/// Whether a type moves (RFC-0018): a primitive and a reference are words
-/// and copy; everything else moves. `None` for a type the analysis cannot
-/// classify.
-///
-/// The answer for an option is one half of a contract with the runtime's
-/// representation of one, written in RFC-0039 and `docs/runtime-value.md`:
-/// a host gives an option no storage of its own, so `Some(v)` is `v` and a
-/// `None` is a word counting the `Some`s around it. A host that gave an
-/// option a box would have to move this arm with it.
+/// Whether a type moves at the IR (RFC-0018): every type that is not a word
+/// (`TyTerm::is_word`), `String` included. `None` for a type the analysis
+/// cannot classify.
 pub fn is_move_only(ty: &Ty) -> Option<bool> {
-    match ty {
-        Ty::Int(_) | Ty::Float | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => {
-            Some(false)
-        }
-        Ty::Ref(..) => Some(false),
-        Ty::Slice(_) | Ty::Str => Some(true),
-        Ty::Option(payload) => is_move_only(payload),
-        Ty::String
-        | Ty::Handle(..)
-        | Ty::UserDefined { .. }
-        | Ty::Array(..)
-        | Ty::Result(..)
-        | Ty::Tuple(..)
-        | Ty::Object(..)
-        | Ty::Enum { .. }
-        | Ty::Fn { .. } => Some(true),
-
-        // Unknown - skip
-        Ty::Error(_) => None,
-
-        // Post-inference: no type variables remain.
-        Ty::Var(v) => match *v {},
-    }
+    ty.is_word().map(|word| !word)
 }
 
 // ---------------------------------------------------------------------------
@@ -636,7 +608,7 @@ fn try_consume_value(
 
 /// RFC-0018 rule 2.
 pub(crate) fn moves_out(ty: &Ty) -> bool {
-    !matches!(ty, Ty::String) && is_move_only(ty) == Some(true)
+    ty.copies() == Some(false)
 }
 
 /// The register this instruction leaves owning nothing, and the one

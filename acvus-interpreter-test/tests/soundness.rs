@@ -24,38 +24,7 @@ struct Known {
     shows: &'static str,
 }
 
-const KNOWN: &[Known] = &[
-    // A field of an element read through the element's reference: the checker admits it.
-    Known {
-        program: "attack-places/e01.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-    Known {
-        program: "attack-places/e02.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-    Known {
-        program: "attack-places/e03.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-    Known {
-        program: "attack-places/p15.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-    Known {
-        program: "attack-for-runs/13.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-    // `*x` of an aggregate element reference from a `for`: the checker admits it.
-    Known {
-        program: "attack-cleanups/h02.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-    Known {
-        program: "attack-cleanups/s38.acvus",
-        shows: "Take takes a primitive through a reference",
-    },
-];
+const KNOWN: &[Known] = &[];
 
 const LIMIT: Duration = Duration::from_secs(30);
 

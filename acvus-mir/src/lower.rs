@@ -1811,7 +1811,7 @@ impl<'a> Lowerer<'a> {
         let Some(Ty::Ref(_, arg)) = self.body.val_types.get(&taken).cloned() else {
             return taken;
         };
-        if !arg.ty.is_primitive() {
+        if arg.ty.is_word() != Some(true) {
             return taken;
         }
         self.emit_take(span, RefTarget::Through(taken), vec![], arg.ty)

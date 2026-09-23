@@ -3075,18 +3075,58 @@ impl<V: Phase> TyTerm<V> {
     pub const U32: Self = TyTerm::Int(IntTy::U32);
     pub const U64: Self = TyTerm::Int(IntTy::U64);
 
-    /// A word-sized type the runtime copies (RFC-0018); everything else moves.
-    pub fn is_primitive(&self) -> bool {
-        matches!(
-            self,
+    /// A type with no parts, held as one word.
+    pub fn is_scalar(&self) -> bool {
+        match self {
             TyTerm::Int(_)
-                | TyTerm::Float
-                | TyTerm::Char
-                | TyTerm::Bool
-                | TyTerm::Unit
-                | TyTerm::Never
-                | TyTerm::Order
-        )
+            | TyTerm::Float
+            | TyTerm::Char
+            | TyTerm::Bool
+            | TyTerm::Unit
+            | TyTerm::Never
+            | TyTerm::Order => true,
+            TyTerm::String
+            | TyTerm::Array(..)
+            | TyTerm::Object(_)
+            | TyTerm::Tuple(_)
+            | TyTerm::Option(_)
+            | TyTerm::Result(..)
+            | TyTerm::Fn { .. }
+            | TyTerm::UserDefined { .. }
+            | TyTerm::Enum { .. }
+            | TyTerm::Slice(_)
+            | TyTerm::Str
+            | TyTerm::Handle(_)
+            | TyTerm::Ref(..)
+            | TyTerm::Error(_)
+            | TyTerm::Var(_) => false,
+        }
+    }
+
+    /// Whether a value of this type is a word (RFC-0018 rule 1). `None`
+    /// where a variable or an error leaves the answer open.
+    ///
+    /// The answer for an option is one half of a contract with the runtime's
+    /// representation of one, written in RFC-0039 and `docs/runtime-value.md`:
+    /// a host gives an option no storage of its own, so `Some(v)` is `v` and a
+    /// `None` is a word counting the `Some`s around it. A host that gave an
+    /// option a box would have to move this arm with it.
+    pub fn is_word(&self) -> Option<bool> {
+        match self {
+            TyTerm::Ref(..) => Some(true),
+            TyTerm::Option(payload) => payload.is_word(),
+            TyTerm::Var(_) | TyTerm::Error(_) => None,
+            other => Some(other.is_scalar()),
+        }
+    }
+
+    /// Whether a value of this type is copied where it is read, not moved:
+    /// a word, or a `String` (RFC-0018 rule 2).
+    pub fn copies(&self) -> Option<bool> {
+        match self {
+            TyTerm::String => Some(true),
+            other => other.is_word(),
+        }
     }
 
     /// Two types that print the same and whose source lists differ are one

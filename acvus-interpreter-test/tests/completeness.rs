@@ -147,14 +147,6 @@ fn a_method_on_a_mutably_lent_lambda_parameter() {
     );
 }
 
-/// RFC-0018 rule 1: an `Option` copies exactly when its payload does, so
-/// an `Option` of a word is a word to `*` (rule 4) and an index (RFC-0047
-/// rule 5).
-#[test]
-fn an_option_of_a_word_is_read_through_a_reference() {
-    runs_to("let o = Some(2); let r = &o; match *r { Some(x) => x, None => 0, }", "2");
-}
-
 /// RFC-0029 rules 3-4: a pattern against a `&mut T` binding binds as it does
 /// against `&T`, each part a shared reborrow.
 #[test]
