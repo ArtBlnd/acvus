@@ -1,0 +1,2 @@
+// expect 2
+let o = None; let v = [o, Some(1u64)]; let n = 0u64; for e in &v { n = n + 1u64; } n

@@ -1,0 +1,2 @@
+// expect "n"
+let o = None; let e = if false { Some("a".to_string()) } else { o }; match e { Some(s) => s, None => "n".to_string(), }

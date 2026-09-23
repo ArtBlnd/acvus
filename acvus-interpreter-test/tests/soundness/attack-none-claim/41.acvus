@@ -1,0 +1,2 @@
+// expect 2
+let o = None; let v = [Some(vec(["a".to_string()])), o, Some(vec([]))]; let c = 0; for e in v { if let Some(w) = e { c = c + 1; }; } c

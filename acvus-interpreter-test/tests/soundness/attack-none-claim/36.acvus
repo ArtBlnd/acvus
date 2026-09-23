@@ -1,0 +1,2 @@
+// expect "ab"
+let v = vec([Some("a".to_string())]); v.push(None); v.push(Some("b".to_string())); let r = "".to_string(); for e in &v { if let Some(s) = e { r = r + s; }; } r

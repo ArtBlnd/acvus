@@ -1,0 +1,2 @@
+// expect true
+let o = None; let v = [o, Some(false)]; let r = false; for e in v { if let Some(b) = e { r = !b; }; } r

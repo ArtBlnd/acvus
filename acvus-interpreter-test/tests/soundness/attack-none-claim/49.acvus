@@ -1,0 +1,2 @@
+// expect "n"
+let f = |k| -> { if k > 0 { return None; }; Some("a".to_string()) }; match f(1) { Some(s) => s, None => "n".to_string(), }

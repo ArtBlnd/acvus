@@ -1,0 +1,2 @@
+// expect 2
+let f = |b| -> { let o = None; if b { o = Some("a".to_string()); }; o }; let v = [f(true), f(false)]; v.len()

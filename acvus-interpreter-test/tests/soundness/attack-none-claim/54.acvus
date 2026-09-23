@@ -1,0 +1,2 @@
+// expect 2
+let arr = [None, None]; let q = [Some("a".to_string())]; let c = 0; for e in arr { c = c + 1; } for e in q { if let Some(s) = e { let z = 0; }; } c

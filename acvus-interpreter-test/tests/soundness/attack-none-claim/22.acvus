@@ -1,0 +1,2 @@
+// expect "ccc"
+let acc = Some("".to_string()); acc = None; let i = 0; while i < 3 { acc = match acc { Some(s) => Some(s + "c"), None => Some("c".to_string()), }; i = i + 1; } match acc { Some(s) => s, None => "".to_string(), }

@@ -1,0 +1,2 @@
+// expect "n"
+let o = None; let m = match o { Some(s) => s, None => "n".to_string(), }; let v = [Some(m), None]; let r = "x".to_string(); for e in v { if let Some(s) = e { r = s; }; } r

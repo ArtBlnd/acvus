@@ -1,0 +1,2 @@
+// expect 1
+let c = true; let o = if c { None } else { Some(3) }; let v = [o, Some(1)]; let s = 0; for e in v { if let Some(x) = e { s = s + x; }; } s

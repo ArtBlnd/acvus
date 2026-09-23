@@ -1,0 +1,2 @@
+// expect 3
+let i = 0; let last = Some("x".to_string()); while i < 3 { let o = if i == 1 { None } else { Some("a".to_string()) }; last = o; i = i + 1; } i

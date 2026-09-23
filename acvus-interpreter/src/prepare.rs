@@ -5174,7 +5174,10 @@ impl<'a> Prepare<'a> {
                 true => node(move |next| variant::MakeSome::<true> { slots, next }),
                 false => node(move |next| variant::MakeSome::<false> { slots, next }),
             },
-            (Ty::Option(_), None) => node(move |next| variant::MakeNone { dst: out.at, next }),
+            (Ty::Option(_), None) => match self.owns(dst) {
+                true => node(move |next| variant::MakeNone::<true> { dst: out, next }),
+                false => node(move |next| variant::MakeNone::<false> { dst: out, next }),
+            },
             (_, Some(slots)) => {
                 let tag = Value::tag(tag);
                 match large {

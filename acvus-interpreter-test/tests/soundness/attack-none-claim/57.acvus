@@ -1,0 +1,2 @@
+// expect "n"
+let f = |o| -> { let v = [o, Some("z".to_string())]; let r = "n".to_string(); for e in v { if let Some(s) = e { if s != "z" { r = s; }; }; } r }; f(None)

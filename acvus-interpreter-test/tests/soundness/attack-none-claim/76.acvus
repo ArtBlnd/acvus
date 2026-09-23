@@ -1,0 +1,2 @@
+// expect "n"
+let o = None; let s = Some("a".to_string()); let r = match o { None => "n".to_string(), Some(t) => t, }; let q = match s { None => "m".to_string(), Some(t) => t, }; r

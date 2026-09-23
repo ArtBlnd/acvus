@@ -1,0 +1,2 @@
+// expect 5
+let o = None; let ob = { f: o, g: Some(5), }; match ob.g { Some(x) => x, None => 0, }

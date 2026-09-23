@@ -1,0 +1,2 @@
+// expect 1
+let x = 2; let o = match x { 1 => Some("a".to_string()), 2 => None, _ => Some("c".to_string()), }; let v = vec([o]); v.push(Some("d".to_string())); let c = 0; for e in &v { if let Some(s) = e { c = c + 1; }; } c

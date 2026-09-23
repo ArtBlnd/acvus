@@ -1,0 +1,2 @@
+// expect 0
+let o = None; let p = None; let i = 0; while i < 2 { let t = o; o = p; p = t; i = i + 1; } o = Some("a".to_string()); 0

@@ -1,0 +1,2 @@
+// expect 2
+let o = None; let e = A::P({ x: o, y: Some("b".to_string()), }); let e2 = A::P({ x: Some("c".to_string()), y: None, }); let v = [e, e2]; v.len()

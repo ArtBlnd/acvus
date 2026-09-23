@@ -1,0 +1,2 @@
+// expect 0
+let o = None; if true { let p = o; let q = [p, Some("a".to_string())]; }; 0

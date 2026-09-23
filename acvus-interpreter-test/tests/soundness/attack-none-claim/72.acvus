@@ -1,0 +1,2 @@
+// expect 4
+let i = 0; let o = None; while i < 4 { let v = [o, Some("k".to_string())]; o = None; i = i + 1; } i

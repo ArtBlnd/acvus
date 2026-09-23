@@ -73,10 +73,15 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         let term_uses = terminator_uses_with_storage(&block.terminator, &loans);
         let already_dropped: FxHashSet<ValueId> = drops.iter().map(|drop| drop.value).collect();
 
-        // Collect all defs in this block.
+        // Collect all defs in this block, each once: a storage an `Assign`
+        // writes is defined at every write.
         let mut all_defs: Vec<ValueId> = block.params.clone();
         for inst in &block.insts {
-            all_defs.extend(inst_info::defs(&inst.kind));
+            for def in inst_info::defs(&inst.kind) {
+                if !all_defs.contains(&def) {
+                    all_defs.push(def);
+                }
+            }
         }
 
         for v in all_defs {
@@ -104,15 +109,23 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 }
 
                 if !is_used_in_block(block, v, &loans) {
-                    // Unused def - insert drop right after definition; a
-                    // block parameter is defined before the block's first
+                    // Unused def - each value it is given dies where it is
+                    // given, so a drop follows every definition; a block
+                    // parameter is defined before the block's first
                     // instruction.
-                    let at = block
+                    let defined: Vec<usize> = block
                         .insts
                         .iter()
-                        .position(|inst| inst_info::defs(&inst.kind).contains(&v))
-                        .map_or(0, |defined| defined + 1);
-                    drops.push(BlockDrop { at, value: v });
+                        .enumerate()
+                        .filter(|(_, inst)| inst_info::defs(&inst.kind).contains(&v))
+                        .map(|(at, _)| at + 1)
+                        .collect();
+                    match defined.is_empty() {
+                        true => drops.push(BlockDrop { at: 0, value: v }),
+                        false => {
+                            drops.extend(defined.into_iter().map(|at| BlockDrop { at, value: v }))
+                        }
+                    }
                 }
                 // If used in block but not consumed, it was already handled
                 // in the per-instruction loop above.
@@ -872,6 +885,62 @@ mod tests {
     }
 
     // -- Unused move-only value: dropped immediately ------------------
+
+    /// A storage written twice and never read: each value dies at its own
+    /// write, so a drop follows each write, not two after the first.
+    #[test]
+    fn an_unread_storage_is_dropped_after_every_write() {
+        let (mut cfg, val_types) = make_cfg_with_types(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(0),
+                },
+                InstKind::Assign {
+                    target: RefTarget::Var(v(5)),
+                    path: vec![],
+                    value: v(0),
+                },
+                InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Assign {
+                    target: RefTarget::Var(v(5)),
+                    path: vec![],
+                    value: v(1),
+                },
+                InstKind::Const {
+                    dst: v(2),
+                    value: acvus_ast::Literal::Int(2),
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            vec![
+                (v(0), user_defined_ty()),
+                (v(1), user_defined_ty()),
+                (v(5), user_defined_ty()),
+                (v(2), Ty::I64),
+            ],
+        );
+
+        insert_drops(&mut cfg, &val_types);
+        let kinds: Vec<&InstKind> = cfg.blocks[0].insts.iter().map(|i| &i.kind).collect();
+        let dropped_after = |write: usize| {
+            matches!(kinds.get(write + 1), Some(InstKind::Drop { src }) if *src == v(5))
+        };
+        let writes: Vec<usize> = kinds
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| matches!(k, InstKind::Assign { .. }))
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(writes.len(), 2);
+        assert!(writes.iter().all(|w| dropped_after(*w)), "{kinds:?}");
+    }
 
     #[test]
     fn drop_unused_move_only() {

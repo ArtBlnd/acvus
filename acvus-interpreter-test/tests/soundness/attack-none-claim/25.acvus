@@ -1,0 +1,2 @@
+// expect 0
+let o = None; let v = [o, Some("a".to_string())]; for e in v { break; } 0

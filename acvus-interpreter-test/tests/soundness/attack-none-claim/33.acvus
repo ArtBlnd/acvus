@@ -1,0 +1,2 @@
+// expect 0
+let f = |x| -> match x { Some(s) => s, None => 0, }; let o = None; f(o)
