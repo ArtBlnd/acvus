@@ -30,7 +30,7 @@ use crate::analysis::affine::{AffineValues, Derivation};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::ir::{ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
 use crate::ty::Ty;
 
 pub fn run(cfg: &mut CfgBody) {
@@ -257,6 +257,7 @@ impl Counted {
             body_args: self.body_args,
             exit: self.exit,
             exit_args: self.exit_args,
+            exit_trip: ExitTrip::Absent,
         };
     }
 }
