@@ -1,0 +1,3 @@
+// expect 1
+// the capturing lambda is let-bound before its call
+let h = |g| -> { let k = |x| -> g(x); k(1) }; h(|y| -> opaque(y))

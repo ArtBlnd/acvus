@@ -1,0 +1,3 @@
+// expect 1
+// a lambda calls a captured parameter of its enclosing lambda, given an opaque function
+let h = |g| -> (|x| -> g(x))(1); h(|y| -> opaque(y))

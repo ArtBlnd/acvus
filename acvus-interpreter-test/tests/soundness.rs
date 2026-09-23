@@ -8,6 +8,9 @@
 //! fails the test until its entry is removed, and a hole not listed fails it
 //! too. A directory's `ctx.json` declares the contexts of its programs, as
 //! `acvus run --context` reads it.
+//!
+//! Beside the standard registries a program can call `opaque(x)` and
+//! `opaque_async(x)`, which answer `x` at effect `opaque`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

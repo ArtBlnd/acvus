@@ -742,6 +742,29 @@ pub mod corpus {
 
     use crate::Opt;
 
+    /// The standard registries and the corpus's own: `opaque(x)` and
+    /// `opaque_async(x)` answer `x` at effect `opaque`, which no standard
+    /// function has, so a program can hand the checker an effectful
+    /// function (RFC-0014).
+    fn registries() -> Vec<acvus_extern::Registry<acvus_interpreter::AcvusRuntime>> {
+        let mut registries = acvus_ext::std_registries();
+        registries.push(acvus_extern::extern_registry! {
+            ns: "corpus",
+            fns: [opaque, opaque_async],
+        });
+        registries
+    }
+
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn opaque(x: i64) -> i64 {
+        x
+    }
+
+    #[acvus_extern::extern_fn(effect = opaque)]
+    async fn opaque_async(x: i64) -> i64 {
+        x
+    }
+
     /// One source the corpus holds, with the call site it was written at.
     #[derive(Clone)]
     pub struct Script {
@@ -1325,7 +1348,7 @@ pub mod corpus {
                 &interner,
                 parsed,
                 &context_types,
-                acvus_ext::std_registries(),
+                registries(),
                 Ty::Never,
                 opt,
                 |_| {},

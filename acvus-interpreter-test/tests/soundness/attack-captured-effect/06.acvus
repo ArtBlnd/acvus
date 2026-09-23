@@ -1,0 +1,3 @@
+// expect 3
+// two captures deep
+let h = |g| -> (|a| -> (|b| -> g(a) + g(b))(2))(1); h(|y| -> opaque(y))

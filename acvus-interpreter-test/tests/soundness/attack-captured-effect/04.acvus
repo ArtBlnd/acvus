@@ -1,0 +1,3 @@
+// expect 1
+// the capturing lambda is handed to another lambda that calls it
+let each_any = |f| -> f(1); let h = |g| -> each_any(|x| -> g(x)); h(|y| -> opaque(y))

@@ -1,0 +1,3 @@
+// expect 1
+// the captured function is async
+let h = |g| -> (|x| -> g(x))(1); h(|y| -> opaque_async(y))
