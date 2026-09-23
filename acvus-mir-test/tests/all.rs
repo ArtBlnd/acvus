@@ -11,6 +11,7 @@ mod consumer_task;
 mod context_move;
 mod context_variable;
 mod cyclic;
+mod dataflow_scale;
 mod dead_store;
 mod declared_struct;
 mod diagnostic_labels;

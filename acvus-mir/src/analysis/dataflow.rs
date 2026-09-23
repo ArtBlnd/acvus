@@ -141,11 +141,11 @@ pub fn forward_analysis<A: DataflowAnalysis>(
     }
 
     block_entry[0] = initial;
-    let mut worklist = VecDeque::new();
-    worklist.push_back(BlockIdx(0));
+    let mut worklist = Worklist::new(n);
+    worklist.push(BlockIdx(0));
     let mut visited = vec![false; n];
 
-    while let Some(idx) = worklist.pop_front() {
+    while let Some(idx) = worklist.pop() {
         visited[idx.0] = true;
         let block = &cfg.blocks[idx.0];
         let mut state = block_entry[idx.0].clone();
@@ -174,6 +174,37 @@ pub fn forward_analysis<A: DataflowAnalysis>(
     DataflowResult {
         block_entry,
         block_exit,
+    }
+}
+
+/// The forward worklist: a block is queued at most once at a time. A block
+/// pushed while already queued is visited once, on the state every push
+/// joined into its entry, so the number of visits is bounded by the
+/// changes to its entry rather than by the paths that reach it.
+struct Worklist {
+    queue: VecDeque<BlockIdx>,
+    queued: Vec<bool>,
+}
+
+impl Worklist {
+    fn new(n: usize) -> Self {
+        Worklist {
+            queue: VecDeque::new(),
+            queued: vec![false; n],
+        }
+    }
+
+    fn push(&mut self, idx: BlockIdx) {
+        if !self.queued[idx.0] {
+            self.queued[idx.0] = true;
+            self.queue.push_back(idx);
+        }
+    }
+
+    fn pop(&mut self) -> Option<BlockIdx> {
+        let idx = self.queue.pop_front()?;
+        self.queued[idx.0] = false;
+        Some(idx)
     }
 }
 
@@ -262,7 +293,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
     analysis: &A,
     block_entry: &mut [DataflowState<A::Key, A::Domain>],
     visited: &[bool],
-    worklist: &mut VecDeque<BlockIdx>,
+    worklist: &mut Worklist,
 ) {
     let n = block_entry.len();
 
@@ -277,7 +308,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                     &mut block_entry[t.0],
                 );
                 if changed || !visited[t.0] {
-                    worklist.push_back(t);
+                    worklist.push(t);
                 }
             }
         }
@@ -319,7 +350,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                         &mut block_entry[t.0],
                     );
                     if changed || !visited[t.0] {
-                        worklist.push_back(t);
+                        worklist.push(t);
                     }
                 }
             }
@@ -344,7 +375,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                     &mut block_entry[t.0],
                 );
                 if changed || !visited[t.0] {
-                    worklist.push_back(t);
+                    worklist.push(t);
                 }
             }
             if let Some(&t) = cfg.label_to_block.get(exit) {
@@ -356,7 +387,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                     &mut block_entry[t.0],
                 );
                 if changed || !visited[t.0] {
-                    worklist.push_back(t);
+                    worklist.push(t);
                 }
             }
         }
@@ -377,7 +408,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
                         &mut block_entry[t.0],
                     );
                     if changed || !visited[t.0] {
-                        worklist.push_back(t);
+                        worklist.push(t);
                     }
                 }
             }
@@ -385,7 +416,7 @@ fn propagate_to_successors<A: DataflowAnalysis>(
         Terminator::Fallthrough => {
             let next = idx.0 + 1;
             if next < n && (block_entry[next].join_from(exit_state) || !visited[next]) {
-                worklist.push_back(BlockIdx(next));
+                worklist.push(BlockIdx(next));
             }
         }
         Terminator::Return { .. } | Terminator::Diverge => {}
