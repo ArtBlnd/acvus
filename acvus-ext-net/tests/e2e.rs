@@ -97,11 +97,12 @@ fn reissue_of(source: &str) -> Reissue {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: Some(entry),
     };
     let ext = extract::extract(&i, &graph);
-    let inf = infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::new(types));
+    let inf = infer::infer(&i, &graph, &ext);
     assert!(!inf.has_errors(), "infer refused: {:?}", inf.errors());
     inf.outcomes
         .get(&entry)

@@ -91,18 +91,13 @@ async fn run_parsed(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: Some(entry_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
     let lowered = graph_lower::lower(interner, &graph, &ext.view(), &inf);
 
     let errs: Vec<String> = inf

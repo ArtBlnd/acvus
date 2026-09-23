@@ -94,7 +94,11 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
 
 pub fn load(interner: &Interner, path: &Path) -> Result<Loaded, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let root: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    from_text(interner, &text)
+}
+
+pub fn from_text(interner: &Interner, text: &str) -> Result<Loaded, String> {
+    let root: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let serde_json::Value::Object(fields) = root else {
         return Err("the context file is a JSON object".to_string());
     };

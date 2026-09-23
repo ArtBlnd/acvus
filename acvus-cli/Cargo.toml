@@ -25,6 +25,7 @@ acvus-extern = { path = "../acvus-extern" }
 # `probe` carries `Op::successor`, `Op::owns` and `Named::name`, which the
 # `ops` command's listing walks; a release build without it has no listing.
 acvus-interpreter = { path = "../acvus-interpreter", features = ["probe"] }
+acvus-lsp = { path = "../acvus-lsp" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }

@@ -2,57 +2,87 @@
 //! as the batch compilation pipeline.
 
 use acvus_extern::{Externs, TypesOnly};
-use acvus_lsp::LspSession;
+use acvus_lsp::{Document, LspSession, Mode};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
-use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeRegistry, lift_to_poly};
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
-/// Compile via batch pipeline, return error messages (sorted).
-fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<String> {
-    let contexts: Vec<Context> = ctx
-        .iter()
+fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
+    ctx.iter()
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
         })
-        .collect();
-    let test_qref = QualifiedRef::root(interner.intern("test"));
-    let template = acvus_ast::parse(interner, source).expect("parse failed");
+        .collect()
+}
+
+fn environment(
+    contexts: Vec<Context>,
+    functions: Vec<Function>,
+    types: TypeRegistry,
+    bindings: Bindings,
+) -> CompilationGraph {
+    CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+        types: Freeze::new(types),
+        bindings,
+        entry: None,
+    }
+}
+
+fn bare(contexts: Vec<Context>) -> CompilationGraph {
+    environment(contexts, vec![], TypeRegistry::default(), Bindings::default())
+}
+
+fn with_std(interner: &Interner, contexts: Vec<Context>) -> CompilationGraph {
+    let Externs {
+        functions, types, ..
+    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
+        .expect("standard registries combine");
+    environment(contexts, functions, types, Bindings::default())
+}
+
+fn template_document(interner: &Interner, name: &str) -> Document {
     let mut pb = PolyBuilder::new();
-    let mut functions = vec![Function {
-        qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Template(template)),
+    Document {
+        qref: QualifiedRef::root(interner.intern(name)),
+        mode: Mode::Template,
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
         },
-    }];
-    let Externs {
-        functions: std_fns,
-        types: type_registry,
-        handlers: _,
-        ..
-    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
-        .expect("standard registries combine");
-    functions.extend(std_fns);
+    }
+}
+
+fn template(interner: &Interner, name: &str, source: &str) -> Function {
+    let Document { qref, ty, .. } = template_document(interner, name);
+    Function {
+        qref,
+        kind: FnKind::Local(ParsedAst::Template(
+            acvus_ast::parse(interner, source).expect("parse failed"),
+        )),
+        ty,
+    }
+}
+
+/// Compile via batch pipeline, return error messages (sorted).
+fn batch_errors(interner: &Interner, environment: &CompilationGraph, source: &str) -> Vec<String> {
+    let functions: Vec<Function> = environment
+        .functions
+        .iter()
+        .cloned()
+        .chain(std::iter::once(template(interner, "test", source)))
+        .collect();
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
-        contexts: Freeze::new(contexts),
-        bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        ..environment.clone()
     };
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
     let mut errs: Vec<String> = Vec::new();
     // Collect infer errors.
     for (_, fn_errs) in inf.errors() {
@@ -71,24 +101,10 @@ fn batch_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<St
     errs
 }
 
-/// Register standard library functions into an LspSession.
-fn register_std(session: &mut LspSession) {
-    let interner = session.interner().clone();
-    let externs = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), &interner)
-        .expect("standard registries combine");
-    for func in externs.functions {
-        session.graph_mut().add_function(func);
-    }
-}
-
 /// Compile via LspSession, return error messages (sorted).
-fn lsp_errors(interner: &Interner, source: &str, ctx: &[(&str, Ty)]) -> Vec<String> {
-    let mut session = LspSession::new(interner);
-    register_std(&mut session);
-    for (name, ty) in ctx {
-        session.add_context(name, None, lift_to_poly(ty));
-    }
-    let doc = session.open("test", source, None);
+fn lsp_errors(interner: &Interner, environment: &CompilationGraph, source: &str) -> Vec<String> {
+    let mut session = LspSession::new(interner, environment.clone());
+    let doc = session.open(template_document(interner, "test"), source);
     let mut errs: Vec<String> = session
         .diagnostics(doc)
         .into_iter()
@@ -103,8 +119,9 @@ fn no_errors_simple_template() {
     let i = Interner::new();
     let ctx = [("name", Ty::String)];
     let source = "hello {{ @name }}";
-    assert_eq!(batch_errors(&i, source, &ctx), lsp_errors(&i, source, &ctx));
-    assert!(lsp_errors(&i, source, &ctx).is_empty());
+    let env = with_std(&i, root_contexts(&i, &ctx));
+    assert_eq!(batch_errors(&i, &env, source), lsp_errors(&i, &env, source));
+    assert!(lsp_errors(&i, &env, source).is_empty());
 }
 
 #[test]
@@ -112,8 +129,9 @@ fn valid_multi_context_equivalence() {
     let i = Interner::new();
     let ctx = [("name", Ty::String), ("count", Ty::I64)];
     let source = "{{ @name }} and {{ @count.to_string() }}";
-    let batch = batch_errors(&i, source, &ctx);
-    let lsp = lsp_errors(&i, source, &ctx);
+    let env = with_std(&i, root_contexts(&i, &ctx));
+    let batch = batch_errors(&i, &env, source);
+    let lsp = lsp_errors(&i, &env, source);
     assert_eq!(batch, lsp);
     assert!(lsp.is_empty());
 }
@@ -124,8 +142,9 @@ fn type_error_equivalence() {
     let ctx = [("name", Ty::String), ("count", Ty::I64)];
     // String + Int is a type error.
     let source = "% let out = @name + @count\n{{ out.to_string() }}";
-    let batch = batch_errors(&i, source, &ctx);
-    let lsp = lsp_errors(&i, source, &ctx);
+    let env = with_std(&i, root_contexts(&i, &ctx));
+    let batch = batch_errors(&i, &env, source);
+    let lsp = lsp_errors(&i, &env, source);
     assert_eq!(batch, lsp, "batch and lsp should agree on type errors");
 }
 
@@ -135,20 +154,67 @@ fn type_error_equivalence() {
 fn definite_assignment_equivalence() {
     let i = Interner::new();
     let source = "% let x = { a: 1, }\n% if $flag\n% x.b = \"yes\"\n% end\n{{ x.b }}\n";
-    let batch = batch_errors(&i, source, &[]);
+    let env = with_std(&i, root_contexts(&i, &[]));
+    let batch = batch_errors(&i, &env, source);
     assert_eq!(batch.len(), 1, "one refusal from lowering: {batch:?}");
-    assert_eq!(batch, lsp_errors(&i, source, &[]));
+    assert_eq!(batch, lsp_errors(&i, &env, source));
+}
+
+#[test]
+fn extension_type_equivalence() {
+    let i = Interner::new();
+    let source = "% let q = deque()\n% q.push_back(1)\n{{ q.len().to_string() }}\n";
+    let env = with_std(&i, vec![]);
+    let batch = batch_errors(&i, &env, source);
+    assert_eq!(batch, lsp_errors(&i, &env, source));
+    assert!(batch.is_empty(), "{batch:?}");
+}
+
+#[test]
+fn a_new_environment_rechecks_open_documents() {
+    let i = Interner::new();
+    let mut session = LspSession::new(&i, bare(root_contexts(&i, &[("x", Ty::String)])));
+    let doc = session.open(template_document(&i, "test"), "{{ @x }}");
+    assert!(session.diagnostics(doc).is_empty());
+
+    session.set_environment(bare(root_contexts(&i, &[("x", Ty::I64)])));
+    assert!(
+        !session.diagnostics(doc).is_empty(),
+        "an Int is not emitted in a template"
+    );
+
+    session.set_environment(bare(root_contexts(&i, &[("x", Ty::String)])));
+    assert!(session.diagnostics(doc).is_empty());
+}
+
+#[test]
+fn an_open_document_replaces_the_environment_function_at_its_name() {
+    let i = Interner::new();
+    let qref = QualifiedRef::root(i.intern("test"));
+    let env = environment(
+        root_contexts(&i, &[("x", Ty::I64), ("y", Ty::String)]),
+        vec![template(&i, "test", "{{ @x }}")],
+        TypeRegistry::default(),
+        Bindings::default(),
+    );
+    let mut session = LspSession::new(&i, env.clone());
+    assert!(!session.graph().diagnostics(qref).is_empty());
+
+    let doc = session.open(template_document(&i, "test"), "{{ @y }}");
+    assert!(session.diagnostics(doc).is_empty());
+
+    session.set_environment(env);
+    assert!(session.diagnostics(doc).is_empty());
+    assert!(session.graph().diagnostics(qref).is_empty());
 }
 
 #[test]
 fn incremental_update_fixes_error() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-    register_std(&mut session);
-    session.add_context("x", None, lift_to_poly(&Ty::I64));
+    let mut session = LspSession::new(&i, with_std(&i, root_contexts(&i, &[("x", Ty::I64)])));
 
     // Start with emit type error: Int not emittable in template.
-    let doc = session.open("test", "{{ @x }}", None);
+    let doc = session.open(template_document(&i, "test"), "{{ @x }}");
     let errs = session.diagnostics(doc);
     assert!(
         !errs.is_empty(),
@@ -168,12 +234,10 @@ fn incremental_update_fixes_error() {
 #[test]
 fn incremental_update_introduces_error() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-    register_std(&mut session);
-    session.add_context("name", None, lift_to_poly(&Ty::String));
+    let mut session = LspSession::new(&i, with_std(&i, root_contexts(&i, &[("name", Ty::String)])));
 
     // Start correct.
-    let doc = session.open("test", "hello {{ @name }}", None);
+    let doc = session.open(template_document(&i, "test"), "hello {{ @name }}");
     assert!(session.diagnostics(doc).is_empty());
 
     // Break it: unknown builtin.
@@ -184,14 +248,15 @@ fn incremental_update_introduces_error() {
 #[test]
 fn namespace_context_isolation() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-
-    let ns = session.add_namespace("node_a");
-    session.add_context("value", Some(ns), lift_to_poly(&Ty::I64));
-    session.add_context("global", None, lift_to_poly(&Ty::String));
+    let mut contexts = root_contexts(&i, &[("global", Ty::String)]);
+    contexts.push(Context {
+        qref: QualifiedRef::qualified(i.intern("node_a"), i.intern("value")),
+        ty: lift_to_poly(&Ty::I64),
+    });
+    let mut session = LspSession::new(&i, bare(contexts));
 
     // Root function sees @global.
-    let doc_root = session.open("root_fn", "{{ @global }}", None);
+    let doc_root = session.open(template_document(&i, "root_fn"), "{{ @global }}");
     assert!(
         session.diagnostics(doc_root).is_empty(),
         "root should see @global"
@@ -203,11 +268,12 @@ fn namespace_context_isolation() {
 #[test]
 fn completion_context_trigger() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-    session.add_context("name", None, lift_to_poly(&Ty::String));
-    session.add_context("count", None, lift_to_poly(&Ty::I64));
+    let mut session = LspSession::new(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String), ("count", Ty::I64)])),
+    );
 
-    let doc = session.open("test", "{{ @n }}", None);
+    let doc = session.open(template_document(&i, "test"), "{{ @n }}");
     // Cursor after "@n" -> context trigger with prefix "n"
     let items = session.completions(doc, 5); // "{{ @n" = 5 chars
     assert!(!items.is_empty(), "should get context completions");
@@ -225,24 +291,18 @@ fn completion_context_trigger() {
 #[test]
 fn completion_pipe_trigger() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-    session.add_context("name", None, lift_to_poly(&Ty::String));
-
     // Add a helper function so visible_functions returns something.
-    let helper_qref = QualifiedRef::root(i.intern("helper"));
-    let mut pb = PolyBuilder::new();
-    session.graph_mut().add_function(Function {
-        qref: helper_qref,
-        kind: FnKind::Local(ParsedAst::Template(acvus_ast::parse(&i, "hello").unwrap())),
-        ty: TyTerm::Fn {
-            params: vec![],
-            ret: Box::new(pb.fresh_ty_var()),
-            captures: vec![],
-            effect: acvus_mir::ty::Effect::OPAQUE.into(),
-        },
-    });
+    let mut session = LspSession::new(
+        &i,
+        environment(
+            root_contexts(&i, &[("name", Ty::String)]),
+            vec![template(&i, "helper", "hello")],
+            TypeRegistry::default(),
+            Bindings::default(),
+        ),
+    );
 
-    let doc = session.open("test", "{{ @name | helper }}", None);
+    let doc = session.open(template_document(&i, "test"), "{{ @name | helper }}");
     // Cursor after "| " -> pipe trigger (user is about to type after |)
     let items = session.completions(doc, 10); // "{{ @name |" = 10 chars
     assert!(!items.is_empty(), "should get pipe completions (functions)");
@@ -256,9 +316,9 @@ fn completion_pipe_trigger() {
 #[test]
 fn completion_keyword_trigger() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
+    let mut session = LspSession::new(&i, bare(vec![]));
 
-    let doc = session.open("test", "{{ tr }}", None);
+    let doc = session.open(template_document(&i, "test"), "{{ tr }}");
     // Cursor after "tr" -> keyword trigger
     let items = session.completions(doc, 5); // "{{ tr" = 5 chars
     assert!(
@@ -271,10 +331,9 @@ fn completion_keyword_trigger() {
 #[test]
 fn completion_empty_after_close() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-    session.add_context("name", None, lift_to_poly(&Ty::String));
+    let mut session = LspSession::new(&i, bare(root_contexts(&i, &[("name", Ty::String)])));
 
-    let doc = session.open("test", "{{ @n }}", None);
+    let doc = session.open(template_document(&i, "test"), "{{ @n }}");
     session.close(doc);
     let items = session.completions(doc, 5);
     assert!(items.is_empty(), "closed doc should return no completions");
@@ -283,11 +342,12 @@ fn completion_empty_after_close() {
 #[test]
 fn completion_updates_with_source() {
     let i = Interner::new();
-    let mut session = LspSession::new(&i);
-    session.add_context("name", None, lift_to_poly(&Ty::String));
-    session.add_context("age", None, lift_to_poly(&Ty::I64));
+    let mut session = LspSession::new(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String), ("age", Ty::I64)])),
+    );
 
-    let doc = session.open("test", "{{ @n }}", None);
+    let doc = session.open(template_document(&i, "test"), "{{ @n }}");
     let items = session.completions(doc, 5);
     assert!(
         items.iter().any(|c| c.label == "@name"),
@@ -307,10 +367,18 @@ fn completion_updates_with_source() {
 /// RFC-0071 rule 5, at the surface the editor reads.
 mod required_inputs {
     use acvus_lsp::LspSession;
+    use acvus_mir::graph::{Bindings, CompilationGraph};
+    use acvus_mir::ty::TypeRegistry;
     use acvus_utils::Interner;
 
     fn text(value: &str) -> acvus_ast::Literal {
         acvus_ast::Literal::String(value.to_string())
+    }
+
+    fn bound(interner: &Interner, name: &str, value: acvus_ast::Literal) -> CompilationGraph {
+        let mut bindings = Bindings::default();
+        bindings.bind(interner.intern(name), value);
+        super::environment(vec![], vec![], TypeRegistry::default(), bindings)
     }
 
     fn shown(session: &acvus_lsp::LspSession, id: acvus_lsp::DocId) -> Vec<String> {
@@ -349,8 +417,8 @@ Explain for {{ $who }}
     #[test]
     fn a_document_shows_the_inputs_it_reads() {
         let interner = Interner::new();
-        let mut session = LspSession::new(&interner);
-        let doc = session.open("test", BY_MODE, None);
+        let mut session = LspSession::new(&interner, super::bare(vec![]));
+        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
         assert_eq!(
             shown(&session, doc),
             vec![
@@ -364,16 +432,16 @@ Explain for {{ $who }}
     #[test]
     fn a_binding_narrows_to_what_the_surviving_arm_reads() {
         let interner = Interner::new();
-        let mut session = LspSession::new(&interner);
-        let doc = session.open("test", BY_MODE, None);
+        let mut session = LspSession::new(&interner, super::bare(vec![]));
+        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
 
-        session.bind_input("mode", text("review"));
+        session.set_environment(bound(&interner, "mode", text("review")));
         assert_eq!(shown(&session, doc), vec!["$rules: String".to_string()]);
 
-        session.bind_input("mode", text("explain"));
+        session.set_environment(bound(&interner, "mode", text("explain")));
         assert_eq!(shown(&session, doc), vec!["$examples: String".to_string()]);
 
-        session.unbind_input("mode");
+        session.set_environment(super::bare(vec![]));
         assert_eq!(
             shown(&session, doc),
             vec![
@@ -387,8 +455,8 @@ Explain for {{ $who }}
     #[test]
     fn a_name_both_arms_read_survives_every_binding() {
         let interner = Interner::new();
-        let mut session = LspSession::new(&interner);
-        let doc = session.open("test", BY_MODE, None);
+        let mut session = LspSession::new(&interner, super::bare(vec![]));
+        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
         session.update_source(doc, BOTH_ARMS_READ_WHO);
 
         assert_eq!(
@@ -396,18 +464,18 @@ Explain for {{ $who }}
             vec!["$mode: String".to_string(), "$who: String".to_string()]
         );
 
-        session.bind_input("mode", text("review"));
+        session.set_environment(bound(&interner, "mode", text("review")));
         assert_eq!(shown(&session, doc), vec!["$who: String".to_string()]);
 
-        session.bind_input("mode", text("explain"));
+        session.set_environment(bound(&interner, "mode", text("explain")));
         assert_eq!(shown(&session, doc), vec!["$who: String".to_string()]);
     }
 
     #[test]
     fn a_source_that_does_not_parse_is_one_diagnostic_and_recovers() {
         let interner = Interner::new();
-        let mut session = LspSession::new(&interner);
-        let doc = session.open("test", BY_MODE, None);
+        let mut session = LspSession::new(&interner, super::bare(vec![]));
+        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
 
         session.update_source(doc, "% if\nbroken\n");
         assert_eq!(session.diagnostics(doc).len(), 1);
@@ -432,8 +500,8 @@ Explain for {{ $who }}
     #[test]
     fn a_document_that_never_parsed_is_one_diagnostic() {
         let interner = Interner::new();
-        let mut session = LspSession::new(&interner);
-        let doc = session.open("test", "% if\nbroken\n", None);
+        let mut session = LspSession::new(&interner, super::bare(vec![]));
+        let doc = session.open(super::template_document(&interner, "test"), "% if\nbroken\n");
         assert_eq!(session.diagnostics(doc).len(), 1);
         assert!(shown(&session, doc).is_empty());
         assert!(session.required_inputs(doc).is_empty());

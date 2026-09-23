@@ -24,6 +24,7 @@ dependencies = [
  "acvus-extern",
  "acvus-interpreter",
  "acvus-interpreter-test",
+ "acvus-lsp",
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",
@@ -144,6 +145,7 @@ dependencies = [
  "acvus-mir",
  "acvus-utils",
  "rustc-hash",
+ "tempfile",
 ]
 
 [[package]]

@@ -5,7 +5,7 @@
 
 use acvus_ast::Span;
 use acvus_ast::report::Label;
-use acvus_extern::{Externs, Registry};
+use acvus_extern::{CombineError, Externs, Handlers, Registry};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,7 @@ use acvus_mir::graph::{
     extract, infer, lower, optimize,
 };
 use acvus_mir::ir::MirModule;
-use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, lift_declaration, try_freeze_poly};
+use acvus_mir::ty::{PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration, try_freeze_poly};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -205,6 +205,75 @@ fn span_of(span: Span) -> Option<Span> {
     (span.start != 0 || span.end != 0).then_some(span)
 }
 
+pub struct Environment {
+    pub graph: CompilationGraph,
+    handlers: Handlers<AcvusRuntime>,
+    space: acvus_interpreter::SpaceHooksByType,
+    instances: acvus_extern::InstanceTable,
+    fn_types: FxHashMap<QualifiedRef, Ty>,
+}
+
+pub fn entry_ref(interner: &Interner) -> QualifiedRef {
+    QualifiedRef::root(interner.intern("main"))
+}
+
+/// This type and the contexts `environment` lifts do not share a
+/// `PolyBuilder`. `infer` instantiates every context and a function's
+/// declared return type each on its own, so a variable number means
+/// something only inside the one declaration that minted it.
+pub fn entry_ty() -> PolyTy {
+    TyTerm::Fn {
+        params: vec![],
+        ret: Box::new(lift_declaration(&Ty::Never, &mut PolyBuilder::new())),
+        captures: vec![],
+        effect: acvus_mir::ty::Effect::OPAQUE.into(),
+    }
+}
+
+pub fn combine_refusal(error: &CombineError) -> String {
+    format!("the registries do not combine: {error}")
+}
+
+pub fn environment(
+    interner: &Interner,
+    context_types: &FxHashMap<Astr, Ty>,
+    bindings: Bindings,
+    registries: Vec<Registry<AcvusRuntime>>,
+) -> Result<Environment, CombineError> {
+    let mut pb = PolyBuilder::new();
+    let contexts: Vec<Context> = context_types
+        .iter()
+        .map(|(name, ty)| Context {
+            qref: QualifiedRef::root(*name),
+            ty: lift_declaration(ty, &mut pb),
+        })
+        .collect();
+    let Externs {
+        functions,
+        types,
+        handlers,
+        space,
+        instances,
+    } = Externs::combine(registries, interner)?;
+    let fn_types: FxHashMap<QualifiedRef, Ty> = functions
+        .iter()
+        .filter_map(|f| try_freeze_poly(&f.ty).map(|ty| (f.qref, ty)))
+        .collect();
+    Ok(Environment {
+        graph: CompilationGraph {
+            functions: Freeze::new(functions),
+            contexts: Freeze::new(contexts),
+            types: Freeze::new(types),
+            bindings,
+            entry: Some(entry_ref(interner)),
+        },
+        handlers,
+        space,
+        instances,
+        fn_types,
+    })
+}
+
 pub fn check(
     interner: &Interner,
     source: &str,
@@ -232,50 +301,31 @@ pub fn check(
     })?;
     stages.parse = watch.stop();
 
-    let mut pb = PolyBuilder::new();
-    let contexts: Vec<Context> = context_types
-        .iter()
-        .map(|(name, ty)| Context {
-            qref: QualifiedRef::root(*name),
-            ty: lift_declaration(ty, &mut pb),
-        })
-        .collect();
-    let entry = QualifiedRef::root(interner.intern("main"));
-    let mut functions = vec![Function {
-        qref: entry,
-        kind: FnKind::Local(parsed),
-        ty: TyTerm::Fn {
-            params: vec![],
-            ret: Box::new(lift_declaration(&Ty::Never, &mut pb)),
-            captures: vec![],
-            effect: acvus_mir::ty::Effect::OPAQUE.into(),
-        },
-    }];
-    let Externs {
-        functions: extern_fns,
-        types,
+    let Environment {
+        graph: environment,
         handlers,
         space,
         instances,
-    } = Externs::combine(registries, interner).map_err(|e| {
+        fn_types,
+    } = environment(interner, context_types, bindings, registries).map_err(|e| {
         vec![Diagnostic {
-            message: format!("the registries do not combine: {e}"),
+            message: combine_refusal(&e),
             primary: None,
             span: None,
             labels: Vec::new(),
         }]
     })?;
-    let fn_types: FxHashMap<QualifiedRef, Ty> = extern_fns
-        .iter()
-        .filter_map(|f| try_freeze_poly(&f.ty).map(|ty| (f.qref, ty)))
-        .collect();
-    functions.extend(extern_fns);
+    let entry = entry_ref(interner);
+    let functions: Vec<Function> = std::iter::once(Function {
+        qref: entry,
+        kind: FnKind::Local(parsed),
+        ty: entry_ty(),
+    })
+    .chain(environment.functions.iter().cloned())
+    .collect();
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
-        contexts: Freeze::new(contexts),
-        types: Freeze::new(types),
-        bindings,
-        entry: Some(entry),
+        ..environment
     };
 
     let watch = Stopwatch::start(timed);

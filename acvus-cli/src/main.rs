@@ -3,6 +3,7 @@
 mod compile;
 mod context;
 mod json;
+mod lsp_host;
 mod oplist;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};

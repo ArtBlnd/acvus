@@ -240,6 +240,10 @@ impl IncrementalGraph {
         Some(self.outcome(qref)?.meta())
     }
 
+    pub fn inferred_ty(&self, qref: QualifiedRef) -> Option<&Ty> {
+        Some(&self.fn_meta(qref)?.ty)
+    }
+
     pub fn resolution(&self, qref: QualifiedRef) -> Option<Freeze<crate::typeck::TypeResolution>> {
         self.outcome(qref)?.resolution()
     }
