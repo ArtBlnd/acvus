@@ -6,12 +6,15 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use acvus_extern::{ExternType, Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::listing::{BlockListing, RegionListing, ops_of_anywhere, regions_named};
+use acvus_interpreter_test::corpus::{self, Outcome, Stage};
 use acvus_interpreter_test::listing::{script_listing, script_listing_with_externs};
 use acvus_interpreter_test::*;
+use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
 
@@ -598,5 +601,98 @@ fn a_traversal_of_owners_a_break_leaves_runs_as_joints_and_releases_nothing_itse
         ops.iter().filter(|op| *op == "DropValue").count(),
         2,
         "{ops:?}"
+    );
+}
+
+// -- An element's reference outlives its iteration ----------------------
+
+const LIMIT: Duration = Duration::from_secs(30);
+
+#[test]
+fn corpus_child() {
+    corpus::child();
+}
+
+fn outcome(source: &str, opt: Opt) -> Outcome {
+    acvus_interpreter_test::attempt_within!(source, opt, Stage::Run, LIMIT)
+        .unwrap_or_else(|lapse| panic!("at {opt:?}, {lapse:?}: {source}"))
+}
+
+fn runs_to(source: &str, value: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        match outcome(source, opt) {
+            Outcome::Value(got) => assert_eq!(got, value, "at {opt:?}: {source}"),
+            other => panic!("at {opt:?}, expected {value}, got {other:?}: {source}"),
+        }
+    }
+}
+
+fn refused_with(source: &str, words: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        match outcome(source, opt) {
+            Outcome::Refused(why) => assert!(why.contains(words), "at {opt:?}: {why}"),
+            other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
+        }
+    }
+}
+
+/// The terminator hands each element out through the one `SliceMut` borrow
+/// taken before the header (RFC-0057 rule 2), so a reference to an element
+/// kept past its iteration holds that borrow's loan of `v` from where it is
+/// kept, and not before.
+#[test]
+fn a_mutable_element_kept_past_the_loop_writes_through_to_the_container() {
+    runs_to(
+        "let v = vec([1, 2, 3]); let z = 0; let q = &mut z; \
+         for x in &mut v { q = x; } *q = 9; v[2u64]",
+        "9",
+    );
+}
+
+#[test]
+fn a_shared_element_kept_past_the_loop_reads_the_container() {
+    runs_to(
+        "let v = vec([1, 2, 3]); let z = 0; let q = &z; for x in &v { q = x; } *q",
+        "3",
+    );
+}
+
+#[test]
+fn the_container_is_not_written_while_a_kept_element_is_still_used() {
+    refused_with(
+        "let v = vec([1, 2, 3]); let z = 0; let q = &mut z; \
+         for x in &mut v { q = x; } push(&mut v, 4); *q = 9; v[2u64]",
+        "`v` is written here while a reference to it is live",
+    );
+    refused_with(
+        "let v = vec([1, 2, 3]); let z = 0; let q = &mut z; \
+         for x in &mut v { q = x; } v = vec([7]); *q = 9; v[0u64]",
+        "`v` is written here while a reference to it is live",
+    );
+}
+
+/// RFC-0057 rule 5: the loop holds the container exclusively.
+#[test]
+fn the_container_is_not_written_inside_its_own_mutable_loop() {
+    refused_with(
+        "let v = vec([1, 2, 3]); for x in &mut v { push(&mut v, 4); } v[0u64]",
+        "`v` is written here while a reference to it is live",
+    );
+    refused_with(
+        "let v = vec([1, 2, 3]); for x in &mut v { v = vec([7]); } v[0u64]",
+        "`v` is written here while a reference to it is live",
+    );
+}
+
+/// Every element a `SliceMut` head hands out is a loan of the one container
+/// (RFC-0057 rule 5), and no RFC tells two elements' loans apart: two kept
+/// from two iterations are two live `&mut`s of `v`, and a write through
+/// either is refused while the other is used after it (RFC-0018 rule 8).
+#[test]
+fn two_mutable_elements_kept_from_two_iterations_are_not_both_written() {
+    refused_with(
+        "let v = vec([1, 2, 3]); let z = 0; let w = 0; let a = &mut z; let b = &mut w; \
+         for x in &mut v { b = a; a = x; } *a = 7; *b = 8; v[1u64] * 10 + v[2u64]",
+        "is written here while a reference to it is live",
     );
 }

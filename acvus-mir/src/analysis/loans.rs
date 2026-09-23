@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
-use crate::cfg::{CfgBody, Terminator};
+use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, ForSource, Inst, InstKind, Label, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty};
@@ -556,6 +556,17 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
 
 pub struct Loans {
     region: FxHashMap<ValueId, Region>,
+    entry: Vec<DataflowState<ValueId, Region>>,
+    given: Vec<Vec<Given>>,
+}
+
+/// The region an instruction gave a value it defines. A transfer writes only
+/// the values the instruction defines, so a block's entry state and these
+/// give the regions before each of its instructions.
+struct Given {
+    at: usize,
+    value: ValueId,
+    region: Region,
 }
 
 static NOTHING: Region = Region {
@@ -591,7 +602,38 @@ impl Loans {
                 region.entry(*v).or_default().join_mut(r);
             }
         }
-        Self { region }
+        let mut given: Vec<Vec<Given>> = Vec::with_capacity(cfg.blocks.len());
+        for (block, entry) in cfg.blocks.iter().zip(&result.block_entry) {
+            let mut state = entry.clone();
+            let mut block_given = Vec::new();
+            for (at, inst) in block.insts.iter().enumerate() {
+                analysis.transfer_inst(inst, &mut state);
+                for value in inst_info::defs(&inst.kind) {
+                    block_given.push(Given {
+                        at,
+                        value,
+                        region: state.get(value),
+                    });
+                }
+            }
+            given.push(block_given);
+        }
+        Self {
+            region,
+            entry: result.block_entry,
+            given,
+        }
+    }
+
+    /// The regions at the entry of `block`, to be walked through its
+    /// instructions in order.
+    pub fn at_entry(&self, block: BlockIdx) -> RegionsAt<'_> {
+        RegionsAt {
+            state: self.entry[block.0].clone(),
+            given: &self.given[block.0],
+            next: 0,
+            at: 0,
+        }
     }
 
     /// The region of a value; a value that names no storage has the empty
@@ -740,6 +782,37 @@ impl Loans {
             };
             effect.add(loan.storage.value(), bounded);
         }
+    }
+}
+
+/// The regions a body's values hold before one instruction of a block: what
+/// a holder lends where it is used, where `Loans::region` is what it lends
+/// anywhere in the body. A storage is given loans by the assignments that
+/// reach it, so before the first of them it lends only what it held
+/// (RFC-0064: a reference's extent is per instruction).
+pub struct RegionsAt<'a> {
+    state: DataflowState<ValueId, Region>,
+    given: &'a [Given],
+    next: usize,
+    at: usize,
+}
+
+impl RegionsAt<'_> {
+    pub fn region(&self, value: ValueId) -> Region {
+        self.state.get(value)
+    }
+
+    /// Past the instruction the walk is before.
+    pub fn pass(&mut self) {
+        while let Some(given) = self
+            .given
+            .get(self.next)
+            .filter(|given| given.at == self.at)
+        {
+            self.state.set(given.value, given.region.clone());
+            self.next += 1;
+        }
+        self.at += 1;
     }
 }
 

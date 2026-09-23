@@ -9,7 +9,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Loan, Loans, Summaries, Summary, held_loan};
+use crate::analysis::loans::{Loan, Loans, RegionsAt, Summaries, Summary, held_loan};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
@@ -281,14 +281,14 @@ struct Reached {
     via: Vec<ValueId>,
 }
 
-fn reached(target: &RefTarget, loans: &Loans) -> Reached {
+fn reached(target: &RefTarget, regions: &RegionsAt<'_>) -> Reached {
     match target {
         RefTarget::Var(s) | RefTarget::Param(s) => Reached {
             storage: vec![*s],
             via: vec![],
         },
         RefTarget::Through(r) => {
-            let region = loans.region(*r);
+            let region = regions.region(*r);
             Reached {
                 storage: region.loans.iter().map(|l| l.storage.value()).collect(),
                 via: region.via.iter().copied().chain([*r]).collect(),
@@ -525,15 +525,18 @@ impl Checking {
                 live_before[ii] = current.clone();
             }
 
+            // A holder conflicts by the loans it holds where the touch is,
+            // not by every loan it takes anywhere in the body.
+            let mut regions = self.loans.at_entry(BlockIdx(bi));
             for (ii, inst) in block.insts.iter().enumerate() {
                 for (target, touch) in touches(&inst.kind, &self.cfg.val_types) {
-                    let reach = reached(&target, &self.loans);
+                    let reach = reached(&target, &regions);
                     let mut holders: Vec<ValueId> = live_before[ii]
                         .iter()
                         .copied()
                         .filter(|holder| {
                             !reach.via.contains(holder)
-                                && self.loans.region(*holder).loans.iter().any(|loan| {
+                                && regions.region(*holder).loans.iter().any(|loan| {
                                     reach.storage.contains(&loan.storage.value())
                                         && conflicts(loan, &touch)
                                 })
@@ -561,6 +564,7 @@ impl Checking {
                         holders,
                     });
                 }
+                regions.pass();
             }
         }
         errors.extend(self.without_consequences(found));
