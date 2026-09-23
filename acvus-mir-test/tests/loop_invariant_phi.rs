@@ -53,11 +53,14 @@ fn a_bound_and_a_factor_no_loop_assigns_are_not_block_params() {
         [
             ("L0".to_string(), 1),
             ("L1".to_string(), 1),
-            ("L3".to_string(), 1),
-            ("L4".to_string(), 1)
+            ("L4".to_string(), 1),
+            ("L5".to_string(), 1)
         ],
-        "each header carries the accumulator and each body the counter its \
-         `for` fills, nothing else. Both `while`s are range `for`s (RFC-0081), \
-         and nothing reads `t` or `i` once the comparisons are gone:\n{listing}"
+        "the outer header carries the accumulator, each body the counter its \
+         `for` fills, and the inner loop's exit the trip count, nothing else. \
+         Both `while`s are range `for`s (RFC-0081), nothing reads `t` or `i` \
+         once the comparisons are gone, and the accumulator is an induction \
+         variable of the weak inner loop, computed at its exit from the trip \
+         count (RFC-0066 rule 7):\n{listing}"
     );
 }

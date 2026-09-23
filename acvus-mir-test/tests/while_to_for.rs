@@ -1,8 +1,9 @@
 //! `optimize::while_to_for` (RFC-0081): which `while` loops become a range
 //! `for`, what the rewrite leaves as it was, and the forms it declines.
 //!
-//! These tests read `i` as a header parameter after the full pipeline,
-//! which holds while that pipeline has no IV canonicalization.
+//! These tests read the loop as `Promoted::of` leaves it, before IV
+//! canonicalization. That pass runs later in the full pipeline and replaces
+//! `i` with the counter, which would hide what the promotion itself wrote.
 
 use acvus_mir::analysis::affine::{AffineValues, Derivation};
 use acvus_mir::analysis::domtree::DomTree;
@@ -10,22 +11,26 @@ use acvus_mir::analysis::inst_info;
 use acvus_mir::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::ir::{ForSource, ValueId};
-use acvus_mir::optimize::{dce, ssa_pass, while_to_for};
-use acvus_mir_test::{lowered_script_module, optimized_script_module};
+use acvus_mir::optimize::{dce, fold, ssa_pass, while_to_for};
+use acvus_mir_test::lowered_script_module;
 use acvus_utils::Interner;
 
-struct Optimized {
+struct Promoted {
     cfg: CfgBody,
     nest: LoopNest,
     invariants: Invariants,
 }
 
-impl Optimized {
+impl Promoted {
     fn of(source: &str) -> Self {
         let i = Interner::new();
         let module =
-            optimized_script_module(&i, source, &[]).unwrap_or_else(|e| panic!("{source}\n{e}"));
-        let cfg = promote(module.main);
+            lowered_script_module(&i, source, &[]).unwrap_or_else(|e| panic!("{source}\n{e}"));
+        let mut cfg = promote(module.main);
+        ssa_pass::run(&mut cfg);
+        fold::run(&mut cfg);
+        while_to_for::run(&mut cfg);
+        dce::run(&mut cfg);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         Self {
@@ -103,8 +108,8 @@ struct Range {
     hi: ValueId,
 }
 
-fn assert_converted(source: &str) -> Optimized {
-    let o = Optimized::of(source);
+fn assert_converted(source: &str) -> Promoted {
+    let o = Promoted::of(source);
     let loop_ = o.sole_loop();
     let Range { at, hi } = o.range(loop_);
     for bound in [at, hi] {
@@ -133,7 +138,7 @@ fn assert_converted(source: &str) -> Optimized {
 }
 
 fn assert_declined(source: &str) {
-    let o = Optimized::of(source);
+    let o = Promoted::of(source);
     let loop_ = o.sole_loop();
     assert!(
         matches!(loop_.kind, LoopKind::While),
@@ -174,7 +179,7 @@ fn n_greater_than_i_is_the_same_condition() {
 
 #[test]
 fn a_while_nested_in_a_for_is_converted_with_the_outer_counter_as_its_bound() {
-    let o = Optimized::of(
+    let o = Promoted::of(
         "let s = 0; for j in 0..5 { let i = 0; while i < j { s = s + i; i = i + 1; } } s",
     );
     let loops: Vec<&Loop> = o.nest.iter().map(|(_, l)| l).collect();

@@ -289,7 +289,7 @@ fn closure_called_where_it_was_made() {
 fn closure_called_in_a_while_body() {
     let i = Interner::new();
     let c = ctx(&i, &[("n", Ty::I64)]);
-    let src = "let step = |x| -> x + 1; let i = 0; while i < @n { i = step(i); } i";
+    let src = "let step = |x| -> x + 1; let i = 0; while i <= @n { i = step(i); } i";
     let (raw, opt) = snap_both(&i, src, &c);
     insta::assert_snapshot!("closure_called_in_a_while_body@raw", raw);
     insta::assert_snapshot!("closure_called_in_a_while_body@optimized", opt);

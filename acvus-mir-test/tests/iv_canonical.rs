@@ -402,7 +402,7 @@ fn nested_loops_are_each_judged_by_their_own_state() {
 
 // -- Declined --------------------------------------------------------
 
-const WHILE: &str = "let j = 0; let i = 0; while i < 5 { j = j + 2; i = i + 1; } j";
+const WHILE: &str = "let j = 0; let i = 0; while i <= 4 { j = j + 2; i = i + 1; } j";
 
 #[test]
 fn a_weak_while_is_untouched() {

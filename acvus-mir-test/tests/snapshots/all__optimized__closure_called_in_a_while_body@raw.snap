@@ -12,7 +12,7 @@ expression: raw
      7 | L0:
      8 |   r3 = take i
      9 |   r4 = take @n
-    10 |   r5 = r3 < r4
+    10 |   r5 = r3 <= r4
     11 |   jump_if r5 then L1 else L2
     12 | L1:
     13 |   r6 = take i

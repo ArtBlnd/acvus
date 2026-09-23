@@ -28,6 +28,19 @@ impl BlockBody {
             .filter(|inst| inst.contains(" * "))
             .count()
     }
+
+    fn multiplications_by(&self, factor: &str) -> usize {
+        self.insts
+            .iter()
+            .filter_map(|inst| inst.split_once(" = "))
+            .filter_map(|(_, product)| product.split_once(" * "))
+            .filter(|(left, right)| {
+                [left, right]
+                    .iter()
+                    .any(|operand| operand.split(' ').next() == Some(factor))
+            })
+            .count()
+    }
 }
 
 fn blocks(listing: &str) -> Vec<BlockBody> {
@@ -70,6 +83,21 @@ fn where_it_multiplies(listing: &str) -> Vec<String> {
         .iter()
         .filter(|block| block.multiplications() > 0)
         .map(|block| format!("{}: {}", block.label, block.multiplications()))
+        .collect()
+}
+
+fn where_it_multiplies_by_context(listing: &str, context: &str) -> Vec<String> {
+    let fetch = format!(" = fetch {context}");
+    let Some(factor) = listing.lines().find_map(|line| {
+        let (_, inst) = line.split_once('|')?;
+        inst.trim().strip_suffix(fetch.as_str())
+    }) else {
+        panic!("`{context}` is fetched:\n{listing}");
+    };
+    blocks(listing)
+        .iter()
+        .filter(|block| block.multiplications_by(factor) > 0)
+        .map(|block| format!("{}: {}", block.label, block.multiplications_by(factor)))
         .collect()
 }
 
@@ -123,7 +151,7 @@ const BARE_PRODUCTS: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < @n { \
-    acc = acc + i * @k; \
+    acc = acc * 2 + i * @k; \
     i = i + 1; \
 } \
 let shared = 0; \
@@ -142,11 +170,12 @@ fn a_bare_product_keeps_its_multiplication() {
         .expect("it compiles");
     insta::assert_snapshot!("bare_products", listing);
     assert_eq!(
-        multiplications(&listing),
-        2,
-        "both bodies keep the multiplication they were written with, and no \
-         start or step stands above either header: a reduction that does not \
-         lower the operation count is not applied (RFC-0056):\n{listing}"
+        where_it_multiplies(&listing),
+        ["L1: 2".to_string(), "L4: 1".to_string()],
+        "both bodies keep the multiplication they were written with, beside \
+         the first body's `acc * 2`, and no start or step stands above either \
+         header: a reduction that does not lower the operation count is not \
+         applied (RFC-0056):\n{listing}"
     );
 }
 
@@ -199,10 +228,11 @@ fn a_weak_loop_is_left_as_written_and_a_strong_one_is_reduced() {
     let weak = compile_script_optimized(&i, WEAK, &names).expect("it compiles");
     let strong = compile_script_optimized(&i, STRONG, &names).expect("it compiles");
     assert_eq!(
-        where_it_multiplies(&weak),
+        where_it_multiplies_by_context(&weak, "@k"),
         ["L1: 1".to_string()],
         "the accumulator is a merge and `i` an induction variable, so the loop \
-         is weak and keeps `i * @k` in its body (RFC-0056):\n{weak}"
+         is weak and keeps `i * @k` in its body, with no start or step above \
+         it (RFC-0056); its `i` is IV canonicalization's (RFC-0066 rule 7):\n{weak}"
     );
     assert_eq!(
         where_it_multiplies(&strong),

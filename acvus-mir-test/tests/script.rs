@@ -355,7 +355,7 @@ fn an_assignment_in_a_loop_body_is_the_outer_binding() {
     let i = Interner::new();
     let ir = compile_script_optimized(
         &i,
-        "let n = 0; while n < 3 { n = n + 1; } n",
+        "let n = 0; while n <= 2 { n = n + 1; } n",
         &FxHashMap::default(),
     )
     .expect("`n` is assigned in the body and read after it");
