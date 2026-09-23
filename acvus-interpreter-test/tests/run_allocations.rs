@@ -145,6 +145,7 @@ i = i + 1; } acc";
 struct Balance {
     allocations: usize,
     releases: usize,
+    answer: u64,
 }
 
 async fn balance(source: &str, n: i64, opt: Opt) -> Balance {
@@ -166,12 +167,11 @@ async fn balance(source: &str, n: i64, opt: Opt) -> Balance {
     let allocated = ALLOCATIONS.load(Ordering::Relaxed);
     let released = RELEASES.load(Ordering::Relaxed);
     let answer = interp.execute().await;
-    let balance = Balance {
+    Balance {
         allocations: ALLOCATIONS.load(Ordering::Relaxed) - allocated,
         releases: RELEASES.load(Ordering::Relaxed) - released,
-    };
-    std::hint::black_box(answer);
-    balance
+        answer: answer.bits(),
+    }
 }
 
 #[tokio::test]
@@ -193,4 +193,133 @@ async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
             "at {opt:?}, an iteration leaves {left} allocations behind"
         );
     }
+}
+
+// -- Leaving a `for` over an owned array early (RFC-0057 rule 6) --------
+
+/// What one iteration of `source` leaves allocated, at `opt`, with the run's
+/// answer at the larger count checked against `answer`.
+async fn left_per_iteration<F>(source: &str, opt: Opt, answer: F) -> f64
+where
+    F: Fn(i64) -> u64,
+{
+    let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
+    let (few, many) = (1_000i64, 5_000i64);
+    let low = balance(source, few, opt).await;
+    let high = balance(source, many, opt).await;
+    drop(measuring);
+    assert_eq!(low.answer, answer(few), "at {opt:?}, the answer at {few}");
+    assert_eq!(high.answer, answer(many), "at {opt:?}, the answer at {many}");
+    ((high.allocations as f64 - high.releases as f64)
+        - (low.allocations as f64 - low.releases as f64))
+        / (many - few) as f64
+}
+
+/// Each script leaves a `for` over an array of owners by the edge its name
+/// gives, at both levels, and every iteration of the enclosing `while` gives
+/// back all it allocated: the elements the loop took are released by their
+/// own scopes, and the array's `Drop` on the leaving edge releases the rest.
+async fn leaves_nothing_behind<F>(source: &str, answer: F)
+where
+    F: Fn(i64) -> u64,
+{
+    for opt in [Opt::None, Opt::Full] {
+        let left = left_per_iteration(source, opt, &answer).await;
+        println!("at {opt:?}: left behind per iteration: {left:.3}");
+        assert!(
+            left.abs() < 0.01,
+            "at {opt:?}, an iteration leaves {left} allocations behind"
+        );
+    }
+}
+
+/// Two taken, "ab" read and "c" released by its scope at the `break`, "d"
+/// never taken.
+const BREAK_IN_OWNERS: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+let a = [\"ab\".to_string(), \"c\".to_string(), \"d\".to_string()]; let k = 0; \
+for s in a { if k == 1 { break; }; acc = acc + len(&s); k = k + 1; } \
+i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_break_out_of_an_array_of_strings_releases_the_elements_not_taken() {
+    leaves_nothing_behind(BREAK_IN_OWNERS, |n| 2 * n as u64).await;
+}
+
+/// The control: a `continue` does not leave the loop, so the terminator's
+/// exit is the one edge out, as it is without a jump.
+const CONTINUE_IN_OWNERS: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+let a = [\"ab\".to_string(), \"c\".to_string(), \"d\".to_string()]; \
+for s in a { if len(&s) == 1 { continue; }; acc = acc + len(&s); } \
+i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_continue_in_an_array_of_strings_releases_every_element() {
+    leaves_nothing_behind(CONTINUE_IN_OWNERS, |n| 2 * n as u64).await;
+}
+
+/// The `?` leaves the lambda from its second element, "c".
+const TRY_IN_OWNERS: &str = "\
+let f = |k| -> { let acc = 0; \
+for s in [\"ab\".to_string(), \"c\".to_string(), \"d\".to_string()] { \
+let r = if len(&s) == k { Err(1) } else { Ok(len(&s)) }; acc = acc + r?; } Ok(acc) }; \
+let acc = 0; let i = 0; while i < @n { \
+acc = acc + match f(1) { Ok(v) => v, Err(e) => e }; \
+i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_try_out_of_an_array_of_strings_releases_the_elements_not_taken() {
+    leaves_nothing_behind(TRY_IN_OWNERS, |n| n as u64).await;
+}
+
+/// The `return` leaves the lambda from its second element, "c".
+const RETURN_IN_OWNERS: &str = "\
+let f = |k| -> { for s in [\"ab\".to_string(), \"c\".to_string(), \"d\".to_string()] { \
+if len(&s) == k { return 1; }; } 0 }; \
+let acc = 0; let i = 0; while i < @n { acc = acc + f(1); \
+i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_return_out_of_an_array_of_strings_releases_the_elements_not_taken() {
+    leaves_nothing_behind(RETURN_IN_OWNERS, |n| n as u64).await;
+}
+
+/// Each outer element runs the inner loop to its `break` at "yz", and the
+/// outer loop breaks at "c": per turn of the `while`, 1 + 2 + 1.
+const NESTED_BREAKS_IN_OWNERS: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+for s in [\"ab\".to_string(), \"c\".to_string(), \"d\".to_string()] { \
+for t in [\"x\".to_string(), \"yz\".to_string(), \"w\".to_string()] { \
+if len(&t) == 2 { break; }; acc = acc + len(&t); } \
+if len(&s) == 1 { break; }; acc = acc + len(&s); } \
+i = i + 1; } acc";
+
+#[tokio::test]
+async fn nested_breaks_out_of_arrays_of_strings_release_the_elements_not_taken() {
+    leaves_nothing_behind(NESTED_BREAKS_IN_OWNERS, |n| 4 * n as u64).await;
+}
+
+/// The element's type is open where the checker reaches the `break`: the
+/// lambda's parameters are settled by the call.
+const BREAK_IN_OPEN_ELEMENTS: &str = "\
+let f = |x, z| -> { let k = 0; for y in [x, z] { k = k + 1; break; } k }; \
+let acc = 0; let i = 0; while i < @n { \
+acc = acc + f(\"a\".to_string(), \"b\".to_string()); i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_break_out_of_an_array_of_open_elements_releases_the_elements_not_taken() {
+    leaves_nothing_behind(BREAK_IN_OPEN_ELEMENTS, |n| n as u64).await;
+}
+
+/// An element that is itself an aggregate owning a `String`.
+const BREAK_IN_OBJECTS: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+for o in [{ s: \"ab\".to_string(), }, { s: \"c\".to_string(), }, { s: \"d\".to_string(), }] { \
+acc = acc + len(&o.s); break; } \
+i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_break_out_of_an_array_of_objects_releases_the_elements_not_taken() {
+    leaves_nothing_behind(BREAK_IN_OBJECTS, |n| 2 * n as u64).await;
 }

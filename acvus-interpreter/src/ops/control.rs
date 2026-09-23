@@ -509,10 +509,14 @@ impl Source for Slice {
 
 /// Cross-artifact obligation: this operation does not release the array, and
 /// it must not. `acvus_mir::optimize::drop_insertion` emits a `Drop` of the
-/// array on the loop's exit block, which is what releases the storage and the
+/// array on every edge that leaves the loop — the exit, a `break`, a `?`, a
+/// `return` (RFC-0057 rule 6) — which is what releases the storage and the
 /// slots the counter never reached; `acvus mir` over `for x in a { … }` prints
 /// it as the `drop` above the exit's `return`. So the array's register keeps
 /// its value and the frame keeps its claim on it for that `Drop` to take.
+/// `lay` leaves `Value::UNDEF` in each slot it takes, which releases nothing,
+/// so that `Drop` releases the suffix the counter has not reached and no
+/// element the body was handed.
 pub struct Array<const LARGE: bool, const WORD: bool> {
     pub array: Off,
     pub elem: Marked,

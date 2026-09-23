@@ -70,11 +70,19 @@ instances of this rule.
    loop, and the terminator carries that borrow. Naming `v` in the body is a
    loan error, and two `for` loops over `&mut v` cannot nest.
 
-6. **An `Array` head's release is the MIR's.** `drop_insertion` places the
-   array's `Drop` on the exit block and on every `break` edge (RFC-0048). The
-   machine does not release the array and must not. Where the element type
-   owns something, the checker refuses `break`, `?` and `return` inside the
-   loop, because the elements not yet taken would have no release.
+6. **An `Array` head's release is the MIR's, on every edge that leaves the
+   loop.** The terminator takes element `index` out of its slot and leaves
+   the slot holding nothing, so the array owns exactly the elements the
+   counter has not reached. The terminator reads the array, so it is live
+   wherever a path returns to the header, and `drop_insertion` places its
+   `Drop` on each edge from there to where no path does: the terminator's
+   exit, a `break`, a `?` and a `return` alike (RFC-0048). That `Drop`
+   releases the storage and the elements not taken. An element taken was
+   moved to the binding and is released by its own scope, and its slot
+   releases nothing. The machine does not release the array and must not.
+   Leaving early is therefore admitted at every element type, as Rust's
+   `IntoIter` releases what it has not yielded: the slots record the
+   counter, so one release covers the suffix without the MIR naming it.
 
 7. **A `break` that jumps past the exit's drop block runs as joints.** Where
    `drop_insertion` gives the exit edge a block of its own, the lowering lays
@@ -108,6 +116,12 @@ closed, so the compiler enumerates the sites. There are two loop forms:
 - `for` over an iterator — `next` is an extern call per element and cannot be
   a terminator's condition.
 - Labeled `break` — a second scope mechanism the block design does not have.
+- Refusing `break`, `?` and `return` in a loop over an array of owners —
+  the elements not taken have a release (rule 6), and a refusal decided at
+  the jump was skipped wherever the element was still open there.
+- A release that takes the counter as its start — the slots already record
+  it, and a second record of which elements left beside the array's own
+  would be two answers to one question.
 - Tail duplication for `break` (copying the loop's tail into each arm so every
   branch rejoins) — 2^k code for k exits.
 

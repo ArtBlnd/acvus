@@ -1221,12 +1221,10 @@ pub struct TypeChecker<'a, 's, 'src> {
     index_access: FxHashMap<AstId, IndexAccess>,
     /// Which head each `for` under check was written with (RFC-0057).
     for_kinds: FxHashMap<AstId, ForKind>,
-    /// The loops enclosing the statement under check, innermost last:
-    /// `break` and `continue` name the last one and are refused where there
-    /// is none (RFC-0057 rule 4). A `Some` carries the element type of a
-    /// `for x in a` whose array owns what it holds, and leaving such a loop
-    /// early would leave the elements it has not taken without a release.
-    loops: Vec<Option<Ty>>,
+    /// How many loops enclose the statement under check: `break` and
+    /// `continue` name the innermost one and are refused where there is
+    /// none (RFC-0057 rule 4).
+    loop_depth: usize,
     /// How the pattern being checked reads its scrutinee (RFC-0024).
     pattern_mode: PatternMode,
     /// The bindings of the pattern being checked under `Deferred`, each
@@ -1330,7 +1328,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             calls: FxHashMap::default(),
             index_access: FxHashMap::default(),
             for_kinds: FxHashMap::default(),
-            loops: Vec::new(),
+            loop_depth: 0,
             pattern_mode: PatternMode::Value,
             deferred_bindings: Vec::new(),
             deferred_context_binds: Vec::new(),
@@ -2553,9 +2551,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.body_effect = self.solver.fresh_effect_var();
         let outer_return = self.return_ty.replace(self.solver.fresh_ty_var());
         let outer_holds = std::mem::take(&mut self.holds);
-        let outer_loops = std::mem::take(&mut self.loops);
+        let outer_loop_depth = std::mem::take(&mut self.loop_depth);
         let body_ty = self.check_expr(body);
-        self.loops = outer_loops;
+        self.loop_depth = outer_loop_depth;
         self.holds = outer_holds;
         let ret = self
             .return_ty
@@ -6032,11 +6030,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                 }
                 self.push_scope();
-                self.loops.push(None);
+                self.loop_depth += 1;
                 for s in body {
                     self.check_stmt(s);
                 }
-                self.loops.pop();
+                self.loop_depth -= 1;
                 self.pop_scope();
             }
             acvus_ast::Stmt::Anyorder { body, .. } => {
@@ -6056,12 +6054,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let source_ty = self.check_expr(source);
                 self.note_place(source);
                 self.push_scope();
-                self.loops.push(None);
+                self.loop_depth += 1;
                 self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
                 for s in body {
                     self.check_stmt(s);
                 }
-                self.loops.pop();
+                self.loop_depth -= 1;
                 self.pop_scope();
             }
             acvus_ast::Stmt::For {
@@ -6117,19 +6115,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             ForKind::Array | ForKind::Range => element.clone(),
         };
-        let consumed = self
-            .solver
-            .freeze_ty(&element)
-            .ok()
-            .filter(|_| kind == ForKind::Array)
-            .filter(|element| crate::validate::is_move_only(element) == Some(true));
         self.push_scope();
-        self.loops.push(consumed);
+        self.loop_depth += 1;
         self.define_var(binding, binding_ty);
         for s in body {
             self.check_stmt(s);
         }
-        self.loops.pop();
+        self.loop_depth -= 1;
         self.pop_scope();
     }
 
@@ -6230,35 +6222,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// `break` and `continue` name the innermost loop, so outside every loop
-    /// they name none (RFC-0057 rule 4). A `break` out of a `for x in a`
-    /// whose element owns something is refused: the elements the loop has
-    /// not taken would have no release.
+    /// they name none (RFC-0057 rule 4).
     fn check_loop_jump(&mut self, keyword: &'static str, span: Span) {
-        let Some(innermost) = self.loops.last() else {
+        if self.loop_depth == 0 {
             self.error(MirErrorKind::OutsideLoop { keyword }, span);
-            return;
-        };
-        if let Some(element) = innermost
-            && keyword == "break"
-        {
-            self.error(
-                MirErrorKind::ArrayLoopLeftEarly {
-                    keyword,
-                    element: element.clone(),
-                },
-                span,
-            );
         }
-    }
-
-    /// `?` and `return` leave the body, so they leave every enclosing loop at
-    /// once: a `for x in a` among them whose element owns something is refused
-    /// for the reason `break` is.
-    fn check_body_exit(&mut self, keyword: &'static str, span: Span) {
-        let Some(element) = self.loops.iter().rev().find_map(|loop_| loop_.clone()) else {
-            return;
-        };
-        self.error(MirErrorKind::ArrayLoopLeftEarly { keyword, element }, span);
     }
 
     /// A template's append reads a `String` or a `&str`; nothing is
@@ -6971,7 +6939,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
 
             Expr::Try { id, inner, span } => {
-                self.check_body_exit("?", *span);
                 let ty = self.check_try(inner, *span);
                 if !Self::is_error(&ty) {
                     let ret = self.return_ty.clone().expect("check_try admitted a return");
@@ -6981,7 +6948,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
 
             Expr::Return { id, value, span } => {
-                self.check_body_exit("return", *span);
                 let ty = self.check_expr(value);
                 let Some(return_ty) = self.return_ty.clone() else {
                     self.error(MirErrorKind::ReturnOutsideFunction, *span);

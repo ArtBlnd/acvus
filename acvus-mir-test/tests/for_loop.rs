@@ -6,7 +6,6 @@ use acvus_mir::analysis::loops::{for_headers, natural_loops_innermost_first};
 use acvus_mir::cfg::{BlockIdx, promote};
 use acvus_mir::optimize::spawn_split::iterations_run_apart;
 use acvus_mir::optimize::{dce, ssa_pass};
-use acvus_mir::ty::Ty;
 use acvus_mir_test::{compile_script_ir, compile_script_optimized, lowered_script_module};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -239,32 +238,39 @@ fn a_range_of_two_widths_is_refused() {
     assert!(found.contains("u64") && found.contains("u32"), "{found}");
 }
 
-#[test]
-fn a_break_out_of_an_array_of_owners_is_refused() {
-    let found = refusal("let a = [\"x\".to_string(), \"y\".to_string()]; for s in a { break; } 0");
-    assert_eq!(
-        found,
-        "a `for` over an array of `String` cannot `break`: the elements the loop has not taken would have no release"
-    );
+/// How many `Drop`s of the array the entry's `for` traverses stand in it.
+fn array_drops(ir: &str) -> usize {
+    let body = main_body(ir);
+    let array = body
+        .lines()
+        .filter_map(|line| line.split('|').nth(1))
+        .find_map(|inst| inst.trim().split_once(" = list ["))
+        .map(|(array, _)| array)
+        .expect("the entry builds the array");
+    count(body, &format!("drop {array}\n"))
 }
 
+/// The array's `Drop` stands on the terminator's exit and on the `break`
+/// edge, and it releases the elements the loop has not taken (RFC-0057
+/// rule 6), so a `break` is admitted at an element that owns something.
 #[test]
-fn a_try_inside_an_array_of_owners_is_refused() {
-    let i = Interner::new();
-    let context = FxHashMap::from_iter([(
-        i.intern("r"),
-        Ty::Result(Box::new(Ty::I64), Box::new(Ty::String)),
-    )]);
-    let source =
-        "let a = [\"x\".to_string(), \"y\".to_string()]; for s in a { let v = @r?; } Ok(0)";
-    let found = compile_script_optimized(&i, source, &context)
-        .expect_err("a `?` out of an owning array loop is refused");
-    assert!(
-        found.contains(
-            "a `for` over an array of `String` cannot `?`: the elements the loop has not taken would have no release"
-        ),
-        "{found}"
+fn a_break_out_of_an_array_of_owners_drops_the_array_on_its_edge() {
+    let ir = optimized(
+        "let a = [\"x\".to_string(), \"yz\".to_string()]; let n = 0; \
+         for s in a { if len(&s) == 2 { break; }; n = n + 1; } n",
     );
+    assert_eq!(array_drops(&ir), 2, "{ir}");
+}
+
+/// A `?` is one more edge out of the loop, and it carries the array's `Drop`
+/// as a `break` does.
+#[test]
+fn a_try_out_of_an_array_of_owners_drops_the_array_on_its_edge() {
+    let ir = optimized(
+        "let a = [\"x\".to_string(), \"yz\".to_string()]; let n = 0; for s in a { \
+         let r = if len(&s) == 2 { Err(0) } else { Ok(1) }; n = n + r?; } Ok(n)",
+    );
+    assert_eq!(array_drops(&ir), 2, "{ir}");
 }
 
 #[test]

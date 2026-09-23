@@ -521,14 +521,6 @@ pub enum MirErrorKind {
     OutsideLoop {
         keyword: &'static str,
     },
-    /// A `for` over an `Array` whose element owns something, left early:
-    /// the elements the loop did not take have no release, because how many
-    /// were taken is a run-time number and the array's own release does not
-    /// know it (RFC-0057 rule 6).
-    ArrayLoopLeftEarly {
-        keyword: &'static str,
-        element: Ty,
-    },
     /// `e as T` where `T` is not one of the types `as` converts between
     /// (RFC-0049).
     CastToUnknownType(String),
@@ -799,13 +791,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             }
             MirErrorKind::OutsideLoop { keyword } => {
                 write!(f, "`{keyword}` is only inside a loop")
-            }
-            MirErrorKind::ArrayLoopLeftEarly { keyword, element } => {
-                write!(
-                    f,
-                    "a `for` over an array of `{}` cannot `{keyword}`: the elements the loop has not taken would have no release",
-                    element.shown(interner)
-                )
             }
             MirErrorKind::CastToUnknownType(name) => {
                 write!(

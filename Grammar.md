@@ -191,9 +191,10 @@ loop each is refused:
 `break` is only inside a loop
 ```
 
-A `for` over an array whose element owns something cannot `break`: how many
-elements the loop had taken is a run-time number, and the elements it had
-not taken would have no release.
+A `for` over an array may be left by `break`, `?` or `return` at every
+element type: the elements it had taken are the binding's and are released
+by their scopes, and the array's release on the leaving edge releases the
+ones it had not taken.
 
 ### `return`
 
@@ -219,12 +220,8 @@ in a template, which returns nothing, is refused as a `?` there is:
 `return` needs a function to return from; a template has none
 ```
 
-A `return` leaves every enclosing loop at once, so the array traversal that
-cannot `break` cannot `return` either:
-
-```
-a `for` over an array of `String` cannot `return`: the elements the loop has not taken would have no release
-```
+A `return` leaves every enclosing loop at once, and each array traversal
+among them releases the elements it had not taken, as on a `break`.
 
 What the source wrote after a `return` lands in a block no jump reaches,
 as it does after `break`, `continue` or an expression typed `!`. It is

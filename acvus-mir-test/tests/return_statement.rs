@@ -1,4 +1,4 @@
-//! What the checker makes of `return e`: the shapes it admits, and the four
+//! What the checker makes of `return e`: the shapes it admits, and the three
 //! it refuses.
 
 use acvus_mir::ty::Ty;
@@ -61,17 +61,16 @@ fn what_stands_after_a_return_still_meets_the_body_s_return_type() {
     assert!(err.contains("type mismatch"), "{err}");
 }
 
+/// The array's release on the `return` edge covers the elements the loop
+/// has not taken (RFC-0057 rule 6), so the `return` is admitted as `break`
+/// and `?` are.
 #[test]
-fn a_return_out_of_an_array_of_owners_is_refused_as_break_and_question_are() {
+fn a_return_out_of_an_array_of_owners_compiles() {
     let i = Interner::new();
-    let err = compile_script_mode_raw(
+    compile_script_mode_raw(
         &i,
         "let a = [\"ab\".to_string()]; for s in a { return len(&s) as i64; } 0",
         &no_context(),
     )
-    .expect_err("the elements the loop has not taken would have no release");
-    assert!(
-        err.contains("a `for` over an array of `String` cannot `return`"),
-        "{err}"
-    );
+    .unwrap_or_else(|e| panic!("{e}"));
 }
