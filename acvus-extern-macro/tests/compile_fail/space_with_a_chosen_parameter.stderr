@@ -1,0 +1,5 @@
+error: `T` is a `Chosen` type parameter, so each instance's box is keyed at its own Rust type and no one set of space hooks reads them all: a type a space holds has only uniform type parameters (RFC-0033)
+ --> tests/compile_fail/space_with_a_chosen_parameter.rs:9:15
+  |
+9 | struct Picked<T>(Vec<T>)
+  |               ^

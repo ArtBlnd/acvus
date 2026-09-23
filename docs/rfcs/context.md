@@ -161,12 +161,34 @@ Status: Accepted
 8. `Deque` pops are tombstones: the ops at its two ends are counters, and a
    pop that would cross the other end's cursor is a conflict the replay
    detects. A value pushed and popped within one run leaves no op.
+9. A type is a context a space holds when its `ExternTypeDecl::space` gives
+   hooks, `SpaceHooks::of::<J>()`. `J` is the type as the runtime holds it:
+   each type parameter at `Owned<Rt>`, each identity and effect parameter at
+   `()`, each lifetime at `'static`. `#[derive(ExternType)]` writes these
+   hooks under `#[extern_type(space)]`, and the author writes `Journaled` for
+   `J`; without that impl the derive's use does not compile. The derive
+   refuses `space` on a type with a `Chosen` type parameter.
+10. A loaded value is written through `J`'s own crossing, so its box is the
+    one the type's `Borrowable` reads: a derived type's box is keyed by its
+    payload (RFC-0076), `Deque`'s by its canonical form.
 
 **Why.** Committing a whole value every run makes an append-only log O(n)
 where the change is O(1). The type is the schema, so no tag or JSON is stored.
 Identity (RFC-0012) makes one head per context the unit, with no aliasing to
-reconcile inside a run.
+reconcile inside a run. The runtime carries no identity and no effect, and a
+type variable is the runtime's value at run time, so every value of a type is
+boxed as `J` is, up to the canonical form, and one set of hooks reads them
+all. A `Chosen` parameter keys each instance's box at its own Rust type, which
+no one `J` reads. A type's `Journaled` bytes are its stored format, so they
+are the type's to write.
 
 **Rejected.**
 - Committing whole values each run — O(n) for an O(1) change.
 - Tagged or JSON node layout — the type is already the schema.
+- A generated `Journaled` — its bytes are the stored format and belong to
+  the type.
+- Writing a loaded value at `J` itself — a derived type's box is its
+  payload's, so the read panics in a debug build and reads another type's box
+  in a release build.
+- Keying a derived type's box at the struct so that `J` itself is the key —
+  it reverses RFC-0076's payload key for every derived type.

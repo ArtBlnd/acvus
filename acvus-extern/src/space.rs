@@ -131,15 +131,21 @@ impl<Rt> SpaceHooks<Rt>
 where
     Rt: Runtime,
 {
-    /// `J` is its own canonical form, so the box `decode_state` writes at
-    /// `J` is the one `Borrowable::deref` reads (`Canonical`).
+    /// `decode_state` erases through `J`'s own crossing, so its box is the
+    /// one `Borrowable::deref` reads; a derived type's box is keyed by its
+    /// payload, not by `J`. `Canon = J` pins the registered `J` to the form
+    /// the runtime holds.
     pub fn of<J>() -> Self
     where
-        J: Journaled<Rt> + crate::Borrowable<Rt> + Canonical<kind::Type, Canon = J>,
+        J: Journaled<Rt>
+            + crate::Borrowable<Rt>
+            + crate::OneValue<Rt>
+            + Canonical<kind::Type, Canon = J>,
     {
-        // SAFETY (each hook): the value was erased from `J` — the hooks are
-        // looked up by the value's declared type — and the space alone
-        // holds it while a hook runs.
+        // SAFETY (each hook that reads a value): the hooks are looked up by
+        // the value's declared type, whose canonical form is `J`, so its box
+        // is the one `J`'s crossing writes, as `decode_state`'s is; the space
+        // alone holds it while a hook runs.
         Self {
             encode_state: Box::new(|rt, value, args, elem, out| {
                 let reference = unsafe { rt.reference(value) };
@@ -148,7 +154,7 @@ where
             }),
             decode_state: Box::new(|rt, args, elem, input| {
                 let j = J::decode_state(rt, args, elem, input)?;
-                Ok(unsafe { rt.erase::<J>(j) })
+                Ok(<J as crate::OneValue<Rt>>::erase(j, rt))
             }),
             take_ops: Box::new(|rt, value, args, elem| {
                 let reference = unsafe { rt.reference(value) };

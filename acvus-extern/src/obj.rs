@@ -672,8 +672,9 @@ where
     fn erase(self, rt: &Rt) -> Rt::Value;
 
     /// # Safety
-    /// `value` was erased from `Self` (by the runtime's `erase::<Self>` or
-    /// `Self::erase`).
+    /// `value` holds the box `Self::erase` writes. A type stored as its
+    /// payload or as its canonical form keys that box by that type, so the
+    /// runtime's `erase::<Self>` need not write it.
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self;
 
     /// # Safety

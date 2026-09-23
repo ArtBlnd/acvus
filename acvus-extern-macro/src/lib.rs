@@ -1405,6 +1405,9 @@ struct ExternTypeAttr {
     /// what lets its box be read at the payload's canonical form
     /// (`Canonical`, RFC-0076).
     uniform_payload: bool,
+    /// `space`: the type is a context a space holds, through the author's
+    /// `Journaled` impl at the form the runtime holds (RFC-0033).
+    space: bool,
 }
 
 /// Whether the struct carries `#[repr(transparent)]`.
@@ -1421,6 +1424,7 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
         name: None,
         ns: None,
         uniform_payload: false,
+        space: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("extern_type") {
@@ -1433,6 +1437,8 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
             } else if meta.path.is_ident("ns") {
                 meta.input.parse::<Token![=]>()?;
                 out.ns = Some(meta.input.parse::<LitStr>()?.value());
+            } else if meta.path.is_ident("space") {
+                out.space = true;
             } else if meta.path.is_ident("unsafe") {
                 meta.parse_nested_meta(|inner| {
                     if !inner.path.is_ident("uniform_payload") {
@@ -1442,7 +1448,9 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
                     Ok(())
                 })?;
             } else {
-                return Err(meta.error("expected `name`, `ns`, or `unsafe(uniform_payload)`"));
+                return Err(meta.error(
+                    "expected `name`, `ns`, `space`, or `unsafe(uniform_payload)`",
+                ));
             }
             Ok(())
         })?;
@@ -1610,6 +1618,46 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
 
     let qref = qref_expr_in(attr.ns.as_deref(), &name);
+    let space_hooks = match attr.space {
+        false => quote! {},
+        true => {
+            if let Some(chosen) = vars.chosen() {
+                return Err(syn::Error::new(
+                    chosen.span(),
+                    format!(
+                        "`{chosen}` is a `Chosen` type parameter, so each instance's box is keyed \
+                         at its own Rust type and no one set of space hooks reads them all: a \
+                         type a space holds has only uniform type parameters (RFC-0033)"
+                    ),
+                ));
+            }
+            let held_args = input.generics.params.iter().map(|param| match param {
+                GenericParam::Lifetime(_) => quote! { 'static },
+                GenericParam::Type(tp) => {
+                    let ident = &tp.ident;
+                    quote! { #ident }
+                }
+                GenericParam::Const(c) => {
+                    let ident = &c.ident;
+                    quote! { #ident }
+                }
+            });
+            let held: Type = if input.generics.params.is_empty() {
+                syn::parse_quote! { #ident }
+            } else {
+                syn::parse_quote! { #ident<#(#held_args),*> }
+            };
+            let held = vars.to_runtime_instance(&held, None);
+            quote! {
+                fn space<__R>() -> ::core::option::Option<::acvus_extern::SpaceHooks<__R>>
+                where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    ::core::option::Option::Some(::acvus_extern::SpaceHooks::of::<#held>())
+                }
+            }
+        }
+    };
     let one_value_run = one_value_run(returned_as_one_value());
     let payload_crossing = quote! {
         fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
@@ -1777,6 +1825,8 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     specializable: vec![true; #n_tys],
                 }
             }
+
+            #space_hooks
         }
     })
 }

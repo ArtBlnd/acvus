@@ -3,18 +3,23 @@
 //! nearest checkpoint; a deque nested in a deque has its own log; a head
 //! that moved refuses a commit.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_ext::Deque;
-use acvus_extern::{Externs, Owned, Runtime};
+use acvus_extern::{
+    Borrowable, Decode, Encode, ExternType, ExternTypeDecl, Externs, Journaled, NodeHash,
+    OneValue, Owned, Registry, Runtime, SpaceError, SpaceResult, Var, Visit, extern_fn,
+    extern_registry, kind,
+};
 use acvus_interpreter::{
     AcvusRuntime, Commit, InterpreterContext, Log, Mode, NodeKind, Plain, Record, SequentialExecutor,
     Space, Value,
 };
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{LenTerm, ObjectTy, Ty, TypeArg};
-use acvus_utils::Interner;
+use acvus_mir::ty::{IdentityId, IdentityTerm, LenTerm, ObjectTy, Ty, TypeArg};
+use acvus_utils::{Interner, LocalIdOps};
 use rustc_hash::FxHashMap;
 
 fn runtime(i: &Interner) -> AcvusRuntime {
@@ -513,4 +518,324 @@ fn a_host_s_mode_decides_the_nodes_and_the_history_reads_back() {
     );
     let again = space.load(&rt, "d", &ty).unwrap().expect("held");
     assert_eq!(ints(&rt, &again), [1, 2, 3]);
+}
+
+/// A context type written the way the derive lets it be: the struct, the
+/// `space` switch, and `Journaled`. It has one type parameter and one
+/// identity parameter, and its box is keyed by its payload.
+#[derive(ExternType)]
+#[extern_type(name = "Tally", space, unsafe(uniform_payload))]
+#[repr(transparent)]
+struct Tally<T, I>(TallyState<T>, PhantomData<I>)
+where
+    T: Var<kind::Type>,
+    I: Var<kind::Identity>;
+
+struct TallyState<T> {
+    items: Vec<T>,
+    settled: usize,
+    head: Option<NodeHash>,
+}
+
+/// The form the runtime holds a `Tally` at, which its space hooks are
+/// registered for.
+type HeldTally = Tally<Owned<AcvusRuntime>, ()>;
+
+fn tally_element(type_args: &[Ty]) -> SpaceResult<&Ty> {
+    match type_args {
+        [elem] => Ok(elem),
+        other => Err(SpaceError::new(format!(
+            "Tally has one type argument, got {}",
+            other.len()
+        ))),
+    }
+}
+
+/// State: `u64` count, then the items in order. Op: one pushed item.
+impl<Rt> Journaled<Rt> for Tally<Owned<Rt>, ()>
+where
+    Rt: Runtime,
+{
+    fn encode_state(
+        &self,
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Encode<'_, Rt>,
+        out: &mut Vec<u8>,
+    ) -> SpaceResult<()> {
+        let ty = tally_element(type_args)?;
+        out.extend_from_slice(&(self.0.items.len() as u64).to_le_bytes());
+        for item in &self.0.items {
+            elem(ty, item, out)?;
+        }
+        Ok(())
+    }
+
+    fn decode_state(
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Decode<'_, Rt>,
+        input: &mut &[u8],
+    ) -> SpaceResult<Self> {
+        let ty = tally_element(type_args)?;
+        let (count, rest) = input
+            .split_first_chunk::<8>()
+            .ok_or_else(|| SpaceError::new("Tally: truncated count"))?;
+        *input = rest;
+        let items = (0..u64::from_le_bytes(*count))
+            .map(|_| elem(ty, input).map(Owned::from_value))
+            .collect::<SpaceResult<Vec<_>>>()?;
+        let settled = items.len();
+        Ok(Tally(
+            TallyState {
+                items,
+                settled,
+                head: None,
+            },
+            PhantomData,
+        ))
+    }
+
+    fn take_ops(
+        &mut self,
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Encode<'_, Rt>,
+    ) -> SpaceResult<Vec<Vec<u8>>> {
+        let ty = tally_element(type_args)?;
+        let ops = self.0.items[self.0.settled..]
+            .iter()
+            .map(|item| {
+                let mut op = Vec::new();
+                elem(ty, item, &mut op).map(|()| op)
+            })
+            .collect::<SpaceResult<Vec<_>>>()?;
+        self.0.settled = self.0.items.len();
+        Ok(ops)
+    }
+
+    fn apply_op(
+        &mut self,
+        _: &Rt,
+        type_args: &[Ty],
+        elem: &Decode<'_, Rt>,
+        op: &mut &[u8],
+    ) -> SpaceResult<()> {
+        let ty = tally_element(type_args)?;
+        self.0.items.push(Owned::from_value(elem(ty, op)?));
+        self.0.settled = self.0.items.len();
+        Ok(())
+    }
+
+    fn children(&mut self, type_args: &[Ty], visit: &mut Visit<'_, Rt>) -> SpaceResult<()> {
+        let ty = tally_element(type_args)?;
+        for item in &mut self.0.items {
+            visit(ty, item.value_mut())?;
+        }
+        Ok(())
+    }
+
+    fn head(&self) -> Option<NodeHash> {
+        self.0.head
+    }
+
+    fn set_head(&mut self, head: NodeHash) {
+        self.0.head = Some(head);
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn tally_push<T, I>(t: &mut Tally<T, I>, item: T)
+where
+    T: Var<kind::Type>,
+    I: Var<kind::Identity>,
+{
+    t.0.items.push(item);
+}
+
+fn tally_registry<R>() -> Registry<R>
+where
+    R: Runtime,
+{
+    extern_registry! {
+        ns: "tally",
+        types: [Tally<_, _>],
+        fns: [tally_push],
+    }
+}
+
+fn registries_with_tally() -> Vec<Registry<AcvusRuntime>> {
+    let mut registries = acvus_ext::std_registries();
+    registries.push(tally_registry());
+    registries
+}
+
+fn tally_runtime(i: &Interner) -> AcvusRuntime {
+    let externs = Externs::combine(registries_with_tally(), i).expect("registries combine");
+    InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor))
+        .with_space(externs.space)
+        .runtime_over_an_empty_page()
+}
+
+fn tally_ty(i: &Interner) -> Ty {
+    Ty::UserDefined {
+        id: QualifiedRef::root(i.intern("Tally")),
+        type_args: vec![TypeArg::uniform(Ty::I64)],
+        effect_args: vec![],
+        identity_args: vec![IdentityTerm::Known(IdentityId::from_raw(0))],
+    }
+}
+
+/// A `Tally` made as a program makes one: through its own crossing.
+fn tally_of(rt: &AcvusRuntime, items: impl IntoIterator<Item = i64>) -> Value {
+    let t: HeldTally = Tally(
+        TallyState {
+            items: items
+                .into_iter()
+                .map(|n| Owned::from_value(Value::int(n)))
+                .collect(),
+            settled: 0,
+            head: None,
+        },
+        PhantomData,
+    );
+    <HeldTally as OneValue<AcvusRuntime>>::erase(t, rt)
+}
+
+fn tally_ints(rt: &AcvusRuntime, value: &Value) -> Vec<i64> {
+    // SAFETY: the value is a `Tally` of Int, as its type says, read through
+    // its own crossing.
+    let reference = unsafe { rt.reference(value) };
+    let t: &HeldTally = unsafe { <HeldTally as Borrowable<AcvusRuntime>>::deref(rt, &reference) };
+    t.0.items.iter().map(|v| v.as_int()).collect()
+}
+
+async fn push_in_a_script(i: &Interner, ty: &Ty, loaded: Value, source: &str) -> Value {
+    let ran = run_script_with_externs(
+        i,
+        source,
+        [(i.intern("t"), typed(ty.clone(), loaded))]
+            .into_iter()
+            .collect(),
+        registries_with_tally(),
+        Ty::I64,
+    )
+    .await;
+    ran.writes
+        .into_iter()
+        .find(|w| w.key == "t")
+        .expect("t was written")
+        .value
+        .into_value()
+}
+
+/// A derived context type round-trips through a directory space: its
+/// state, the ops a script records on it, a checkpoint the ops cross, and
+/// a reopened store that replays from that checkpoint.
+#[tokio::test]
+async fn a_derived_context_commits_reloads_and_replays_across_a_checkpoint() {
+    let i = Interner::new();
+    let rt = tally_runtime(&i);
+    let dir = tempfile::tempdir().unwrap();
+    let ty = tally_ty(&i);
+    let open = || {
+        Space::over(
+            Log {
+                checkpoint_every: 2,
+            },
+            Box::new(acvus_interpreter::DirStore::open(dir.path(), &i).unwrap()),
+        )
+    };
+    {
+        let space = open();
+        let mut t = tally_of(&rt, [1]);
+        space.commit(&rt, "t", &ty, &mut t).unwrap();
+        let loaded = space.load(&rt, "t", &ty).unwrap().expect("held");
+        let mut written = push_in_a_script(
+            &i,
+            &ty,
+            loaded,
+            "tally_push(&mut @t, 2); tally_push(&mut @t, 3); 0",
+        )
+        .await;
+        space.commit(&rt, "t", &ty, &mut written).unwrap();
+        // state, then two ops, then the checkpoint the second op crosses into
+        assert_eq!(space.node_count(), 4);
+    }
+    {
+        let space = open();
+        let loaded = space.load(&rt, "t", &ty).unwrap().expect("held");
+        assert_eq!(tally_ints(&rt, &loaded), [1, 2, 3]);
+        let mut written =
+            push_in_a_script(&i, &ty, loaded, "tally_push(&mut @t, 4); 0").await;
+        space.commit(&rt, "t", &ty, &mut written).unwrap();
+        assert_eq!(
+            space.node_count(),
+            5,
+            "one op after the checkpoint, no new state yet"
+        );
+    }
+    let space = open();
+    let mut kinds = Vec::new();
+    let mut at = space.head("t");
+    while let Some(hash) = at {
+        let node = space.get(hash).unwrap();
+        kinds.push(node.kind());
+        at = node.parent();
+    }
+    kinds.reverse();
+    assert_eq!(
+        kinds,
+        [
+            NodeKind::State,
+            NodeKind::Op,
+            NodeKind::Op,
+            NodeKind::State,
+            NodeKind::Op,
+        ]
+    );
+    let again = space.load(&rt, "t", &ty).unwrap().expect("held");
+    assert_eq!(tally_ints(&rt, &again), [1, 2, 3, 4]);
+}
+
+/// Without the switch a derived type declares no space hooks.
+#[derive(ExternType)]
+#[repr(transparent)]
+struct Untallied<I>(i64, PhantomData<I>)
+where
+    I: Var<kind::Identity>;
+
+#[test]
+fn a_derived_type_without_the_switch_has_no_space_hooks() {
+    assert!(<Untallied<()> as ExternTypeDecl>::space::<AcvusRuntime>().is_none());
+    assert!(<Tally<(), ()> as ExternTypeDecl>::space::<AcvusRuntime>().is_some());
+}
+
+/// A declared context of a derived type with an identity parameter names
+/// its own source: another context's value is refused, its own is accepted.
+#[test]
+fn a_derived_context_keeps_its_identity() {
+    let i = Interner::new();
+    let ctx: FxHashMap<_, _> = [(i.intern("t"), tally_ty(&i)), (i.intern("u"), tally_ty(&i))]
+        .into_iter()
+        .collect();
+    let check = |source: &str| {
+        check_source(
+            &i,
+            acvus_mir::graph::ParsedAst::Script(acvus_ast::parse_script(&i, source).unwrap()),
+            &ctx,
+            registries_with_tally(),
+            Ty::I64,
+            acvus_mir::graph::optimize::Opt::Full,
+            |_| {},
+        )
+        .map(|_| ())
+        .map_err(|refusal| refusal.messages)
+    };
+    let refused = check("@t = @u; 0").expect_err("another context's value is refused");
+    assert!(
+        refused.iter().any(|m| m.contains("different sources")),
+        "{refused:?}"
+    );
+    check("let a = @t; @t = a; 0").expect("the context's own value is accepted");
 }

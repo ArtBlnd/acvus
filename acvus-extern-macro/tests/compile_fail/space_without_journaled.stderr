@@ -1,0 +1,20 @@
+error[E0277]: the trait bound `History<()>: Journaled<_>` is not satisfied
+  --> tests/compile_fail/space_without_journaled.rs:8:10
+   |
+ 8 | #[derive(ExternType)]
+   |          ^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Journaled<_>` is not implemented for `History<()>`
+  --> tests/compile_fail/space_without_journaled.rs:11:1
+   |
+11 | struct History<I>(Vec<i64>, PhantomData<I>)
+   | ^^^^^^^^^^^^^^^^^
+note: required by a bound in `SpaceHooks::<Rt>::of`
+  --> $WORKSPACE/acvus-extern/src/space.rs
+   |
+   |     pub fn of<J>() -> Self
+   |            -- required by a bound in this associated function
+   |     where
+   |         J: Journaled<Rt>
+   |            ^^^^^^^^^^^^^ required by this bound in `SpaceHooks::<Rt>::of`
+   = note: this error originates in the derive macro `ExternType` (in Nightly builds, run with -Z macro-backtrace for more info)
