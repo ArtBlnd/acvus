@@ -5,9 +5,9 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectArg, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
-    EffectVarBound, RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed,
-    matches_pattern, unify_patterns,
+    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm, ParamTerm, Poly,
+    PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry,
+    UserDefinedDecl, Viewed, bind_chosen, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -79,6 +79,10 @@ pub struct SignatureDecl {
     pub qref: QualifiedRef,
     pub ty: PolyTy,
     pub bounds: Vec<TyVarBound>,
+    /// The type variables of `ty` each instance chooses (RFC-0041): a
+    /// variable bounded by `Chosen`, whose slots are `#` at the instance's
+    /// own tree.
+    pub chosen: Vec<u32>,
 }
 
 /// The declarations one registry contributes; nothing here names a runtime.
@@ -227,26 +231,32 @@ impl FamilyPatterns {
         let ty_vars: Vec<PolyTy> = type_args.iter().map(|_| b.fresh_ty_var()).collect();
         let effect_vars: Vec<EffectArg<Poly>> = effect_args
             .iter()
-            .map(|arg| EffectArg::new(arg.repr, b.fresh_effect_var()))
+            .map(|arg| arg.with_effect(b.fresh_effect_var()))
             .collect();
         let identity_vars: Vec<IdentityTerm<Poly>> = identity_args
             .iter()
             .map(|_| b.fresh_identity_var())
             .collect();
-        let pattern = |repr_of: fn(&TypeArg<Poly>) -> Repr<Poly>| PolyTy::UserDefined {
+        let pattern = |at: fn(&TypeArg<Poly>, PolyTy) -> TypeArg<Poly>| PolyTy::UserDefined {
             id: *id,
             type_args: type_args
                 .iter()
                 .zip(&ty_vars)
-                .map(|(arg, var)| TypeArg::new(repr_of(arg), var.clone()))
+                .map(|(arg, var)| at(arg, var.clone()))
                 .collect(),
             effect_args: effect_vars.clone(),
             identity_args: identity_vars.clone(),
         };
         Some(FamilyPatterns {
             family: written(i, *id),
-            specialized: pattern(|arg| arg.repr),
-            uniform: pattern(|_| Repr::Uniform),
+            specialized: pattern(|arg, var| match arg {
+                // `#T` held whole: the member fills `T` with a Rust type
+                // written out, `#` at every part (`family_member_written`).
+                TypeArg::Specialized(_) => TypeArg::specialized(var),
+                TypeArg::Uniform(_) => TypeArg::uniform(var),
+                TypeArg::Open(repr, _) => TypeArg::Open(*repr, var),
+            }),
+            uniform: pattern(|_, var| TypeArg::uniform(var)),
             ty_vars: ty_vars.len(),
         })
     }
@@ -435,6 +445,14 @@ pub enum CombineError {
         function: QualifiedRef,
         reason: &'static str,
     },
+    /// A family cast at a member whose `#` argument has a part a run-time
+    /// instantiation fills (RFC-0041): the family's pattern `F<#T>` holds
+    /// `T` whole, `#` at every part, and a member such as `Vec<#(#f64, U)>`
+    /// has the uniform part `U`, which that pattern would call `#`.
+    FamilyMemberNotWritten {
+        function: String,
+        member: PolyTy,
+    },
     /// A declaration marked the machine's view whose type is not one.
     ViewShape {
         function: QualifiedRef,
@@ -485,6 +503,12 @@ impl fmt::Display for CombineError {
                 write!(f, "{signature:?} has two instances for {ty:?}")
             }
             Self::CastShape { function, reason } => write!(f, "cast {function:?}: {reason}"),
+            Self::FamilyMemberNotWritten { function, member } => write!(
+                f,
+                "{function} is a family cast, and its instance {member:?} is not of the \
+                 family's pattern: a member is a Rust type written out, with no part a \
+                 type variable or an erased value fills"
+            ),
             Self::ViewShape { function } => write!(
                 f,
                 "view {function:?}: a view lends the run behind its one reference parameter at the same mutability"
@@ -738,17 +762,20 @@ impl<R: Runtime> Externs<R> {
                 }
             }
             match decl.coercion {
-                Some(Coercion::Cast) => types.register_cast(cast_rule(&decl)?),
+                Some(Coercion::Cast) => {
+                    family_member_written(interner, &decl, &instances)?;
+                    types.register_cast(cast_rule(&decl)?)
+                }
                 Some(Coercion::View) => {
                     let viewed = view_of(&decl)?;
                     let referent_taken = match &decl.ty {
                         PolyTy::Fn { params, .. } => match params.first().map(|p| &p.ty) {
-                            Some(TyTerm::Ref(_, referent)) => &referent.ty,
-                            _ => &decl.ty,
+                            Some(TyTerm::Ref(_, referent)) => referent.ty(),
+                            _ => std::borrow::Cow::Borrowed(&decl.ty),
                         },
-                        other => other,
+                        other => std::borrow::Cow::Borrowed(other),
                     };
-                    types.register_machine_view(decl.qref, viewed, referent_taken);
+                    types.register_machine_view(decl.qref, viewed, &referent_taken);
                 }
                 None => {}
             }
@@ -892,7 +919,8 @@ fn add_instance<R: Runtime>(
         instance: decl.qref,
         signature: sig,
     };
-    if !matches_pattern(&decl.ty, &collected.decl.ty) {
+    let signature = bind_chosen(&collected.decl.ty, &decl.ty, &collected.decl.chosen);
+    if !matches_pattern(&decl.ty, &signature) {
         return Err(mismatch());
     }
     let ty = instance_type(&collected.decl.ty, &decl.ty).ok_or_else(mismatch)?;
@@ -979,13 +1007,13 @@ fn instance_type(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
 fn instance_at_first_var(signature: &PolyTy, instance: &PolyTy) -> Option<PolyTy> {
     match (signature, instance) {
         (PolyTy::Var(0), t) => Some(t.clone()),
-        (PolyTy::Ref(_, s), PolyTy::Ref(_, i)) => instance_at_first_var(&s.ty, &i.ty),
+        (PolyTy::Ref(_, s), PolyTy::Ref(_, i)) => instance_at_first_var(&s.ty(), &i.ty()),
         (PolyTy::Array(s, _), PolyTy::Array(i, _)) => instance_at_first_var(s, i),
         (PolyTy::Slice(s), PolyTy::Slice(i)) => instance_at_first_var(s, i),
         (PolyTy::UserDefined { type_args: sa, .. }, PolyTy::UserDefined { type_args: ia, .. }) => {
             sa.iter()
                 .zip(ia)
-                .find_map(|(s, i)| instance_at_first_var(&s.ty, &i.ty))
+                .find_map(|(s, i)| instance_at_first_var(&s.ty(), &i.ty()))
         }
         (PolyTy::Tuple(se), PolyTy::Tuple(ie)) => se
             .iter()
@@ -999,6 +1027,35 @@ fn view_of(decl: &FnDecl) -> Result<Viewed, CombineError> {
     Viewed::of_declaration(&decl.ty).ok_or(CombineError::ViewShape {
         function: decl.qref,
     })
+}
+
+/// Every instance of a cast has the shape of the cast's declared type. For a
+/// family cast, whose declared type holds each `#` argument whole as
+/// `F<#T>`, this is the invariant `Held` rests on: a member fills `T` with a
+/// Rust type written out, and one with a part an `Owned`, `Erased` or `Nth`
+/// fills is refused here, where the registry is built. It is not a bound
+/// on the member list: the members (`mono_member!`) are written scalars
+/// already, and the part a variable fills comes from the family type the
+/// declaration writes around its member, as `Vec<(T, U)>` would.
+fn family_member_written<R>(
+    i: &Interner,
+    decl: &FnDecl,
+    instances: &Instances<R>,
+) -> Result<(), CombineError>
+where
+    R: Runtime,
+{
+    match instances
+        .concrete
+        .iter()
+        .find(|instance| !matches_pattern(&instance.signature, &decl.ty))
+    {
+        Some(instance) => Err(CombineError::FamilyMemberNotWritten {
+            function: written(i, decl.qref),
+            member: instance.signature.clone(),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn cast_rule(decl: &FnDecl) -> Result<CastRule, CombineError> {

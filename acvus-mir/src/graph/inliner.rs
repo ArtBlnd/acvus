@@ -738,7 +738,7 @@ fn capture_binding(closure: &MirBody, reg: ValueId, arg_ty: &Ty) -> Option<Captu
     let Ty::Ref(Mutability::Shared, inner) = cap_ty else {
         return None;
     };
-    if inner.ty != *arg_ty {
+    if *inner.ty() != *arg_ty {
         return None;
     }
     Some(match word_reads(closure, reg) {

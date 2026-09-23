@@ -11,12 +11,12 @@ error[E0277]: `std::option::Option<i64>` has no storage of its own type, so a pa
   = help: the following other types implement trait `Borrowable<Rt>`:
             `()` implements `Borrowable<__Rt>`
             `Arr<T, N>` implements `Borrowable<Rt>`
+            `ChosenNth<N>` implements `Borrowable<Rt>`
             `Erased<R, T>` implements `Borrowable<R>`
             `Nth<acvus_extern::kind::Type, N>` implements `Borrowable<Rt>`
             `Spec<T>` implements `Borrowable<Rt>`
             `Vec<T>` implements `Borrowable<Rt>`
             `acvus_extern::Owned<R>` implements `Borrowable<R>`
-            `bool` implements `Borrowable<__Rt>`
           and $N others
   = note: required for `ByRef<std::option::Option<i64>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -82,7 +82,9 @@ fn constant(body: &mut MirBody, ty: &Ty, value: &Literal) -> Result<Written, Mis
         | (Ty::Bool, held @ Literal::Bool(_))
         | (Ty::Char, held @ Literal::Char(_)) => vec![scalar(held)],
         (Ty::Str, Literal::String(held)) => vec![const_str(dst, held)],
-        (Ty::Ref(_, inner), Literal::String(held)) if matches!(inner.ty, Ty::Str | Ty::String) => {
+        (Ty::Ref(_, inner), Literal::String(held))
+            if matches!(*inner.ty(), Ty::Str | Ty::String) =>
+        {
             vec![const_str(dst, held)]
         }
         (Ty::String, Literal::String(held)) => {

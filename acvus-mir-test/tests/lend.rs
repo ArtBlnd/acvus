@@ -71,7 +71,7 @@ fn array_of_two_floats() -> Ty {
 
 /// RFC-0029.
 fn is_double_reference(ty: &Ty) -> bool {
-    matches!(ty, Ty::Ref(_, arg) if matches!(arg.ty, Ty::Ref(..)))
+    matches!(ty, Ty::Ref(_, arg) if matches!(*arg.ty(), Ty::Ref(..)))
 }
 
 fn distinct_lent_parameter_types(types: &[Ty]) -> Vec<Ty> {

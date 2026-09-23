@@ -447,6 +447,13 @@ fn generate_extern_fn(
     let is_view = take_marker_attr(&mut func.attrs, "extern_view");
     let is_async = func.sig.asyncness.is_some();
     let vars = Vars::from_generics(&func.sig.generics)?;
+    if let Some(chosen) = vars.chosen() {
+        return Err(syn::Error::new(
+            chosen.span(),
+            "a declaration has no instance to choose its variables: Chosen is written on an \
+             extern_signature! parameter",
+        ));
+    }
     let Signature {
         takes_ctx,
         params: rust_params,
@@ -1448,6 +1455,13 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             suspending.span(),
             "a type does not bound its effect variables: Suspends is written on an \
              #[extern_fn] declaration",
+        ));
+    }
+    if let Some(chosen) = vars.chosen() {
+        return Err(syn::Error::new(
+            chosen.span(),
+            "a type has no instance to choose its variables: Chosen is written on an \
+             extern_signature! parameter",
         ));
     }
     if vars.has_len_vars() {
@@ -3051,6 +3065,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     });
     let comp_ret = types_only(&vars.to_compile_time_instance(&ret, None));
     let bounds = vars.bound_exprs();
+    let chosen = vars.chosen_numbers();
     let fresh_vars = vars.fresh_vars_expr();
     let effect = match &input.effect {
         None => quote! { ::acvus_extern::EffectTerm::Known(::acvus_extern::Effect::PURE) },
@@ -3121,6 +3136,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                         effect: #effect,
                     },
                     bounds: vec![#(#bounds),*],
+                    chosen: vec![#(#chosen),*],
                 }
             }
         }
@@ -3190,12 +3206,22 @@ fn requirement_of(ident: &Ident, vars: &Vars, marker_params: &[Ident]) -> proc_m
                 let __lens: Vec<::acvus_extern::LenTerm<::acvus_extern::Poly>> = vec![#(#lens),*];
                 let __identities: Vec<::acvus_extern::IdentityTerm<::acvus_extern::Poly>> =
                     vec![#(#identities),*];
+                // The signature's own `ρ`s are its slots'; beside the
+                // requiring declaration's type, each is a slot of its own
+                // there too, so it is renamed to one the declaration has
+                // not given out.
+                let mut __reprs: ::std::collections::HashMap<u32, u32> =
+                    ::std::collections::HashMap::new();
                 <Self as ::acvus_extern::SharedSignature>::signature_decl(__i).ty.map(
                     &mut |__k: u32| __tys[__k as usize].clone(),
                     &mut |__k: u32| __identities[__k as usize],
                     &mut |__k: u32| __effects[__k as usize].clone(),
                     &mut |__k: u32| __lens[__k as usize],
-                    &mut |__r: u32| ::acvus_extern::Repr::Var(__r),
+                    &mut |__r: u32| {
+                        ::acvus_extern::Repr::Var(
+                            *__reprs.entry(__r).or_insert_with(|| __vars.fresh_repr()),
+                        )
+                    },
                 )
             }
         }

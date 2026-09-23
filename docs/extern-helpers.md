@@ -197,7 +197,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Nth` | the `N`-th variable of a kind, as a Rust type | derived from `Kind` + `Term` — the stand-in that fills the parameter while the declaration's type is built; uninhabited, so it names a variable and is never a value |
 | `PolyVars` | the variables a declaration ranges over, by kind and position | atom — built once per declaration; how many of each it has is the length of its vector |
 | `TyArg` | a Rust type that names an acvus type | atom — it takes the interner and carries `SLOT`, which `Term` takes and carries neither of |
-| `SlotRepr` | the representation a specializing slot gives its argument | atom — a composite takes the strongest of its parts |
+| `SlotRepr` | what a specializing slot's argument holds: a member part, a variable part, or neither | atom — a composite takes the strongest of its parts, which picks the slot's form; the tree `TyArg::slot` builds keeps each part's own mark |
 | `Spec` | the member stand-in in a member instance's type | derived from `TyArg` — its parameter is the member and its `SLOT` is `Member`; that is the whole difference from `Nth<kind::Type, N>` |
 | `Monomorphize` | a type variable ranging over a finite set of concrete types | atom — the one specialization the machine keeps, the handler compiled once per member |
 | `Never` | the language's `!` | atom — a declaration returning it panics instead of returning, so its call is typed `!` |

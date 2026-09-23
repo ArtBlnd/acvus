@@ -9,6 +9,7 @@
 //! extern call reaches, the page key a context is stored under, where a
 //! label sits — is decided here.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem;
@@ -1345,12 +1346,13 @@ impl<'a> Prepare<'a> {
             )
         };
         let interner = self.ctx.interner;
-        let order = acvus_mir::structural::structural_leaves(&referent.ty, interner);
+        let referent = referent.ty();
+        let order = acvus_mir::structural::structural_leaves(&referent, interner);
         assert_eq!(
             order.len(),
             leaves.len(),
             "the lowering writes one instance per leaf of {:?}",
-            referent.ty
+            referent
         );
         let mut entries = self.entries.borrow_mut();
         let words: Vec<Value> = leaves
@@ -1361,10 +1363,10 @@ impl<'a> Prepare<'a> {
             let at = order
                 .iter()
                 .position(|leaf| leaf.path == path)
-                .unwrap_or_else(|| panic!("{path:?} is no leaf of {:?}", referent.ty));
+                .unwrap_or_else(|| panic!("{path:?} is no leaf of {:?}", referent));
             words[at]
         };
-        structural_shape_of(&referent.ty, interner, &mut Vec::new(), &found)
+        structural_shape_of(&referent, interner, &mut Vec::new(), &found)
     }
 
     /// A call into a body — another module's or a closure's — suspends
@@ -1380,10 +1382,10 @@ impl<'a> Prepare<'a> {
     }
 
     /// A test reads through a reference, so the storage's type decides.
-    fn scrutinee_ty(&self, id: ValueId) -> &Ty {
+    fn scrutinee_ty(&self, id: ValueId) -> Cow<'_, Ty> {
         match self.ty(id) {
-            Ty::Ref(_, inner) => &inner.ty,
-            ty => ty,
+            Ty::Ref(_, inner) => inner.ty(),
+            ty => Cow::Borrowed(ty),
         }
     }
 
@@ -1393,12 +1395,12 @@ impl<'a> Prepare<'a> {
 
     fn walked_under(&self, target: &RefTarget, path: &[PathSeg]) -> Under {
         let (id, root) = match target {
-            RefTarget::Var(s) | RefTarget::Param(s) => (*s, self.ty(*s)),
+            RefTarget::Var(s) | RefTarget::Param(s) => (*s, Cow::Borrowed(self.ty(*s))),
             RefTarget::Through(r) => (*r, self.scrutinee_ty(*r)),
         };
         Under {
             base: self.marked(id),
-            path: self.walked(root, path),
+            path: self.walked(&root, path),
         }
     }
 
@@ -1408,7 +1410,7 @@ impl<'a> Prepare<'a> {
             .chain(rest.iter().copied())
             .map(PathSeg::Field)
             .collect();
-        self.walked(self.scrutinee_ty(object), &segs)
+        self.walked(&self.scrutinee_ty(object), &segs)
     }
 
     /// The path under `root` with each step resolved against the type it
@@ -1790,7 +1792,7 @@ impl<'a> Prepare<'a> {
         let (key, _, _) = arms
             .first()
             .expect("a Switch names at least one arm, which is the key kind it reads");
-        dispatch_form(*key, self.scrutinee_ty(tag))
+        dispatch_form(*key, &self.scrutinee_ty(tag))
     }
 
     /// Where a text dispatch reads its scrutinee: the register's own
@@ -3034,7 +3036,7 @@ impl<'a> Prepare<'a> {
             || self.run_tag(*tested).is_some()
             || self.is_ref(*tested)
             || !matches!(
-                variant_form(self.scrutinee_ty(*tested)),
+                variant_form(&self.scrutinee_ty(*tested)),
                 VariantForm::Option
             )
         {
@@ -4219,7 +4221,7 @@ impl<'a> Prepare<'a> {
                     src: self.marked(*src),
                 };
                 let at = field_at(
-                    std::slice::from_ref(self.scrutinee_ty(*src)),
+                    std::slice::from_ref(&*self.scrutinee_ty(*src)),
                     *key,
                     self.ctx.interner,
                 );
@@ -4358,7 +4360,7 @@ impl<'a> Prepare<'a> {
                     src: self.marked(*src),
                 };
                 let through = self.is_ref(*src);
-                let form = variant_form(self.scrutinee_ty(*src));
+                let form = variant_form(&self.scrutinee_ty(*src));
                 let tag = *tag;
                 match (form, through) {
                     (VariantForm::Option, true) => {
@@ -7860,7 +7862,7 @@ impl Growing<'_> {
 /// run in: a container's elements (RFC-0047) or a `String`'s bytes
 /// (RFC-0062 rule 1).
 fn is_slice(ty: &Ty) -> bool {
-    matches!(ty, Ty::Ref(_, target) if matches!(target.ty, Ty::Slice(_) | Ty::Str))
+    matches!(ty, Ty::Ref(_, target) if matches!(*target.ty(), Ty::Slice(_) | Ty::Str))
 }
 
 /// How many registers a value takes, and what the frame opens them with
@@ -8129,7 +8131,7 @@ impl<'a> Prepare<'a> {
         let RefTarget::Through(source) = target else {
             return None;
         };
-        if *source != last || !self.walked(self.scrutinee_ty(*source), path).is_empty() {
+        if *source != last || !self.walked(&self.scrutinee_ty(*source), path).is_empty() {
             return None;
         }
         let read: Deref = if self.is_string(*dst) {

@@ -10,10 +10,11 @@
 //! interner and carries `SLOT`, the representation a specializing slot
 //! gives its argument, and `Term` takes and carries neither.
 
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 
 use acvus_mir::ty::{
-    EffectArg, EffectTerm, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy, Repr, TypeArg,
+    EffectArg, EffectTerm, HeldTy, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy, TypeArg,
 };
 use acvus_utils::Interner;
 
@@ -24,6 +25,12 @@ pub struct PolyVars {
     pub effects: Vec<EffectTerm<Poly>>,
     pub lens: Vec<LenTerm<Poly>>,
     pub identities: Vec<IdentityTerm<Poly>>,
+    /// The next representation variable, and the one each slot type has
+    /// been given: a `ρ` binds the whole tree of what it stands over
+    /// (RFC-0041), so two slots of one type share one and two of different
+    /// types have one each.
+    next_repr: Cell<u32>,
+    slot_reprs: RefCell<Vec<(PolyTy, u32)>>,
 }
 
 impl PolyVars {
@@ -41,6 +48,32 @@ impl PolyVars {
             effects: (0..effects).map(|_| b.fresh_effect_var()).collect(),
             lens: (0..lens).map(|_| b.fresh_len_var()).collect(),
             identities: (0..identities).map(|_| b.fresh_identity_var()).collect(),
+            next_repr: Cell::new(0),
+            slot_reprs: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// A representation variable nothing in this declaration has yet.
+    pub fn fresh_repr(&self) -> u32 {
+        let repr = self.next_repr.get();
+        self.next_repr.set(repr + 1);
+        repr
+    }
+
+    /// The representation variable of a specializing slot holding `ty`.
+    fn slot_repr(&self, ty: &PolyTy) -> u32 {
+        let known = self
+            .slot_reprs
+            .borrow()
+            .iter()
+            .find_map(|(slot, repr)| (slot == ty).then_some(*repr));
+        match known {
+            Some(repr) => repr,
+            None => {
+                let repr = self.fresh_repr();
+                self.slot_reprs.borrow_mut().push((ty.clone(), repr));
+                repr
+            }
         }
     }
 }
@@ -150,9 +183,10 @@ impl<const N: usize> Var<kind::Effect> for Nth<kind::Effect, N> {}
 impl<const N: usize> Var<kind::Length> for Nth<kind::Length, N> {}
 impl<const N: usize> Var<kind::Identity> for Nth<kind::Identity, N> {}
 
-/// The representation of a specializing slot by what it holds
-/// (hash-types.md, Signatures); a composite takes the strongest of its
-/// parts.
+/// What a specializing slot's argument holds (hash-types.md,
+/// Signatures), which picks the slot's form in `TyArg::slot`: a member
+/// part, else a variable part, else neither. A composite takes the
+/// strongest of its parts; the tree the form builds keeps each part's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SlotRepr {
     Ground,
@@ -160,34 +194,12 @@ pub enum SlotRepr {
     Member,
 }
 
-/// The one `ρ` of a signature (RFC-0041).
-const SIGNATURE_RHO: u32 = 0;
-
 impl SlotRepr {
     pub const fn join(self, other: Self) -> Self {
         if (self as u8) >= (other as u8) {
             self
         } else {
             other
-        }
-    }
-
-    pub const fn repr(self) -> Repr<Poly> {
-        match self {
-            SlotRepr::Ground => Repr::Uniform,
-            SlotRepr::Var => Repr::Var(SIGNATURE_RHO),
-            SlotRepr::Member => Repr::Specialized,
-        }
-    }
-
-    /// The representation of an argument of an extension type the runtime
-    /// keeps as one box of its Rust type: a variable is filled with its
-    /// run-time instantiation, which is the uniform one, and any other
-    /// argument is the Rust type it names.
-    pub const fn held(self) -> Repr<Poly> {
-        match self {
-            SlotRepr::Var => Repr::Uniform,
-            SlotRepr::Ground | SlotRepr::Member => Repr::Specialized,
         }
     }
 }
@@ -198,26 +210,46 @@ pub trait TyArg: Var<kind::Type> {
 
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy;
 
-    /// This type as the argument of a specializing slot.
+    /// This type as the argument of a specializing slot (RFC-0041). With a
+    /// member part, the member instance's type is the Rust type written
+    /// out, so it is the held tree: `#` at every part but a variable's.
+    /// Otherwise, with a variable part, a `ρ` stands over the whole
+    /// argument until an instance fixes it, the one `ρ` of this slot type.
+    /// Otherwise it is uniform.
     fn slot(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
-        TypeArg::new(Self::SLOT.repr(), Self::poly_ty(interner, vars))
+        match Self::SLOT {
+            SlotRepr::Member => Self::held(interner, vars),
+            SlotRepr::Var => {
+                let ty = Self::poly_ty(interner, vars);
+                TypeArg::Open(vars.slot_repr(&ty), ty)
+            }
+            SlotRepr::Ground => TypeArg::uniform(Self::poly_ty(interner, vars)),
+        }
     }
 
     /// This type as an argument of an extension type the runtime keeps as
     /// one box of its Rust type: a derived type, or a container stored as
-    /// itself.
+    /// itself. The representation follows the Rust type part by part: a
+    /// variable is filled with its run-time instantiation, which is
+    /// uniform, and any other part is the Rust type it names, `#`. A type
+    /// whose acvus head is a tuple, option, result or array states its
+    /// parts; any other head is one `#` leaf.
     fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
-        TypeArg::new(Self::SLOT.held(), Self::poly_ty(interner, vars))
+        TypeArg::specialized(Self::poly_ty(interner, vars))
     }
 }
 
 /// An effect as an argument of an extension type the runtime keeps as one
-/// box of its Rust type, as `TyArg::held` gives a type.
+/// box of its Rust type, as `TyArg::held` gives a type: a variable is
+/// uniform, and a written effect is `#`.
 pub fn held_effect<E>(vars: &PolyVars) -> EffectArg<Poly>
 where
     E: Term<kind::Effect>,
 {
-    EffectArg::new(E::SLOT.held(), E::poly(vars))
+    match E::SLOT {
+        SlotRepr::Var => EffectArg::uniform(E::poly(vars)),
+        SlotRepr::Ground | SlotRepr::Member => EffectArg::specialized(E::poly(vars)),
+    }
 }
 
 impl<const N: usize> TyArg for Nth<kind::Type, N> {
@@ -225,6 +257,10 @@ impl<const N: usize> TyArg for Nth<kind::Type, N> {
 
     fn poly_ty(_: &Interner, vars: &PolyVars) -> PolyTy {
         vars.tys[N].clone()
+    }
+
+    fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::uniform(Self::poly_ty(interner, vars))
     }
 }
 
@@ -244,6 +280,31 @@ where
 
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         T::poly_ty(i, vars)
+    }
+
+    fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        T::held(i, vars)
+    }
+}
+
+/// The stand-in of a signature's type variable bounded by `Chosen`: `Nth`
+/// but for its slots. Each instance fills the variable with a Rust type
+/// of its own, so the variable's slot is not uniform but a `ρ` the
+/// instance's tree binds, the form `TyArg::slot` gives a variable
+/// (RFC-0041).
+pub struct ChosenNth<const N: usize>(Never);
+
+impl<const N: usize> Var<kind::Type> for ChosenNth<N> {}
+
+impl<const N: usize> TyArg for ChosenNth<N> {
+    const SLOT: SlotRepr = SlotRepr::Var;
+
+    fn poly_ty(_: &Interner, vars: &PolyVars) -> PolyTy {
+        vars.tys[N].clone()
+    }
+
+    fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        Self::slot(interner, vars)
     }
 }
 
@@ -325,6 +386,38 @@ where
 {
 }
 
+crate::cross_one_value!(ChosenNth<N>, const N: usize);
+
+impl<const N: usize, Rt> crate::OneValue<Rt> for ChosenNth<N>
+where
+    Rt: crate::Runtime,
+{
+    fn erase(self, _: &Rt) -> Rt::Value {
+        match self.0 {}
+    }
+
+    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+        panic!("a value of a compile-time stand-in type was materialized")
+    }
+}
+
+impl<const N: usize, Rt> crate::Stored<Rt> for ChosenNth<N>
+where
+    Rt: crate::Runtime,
+{
+    crate::stored_as_itself!();
+}
+
+impl<const N: usize, Rt> crate::Borrowable<Rt> for ChosenNth<N>
+where
+    Rt: crate::Runtime,
+{
+    crate::whole_box_in_place!(Self, Rt);
+}
+
+// SAFETY: as `Nth<kind::Type, N>`: `ChosenNth<N>` holds a `Never` and is uninhabited.
+unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for ChosenNth<N> where Rt: crate::Runtime {}
+
 macro_rules! impl_scalar_ty_arg {
     ($T:ty, $ty:expr) => {
         impl TyArg for $T {
@@ -370,6 +463,10 @@ where
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), LenTerm::Known(N))
     }
+
+    fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::Specialized(HeldTy::Array(Box::new(T::held(i, vars)), LenTerm::Known(N)))
+    }
 }
 
 impl<T> Var<kind::Type> for Option<T> where T: Var<kind::Type> {}
@@ -382,6 +479,10 @@ where
 
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Option(Box::new(T::poly_ty(i, vars)))
+    }
+
+    fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::Specialized(HeldTy::Option(Box::new(T::held(i, vars))))
     }
 }
 
@@ -402,6 +503,13 @@ where
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Result(Box::new(T::poly_ty(i, vars)), Box::new(E::poly_ty(i, vars)))
     }
+
+    fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::Specialized(HeldTy::Result(
+            Box::new(T::held(i, vars)),
+            Box::new(E::held(i, vars)),
+        ))
+    }
 }
 
 macro_rules! impl_tuple_ty_arg {
@@ -421,6 +529,10 @@ macro_rules! impl_tuple_ty_arg {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
                 PolyTy::Tuple(vec![$($T::poly_ty(i, vars)),+])
             }
+
+            fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+                TypeArg::Specialized(HeldTy::Tuple(vec![$($T::held(i, vars)),+]))
+            }
         }
     }
 }
@@ -434,6 +546,14 @@ impl_tuple_ty_arg!(A, B, C, D);
 /// types: `A: Monomorphize<(i64, f64)>`. The declaration carries the set;
 /// the handler is compiled once per member. The macro reads the set.
 pub trait Monomorphize<Types>: Var<kind::Type> {}
+
+/// The bound of a shared signature's type variable that each instance
+/// fills with a Rust type of its own: `Ts: Var<kind::Type> + Chosen`,
+/// where a derived type's payload projects through `Ts`, so no one box
+/// serves every `Ts` and the slot cannot be uniform (RFC-0041). Only
+/// `extern_signature!` reads it, and a signature's generics are never
+/// Rust generics, so nothing implements it.
+pub trait Chosen: Var<kind::Type> {}
 
 /// The run-time fill. `Owned<R>: TyArg` is not written and is not missing:
 /// the carrier holds a value of whatever acvus type the caller passed, so

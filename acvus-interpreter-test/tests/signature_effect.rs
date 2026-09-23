@@ -45,7 +45,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn src<E, I, Rt>() -> Pipe<Erased<Rt, ()>, Erased<Rt, i64>, E, I, Rt>
+fn src<E, I, Rt>() -> Pipe<(), Erased<Rt, i64>, E, I, Rt>
 where
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
@@ -96,7 +96,7 @@ mod sig {
         effect = E,
         fn tally<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
         where
-            Ts: Var<kind::Type>,
+            Ts: Var<kind::Type> + Chosen,
             O: Var<kind::Type>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
@@ -139,7 +139,7 @@ macro_rules! step_instance {
     };
 }
 
-step_instance!(step_0, [], Erased<Rt, ()>);
+step_instance!(step_0, [], ());
 step_instance!(step_1, [A], (A, ()));
 step_instance!(step_2, [A, B], (A, (B, ())));
 
@@ -180,7 +180,7 @@ macro_rules! drain_instance {
     };
 }
 
-drain_instance!(drain_0, drain_0_now, [], Erased<Rt, ()>);
+drain_instance!(drain_0, drain_0_now, [], ());
 drain_instance!(drain_1, drain_1_now, [A], (A, ()));
 
 #[extern_fn(instance_of = sig::drain, effect = pure)]
@@ -228,14 +228,14 @@ macro_rules! tally_instance {
     };
 }
 
-tally_instance!(tally_0, tally_0_now, tally, [], Erased<Rt, ()>);
+tally_instance!(tally_0, tally_0_now, tally, [], ());
 tally_instance!(tally_1, tally_1_now, tally, [A], (A, ()));
-tally_instance!(bare_tally_0, bare_tally_0_now, bare_tally, [], Erased<Rt, ()>);
+tally_instance!(bare_tally_0, bare_tally_0_now, bare_tally, [], ());
 tally_instance!(bare_tally_1, bare_tally_1_now, bare_tally, [A], (A, ()));
 
-fn depth_now<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
+fn depth_now<A, O, E, I, Rt>(it: Pipe<(A, ()), O, E, I, Rt>) -> i64
 where
-    Ts: Var<kind::Type>,
+    A: Var<kind::Type>,
     O: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
@@ -244,10 +244,13 @@ where
     it.stages()
 }
 
+/// A plain declaration at the one length its programs build: a pipeline's
+/// stage list is its box's Rust type, so a declaration reads one length, and
+/// the per-length reading is a signature's (`tally`).
 #[extern_fn(effect = E, sync = depth_now)]
-async fn depth<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
+async fn depth<A, O, E, I, Rt>(it: Pipe<(A, ()), O, E, I, Rt>) -> i64
 where
-    Ts: Var<kind::Type>,
+    A: Var<kind::Type>,
     O: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
@@ -354,7 +357,7 @@ async fn a_declaration_whose_parameter_names_the_effect_is_async_over_an_async_s
     assert!(!prepared_entry(over_sync).may_suspend);
     assert!(
         prepared_entry(over_async).may_suspend,
-        "the stage's closure suspends, and the parameter type `Pipe<Ts, O, E, I, Rt>` \
+        "the stage's closure suspends, and the parameter type `Pipe<(A, ()), O, E, I, Rt>` \
          makes the pipeline's effect the call's own"
     );
     assert_eq!(run_i64(over_sync).await, 1);

@@ -1409,3 +1409,237 @@ async fn a_deque_made_and_borrowed_at_one_concrete_type_is_read_in_place() {
     .await;
     assert_eq!(result.value.as_int(), 410);
 }
+
+// =======================================================================
+//  A held argument's representation follows its type part by part
+// =======================================================================
+
+/// A derived type whose payload names its argument: `Bag<T>` is stored as
+/// a `Vec<T>`, so a generic constructor's bag is a `Vec<Owned<Rt>>`, a bag
+/// of `(i64, U)` a `Vec<(i64, Owned<Rt>)>`, and a bag of `Erased<Rt, i64>` a
+/// `Vec<Erased<Rt, i64>>`.
+#[derive(ExternType)]
+#[repr(transparent)]
+#[extern_type(name = "Bag")]
+struct Bag<T>(Vec<T>)
+where
+    T: acvus_extern::Var<acvus_extern::kind::Type>;
+
+#[extern_fn(effect = pure)]
+fn bag_of<T>(x: T) -> Bag<T>
+where
+    T: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    Bag(vec![x])
+}
+
+#[extern_fn(effect = pure)]
+fn bag_width<T>(b: Bag<T>) -> i64
+where
+    T: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    i64::try_from(b.0.len()).expect("a bag shorter than i64::MAX")
+}
+
+#[extern_fn(effect = pure)]
+fn erased_bag_of<Rt>(
+    ctx: &mut acvus_extern::Ctx<'_, Rt>,
+    x: i64,
+) -> Bag<acvus_extern::Erased<Rt, i64>>
+where
+    Rt: acvus_extern::Runtime,
+{
+    Bag(vec![acvus_extern::Erased::new(ctx.rt, x)])
+}
+
+#[extern_fn(effect = pure)]
+fn erased_bag_head<Rt>(b: Bag<acvus_extern::Erased<Rt, i64>>) -> i64
+where
+    Rt: acvus_extern::Runtime,
+{
+    b.0.first().map_or(-1, |x| x.get())
+}
+
+#[extern_fn(effect = pure)]
+fn erased_bag_head_ref<Rt>(b: &Bag<acvus_extern::Erased<Rt, i64>>) -> i64
+where
+    Rt: acvus_extern::Runtime,
+{
+    b.0.first().map_or(-1, |x| x.get())
+}
+
+/// A bag whose argument is a composite holding a variable, read by its
+/// written part.
+#[extern_fn(effect = pure)]
+fn pair_bag_first<U>(b: Bag<(i64, U)>) -> i64
+where
+    U: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    b.0.first().map_or(-1, |x| x.0)
+}
+
+/// A bag at a concrete composite, made where the Rust type is written.
+#[extern_fn(effect = pure)]
+fn pair_bag_of_ints(a: i64, b: i64) -> Bag<(i64, i64)> {
+    Bag(vec![(a, b)])
+}
+
+/// A bag at the composite `pair_bag_first` reads, made where that Rust type
+/// is written.
+#[extern_fn(effect = pure)]
+fn pair_bag_of<U>(a: i64, u: U) -> Bag<(i64, U)>
+where
+    U: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    Bag(vec![(a, u)])
+}
+
+/// A bag whose composite holds its variable at the other part.
+#[extern_fn(effect = pure)]
+fn int_second_bag_of<V>(v: V, b: i64) -> Bag<(V, i64)>
+where
+    V: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    Bag(vec![(v, b)])
+}
+
+/// A bag of deques: `Vec<Deque<Owned<Rt>>>`.
+#[extern_fn(effect = pure)]
+fn deque_bag_width<T>(b: Bag<acvus_ext::Deque<T>>) -> i64
+where
+    T: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    b.0.first().map_or(-1, |d| {
+        i64::try_from(d.len()).expect("a deque shorter than i64::MAX")
+    })
+}
+
+fn erased_held_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "erased_held",
+        types: [Bag<_>],
+        fns: [
+            bag_of,
+            bag_width,
+            erased_bag_of,
+            erased_bag_head,
+            erased_bag_head_ref,
+            pair_bag_first,
+            pair_bag_of_ints,
+            pair_bag_of,
+            int_second_bag_of,
+            deque_bag_width,
+        ],
+    }
+}
+
+fn erased_held_regs() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(erased_held_registry());
+    regs
+}
+
+async fn run_erased_held(source: &str) -> i64 {
+    let i = Interner::new();
+    let result =
+        run_script_with_externs(&i, source, ctx(&i, vec![]), erased_held_regs(), Ty::I64).await;
+    result.value.as_int()
+}
+
+fn erased_held_refusal(source: &str) -> String {
+    let i = Interner::new();
+    let ast = acvus_mir::graph::ParsedAst::Script(
+        acvus_ast::parse_script(&i, source).expect("parse error"),
+    );
+    match check_source(
+        &i,
+        ast,
+        &FxHashMap::default(),
+        erased_held_regs(),
+        Ty::I64,
+        acvus_mir::graph::optimize::Opt::Full,
+        |_| {},
+    ) {
+        Ok(_) => panic!("the program was admitted: {source}"),
+        Err(refusal) => refusal.messages.join(" | "),
+    }
+}
+
+#[tokio::test]
+async fn probe_erased_by_value_from_a_generic_constructor() {
+    assert_eq!(run_erased_held("erased_bag_head(bag_of(7))").await, 7);
+}
+
+#[tokio::test]
+async fn probe_erased_by_reference_from_a_generic_constructor() {
+    assert_eq!(
+        run_erased_held("let b = bag_of(7); erased_bag_head_ref(&b)").await,
+        7
+    );
+}
+
+#[tokio::test]
+async fn probe_erased_constructor_read_by_a_generic_declaration() {
+    assert_eq!(run_erased_held("bag_width(erased_bag_of(7))").await, 1);
+}
+
+#[tokio::test]
+async fn probe_erased_made_and_read_at_erased() {
+    assert_eq!(
+        run_erased_held("erased_bag_head(erased_bag_of(7))").await,
+        7
+    );
+}
+
+/// A generic constructor's bag is a `Vec<Owned>`, and a bag of `(i64, U)`
+/// a `Vec<(i64, Owned)>`: the argument is uniform against `#(#i64, U)`.
+#[test]
+fn a_composite_holding_a_variable_is_not_what_a_generic_constructor_made() {
+    let messages = erased_held_refusal("pair_bag_first(bag_of((1, 2)))");
+    assert!(
+        messages.contains("expected Bag<#(#i64, i64)>, got Bag<(i64, i64)>"),
+        "{messages}"
+    );
+}
+
+/// `Vec<(i64, i64)>` against `Vec<(i64, Owned)>`: the two meet at `#i64`
+/// and part at `U`, which is uniform against `#i64`.
+#[test]
+fn a_composite_holding_a_variable_is_not_the_concrete_composite() {
+    let messages = erased_held_refusal("pair_bag_first(pair_bag_of_ints(1, 2))");
+    assert!(
+        messages.contains("expected Bag<#(#i64, i64)>, got Bag<#(#i64, #i64)>"),
+        "{messages}"
+    );
+}
+
+/// `Vec<(i64, Owned)>` against `Vec<(Owned, i64)>`: each has one uniform
+/// part, at a different place.
+#[test]
+fn two_composites_holding_a_variable_at_different_parts_are_two_types() {
+    let messages = erased_held_refusal("pair_bag_first(int_second_bag_of(1, 2))");
+    assert!(
+        messages.contains("expected Bag<#(#i64, i64)>, got Bag<#(i64, #i64)>"),
+        "{messages}"
+    );
+}
+
+/// `Vec<Owned>` against `Vec<Deque<Owned>>`.
+#[test]
+fn a_bag_of_deques_is_not_what_a_generic_constructor_made() {
+    let messages = erased_held_refusal("deque_bag_width(bag_of(deque()))");
+    assert!(
+        messages.contains("expected Bag<#Deque<_>>, got Bag<Deque<_>>"),
+        "{messages}"
+    );
+}
+
+/// Made and read at one composite: the reader takes the written part out of
+/// the `Vec<(i64, Owned)>` the maker boxed.
+#[tokio::test]
+async fn a_composite_holding_a_variable_is_read_by_its_parts_where_it_was_made() {
+    assert_eq!(
+        run_erased_held("pair_bag_first(pair_bag_of(1, 2))").await,
+        1
+    );
+}

@@ -6,7 +6,7 @@
 
 use std::mem::ManuallyDrop;
 
-use acvus_mir::ty::{Ty, TypeArg};
+use acvus_mir::ty::{Poly, Ty, TypeArg};
 
 use crate::obj::{InPlaceElement, OneValue, stored_as_container_of};
 use crate::owned::Owned;
@@ -121,6 +121,17 @@ where
             effect_args: vec![],
             identity_args: vec![],
         }
+    }
+
+    /// A `Vec` held in another type's box is the Rust `Vec` of what its
+    /// element is held as: no `ρ` enters a held tree.
+    fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::specialized(PolyTy::UserDefined {
+            id: QualifiedRef::root(i.intern("Vec")),
+            type_args: vec![T::held(i, vars)],
+            effect_args: vec![],
+            identity_args: vec![],
+        })
     }
 }
 

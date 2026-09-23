@@ -261,11 +261,21 @@ A value of type `τ` has a representation: uniform, the runtime's `Value`,
 which every polymorphic position holds; or specialized, the Rust type `τ`
 itself. `#τ` names the specialized representation and is a fact about a
 **slot** — a type argument or an effect argument of a user-defined type, or
-the target of a reference — never about a bare type: there is no `##τ` and
-no `#` at a position that is not a slot. A user-defined type declares per
-type parameter whether its slot can specialize (`specializable`); a slot
-that cannot is uniform. Every effect slot can. `Fn`, `Object`, `Enum` and
-handles have no representation the language defines and carry no `#`.
+the target of a reference — never about a bare type: there is no `##τ`. A
+user-defined type declares per type parameter whether its slot can
+specialize (`specializable`); a slot that cannot is uniform. Every effect
+slot can. `Fn`, `Object`, `Enum` and handles have no representation the
+language defines and carry no `#`.
+
+**`#` is marked per part.** A `#` argument is a tree that follows its type
+(`TypeArg`, `HeldTy`): a `#` tuple, option, result or array marks each of its
+parts again, a part whose Rust type is itself is `#`, and a part a type
+variable's run-time instantiation fills (`Owned`, `Erased`) is uniform.
+`Bag<(i64, U)>` is `Bag<#(#i64, U)>`; any other head is one `#` leaf. Two
+types meet only where the marks agree at every part: uniform with uniform,
+`#τ` with `#τ`; uniform against `#` is a mismatch. A variable inside a `#`
+composite is uniform at its own position and never binds across a `#` leaf.
+`#T` over a variable in a pattern is `Held(T)`: `T` with every part `#`.
 
 **An argument written concrete is held.** A map, a set, a deque and a
 derived extension type are each kept as one box of the Rust type their
@@ -274,22 +284,36 @@ instantiation — a type variable with `Owned<R>`, an effect variable with
 `()`. A declaration that writes an argument concrete — `Deque<i64>`,
 `HashMap<K, V, Pure, R>`, `Keys<K, V, Pure, I, R>` — names another box, so
 that argument is held: `#i64`, `#pure`. A variable stays uniform, and a
-`Monomorphize` member is `#` as everywhere. One rule, `SlotRepr::held`,
-gives it for both kinds, through `TyArg::held` and `held_effect`, at every
-crossing: by value, `&` and `&mut`. A value a generic constructor made meets
+`Monomorphize` member is `#` as everywhere. `TyArg::held` gives the tree per
+Rust type, and `held_effect` an effect's one mark, at every crossing: by
+value, `&` and `&mut`. A value a generic constructor made meets
 a held parameter as a type mismatch that names both types; a writer and a
 reader that write the same concrete argument meet at the held slot.
 
 Only a `Monomorphize` member and a held argument make `#`. `#[extern_fn] fn reverse<T:
 Monomorphize<(f64,)>>(Vec<T>) -> Vec<T>` has the concrete instance
 `reverse@#f64 : Vec<#f64> -> Vec<#f64>` and, when `T` has no other bound, the
-generic instance `Vec<ρT> -> Vec<ρT>`, where `ρ` is the one representation
-variable of the signature. A plain concrete signature (`-> Vec<String>`)
-stays uniform. The compiler chooses the instance by type (RFC-0040); a
-member's glue crosses the family whole (`OneValue<Rt, Specialized>`: one box,
-O(1)); every family a member names declares its two casts `F<#m> -> F<m>`
-(erase) and `F<m> -> F<#m>` (materialize), one generic fn each with concrete
-instances, merged across registries by type.
+generic instance `Vec<ρT> -> Vec<ρT>`. A specializing slot is the held tree
+when it holds a member part, `ρ` over the whole argument when it holds a
+variable part, and uniform otherwise; a declaration has one `ρ` per slot
+type, and a `ρ` binds the whole tree it meets. A plain concrete signature
+(`-> Vec<String>`) stays uniform. The compiler chooses the instance by type
+(RFC-0040); a member's glue crosses the family whole
+(`OneValue<Rt, Specialized>`: one box, O(1)); every family a member names
+declares its two casts `F<#T> -> F<T>` (erase) and `F<T> -> F<#T>`
+(materialize), one generic fn each with concrete instances, merged across
+registries by type. A member is a Rust type written out, with no part a
+variable or `Erased` fills; the registry refuses one that has such a part
+(`FamilyMemberNotWritten`), since `#T` would call that part `#`.
+
+**An instance may choose a signature's variable.** `extern_signature!` alone
+takes the bound `Ts: Var<kind::Type> + Chosen`, a variable each instance
+fills with a Rust type of its own. Its slot is a `ρ`; `combine` binds it to
+the instance's tree at that slot, and `Ts` to the tree's type, then matches
+the rest exactly. An undeclared `ρ` still stands for uniform. The reason is a
+payload that projects through the variable: `Pipe<Ts, …>` holds
+`<Ts as TypeList>::Body`, so each instance's box is its own Rust type and no
+uniform `Pipe<Owned>` exists.
 
 A signature's `ρ` is bound only by a decision — the instance choice, or
 `solve`'s default `Uniform` — never by a value flow. A flow whose only
@@ -355,7 +379,10 @@ holds whichever path settled the conversion; a store is refused rather than
 let revive the place because the restore would overwrite it. Shared lends
 at one type share the temporary where the one cast is emitted, in the
 lowering. Storage the body owns is the one kind of place a value can be
-taken out of and put back into.
+taken out of and put back into. The mark is per part because a box's Rust
+type differs part by part and the runtime reads a held value by its parts:
+a handler taking `Bag<(i64, U)>` reads `.0` of a `Vec<(i64, Owned)>`, and
+`Vec<(i64, i64)>` handed to it panicked in debug and crashed in release.
 
 **Rejected.**
 - Holding a converted place at the parameter's type for the call — the
@@ -372,6 +399,11 @@ taken out of and put back into.
 - A loan for the call kept by the checker over the names each argument
   uses — a second implementation of RFC-0018 rules 7 and 8, over the AST,
   beside the MIR's.
+- One mark per argument, a composite taking the strongest of its parts — it
+  admitted `Vec<(i64, i64)>` where `Vec<(i64, Owned)>` was declared. One
+  more mark, "mixed", admits `Bag<(i64, U)>` against `Bag<(V, i64)>`.
+- A cast-only matching mode where a pattern's `ρ` matches any tree —
+  `Held(T)` states the family's pattern under the one matching rule.
 - Refusing a concrete argument at the declaration, as a bound asked of the
   variable (`InPlaceElement` of a deque's element, an effect bound of a
   map's effect) — it covered a borrow only, left the by-value crossing and a

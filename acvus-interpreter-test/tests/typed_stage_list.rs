@@ -11,8 +11,8 @@ use std::marker::PhantomData;
 
 use acvus_extern::Ctx;
 use acvus_extern::{
-    Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, Nth, OneValue, PassedByValue,
-    Registry, Runtime, Var, extern_fn, extern_registry, kind,
+    ChosenNth, Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, OneValue,
+    PassedByValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -106,27 +106,6 @@ where
     }
 }
 
-/// The empty list held uniformly: a signature's `Ts` is a type variable, so
-/// an instance at the empty list holds it as the runtime does.
-impl<Rt> TypeList<Rt> for Erased<Rt, ()>
-where
-    Rt: Runtime,
-{
-    type Body<O, E>
-        = Source<O, Rt>
-    where
-        O: Var<kind::Type>,
-        E: Var<kind::Effect>;
-
-    fn pull<O, E>(body: &mut Source<O, Rt>, _: &mut Ctx<'_, Rt>) -> Option<O>
-    where
-        O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
-        E: Var<kind::Effect>,
-    {
-        body.pull()
-    }
-}
-
 impl<T, Ts, Rt> TypeList<Rt> for (T, Ts)
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -158,10 +137,10 @@ where
     }
 }
 
-/// The stand-in a shared signature's own type carries: a generic `Ts` is
-/// `Nth<kind::Type, N>` while the declaration's type is built, and `Never` says no
-/// pipeline of that type is a value.
-impl<const N: usize, Rt> TypeList<Rt> for Nth<kind::Type, N>
+/// The stand-in a shared signature's own type carries: a `Ts` bounded by
+/// `Chosen` is `ChosenNth<N>` while the declaration's type is built, and
+/// `Never` says no pipeline of that type is a value.
+impl<const N: usize, Rt> TypeList<Rt> for ChosenNth<N>
 where
     Rt: Runtime,
 {
@@ -222,7 +201,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn ints<T, E, I, Rt>(items: Vec<T>) -> Pipe<Erased<Rt, ()>, T, E, I, Rt>
+fn ints<T, E, I, Rt>(items: Vec<T>) -> Pipe<(), T, E, I, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
@@ -250,7 +229,7 @@ mod sig {
             f: Closure<(T,), U, E, Rt>,
         ) -> Pipe<(T, Ts), U, E, I, Rt>
         where
-            Ts: Var<kind::Type>,
+            Ts: Var<kind::Type> + Chosen,
             T: Var<kind::Type>,
             U: Var<kind::Type>,
             E: Var<kind::Effect>,
@@ -262,7 +241,7 @@ mod sig {
         ns: "p",
         fn cut<Ts, T, E, I, Rt>(it: Pipe<Ts, T, E, I, Rt>, n: u64) -> Pipe<(T, Ts), T, E, I, Rt>
         where
-            Ts: Var<kind::Type>,
+            Ts: Var<kind::Type> + Chosen,
             T: Var<kind::Type>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
@@ -274,7 +253,7 @@ mod sig {
         effect = E,
         fn total<Ts, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>) -> i64
         where
-            Ts: Var<kind::Type>,
+            Ts: Var<kind::Type> + Chosen,
             O: Var<kind::Type>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
@@ -317,7 +296,7 @@ macro_rules! adaptor_instances {
     };
 }
 
-adaptor_instances!(step_0, cut_0, [], Erased<Rt, ()>);
+adaptor_instances!(step_0, cut_0, [], ());
 adaptor_instances!(step_1, cut_1, [A], (A, ()));
 adaptor_instances!(step_2, cut_2, [A, B], (A, (B, ())));
 
@@ -366,7 +345,7 @@ macro_rules! total_instance {
     };
 }
 
-total_instance!(total_0, total_0_now, [], Erased<Rt, ()>);
+total_instance!(total_0, total_0_now, [], ());
 total_instance!(total_1, total_1_now, [A], (A, ()));
 total_instance!(total_2, total_2_now, [A, B], (A, (B, ())));
 total_instance!(total_3, total_3_now, [A, B, C], (A, (B, (C, ()))));

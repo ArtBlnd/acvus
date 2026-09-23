@@ -590,6 +590,158 @@ where
     matches_pattern_with(ty, pattern, Unknowns::Open, Reprs::Exact)
 }
 
+/// `pattern` with each type variable of `chosen` bound where `ty` fills
+/// its first slot (RFC-0041): the slot's `ρ` binds the tree `ty` holds
+/// there, and the variable binds that tree's type, everywhere in
+/// `pattern`. A signature so bound states what its instance chose, and
+/// `matches_pattern` compares the rest exactly. The tree's own variables
+/// are renamed past `pattern`'s. A variable with no slot the walk
+/// reaches is left as it is, and its `ρ` stands for uniform.
+pub fn bind_chosen(pattern: &PolyTy, ty: &PolyTy, chosen: &[u32]) -> PolyTy {
+    let mut found = FxHashMap::default();
+    chosen_slots(pattern, ty, chosen, &mut found);
+    let by = var_span(pattern);
+    let found: FxHashMap<u32, ChosenSlot> = found
+        .into_iter()
+        .map(|(var, slot)| (var, slot.renamed_past(by)))
+        .collect();
+    let reprs: FxHashMap<u32, Repr<Poly>> = found
+        .values()
+        .map(|slot| (slot.repr, slot.arg.repr()))
+        .collect();
+    pattern.map::<Poly>(
+        &mut |v| match found.get(&v) {
+            Some(slot) => slot.arg.ty().into_owned(),
+            None => TyTerm::Var(v),
+        },
+        &mut IdentityTerm::Var,
+        &mut EffectTerm::Var,
+        &mut LenTerm::Var,
+        &mut |r| match reprs.get(&r) {
+            Some(repr) => repr.clone(),
+            None => Repr::Var(r),
+        },
+    )
+}
+
+/// A chosen variable's first slot in a pattern: the slot's `ρ`, and the
+/// argument the matched type holds there.
+struct ChosenSlot {
+    repr: u32,
+    arg: TypeArg<Poly>,
+}
+
+impl ChosenSlot {
+    fn renamed_past(self, by: VarSpan) -> Self {
+        let arg = self.arg.map::<Poly>(
+            &mut |v| TyTerm::Var(v + by.ty),
+            &mut |v| IdentityTerm::Var(v + by.identity),
+            &mut |v| EffectTerm::Var(v + by.effect),
+            &mut |v| LenTerm::Var(v + by.len),
+            &mut |v| Repr::Var(v + by.repr),
+        );
+        Self { arg, ..self }
+    }
+}
+
+/// A head with no arm here, an object or an enum, is not descended: a
+/// slot under it stays unbound, and `matches_pattern` refuses an instance
+/// that fills it with `#`. Two heads that differ are left to
+/// `matches_pattern` the same way.
+fn chosen_slots(
+    pattern: &PolyTy,
+    ty: &PolyTy,
+    chosen: &[u32],
+    found: &mut FxHashMap<u32, ChosenSlot>,
+) {
+    match (pattern, ty) {
+        (TyTerm::Array(p, _), TyTerm::Array(t, _))
+        | (TyTerm::Option(p), TyTerm::Option(t))
+        | (TyTerm::Slice(p), TyTerm::Slice(t))
+        | (TyTerm::Handle(p), TyTerm::Handle(t)) => chosen_slots(p, t, chosen, found),
+        (TyTerm::Result(p_ok, p_err), TyTerm::Result(t_ok, t_err)) => {
+            chosen_slots(p_ok, t_ok, chosen, found);
+            chosen_slots(p_err, t_err, chosen, found);
+        }
+        (TyTerm::Tuple(ps), TyTerm::Tuple(ts)) => {
+            for (p, t) in ps.iter().zip(ts) {
+                chosen_slots(p, t, chosen, found);
+            }
+        }
+        (
+            TyTerm::Fn {
+                params: pp,
+                ret: pr,
+                captures: pc,
+                ..
+            },
+            TyTerm::Fn {
+                params: tp,
+                ret: tr,
+                captures: tc,
+                ..
+            },
+        ) => {
+            for (p, t) in pp.iter().zip(tp) {
+                chosen_slots(&p.ty, &t.ty, chosen, found);
+            }
+            chosen_slots(pr, tr, chosen, found);
+            for (p, t) in pc.iter().zip(tc) {
+                chosen_slots(p, t, chosen, found);
+            }
+        }
+        (TyTerm::UserDefined { type_args: pa, .. }, TyTerm::UserDefined { type_args: ta, .. }) => {
+            for (p, t) in pa.iter().zip(ta) {
+                chosen_arg(p, t, chosen, found);
+            }
+        }
+        (TyTerm::Ref(_, p), TyTerm::Ref(_, t)) => chosen_arg(p, t, chosen, found),
+        _ => {}
+    }
+}
+
+fn chosen_arg(
+    pattern: &TypeArg<Poly>,
+    ty: &TypeArg<Poly>,
+    chosen: &[u32],
+    found: &mut FxHashMap<u32, ChosenSlot>,
+) {
+    match (pattern, ty) {
+        (TypeArg::Open(repr, TyTerm::Var(v)), _) if chosen.contains(v) => {
+            found.entry(*v).or_insert_with(|| ChosenSlot {
+                repr: *repr,
+                arg: ty.clone(),
+            });
+        }
+        (TypeArg::Specialized(p), TypeArg::Specialized(t)) => chosen_held(p, t, chosen, found),
+        _ => chosen_slots(&pattern.ty(), &ty.ty(), chosen, found),
+    }
+}
+
+fn chosen_held(
+    pattern: &HeldTy<Poly>,
+    ty: &HeldTy<Poly>,
+    chosen: &[u32],
+    found: &mut FxHashMap<u32, ChosenSlot>,
+) {
+    match (pattern, ty) {
+        (HeldTy::Tuple(ps), HeldTy::Tuple(ts)) => {
+            for (p, t) in ps.iter().zip(ts) {
+                chosen_arg(p, t, chosen, found);
+            }
+        }
+        (HeldTy::Option(p), HeldTy::Option(t)) | (HeldTy::Array(p, _), HeldTy::Array(t, _)) => {
+            chosen_arg(p, t, chosen, found)
+        }
+        (HeldTy::Result(p_ok, p_err), HeldTy::Result(t_ok, t_err)) => {
+            chosen_arg(p_ok, t_ok, chosen, found);
+            chosen_arg(p_err, t_err, chosen, found);
+        }
+        (HeldTy::Leaf(p), HeldTy::Leaf(t)) => chosen_slots(p.ty(), t.ty(), chosen, found),
+        _ => {}
+    }
+}
+
 /// What a variable of the matched type stands for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unknowns {
@@ -640,28 +792,24 @@ where
     where
         P: Phase + PartialEq,
     {
-        repr_matches(&arg.repr, &pat.repr, unknowns, reprs)
-            && effect_matches(&arg.effect, &pat.effect, unknowns)
+        (reprs == Reprs::Alike || arg.is_specialized() == pat.is_specialized())
+            && effect_matches(arg.effect(), pat.effect(), unknowns)
     }
-    /// A pattern's representation variable stands for the uniform
-    /// representation: the generic instance is the uniform one
-    /// (hash-types.md, R3). A fixed representation matches itself; a
-    /// variable matches a pattern variable, and a fixed one only when
-    /// unknowns are open.
-    fn repr_matches<P>(repr: &Repr<P>, pat: &Repr<Poly>, unknowns: Unknowns, reprs: Reprs) -> bool
+    fn len_matches<P>(len: &LenTerm<P>, pat: &LenTerm<Poly>, unknowns: Unknowns) -> bool
     where
         P: Phase + PartialEq,
     {
-        match (repr, pat) {
-            _ if reprs == Reprs::Alike => true,
-            (Repr::Var(_), Repr::Var(_)) => true,
-            (Repr::Var(_), _) => unknowns == Unknowns::Open,
-            (Repr::Uniform, Repr::Var(_)) => true,
-            (Repr::Specialized, Repr::Var(_)) => false,
-            (Repr::Uniform, Repr::Uniform) | (Repr::Specialized, Repr::Specialized) => true,
-            (Repr::Uniform, Repr::Specialized) | (Repr::Specialized, Repr::Uniform) => false,
+        match (len, pat) {
+            (_, LenTerm::Var(_)) => true,
+            (LenTerm::Var(_), _) => unknowns == Unknowns::Open,
+            (LenTerm::Known(n), LenTerm::Known(k)) => n == k,
         }
     }
+    /// A pattern's representation variable stands for the uniform
+    /// representation: the generic instance is the uniform one
+    /// (hash-types.md, R3). A fixed representation matches itself, part by
+    /// part; a variable matches a pattern variable, and a fixed one only
+    /// when unknowns are open.
     fn arg_matches<P>(
         arg: &TypeArg<P>,
         pat: &TypeArg<Poly>,
@@ -672,8 +820,65 @@ where
     where
         P: Phase + PartialEq,
     {
-        repr_matches(&arg.repr, &pat.repr, unknowns, reprs)
-            && go(&arg.ty, &pat.ty, seen, unknowns, reprs)
+        match (arg, pat) {
+            _ if reprs == Reprs::Alike => go(&arg.ty(), &pat.ty(), seen, unknowns, reprs),
+            (TypeArg::Open(_, ty), TypeArg::Open(_, p)) => go(ty, p, seen, unknowns, reprs),
+            (TypeArg::Open(..), _) => {
+                unknowns == Unknowns::Open && go(&arg.ty(), &pat.ty(), seen, unknowns, reprs)
+            }
+            (TypeArg::Uniform(ty), TypeArg::Uniform(p) | TypeArg::Open(_, p)) => {
+                go(ty, p, seen, unknowns, reprs)
+            }
+            (TypeArg::Specialized(held), TypeArg::Specialized(p)) => {
+                held_matches(held, p, seen, unknowns, reprs)
+            }
+            (TypeArg::Specialized(_), TypeArg::Uniform(_) | TypeArg::Open(..))
+            | (TypeArg::Uniform(_), TypeArg::Specialized(_)) => false,
+        }
+    }
+    fn held_matches<P>(
+        held: &HeldTy<P>,
+        pat: &HeldTy<Poly>,
+        seen: &mut FxHashMap<u32, TyTerm<P>>,
+        unknowns: Unknowns,
+        reprs: Reprs,
+    ) -> bool
+    where
+        P: Phase + PartialEq,
+    {
+        match (held, pat) {
+            (_, HeldTy::Held(v)) => {
+                held.is_full(unknowns == Unknowns::Open)
+                    && go(&held.ty(), &TyTerm::Var(*v), seen, unknowns, reprs)
+            }
+            (HeldTy::Held(_), _) => {
+                unknowns == Unknowns::Open && go(&held.ty(), &pat.ty(), seen, unknowns, reprs)
+            }
+            (HeldTy::Tuple(parts), HeldTy::Tuple(ps)) => {
+                parts.len() == ps.len()
+                    && parts
+                        .iter()
+                        .zip(ps)
+                        .all(|(a, p)| arg_matches(a, p, seen, unknowns, reprs))
+            }
+            (HeldTy::Option(a), HeldTy::Option(p)) => arg_matches(a, p, seen, unknowns, reprs),
+            (HeldTy::Result(a_ok, a_err), HeldTy::Result(p_ok, p_err)) => {
+                arg_matches(a_ok, p_ok, seen, unknowns, reprs)
+                    && arg_matches(a_err, p_err, seen, unknowns, reprs)
+            }
+            (HeldTy::Array(a, n), HeldTy::Array(p, pn)) => {
+                len_matches(n, pn, unknowns) && arg_matches(a, p, seen, unknowns, reprs)
+            }
+            (HeldTy::Leaf(a), HeldTy::Leaf(p)) => go(a.ty(), p.ty(), seen, unknowns, reprs),
+            (
+                HeldTy::Tuple(_)
+                | HeldTy::Option(_)
+                | HeldTy::Result(..)
+                | HeldTy::Array(..)
+                | HeldTy::Leaf(_),
+                _,
+            ) => false,
+        }
     }
     fn go<P>(
         ty: &TyTerm<P>,
@@ -705,12 +910,7 @@ where
             | (TyTerm::Never, TyTerm::Never)
             | (TyTerm::Order, TyTerm::Order) => true,
             (TyTerm::Array(e, n), TyTerm::Array(pe, pn)) => {
-                let len_ok = match (n, pn) {
-                    (_, LenTerm::Var(_)) => true,
-                    (LenTerm::Var(_), _) => unknowns == Unknowns::Open,
-                    (LenTerm::Known(n), LenTerm::Known(k)) => n == k,
-                };
-                len_ok && go(e, pe, seen, unknowns, reprs)
+                len_matches(n, pn, unknowns) && go(e, pe, seen, unknowns, reprs)
             }
             (TyTerm::Option(i), TyTerm::Option(pi)) => go(i, pi, seen, unknowns, reprs),
             (TyTerm::Result(t, e), TyTerm::Result(pt, pe)) => {
@@ -915,27 +1115,52 @@ impl PatternSubst {
         found
     }
 
-    fn unify_repr(&mut self, a: &Repr<Poly>, b: &Repr<Poly>) -> bool {
-        let resolve = |s: &Self, r: &Repr<Poly>| match r {
-            Repr::Var(v) => s.repr.get(v).copied().unwrap_or(*r),
-            fixed => *fixed,
-        };
-        match (resolve(self, a), resolve(self, b)) {
-            (Repr::Var(x), Repr::Var(y)) if x == y => true,
-            (Repr::Var(v), other) | (other, Repr::Var(v)) => {
-                self.repr.insert(v, other);
+    fn unify_arg(&mut self, a: &TypeArg<Poly>, b: &TypeArg<Poly>) -> bool {
+        self.unify(&a.ty(), &b.ty()) && self.meet_reprs(&self.apply_arg(a), &self.apply_arg(b))
+    }
+
+    /// Two arguments whose types have unified, their representations met
+    /// part by part.
+    fn meet_reprs(&mut self, a: &TypeArg<Poly>, b: &TypeArg<Poly>) -> bool {
+        match (a, b) {
+            (TypeArg::Open(x, _), TypeArg::Open(y, _)) if x == y => true,
+            (TypeArg::Open(v, _), other) | (other, TypeArg::Open(v, _)) => {
+                self.repr.insert(*v, other.repr());
                 true
             }
-            (x, y) => x == y,
+            (TypeArg::Uniform(_), TypeArg::Uniform(_)) => true,
+            (TypeArg::Specialized(x), TypeArg::Specialized(y)) => self.meet_held(x, y),
+            (TypeArg::Uniform(_), TypeArg::Specialized(_))
+            | (TypeArg::Specialized(_), TypeArg::Uniform(_)) => false,
         }
     }
 
-    fn unify_arg(&mut self, a: &TypeArg<Poly>, b: &TypeArg<Poly>) -> bool {
-        self.unify_repr(&a.repr, &b.repr) && self.unify(&a.ty, &b.ty)
+    fn meet_held(&mut self, a: &HeldTy<Poly>, b: &HeldTy<Poly>) -> bool {
+        match (a, b) {
+            (HeldTy::Tuple(xs), HeldTy::Tuple(ys)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| self.meet_reprs(x, y))
+            }
+            (HeldTy::Option(x), HeldTy::Option(y)) | (HeldTy::Array(x, _), HeldTy::Array(y, _)) => {
+                self.meet_reprs(x, y)
+            }
+            (HeldTy::Result(xo, xe), HeldTy::Result(yo, ye)) => {
+                self.meet_reprs(xo, yo) && self.meet_reprs(xe, ye)
+            }
+            (HeldTy::Leaf(_), HeldTy::Leaf(_)) => true,
+            (HeldTy::Held(_), _) | (_, HeldTy::Held(_)) => a.is_full(false) && b.is_full(false),
+            (
+                HeldTy::Tuple(_)
+                | HeldTy::Option(_)
+                | HeldTy::Result(..)
+                | HeldTy::Array(..)
+                | HeldTy::Leaf(_),
+                _,
+            ) => false,
+        }
     }
 
     fn unify_effect_arg(&mut self, a: &EffectArg<Poly>, b: &EffectArg<Poly>) -> bool {
-        self.unify_repr(&a.repr, &b.repr) && self.unify_effect(&a.effect, &b.effect)
+        a.is_specialized() == b.is_specialized() && self.unify_effect(a.effect(), b.effect())
     }
 
     fn unify_effect(&mut self, a: &EffectTerm<Poly>, b: &EffectTerm<Poly>) -> bool {
@@ -1105,12 +1330,49 @@ impl PatternSubst {
             },
             &mut |v| self.effect.get(&v).cloned().unwrap_or(EffectTerm::Var(v)),
             &mut |v| self.len.get(&v).copied().unwrap_or(LenTerm::Var(v)),
-            &mut |v| self.repr.get(&v).copied().unwrap_or(Repr::Var(v)),
+            &mut |v| self.apply_repr(v),
+        )
+    }
+
+    fn apply_repr(&self, v: u32) -> Repr<Poly> {
+        match self.repr.get(&v) {
+            None => Repr::Var(v),
+            Some(Repr::Var(w)) => self.apply_repr(*w),
+            Some(Repr::Uniform) => Repr::Uniform,
+            Some(Repr::Specialized(held)) => Repr::Specialized(self.apply_held(held)),
+        }
+    }
+
+    fn apply_arg(&self, arg: &TypeArg<Poly>) -> TypeArg<Poly> {
+        match arg {
+            TypeArg::Uniform(ty) => TypeArg::Uniform(self.apply(ty)),
+            TypeArg::Open(v, ty) => self.apply_repr(*v).at(self.apply(ty)),
+            TypeArg::Specialized(held) => TypeArg::Specialized(self.apply_held(held)),
+        }
+    }
+
+    fn apply_held(&self, held: &HeldTy<Poly>) -> HeldTy<Poly> {
+        held.map::<Poly>(
+            &mut |v| match self.ty.get(&v) {
+                Some(bound) => self.apply(bound),
+                None => TyTerm::Var(v),
+            },
+            &mut |v| {
+                self.identity
+                    .get(&v)
+                    .copied()
+                    .unwrap_or(IdentityTerm::Var(v))
+            },
+            &mut |v| self.effect.get(&v).cloned().unwrap_or(EffectTerm::Var(v)),
+            &mut |v| self.len.get(&v).copied().unwrap_or(LenTerm::Var(v)),
+            &mut |v| self.apply_repr(v),
         )
     }
 }
 
-/// The anti-unifier of two patterns.
+/// The anti-unifier of two patterns. An effect argument has no
+/// representation variable, so two user-defined types that disagree on an
+/// effect's `#` generalize to a type variable.
 pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
     fn fresh(next: &mut u32) -> u32 {
         let var = *next;
@@ -1120,13 +1382,7 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
     fn walk(a: &PolyTy, b: &PolyTy, next: &mut u32) -> PolyTy {
         match (a, b) {
             (TyTerm::Ref(ma, x), TyTerm::Ref(mb, y)) if ma == mb => {
-                let repr = if x.repr == y.repr {
-                    x.repr
-                } else {
-                    Repr::Var(fresh(next))
-                };
-                let ty = walk(&x.ty, &y.ty, next);
-                TyTerm::Ref(*ma, Box::new(TypeArg { repr, ty }))
+                TyTerm::Ref(*ma, Box::new(walk_arg(x, y, next)))
             }
             (TyTerm::Option(x), TyTerm::Option(y)) => TyTerm::Option(Box::new(walk(x, y, next))),
             (TyTerm::Handle(x), TyTerm::Handle(y)) => TyTerm::Handle(Box::new(walk(x, y, next))),
@@ -1161,34 +1417,26 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
             ) if ia == ib
                 && ta.len() == tb.len()
                 && ea.len() == eb.len()
-                && ida.len() == idb.len() =>
+                && ida.len() == idb.len()
+                && ea
+                    .iter()
+                    .zip(eb)
+                    .all(|(x, y)| x.is_specialized() == y.is_specialized()) =>
             {
                 let type_args = ta
                     .iter()
                     .zip(tb)
-                    .map(|(x, y)| TypeArg {
-                        repr: if x.repr == y.repr {
-                            x.repr
-                        } else {
-                            Repr::Var(fresh(next))
-                        },
-                        ty: walk(&x.ty, &y.ty, next),
-                    })
+                    .map(|(x, y)| walk_arg(x, y, next))
                     .collect();
                 let effect_args = ea
                     .iter()
                     .zip(eb)
-                    .map(|(x, y)| EffectArg {
-                        repr: if x.repr == y.repr {
-                            x.repr
-                        } else {
-                            Repr::Var(fresh(next))
-                        },
-                        effect: if x.effect == y.effect {
-                            x.effect.clone()
+                    .map(|(x, y)| {
+                        x.with_effect(if x.effect() == y.effect() {
+                            x.effect().clone()
                         } else {
                             EffectTerm::Var(fresh(next))
-                        },
+                        })
                     })
                     .collect();
                 let identity_args = ida
@@ -1211,6 +1459,52 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
             }
             (x, y) if x == y => x.clone(),
             _ => TyTerm::Var(fresh(next)),
+        }
+    }
+    fn walk_arg(x: &TypeArg<Poly>, y: &TypeArg<Poly>, next: &mut u32) -> TypeArg<Poly> {
+        match (x, y) {
+            (TypeArg::Uniform(a), TypeArg::Uniform(b)) => TypeArg::Uniform(walk(a, b, next)),
+            (TypeArg::Open(r, a), TypeArg::Open(s, b)) if r == s => {
+                TypeArg::Open(*r, walk(a, b, next))
+            }
+            (TypeArg::Specialized(a), TypeArg::Specialized(b)) => match walk_held(a, b, next) {
+                Some(held) => TypeArg::Specialized(held),
+                None => TypeArg::Open(fresh(next), walk(&x.ty(), &y.ty(), next)),
+            },
+            _ => TypeArg::Open(fresh(next), walk(&x.ty(), &y.ty(), next)),
+        }
+    }
+    fn walk_held(a: &HeldTy<Poly>, b: &HeldTy<Poly>, next: &mut u32) -> Option<HeldTy<Poly>> {
+        match (a, b) {
+            (HeldTy::Tuple(xs), HeldTy::Tuple(ys)) if xs.len() == ys.len() => Some(HeldTy::Tuple(
+                xs.iter()
+                    .zip(ys)
+                    .map(|(x, y)| walk_arg(x, y, next))
+                    .collect(),
+            )),
+            (HeldTy::Option(x), HeldTy::Option(y)) => {
+                Some(HeldTy::Option(Box::new(walk_arg(x, y, next))))
+            }
+            (HeldTy::Result(xo, xe), HeldTy::Result(yo, ye)) => {
+                let ok = walk_arg(xo, yo, next);
+                Some(HeldTy::Result(
+                    Box::new(ok),
+                    Box::new(walk_arg(xe, ye, next)),
+                ))
+            }
+            (HeldTy::Array(x, la), HeldTy::Array(y, lb)) => {
+                let elem = walk_arg(x, y, next);
+                let len = if la == lb {
+                    *la
+                } else {
+                    LenTerm::Var(fresh(next))
+                };
+                Some(HeldTy::Array(Box::new(elem), len))
+            }
+            _ if a.is_full(false) && b.is_full(false) => {
+                Some(HeldTy::of(walk(&a.ty(), &b.ty(), next)))
+            }
+            _ => None,
         }
     }
     walk(a, b, &mut 0)
@@ -1280,8 +1574,38 @@ enum TyHead {
     Str,
     /// A user-defined type with the representation of each argument: two
     /// cast rules between `Vec<#T>` and `Vec<T>` have distinct heads.
-    UserDefined(QualifiedRef, Vec<Repr<Poly>>),
+    UserDefined(QualifiedRef, Vec<ArgHead>),
     Error,
+}
+
+/// An argument's tree of representations without its types.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ArgHead {
+    Uniform,
+    Open,
+    Tuple(Vec<ArgHead>),
+    Option(Box<ArgHead>),
+    Result(Box<ArgHead>, Box<ArgHead>),
+    Array(Box<ArgHead>),
+    Leaf,
+    Held,
+}
+
+fn arg_head(arg: &TypeArg<Poly>) -> ArgHead {
+    match arg {
+        TypeArg::Uniform(_) => ArgHead::Uniform,
+        TypeArg::Open(..) => ArgHead::Open,
+        TypeArg::Specialized(held) => match held {
+            HeldTy::Tuple(parts) => ArgHead::Tuple(parts.iter().map(arg_head).collect()),
+            HeldTy::Option(part) => ArgHead::Option(Box::new(arg_head(part))),
+            HeldTy::Result(ok, err) => {
+                ArgHead::Result(Box::new(arg_head(ok)), Box::new(arg_head(err)))
+            }
+            HeldTy::Array(part, _) => ArgHead::Array(Box::new(arg_head(part))),
+            HeldTy::Leaf(_) => ArgHead::Leaf,
+            HeldTy::Held(_) => ArgHead::Held,
+        },
+    }
 }
 
 fn ty_head(ty: &PolyTy) -> TyHead {
@@ -1306,7 +1630,7 @@ fn ty_head(ty: &PolyTy) -> TyHead {
         TyTerm::Slice(_) => TyHead::Slice,
         TyTerm::Str => TyHead::Str,
         TyTerm::UserDefined { id, type_args, .. } => {
-            TyHead::UserDefined(*id, type_args.iter().map(|a| a.repr).collect())
+            TyHead::UserDefined(*id, type_args.iter().map(arg_head).collect())
         }
         TyTerm::Error(_) => TyHead::Error,
         TyTerm::Var(_) => TyHead::Error,
@@ -1885,7 +2209,7 @@ impl TyTerm<Concrete> {
             Ty::Enum { variants, .. } => variants
                 .values()
                 .all(|p| p.as_ref().is_none_or(|ty| ty.is_data())),
-            Ty::UserDefined { type_args, .. } => type_args.iter().all(|a| a.ty.is_data()),
+            Ty::UserDefined { type_args, .. } => type_args.iter().all(|a| a.ty().is_data()),
             Ty::Fn { .. }
             | Ty::Handle(..)
             | Ty::Order
@@ -1984,7 +2308,8 @@ where
     }
 }
 
-/// An argument as `#τ`, `τ`, or `#?τ` while its representation is open.
+/// An argument as `τ`, as `#?τ` while its representation is open, or with
+/// `#` on each specialized part, as `#(#i64, T)`.
 pub struct ArgDisplay<'a, V>
 where
     V: Phase,
@@ -1994,25 +2319,74 @@ where
     never: NeverAs,
 }
 
+impl<'a, V> ArgDisplay<'a, V>
+where
+    V: Phase,
+{
+    fn ty(&self, ty: &'a TyTerm<V>) -> TyDisplay<'a, V> {
+        TyDisplay {
+            ty,
+            interner: self.interner,
+            never: self.never,
+        }
+    }
+
+    fn part(&self, arg: &'a TypeArg<V>) -> Self {
+        ArgDisplay {
+            arg,
+            interner: self.interner,
+            never: self.never,
+        }
+    }
+
+    fn held(&self, held: &'a HeldTy<V>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match held {
+            HeldTy::Tuple(parts) => {
+                write!(f, "(")?;
+                for (i, part) in parts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.part(part))?;
+                }
+                write!(f, ")")
+            }
+            HeldTy::Option(part) => write!(f, "Option<{}>", self.part(part)),
+            HeldTy::Result(ok, err) => {
+                write!(f, "Result<{}, {}>", self.part(ok), self.part(err))
+            }
+            HeldTy::Array(part, len) => {
+                write!(f, "Array<{}, ", self.part(part))?;
+                match len {
+                    LenTerm::Known(n) => write!(f, "{n}>"),
+                    LenTerm::Var(v) => {
+                        V::spell_len_var(v, f)?;
+                        write!(f, ">")
+                    }
+                }
+            }
+            HeldTy::Leaf(leaf) => write!(f, "{}", self.ty(leaf.ty())),
+            HeldTy::Held(v) => V::spell_ty_var(v, f),
+        }
+    }
+}
+
 impl<'a, V> fmt::Display for ArgDisplay<'a, V>
 where
     V: Phase,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.arg.repr {
-            Repr::Uniform => {}
-            Repr::Specialized => write!(f, "#")?,
-            Repr::Var(_) => V::spell_open_repr(f)?,
-        }
-        write!(
-            f,
-            "{}",
-            TyDisplay {
-                ty: &self.arg.ty,
-                interner: self.interner,
-                never: self.never,
+        match self.arg {
+            TypeArg::Uniform(ty) => write!(f, "{}", self.ty(ty)),
+            TypeArg::Open(_, ty) => {
+                V::spell_open_repr(f)?;
+                write!(f, "{}", self.ty(ty))
             }
-        )
+            TypeArg::Specialized(held) => {
+                write!(f, "#")?;
+                self.held(held, f)
+            }
+        }
     }
 }
 
@@ -2146,12 +2520,10 @@ where
                             write!(f, ", ")?;
                         }
                         first = false;
-                        match arg.repr {
-                            Repr::Uniform => {}
-                            Repr::Specialized => write!(f, "#")?,
-                            Repr::Var(_) => V::spell_open_repr(f)?,
+                        if arg.is_specialized() {
+                            write!(f, "#")?;
                         }
-                        match &arg.effect {
+                        match arg.effect() {
                             EffectTerm::Known(e) => write!(f, "{e}")?,
                             EffectTerm::Var(v) => V::spell_effect_var(v, f)?,
                         }
@@ -2304,8 +2676,8 @@ impl Viewed {
         let TyTerm::Ref(lends, run) = ret.as_ref() else {
             return None;
         };
-        let view = View::of(&run.ty)?;
-        (takes == lends && view.taken_of(&storage.ty)).then_some(Viewed {
+        let view = View::of(&run.ty())?;
+        (takes == lends && view.taken_of(&storage.ty())).then_some(Viewed {
             view,
             mutability: *takes,
         })
@@ -2570,65 +2942,158 @@ pub use crate::solver::{FreezeError, Solver, Sources, TypeBound};
 /// Type alias - always concrete, no inference variables.
 pub type InferTy = TyTerm<Infer>;
 
-/// The representation of a value at an argument position (hash-types.md).
-/// `Uniform` is the representation every polymorphic position needs;
-/// `Specialized` is the one the type itself fixes, written `#τ`. A
-/// variable is a type variable's `ρ`, open until a specializing position
-/// fixes it; frozen open, it is `Uniform`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// What a representation variable stands for (hash-types.md). A variable
+/// that meets a `#` tree stands for the whole tree (RFC-0041).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Repr<V: Phase> {
     Uniform,
-    Specialized,
     Var(V::ReprVar),
-}
-
-impl<V: Phase> Repr<V> {
-    pub fn map<W: Phase>(&self, on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>) -> Repr<W> {
-        match self {
-            Repr::Uniform => Repr::Uniform,
-            Repr::Specialized => Repr::Specialized,
-            Repr::Var(v) => on_repr(*v),
-        }
-    }
-
-    pub fn try_map<W: Phase, E>(
-        &self,
-        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
-    ) -> Result<Repr<W>, E> {
-        match self {
-            Repr::Uniform => Ok(Repr::Uniform),
-            Repr::Specialized => Ok(Repr::Specialized),
-            Repr::Var(v) => on_repr(*v),
-        }
-    }
+    Specialized(HeldTy<V>),
 }
 
 /// A slot whose storage may be laid out by its argument: a type argument
 /// of a user-defined type, and the target of a reference. `#` lives here
 /// and on an `EffectArg` and nowhere else (hash-types.md, R1): a position
 /// that holds a bare `TyTerm` cannot carry a representation.
+///
+/// The representation follows the type part by part (RFC-0041). A part
+/// whose Rust type is a type variable's run-time instantiation is uniform;
+/// a part whose Rust type is itself is `#`, and a `#` composite states the
+/// representation of each of its parts again, because the runtime reads a
+/// value by its parts and a box's Rust type differs part by part.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeArg<V: Phase> {
-    pub repr: Repr<V>,
-    pub ty: TyTerm<V>,
+pub enum TypeArg<V: Phase> {
+    /// The representation every polymorphic position needs.
+    Uniform(TyTerm<V>),
+    /// A type variable's `ρ`, open until a specializing position fixes it;
+    /// frozen open, it is `Uniform`.
+    Open(V::ReprVar, TyTerm<V>),
+    Specialized(HeldTy<V>),
+}
+
+/// A `#` node: a Rust head written out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeldTy<V: Phase> {
+    Tuple(Vec<TypeArg<V>>),
+    Option(Box<TypeArg<V>>),
+    Result(Box<TypeArg<V>>, Box<TypeArg<V>>),
+    Array(Box<TypeArg<V>>, LenTerm<V>),
+    Leaf(LeafTy<V>),
+    /// `α` with every part `#`: once `α` resolves, the node is the fully
+    /// specialized tree of `α`'s type. What a family cast's pattern writes
+    /// (RFC-0041), which a member's type fills: a member is a written Rust
+    /// type with no part a run-time instantiation fills.
+    Held(V::TyVar),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeafTy<V: Phase>(TyTerm<V>);
+
+impl<V: Phase> LeafTy<V> {
+    pub fn ty(&self) -> &TyTerm<V> {
+        &self.0
+    }
+}
+
+impl<V: Phase> Repr<V> {
+    /// This representation over `ty`. A tree drops `ty`: the solver binds a
+    /// variable to a tree only after joining the tree's type with the
+    /// position's (`Terms::join`).
+    pub fn at(self, ty: TyTerm<V>) -> TypeArg<V> {
+        match self {
+            Repr::Uniform => TypeArg::Uniform(ty),
+            Repr::Var(v) => TypeArg::Open(v, ty),
+            Repr::Specialized(held) => TypeArg::Specialized(held),
+        }
+    }
 }
 
 impl<V: Phase> TypeArg<V> {
-    pub fn new(repr: Repr<V>, ty: TyTerm<V>) -> Self {
-        Self { repr, ty }
+    pub fn uniform(ty: TyTerm<V>) -> Self {
+        TypeArg::Uniform(ty)
     }
 
-    pub fn uniform(ty: TyTerm<V>) -> Self {
-        Self {
-            repr: Repr::Uniform,
-            ty,
+    /// `#ty` with every part `#`: the argument whose Rust type is `ty`
+    /// written out to its leaves.
+    pub fn specialized(ty: TyTerm<V>) -> Self {
+        TypeArg::Specialized(HeldTy::of(ty))
+    }
+
+    pub fn ty(&self) -> std::borrow::Cow<'_, TyTerm<V>> {
+        match self {
+            TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => std::borrow::Cow::Borrowed(ty),
+            TypeArg::Specialized(held) => std::borrow::Cow::Owned(held.ty()),
         }
     }
 
-    pub fn specialized(ty: TyTerm<V>) -> Self {
-        Self {
-            repr: Repr::Specialized,
-            ty,
+    pub fn into_ty(self) -> TyTerm<V> {
+        match self {
+            TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => ty,
+            TypeArg::Specialized(held) => held.ty(),
+        }
+    }
+
+    /// The type this argument names where the argument holds it whole: a
+    /// uniform or open argument's, or a `#` leaf's. `None` for a `#`
+    /// composite or a `#` variable, whose type is built from the tree.
+    pub fn whole(&self) -> Option<&TyTerm<V>> {
+        match self {
+            TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => Some(ty),
+            TypeArg::Specialized(HeldTy::Leaf(leaf)) => Some(leaf.ty()),
+            TypeArg::Specialized(
+                HeldTy::Tuple(_)
+                | HeldTy::Option(_)
+                | HeldTy::Result(..)
+                | HeldTy::Array(..)
+                | HeldTy::Held(_),
+            ) => None,
+        }
+    }
+
+    pub fn is_uniform(&self) -> bool {
+        matches!(self, TypeArg::Uniform(_))
+    }
+
+    /// `rewrite` on each type this argument holds: a `#` leaf or a `Held`
+    /// node is rewritten as its type, and becomes the rewritten type's node.
+    pub fn rewrite_types(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
+        match self {
+            TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => rewrite(ty),
+            TypeArg::Specialized(held) => held.rewrite_types(rewrite),
+        }
+    }
+
+    /// What a representation variable meeting this argument binds to.
+    pub fn repr(&self) -> Repr<V> {
+        match self {
+            TypeArg::Uniform(_) => Repr::Uniform,
+            TypeArg::Open(v, _) => Repr::Var(*v),
+            TypeArg::Specialized(held) => Repr::Specialized(held.clone()),
+        }
+    }
+
+    /// Whether this argument is `#` at every part, or could still be where
+    /// `open` lets an open representation stand for `#`.
+    fn is_full(&self, open: bool) -> bool {
+        match self {
+            TypeArg::Uniform(_) => false,
+            TypeArg::Open(..) => open,
+            TypeArg::Specialized(held) => held.is_full(open),
+        }
+    }
+
+    /// Whether two arguments have one tree of representations and `same`
+    /// holds of each pair of types the tree leaves to them.
+    pub fn same_by(
+        &self,
+        other: &Self,
+        same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool,
+    ) -> bool {
+        match (self, other) {
+            (TypeArg::Uniform(a), TypeArg::Uniform(b)) => same(a, b),
+            (TypeArg::Open(x, a), TypeArg::Open(y, b)) => x == y && same(a, b),
+            (TypeArg::Specialized(a), TypeArg::Specialized(b)) => a.same_by(b, same),
+            (TypeArg::Uniform(_) | TypeArg::Open(..) | TypeArg::Specialized(_), _) => false,
         }
     }
 
@@ -2640,9 +3105,17 @@ impl<V: Phase> TypeArg<V> {
         on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
     ) -> TypeArg<W> {
-        TypeArg {
-            repr: self.repr.map(on_repr),
-            ty: self.ty.map(on_var, on_identity, on_effect, on_len, on_repr),
+        match self {
+            TypeArg::Uniform(ty) => {
+                TypeArg::Uniform(ty.map(on_var, on_identity, on_effect, on_len, on_repr))
+            }
+            TypeArg::Open(v, ty) => {
+                let ty = ty.map(on_var, on_identity, on_effect, on_len, on_repr);
+                on_repr(*v).at(ty)
+            }
+            TypeArg::Specialized(held) => {
+                TypeArg::Specialized(held.map(on_var, on_identity, on_effect, on_len, on_repr))
+            }
         }
     }
 
@@ -2654,11 +3127,202 @@ impl<V: Phase> TypeArg<V> {
         on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
     ) -> Result<TypeArg<W>, E> {
-        Ok(TypeArg {
-            repr: self.repr.try_map(on_repr)?,
-            ty: self
-                .ty
-                .try_map(on_var, on_identity, on_effect, on_len, on_repr)?,
+        Ok(match self {
+            TypeArg::Uniform(ty) => {
+                TypeArg::Uniform(ty.try_map(on_var, on_identity, on_effect, on_len, on_repr)?)
+            }
+            TypeArg::Open(v, ty) => {
+                let ty = ty.try_map(on_var, on_identity, on_effect, on_len, on_repr)?;
+                on_repr(*v)?.at(ty)
+            }
+            TypeArg::Specialized(held) => TypeArg::Specialized(held.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+                on_repr,
+            )?),
+        })
+    }
+}
+
+impl<V: Phase> HeldTy<V> {
+    /// The fully specialized tree of `ty`: every part `#`, a variable's
+    /// part `Held`.
+    pub fn of(ty: TyTerm<V>) -> Self {
+        match ty {
+            TyTerm::Tuple(elems) => {
+                HeldTy::Tuple(elems.into_iter().map(TypeArg::specialized).collect())
+            }
+            TyTerm::Option(inner) => HeldTy::Option(Box::new(TypeArg::specialized(*inner))),
+            TyTerm::Result(ok, err) => HeldTy::Result(
+                Box::new(TypeArg::specialized(*ok)),
+                Box::new(TypeArg::specialized(*err)),
+            ),
+            TyTerm::Array(elem, len) => HeldTy::Array(Box::new(TypeArg::specialized(*elem)), len),
+            TyTerm::Var(v) => HeldTy::Held(v),
+            leaf @ (TyTerm::Int(_)
+            | TyTerm::Float
+            | TyTerm::Char
+            | TyTerm::String
+            | TyTerm::Bool
+            | TyTerm::Unit
+            | TyTerm::Never
+            | TyTerm::Order
+            | TyTerm::Object(_)
+            | TyTerm::Fn { .. }
+            | TyTerm::UserDefined { .. }
+            | TyTerm::Enum { .. }
+            | TyTerm::Slice(_)
+            | TyTerm::Str
+            | TyTerm::Handle(_)
+            | TyTerm::Ref(..)
+            | TyTerm::Error(_)) => HeldTy::Leaf(LeafTy(leaf)),
+        }
+    }
+
+    pub fn ty(&self) -> TyTerm<V> {
+        match self {
+            HeldTy::Tuple(parts) => {
+                TyTerm::Tuple(parts.iter().map(|p| p.ty().into_owned()).collect())
+            }
+            HeldTy::Option(part) => TyTerm::Option(Box::new(part.ty().into_owned())),
+            HeldTy::Result(ok, err) => TyTerm::Result(
+                Box::new(ok.ty().into_owned()),
+                Box::new(err.ty().into_owned()),
+            ),
+            HeldTy::Array(part, len) => {
+                TyTerm::Array(Box::new(part.ty().into_owned()), len.clone())
+            }
+            HeldTy::Leaf(leaf) => leaf.0.clone(),
+            HeldTy::Held(v) => TyTerm::Var(*v),
+        }
+    }
+
+    pub fn parts(&self) -> Vec<&TypeArg<V>> {
+        match self {
+            HeldTy::Tuple(parts) => parts.iter().collect(),
+            HeldTy::Option(part) | HeldTy::Array(part, _) => vec![part],
+            HeldTy::Result(ok, err) => vec![ok, err],
+            HeldTy::Leaf(_) | HeldTy::Held(_) => Vec::new(),
+        }
+    }
+
+    fn rewrite_types(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
+        match self {
+            HeldTy::Tuple(parts) => {
+                for part in parts {
+                    part.rewrite_types(rewrite);
+                }
+            }
+            HeldTy::Option(part) | HeldTy::Array(part, _) => part.rewrite_types(rewrite),
+            HeldTy::Result(ok, err) => {
+                ok.rewrite_types(rewrite);
+                err.rewrite_types(rewrite);
+            }
+            HeldTy::Leaf(_) | HeldTy::Held(_) => {
+                let mut ty = self.ty();
+                rewrite(&mut ty);
+                *self = HeldTy::of(ty);
+            }
+        }
+    }
+
+    /// Whether every part is `#`, or could still be where `open` lets an
+    /// open representation stand for `#`.
+    pub fn is_full(&self, open: bool) -> bool {
+        self.parts().into_iter().all(|part| part.is_full(open))
+    }
+
+    fn same_by(&self, other: &Self, same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool) -> bool {
+        match (self, other) {
+            (HeldTy::Tuple(a), HeldTy::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_by(y, same))
+            }
+            (HeldTy::Option(a), HeldTy::Option(b)) => a.same_by(b, same),
+            (HeldTy::Result(a_ok, a_err), HeldTy::Result(b_ok, b_err)) => {
+                a_ok.same_by(b_ok, same) && a_err.same_by(b_err, same)
+            }
+            (HeldTy::Array(a, an), HeldTy::Array(b, bn)) => {
+                let same_len = match (an, bn) {
+                    (LenTerm::Known(x), LenTerm::Known(y)) => x == y,
+                    (LenTerm::Var(x), LenTerm::Var(y)) => x == y,
+                    (LenTerm::Known(_), LenTerm::Var(_)) | (LenTerm::Var(_), LenTerm::Known(_)) => {
+                        false
+                    }
+                };
+                same_len && a.same_by(b, same)
+            }
+            (HeldTy::Leaf(a), HeldTy::Leaf(b)) => same(&a.0, &b.0),
+            (HeldTy::Held(a), HeldTy::Held(b)) => a == b,
+            (
+                HeldTy::Tuple(_)
+                | HeldTy::Option(_)
+                | HeldTy::Result(..)
+                | HeldTy::Array(..)
+                | HeldTy::Leaf(_)
+                | HeldTy::Held(_),
+                _,
+            ) => false,
+        }
+    }
+
+    pub fn map<W: Phase>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+        on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+    ) -> HeldTy<W> {
+        let mut part = |p: &TypeArg<V>| p.map(on_var, on_identity, on_effect, on_len, on_repr);
+        match self {
+            HeldTy::Tuple(parts) => HeldTy::Tuple(parts.iter().map(&mut part).collect()),
+            HeldTy::Option(p) => HeldTy::Option(Box::new(part(p))),
+            HeldTy::Result(ok, err) => {
+                let ok = part(ok);
+                HeldTy::Result(Box::new(ok), Box::new(part(err)))
+            }
+            HeldTy::Array(p, len) => {
+                let p = part(p);
+                HeldTy::Array(Box::new(p), len.map(on_len))
+            }
+            HeldTy::Leaf(leaf) => {
+                HeldTy::of(leaf.0.map(on_var, on_identity, on_effect, on_len, on_repr))
+            }
+            HeldTy::Held(v) => HeldTy::of(on_var(*v)),
+        }
+    }
+
+    pub fn try_map<W: Phase, E>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+        on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+    ) -> Result<HeldTy<W>, E> {
+        let mut part = |p: &TypeArg<V>| p.try_map(on_var, on_identity, on_effect, on_len, on_repr);
+        Ok(match self {
+            HeldTy::Tuple(parts) => {
+                HeldTy::Tuple(parts.iter().map(&mut part).collect::<Result<_, _>>()?)
+            }
+            HeldTy::Option(p) => HeldTy::Option(Box::new(part(p)?)),
+            HeldTy::Result(ok, err) => {
+                let ok = part(ok)?;
+                HeldTy::Result(Box::new(ok), Box::new(part(err)?))
+            }
+            HeldTy::Array(p, len) => {
+                let p = part(p)?;
+                HeldTy::Array(Box::new(p), len.try_map(on_len)?)
+            }
+            HeldTy::Leaf(leaf) => {
+                HeldTy::of(
+                    leaf.0
+                        .try_map(on_var, on_identity, on_effect, on_len, on_repr)?,
+                )
+            }
+            HeldTy::Held(v) => HeldTy::of(on_var(*v)?),
         })
     }
 }
@@ -2669,50 +3333,49 @@ impl<V: Phase> TypeArg<V> {
 /// values whose Rust types differ in it are two types here, as `#τ` and
 /// `τ` are.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EffectArg<V: Phase> {
-    pub repr: Repr<V>,
-    pub effect: EffectTerm<V>,
+pub enum EffectArg<V: Phase> {
+    Uniform(EffectTerm<V>),
+    Specialized(EffectTerm<V>),
 }
 
 impl<V: Phase> EffectArg<V> {
-    pub fn new(repr: Repr<V>, effect: EffectTerm<V>) -> Self {
-        Self { repr, effect }
-    }
-
     pub fn uniform(effect: EffectTerm<V>) -> Self {
-        Self {
-            repr: Repr::Uniform,
-            effect,
-        }
+        EffectArg::Uniform(effect)
     }
 
     pub fn specialized(effect: EffectTerm<V>) -> Self {
-        Self {
-            repr: Repr::Specialized,
-            effect,
+        EffectArg::Specialized(effect)
+    }
+
+    pub fn effect(&self) -> &EffectTerm<V> {
+        match self {
+            EffectArg::Uniform(effect) | EffectArg::Specialized(effect) => effect,
+        }
+    }
+
+    pub fn is_specialized(&self) -> bool {
+        matches!(self, EffectArg::Specialized(_))
+    }
+
+    pub fn with_effect<W: Phase>(&self, effect: EffectTerm<W>) -> EffectArg<W> {
+        match self {
+            EffectArg::Uniform(_) => EffectArg::Uniform(effect),
+            EffectArg::Specialized(_) => EffectArg::Specialized(effect),
         }
     }
 
     pub fn map<W: Phase>(
         &self,
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
-        on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
     ) -> EffectArg<W> {
-        EffectArg {
-            repr: self.repr.map(on_repr),
-            effect: self.effect.map(on_effect),
-        }
+        self.with_effect(self.effect().map(on_effect))
     }
 
     pub fn try_map<W: Phase, E>(
         &self,
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
-        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
     ) -> Result<EffectArg<W>, E> {
-        Ok(EffectArg {
-            repr: self.repr.try_map(on_repr)?,
-            effect: self.effect.try_map(on_effect)?,
-        })
+        Ok(self.with_effect(self.effect().try_map(on_effect)?))
     }
 }
 
@@ -3219,7 +3882,8 @@ impl<V: Phase> TyTerm<V> {
     /// `MirErrorKind::IdentityMismatch` reports: this order is the pairing
     /// that refusal reads, and `typeck` compares the two lists position by
     /// position.
-    pub fn children(&self) -> Vec<&TyTerm<V>> {
+    pub fn children(&self) -> Vec<std::borrow::Cow<'_, TyTerm<V>>> {
+        use std::borrow::Cow;
         match self {
             TyTerm::Int(_)
             | TyTerm::Float
@@ -3235,12 +3899,16 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Array(inner, _)
             | TyTerm::Slice(inner)
             | TyTerm::Handle(inner)
-            | TyTerm::Option(inner) => vec![inner],
-            TyTerm::Ref(_, inner) => vec![&inner.ty],
-            TyTerm::Result(ok, err) => vec![ok, err],
-            TyTerm::Tuple(elems) => elems.iter().collect(),
-            TyTerm::Object(object) => object.values().collect(),
-            TyTerm::Enum { variants, .. } => variants.values().flatten().map(|b| &**b).collect(),
+            | TyTerm::Option(inner) => vec![Cow::Borrowed(&**inner)],
+            TyTerm::Ref(_, inner) => vec![inner.ty()],
+            TyTerm::Result(ok, err) => vec![Cow::Borrowed(&**ok), Cow::Borrowed(&**err)],
+            TyTerm::Tuple(elems) => elems.iter().map(Cow::Borrowed).collect(),
+            TyTerm::Object(object) => object.values().map(Cow::Borrowed).collect(),
+            TyTerm::Enum { variants, .. } => variants
+                .values()
+                .flatten()
+                .map(|b| Cow::Borrowed(&**b))
+                .collect(),
             TyTerm::Fn {
                 params,
                 ret,
@@ -3251,12 +3919,16 @@ impl<V: Phase> TyTerm<V> {
                 .map(|param| &param.ty)
                 .chain(std::iter::once(&**ret))
                 .chain(captures.iter())
+                .map(Cow::Borrowed)
                 .collect(),
-            TyTerm::UserDefined { type_args, .. } => type_args.iter().map(|arg| &arg.ty).collect(),
+            TyTerm::UserDefined { type_args, .. } => type_args.iter().map(TypeArg::ty).collect(),
         }
     }
 
-    pub fn children_mut(&mut self) -> Vec<&mut TyTerm<V>> {
+    /// `rewrite` on each type directly below this one. A type inside a `#`
+    /// tree is rewritten where the tree holds it, and the node it sits at is
+    /// the rewritten type's.
+    pub fn rewrite_children(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
         match self {
             TyTerm::Int(_)
             | TyTerm::Float
@@ -3268,33 +3940,38 @@ impl<V: Phase> TyTerm<V> {
             | TyTerm::Order
             | TyTerm::Str
             | TyTerm::Error(_)
-            | TyTerm::Var(_) => Vec::new(),
+            | TyTerm::Var(_) => {}
             TyTerm::Array(inner, _)
             | TyTerm::Slice(inner)
             | TyTerm::Handle(inner)
-            | TyTerm::Option(inner) => vec![&mut **inner],
-            TyTerm::Ref(_, inner) => vec![&mut inner.ty],
-            TyTerm::Result(ok, err) => vec![&mut **ok, &mut **err],
-            TyTerm::Tuple(elems) => elems.iter_mut().collect(),
-            TyTerm::Object(object) => object.fields.values_mut().collect(),
+            | TyTerm::Option(inner) => rewrite(inner),
+            TyTerm::Ref(_, inner) => inner.rewrite_types(rewrite),
+            TyTerm::Result(ok, err) => {
+                rewrite(ok);
+                rewrite(err);
+            }
+            TyTerm::Tuple(elems) => elems.iter_mut().for_each(rewrite),
+            TyTerm::Object(object) => object.fields.values_mut().for_each(rewrite),
             TyTerm::Enum { variants, .. } => variants
                 .values_mut()
                 .flatten()
-                .map(|payload| &mut **payload)
-                .collect(),
+                .for_each(|payload| rewrite(payload)),
             TyTerm::Fn {
                 params,
                 ret,
                 captures,
                 ..
-            } => params
-                .iter_mut()
-                .map(|param| &mut param.ty)
-                .chain(std::iter::once(&mut **ret))
-                .chain(captures.iter_mut())
-                .collect(),
+            } => {
+                for param in params {
+                    rewrite(&mut param.ty);
+                }
+                rewrite(ret);
+                captures.iter_mut().for_each(rewrite);
+            }
             TyTerm::UserDefined { type_args, .. } => {
-                type_args.iter_mut().map(|arg| &mut arg.ty).collect()
+                for arg in type_args {
+                    arg.rewrite_types(rewrite);
+                }
             }
         }
     }
@@ -3317,7 +3994,7 @@ impl<V: Phase> TyTerm<V> {
     }
 
     pub fn mentions_error(&self) -> bool {
-        matches!(self, TyTerm::Error(_)) || self.children().into_iter().any(TyTerm::mentions_error)
+        matches!(self, TyTerm::Error(_)) || self.children().iter().any(|c| c.mentions_error())
     }
 
     pub fn for_each_source(&self, on_source: &mut impl FnMut(IdentityId)) {
@@ -3346,7 +4023,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Slice(elem) => elem.for_each_identity(on_identity),
             TyTerm::Handle(inner) => inner.for_each_identity(on_identity),
             TyTerm::Option(inner) => inner.for_each_identity(on_identity),
-            TyTerm::Ref(_, inner) => inner.ty.for_each_identity(on_identity),
+            TyTerm::Ref(_, inner) => inner.ty().for_each_identity(on_identity),
             TyTerm::Result(ok, err) => {
                 ok.for_each_identity(on_identity);
                 err.for_each_identity(on_identity);
@@ -3392,7 +4069,7 @@ impl<V: Phase> TyTerm<V> {
                 ..
             } => {
                 for arg in type_args {
-                    arg.ty.for_each_identity(on_identity);
+                    arg.ty().for_each_identity(on_identity);
                 }
                 for arg in identity_args {
                     on_identity(arg);
@@ -3433,7 +4110,7 @@ impl<V: Phase> TyTerm<V> {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_erased(y))
             }
             (TyTerm::Ref(a_mut, a), TyTerm::Ref(b_mut, b)) => {
-                a_mut == b_mut && a.repr == b.repr && a.ty.same_erased(&b.ty)
+                a_mut == b_mut && a.same_by(b, &mut |x, y| x.same_erased(y))
             }
             (TyTerm::Object(a), TyTerm::Object(b)) => {
                 a.set == b.set
@@ -3510,7 +4187,7 @@ impl<V: Phase> TyTerm<V> {
                     && a_args
                         .iter()
                         .zip(b_args)
-                        .all(|(x, y)| x.repr == y.repr && x.ty.same_erased(&y.ty))
+                        .all(|(x, y)| x.same_by(y, &mut |x, y| x.same_erased(y)))
             }
             (TyTerm::Int(_), _)
             | (TyTerm::Float, _)
@@ -3623,10 +4300,7 @@ impl<V: Phase> TyTerm<V> {
                     .iter()
                     .map(|t| t.map(on_var, on_identity, on_effect, on_len, on_repr))
                     .collect(),
-                effect_args: effect_args
-                    .iter()
-                    .map(|e| e.map(on_effect, on_repr))
-                    .collect(),
+                effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
                 identity_args: identity_args.iter().map(|i| i.map(on_identity)).collect(),
             },
             TyTerm::Enum { name, variants, .. } => TyTerm::Enum {
@@ -3750,7 +4424,7 @@ impl<V: Phase> TyTerm<V> {
                     .collect::<Result<_, _>>()?,
                 effect_args: effect_args
                     .iter()
-                    .map(|e| e.try_map(on_effect, on_repr))
+                    .map(|e| e.try_map(on_effect))
                     .collect::<Result<_, _>>()?,
                 identity_args: identity_args
                     .iter()
@@ -3834,13 +4508,27 @@ pub fn lift_to_poly(ty: &Ty) -> PolyTy {
 /// minted it, never in a declaration.
 pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
     fn arg(a: &TypeArg<Concrete>, builder: &mut PolyBuilder) -> TypeArg<Poly> {
-        TypeArg {
-            repr: a.repr.map(&mut |v: Infallible| match v {}),
-            ty: go(&a.ty, builder),
+        match a {
+            TypeArg::Uniform(ty) => TypeArg::Uniform(go(ty, builder)),
+            TypeArg::Open(v, _) => match *v {},
+            TypeArg::Specialized(held) => TypeArg::Specialized(held_arg(held, builder)),
+        }
+    }
+    fn held_arg(held: &HeldTy<Concrete>, builder: &mut PolyBuilder) -> HeldTy<Poly> {
+        match held {
+            HeldTy::Tuple(parts) => HeldTy::Tuple(parts.iter().map(|p| arg(p, builder)).collect()),
+            HeldTy::Option(p) => HeldTy::Option(Box::new(arg(p, builder))),
+            HeldTy::Result(ok, err) => {
+                let ok = Box::new(arg(ok, builder));
+                HeldTy::Result(ok, Box::new(arg(err, builder)))
+            }
+            HeldTy::Array(p, len) => HeldTy::Array(Box::new(arg(p, builder)), lift_ty_len(len)),
+            HeldTy::Leaf(leaf) => HeldTy::of(go(leaf.ty(), builder)),
+            HeldTy::Held(v) => match *v {},
         }
     }
     fn effect_arg(a: &EffectArg<Concrete>) -> EffectArg<Poly> {
-        a.map(&mut |v: Infallible| match v {}, &mut |v: Infallible| match v {})
+        a.map(&mut |v: Infallible| match v {})
     }
     fn go(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
         match ty {

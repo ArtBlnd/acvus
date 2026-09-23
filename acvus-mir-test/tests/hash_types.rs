@@ -10,8 +10,8 @@ use acvus_mir::graph::{
 };
 use acvus_mir::ir::{Callee, CastKind};
 use acvus_mir::ty::{
-    CastRule, Effect, Instances, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Ty, TyTerm,
-    TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
+    CastRule, Effect, Instances, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, TyVarBound,
+    TypeArg, TypeRegistry, UserDefinedDecl,
 };
 use acvus_mir::typeck::CallTarget;
 use acvus_utils::{Freeze, Interner};
@@ -56,7 +56,7 @@ fn var_arg(t: &PolyTy) -> TypeArg<Poly> {
     let TyTerm::Var(v) = t else {
         panic!("a type variable")
     };
-    TypeArg::new(Repr::Var(*v), t.clone())
+    TypeArg::Open(*v, t.clone())
 }
 
 fn spec(ty: PolyTy) -> TypeArg<Poly> {
@@ -482,10 +482,10 @@ fn h4_a_uniform_binding_takes_the_generic_instance() {
     assert_eq!(ty_of(&i, "first(k())"), Ty::String);
 }
 
-// -- H5: R1 a composite is laid out whole --------------------------------
+// -- H5: R1 a composite is specialized part by part -----------------------
 
 #[test]
-fn h5_a_composite_inside_a_slot_is_one_representation() {
+fn h5_a_composite_inside_a_slot_is_specialized_part_by_part() {
     let i = Interner::new();
     let option = Ty::Option(Box::new(Ty::String));
     assert_eq!(ty_of(&i, "opt()"), vec_of(&i, spec_ty(option.clone())));
@@ -494,14 +494,14 @@ fn h5_a_composite_inside_a_slot_is_one_representation() {
     let errs = errors_of(&i, "g2(optv())");
     assert!(
         errs.iter()
-            .any(|e| e.contains("Vec<#Option<String>>") && e.contains("Vec<Option<String>>")),
+            .any(|e| e.contains("Vec<#Option<#String>>") && e.contains("Vec<Option<String>>")),
         "{errs:?}"
     );
     assert_eq!(ty_of(&i, "first(optv())"), option);
     let errs = errors_of(&i, "first(opt())");
     assert!(
         errs.iter()
-            .any(|e| e.contains("Vec<#Option<String>>") && e.contains("Vec<Option<String>>")),
+            .any(|e| e.contains("Vec<#Option<#String>>") && e.contains("Vec<Option<String>>")),
         "{errs:?}"
     );
 }

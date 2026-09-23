@@ -130,13 +130,14 @@ pub fn object_fields_at<'a, const K: usize>(
     names: [&str; K],
 ) -> [(FieldAt, ArgAt<'a>); K] {
     let object = match at.ty {
-        Ty::Ref(_, inner) => &inner.ty,
-        other => other,
+        Ty::Ref(_, inner) => inner.whole(),
+        other => Some(other),
     };
-    let Ty::Object(obj) = object else {
+    let Some(Ty::Object(obj)) = object else {
         panic!(
-            "a projection parameter's argument is typed {object:?}, which names no object \
-             (RFC-0050 rule 6)"
+            "a projection parameter's argument is typed {:?}, which names no object \
+             (RFC-0050 rule 6)",
+            at.ty
         )
     };
     let shape = ObjectShape::of(at.interner, obj.keys().copied());
@@ -177,13 +178,14 @@ pub fn variant_tags_at<'a, const K: usize>(
     names: [&str; K],
 ) -> [(u64, Option<ArgAt<'a>>); K] {
     let declared = match at.ty {
-        Ty::Ref(_, inner) => &inner.ty,
-        other => other,
+        Ty::Ref(_, inner) => inner.whole(),
+        other => Some(other),
     };
-    let Ty::Enum { variants, .. } = declared else {
+    let Some(Ty::Enum { variants, .. }) = declared else {
         panic!(
-            "an enum projection parameter's argument is typed {declared:?}, which names no enum \
-             (RFC-0050 rule 6)"
+            "an enum projection parameter's argument is typed {:?}, which names no enum \
+             (RFC-0050 rule 6)",
+            at.ty
         )
     };
     names.map(|name| {

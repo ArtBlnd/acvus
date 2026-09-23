@@ -70,7 +70,8 @@ pub use slice::{BySlice, Slice, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
 pub use ty_arg::{
-    Kind, Monomorphize, Never, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var, held_effect, kind,
+    Chosen, ChosenNth, Kind, Monomorphize, Never, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var,
+    held_effect, kind,
 };
 pub use vec::vec_ty;
 
@@ -79,7 +80,7 @@ pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, exte
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{
     CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm, LenTerm, Mutability, ObjectTy, ParamTerm, Poly,
-    Home, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
+    HeldTy, Home, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
     UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };
 pub use acvus_utils::{Astr, Interner, QualifiedRef};

@@ -75,7 +75,9 @@ fn kind_of(bound: &TypeParamBound) -> Option<syn::Result<VarKind>> {
 /// its handler is compiled for, and whether the runtime's value can stand in
 /// for it: it can unless the parameter carries a trait bound the erased
 /// value cannot satisfy. An effect variable bounded by `Suspends` carries
-/// that bound (RFC-0011 rule 5).
+/// that bound (RFC-0011 rule 5). A signature's type variable bounded by
+/// `Chosen` is one each instance fills with a Rust type of its own
+/// (RFC-0041).
 pub struct Var {
     pub ident: Ident,
     pub kind: VarKind,
@@ -83,6 +85,7 @@ pub struct Var {
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
     pub suspends: bool,
+    pub chosen: bool,
 }
 
 pub struct Vars(Vec<Var>);
@@ -212,6 +215,14 @@ impl Vars {
                     "Suspends is an effect-variable bound: it needs Var<kind::Effect>",
                 ));
             }
+            let chosen =
+                bounds_of(generics, tp).any(|b| bound_ident(b).is_some_and(|i| i == "Chosen"));
+            if chosen && kind != VarKind::Ty {
+                return Err(syn::Error::new(
+                    tp.ident.span(),
+                    "Chosen is a type-variable bound: it needs Var<kind::Type>",
+                ));
+            }
             let slot = kind as usize;
             let mono_fallback = mono.is_some() && !has_extra_bounds;
             vars.push(Var {
@@ -221,6 +232,7 @@ impl Vars {
                 mono,
                 mono_fallback,
                 suspends,
+                chosen,
             });
             counts[slot] += 1;
         }
@@ -302,6 +314,7 @@ impl Vars {
         let k = v.index;
         match v.kind {
             VarKind::Runtime => syn::parse_quote! { __R },
+            VarKind::Ty if v.chosen => syn::parse_quote! { ::acvus_extern::ChosenNth<#k> },
             kind => {
                 let marker = kind.marker();
                 syn::parse_quote! { ::acvus_extern::Nth<#marker, #k> }
@@ -443,6 +456,24 @@ impl Vars {
     /// that has no place to carry the bound.
     pub fn suspending(&self) -> Option<&Ident> {
         self.0.iter().find(|v| v.suspends).map(|v| &v.ident)
+    }
+
+    /// The first type variable bounded by `Chosen`, for a declaration that
+    /// is not a shared signature and so has no instance to choose it.
+    pub fn chosen(&self) -> Option<&Ident> {
+        self.0.iter().find(|v| v.chosen).map(|v| &v.ident)
+    }
+
+    /// The number of each type variable bounded by `Chosen`, as an
+    /// unsuffixed literal the `Vec<u32>` it is written into types:
+    /// `PolyVars::fresh` numbers a declaration's type variables in order
+    /// from zero.
+    pub fn chosen_numbers(&self) -> Vec<proc_macro2::Literal> {
+        self.0
+            .iter()
+            .filter(|v| v.chosen)
+            .map(|v| proc_macro2::Literal::usize_unsuffixed(v.index))
+            .collect()
     }
 
     /// Whether effect variable `ident` is bounded by `Suspends`.

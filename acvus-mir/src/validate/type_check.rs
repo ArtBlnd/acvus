@@ -286,9 +286,7 @@ fn types_match(expected: &Ty, actual: &Ty) -> bool {
         (Ty::Array(a, la), Ty::Array(b, lb)) => la == lb && types_match(a, b),
         (Ty::Option(a), Ty::Option(b)) | (Ty::Slice(a), Ty::Slice(b)) => types_match(a, b),
         (Ty::Result(ta, ea), Ty::Result(tb, eb)) => types_match(ta, tb) && types_match(ea, eb),
-        (Ty::Ref(ma, a), Ty::Ref(mb, b)) => {
-            ma == mb && a.repr == b.repr && types_match(&a.ty, &b.ty)
-        }
+        (Ty::Ref(ma, a), Ty::Ref(mb, b)) => ma == mb && a.same_by(b, &mut |x, y| types_match(x, y)),
         (Ty::Tuple(a), Ty::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_match(x, y))
         }
@@ -562,7 +560,7 @@ impl CheckCtx {
             }
             return None;
         };
-        let at = self.walk(pc, span, inst_name, inner.ty.clone(), path, errors)?;
+        let at = self.walk(pc, span, inst_name, inner.ty().into_owned(), path, errors)?;
         Some((*m, at))
     }
 
@@ -690,7 +688,7 @@ impl CheckCtx {
         errors: &mut Vec<ValidationError>,
     ) {
         let lends_structural = operand_ty.is_error()
-            || matches!(operand_ty, Ty::Ref(_, lent) if crate::structural::components(&lent.ty).is_some());
+            || matches!(operand_ty, Ty::Ref(_, lent) if crate::structural::components(&lent.ty()).is_some());
         if !lends_structural {
             errors.push(ValidationError {
                 scope: self.scope_name.clone(),
@@ -832,6 +830,7 @@ impl CheckCtx {
                     self.invalid(pc, span, "Index", "Ref(_, Slice)", slice_ty, errors);
                     return;
                 };
+                let element = &element;
                 let dst_ty = ty!(*dst);
                 match mode {
                     IndexMode::Copy => {
@@ -868,6 +867,7 @@ impl CheckCtx {
                     self.invalid(pc, span, "IndexSet", "Ref(Mut, Slice)", slice_ty, errors);
                     return;
                 };
+                let element = &element;
                 let value_ty = ty!(*value);
                 self.assert_match(pc, span, "IndexSet", "value", element, value_ty, errors);
             }
@@ -900,7 +900,7 @@ impl CheckCtx {
                 let src_ty = ty!(*src);
                 let is_string = match src_ty {
                     Ty::String | Ty::Error(_) => true,
-                    Ty::Ref(_, inner) => matches!(inner.ty, Ty::String),
+                    Ty::Ref(_, inner) => matches!(*inner.ty(), Ty::String),
                     _ => false,
                 };
                 if !is_string {
@@ -921,7 +921,7 @@ impl CheckCtx {
                 self.assert_match(pc, span, "StringEq", "dst", &Ty::Bool, dst_ty, errors);
                 for operand in [a, b] {
                     let operand_ty = ty!(*operand);
-                    let is_lent_text = matches!(operand_ty, Ty::Ref(_, inner) if matches!(inner.ty, Ty::String | Ty::Str))
+                    let is_lent_text = matches!(operand_ty, Ty::Ref(_, inner) if matches!(*inner.ty(), Ty::String | Ty::Str))
                         || operand_ty.is_error();
                     if !is_lent_text {
                         errors.push(ValidationError {
@@ -946,7 +946,15 @@ impl CheckCtx {
                     self.assert_lends_structural(pc, span, "StructuralEq", operand_ty, errors);
                 }
                 if let (Ty::Ref(_, a_lent), Ty::Ref(_, b_lent)) = (a_ty, b_ty) {
-                    self.assert_match(pc, span, "StructuralEq", "b", &a_lent.ty, &b_lent.ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "StructuralEq",
+                        "b",
+                        &a_lent.ty(),
+                        &b_lent.ty(),
+                        errors,
+                    );
                 }
             }
             InstKind::StructuralClone { dst, src, .. } => {
@@ -954,7 +962,15 @@ impl CheckCtx {
                 self.assert_lends_structural(pc, span, "StructuralClone", src_ty, errors);
                 if let Ty::Ref(_, lent) = src_ty {
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "StructuralClone", "dst", &lent.ty, dst_ty, errors);
+                    self.assert_match(
+                        pc,
+                        span,
+                        "StructuralClone",
+                        "dst",
+                        &lent.ty(),
+                        dst_ty,
+                        errors,
+                    );
                 }
             }
             InstKind::StringConcat { dst, parts } => {
@@ -964,7 +980,7 @@ impl CheckCtx {
                     let part_ty = ty!(*part);
                     let is_text = match part_ty {
                         Ty::String => true,
-                        Ty::Ref(_, inner) => matches!(inner.ty, Ty::String | Ty::Str),
+                        Ty::Ref(_, inner) => matches!(*inner.ty(), Ty::String | Ty::Str),
                         Ty::Error(_) => true,
                         _ => false,
                     };
@@ -997,7 +1013,7 @@ impl CheckCtx {
                 let part_ty = ty!(*part);
                 let is_text = match part_ty {
                     Ty::String => true,
-                    Ty::Ref(_, inner) => matches!(inner.ty, Ty::String | Ty::Str),
+                    Ty::Ref(_, inner) => matches!(*inner.ty(), Ty::String | Ty::Str),
                     Ty::Error(_) => true,
                     _ => false,
                 };
@@ -1649,7 +1665,7 @@ impl CheckCtx {
             InstKind::TestObjectKey { dst, src, .. } => {
                 let src_ty = ty!(*src);
                 let src_ty = match src_ty {
-                    Ty::Ref(_, inner) => &inner.ty,
+                    Ty::Ref(_, inner) => &inner.ty(),
                     other => other,
                 };
                 let src_ty = if matches!(src_ty, Ty::Object(_) | Ty::Error(_)) {
@@ -1676,7 +1692,7 @@ impl CheckCtx {
             InstKind::TestVariant { dst, src, .. } => {
                 let src_ty = ty!(*src);
                 let src_ty = match src_ty {
-                    Ty::Ref(_, inner) => &inner.ty,
+                    Ty::Ref(_, inner) => &inner.ty(),
                     other => other,
                 };
                 if !matches!(
@@ -1917,6 +1933,7 @@ impl CheckCtx {
                             self.invalid(pc, span, "For", "Ref(_, Slice)", slice_ty, errors);
                             return;
                         };
+                        let element = &element;
                         if held != wanted {
                             self.invalid(
                                 pc,
@@ -2180,17 +2197,17 @@ fn run_of(ty: &Ty) -> Option<Mutability> {
     let Ty::Ref(mutability, target) = ty else {
         return None;
     };
-    matches!(target.ty, Ty::Slice(_) | Ty::Str).then_some(*mutability)
+    matches!(*target.ty(), Ty::Slice(_) | Ty::Str).then_some(*mutability)
 }
 
-fn slice_of(ty: &Ty) -> Option<(Mutability, &Ty)> {
+fn slice_of(ty: &Ty) -> Option<(Mutability, Ty)> {
     let Ty::Ref(mutability, target) = ty else {
         return None;
     };
-    let Ty::Slice(element) = &target.ty else {
+    let Ty::Slice(element) = target.ty().into_owned() else {
         return None;
     };
-    Some((*mutability, element))
+    Some((*mutability, *element))
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_ext::vec_registry;
 use acvus_extern::{
     DirectOp, ExternHandler, Externs, FnKind, Interner, Monomorphize, OneValue, PolyTy,
-    QualifiedRef, Registry, Release, Repr, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
+    QualifiedRef, Registry, Release, Runtime, TyTerm, TypeArg, extern_fn, extern_registry,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -547,7 +547,7 @@ fn a_member_instance_marks_the_slots_holding_the_member() {
 }
 
 #[test]
-fn a_type_variable_at_a_specializing_slot_carries_the_signature_s_rho() {
+fn a_type_variable_at_a_specializing_slot_carries_its_slot_s_rho() {
     let w = World::new();
     let TyTerm::Fn { ret, .. } = &w.function("t", "zeros").ty else {
         panic!("zeros has a function type")
@@ -555,8 +555,7 @@ fn a_type_variable_at_a_specializing_slot_carries_the_signature_s_rho() {
     let TyTerm::UserDefined { type_args, .. } = &**ret else {
         panic!("zeros returns a Vec")
     };
-    assert!(matches!(type_args[0].repr, Repr::Var(_)));
-    assert!(matches!(type_args[0].ty, TyTerm::Var(_)));
+    assert!(matches!(type_args[0], TypeArg::Open(_, TyTerm::Var(_))));
 }
 
 // -- Cast rules ---------------------------------------------------------

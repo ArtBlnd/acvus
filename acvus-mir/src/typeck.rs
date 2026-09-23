@@ -5,6 +5,7 @@ use acvus_ast::{
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 
 use crate::error::{
     DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
@@ -25,8 +26,9 @@ use crate::solver::{
 use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    CastTy, Effect, EffectTerm, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm,
-    Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed, lift_ty,
+    CastTy, Effect, EffectTerm, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy,
+    ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed,
+    lift_ty,
 };
 use crate::variant::VariantPayload;
 
@@ -283,25 +285,25 @@ fn written_place(interner: &Interner, expr: &Expr) -> ShownValue {
     }
 }
 
-fn behind_a_reference(ty: &Ty) -> &Ty {
+fn behind_a_reference(ty: &Ty) -> Cow<'_, Ty> {
     match ty {
-        TyTerm::Ref(_, referent) => &referent.ty,
-        other => other,
+        TyTerm::Ref(_, referent) => referent.ty(),
+        other => Cow::Borrowed(other),
     }
 }
 
 /// What a lent operand's reference names, as the operator's report shows it.
 fn referent_shown(ty: Ty) -> Ty {
     match ty {
-        Ty::Ref(_, named) => named.ty,
+        Ty::Ref(_, named) => named.into_ty(),
         other => other,
     }
 }
 
-fn referent_of(ty: &InferTy) -> &InferTy {
+fn referent_of(ty: &InferTy) -> Cow<'_, InferTy> {
     match ty {
-        TyTerm::Ref(_, referent) => &referent.ty,
-        other => other,
+        TyTerm::Ref(_, referent) => referent.ty(),
+        other => Cow::Borrowed(other),
     }
 }
 
@@ -316,7 +318,7 @@ fn takes_container(candidates: &[SignatureCandidate], container: &InferTy) -> bo
             return true;
         };
         match scheme.params().first().map(|param| &param.ty) {
-            Some(TyTerm::Ref(_, takes)) => sliceable_head(&takes.ty) == Some(head),
+            Some(TyTerm::Ref(_, takes)) => sliceable_head(&takes.ty()) == Some(head),
             _ => false,
         }
     })
@@ -333,13 +335,13 @@ where
 }
 
 /// The type behind a reference, or the type itself.
-fn strip_ref<V>(ty: &TyTerm<V>) -> &TyTerm<V>
+fn strip_ref<V>(ty: &TyTerm<V>) -> Cow<'_, TyTerm<V>>
 where
     V: crate::ty::Phase,
 {
     match ty {
-        TyTerm::Ref(_, inner) => &inner.ty,
-        _ => ty,
+        TyTerm::Ref(_, inner) => inner.ty(),
+        _ => Cow::Borrowed(ty),
     }
 }
 
@@ -780,7 +782,7 @@ impl ResultCrossing {
     fn unreturnable<'t>(self, ty: &'t InferTy) -> Option<Unreturnable<'t>> {
         let reference = match (self, ty) {
             (Self::Registers, _) if is_pair(ty) => None,
-            (_, TyTerm::Ref(_, target)) => is_view(&target.ty).then_some(ty),
+            (_, TyTerm::Ref(_, target)) => is_view(&target.ty()).then_some(ty),
             // The crossing governs the top level only: below it a reference
             // inside data is RFC-0062 rule 5's refusal whatever its
             // shape, so no branch separates the two here.
@@ -811,10 +813,23 @@ fn closure_in_result(ty: &InferTy) -> Option<&InferTy> {
             .iter()
             .filter_map(|(_, payload)| payload.as_ref())
             .find_map(|payload| closure_in_result(payload)),
-        TyTerm::UserDefined { type_args, .. } => {
-            type_args.iter().find_map(|arg| closure_in_result(&arg.ty))
-        }
+        TyTerm::UserDefined { type_args, .. } => type_args.iter().find_map(closure_in_arg),
         _ => None,
+    }
+}
+
+/// A closure anywhere in an argument, part by part. A `#` part over a type
+/// variable is no closure, as the variable is not.
+fn closure_in_arg(arg: &TypeArg<Infer>) -> Option<&InferTy> {
+    match arg {
+        TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => closure_in_result(ty),
+        TypeArg::Specialized(held) => match held {
+            HeldTy::Leaf(leaf) => closure_in_result(leaf.ty()),
+            HeldTy::Held(_) => None,
+            HeldTy::Tuple(_) | HeldTy::Option(_) | HeldTy::Result(..) | HeldTy::Array(..) => {
+                held.parts().into_iter().find_map(closure_in_arg)
+            }
+        },
     }
 }
 
@@ -825,7 +840,7 @@ fn closure_in_result(ty: &InferTy) -> Option<&InferTy> {
 /// through a reference and this does not: a reference *to* a view is the one
 /// `Kind::Ref` word, which reaches half a pair.
 fn is_pair(ty: &InferTy) -> bool {
-    matches!(ty, TyTerm::Ref(_, target) if matches!(target.ty, TyTerm::Str | TyTerm::Slice(_)))
+    matches!(ty, TyTerm::Ref(_, target) if matches!(*target.ty(), TyTerm::Str | TyTerm::Slice(_)))
 }
 
 /// The two adjacent word registers a run occupies (RFC-0047 rule 6,
@@ -837,7 +852,7 @@ fn is_pair(ty: &InferTy) -> bool {
 fn is_view(ty: &InferTy) -> bool {
     match ty {
         TyTerm::Slice(_) | TyTerm::Str => true,
-        TyTerm::Ref(_, target) => is_view(&target.ty),
+        TyTerm::Ref(_, target) => is_view(&target.ty()),
         _ => false,
     }
 }
@@ -1916,13 +1931,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(_, borrowed) = self.solver.shallow_resolve_ty(param_ty) else {
             return false;
         };
-        let TyTerm::Object(projection) = self.solver.shallow_resolve_ty(&borrowed.ty) else {
+        let TyTerm::Object(projection) = self.solver.shallow_resolve_ty(&borrowed.ty()) else {
             return false;
         };
         let TyTerm::Ref(_, referent) = self.solver.shallow_resolve_ty(arg_ty) else {
             return false;
         };
-        let TyTerm::Object(argument) = self.solver.shallow_resolve_ty(&referent.ty) else {
+        let TyTerm::Object(argument) = self.solver.shallow_resolve_ty(&referent.ty()) else {
             return false;
         };
         let Some(field) = projection.borrowed_field_missing_from(&argument) else {
@@ -1982,7 +1997,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(mutability, wanted) = self.solver.shallow_resolve_ty(param_ty) else {
             return false;
         };
-        let Some(view) = View::of(&self.solver.shallow_resolve_ty(&wanted.ty)) else {
+        let Some(view) = View::of(&self.solver.shallow_resolve_ty(&wanted.ty())) else {
             return false;
         };
         if view == View::Str && mutability != Mutability::Shared {
@@ -2022,7 +2037,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(_, container) = self.solver.shallow_resolve_ty(arg_ty) else {
             return SliceCoercion::NoDeclaration;
         };
-        let referent = self.solver.resolve_ty(&container.ty);
+        let referent = self.solver.resolve_ty(&container.ty());
         let lent_as = TyTerm::Ref(viewed.mutability, container);
         self.slice_coercion(&referent, viewed, &lent_as, param_ty, site.id, site.span)
     }
@@ -2055,7 +2070,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .into_iter()
             .filter(
                 |(_, scheme)| match scheme.params().first().map(|param| &param.ty) {
-                    Some(TyTerm::Ref(_, takes)) => takes_referent(&takes.ty),
+                    Some(TyTerm::Ref(_, takes)) => takes_referent(&takes.ty()),
                     _ => false,
                 },
             )
@@ -2177,7 +2192,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         viewed: Viewed,
     ) {
         let referent = match self.solver.shallow_resolve_ty(arg) {
-            TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
+            TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty()),
             other => other,
         };
         let open = matches!(referent, TyTerm::Var(_));
@@ -2566,7 +2581,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
         let captured_a_view = capture_types.iter().zip(&ls.captures).any(|(t, c)| {
             matches!(t, TyTerm::Ref(_, target)
-                if self.solver.captured_shape(&target.ty) == CapturedShape::Pair)
+                if self.solver.captured_shape(&target.ty()) == CapturedShape::Pair)
                 && !matches!(c.read, CaptureSource::Decided(_))
         });
         if captured_a_view {
@@ -2606,7 +2621,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// holds one (RFC-0064 rule 5).
     fn reference_in_data(&self, ty: &InferTy, shape: DataShape) -> Option<MirErrorKind> {
         match self.solver.resolve_ty(ty) {
-            TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => {
+            TyTerm::Ref(_, inner) if matches!(*inner.ty(), TyTerm::Str) => {
                 Some(MirErrorKind::ViewInData(shape))
             }
             TyTerm::Ref(..) => Some(MirErrorKind::ReferenceInData(shape)),
@@ -2723,7 +2738,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 };
                 self.record(*id, var_ty.clone());
                 match self.solver.shallow_resolve_ty(&var_ty) {
-                    TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
+                    TyTerm::Ref(Mutability::Mut, inner) => inner.into_ty(),
                     TyTerm::Ref(Mutability::Shared, _) => {
                         let shown = self.type_as_written(&var_ty);
                         let subject = ShownValue::Named(self.interner.resolve(*name).to_string());
@@ -2857,7 +2872,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     fn near_fields(&self, object_ty: &Ty, wanted: &str) -> DidYouMean {
-        let TyTerm::Object(object) = behind_a_reference(object_ty) else {
+        let TyTerm::Object(object) = &*behind_a_reference(object_ty) else {
             return DidYouMean::default();
         };
         DidYouMean::of(
@@ -2875,7 +2890,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         enum_name: Option<Astr>,
         wanted: Astr,
     ) -> DidYouMean {
-        let TyTerm::Enum { name, variants, .. } = behind_a_reference(scrutinee_ty) else {
+        let TyTerm::Enum { name, variants, .. } = &*behind_a_reference(scrutinee_ty) else {
             return DidYouMean::default();
         };
         let qualified = |tag: &Astr| match enum_name {
@@ -2969,7 +2984,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             shapes.extend(compiler_instances.iter().filter_map(|c| match &c.ty {
                 TyTerm::Fn { params, .. } => match &params.first()?.ty {
-                    TyTerm::Ref(_, taken) => Some(taken.ty.clone()),
+                    TyTerm::Ref(_, taken) => Some(taken.ty().into_owned()),
                     taken => Some(taken.clone()),
                 },
                 _ => None,
@@ -3169,7 +3184,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(_, lent) = &params.first()?.ty else {
             return None;
         };
-        let ty = self.solver.close_ty(&lent.ty).ok()?;
+        let ty = self.solver.close_ty(&lent.ty()).ok()?;
         let leaves = structural_leaves(&ty, self.interner)
             .into_iter()
             .map(|leaf| {
@@ -3799,8 +3814,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let Some(references) = ReferencePair::of(&from, &to) else {
                         unreachable!("a ThroughRef answer was formed from a reference pair")
                     };
-                    let named_from = references.from.ty.clone();
-                    let named_to = references.to.ty.clone();
+                    let named_from = references.from.ty().clone();
+                    let named_to = references.to.ty().clone();
                     PendingCast::ThroughRef {
                         mutability,
                         cast: self.cast_at(cast, &named_from, &named_to, span),
@@ -3820,13 +3835,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let lent_ty = self.solver.shallow_resolve_ty(lent_ty);
         let param_ty = self.solver.shallow_resolve_ty(param_ty);
         let (expected, got) = match ReferencePair::of(&lent_ty, &param_ty) {
-            Some(references) => (&references.to.ty, &references.from.ty),
-            None => (&param_ty, &lent_ty),
+            Some(references) => (references.to.ty(), references.from.ty()),
+            None => (Cow::Borrowed(&param_ty), Cow::Borrowed(&lent_ty)),
         };
         self.error(
             MirErrorKind::UnificationFailure {
-                expected: self.type_as_written(expected),
-                got: self.type_as_written(got),
+                expected: self.type_as_written(&expected),
+                got: self.type_as_written(&got),
             },
             span,
         );
@@ -3995,7 +4010,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// writes before the refused one. `Vec<i64>` is not what `iter::next`
     /// takes, and `into_iter` yields `Items<T>` of it, which is.
     fn a_call_that_reaches(&self, arg: &Ty, takes: &[crate::ty::PolyTy]) -> Vec<String> {
-        let taken: Vec<&crate::ty::PolyTy> = takes
+        let taken: Vec<Cow<'_, crate::ty::PolyTy>> = takes
             .iter()
             .filter_map(|t| match t {
                 TyTerm::Fn { params, .. } => params.first().map(|p| strip_ref(&p.ty)),
@@ -4024,12 +4039,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     continue;
                 };
                 let yielded = strip_ref(ret);
-                if !names_a_shape(strip_ref(&param.ty)) || !names_a_shape(yielded) {
+                if !names_a_shape(&strip_ref(&param.ty)) || !names_a_shape(&yielded) {
                     continue;
                 }
                 if !taken
                     .iter()
-                    .any(|t| crate::ty::could_match_pattern(yielded, t))
+                    .any(|t| crate::ty::could_match_pattern(&yielded, t))
                 {
                     continue;
                 }
@@ -4099,7 +4114,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         && let Some(first) = params.first()
                     {
                         let arg = self.type_as_written(&first.ty);
-                        let reaches = self.a_call_that_reaches(strip_ref(&arg), &instances);
+                        let reaches = self.a_call_that_reaches(&strip_ref(&arg), &instances);
                         if !reaches.is_empty() {
                             labels.push(Label::note(format!(
                                 "{} takes {}",
@@ -4461,12 +4476,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
 
         let container = self.solver.resolve_ty(&first.ty);
-        if Self::is_error(referent_of(&container)) {
+        if Self::is_error(&referent_of(&container)) {
             return self.record_ret(id, Self::infer_error());
         }
         if !takes_container(
             &candidates,
-            &self.solver.resolve_ty(referent_of(&container)),
+            &self.solver.resolve_ty(&referent_of(&container)),
         ) {
             self.index_uses.push(IndexUse {
                 id,
@@ -4526,7 +4541,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(_, run) = self.solver.shallow_resolve_ty(&slice) else {
             return Self::infer_error();
         };
-        match self.solver.shallow_resolve_ty(&run.ty) {
+        match self.solver.shallow_resolve_ty(&run.ty()) {
             TyTerm::Slice(element) => *element,
             _ => Self::infer_error(),
         }
@@ -4546,7 +4561,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             demand,
         } in uses
         {
-            let referent = self.solver.resolve_ty(referent_of(&container));
+            let referent = self.solver.resolve_ty(&referent_of(&container));
             if Self::is_error(&element) || self.call_refused(callee_id) {
                 let ty = self.type_as_written(&referent);
                 self.error(MirErrorKind::CannotIndex { ty }, span);
@@ -5701,7 +5716,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             _ => return resolved,
         };
-        let referent = self.solver.resolve_ty(&inner.ty);
+        let referent = self.solver.resolve_ty(&inner.ty());
         let word = referent.is_word() != Some(false);
         if stays_lent || word {
             referent
@@ -5846,7 +5861,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let ty = self.check_expr(expr);
                 let tt = self.check_expr(target);
                 let inner = match self.solver.resolve_ty(&tt) {
-                    TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
+                    TyTerm::Ref(Mutability::Mut, inner) => inner.into_ty(),
                     TyTerm::Error(_) => Self::infer_error(),
                     // A store through `*r` writes through a `&mut`, so a head
                     // still open is one (RFC-0018 rule 4).
@@ -6109,7 +6124,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let container = self.solver.resolve_ty(&first.ty);
         if !takes_container(
             &candidates,
-            &self.solver.resolve_ty(referent_of(&container)),
+            &self.solver.resolve_ty(&referent_of(&container)),
         ) {
             self.error(
                 MirErrorKind::ForSourceNotAdmitted {
@@ -6177,9 +6192,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         match &resolved {
             TyTerm::String | TyTerm::Error(_) => {}
-            TyTerm::Ref(_, inner) => match self.solver.resolve_ty(&inner.ty) {
+            TyTerm::Ref(_, inner) => match self.solver.resolve_ty(&inner.ty()) {
                 TyTerm::String | TyTerm::Str | TyTerm::Error(_) => {}
-                TyTerm::Var(_) => self.convert_at(&inner.ty, &TyTerm::String, site),
+                TyTerm::Var(_) => self.convert_at(&inner.ty(), &TyTerm::String, site),
                 _ => self.error(
                     MirErrorKind::EmitNotString {
                         actual: self.type_as_written(&resolved),
@@ -6603,7 +6618,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             inner
                         }
                         TyTerm::Ref(_, inner) => {
-                            let inner = self.solver.resolve_ty(&inner.ty);
+                            let inner = self.solver.resolve_ty(&inner.ty());
                             match self.refuse_read_through(&inner, ReadThrough::Deref, *span) {
                                 true => Self::infer_error(),
                                 false => inner,
@@ -6687,7 +6702,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let field_key = *field;
                 let field_str = || self.interner.resolve(*field).to_string();
                 if let TyTerm::Ref(_, inner) = &ot {
-                    let field_ty = match self.solver.shallow_resolve_ty(&inner.ty) {
+                    let field_ty = match self.solver.shallow_resolve_ty(&inner.ty()) {
                         TyTerm::Object(fields) if fields.contains_key(&field_key) => {
                             fields[&field_key].clone()
                         }
@@ -6697,7 +6712,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             let partial = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter(
                                 [(field_key, fresh.clone())],
                             )));
-                            if self.solver.unify(&inner.ty, &partial).is_err() {
+                            if self.solver.unify(&inner.ty(), &partial).is_err() {
                                 self.error(
                                     MirErrorKind::UndefinedField {
                                         near: self
@@ -7377,7 +7392,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(_, inner) = &resolved else {
             return resolved;
         };
-        match self.solver.shallow_resolve_ty(&inner.ty) {
+        match self.solver.shallow_resolve_ty(&inner.ty()) {
             lent @ (TyTerm::Fn { .. } | TyTerm::Var(_)) => lent,
             _ => resolved,
         }
@@ -7939,12 +7954,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// and the references do not agree on their mutability.
     fn shared_meeting(&mut self, branches: &[Branch]) -> Option<InferTy> {
         let mut mutabilities = Vec::with_capacity(branches.len());
-        let mut repr = None;
         for branch in branches {
             match self.solver.shallow_resolve_ty(&branch.ty) {
-                TyTerm::Ref(mutability, named) => {
+                TyTerm::Ref(mutability, _) => {
                     mutabilities.push(mutability);
-                    repr.get_or_insert(named.repr);
                 }
                 TyTerm::Never => {}
                 _ => return None,
@@ -7955,7 +7968,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
         Some(TyTerm::Ref(
             Mutability::Shared,
-            Box::new(TypeArg::new(repr?, self.solver.fresh_ty_var())),
+            Box::new(TypeArg::Open(
+                self.solver.fresh_repr_var(),
+                self.solver.fresh_ty_var(),
+            )),
         ))
     }
 
@@ -8069,7 +8085,7 @@ fn is_text(ty: &InferTy) -> bool {
 fn holds_text(ty: &InferTy) -> bool {
     match ty {
         TyTerm::String | TyTerm::Str => true,
-        TyTerm::Ref(_, inner) => holds_text(&inner.ty),
+        TyTerm::Ref(_, inner) => holds_text(&inner.ty()),
         _ => false,
     }
 }

@@ -610,8 +610,8 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
     };
     assert_eq!(
         at_f64.ty.display(&interner).to_string(),
-        "Fn(Vec<#Option<Float>>) -> Float",
-        "the `#` sits on the Vec slot, which holds the composite whole"
+        "Fn(Vec<#Option<#Float>>) -> Float",
+        "the `#` sits on the Vec slot and on each part of the composite it holds"
     );
 
     let vec = QualifiedRef::root(interner.intern("Vec"));
@@ -659,7 +659,7 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
         .collect();
     assert_eq!(
         displayed,
-        ["Fn(Vec<Option<Float>>) -> Vec<#Option<Float>>"],
+        ["Fn(Vec<Option<Float>>) -> Vec<#Option<#Float>>"],
         "the one cast instance is at the composite Option<Float>"
     );
 }

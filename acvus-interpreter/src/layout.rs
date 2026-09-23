@@ -5,7 +5,7 @@
 
 use acvus_extern::{NodeHash, ObjectShape, Owned, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{LenTerm, Repr, Ty};
+use acvus_mir::ty::{LenTerm, Ty, TypeArg};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -333,12 +333,15 @@ pub fn extension<'a>(
             ty.display(&rt.shared.interner)
         )));
     };
-    if type_args.iter().any(|a| a.repr == Repr::Specialized) {
+    if type_args
+        .iter()
+        .any(|a| matches!(a, TypeArg::Specialized(_)))
+    {
         return Err(SpaceError::new(format!(
             "{} has a specialized slot, which has no space layout",
             ty.display(&rt.shared.interner)
         )));
     }
-    let args = type_args.iter().map(|a| a.ty.clone()).collect();
+    let args = type_args.iter().map(|a| a.ty().into_owned()).collect();
     Ok((hooks_of(rt, ty, id)?, args))
 }

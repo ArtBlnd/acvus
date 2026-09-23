@@ -37,7 +37,7 @@ its own union-find arena inside `Terms`:
 | effect | `EffectBound` | `Range { lower, upper }` on the reissue chain (RFC-0013 rule 1), or `Bound` |
 | length | `LenBound` | an array's length, `Unbound` until an element count fixes it |
 | identity | `IdentityBound` | which source a value came from (RFC-0012); identities are invariant |
-| representation | `ReprBound` | `Uniform` or `Specialized` for a slot (RFC-0041, hash-types.md) |
+| representation | `ReprBound` | `Uniform`, or `Specialized` with the slot's whole `#` tree (RFC-0041, hash-types.md) |
 
 `TyVarBound` is a lattice under `meet`. `Any` meets anything; two `OneOf`
 sets meet at the shapes that unify pairwise, and an empty meet is a

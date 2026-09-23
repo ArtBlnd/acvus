@@ -350,7 +350,7 @@ impl Dispatch {
 fn holds_text(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
-        Ty::Ref(_, inner) => holds_text(&inner.ty),
+        Ty::Ref(_, inner) => holds_text(&inner.ty()),
         _ => false,
     }
 }
@@ -1594,7 +1594,7 @@ impl<'a> Lowerer<'a> {
                 let Ty::Ref(_, referent) = ty else {
                     panic!("the checker reads a base through a reference only where it is one")
                 };
-                referent.ty
+                referent.into_ty()
             }
             _ => ty,
         }
@@ -1842,10 +1842,10 @@ impl<'a> Lowerer<'a> {
         let Some(Ty::Ref(_, arg)) = self.body.val_types.get(&taken).cloned() else {
             return taken;
         };
-        if arg.ty.is_word() != Some(true) {
+        if arg.ty().is_word() != Some(true) {
             return taken;
         }
-        self.emit_take(span, RefTarget::Through(taken), vec![], arg.ty)
+        self.emit_take(span, RefTarget::Through(taken), vec![], arg.into_ty())
     }
 
     /// A reference to a storage: a fresh `&T` / `&mut T` value.
@@ -3349,7 +3349,7 @@ impl<'a> Lowerer<'a> {
             Ty::Ref(_, lent) => {
                 let reference = Ty::Ref(Mutability::Shared, lent.clone());
                 let reg = self.emit_take(span, RefTarget::Var(slot), vec![], reference);
-                (reg, lent.ty.clone())
+                (reg, lent.ty().into_owned())
             }
             owned => {
                 let reg = self.emit_ref(
@@ -3591,7 +3591,7 @@ impl<'a> Lowerer<'a> {
             };
             return PatSrc::Placed(Placed::Through {
                 reference: value,
-                ty: referent.ty,
+                ty: referent.into_ty(),
             });
         }
         if patterns.into_iter().any(test_reads_a_part) {

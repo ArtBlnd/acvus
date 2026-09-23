@@ -6,10 +6,10 @@
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::PolyTy;
+use acvus_mir::ty::{HeldTy, Poly, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::ty_arg::{PolyVars, Term, TyArg, Var, kind};
+use crate::ty_arg::{PolyVars, SlotRepr, Term, TyArg, Var, kind};
 
 /// The runtime carries no length: a length variable is settled before the
 /// handler runs, so the runtime fills it with nothing.
@@ -61,7 +61,13 @@ where
     T: TyArg + Send + Sync + 'static,
     N: Term<kind::Length> + Var<kind::Length>,
 {
+    const SLOT: SlotRepr = T::SLOT;
+
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), N::poly(vars))
+    }
+
+    fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
+        TypeArg::Specialized(HeldTy::Array(Box::new(T::held(i, vars)), N::poly(vars)))
     }
 }

@@ -9,7 +9,6 @@
 //! and the compilation's sources. A body is checked (`fresh`, `unify`,
 //! `decide`), then solved once (`solve`), then frozen.
 
-use std::convert::Infallible;
 use std::rc::Rc;
 
 use acvus_ast::Span;
@@ -21,10 +20,10 @@ use crate::ir::Intrinsic;
 use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
-    ErrorToken, FieldSet, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances,
-    IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy,
-    Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId,
-    TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
+    ErrorToken, FieldSet, HeldTy, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy,
+    Instances, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly,
+    PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
+    TypeBoundId, TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -89,7 +88,8 @@ pub enum IdentityBound {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReprBound {
     Unbound(ReprOwner),
-    Bound(Repr<Concrete>),
+    Uniform,
+    Specialized(HeldTy<Infer>),
     Forward(ReprVarId),
 }
 
@@ -329,9 +329,7 @@ impl Terms {
             *ty = TyTerm::Var(home);
             return;
         }
-        for child in ty.children_mut() {
-            self.unstale_in_place(child);
-        }
+        ty.rewrite_children(&mut |child| self.unstale_in_place(child));
     }
 
     /// A term as a variable holds it: its own home is the variable it is
@@ -340,9 +338,7 @@ impl Terms {
     fn stored(&self, term: InferTy) -> InferTy {
         let mut term = term;
         term.set_home(Home::NONE);
-        for child in term.children_mut() {
-            self.unstale_in_place(child);
-        }
+        term.rewrite_children(&mut |child| self.unstale_in_place(child));
         term
     }
 
@@ -380,7 +376,7 @@ impl Terms {
             &mut |id: IdentityVarId| self.resolve_identity(&IdentityTerm::Var(id)),
             &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
             &mut |id: LenVarId| self.resolve_len(&LenTerm::Var(id)),
-            &mut |id: ReprVarId| self.resolve_repr(Repr::Var(id)),
+            &mut |id: ReprVarId| self.resolve_repr(id),
         )
     }
 
@@ -399,7 +395,7 @@ impl Terms {
             TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Handle(inner) => {
                 self.occurs_in(id, inner)
             }
-            TyTerm::Ref(_, inner) => self.occurs_in(id, &inner.ty),
+            TyTerm::Ref(_, inner) => self.occurs_in(id, &inner.ty()),
             TyTerm::Slice(elem) => self.occurs_in(id, elem),
             TyTerm::Str => false,
             TyTerm::Result(ok, err) => self.occurs_in(id, ok) || self.occurs_in(id, err),
@@ -419,7 +415,7 @@ impl Terms {
                 .values()
                 .any(|p| p.as_ref().is_some_and(|ty| self.occurs_in(id, ty))),
             TyTerm::UserDefined { type_args, .. } => {
-                type_args.iter().any(|t| self.occurs_in(id, &t.ty))
+                type_args.iter().any(|t| self.occurs_in(id, &t.ty()))
             }
             TyTerm::Int(_)
             | TyTerm::Float
@@ -799,76 +795,141 @@ impl Terms {
         }
     }
 
-    fn resolve_repr(&self, repr: Repr<Infer>) -> Repr<Infer> {
-        let Repr::Var(id) = repr else {
-            return repr;
-        };
+    fn resolve_repr(&self, id: ReprVarId) -> Repr<Infer> {
         let root = self.find_repr_root(id);
         match &self.repr_vars[root.0 as usize] {
-            ReprBound::Bound(fixed) => lift_repr(*fixed),
+            ReprBound::Uniform => Repr::Uniform,
+            ReprBound::Specialized(held) => Repr::Specialized(self.resolve_held(held)),
             ReprBound::Unbound(_) => Repr::Var(root),
             ReprBound::Forward(_) => unreachable!("find_repr_root resolves forwards"),
+        }
+    }
+
+    fn resolve_held(&self, held: &HeldTy<Infer>) -> HeldTy<Infer> {
+        held.map(
+            &mut |id: TypeBoundId| self.resolve_ty(&TyTerm::Var(id)),
+            &mut |id: IdentityVarId| self.resolve_identity(&IdentityTerm::Var(id)),
+            &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
+            &mut |id: LenVarId| self.resolve_len(&LenTerm::Var(id)),
+            &mut |id: ReprVarId| self.resolve_repr(id),
+        )
+    }
+
+    fn resolve_arg(&self, arg: &TypeArg<Infer>) -> TypeArg<Infer> {
+        match arg {
+            TypeArg::Uniform(ty) => TypeArg::Uniform(self.resolve_ty(ty)),
+            TypeArg::Open(v, ty) => self.resolve_repr(*v).at(self.resolve_ty(ty)),
+            TypeArg::Specialized(held) => TypeArg::Specialized(self.resolve_held(held)),
         }
     }
 
     fn repr_owner(&self, root: ReprVarId) -> ReprOwner {
         match &self.repr_vars[root.0 as usize] {
             ReprBound::Unbound(owner) => *owner,
-            ReprBound::Bound(_) | ReprBound::Forward(_) => {
+            ReprBound::Uniform | ReprBound::Specialized(_) | ReprBound::Forward(_) => {
                 unreachable!("repr_owner takes an open root")
             }
         }
     }
 
-    /// Two representations at one specializing position (hash-types.md,
-    /// R3). Two fixed ones must agree. An open one takes the other when
-    /// its owner lets this join bind it: a local variable at any join, a
-    /// signature's variable at a decision's join. A local variable meeting
-    /// a signature's forwards to it, so the local name follows the
-    /// decision; two signatures' variables are two decisions' names, and
-    /// only a decision's join — a conversion answered identity — makes
-    /// them one.
+    /// Two arguments at one specializing position, whose types have
+    /// joined (hash-types.md, R3), met part by part. Two fixed
+    /// representations must agree at every part. An open one takes the
+    /// other, a `#` tree whole, when its owner lets this join bind it: a
+    /// local variable at any join, a signature's variable at a decision's
+    /// join. A local variable meeting a signature's forwards to it, so the
+    /// local name follows the decision; two signatures' variables are two
+    /// decisions' names, and only a decision's join — a conversion answered
+    /// identity — makes them one.
     fn unify_repr(
         &mut self,
-        a: Repr<Infer>,
-        b: Repr<Infer>,
+        a: &TypeArg<Infer>,
+        b: &TypeArg<Infer>,
+        kind: JoinKind,
+    ) -> Result<(), MismatchReason> {
+        let a = self.resolve_arg(a);
+        let b = self.resolve_arg(b);
+        self.meet_reprs(&a, &b, kind)
+    }
+
+    fn meet_reprs(
+        &mut self,
+        a: &TypeArg<Infer>,
+        b: &TypeArg<Infer>,
         kind: JoinKind,
     ) -> Result<(), MismatchReason> {
         let binds = |terms: &Self, v: ReprVarId| {
             kind == JoinKind::Decision || terms.repr_owner(v) == ReprOwner::Local
         };
-        match (self.resolve_repr(a), self.resolve_repr(b)) {
-            (Repr::Var(x), Repr::Var(y)) if x == y => Ok(()),
-            (Repr::Var(x), Repr::Var(y)) => {
-                let (from, to) = match (self.repr_owner(x), self.repr_owner(y)) {
-                    (ReprOwner::Local, _) => (x, y),
-                    (ReprOwner::Signature, ReprOwner::Local) => (y, x),
+        match (a, b) {
+            (TypeArg::Open(x, _), TypeArg::Open(y, _)) if x == y => Ok(()),
+            (TypeArg::Open(x, _), TypeArg::Open(y, _)) => {
+                let (from, to) = match (self.repr_owner(*x), self.repr_owner(*y)) {
+                    (ReprOwner::Local, _) => (*x, *y),
+                    (ReprOwner::Signature, ReprOwner::Local) => (*y, *x),
                     (ReprOwner::Signature, ReprOwner::Signature) => {
                         if kind != JoinKind::Decision {
-                            return Err(MismatchReason::ReprOpen(x));
+                            return Err(MismatchReason::ReprOpen(*x));
                         }
-                        (x, y)
+                        (*x, *y)
                     }
                 };
                 self.repr_vars[from.0 as usize] = ReprBound::Forward(to);
                 Ok(())
             }
-            (Repr::Var(v), fixed) | (fixed, Repr::Var(v)) => {
-                if !binds(self, v) {
-                    return Err(MismatchReason::ReprOpen(v));
+            (TypeArg::Open(v, _), fixed) | (fixed, TypeArg::Open(v, _)) => {
+                if !binds(self, *v) {
+                    return Err(MismatchReason::ReprOpen(*v));
                 }
-                let fixed = match fixed {
-                    Repr::Uniform => Repr::Uniform,
-                    Repr::Specialized => Repr::Specialized,
-                    Repr::Var(_) => unreachable!("two variables are matched above"),
+                self.repr_vars[v.0 as usize] = match fixed {
+                    TypeArg::Uniform(_) => ReprBound::Uniform,
+                    TypeArg::Specialized(held) => ReprBound::Specialized(held.clone()),
+                    TypeArg::Open(..) => unreachable!("two variables are matched above"),
                 };
-                self.repr_vars[v.0 as usize] = ReprBound::Bound(fixed);
                 Ok(())
             }
-            (Repr::Uniform, Repr::Uniform) | (Repr::Specialized, Repr::Specialized) => Ok(()),
-            (Repr::Uniform, Repr::Specialized) | (Repr::Specialized, Repr::Uniform) => {
-                Err(MismatchReason::NoJoin)
+            (TypeArg::Uniform(_), TypeArg::Uniform(_)) => Ok(()),
+            (TypeArg::Specialized(x), TypeArg::Specialized(y)) => self.meet_held(x, y, kind),
+            (TypeArg::Uniform(_), TypeArg::Specialized(_))
+            | (TypeArg::Specialized(_), TypeArg::Uniform(_)) => Err(MismatchReason::NoJoin),
+        }
+    }
+
+    /// Two `#` nodes whose types have joined. A leaf's own arguments have
+    /// met already, in the `UserDefined` arm of `join`.
+    fn meet_held(
+        &mut self,
+        a: &HeldTy<Infer>,
+        b: &HeldTy<Infer>,
+        kind: JoinKind,
+    ) -> Result<(), MismatchReason> {
+        match (a, b) {
+            (HeldTy::Tuple(xs), HeldTy::Tuple(ys)) if xs.len() == ys.len() => {
+                for (x, y) in xs.iter().zip(ys) {
+                    self.meet_reprs(x, y, kind)?;
+                }
+                Ok(())
             }
+            (HeldTy::Option(x), HeldTy::Option(y)) | (HeldTy::Array(x, _), HeldTy::Array(y, _)) => {
+                self.meet_reprs(x, y, kind)
+            }
+            (HeldTy::Result(xo, xe), HeldTy::Result(yo, ye)) => {
+                self.meet_reprs(xo, yo, kind)?;
+                self.meet_reprs(xe, ye, kind)
+            }
+            (HeldTy::Leaf(_), HeldTy::Leaf(_)) => Ok(()),
+            (HeldTy::Held(_), _) | (_, HeldTy::Held(_)) if a.is_full(false) && b.is_full(false) => {
+                Ok(())
+            }
+            (
+                HeldTy::Tuple(_)
+                | HeldTy::Option(_)
+                | HeldTy::Result(..)
+                | HeldTy::Array(..)
+                | HeldTy::Leaf(_)
+                | HeldTy::Held(_),
+                _,
+            ) => Err(MismatchReason::NoJoin),
         }
     }
 
@@ -1076,8 +1137,8 @@ impl Terms {
                     };
                     return Err(mismatch_for(self, reason));
                 }
-                self.join(&ia.ty, &ib.ty, Position::Argument, kind, registry)?;
-                self.unify_repr(ia.repr, ib.repr, kind)
+                self.join(&ia.ty(), &ib.ty(), Position::Argument, kind, registry)?;
+                self.unify_repr(ia, ib, kind)
                     .map_err(|reason| mismatch_for(self, reason))
             }
             (
@@ -1127,24 +1188,25 @@ impl Terms {
                 assert_eq!(ea_args.len(), eb_args.len());
                 assert_eq!(ia_args.len(), ib_args.len());
                 for (x, y) in ta_args.iter().zip(tb_args.iter()) {
-                    self.join(&x.ty, &y.ty, Position::Argument, kind, registry)?;
+                    self.join(&x.ty(), &y.ty(), Position::Argument, kind, registry)?;
                 }
                 for (index, (x, y)) in ta_args.iter().zip(tb_args.iter()).enumerate() {
                     if registry.specializes(*id_a, index) {
-                        self.unify_repr(x.repr, y.repr, kind)
+                        self.unify_repr(x, y, kind)
                             .map_err(|reason| mismatch_for(self, reason))?;
                     } else {
                         debug_assert!(
-                            matches!(x.repr, Repr::Uniform) && matches!(y.repr, Repr::Uniform),
+                            x.is_uniform() && y.is_uniform(),
                             "a slot that does not specialize is uniform by instantiation"
                         );
                     }
                 }
                 for (x, y) in ea_args.iter().zip(eb_args.iter()) {
-                    self.unify_repr(x.repr, y.repr, kind)
-                        .map_err(|reason| mismatch_for(self, reason))?;
+                    if x.is_specialized() != y.is_specialized() {
+                        return Err(mismatch(self));
+                    }
                     if self
-                        .unify_effect(&x.effect, &y.effect, EffectRelation::Equal)
+                        .unify_effect(x.effect(), y.effect(), EffectRelation::Equal)
                         .is_err()
                     {
                         return Err(mismatch(self));
@@ -1537,7 +1599,7 @@ fn collect_open_vars(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
         out.push(*var);
     }
     for child in ty.children() {
-        collect_open_vars(child, out);
+        collect_open_vars(&child, out);
     }
 }
 
@@ -1576,10 +1638,6 @@ fn alloc_repr_var(repr_vars: &mut Vec<ReprBound>, owner: ReprOwner) -> ReprVarId
     let id = ReprVarId(repr_vars.len() as u32);
     repr_vars.push(ReprBound::Unbound(owner));
     id
-}
-
-fn lift_repr(repr: Repr<Concrete>) -> Repr<Infer> {
-    repr.map(&mut |v: Infallible| match v {})
 }
 
 // -- Decisions -----------------------------------------------------------
@@ -1690,7 +1748,7 @@ pub fn takes_a_language_owned_type(ty: &PolyTy) -> bool {
         return false;
     };
     let taken = match &first.ty {
-        TyTerm::Ref(_, named) => &named.ty,
+        TyTerm::Ref(_, named) => &named.ty(),
         other => other,
     };
     taken.is_scalar() || matches!(taken, TyTerm::String | TyTerm::Str)
@@ -2514,8 +2572,8 @@ impl<'src> Solver<'src> {
         IdentityTerm::Var(self.terms.alloc_identity_var())
     }
 
-    pub fn fresh_repr_var(&mut self) -> Repr<Infer> {
-        Repr::Var(self.terms.alloc_repr_var(ReprOwner::Local))
+    pub fn fresh_repr_var(&mut self) -> ReprVarId {
+        self.terms.alloc_repr_var(ReprOwner::Local)
     }
 
     // -- Unify -------------------------------------------------------
@@ -2760,7 +2818,7 @@ impl<'src> Solver<'src> {
         }
         for index in 0..self.terms.repr_vars.len() {
             if matches!(self.terms.repr_vars[index], ReprBound::Unbound(_)) {
-                self.terms.repr_vars[index] = ReprBound::Bound(Repr::Uniform);
+                self.terms.repr_vars[index] = ReprBound::Uniform;
             }
         }
         self.close_lends_by_least_element(&mut failures);
@@ -2909,7 +2967,7 @@ impl<'src> Solver<'src> {
             TyTerm::Var(_) => MatchOutcome::HeadOpen,
             TyTerm::Ref(_, inner) => MatchOutcome::Reads(MatchReads {
                 mode: MatchMode::Through,
-                names: inner.ty,
+                names: inner.into_ty(),
             }),
             head => MatchOutcome::Reads(MatchReads {
                 mode: MatchMode::Value,
@@ -3009,10 +3067,12 @@ impl<'src> Solver<'src> {
         match self.terms.shallow_resolve_ty(of) {
             TyTerm::Var(_) => LendOutcome::HeadOpen,
             TyTerm::Ref(Mutability::Shared, inner) if mutability == Mutability::Mut => {
-                LendOutcome::MutableBorrowOfShared { referent: inner.ty }
+                LendOutcome::MutableBorrowOfShared {
+                    referent: inner.into_ty(),
+                }
             }
             TyTerm::Ref(_, inner) => LendOutcome::Names {
-                referent: inner.ty,
+                referent: inner.into_ty(),
                 lend: Lend::Reborrow,
             },
             head => LendOutcome::Names {
@@ -3055,7 +3115,7 @@ impl<'src> Solver<'src> {
     pub fn capture_read(&self, of: &InferTy) -> CaptureOutcome {
         match self.terms.shallow_resolve_ty(of) {
             TyTerm::Var(_) => CaptureOutcome::HeadOpen,
-            TyTerm::Ref(_, target) => match self.captured_shape(&target.ty) {
+            TyTerm::Ref(_, target) => match self.captured_shape(&target.ty()) {
                 CapturedShape::Pair => CaptureOutcome::Refused,
                 CapturedShape::Open => CaptureOutcome::HeadOpen,
                 CapturedShape::Word => CaptureOutcome::Reads {
@@ -3086,7 +3146,7 @@ impl<'src> Solver<'src> {
         match self.terms.shallow_resolve_ty(target) {
             TyTerm::Slice(_) | TyTerm::Str => CapturedShape::Pair,
             TyTerm::Var(_) => CapturedShape::Open,
-            TyTerm::Ref(_, inner) => self.captured_shape(&inner.ty),
+            TyTerm::Ref(_, inner) => self.captured_shape(&inner.ty()),
             _ => CapturedShape::Word,
         }
     }
@@ -3583,7 +3643,7 @@ impl<'src> Solver<'src> {
         let TyTerm::Ref(_, lent) = self.terms.shallow_resolve_ty(arg) else {
             return false;
         };
-        matches!(self.terms.resolve_ty(&lent.ty), TyTerm::Var(_))
+        matches!(self.terms.resolve_ty(&lent.ty()), TyTerm::Var(_))
     }
 
     /// RFC-0047 rule 6, RFC-0062 rule 3.
@@ -3591,7 +3651,7 @@ impl<'src> Solver<'src> {
         let TyTerm::Ref(mutability, storage) = self.terms.resolve_ty(arg) else {
             return None;
         };
-        let storage = self.terms.resolve_ty(&storage.ty);
+        let storage = self.terms.resolve_ty(&storage.ty());
         if matches!(storage, TyTerm::String) {
             return Some(Viewed {
                 view: View::Str,
@@ -3625,7 +3685,7 @@ impl<'src> Solver<'src> {
             return false;
         };
         self.lent_view(arg).is_some_and(|lent| {
-            lent.mutability.reaches(*mutability) && View::of(&pointee.ty) == Some(lent.view)
+            lent.mutability.reaches(*mutability) && View::of(&pointee.ty()) == Some(lent.view)
         })
     }
 
@@ -3636,7 +3696,7 @@ impl<'src> Solver<'src> {
             let TyTerm::Ref(mutability, pointee) = shape else {
                 return None;
             };
-            let view = View::of(&pointee.ty)?;
+            let view = View::of(&pointee.ty())?;
             self.views_as(arg, shape).then_some(Viewed {
                 view,
                 mutability: *mutability,
@@ -3872,7 +3932,7 @@ impl<'src> Solver<'src> {
         let TyTerm::Ref(_, taken) = self.terms.shallow_resolve_ty(&params.first()?.ty) else {
             return None;
         };
-        Some(self.terms.shallow_resolve_ty(&taken.ty))
+        Some(self.terms.shallow_resolve_ty(&taken.ty()))
     }
 
     fn structural_head(&self, call: &InferTy) -> StructuralHead {
@@ -4038,7 +4098,7 @@ impl<'src> Solver<'src> {
             to: named_to,
         }) = reborrowed(&from_r, &to_r)
         {
-            return match self.settle_join(&named_from.ty, &named_to.ty) {
+            return match self.settle_join(&named_from.ty(), &named_to.ty()) {
                 Ok(()) => Progress::Settled(Answer::Conversion(Conversion::Reborrow)),
                 Err(_) => Progress::Failed(Unsettled::NoConversion {
                     decision: id,
@@ -4070,13 +4130,13 @@ impl<'src> Solver<'src> {
                 Conversion::Cast(rule.fn_ref),
             );
         };
-        let back = self.conversion_rules(&references.to.ty, &references.from.ty);
+        let back = self.conversion_rules(&references.to.ty(), &references.from.ty());
         let [back] = back.as_slice() else {
             if back.is_empty() {
                 return Progress::Failed(Unsettled::NoConversion {
                     decision: id,
-                    from: self.terms.resolve_ty(&references.to.ty),
-                    to: self.terms.resolve_ty(&references.from.ty),
+                    from: self.terms.resolve_ty(&references.to.ty()),
+                    to: self.terms.resolve_ty(&references.from.ty()),
                 });
             }
             return Progress::Unchanged;
@@ -4086,9 +4146,9 @@ impl<'src> Solver<'src> {
             cast: rule.fn_ref,
             back: back.fn_ref,
         };
-        let inst_from = references.from_side(inst_from);
-        let inst_to = references.to_side(inst_to);
-        self.settle_cast(id, from, to, &inst_from, &inst_to, answer)
+        let named_from = references.from.ty().into_owned();
+        let named_to = references.to.ty().into_owned();
+        self.settle_cast(id, &named_from, &named_to, &inst_from, &inst_to, answer)
     }
 
     /// The rule's two sides, instantiated, joined with the decision's two
@@ -4144,59 +4204,79 @@ impl<'src> Solver<'src> {
 
     fn freeze_ty_with(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
         self.terms.unstale(ty).try_map(
-            &mut |id: TypeBoundId| {
-                let root = self.terms.find_ty_root(id);
-                match &self.terms.ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved {
-                        ty: inner, bound, ..
-                    } => {
-                        let frozen = self.freeze_ty_with(inner, open)?;
-                        // A report shows the type the solve bound the
-                        // variable to even where the declaration's bound
-                        // refuses it: that type is what the position
-                        // carries, and the bound itself is refused on its
-                        // own by `MirErrorKind::TypeOutOfBound`.
-                        if bound.admits(&frozen) || matches!(open, Open::AsWritten) {
-                            Ok(frozen)
-                        } else {
-                            Err(FreezeError::OutOfBound {
-                                var: root,
-                                ty: frozen,
-                                bound: bound.clone(),
-                            })
-                        }
-                    }
-                    TypeBound::Unresolved { bound } => match (bound.integer_default(), bound, open)
-                    {
-                        (Some(k), _, _) => Ok(Ty::Int(k)),
-                        (None, TyVarBound::Any, Open::Never) | (None, _, Open::AsWritten) => {
-                            Ok(Ty::Never)
-                        }
-                        (None, _, _) => Err(FreezeError::UnresolvedType(root)),
-                    },
-                    TypeBound::Forward(_) => unreachable!("find_ty_root resolves forwards"),
-                }
-            },
+            &mut |id: TypeBoundId| self.freeze_ty_var(id, open),
             &mut |id: IdentityVarId| {
                 self.freeze_identity(&IdentityTerm::Var(id))
                     .map(IdentityTerm::Known)
             },
             &mut |id: EffectVarId| Ok(EffectTerm::Known(self.freeze_effect(&EffectTerm::Var(id)))),
-            &mut |id: LenVarId| match self.terms.resolve_len(&LenTerm::Var(id)) {
-                LenTerm::Known(n) => Ok(LenTerm::Known(n)),
-                LenTerm::Var(root) => Err(FreezeError::UnresolvedLen(root)),
-            },
-            &mut |id: ReprVarId| match self.terms.resolve_repr(Repr::Var(id)) {
-                Repr::Uniform => Ok(Repr::Uniform),
-                Repr::Specialized => Ok(Repr::Specialized),
-                // A report runs before `solve` has taken the least
-                // elements, and `Uniform` is the one an open
-                // representation takes there (RFC-0042 rule 3), so a report
-                // shows the rest of the type rather than nothing.
-                Repr::Var(_) if matches!(open, Open::AsWritten) => Ok(Repr::Uniform),
-                Repr::Var(root) => Err(FreezeError::UnresolvedRepr(root)),
-            },
+            &mut |id: LenVarId| self.freeze_len(id),
+            &mut |id: ReprVarId| self.freeze_repr(id, open),
         )
+    }
+
+    fn freeze_ty_var(&self, id: TypeBoundId, open: Open) -> Result<Ty, FreezeError> {
+        let root = self.terms.find_ty_root(id);
+        match &self.terms.ty_bounds[root.0 as usize] {
+            TypeBound::Resolved {
+                ty: inner, bound, ..
+            } => {
+                let frozen = self.freeze_ty_with(inner, open)?;
+                // A report shows the type the solve bound the
+                // variable to even where the declaration's bound
+                // refuses it: that type is what the position
+                // carries, and the bound itself is refused on its
+                // own by `MirErrorKind::TypeOutOfBound`.
+                if bound.admits(&frozen) || matches!(open, Open::AsWritten) {
+                    Ok(frozen)
+                } else {
+                    Err(FreezeError::OutOfBound {
+                        var: root,
+                        ty: frozen,
+                        bound: bound.clone(),
+                    })
+                }
+            }
+            TypeBound::Unresolved { bound } => match (bound.integer_default(), bound, open) {
+                (Some(k), _, _) => Ok(Ty::Int(k)),
+                (None, TyVarBound::Any, Open::Never) | (None, _, Open::AsWritten) => Ok(Ty::Never),
+                (None, _, _) => Err(FreezeError::UnresolvedType(root)),
+            },
+            TypeBound::Forward(_) => unreachable!("find_ty_root resolves forwards"),
+        }
+    }
+
+    fn freeze_len(&self, id: LenVarId) -> Result<LenTerm<Concrete>, FreezeError> {
+        match self.terms.resolve_len(&LenTerm::Var(id)) {
+            LenTerm::Known(n) => Ok(LenTerm::Known(n)),
+            LenTerm::Var(root) => Err(FreezeError::UnresolvedLen(root)),
+        }
+    }
+
+    fn freeze_repr(&self, id: ReprVarId, open: Open) -> Result<Repr<Concrete>, FreezeError> {
+        match self.terms.resolve_repr(id) {
+            Repr::Uniform => Ok(Repr::Uniform),
+            Repr::Specialized(held) => held
+                .try_map(
+                    &mut |id: TypeBoundId| self.freeze_ty_var(id, open),
+                    &mut |id: IdentityVarId| {
+                        self.freeze_identity(&IdentityTerm::Var(id))
+                            .map(IdentityTerm::Known)
+                    },
+                    &mut |id: EffectVarId| {
+                        Ok(EffectTerm::Known(self.freeze_effect(&EffectTerm::Var(id))))
+                    },
+                    &mut |id: LenVarId| self.freeze_len(id),
+                    &mut |id: ReprVarId| self.freeze_repr(id, open),
+                )
+                .map(Repr::Specialized),
+            // A report runs before `solve` has taken the least
+            // elements, and `Uniform` is the one an open
+            // representation takes there (RFC-0042 rule 3), so a report
+            // shows the rest of the type rather than nothing.
+            Repr::Var(_) if matches!(open, Open::AsWritten) => Ok(Repr::Uniform),
+            Repr::Var(root) => Err(FreezeError::UnresolvedRepr(root)),
+        }
     }
 
     pub fn freeze_effect(&self, term: &EffectTerm<Infer>) -> Effect {
@@ -4718,7 +4798,7 @@ impl<'src> Solver<'src> {
             &mut |root: ReprVarId| {
                 let owner = match &repr_vars[root.0 as usize] {
                     ReprBound::Unbound(owner) => *owner,
-                    ReprBound::Bound(_) | ReprBound::Forward(_) => {
+                    ReprBound::Uniform | ReprBound::Specialized(_) | ReprBound::Forward(_) => {
                         unreachable!("resolve_ty yields open roots")
                     }
                 };
@@ -4793,7 +4873,7 @@ fn conversion_rules(
     let from_r = terms.resolve_ty(from);
     let to_r = terms.resolve_ty(to);
     if let Some(references) = ReferencePair::of(&from_r, &to_r) {
-        return conversion_rules(terms, registry, &references.from.ty, &references.to.ty);
+        return conversion_rules(terms, registry, &references.from.ty(), &references.to.ty());
     }
     let shape = conversion_shape(&from_r, &to_r);
     let from_rules = match &from_r {
@@ -4823,7 +4903,7 @@ fn borrows_a_view<V>(shape: &TyTerm<V>) -> bool
 where
     V: Phase,
 {
-    matches!(shape, TyTerm::Ref(_, pointee) if matches!(pointee.ty, TyTerm::Slice(_) | TyTerm::Str))
+    matches!(shape, TyTerm::Ref(_, pointee) if matches!(*pointee.ty(), TyTerm::Slice(_) | TyTerm::Str))
 }
 
 /// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
@@ -4854,8 +4934,8 @@ fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy
         let mut trial = terms.clone();
         return trial
             .join(
-                &named_from.ty,
-                &named_to.ty,
+                &named_from.ty(),
+                &named_to.ty(),
                 Position::Value,
                 JoinKind::Decision,
                 registry,
@@ -4866,8 +4946,8 @@ fn converts(terms: &Terms, registry: &TypeRegistry, from: &InferTy, to: &InferTy
         return !conversion_rules(terms, registry, from, to).is_empty();
     };
     [
-        (&references.from.ty, &references.to.ty),
-        (&references.to.ty, &references.from.ty),
+        (&references.from.ty(), &references.to.ty()),
+        (&references.to.ty(), &references.from.ty()),
     ]
     .into_iter()
     .all(|(from, to)| !conversion_rules(terms, registry, from, to).is_empty())
@@ -4901,16 +4981,6 @@ impl<'a> ReferencePair<'a> {
             to,
         })
     }
-
-    /// The `from` reference with what it names replaced by `ty`.
-    fn from_side(&self, ty: InferTy) -> InferTy {
-        TyTerm::Ref(self.mutability, Box::new(TypeArg::new(self.from.repr, ty)))
-    }
-
-    /// The `to` reference with what it names replaced by `ty`.
-    fn to_side(&self, ty: InferTy) -> InferTy {
-        TyTerm::Ref(self.mutability, Box::new(TypeArg::new(self.to.repr, ty)))
-    }
 }
 
 /// A signature enters the solver with the slots that do not specialize
@@ -4918,10 +4988,16 @@ impl<'a> ReferencePair<'a> {
 /// of the type.
 fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
     fn arg(a: TypeArg<Infer>, specializing: bool, registry: &TypeRegistry) -> TypeArg<Infer> {
-        TypeArg {
-            repr: if specializing { a.repr } else { Repr::Uniform },
-            ty: uniform_slots(a.ty, registry),
-        }
+        let mut a = match a {
+            TypeArg::Open(..) | TypeArg::Specialized(_) if !specializing => {
+                TypeArg::Uniform(a.into_ty())
+            }
+            a => a,
+        };
+        a.rewrite_types(&mut |ty| {
+            *ty = uniform_slots(std::mem::replace(ty, TyTerm::Unit), registry)
+        });
+        a
     }
     match ty {
         TyTerm::UserDefined {

@@ -224,7 +224,9 @@ of …" names shapes where a trait system would name a trait.
 
 **Representation is a fact about a slot** (RFC-0041). `#τ` is the
 specialized, native Rust representation of a type argument or a reference
-target; everything else is uniform, the runtime's `Value`.
+target; everything else is uniform, the runtime's `Value`. A `#` composite
+marks each of its parts again, since a box's Rust type differs part by part:
+`#(#i64, U)`.
 
 ## Validation
 

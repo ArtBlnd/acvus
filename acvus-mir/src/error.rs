@@ -1217,7 +1217,7 @@ const USE_STRING_CMP: &str = "; use `string::cmp`, `lt`, `le`, `gt` or `ge`";
 fn is_text_view(ty: &Ty) -> bool {
     match ty {
         Ty::Str => true,
-        Ty::Ref(_, inner) => is_text_view(&inner.ty),
+        Ty::Ref(_, inner) => is_text_view(&inner.ty()),
         _ => false,
     }
 }
@@ -1228,7 +1228,7 @@ fn is_text_view(ty: &Ty) -> bool {
 fn holds_text(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
-        Ty::Ref(_, inner) => holds_text(&inner.ty),
+        Ty::Ref(_, inner) => holds_text(&inner.ty()),
         _ => false,
     }
 }
@@ -1243,7 +1243,7 @@ fn open_payload(ty: &Ty) -> Option<String> {
         Ty::Result(..) => {
             Some("; a Result is not its payload -- write `?`, `.unwrap()` or match it".to_string())
         }
-        Ty::Ref(_, inner) => open_payload(&inner.ty),
+        Ty::Ref(_, inner) => open_payload(&inner.ty()),
         _ => None,
     }
 }
@@ -1275,9 +1275,9 @@ fn view_in(ty: &Ty) -> &'static str {
 fn mentions_view(ty: &Ty) -> bool {
     match ty {
         Ty::Str => true,
-        Ty::Ref(_, inner) => mentions_view(&inner.ty),
+        Ty::Ref(_, inner) => mentions_view(&inner.ty()),
         Ty::Option(inner) | Ty::Array(inner, _) | Ty::Slice(inner) => mentions_view(inner),
-        Ty::UserDefined { type_args, .. } => type_args.iter().any(|arg| mentions_view(&arg.ty)),
+        Ty::UserDefined { type_args, .. } => type_args.iter().any(|arg| mentions_view(&arg.ty())),
         _ => false,
     }
 }

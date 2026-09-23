@@ -2364,8 +2364,11 @@ extern_signature! {
         Rt: Runtime;
 }
 
+/// The signature's `(T, U)` is held part by part, `T` uniform, so an
+/// instance holds its `T` as the erased value the signature's box holds
+/// there, as `width_i64` does at the top.
 #[extern_fn(instance_of = head, effect = pure)]
-fn head_i64<U, E, Rt>(b: Boxed<(i64, U), E, Rt>) -> i64
+fn head_i64<U, E, Rt>(b: Boxed<(Erased<Rt, i64>, U), E, Rt>) -> i64
 where
     U: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -2375,7 +2378,7 @@ where
 }
 
 #[extern_fn(instance_of = head, effect = pure)]
-fn head_string<U, E, Rt>(b: Boxed<(String, U), E, Rt>) -> i64
+fn head_string<U, E, Rt>(b: Boxed<(Erased<Rt, String>, U), E, Rt>) -> i64
 where
     U: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -2450,6 +2453,84 @@ fn a_signature_reaching_its_variable_through_a_container_is_refused() {
         matches!(err, acvus_extern::CombineError::InstanceMismatch { .. }),
         "{err:?}"
     );
+}
+
+// -- A signature declares the variables its instances choose (RFC-0041) -------
+
+extern_signature! {
+    ns: "t",
+    fn spread<T, E, Rt>(b: Boxed<T, E, Rt>) -> i64
+    where
+        T: Var<kind::Type>,
+        E: Var<kind::Effect>,
+        Rt: Runtime;
+}
+
+#[extern_fn(instance_of = spread, effect = pure)]
+fn spread_pair<U, E, Rt>(b: Boxed<(i64, U), E, Rt>) -> i64
+where
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
+}
+
+extern_signature! {
+    ns: "t",
+    fn chosen_spread<T, E, Rt>(b: Boxed<T, E, Rt>) -> i64
+    where
+        T: Var<kind::Type> + Chosen,
+        E: Var<kind::Effect>,
+        Rt: Runtime;
+}
+
+#[extern_fn(instance_of = chosen_spread, effect = pure)]
+fn chosen_spread_pair<U, E, Rt>(b: Boxed<(i64, U), E, Rt>) -> i64
+where
+    U: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    i64::try_from(b.0.len()).expect("a box shorter than i64::MAX")
+}
+
+fn undeclared_slot_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        types: [Boxed<_, _, R>],
+        signatures: [spread],
+        fns: [spread_pair],
+    }
+}
+
+fn chosen_slot_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        types: [Boxed<_, _, R>],
+        signatures: [chosen_spread],
+        fns: [chosen_spread_pair],
+    }
+}
+
+#[test]
+fn an_undeclared_variable_at_a_held_slot_is_uniform_and_refuses_a_specialized_instance() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![undeclared_slot_registry::<Tiny>()], &i)
+        .err()
+        .expect("`Box<#(#i64, U)>` is not the uniform `Box<T>`");
+    assert!(
+        matches!(err, acvus_extern::CombineError::InstanceMismatch { .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_chosen_variable_at_a_held_slot_takes_the_instance_s_tree() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![chosen_slot_registry::<Tiny>()], &i)
+        .expect("the instance chooses `T` as `#(#i64, U)`");
+    assert_eq!(reg.handlers[&qref(&i, "chosen_spread")].len(), 1);
 }
 
 /// An `Inline` element is read, copied and edited through `Erased` with no
@@ -2892,4 +2973,64 @@ fn a_plain_declarations_site_table_is_zero_sized() {
 
     assert_eq!(size_of_val(&closure), 0);
     assert_eq!(size_of_val(&sited), 0);
+}
+
+// -- A family member is a Rust type written out (RFC-0041) ---------------
+
+/// `Vec`'s two family casts at a member whose `#` argument has a part the
+/// runtime fills: `Vec<#(#Float, T)>`, which `#[extern_fn]` builds for a
+/// `Monomorphize` member beside a variable. Built by hand: a `Vec` of
+/// `(f64, Owned<R>)` or of `(f64, Erased<R, i64>)` does not cross the
+/// boundary, so `#[extern_fn]` does not build one today.
+fn a_family_member_with_a_uniform_part() -> Registry<Tiny> {
+    Registry::new(|i: &Interner| {
+        let vec_of = |arg: TypeArg<acvus_extern::Poly>| PolyTy::UserDefined {
+            id: acvus_extern::QualifiedRef::root(i.intern("Vec")),
+            type_args: vec![arg],
+            effect_args: vec![],
+            identity_args: vec![],
+        };
+        let t = PolyTy::Var(0);
+        let handler = || {
+            ExternHandler::sync(acvus_extern::glue::<Tiny, _, (), acvus_extern::Val<V>>(
+                |_, ()| V::Taken,
+            ))
+        };
+        let mut contribution = acvus_extern::Contribution::of(acvus_extern::Manifest {
+            types: vec![<Vec<i64> as acvus_extern::ExternTypeDecl>::type_decl(i)],
+            signatures: Vec::new(),
+            fns: Vec::new(),
+        });
+        for cast in acvus_extern::family_casts::<Tiny>(
+            i,
+            acvus_extern::MemberType {
+                specialized: vec_of(TypeArg::Specialized(acvus_extern::HeldTy::Tuple(vec![
+                    TypeArg::specialized(PolyTy::Float),
+                    TypeArg::uniform(t.clone()),
+                ]))),
+                uniform: vec_of(TypeArg::uniform(PolyTy::Tuple(vec![PolyTy::Float, t]))),
+                erase: handler(),
+                materialize: handler(),
+            },
+        ) {
+            contribution.declare(cast);
+        }
+        contribution
+    })
+}
+
+#[test]
+fn a_family_member_with_a_part_the_runtime_fills_is_refused_where_the_registry_is_built() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![a_family_member_with_a_uniform_part()], &i)
+        .err()
+        .expect("the pattern `Vec<#T>` would call the uniform part `#`");
+    let acvus_extern::CombineError::FamilyMemberNotWritten { function, member } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(function, "Vec::erase");
+    assert_eq!(
+        member.display(&i).to_string(),
+        "Fn(Vec<#(#Float, T)>) -> Vec<(Float, T)>"
+    );
 }

@@ -17,6 +17,7 @@
 //! The pass reads `InstKind::Switch`, the one shape that names a `match`.
 //! An `if let` is two arms and always exhaustive, and never wears one.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use acvus_utils::Astr;
@@ -157,7 +158,7 @@ fn missed_variants(
 /// The name the source gave the enum the value carries, for the refusal to
 /// write `E::B` rather than a bare tag.
 fn enum_name_of(body: &MirBody, value: ValueId) -> Option<Astr> {
-    match scrutinee_ty(body, value)? {
+    match &*scrutinee_ty(body, value)? {
         Ty::Enum { name, .. } => Some(*name),
         _ => None,
     }
@@ -171,7 +172,7 @@ pub fn known_variants(body: &MirBody, value: ValueId) -> Known {
     let Some(ty) = scrutinee_ty(body, value) else {
         return Known::Open;
     };
-    match ty {
+    match &*ty {
         Ty::Option(_) => Known::ClosedBuiltin(OPTION),
         Ty::Result(..) => Known::ClosedBuiltin(RESULT),
         Ty::Enum { variants, .. } => Known::Closed(variants.keys().copied().collect()),
@@ -181,10 +182,10 @@ pub fn known_variants(body: &MirBody, value: ValueId) -> Known {
 
 /// The type of the value a `Switch` reads its tag from. A place scrutinee is
 /// lent for the tag read, and what it lends is what names the variants.
-fn scrutinee_ty(body: &MirBody, value: ValueId) -> Option<&Ty> {
+fn scrutinee_ty(body: &MirBody, value: ValueId) -> Option<Cow<'_, Ty>> {
     match body.val_types.get(&value)? {
-        Ty::Ref(_, inner) => Some(&inner.ty),
-        ty => Some(ty),
+        Ty::Ref(_, inner) => Some(inner.ty()),
+        ty => Some(Cow::Borrowed(ty)),
     }
 }
 

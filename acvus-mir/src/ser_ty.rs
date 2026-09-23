@@ -18,8 +18,8 @@ use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
 use crate::ty::{
-    Concrete, Effect, EffectArg, EffectTerm, FieldSet, IdentityId, IdentityTerm, IntTy, LenTerm, ObjectTy,
-    Reissue, Repr, Task, Ty, TypeArg,
+    Concrete, Effect, EffectArg, EffectTerm, FieldSet, HeldTy, IdentityId, IdentityTerm, IntTy,
+    LenTerm, ObjectTy, Reissue, Task, Ty, TypeArg,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -79,68 +79,139 @@ pub struct SerParam {
     pub ty: SerTy,
 }
 
-/// The representation of a slot's argument (hash-types.md).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum SerRepr {
-    Uniform,
-    Specialized,
+/// A type argument of a user-defined type, with its representation part by
+/// part (hash-types.md).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "repr", rename_all = "camelCase")]
+pub enum SerTypeArg {
+    Uniform { ty: SerTy },
+    Specialized { held: SerHeld },
 }
 
-/// A type argument of a user-defined type, with its representation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SerTypeArg {
-    pub repr: SerRepr,
-    pub ty: SerTy,
+#[serde(tag = "node", rename_all = "camelCase")]
+pub enum SerHeld {
+    Tuple {
+        parts: Vec<SerTypeArg>,
+    },
+    Option {
+        part: Box<SerTypeArg>,
+    },
+    Result {
+        ok: Box<SerTypeArg>,
+        err: Box<SerTypeArg>,
+    },
+    Array {
+        part: Box<SerTypeArg>,
+        len: usize,
+    },
+    Leaf {
+        ty: SerLeaf,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "SerTy", into = "SerTy")]
+pub struct SerLeaf(SerTy);
+
+impl TryFrom<SerTy> for SerLeaf {
+    type Error = &'static str;
+
+    fn try_from(ty: SerTy) -> Result<Self, Self::Error> {
+        match ty {
+            SerTy::Tuple { .. }
+            | SerTy::Option { .. }
+            | SerTy::Result { .. }
+            | SerTy::Array { .. } => Err("a `#` leaf is not a tuple, option, result or array"),
+            leaf => Ok(SerLeaf(leaf)),
+        }
+    }
+}
+
+impl From<SerLeaf> for SerTy {
+    fn from(leaf: SerLeaf) -> Self {
+        leaf.0
+    }
 }
 
 /// An effect argument of a user-defined type, with its representation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SerEffectArg {
-    pub repr: SerRepr,
-    pub effect: SerEffect,
-}
-
-fn repr_to_ser(repr: Repr<Concrete>) -> SerRepr {
-    match repr {
-        Repr::Uniform => SerRepr::Uniform,
-        Repr::Specialized => SerRepr::Specialized,
-        Repr::Var(v) => match v {},
-    }
-}
-
-fn ser_to_repr(repr: SerRepr) -> Repr<Concrete> {
-    match repr {
-        SerRepr::Uniform => Repr::Uniform,
-        SerRepr::Specialized => Repr::Specialized,
-    }
+#[serde(tag = "repr", rename_all = "camelCase")]
+pub enum SerEffectArg {
+    Uniform { effect: SerEffect },
+    Specialized { effect: SerEffect },
 }
 
 fn arg_to_ser(arg: &TypeArg<Concrete>, interner: &Interner) -> SerTypeArg {
-    SerTypeArg {
-        repr: repr_to_ser(arg.repr),
-        ty: arg.ty.to_ser(interner),
+    match arg {
+        TypeArg::Uniform(ty) => SerTypeArg::Uniform {
+            ty: ty.to_ser(interner),
+        },
+        TypeArg::Open(v, _) => match *v {},
+        TypeArg::Specialized(held) => SerTypeArg::Specialized {
+            held: held_to_ser(held, interner),
+        },
+    }
+}
+
+fn held_to_ser(held: &HeldTy<Concrete>, interner: &Interner) -> SerHeld {
+    let part = |p: &TypeArg<Concrete>| Box::new(arg_to_ser(p, interner));
+    match held {
+        HeldTy::Tuple(parts) => SerHeld::Tuple {
+            parts: parts.iter().map(|p| arg_to_ser(p, interner)).collect(),
+        },
+        HeldTy::Option(p) => SerHeld::Option { part: part(p) },
+        HeldTy::Result(ok, err) => SerHeld::Result {
+            ok: part(ok),
+            err: part(err),
+        },
+        HeldTy::Array(p, len) => SerHeld::Array {
+            part: part(p),
+            len: len.get(),
+        },
+        HeldTy::Leaf(leaf) => SerHeld::Leaf {
+            ty: SerLeaf(leaf.ty().to_ser(interner)),
+        },
+        HeldTy::Held(v) => match *v {},
     }
 }
 
 fn ser_to_arg(arg: &SerTypeArg, interner: &Interner) -> TypeArg<Concrete> {
-    TypeArg {
-        repr: ser_to_repr(arg.repr),
-        ty: arg.ty.to_ty(interner),
+    match arg {
+        SerTypeArg::Uniform { ty } => TypeArg::Uniform(ty.to_ty(interner)),
+        SerTypeArg::Specialized { held } => TypeArg::Specialized(ser_to_held(held, interner)),
+    }
+}
+
+fn ser_to_held(held: &SerHeld, interner: &Interner) -> HeldTy<Concrete> {
+    let part = |p: &SerTypeArg| Box::new(ser_to_arg(p, interner));
+    match held {
+        SerHeld::Tuple { parts } => {
+            HeldTy::Tuple(parts.iter().map(|p| ser_to_arg(p, interner)).collect())
+        }
+        SerHeld::Option { part: p } => HeldTy::Option(part(p)),
+        SerHeld::Result { ok, err } => HeldTy::Result(part(ok), part(err)),
+        SerHeld::Array { part: p, len } => HeldTy::Array(part(p), LenTerm::Known(*len)),
+        SerHeld::Leaf { ty } => HeldTy::of(ty.0.to_ty(interner)),
     }
 }
 
 fn effect_arg_to_ser(arg: &EffectArg<Concrete>, interner: &Interner) -> SerEffectArg {
-    SerEffectArg {
-        repr: repr_to_ser(arg.repr),
-        effect: effect_to_ser(arg.effect.get(), interner),
+    let effect = effect_to_ser(arg.effect().get(), interner);
+    match arg {
+        EffectArg::Uniform(_) => SerEffectArg::Uniform { effect },
+        EffectArg::Specialized(_) => SerEffectArg::Specialized { effect },
     }
 }
 
 fn ser_to_effect_arg(arg: &SerEffectArg, interner: &Interner) -> EffectArg<Concrete> {
-    EffectArg {
-        repr: ser_to_repr(arg.repr),
-        effect: EffectTerm::Known(ser_to_effect(&arg.effect, interner)),
+    match arg {
+        SerEffectArg::Uniform { effect } => {
+            EffectArg::Uniform(EffectTerm::Known(ser_to_effect(effect, interner)))
+        }
+        SerEffectArg::Specialized { effect } => {
+            EffectArg::Specialized(EffectTerm::Known(ser_to_effect(effect, interner)))
+        }
     }
 }
 

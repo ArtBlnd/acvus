@@ -10,8 +10,8 @@ use acvus_mir::graph::{
 use acvus_mir::ir::{Callee, CastKind};
 use acvus_mir::solver::{Answer, Conversion, Decision, InstanceChoice, InstanceKind};
 use acvus_mir::ty::{
-    CastRule, Effect, Instances, LenTerm, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
-    Scheme, Solver, Sources, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
+    CastRule, Effect, Instances, LenTerm, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Scheme,
+    Solver, Sources, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
 };
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
@@ -134,7 +134,7 @@ fn externs(i: &Interner) -> Vec<Function> {
             fn_of(
                 i,
                 &[("items", array_of(t.clone()))],
-                vec_of(i, TypeArg::new(Repr::Var(tv), t)),
+                vec_of(i, TypeArg::Open(tv, t)),
             ),
             Instances {
                 concrete: vec_array_concrete

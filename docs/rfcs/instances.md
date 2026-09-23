@@ -39,7 +39,11 @@ governs the borrow, the effect system says whether the call may suspend.
    the signature's instances stand at; which instance a call takes is the
    checker's decision (RFC-0068 rule 5). A shared signature names its call effect
    (`extern_signature! { effect = E, … }`, one of its own effect variables);
-   one that names none is `Known(PURE)`.
+   one that names none is `Known(PURE)`. A signature whose parameter type
+   projects through a variable bounds it `Chosen` (RFC-0041):
+   `tally<Ts: Var<kind::Type> + Chosen, O, E, I, Rt>(it: Pipe<Ts, O, E, I, Rt>)`,
+   whose per-length instances fill `Ts` with their own stage list, `()` the
+   empty one.
 
 3. **The word lives in the site table.** `prepare` places the
    chosen word in the call site's table once per site; `Required<S, I, T, N>`
