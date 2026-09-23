@@ -109,6 +109,7 @@ mod typed_stage_list;
 mod undeclared_context;
 mod unordered;
 mod unread_store_drop;
+mod weaker_admissions;
 mod while_let_call;
 
 /// The targets this crate's manifest declares under `[[test]]`, as the paths

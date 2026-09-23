@@ -417,9 +417,18 @@ an argument empties is `NoMatchingFunction` there.
    told apart by the type each sees: modes yielding one type are one mode,
    the lend; candidates seeing different types are `AmbiguousFunction`, since
    choosing a lend over a move would be a default. A receiver that is not a
-   place, or a place whose head is still a variable, narrows no candidate:
-   it is lent where every candidate's first parameter is a reference of one
-   mutability, by value otherwise. A pipe passes its left side as a value.
+   place narrows no candidate: it is lent where every candidate's first
+   parameter is a reference of one mutability, by value otherwise. A place
+   whose head is still a variable is held, and its mode is part of each
+   candidate's admission of it: every step of the decision admits a
+   candidate at the type its own mode sees, the place or a reference to
+   what a lend of the place names, and that type waits as rule 2 has it
+   while its head is open. The settled candidate's mode lends or moves the
+   place, as it would at a known head. Choosing the mode first would ask
+   admission of a type no candidate sees: a `String` a lambda parameter
+   turns out to be would be passed by value, and `s.contains("a")` refused
+   where the known form lends it to `string::contains`. A pipe passes its
+   left side as a value.
 
 Where a remaining candidate takes an argument only by conversion, the
 call's parameter stays open and one conversion decision is opened there; it
@@ -427,7 +436,14 @@ has no answer of its own and settles after the signature — identity where
 the settled candidate took the argument directly, the rule where it
 converted. A conversion decision one side of which is a `OneOf` variable
 answers identity only where the other side could match a shape of the
-bound.
+bound. Where another remaining candidate takes the same argument by view,
+or two take it by different views, no conversion decision is opened: a
+conversion decision has no view to answer (rule 5). The argument is held
+and settled after the solve as rule 2 settles one, where no conversion is
+asked, so the decision keeps a candidate there only where it takes the
+argument directly, by reborrow or by view; one that takes it only by
+conversion leaves the set, and a call it was the last candidate of is
+`NoMatchingFunction`.
 
 The call opens a signature decision (RFC-0042 rule 2), stepped as an instance
 decision is: a candidate stays while the call type would join its type on

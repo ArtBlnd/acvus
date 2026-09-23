@@ -1,4 +1,4 @@
-error: no `len` takes a call of type Fn(_) -> u64
+error: no `len` takes a call of type Fn(i64) -> u64
   --> 17-a-method-the-receivers-type-has-not.acvus:2:1
   |
 2 | x.len()

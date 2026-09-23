@@ -1915,7 +1915,7 @@ pub enum ReceiverMode {
 }
 
 /// RFC-0043.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SignatureCandidate {
     Named { qref: QualifiedRef, scheme: Scheme },
     Local { ty: InferTy },
@@ -1993,14 +1993,26 @@ impl SignatureOption {
     }
 }
 
-/// An argument whose head the solve had not named where the argument met the
-/// candidate set, at a position some candidate takes a view of (RFC-0043 rule
-/// 2). The checker joins no such argument with the call's parameter, so
-/// `admits` answers it afresh at every step of the decision.
+/// An argument the checker held rather than joined with the call's
+/// parameter (RFC-0043 rule 2): its head, or for a receiver the mode it is
+/// taken in (rule 6), is the settled candidate's to answer, so `admits`
+/// answers it afresh at every step of the decision, at the type `seen_by`
+/// says that candidate sees it as.
 #[derive(Debug, Clone)]
 pub struct UnjoinedArgument {
     pub index: usize,
     pub ty: InferTy,
+    pub handed: Handed,
+}
+
+/// How the call hands a held argument to a candidate.
+#[derive(Debug, Clone)]
+pub enum Handed {
+    AsIs,
+    /// `ty` is the type of a receiver's place, handed in the mode the
+    /// candidate's first parameter asks (RFC-0043 rule 6); `referent` is what
+    /// a reference to the place names.
+    Receiver { referent: InferTy },
 }
 
 #[derive(Debug, Clone)]
@@ -2050,23 +2062,26 @@ pub struct UndecidedCall {
 }
 
 /// How one candidate takes one argument (RFC-0043).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Admission {
     Direct,
-    /// A `&mut` reaching a `&` parameter: as direct as `Direct` (RFC-0029
-    /// rule 3), and not joined, since the argument keeps its `&mut`.
-    Reborrowed,
+    /// A `&mut` reaching a `&` parameter as `shared`: as direct as `Direct`
+    /// (RFC-0029 rule 3), and not joined, since the argument keeps its
+    /// `&mut`.
+    Reborrowed {
+        shared: InferTy,
+    },
     Converted,
     /// The argument reaches the parameter as a view of the storage it
     /// lends, which the checker takes at the argument and the decision
     /// therefore cannot unify (RFC-0062 rule 3).
-    Viewed,
+    Viewed(Viewed),
     Refused,
 }
 
 impl Admission {
-    fn is_direct(self) -> bool {
-        matches!(self, Admission::Direct | Admission::Reborrowed)
+    fn is_direct(&self) -> bool {
+        matches!(self, Admission::Direct | Admission::Reborrowed { .. })
     }
 }
 
@@ -2078,16 +2093,19 @@ pub struct Kept {
 }
 
 impl Kept {
-    pub fn among(admissions: &[Admission]) -> Self {
+    pub fn among<'a, A>(admissions: A) -> Self
+    where
+        A: IntoIterator<Item = &'a Admission>,
+    {
         Self {
-            direct: admissions.iter().any(|admission| admission.is_direct()),
+            direct: admissions.into_iter().any(Admission::is_direct),
         }
     }
 
-    pub fn keeps(self, admission: Admission) -> bool {
+    pub fn keeps(self, admission: &Admission) -> bool {
         match admission {
-            Admission::Direct | Admission::Reborrowed => true,
-            Admission::Converted | Admission::Viewed => !self.direct,
+            Admission::Direct | Admission::Reborrowed { .. } => true,
+            Admission::Converted | Admission::Viewed(_) => !self.direct,
             Admission::Refused => false,
         }
     }
@@ -2103,11 +2121,15 @@ impl Decision {
 }
 
 /// A decision's settled answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Answer {
     Instance(InstanceKind),
     Conversion(Conversion),
+    /// `candidate` is the one the decision settled on, which an argument it
+    /// held unjoined is admitted by again once the solve names its head
+    /// (RFC-0043 rule 2).
     Signature {
+        candidate: SignatureCandidate,
         settled: SettledSignature,
         callee_ty: InferTy,
     },
@@ -3147,7 +3169,7 @@ impl<'src> Solver<'src> {
             [] => Progress::Failed(Unsettled::NoSignature {
                 decision: id,
                 name,
-                call: self.resolve_shape(call),
+                call: self.resolve_shape(call, awaiting_head),
             }),
             [only] => {
                 let (ty, settled) = match &only.candidate {
@@ -3195,6 +3217,7 @@ impl<'src> Solver<'src> {
                             });
                         }
                         Progress::Settled(Answer::Signature {
+                            candidate,
                             settled,
                             callee_ty: ty,
                         })
@@ -3224,24 +3247,31 @@ impl<'src> Solver<'src> {
     ) -> Vec<SignatureOption> {
         let admissions: Vec<Admission> = options
             .iter()
-            .map(|option| self.admits(&option.candidate, argument.index, &argument.ty))
+            .map(|option| {
+                let seen = self.seen_by(&option.candidate, argument);
+                self.admits(&option.candidate, argument.index, &seen)
+            })
             .collect();
         let kept = Kept::among(&admissions);
         options
             .into_iter()
             .zip(admissions)
-            .filter(|(_, admission)| kept.keeps(*admission))
+            .filter(|(_, admission)| kept.keeps(admission))
             .map(|(option, _)| option)
             .collect()
     }
 
-    /// The settled candidate takes each unjoined argument directly or as a
-    /// view of what it lends. A direct one joins the call's parameter here,
-    /// which `settle_join` has just bound to the candidate's own; a viewed
-    /// one is the checker's coercion at the argument and its type stays what
-    /// the caller wrote (RFC-0043 rule 5). An argument still waiting for its
-    /// head is joined by neither: rule 2 gives the head to the solve, not to
-    /// the candidate the other arguments settled on.
+    /// The settled candidate takes each unjoined argument as `admits` says,
+    /// with the call's parameter `settle_join` has just bound to the
+    /// candidate's own. A direct one joins that parameter here, and a
+    /// reborrowed one joins it as the shared reborrow it reaches it as
+    /// (RFC-0029 rule 3), the argument keeping its `&mut`; a viewed one is
+    /// the checker's coercion at the argument and its type stays what the
+    /// caller wrote (RFC-0043 rule 5). A converted one is left to after the
+    /// solve, which asks no conversion and meets it with the parameter as it
+    /// is (`meet_settled_argument`). An argument still waiting for its head is
+    /// joined by none: rule 2 gives the head to the solve, not to the
+    /// candidate the other arguments settled on.
     fn join_unjoined(
         &mut self,
         call: &CallShape,
@@ -3249,24 +3279,36 @@ impl<'src> Solver<'src> {
         awaiting_head: &[UnjoinedArgument],
     ) -> Result<(), Mismatch> {
         for argument in awaiting_head {
-            if self.admission_waits(candidate, argument.index, &argument.ty) {
-                continue;
-            }
-            if self.admits(candidate, argument.index, &argument.ty) != Admission::Direct {
+            let seen = self.seen_by(candidate, argument);
+            if self.admission_waits(candidate, argument.index, &seen) {
                 continue;
             }
             let param = call.params[argument.index].ty.clone();
-            self.settle_join(&argument.ty, &param)?;
+            match self.admits(candidate, argument.index, &seen) {
+                Admission::Direct => self.settle_join(&seen, &param)?,
+                Admission::Reborrowed { shared } => self.settle_join(&shared, &param)?,
+                Admission::Converted | Admission::Viewed(_) | Admission::Refused => {}
+            }
         }
         Ok(())
     }
 
-    fn resolve_shape(&self, call: &CallShape) -> CallShape {
+    /// The call as its arguments asked it: an argument the decision held
+    /// unjoined never became the call's parameter, so its own type stands
+    /// there.
+    fn resolve_shape(&self, call: &CallShape, awaiting_head: &[UnjoinedArgument]) -> CallShape {
         CallShape {
             params: call
                 .params
                 .iter()
-                .map(|param| ParamTerm::new(param.name, self.terms.resolve_ty(&param.ty)))
+                .enumerate()
+                .map(|(index, param)| {
+                    let asked = awaiting_head
+                        .iter()
+                        .find(|argument| argument.index == index)
+                        .map_or(&param.ty, |argument| &argument.ty);
+                    ParamTerm::new(param.name, self.terms.resolve_ty(asked))
+                })
                 .collect(),
             ret: self.terms.resolve_ty(&call.ret),
         }
@@ -3316,7 +3358,7 @@ impl<'src> Solver<'src> {
                     };
                     trial
                         .join(
-                            &argument.ty,
+                            &self.seen_by(&option.candidate, argument),
                             &param.ty,
                             Position::Value,
                             JoinKind::Flow,
@@ -3387,17 +3429,18 @@ impl<'src> Solver<'src> {
             )
         });
         let takes_unjoined = awaiting_head.iter().all(|argument| {
-            if self.admission_waits(&option.candidate, argument.index, &argument.ty) {
+            let seen = self.seen_by(&option.candidate, argument);
+            if self.admission_waits(&option.candidate, argument.index, &seen) {
                 return true;
             }
             let param = &instance_params[argument.index].ty;
-            match self.admits(&option.candidate, argument.index, &argument.ty) {
+            match self.admits(&option.candidate, argument.index, &seen) {
                 Admission::Refused => false,
-                Admission::Viewed => self.views_as(&argument.ty, &trial.resolve_ty(param)),
-                Admission::Reborrowed => converts(&trial, self.registry, &argument.ty, param),
+                Admission::Viewed(_) => self.views_as(&seen, &trial.resolve_ty(param)),
+                Admission::Reborrowed { .. } => converts(&trial, self.registry, &seen, param),
                 Admission::Direct | Admission::Converted => trial
                     .join(
-                        &argument.ty,
+                        &seen,
                         param,
                         Position::Value,
                         JoinKind::Decision,
@@ -3429,6 +3472,35 @@ impl<'src> Solver<'src> {
         mutability.map_or(ReceiverMode::Value, ReceiverMode::Lent)
     }
 
+    /// The mode a candidate takes a receiver place of type `owned` in, and
+    /// the type that mode sees it as: the place itself by value, or a
+    /// reference to `referent`, what a lend of the place names (RFC-0043
+    /// rule 6). Every receiver the candidate is admitted at is seen here.
+    pub fn receiver_seen_by(
+        &self,
+        candidate: &SignatureCandidate,
+        owned: &InferTy,
+        referent: &InferTy,
+    ) -> (ReceiverMode, InferTy) {
+        let mode = self.receiver_mode(candidate);
+        let seen = match mode {
+            ReceiverMode::Value => owned.clone(),
+            ReceiverMode::Lent(mutability) => {
+                TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent.clone())))
+            }
+        };
+        (mode, seen)
+    }
+
+    pub fn seen_by(&self, candidate: &SignatureCandidate, argument: &UnjoinedArgument) -> InferTy {
+        match &argument.handed {
+            Handed::AsIs => argument.ty.clone(),
+            Handed::Receiver { referent } => {
+                self.receiver_seen_by(candidate, &argument.ty, referent).1
+            }
+        }
+    }
+
     /// How the candidate takes the argument at `index` (RFC-0043), by one
     /// declared rule (RFC-0023) where it converts. An argument still a
     /// variable is admitted as it is where the two bounds intersect: a
@@ -3449,14 +3521,13 @@ impl<'src> Solver<'src> {
         if self.term_within_shapes(arg, &shapes) {
             return Admission::Direct;
         }
-        if self
-            .shared_reborrow(arg)
-            .is_some_and(|shared| self.term_within_shapes(&shared, &shapes))
+        if let Some(shared) = self.shared_reborrow(arg)
+            && self.term_within_shapes(&shared, &shapes)
         {
-            return Admission::Reborrowed;
+            return Admission::Reborrowed { shared };
         }
-        if shapes.iter().any(|shape| self.views_as(arg, shape)) {
-            return Admission::Viewed;
+        if let Some(viewed) = self.view_among(arg, &shapes) {
+            return Admission::Viewed(viewed);
         }
         let converts = shapes.iter().any(|shape| {
             let mut trial = self.terms.clone();
@@ -3471,22 +3542,37 @@ impl<'src> Solver<'src> {
     }
 
     /// Whether admission at this argument waits for a head (RFC-0043 rule
-    /// 2): the storage it would lend is one the solve has not named, and this
-    /// candidate takes a run of that storage rather than the storage itself,
-    /// so the argument's own type is evidence for neither `Direct` nor
-    /// `Viewed` yet.
+    /// 2): the head this candidate's admission reads is one the solve has
+    /// not named, so the argument's own type is evidence for no admission
+    /// but `Direct` yet. An argument that is such a head itself may still
+    /// reach the parameter by a reborrow, a view or a conversion; one that
+    /// lends such a storage is a reference already, and waits where this
+    /// candidate takes a run of that storage rather than the storage itself.
+    /// An integer literal's head is named, an integer; its width is a
+    /// decision of its own (RFC-0037).
     pub fn admission_waits(
         &self,
         candidate: &SignatureCandidate,
         index: usize,
         arg: &InferTy,
     ) -> bool {
-        if !self.lends_an_unnamed_head(arg) {
+        let TyVarBound::OneOf { shapes, .. } = candidate.param_bound(index) else {
             return false;
+        };
+        match self.terms.shallow_resolve_ty(arg) {
+            TyTerm::Var(var) => !matches!(self.bound_of_var(var), TyVarBound::Integer { .. }),
+            _ => self.lends_an_unnamed_head(arg) && shapes.iter().any(borrows_a_view),
         }
-        match candidate.param_bound(index) {
-            TyVarBound::OneOf { shapes, .. } => shapes.iter().any(borrows_a_view),
-            TyVarBound::Any | TyVarBound::Integer { .. } => false,
+    }
+
+    /// The candidate a signature decision settled on, which takes each
+    /// argument the decision held unjoined as it admits that argument once
+    /// the solve has named its head (RFC-0043 rule 2). `None` where the
+    /// decision did not settle, which is reported at the call.
+    pub fn settled_candidate(&self, id: DecisionId) -> Option<&SignatureCandidate> {
+        match &self.decisions[id.0 as usize].state {
+            DecisionState::Settled(Answer::Signature { candidate, .. }) => Some(candidate),
+            _ => None,
         }
     }
 
@@ -3544,17 +3630,9 @@ impl<'src> Solver<'src> {
         })
     }
 
-    /// The view the candidate's parameter at `index` takes the argument as,
-    /// where it takes it as one.
-    pub fn view_wanted(
-        &self,
-        candidate: &SignatureCandidate,
-        index: usize,
-        arg: &InferTy,
-    ) -> Option<Viewed> {
-        let TyVarBound::OneOf { shapes, .. } = candidate.param_bound(index) else {
-            return None;
-        };
+    /// The view a parameter of these shapes takes the argument as, where it
+    /// takes it as one.
+    fn view_among(&self, arg: &InferTy, shapes: &[PolyTy]) -> Option<Viewed> {
         shapes.iter().find_map(|shape| {
             let TyTerm::Ref(mutability, pointee) = shape else {
                 return None;

@@ -17,10 +17,10 @@ use crate::place::{
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
     CompilerInstances, Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation,
-    ComponentOffer, InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode,
-    MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair, RequiredDecision,
-    SettledSignature, SignatureCandidate, SignatureName, SignatureOption, UndecidedCall,
-    UnjoinedArgument, Unsettled, Withholds, takes_a_language_owned_type,
+    ComponentOffer, Handed, InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding,
+    MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair,
+    RequiredDecision, SettledSignature, SignatureCandidate, SignatureName, SignatureOption,
+    UndecidedCall, UnjoinedArgument, Unsettled, Withholds, takes_a_language_owned_type,
 };
 use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
@@ -186,26 +186,73 @@ struct IndexUse {
 /// its parameter. What an `a[i]` argument names is settled by the index's own
 /// signature decision, so the coercion waits for the solve as `IndexUse`
 /// does.
+///
+/// The parameter is the view already (RFC-0047 rule 6): the referent owes
+/// the declaration, and a referent that declares none is the argument
+/// mismatch.
 struct SliceArg {
     at: AstId,
     span: Span,
     arg: InferTy,
     param: InferTy,
-    view: DeferredView,
+    viewed: Viewed,
 }
 
-/// What coercion a deferred argument owes once the solve has named what it
-/// lends.
-enum DeferredView {
-    /// The parameter is the view already (RFC-0047 rule 6): the referent owes
-    /// the declaration, and a referent that declares none is the argument
-    /// mismatch.
-    Asked(Viewed),
-    /// The parameter belongs to whichever candidate the signature decision
-    /// settled on (RFC-0043 rule 2), so a coercion is owed only where that
-    /// parameter turned out to be a view; where it did not, the decision
-    /// joined the argument with it.
-    OfSettledParam,
+/// An argument of an overloaded call whose parameter belongs to whichever
+/// candidate the signature decision settles on (RFC-0043 rule 2), so what
+/// it owes is that candidate's admission of it, asked once the solve has
+/// named its head.
+struct HeldArgument {
+    at: AstId,
+    span: Span,
+    index: usize,
+    arg: InferTy,
+    param: InferTy,
+    handed: HeldHanded,
+}
+
+/// How a held argument reaches the candidate the decision settles on.
+enum HeldHanded {
+    AsWritten,
+    /// A receiver place whose head was open where the call met it: the
+    /// settled candidate's mode lends it or moves it (RFC-0043 rule 6), and
+    /// that lend or move is recorded once the mode is known. `referent` is
+    /// what the lend decision opened at the place names.
+    Receiver {
+        place: Expr,
+        referent: InferTy,
+    },
+}
+
+impl HeldArgument {
+    fn unjoined(&self) -> UnjoinedArgument {
+        UnjoinedArgument {
+            index: self.index,
+            ty: self.arg.clone(),
+            handed: match &self.handed {
+                HeldHanded::AsWritten => Handed::AsIs,
+                HeldHanded::Receiver { referent, .. } => Handed::Receiver {
+                    referent: referent.clone(),
+                },
+            },
+        }
+    }
+}
+
+/// A receiver place whose head is open where the call meets it, held for
+/// the candidate the decision settles on (RFC-0043 rule 6).
+struct OpenReceiver {
+    place: Expr,
+    referent: InferTy,
+}
+
+/// A receiver place as the mode the call settled on passes it.
+enum Handing {
+    Lent {
+        mutability: Mutability,
+        lent: InferTy,
+    },
+    Value,
 }
 
 /// One `a[i]` as the checker reads it (RFC-0047).
@@ -400,6 +447,7 @@ enum FirstOperand<'e> {
 /// RFC-0030, RFC-0043.
 enum Received {
     Taken(Signatures, FirstArg),
+    Held(Vec<SignatureCandidate>, FirstArg, OpenReceiver),
     Refused(FirstArg),
     AmbiguityReported,
 }
@@ -408,7 +456,9 @@ enum Received {
 struct Narrowing {
     options: Vec<SignatureOption>,
     awaiting_head: Vec<UnjoinedArgument>,
+    held: Vec<HeldArgument>,
     params: Vec<ParamTerm<Infer>>,
+    receiver: Option<OpenReceiver>,
 }
 
 enum Parameters<'p> {
@@ -423,8 +473,15 @@ enum Reach {
     /// would give it the argument's type, which that candidate takes only
     /// through the conversion (RFC-0043).
     Converted,
-    /// RFC-0043 rule 2, RFC-0062 rule 3.
-    Viewed(DeferredView),
+    /// RFC-0062 rule 3.
+    Viewed(Viewed),
+}
+
+/// How an argument of an overloaded call meets the call's parameter.
+enum Narrowed {
+    Reaches(Reach),
+    /// RFC-0043 rule 2: as the candidate the decision settles on admits it.
+    Held(HeldHanded),
 }
 
 struct CallType {
@@ -582,6 +639,15 @@ fn operand_stays_lent(op: BinOp) -> bool {
         | BinOp::And
         | BinOp::Or => false,
     }
+}
+
+/// The union of the shapes the candidates take at `index` directly: the
+/// call's parameter's range there (RFC-0043).
+fn param_range(options: &[SignatureOption], index: usize) -> TyVarBound {
+    options
+        .iter()
+        .map(|option| option.candidate.param_bound(index))
+        .fold(TyVarBound::one_of(vec![]), TyVarBound::union)
 }
 
 /// RFC-0043.
@@ -1207,6 +1273,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     value_reads: FxHashMap<AstId, ValueRead>,
     /// RFC-0047 rule 6, drained by `settle_slice_args`.
     slice_args: Vec<SliceArg>,
+    /// RFC-0043 rule 2, drained by `settle_held_arguments`.
+    held_arguments: Vec<(DecisionId, HeldArgument)>,
     /// The places the calls being checked have consumed, innermost last.
     holds: Vec<Hold>,
     /// Decisions instantiated so far, each at the span that will report a
@@ -1272,6 +1340,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             index_uses: Vec::new(),
             value_reads: FxHashMap::default(),
             slice_args: Vec::new(),
+            held_arguments: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
             operator_decisions: FxHashMap::default(),
@@ -1779,23 +1848,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         reach: Reach,
     ) {
         let joins = match reach {
-            Reach::Viewed(DeferredView::Asked(viewed)) => {
+            Reach::Viewed(viewed) => {
                 match self.coerce_viewed(arg_ty, param_ty, site, viewed) {
                     SliceCoercion::Coerced => {}
                     SliceCoercion::NoDeclaration => {
                         self.meet_settled_argument(arg_ty, param_ty, site.span)
                     }
                 }
-                return;
-            }
-            Reach::Viewed(view) => {
-                self.slice_args.push(SliceArg {
-                    at: site.id,
-                    span: site.span,
-                    arg: arg_ty.clone(),
-                    param: param_ty.clone(),
-                    view,
-                });
                 return;
             }
             Reach::Joined => true,
@@ -1963,7 +2022,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span: site.span,
                 arg: arg_ty.clone(),
                 param: param_ty.clone(),
-                view: DeferredView::Asked(viewed),
+                viewed,
             });
             return SliceCoercion::Coerced;
         }
@@ -2037,30 +2096,98 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             span,
             arg,
             param,
-            view,
+            viewed,
         } in deferred
         {
-            let referent = match self.solver.shallow_resolve_ty(&arg) {
-                TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
-                other => other,
+            self.settle_view(at, span, &arg, &param, viewed);
+        }
+    }
+
+    /// Every argument a signature decision held, met as the candidate it
+    /// settled on admits it now that the solve has named its head (RFC-0043
+    /// rule 2): a view is the checker's coercion at the argument, a reborrow
+    /// is the shared reborrow the argument reaches the parameter as, and any
+    /// other admission meets the parameter as it is.
+    fn settle_held_arguments(&mut self) {
+        let held = std::mem::take(&mut self.held_arguments);
+        for (
+            decision,
+            HeldArgument {
+                at,
+                span,
+                index,
+                arg,
+                param,
+                handed,
+            },
+        ) in held
+        {
+            let Some(candidate) = self.solver.settled_candidate(decision).cloned() else {
+                continue;
             };
-            let viewed = match view {
-                DeferredView::Asked(viewed) => viewed,
-                DeferredView::OfSettledParam => {
-                    let TyTerm::Ref(mutability, wanted) = self.solver.shallow_resolve_ty(&param)
-                    else {
-                        continue;
-                    };
-                    let Some(view) = View::of(&self.solver.shallow_resolve_ty(&wanted.ty)) else {
-                        continue;
-                    };
-                    Viewed { view, mutability }
+            let arg = match handed {
+                HeldHanded::AsWritten => arg,
+                HeldHanded::Receiver { place, referent } => {
+                    self.settle_receiver(&candidate, &place, arg, &referent, span)
                 }
             };
-            match self.slice_coercion(&referent, viewed, &arg, &param, at, span) {
-                SliceCoercion::Coerced => continue,
-                SliceCoercion::NoDeclaration => self.meet_settled_argument(&arg, &param, span),
+            match self.solver.admits(&candidate, index, &arg) {
+                Admission::Viewed(viewed) => self.settle_view(at, span, &arg, &param, viewed),
+                Admission::Reborrowed { shared } => {
+                    self.meet_settled_argument(&shared, &param, span);
+                    self.coercions.push(PendingCoercion {
+                        at,
+                        cast: PendingCast::Reborrow { shared: param },
+                    });
+                }
+                Admission::Direct | Admission::Converted | Admission::Refused => {
+                    self.meet_settled_argument(&arg, &param, span)
+                }
             }
+        }
+    }
+
+    /// A held receiver taken in the settled candidate's mode, with the
+    /// bookkeeping `receiver_in` does for a mode chosen at the call. A head
+    /// the solve left open is lent as the lend decision opened where the
+    /// receiver was held names it.
+    fn settle_receiver(
+        &mut self,
+        candidate: &SignatureCandidate,
+        place: &Expr,
+        owned: InferTy,
+        referent: &InferTy,
+        taken_by: Span,
+    ) -> InferTy {
+        let (mode, seen) = self.solver.receiver_seen_by(candidate, &owned, referent);
+        let handing = match mode {
+            ReceiverMode::Lent(mutability) => Handing::Lent {
+                mutability,
+                lent: match self.lend_named(&owned, place, mutability, place.span()) {
+                    Some(named) => TyTerm::Ref(mutability, Box::new(TypeArg::uniform(named))),
+                    None => seen,
+                },
+            },
+            ReceiverMode::Value => Handing::Value,
+        };
+        self.receiver_handed(place, owned, handing, taken_by).ty
+    }
+
+    fn settle_view(
+        &mut self,
+        at: AstId,
+        span: Span,
+        arg: &InferTy,
+        param: &InferTy,
+        viewed: Viewed,
+    ) {
+        let referent = match self.solver.shallow_resolve_ty(arg) {
+            TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
+            other => other,
+        };
+        match self.slice_coercion(&referent, viewed, arg, param, at, span) {
+            SliceCoercion::Coerced => {}
+            SliceCoercion::NoDeclaration => self.meet_settled_argument(arg, param, span),
         }
     }
 
@@ -3467,6 +3594,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.record_decided_call_types();
         self.resolve_conversions();
         self.settle_slice_args();
+        self.settle_held_arguments();
         self.settle_index_uses();
         let (settled, settled_effects) = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
@@ -4505,6 +4633,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         mutability: Mutability,
         span: Span,
     ) -> InferTy {
+        let referent = match self.lend_named(of, place, mutability, span) {
+            Some(referent) => referent,
+            None => self.open_lend(of, mutability, span),
+        };
+        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
+    }
+
+    /// What a borrow of the place names, where its head does: `None` where
+    /// the head is still a variable.
+    fn lend_named(
+        &mut self,
+        of: &InferTy,
+        place: &Expr,
+        mutability: Mutability,
+        span: Span,
+    ) -> Option<InferTy> {
         if mutability == Mutability::Mut
             && let Some(Loan {
                 root: Storage::Context(qref),
@@ -4513,18 +4657,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         {
             self.note_access(Effect::write(qref), span);
         }
-        let referent = match self.solver.lend(of, mutability) {
-            LendOutcome::Names { referent, .. } => referent,
+        match self.solver.lend(of, mutability) {
+            LendOutcome::Names { referent, .. } => Some(referent),
             LendOutcome::MutableBorrowOfShared { referent } => {
                 let subject = written_place(self.interner, place);
                 self.error(MirErrorKind::MutableBorrowOfShared { subject }, span);
-                referent
+                Some(referent)
             }
-            LendOutcome::HeadOpen => {
-                return self.open_lend(of, mutability, span);
-            }
-        };
-        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
+            LendOutcome::HeadOpen => None,
+        }
     }
 
     /// The place's head is still a variable, so what the reference names
@@ -4538,7 +4679,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             mutability,
         });
         self.decision_sites.insert(decision, span);
-        TyTerm::Ref(mutability, Box::new(TypeArg::uniform(referent)))
+        referent
     }
 
     /// `recv.f(args)` is `f(recv', args)`, `recv'` borrowed when `f`'s
@@ -4602,6 +4743,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             FirstOperand::Checked(first) => (signatures, Some(first)),
             FirstOperand::Receiver(receiver) => match self.receive(signatures, receiver, call) {
                 Received::Taken(signatures, first) => (signatures, Some(first)),
+                Received::Held(candidates, first, receiver) => {
+                    return self.admit_several(candidates, Some(first), Some(receiver), call);
+                }
                 Received::Refused(first) => {
                     let types = self.check_unadmitted_args(Some(&first), call.args);
                     return self.refuse_call(call, types, 1);
@@ -4702,7 +4846,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.calls.insert(call.callee.id, CallChoice::Binding);
                 self.check_callable(&ty, first.as_ref(), call.args, call.span)
             }
-            Signatures::Several(candidates) => self.admit_several(candidates, first, call),
+            Signatures::Several(candidates) => self.admit_several(candidates, first, None, call),
         }
     }
 
@@ -4794,6 +4938,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         candidates: Vec<SignatureCandidate>,
         first: Option<FirstArg>,
+        receiver: Option<OpenReceiver>,
         call: &NamedCall<'_>,
     ) -> InferTy {
         let mut narrowing = Narrowing {
@@ -4802,7 +4947,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .map(SignatureOption::taking_every_argument_directly)
                 .collect(),
             awaiting_head: Vec::new(),
+            held: Vec::new(),
             params: Vec::new(),
+            receiver,
         };
         let types = self.admit_arguments(
             &mut Parameters::Narrowing(&mut narrowing),
@@ -4843,6 +4990,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.decision_sites.insert(decision, call.span);
         self.calls
             .insert(call.callee.id, CallChoice::Decided(decision));
+        self.held_arguments
+            .extend(narrowing.held.into_iter().map(|held| (decision, held)));
         ret
     }
 
@@ -4910,12 +5059,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     ) {
         let reach = match parameters {
             Parameters::Instantiated(_) => Reach::Joined,
-            Parameters::Narrowing(narrowing) => {
-                let Some(reach) = self.narrow(narrowing, index, ty) else {
+            Parameters::Narrowing(narrowing) => match self.narrow(narrowing, index, ty) {
+                None => return,
+                Some(Narrowed::Reaches(reach)) => reach,
+                Some(Narrowed::Held(handed)) => {
+                    let held = HeldArgument {
+                        at: site.id,
+                        span: site.span,
+                        index,
+                        arg: ty.clone(),
+                        param: param.clone(),
+                        handed,
+                    };
+                    narrowing.awaiting_head.push(held.unjoined());
+                    narrowing.held.push(held);
                     return;
-                };
-                reach
-            }
+                }
+            },
         };
         self.meet_argument(ty, param, site, reach);
     }
@@ -4924,7 +5084,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// that takes it only through a conversion or a view, and an argument
     /// whose head the solve has not named is held for the decision to ask
     /// again. `None` where the argument empties the set.
-    fn narrow(&mut self, narrowing: &mut Narrowing, index: usize, ty: &InferTy) -> Option<Reach> {
+    fn narrow(
+        &mut self,
+        narrowing: &mut Narrowing,
+        index: usize,
+        ty: &InferTy,
+    ) -> Option<Narrowed> {
+        if index == 0
+            && let Some(receiver) = narrowing.receiver.take()
+        {
+            return self.hold_receiver(narrowing, ty, receiver);
+        }
         let options = &mut narrowing.options;
         if options
             .iter()
@@ -4939,11 +5109,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             if options.is_empty() {
                 return None;
             }
-            narrowing.awaiting_head.push(UnjoinedArgument {
-                index,
-                ty: ty.clone(),
-            });
-            return Some(Reach::Viewed(DeferredView::OfSettledParam));
+            // Rule 2: a variable is admitted directly where the bounds
+            // intersect, and not joined with the parameter: the settled
+            // candidate may take the head the solve names only by a
+            // reborrow or a view.
+            if let TyTerm::Var(_) = self.solver.shallow_resolve_ty(ty) {
+                let range = self.solver.fresh_var_with(param_range(options, index));
+                if self.solver.unify(ty, &range).is_err() {
+                    return None;
+                }
+            }
+            return Some(Narrowed::Held(HeldHanded::AsWritten));
         }
         let admissions: Vec<Admission> = options
             .iter()
@@ -4951,14 +5127,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
         let kept = Kept::among(&admissions);
         let mut converts = false;
-        let mut views = false;
+        let mut wanted: Vec<Viewed> = Vec::new();
         *options = std::mem::take(options)
             .into_iter()
             .zip(admissions)
             .filter_map(|(mut option, admission)| match admission {
-                _ if !kept.keeps(admission) => None,
+                _ if !kept.keeps(&admission) => None,
                 Admission::Direct => Some(option),
-                Admission::Reborrowed | Admission::Converted => {
+                Admission::Reborrowed { .. } | Admission::Converted => {
                     option.converted.push(ConvertedArgument {
                         index,
                         ty: ty.clone(),
@@ -4966,12 +5142,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     converts = true;
                     Some(option)
                 }
-                Admission::Viewed => {
+                Admission::Viewed(viewed) => {
                     option.viewed.push(ConvertedArgument {
                         index,
                         ty: ty.clone(),
                     });
-                    views = true;
+                    wanted.push(viewed);
                     Some(option)
                 }
                 Admission::Refused => None,
@@ -4980,21 +5156,38 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if options.is_empty() {
             return None;
         }
-        if views {
-            let mut wanted: Vec<Viewed> = options
-                .iter()
-                .filter_map(|option| self.solver.view_wanted(&option.candidate, index, ty))
-                .collect();
-            wanted.dedup();
-            return Some(Reach::Viewed(match wanted.as_slice() {
-                [viewed] if !converts => DeferredView::Asked(*viewed),
-                _ => DeferredView::OfSettledParam,
-            }));
-        }
-        Some(match converts {
-            true => Reach::Converted,
-            false => Reach::Joined,
+        wanted.dedup();
+        Some(match wanted.as_slice() {
+            [] if converts => Narrowed::Reaches(Reach::Converted),
+            [] => Narrowed::Reaches(Reach::Joined),
+            [viewed] if !converts => Narrowed::Reaches(Reach::Viewed(*viewed)),
+            _ => Narrowed::Held(HeldHanded::AsWritten),
         })
+    }
+
+    /// A receiver whose head is open is held whatever the candidates take
+    /// it as: each sees it in its own mode (RFC-0043 rule 6), so no one
+    /// type meets the call's parameter before the decision settles on a
+    /// candidate. One that refuses what its mode sees leaves the set here.
+    fn hold_receiver(
+        &mut self,
+        narrowing: &mut Narrowing,
+        owned: &InferTy,
+        OpenReceiver { place, referent }: OpenReceiver,
+    ) -> Option<Narrowed> {
+        narrowing.options.retain(|option| {
+            let (_, seen) = self
+                .solver
+                .receiver_seen_by(&option.candidate, owned, &referent);
+            !matches!(
+                self.solver.admits(&option.candidate, 0, &seen),
+                Admission::Refused
+            )
+        });
+        if narrowing.options.is_empty() {
+            return None;
+        }
+        Some(Narrowed::Held(HeldHanded::Receiver { place, referent }))
     }
 
     /// RFC-0030, RFC-0043.
@@ -5021,7 +5214,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (vec![candidate], mode)
             }
             Signatures::Several(candidates) => {
-                let Some(admitted) = self.admit_receiver(candidates, &owned, agreed, call) else {
+                let referent = match self.solver.lend(&owned, Mutability::Shared) {
+                    LendOutcome::Names { referent, .. }
+                    | LendOutcome::MutableBorrowOfShared { referent } => referent,
+                    LendOutcome::HeadOpen => {
+                        return self.hold_open_receiver(candidates, receiver, owned, call);
+                    }
+                };
+                let Some(admitted) = self.admit_receiver(candidates, &owned, &referent, call)
+                else {
                     return Received::AmbiguityReported;
                 };
                 admitted
@@ -5041,47 +5242,53 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         owned
     }
 
+    /// The place's head is open, so no candidate's mode can be admitted
+    /// yet and none is chosen: the receiver is held for the candidate the
+    /// decision settles on, and what a lend of the place names is the lend
+    /// decision opened here, which every mode that lends it reads.
+    fn hold_open_receiver(
+        &mut self,
+        candidates: Vec<SignatureCandidate>,
+        receiver: &Expr,
+        owned: InferTy,
+        call: &NamedCall<'_>,
+    ) -> Received {
+        let referent = self.open_lend(&owned, Mutability::Shared, receiver.span());
+        let first = FirstArg {
+            ty: owned,
+            site: ArgSite::of(receiver, call.span),
+        };
+        let receiver = OpenReceiver {
+            place: receiver.clone(),
+            referent,
+        };
+        Received::Held(candidates, first, receiver)
+    }
+
     /// Each candidate admitted at the receiver in its own mode (RFC-0043).
     /// `None` where the ones kept see it as different types, reported here.
     fn admit_receiver(
         &mut self,
         candidates: Vec<SignatureCandidate>,
         owned: &InferTy,
-        agreed: Option<ReceiverMode>,
+        referent: &InferTy,
         call: &NamedCall<'_>,
     ) -> Option<(Vec<SignatureCandidate>, ReceiverMode)> {
-        let per_candidate: Vec<CandidateReceiver> = candidates
+        let admitted: Vec<ReceiverAdmission> = candidates
             .into_iter()
-            .map(|candidate| CandidateReceiver {
-                mode: self.solver.receiver_mode(&candidate),
-                candidate,
+            .map(|candidate| {
+                let (mode, seen_as) = self.solver.receiver_seen_by(&candidate, owned, referent);
+                ReceiverAdmission {
+                    admission: self.solver.admits(&candidate, 0, &seen_as),
+                    seen: CandidateReceiver { candidate, mode },
+                    seen_as,
+                }
             })
             .collect();
-        let trials: Option<Vec<InferTy>> = per_candidate
-            .iter()
-            .map(|seen| self.receiver_as(owned, seen.mode))
-            .collect();
-        let Some(trials) = trials else {
-            let every = per_candidate
-                .into_iter()
-                .map(|seen| seen.candidate)
-                .collect();
-            return Some((every, lent_only_if_agreed(agreed)));
-        };
-        let admitted: Vec<ReceiverAdmission> = per_candidate
-            .into_iter()
-            .zip(trials)
-            .map(|(seen, seen_as)| ReceiverAdmission {
-                admission: self.solver.admits(&seen.candidate, 0, &seen_as),
-                seen,
-                seen_as,
-            })
-            .collect();
-        let admissions: Vec<Admission> = admitted.iter().map(|one| one.admission).collect();
-        let kept_among = Kept::among(&admissions);
+        let kept_among = Kept::among(admitted.iter().map(|one| &one.admission));
         let kept: Vec<(CandidateReceiver, InferTy)> = admitted
             .into_iter()
-            .filter(|one| kept_among.keeps(one.admission))
+            .filter(|one| kept_among.keeps(&one.admission))
             .map(|one| (one.seen, one.seen_as))
             .collect();
         let Some(mode) = self.one_receiver_mode(&kept) else {
@@ -5166,25 +5373,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         )
     }
 
-    /// The type one candidate's mode sees the checked receiver as, or
-    /// `None` where the place's head is still a variable and the lend
-    /// cannot be read off it. No bookkeeping: this is the trial the
-    /// candidate is admitted against (RFC-0043).
-    fn receiver_as(&self, owned: &InferTy, mode: ReceiverMode) -> Option<InferTy> {
-        let ReceiverMode::Lent(mutability) = mode else {
-            return Some(owned.clone());
-        };
-        let referent = match self.solver.lend(owned, mutability) {
-            LendOutcome::Names { referent, .. }
-            | LendOutcome::MutableBorrowOfShared { referent } => referent,
-            LendOutcome::HeadOpen => return None,
-        };
-        Some(TyTerm::Ref(
-            mutability,
-            Box::new(TypeArg::uniform(referent)),
-        ))
-    }
-
     /// The mode the call settled on, with its bookkeeping: the lend
     /// (RFC-0029, RFC-0041) or the place by value.
     fn receiver_in(
@@ -5194,10 +5382,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         mode: ReceiverMode,
         taken_by: Span,
     ) -> FirstArg {
-        let (first, passing) = match mode {
-            ReceiverMode::Lent(mutability) => {
+        let handing = match mode {
+            ReceiverMode::Lent(mutability) => Handing::Lent {
+                mutability,
+                lent: self.lend_place(&owned, receiver, mutability, receiver.span()),
+            },
+            ReceiverMode::Value => Handing::Value,
+        };
+        self.receiver_handed(receiver, owned, handing, taken_by)
+    }
+
+    fn receiver_handed(
+        &mut self,
+        receiver: &Expr,
+        owned: InferTy,
+        handing: Handing,
+        taken_by: Span,
+    ) -> FirstArg {
+        let (first, passing) = match handing {
+            Handing::Lent { mutability, lent } => {
                 let first = FirstArg {
-                    ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
+                    ty: lent,
                     site: ArgSite::lent(receiver, taken_by),
                 };
                 self.lent_places.push(LentWhole {
@@ -5206,7 +5411,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 });
                 (first, Passing::Lent(mutability))
             }
-            ReceiverMode::Value => {
+            Handing::Value => {
                 self.note_value_read(receiver);
                 let refused = self.reads_through_reference(receiver)
                     && self.refuse_read_through(&owned, ReadThrough::Field, receiver.span());
@@ -5375,11 +5580,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .find_map(|option| option.candidate.param_name(index))
             .unwrap_or_else(|| self.interner.intern(&index.to_string()));
-        let bound = options
-            .iter()
-            .map(|option| option.candidate.param_bound(index))
-            .fold(TyVarBound::one_of(vec![]), TyVarBound::union);
-        ParamTerm::new(name, self.solver.fresh_var_with(bound))
+        ParamTerm::new(
+            name,
+            self.solver.fresh_var_with(param_range(options, index)),
+        )
     }
 
     /// `ns::tag(payload)` where `ns` names no function: the structural

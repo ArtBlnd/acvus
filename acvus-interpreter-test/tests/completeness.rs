@@ -64,16 +64,6 @@ fn an_option_holds_a_reference() {
     runs_to("let x = 5; match Some(&x) { Some(r) => *r, _ => 0, }", "5");
 }
 
-/// RFC-0043 rule 2: admission is asked again once the variable settles;
-/// RFC-0062 rule 3: a `&String` reaches `&str`.
-#[test]
-fn a_method_on_a_lambda_parameter_reaches_a_view() {
-    runs_to(
-        "let f = |s| -> s.contains(\"a\"); f(&\"ab\".to_string())",
-        "true",
-    );
-}
-
 /// RFC-0024 rule 5: a pattern on a source whose type is still open is
 /// checked against its own referent and joined when the type settles.
 #[test]
@@ -133,17 +123,6 @@ fn a_comparison_with_a_captured_string() {
     runs_to(
         "let mk = |k| -> |x| -> x == k; let g = mk(\"q\".to_string()); g(\"q\".to_string())",
         "true",
-    );
-}
-
-/// RFC-0043 rule 6: a receiver whose type is still open is lent when every
-/// candidate takes a reference; RFC-0029 rules 3-4: that lend settles to a
-/// shared reborrow of the `&mut` the call passes.
-#[test]
-fn a_method_on_a_mutably_lent_lambda_parameter() {
-    runs_to(
-        "let v = vec([1, 2]); let f = |r| -> match r.last() { Some(x) => *x, None => 0, }; f(&mut v)",
-        "2",
     );
 }
 
