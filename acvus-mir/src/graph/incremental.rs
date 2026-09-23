@@ -181,12 +181,6 @@ impl IncrementalGraph {
             .unwrap_or(&[])
     }
 
-    pub fn all_diagnostics(&self) -> impl Iterator<Item = (QualifiedRef, &[Refusal])> {
-        self.diagnostics
-            .iter()
-            .map(|(&qref, errs)| (qref, errs.as_slice()))
-    }
-
     /// The inputs this one function requires: neither a `$` a binding fixed
     /// nor one whose type closed to `!` is among them (RFC-0071 rule 5).
     ///
@@ -261,38 +255,6 @@ impl IncrementalGraph {
 
     pub fn interner(&self) -> &Interner {
         &self.interner
-    }
-
-    // -- Resolution ---------------------------------------------------
-
-    /// Resolve a function name.
-    /// - `qualifier = None` -> unqualified, root only.
-    /// - `qualifier = Some(ns_name)` -> qualified, specific namespace only.
-    pub fn resolve_fn(&self, qualifier: Option<Astr>, name: Astr) -> Option<QualifiedRef> {
-        let qref = match qualifier {
-            None => QualifiedRef::root(name),
-            Some(ns_name) => QualifiedRef::qualified(ns_name, name),
-        };
-        if self.functions.contains_key(&qref) {
-            Some(qref)
-        } else {
-            None
-        }
-    }
-
-    /// Resolve a context name to its QualifiedRef.
-    /// - `qualifier = None` -> unqualified, root only.
-    /// - `qualifier = Some(ns_name)` -> qualified, specific namespace only.
-    pub fn resolve_ctx(&self, qualifier: Option<Astr>, name: Astr) -> Option<QualifiedRef> {
-        let qref = match qualifier {
-            None => QualifiedRef::root(name),
-            Some(ns_name) => QualifiedRef::qualified(ns_name, name),
-        };
-        if self.contexts.contains_key(&qref) {
-            Some(qref)
-        } else {
-            None
-        }
     }
 
     /// The contexts a body can name: `@name` is the root context `name`,
@@ -792,36 +754,5 @@ impl IncrementalGraph {
             .values()
             .map(|ctx| (ctx.qref, ctx.ty.clone()))
             .collect()
-    }
-
-    /// Build a snapshot InferResult for compatibility with batch APIs.
-    pub fn infer_result(&mut self) -> super::infer::InferResult {
-        let outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = self
-            .infer_cache
-            .iter()
-            .flatten()
-            .flat_map(|scc| scc.outcomes.iter())
-            .map(|(&fid, outcome)| (fid, outcome.clone()))
-            .collect();
-
-        super::infer::InferResult {
-            outcomes,
-            context_types: {
-                // PolyTy -> InferTy (instantiate) -> Ty (freeze) at the output boundary.
-                let known = self.known_context_types();
-                let signatures = FxHashMap::default();
-                let mut solver =
-                    crate::ty::Solver::new(&mut self.sources, &self.types, &signatures);
-                Freeze::new(
-                    known
-                        .into_iter()
-                        .map(|(k, v)| {
-                            let infer = solver.instantiate_poly(&v);
-                            (k, solver.freeze_ty(&infer).unwrap_or_else(|_| Ty::error()))
-                        })
-                        .collect(),
-                )
-            },
-        }
     }
 }

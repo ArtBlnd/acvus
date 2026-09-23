@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Definition, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Hover, Listing, Location, LspSession, Mode, Vfs, Workspace,
+    HostDiagnostic, Hover, Listing, Location, LspErrorCategory, LspSession, Mode, OpenRefusal, Vfs,
+    Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -83,7 +84,9 @@ fn open(
     source: &str,
 ) -> (LspSession, acvus_lsp::DocId) {
     let mut session = LspSession::new(interner, environment);
-    let id = session.open(document(interner, "test", mode), source);
+    let id = session
+        .open(document(interner, "test", mode), source)
+        .expect("the session opens no other document");
     (session, id)
 }
 
@@ -169,6 +172,76 @@ fn a_use_goes_to_its_let() {
     let binder = nth(source, "s", 0);
     assert_eq!(
         session.definition(doc, nth(source, "s", 1)),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+}
+
+/// A binder resolves to itself, as a lambda's parameter does.
+#[test]
+fn a_binder_goes_to_itself() {
+    let i = Interner::new();
+    let source = "let s = 1; let f = |x| -> x + s; f(s)";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    for binder in [nth(source, "s", 0), nth(source, "x", 0)] {
+        assert_eq!(
+            session.definition(doc, binder),
+            Some(Definition::Local {
+                span: (binder, binder + 1)
+            })
+        );
+    }
+}
+
+/// One function has at most one open document: a second is refused and
+/// the first answers as before; once the first closes, the function is
+/// gone from the graph and opens again.
+#[test]
+fn a_second_document_of_one_function_is_refused() {
+    let i = Interner::new();
+    let source = "let s = 1; s";
+    let (mut session, first) = open(&i, bare(vec![]), Mode::Script, source);
+    let refusal = session
+        .open(document(&i, "test", Mode::Script), "let t = 2; t")
+        .expect_err("`test` is the body of the open document `first`");
+    assert_eq!(
+        refusal,
+        OpenRefusal::FunctionHeld {
+            function: "test".to_string(),
+            holder: first,
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "function `test` is already the body of an open document"
+    );
+
+    let binder = nth(source, "s", 0);
+    let used = nth(source, "s", 1);
+    assert_eq!(
+        session.definition(first, used),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+    let hover = session.hover(first, used).expect("the use has a type");
+    assert_eq!(hover.span, (used, used + 1));
+    assert_eq!(hover.ty, Ty::I64.display(&i).to_string());
+    // The refusal took no id: the next document is numbered after `first`.
+    let other = session
+        .open(document(&i, "other", Mode::Script), "1")
+        .expect("no open document is `other`");
+    assert_eq!(other.raw(), first.raw() + 1);
+
+    let qref = QualifiedRef::root(i.intern("test"));
+    session.close(first);
+    assert!(session.graph().function(qref).is_none());
+    let reopened = session
+        .open(document(&i, "test", Mode::Script), source)
+        .expect("the document of `test` is closed");
+    assert_eq!(
+        session.definition(reopened, used),
         Some(Definition::Local {
             span: (binder, binder + 1)
         })
@@ -402,6 +475,78 @@ fn a_call_goes_to_the_document_that_defines_the_function() {
         .hover(&caller, nth(source, "greet", 0))
         .expect("the callee has a type");
     assert!(hover.ty.contains("String"), "{}", hover.ty);
+}
+
+/// Lists two documents of the function `greet`.
+struct OneFunctionTwice {
+    root: PathBuf,
+}
+
+impl Host for OneFunctionTwice {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+        let spec = |file: &str| DocumentSpec {
+            path: self.root.join(file),
+            document: document(interner, "greet", Mode::Template),
+        };
+        Listing {
+            compilations: vec![CompilationSpec {
+                id: CompilationId(self.root.join("main.id")),
+                environment: Ok(Environment {
+                    graph: bare(vec![]),
+                    host: (),
+                }),
+                documents: vec![spec("first.acvt"), spec("second.acvt")],
+            }],
+            refusals: Vec::new(),
+        }
+    }
+
+    fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn a_second_document_of_one_function_is_a_host_refusal() {
+    let i = Interner::new();
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let root = dir.path().to_path_buf();
+    let first = root.join("first.acvt");
+    let second = root.join("second.acvt");
+    let source = "% let x = \"hi\"\n{{ x }}";
+    std::fs::write(&first, source).expect("write first");
+    std::fs::write(&second, "{{ 2 }}").expect("write second");
+    let workspace = Workspace::new(&i, OneFunctionTwice { root });
+    let diagnostics = workspace.diagnostics();
+    assert_eq!(diagnostics[&first], [], "{diagnostics:?}");
+    let [refusal] = diagnostics[&second].as_slice() else {
+        panic!("one refusal on the second document: {diagnostics:?}");
+    };
+    assert_eq!(refusal.category, LspErrorCategory::Host);
+    assert_eq!(
+        refusal.message,
+        format!(
+            "{} and {} are both the body of function `greet`; {} is not opened",
+            first.display(),
+            second.display(),
+            second.display(),
+        )
+    );
+    assert_eq!(workspace.hover(&second, 3), None);
+
+    let binder = nth(source, "x", 0);
+    assert_eq!(
+        workspace.definition(&first, nth(source, "x", 1)),
+        Some(Location {
+            path: first.clone(),
+            span: (binder, binder + 1),
+        })
+    );
+    let used = nth(source, "x", 1);
+    let hover = workspace.hover(&first, used).expect("the use has a type");
+    assert_eq!(hover.span, (used, used + 1));
 }
 
 #[test]

@@ -1077,18 +1077,44 @@ pub struct BodyView {
     /// A refused body's are the types as written, as its refusals show
     /// them, so a poisoned position is `Ty::Error`.
     pub types: FxHashMap<AstId, Ty>,
-    pub binder_of: FxHashMap<AstId, AstId>,
-    /// Every binder the body defines, a use of it or not.
-    pub binders: FxHashSet<AstId>,
-    /// Keyed by the id the call's callee is recorded under, which for a
-    /// method call or an index is the AST's `callee_id` and not the call.
-    pub declaration_of: FxHashMap<AstId, QualifiedRef>,
-    /// The context each `@name` the checker found declared reads, writes
-    /// or binds, keyed by the node the `@name` is.
-    pub context_of: FxHashMap<AstId, QualifiedRef>,
-    /// The input each `$name` the checker admitted reads, keyed by the
-    /// node the `$name` is.
-    pub input_of: FxHashMap<AstId, Astr>,
+    /// What each name the checker resolved refers to, keyed by the node
+    /// the name is; for a call's callee, by the id the callee is recorded
+    /// under, which for a method call, an index or a `for` is the AST's
+    /// `callee_id` and not the call's. Every binder the body defines is in
+    /// it, a use of it or not, as `Resolved::Local` of itself.
+    pub resolved: FxHashMap<AstId, Resolved>,
+}
+
+/// What a name refers to, as the checker resolved it. `B` is what names a
+/// local's binder: its node in `BodyView::resolved`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Resolved<B = AstId> {
+    Local(B),
+    /// The declaration a call settled on.
+    Function(QualifiedRef),
+    /// The declared context an `@name` reads, writes or binds.
+    Context(QualifiedRef),
+    /// The input a `$name` the checker admitted reads.
+    Input(Astr),
+}
+
+/// The resolutions a body's names have so far. A name refers to one
+/// thing, so every resolution is recorded through `record`, which holds
+/// that.
+#[derive(Debug, Clone, Default)]
+struct Resolutions(FxHashMap<AstId, Resolved>);
+
+impl Resolutions {
+    /// Record that the name at `id` refers to `resolved`. Recording it
+    /// again is recording the same fact; recording another referent for
+    /// it is a fault of the checker.
+    fn record(&mut self, id: AstId, resolved: Resolved) {
+        let held = *self.0.entry(id).or_insert(resolved);
+        assert_eq!(
+            held, resolved,
+            "the name at {id:?} resolves to one referent"
+        );
+    }
 }
 
 enum SettledCallee {
@@ -1556,11 +1582,11 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// Namespace this function belongs to.
     namespace: Option<Astr>,
     scopes: Vec<FxHashMap<Astr, Bound>>,
-    binder_of: FxHashMap<AstId, AstId>,
+    /// What each name resolved to, but a call's callee, which `view`
+    /// records from `calls` once the solve settled which one it is.
+    resolved: Resolutions,
     candidate_binder_of: FxHashMap<AstId, AstId>,
     binder_types: FxHashMap<AstId, InferTy>,
-    context_of: FxHashMap<AstId, QualifiedRef>,
-    input_of: FxHashMap<AstId, Astr>,
     /// Extern parameters in Signature order, which is the order iteration
     /// must keep.
     param_types: smallvec::SmallVec<[ExternParam; 4]>,
@@ -1736,11 +1762,9 @@ where
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
-            binder_of: FxHashMap::default(),
+            resolved: Resolutions::default(),
             candidate_binder_of: FxHashMap::default(),
             binder_types: FxHashMap::default(),
-            context_of: FxHashMap::default(),
-            input_of: FxHashMap::default(),
             env,
             namespace: None,
             param_types: smallvec::smallvec![],
@@ -2193,10 +2217,9 @@ where
         match Signatures::of(candidates) {
             None => Vec::new(),
             Some(Signatures::One(one)) => {
-                // Admission stays in front of the trial: it reads the first
-                // parameter's declared bound, which the checker verifies
-                // only when the body freezes, and the trial stops at the
-                // settle before that.
+                // Admission stays in front of the trial, as a method call
+                // admits its receiver against the first parameter before
+                // it admits the call.
                 let admitted = self.admitted_at_receiver(vec![one.clone()], &member.receiver);
                 match !admitted.is_empty() && self.one_takes_receiver(&one, member, name) {
                     true => admitted,
@@ -2216,21 +2239,9 @@ where
         name: Astr,
     ) -> bool {
         let call = member.call_named(name);
-        self.solver.trial(|solver| {
-            let opened = solver.decisions_opened();
-            let mut trial =
-                TypeChecker::new(self.interner, self.env, solver).with_namespace(self.namespace);
-            trial.type_map = self.type_map.clone();
+        self.accepted_on_trial(|trial| {
             trial.call_on_receiver(candidate, member, &call);
-            // `settle`, not `solve`: the arguments after the receiver are
-            // absent here, and closing what they would fix by its least
-            // element would refuse calls that those arguments complete.
-            trial.errors.is_empty()
-                && trial
-                    .solver
-                    .settle()
-                    .iter()
-                    .all(|failure| (failure.decision().0 as usize) < opened)
+            true
         })
     }
 
@@ -2259,7 +2270,7 @@ where
     /// Whether a value of type `value` written at the marker joins the type
     /// the position expects, as a value joins at its use.
     fn flows_on_trial(&self, value: &InferTy, expected: &InferTy, site: CalleeSite) -> bool {
-        self.joins_on_trial(|trial| {
+        self.accepted_on_trial(|trial| {
             trial
                 .flow(value, expected, ConversionSite::value_at(site))
                 .is_ok()
@@ -2286,7 +2297,7 @@ where
             qref,
             scheme: scheme.clone(),
         };
-        self.joins_on_trial(|trial| {
+        self.accepted_on_trial(|trial| {
             let returned = trial.admit_call(Signatures::One(candidate), None, &call);
             trial
                 .flow(&returned, expected, ConversionSite::value_at(site))
@@ -2304,7 +2315,7 @@ where
         expected: &InferTy,
     ) -> bool {
         let call = member.call_named(name);
-        self.joins_on_trial(|trial| {
+        self.accepted_on_trial(|trial| {
             let returned = trial.call_on_receiver(candidate, member, &call);
             trial
                 .flow(
@@ -2319,9 +2330,13 @@ where
     /// Whether what `admit` adds to a copy of the solve is refused
     /// nowhere: `admit` answers its own join, no refusal is raised, no
     /// decision it opens fails when the copy settles, and no variable it
-    /// bounds is out of its bound, as `solve_body` verifies one. `settle`,
-    /// not `solve`, for the reason `one_takes_receiver` gives.
-    fn joins_on_trial<F>(&self, admit: F) -> bool
+    /// bounds is out of its bound, as `solve_body` verifies one. Every
+    /// offer the probe makes on a trial is held to this one verdict.
+    ///
+    /// `settle`, not `solve`: the arguments of a call written at the
+    /// marker are absent, and closing what they would fix by its least
+    /// element would refuse calls that those arguments complete.
+    fn accepted_on_trial<F>(&self, admit: F) -> bool
     where
         F: for<'t, 'u, 'v> FnOnce(&mut TypeChecker<'t, 'u, 'v, S>) -> bool,
     {
@@ -2468,8 +2483,7 @@ where
         for (&binder, ty) in &self.binder_types {
             types.entry(binder).or_insert_with(|| bound(ty));
         }
-        let mut binder_of = self.binder_of.clone();
-        let mut declaration_of = FxHashMap::default();
+        let mut resolved = self.resolved.clone();
         for (&callee, choice) in &self.calls {
             let settled = match choice {
                 CallChoice::Resolved(resolved) => Some(SettledCallee::Declared(resolved.qref)),
@@ -2496,25 +2510,21 @@ where
             };
             match settled {
                 Some(SettledCallee::Declared(qref)) => {
-                    declaration_of.insert(callee, qref);
+                    resolved.record(callee, Resolved::Function(qref));
                 }
                 Some(SettledCallee::Binding) => {
                     let binder = self
                         .candidate_binder_of
                         .get(&callee)
                         .expect("a call settles on a binding only among the candidates it found");
-                    binder_of.insert(callee, *binder);
+                    resolved.record(callee, Resolved::Local(*binder));
                 }
                 None => {}
             }
         }
         Freeze::new(BodyView {
             types,
-            binder_of,
-            binders: self.binder_types.keys().copied().collect(),
-            declaration_of,
-            context_of: self.context_of.clone(),
-            input_of: self.input_of.clone(),
+            resolved: resolved.0,
         })
     }
 
@@ -3214,6 +3224,7 @@ where
             self.solver.name_source(id, name);
         }
         self.binder_types.insert(binder, ty.clone());
+        self.resolved.record(binder, Resolved::Local(binder));
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Bound { ty, binder });
         }
@@ -3625,7 +3636,7 @@ where
             }) => {
                 let var_ty = match self.lookup_var(*name) {
                     Some((ty, binder)) => {
-                        self.binder_of.insert(*id, binder);
+                        self.resolved.record(*id, Resolved::Local(binder));
                         ty
                     }
                     None => {
@@ -5208,7 +5219,7 @@ where
     fn resolve_context_type(&mut self, id: AstId, qref: QualifiedRef, span: Span) -> InferTy {
         self.note_context_use(qref, span);
         if let Some(ty) = self.env.contexts.get(&qref) {
-            self.context_of.insert(id, qref);
+            self.resolved.record(id, Resolved::Context(qref));
             return ty.clone();
         }
         let labels = self.declared_contexts().into_iter().collect();
@@ -6930,11 +6941,11 @@ where
                 let ty = self.check_expr(expr);
                 let var_ty = match self.assign_target(*name) {
                     AssignTarget::Bound { ty, binder } => {
-                        self.binder_of.insert(*id, binder);
+                        self.resolved.record(*id, Resolved::Local(binder));
                         ty
                     }
                     AssignTarget::Captured { binder } => {
-                        self.binder_of.insert(*id, binder);
+                        self.resolved.record(*id, Resolved::Local(binder));
                         let at_the_lambda = self
                             .lambda_stack
                             .last()
@@ -7308,7 +7319,7 @@ where
                     RefKind::ExternParam => {
                         let ty = match self.param_types.iter().find(|p| p.name == name.name) {
                             Some(param) => {
-                                self.input_of.insert(*id, name.name);
+                                self.resolved.record(*id, Resolved::Input(name.name));
                                 param.ty.clone()
                             }
                             None => match self.free_param {
@@ -7319,7 +7330,7 @@ where
                                         ty: ty.clone(),
                                         first_read: Some(*span),
                                     });
-                                    self.input_of.insert(*id, name.name);
+                                    self.resolved.record(*id, Resolved::Input(name.name));
                                     ty
                                 }
                                 FreeParam::Bound => {
@@ -7340,7 +7351,7 @@ where
                     }
                     RefKind::Value => match self.lookup_var(name.name) {
                         Some((ty, binder)) => {
-                            self.binder_of.insert(*id, binder);
+                            self.resolved.record(*id, Resolved::Local(binder));
                             ty
                         }
                         None => {

@@ -1,16 +1,15 @@
-//! LSP session - thin wrapper over `IncrementalGraph`.
-//!
-//! Each document maps to a `Function` in the graph.
-//! Namespace scoping, caching, and incremental recompilation are all
-//! handled by `IncrementalGraph`. This layer only provides:
-//! - DocId <-> FunctionId mapping
-//! - MirError -> LspError conversion
+//! The open documents of one compilation, each the local body of a
+//! `Function` in an `IncrementalGraph`, which checks them. This layer
+//! reads the checker's answers at a place in a document's source:
+//! - `DocId` to the document's function, its source, its parse errors and
+//!   the nodes of the tree the graph holds for it
+//! - Refusals and parse errors as `LspError`s
+//! - Hover, the type the checker's view (`BodyView`) gives a node
+//! - Definition, references and rename, from what the view records each
+//!   name resolves to; a rename is checked by the checker again
+//!   (`IncrementalGraph::view_as`)
 //! - Where a completion is asked and how its items read; what they are is
 //!   the checker's answer (`IncrementalGraph::probe`)
-//! - The names that refer to what a name refers to, and the edits that
-//!   rename a local; which name refers to what is the checker's record
-//!   (`BodyView`), and a rename is checked by the checker again
-//!   (`IncrementalGraph::view_as`)
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -25,8 +24,8 @@ use acvus_mir::graph::ContextInfo;
 use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
 use acvus_mir::ty::{PolyTy, TyTerm};
-use acvus_mir::typeck::{BodyView, DeclarationFit, ProbeProduct};
-use acvus_utils::{Astr, Freeze, Interner};
+use acvus_mir::typeck::{BodyView, DeclarationFit, ProbeProduct, Resolved};
+use acvus_utils::{Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 // -- Public types ----------------------------------------------------
@@ -146,16 +145,6 @@ pub enum Definition {
     Function(QualifiedRef),
 }
 
-/// What a name refers to, as the checker resolved it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Referent {
-    /// The binder of a local, which is a node of one document.
-    Local(AstId),
-    Function(QualifiedRef),
-    Context(QualifiedRef),
-    Input(Astr),
-}
-
 /// Replace the source at `span` with `text`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
@@ -208,6 +197,32 @@ impl fmt::Display for RenameRefusal {
 }
 
 impl std::error::Error for RenameRefusal {}
+
+/// Why `open` opened no document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenRefusal {
+    /// The document's function is the body of the open document `holder`;
+    /// the graph holds one body per function, so a second would hide the
+    /// first's tree from every query on it.
+    FunctionHeld {
+        /// As a script writes it: `ns::name`, or the bare name.
+        function: String,
+        holder: DocId,
+    },
+}
+
+impl fmt::Display for OpenRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenRefusal::FunctionHeld { function, .. } => write!(
+                f,
+                "function `{function}` is already the body of an open document"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OpenRefusal {}
 
 /// The names a rename writes anew, which every compilation holding the
 /// document must resolve as before.
@@ -281,10 +296,18 @@ impl RenamePlan {
 
 pub struct LspSession {
     graph: IncrementalGraph,
-    documents: FxHashMap<DocId, Document>,
-    doc_sources: FxHashMap<DocId, String>,
-    doc_parse_errors: FxHashMap<DocId, Vec<acvus_ast::ParseError>>,
+    documents: FxHashMap<DocId, Open>,
     next_doc_id: u32,
+}
+
+/// A document as its last parse left it.
+struct Open {
+    document: Document,
+    source: String,
+    parse_errors: Vec<acvus_ast::ParseError>,
+    /// The nodes of the tree the graph holds as the document's body, whose
+    /// ids the checker's view is keyed by.
+    nodes: Nodes,
 }
 
 impl LspSession {
@@ -292,8 +315,6 @@ impl LspSession {
         Self {
             graph: IncrementalGraph::new(interner, environment),
             documents: FxHashMap::default(),
-            doc_sources: FxHashMap::default(),
-            doc_parse_errors: FxHashMap::default(),
             next_doc_id: 0,
         }
     }
@@ -311,50 +332,78 @@ impl LspSession {
         self.graph = IncrementalGraph::new(&interner, environment);
         let open: Vec<DocId> = self.documents.keys().copied().collect();
         for id in open {
-            let source = self.doc_sources[&id].clone();
-            self.reparse(id, &source);
+            let open = &self.documents[&id];
+            let document = open.document.clone();
+            let source = open.source.clone();
+            self.load(id, document, &source);
         }
     }
 
     // -- Document lifecycle ------------------------------------------
 
-    pub fn open(&mut self, document: Document, source: &str) -> DocId {
+    /// Refused, leaving the session as it was, when an open document is
+    /// already the body of `document`'s function: one function has at most
+    /// one open document.
+    pub fn open(&mut self, document: Document, source: &str) -> Result<DocId, OpenRefusal> {
+        if let Some(holder) = self.holder(document.qref) {
+            return Err(OpenRefusal::FunctionHeld {
+                function: qualified(self.graph.interner(), document.qref),
+                holder,
+            });
+        }
         let doc_id = DocId(self.next_doc_id);
         self.next_doc_id += 1;
-        self.documents.insert(doc_id, document);
-        self.reparse(doc_id, source);
-        doc_id
+        self.load(doc_id, document, source);
+        Ok(doc_id)
+    }
+
+    /// The open document whose body is `qref`'s function.
+    fn holder(&self, qref: QualifiedRef) -> Option<DocId> {
+        self.documents
+            .iter()
+            .find(|(_, open)| open.document.qref == qref)
+            .map(|(id, _)| *id)
     }
 
     pub fn update_source(&mut self, id: DocId, source: &str) {
-        if self.documents.contains_key(&id) {
-            self.reparse(id, source);
+        if let Some(open) = self.documents.get(&id) {
+            let document = open.document.clone();
+            self.load(id, document, source);
         }
     }
 
-    fn reparse(&mut self, id: DocId, source: &str) {
+    /// Parse `source` as `document`'s body, hand the tree to the graph, and
+    /// keep its nodes beside the document.
+    fn load(&mut self, id: DocId, document: Document, source: &str) {
         let interner = self.graph.interner().clone();
-        let document = self.documents[&id].clone();
-        self.doc_sources.insert(id, source.to_string());
         let Parsed { ast, errors } = document.mode.parse(&interner, source);
-        self.doc_parse_errors.insert(id, errors);
+        let nodes = nodes_of(&ast);
         match self.graph.function(document.qref) {
             Some(_) => self.graph.update_ast(document.qref, ast),
             None => self.graph.add_function(Function {
                 qref: document.qref,
                 kind: FnKind::Local(ast),
-                ty: document.ty,
+                ty: document.ty.clone(),
             }),
         }
+        self.documents.insert(
+            id,
+            Open {
+                document,
+                source: source.to_string(),
+                parse_errors: errors,
+                nodes,
+            },
+        );
     }
 
-    /// Close a document. Removes the Function from the graph.
+    /// Close a document and remove its function from the graph. `open`
+    /// refuses a second document of one function, so the function removed
+    /// is the body of no other open document.
     pub fn close(&mut self, id: DocId) {
-        if let Some(document) = self.documents.remove(&id) {
-            self.graph.remove_function(document.qref);
+        if let Some(open) = self.documents.remove(&id) {
+            self.graph.remove_function(open.document.qref);
         }
-        self.doc_sources.remove(&id);
-        self.doc_parse_errors.remove(&id);
     }
 
     // -- Inputs ------------------------------------------------------
@@ -371,7 +420,7 @@ impl LspSession {
 
     /// Get the QualifiedRef for a document.
     pub fn function_ref(&self, id: DocId) -> Option<QualifiedRef> {
-        self.documents.get(&id).map(|document| document.qref)
+        self.documents.get(&id).map(|open| open.document.qref)
     }
 
     // -- Queries -----------------------------------------------------
@@ -383,10 +432,10 @@ impl LspSession {
         };
         let interner = self.graph.interner();
         let parse_errors = self
-            .doc_parse_errors
+            .documents
             .get(&id)
             .into_iter()
-            .flatten()
+            .flat_map(|open| &open.parse_errors)
             .map(parse_error_to_lsp);
         let refusals = self
             .graph
@@ -414,7 +463,9 @@ impl LspSession {
     /// is, starting with what is typed of it up to `cursor`. In a template
     /// only a `%` line and a `{{ }}` tag hold names.
     pub fn completions(&self, id: DocId, cursor: usize) -> Vec<CompletionItem> {
-        let (Some(source), Some(document)) = (self.doc_sources.get(&id), self.documents.get(&id))
+        let Some(Open {
+            document, source, ..
+        }) = self.documents.get(&id)
         else {
             return vec![];
         };
@@ -607,30 +658,29 @@ impl LspSession {
         })
     }
 
-    /// Where the name at `offset` is defined: the binder of a local name,
-    /// or the function a call settled on. Only the innermost node at
-    /// `offset` is read, so an offset inside a call's argument does not
-    /// answer with the call's callee.
+    /// Where the name at `offset` is defined: the binder of a local, the
+    /// binder itself included, or the function a call settled on where the
+    /// graph holds its body.
     pub fn definition(&self, id: DocId, offset: usize) -> Option<Definition> {
         let (nodes, view) = self.checked_body(id)?;
-        let node = *nodes.at(offset).first()?;
-        let keys = std::iter::once(node.id).chain(node.callee_id);
-        if let Some(binder) = keys.clone().find_map(|key| view.binder_of.get(&key)) {
-            let span = nodes
-                .spans()
-                .get(binder)
-                .copied()
-                .expect("a binder is a node of the body its uses are in");
-            return Some(Definition::Local {
-                span: (span.start, span.end),
-            });
-        }
-        let qref = *keys
-            .into_iter()
-            .find_map(|key| view.declaration_of.get(&key))?;
-        match self.graph.function(qref)?.kind {
-            FnKind::Local(_) => Some(Definition::Function(qref)),
-            FnKind::Extern { .. } => None,
+        let name = nodes.name_at(offset)?;
+        match *view.resolved.get(&name.id)? {
+            Resolved::Local(binder) => {
+                let span = nodes
+                    .names()
+                    .iter()
+                    .find(|name| name.id == binder)
+                    .expect("a binder is a name of the body its uses are in")
+                    .span;
+                Some(Definition::Local {
+                    span: (span.start, span.end),
+                })
+            }
+            Resolved::Function(qref) => match self.graph.function(qref)?.kind {
+                FnKind::Local(_) => Some(Definition::Function(qref)),
+                FnKind::Extern { .. } => None,
+            },
+            Resolved::Context(_) | Resolved::Input(_) => None,
         }
     }
 
@@ -650,24 +700,10 @@ impl LspSession {
     }
 
     /// What the name at `offset` refers to.
-    pub(crate) fn referent(&self, id: DocId, offset: usize) -> Option<Referent> {
+    pub(crate) fn referent(&self, id: DocId, offset: usize) -> Option<Resolved> {
         let (nodes, view) = self.checked_body(id)?;
         let name = nodes.name_at(offset)?;
-        if view.binders.contains(&name.id) {
-            return Some(Referent::Local(name.id));
-        }
-        if let Some(binder) = view.binder_of.get(&name.id) {
-            return Some(Referent::Local(*binder));
-        }
-        if let Some(qref) = view.declaration_of.get(&name.id) {
-            return Some(Referent::Function(*qref));
-        }
-        if let Some(qref) = view.context_of.get(&name.id) {
-            return Some(Referent::Context(*qref));
-        }
-        view.input_of
-            .get(&name.id)
-            .map(|name| Referent::Input(*name))
+        view.resolved.get(&name.id).copied()
     }
 
     /// The names of this document that refer to `referent`, in source
@@ -675,24 +711,19 @@ impl LspSession {
     pub(crate) fn references_to(
         &self,
         id: DocId,
-        referent: Referent,
+        referent: Resolved,
         include_declaration: bool,
     ) -> Vec<(usize, usize)> {
         let Some((nodes, view)) = self.checked_body(id) else {
             return vec![];
         };
-        let refers = |name: &Name| match referent {
-            Referent::Local(binder) => {
-                (include_declaration && name.id == binder)
-                    || view.binder_of.get(&name.id) == Some(&binder)
-            }
-            Referent::Function(qref) => view.declaration_of.get(&name.id) == Some(&qref),
-            Referent::Context(qref) => view.context_of.get(&name.id) == Some(&qref),
-            Referent::Input(input) => view.input_of.get(&name.id) == Some(&input),
+        let refers = |name: &Name| {
+            let declares = referent == Resolved::Local(name.id);
+            view.resolved.get(&name.id) == Some(&referent) && (include_declaration || !declares)
         };
         let declared_here = match referent {
-            Referent::Function(qref) => include_declaration && self.function_ref(id) == Some(qref),
-            Referent::Local(_) | Referent::Context(_) | Referent::Input(_) => false,
+            Resolved::Function(qref) => include_declaration && self.function_ref(id) == Some(qref),
+            Resolved::Local(_) | Resolved::Context(_) | Resolved::Input(_) => false,
         };
         let mut spans: Vec<(usize, usize)> = nodes
             .names()
@@ -728,10 +759,10 @@ impl LspSession {
         new_name: &str,
     ) -> Result<RenamePlan, RenameRefusal> {
         let binder = match self.referent(id, offset) {
-            Some(Referent::Local(binder)) => binder,
-            Some(Referent::Function(_)) => return Err(RenameRefusal::Function),
-            Some(Referent::Context(_)) => return Err(RenameRefusal::Context),
-            Some(Referent::Input(_)) => return Err(RenameRefusal::Input),
+            Some(Resolved::Local(binder)) => binder,
+            Some(Resolved::Function(_)) => return Err(RenameRefusal::Function),
+            Some(Resolved::Context(_)) => return Err(RenameRefusal::Context),
+            Some(Resolved::Input(_)) => return Err(RenameRefusal::Input),
             None => return Err(RenameRefusal::NotAName),
         };
         if KEYWORDS.contains(&new_name) {
@@ -748,14 +779,11 @@ impl LspSession {
         let (nodes, view) = self
             .checked_body(id)
             .expect("a document with a referent is checked");
-        let source = self
-            .doc_sources
-            .get(&id)
-            .expect("a document with a referent has a source");
+        let source = &self.documents[&id].source;
         let renamed = nodes
             .names()
             .iter()
-            .filter(|name| name.id == binder || view.binder_of.get(&name.id) == Some(&binder))
+            .filter(|name| view.resolved.get(&name.id) == Some(&Resolved::Local(binder)))
             .copied()
             .collect();
         Ok(RenamePlan::new(source, new_name, renamed))
@@ -765,8 +793,9 @@ impl LspSession {
     /// function's body on a copy of the graph's sources, resolves each name
     /// as it does now, compared by where the names are after the edits.
     pub(crate) fn check_rename(&self, id: DocId, plan: &RenamePlan) -> Result<(), RenameRefusal> {
-        let source = &self.doc_sources[&id];
-        let document = &self.documents[&id];
+        let Open {
+            document, source, ..
+        } = &self.documents[&id];
         let (nodes, view) = self
             .checked_body(id)
             .expect("an open document's body is checked");
@@ -782,7 +811,7 @@ impl LspSession {
                 ty: document.ty.clone(),
             })
             .expect("a document's function is local, so its body is checked");
-        let expected = Resolution::of(&nodes, &view, |span| plan.moved(span));
+        let expected = Resolution::of(nodes, &view, |span| plan.moved(span));
         let found = Resolution::of(&renamed_nodes, &renamed_view, |span| span);
         match expected == found {
             true => Ok(()),
@@ -790,23 +819,19 @@ impl LspSession {
         }
     }
 
-    fn checked_body(&self, id: DocId) -> Option<(Nodes, Freeze<BodyView>)> {
-        let qref = self.function_ref(id)?;
-        let FnKind::Local(ast) = &self.graph.function(qref)?.kind else {
-            return None;
-        };
-        Some((nodes_of(ast), self.graph.view(qref)?))
+    /// The nodes of the document's body and the checker's view of it.
+    fn checked_body(&self, id: DocId) -> Option<(&Nodes, Freeze<BodyView>)> {
+        let open = self.documents.get(&id)?;
+        Some((&open.nodes, self.graph.view(open.document.qref)?))
     }
 }
 
-/// What the names of a body resolve to, by where the names are written.
-/// A name the checker records no resolution for is not in it, so a name
-/// that comes to resolve is a difference as much as one that stops.
+/// What the names of a body resolve to, by where the names are written,
+/// a local by where its binder is. A name the checker records no
+/// resolution for is not in it, so a name that comes to resolve is a
+/// difference as much as one that stops.
 #[derive(Debug, PartialEq, Eq)]
-struct Resolution {
-    binder_of: FxHashMap<Span, Span>,
-    declaration_of: FxHashMap<Span, QualifiedRef>,
-}
+struct Resolution(FxHashMap<Span, Resolved<Span>>);
 
 impl Resolution {
     fn of<F>(nodes: &Nodes, view: &BodyView, at: F) -> Self
@@ -818,30 +843,46 @@ impl Resolution {
             .iter()
             .map(|name| (name.id, name.span))
             .collect();
-        let span_of = |id: &AstId| {
-            *spans
-                .get(id)
-                .expect("the checker resolves a binder and its uses only where a name is written")
-        };
-        Self {
-            binder_of: view
-                .binder_of
-                .iter()
-                .map(|(used, binder)| (at(span_of(used)), at(span_of(binder))))
-                .collect(),
-            // An index's or a `for`'s callee is written as no name: the
-            // instance it settles on follows from the types of what the
-            // names resolve to, so it is compared through them.
-            declaration_of: view
-                .declaration_of
-                .iter()
-                .filter_map(|(callee, qref)| Some((at(*spans.get(callee)?), *qref)))
-                .collect(),
-        }
+        let resolved = view
+            .resolved
+            .iter()
+            .filter_map(|(id, resolved)| {
+                let Some(&written) = spans.get(id) else {
+                    return match resolved {
+                        // An index's or a `for`'s callee is written as no
+                        // name: the instance it settles on follows from
+                        // the types of what the names resolve to, so it is
+                        // compared through them.
+                        Resolved::Function(_) => None,
+                        Resolved::Local(_) | Resolved::Context(_) | Resolved::Input(_) => panic!(
+                            "the checker resolves a local, a context or an input only where a name is written"
+                        ),
+                    };
+                };
+                let by_span = match *resolved {
+                    Resolved::Local(binder) => Resolved::Local(at(*spans
+                        .get(&binder)
+                        .expect("a binder is a name of the body its uses are in"))),
+                    Resolved::Function(qref) => Resolved::Function(qref),
+                    Resolved::Context(qref) => Resolved::Context(qref),
+                    Resolved::Input(input) => Resolved::Input(input),
+                };
+                Some((at(written), by_span))
+            })
+            .collect();
+        Self(resolved)
     }
 }
 
 /// `edits` are in source order and do not overlap.
+/// A function's name as a script writes it: `ns::name`, or the bare name.
+pub(crate) fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
+    match qref.namespace {
+        Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(qref.name)),
+        None => interner.resolve(qref.name).to_string(),
+    }
+}
+
 fn apply(source: &str, edits: &[Edit]) -> String {
     let mut applied = String::with_capacity(source.len());
     let mut copied = 0;

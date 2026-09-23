@@ -70,7 +70,9 @@ fn open(
     source: &str,
 ) -> (LspSession, DocId) {
     let mut session = LspSession::new(interner, environment);
-    let id = session.open(document(interner, "test", mode, vec![]), source);
+    let id = session
+        .open(document(interner, "test", mode, vec![]), source)
+        .expect("the session opens no other document");
     (session, id)
 }
 
@@ -199,7 +201,9 @@ fn an_input_is_referred_to_by_every_read_of_it() {
     let params = vec![ParamTerm::new(i.intern("x"), lift_to_poly(&Ty::I64))];
     let mut session = LspSession::new(&i, bare(vec![]));
     let source = "let y = $x; $x + y";
-    let doc = session.open(document(&i, "test", Mode::Script, params), source);
+    let doc = session
+        .open(document(&i, "test", Mode::Script, params), source)
+        .expect("the session opens no other document");
     accepted(&session, doc);
     let found = session
         .references(doc, nth(source, "$x", 1), true)
@@ -334,7 +338,9 @@ fn a_rename_of_a_context_a_function_or_an_input_is_refused() {
     let params = vec![ParamTerm::new(i.intern("x"), lift_to_poly(&Ty::I64))];
     let mut session = LspSession::new(&i, bare(vec![]));
     let source = "$x + 1";
-    let doc = session.open(document(&i, "test", Mode::Script, params), source);
+    let doc = session
+        .open(document(&i, "test", Mode::Script, params), source)
+        .expect("the session opens no other document");
     accepted(&session, doc);
     assert_eq!(session.rename(doc, 0, "y"), Err(RenameRefusal::Input));
 }

@@ -220,7 +220,9 @@ fn a_refusal_two_compilations_make_is_shown_once() {
 
     let interner = Interner::new();
     let mut alone = LspSession::new(&interner, environment(&interner, Ty::String));
-    let doc = alone.open(document(&interner, "shared"), source);
+    let doc = alone
+        .open(document(&interner, "shared"), source)
+        .expect("the session opens no other document");
     let expected: Vec<String> = alone
         .diagnostics(doc)
         .into_iter()

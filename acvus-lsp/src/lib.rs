@@ -3,7 +3,7 @@ pub mod workspace;
 
 pub use session::{
     CallShape, CompletionItem, CompletionKind, Definition, DocId, Document, Edit, Hover, LspError,
-    LspErrorCategory, LspSession, Mode, ParamHint, RenameRefusal,
+    LspErrorCategory, LspSession, Mode, OpenRefusal, ParamHint, RenameRefusal,
 };
 pub use workspace::{
     Checked, CompilationId, CompilationSpec, DocumentSpec, Environment, Host, HostDiagnostic,

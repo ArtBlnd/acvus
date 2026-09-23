@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use acvus_ast::Span;
 use acvus_mir::graph::{CompilationGraph, ContextInfo};
 use acvus_mir::ty::Ty;
+use acvus_mir::typeck::Resolved;
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 use crate::session::{
     CompletionItem, Definition, DocId, Document, Edit, Hover, LspError, LspErrorCategory,
-    LspSession, Mode, Referent, RenameRefusal, parse_error_to_lsp,
+    LspSession, Mode, RenameRefusal, parse_error_to_lsp, qualified,
 };
 
 pub trait Host {
@@ -139,6 +140,10 @@ struct Loaded<C> {
     session: LspSession,
     specs: FxHashMap<PathBuf, Document>,
     documents: FxHashMap<PathBuf, Held>,
+    /// One per listed document whose function an earlier listed document
+    /// of the compilation defines; that document is not opened, since a
+    /// session holds one open document per function.
+    duplicates: Vec<HostDiagnostic>,
     refusals: Vec<HostDiagnostic>,
 }
 
@@ -154,9 +159,29 @@ impl<C> Loaded<C> {
             session: LspSession::new(interner, environment.graph),
             specs: FxHashMap::default(),
             documents: FxHashMap::default(),
+            duplicates: Vec::new(),
             refusals: Vec::new(),
         };
         for DocumentSpec { path, document } in documents {
+            let defining = loaded
+                .specs
+                .iter()
+                .find(|(_, held)| held.qref == document.qref)
+                .map(|(defining, _)| defining.clone());
+            if let Some(defining) = defining {
+                loaded.duplicates.push(HostDiagnostic {
+                    message: format!(
+                        "{} and {} are both the body of function `{}`; {} is not opened",
+                        defining.display(),
+                        path.display(),
+                        qualified(interner, document.qref),
+                        path.display(),
+                    ),
+                    path,
+                    span: None,
+                });
+                continue;
+            }
             loaded.specs.insert(path.clone(), document);
             loaded.reread(&path, vfs);
         }
@@ -176,7 +201,11 @@ impl<C> Loaded<C> {
                 Held::Unreadable(unreadable(path, &error))
             }
             (Some(Held::Unreadable(_)) | None, Ok(text)) => {
-                Held::Open(self.session.open(self.specs[path].clone(), &text))
+                let id = self
+                    .session
+                    .open(self.specs[path].clone(), &text)
+                    .expect("`specs` holds one document per function, and only its path opens it");
+                Held::Open(id)
             }
             (Some(Held::Unreadable(_)) | None, Err(error)) => {
                 Held::Unreadable(unreadable(path, &error))
@@ -192,10 +221,14 @@ impl<C> Loaded<C> {
         }
     }
 
+    /// A compilation with a document left unopened is not what the host's
+    /// batch path compiles, so its rules do not run on it.
     fn accepted(&self) -> bool {
-        self.documents
-            .keys()
-            .all(|path| self.document_diagnostics(path).is_empty())
+        self.duplicates.is_empty()
+            && self
+                .documents
+                .keys()
+                .all(|path| self.document_diagnostics(path).is_empty())
     }
 }
 
@@ -296,6 +329,12 @@ impl<C> Compilation<C> {
                     extend_unique(
                         into.entry(path.clone()).or_default(),
                         loaded.document_diagnostics(path),
+                    );
+                }
+                for duplicate in &loaded.duplicates {
+                    extend_unique(
+                        into.entry(duplicate.path.clone()).or_default(),
+                        vec![duplicate.to_lsp()],
                     );
                 }
                 &loaded.refusals
@@ -441,8 +480,8 @@ where
                 continue;
             };
             let searched: Vec<(&Path, DocId)> = match referent {
-                Referent::Local(_) | Referent::Input(_) => vec![(path, id)],
-                Referent::Function(_) | Referent::Context(_) => loaded
+                Resolved::Local(_) | Resolved::Input(_) => vec![(path, id)],
+                Resolved::Function(_) | Resolved::Context(_) => loaded
                     .documents
                     .iter()
                     .filter_map(|(searched, held)| match held {

@@ -82,7 +82,10 @@ match in lowering has to keep.
 **Cost.** Every tree type that holds an expression, a statement or a pattern
 takes the parameter, and the checker is instantiated for both trees. The
 grammar carries recovery points, and each has to leave a tree whose spans
-still cover the source they claim.
+still cover the source they claim. An LR grammar recovers by dropping what it
+cannot reduce, not by supplying a missing closer, so a construct the source
+ends inside, such as a call whose `(` is never closed, becomes one error node,
+and nothing inside it answers an editor.
 
 **Rejected.**
 - An error variant without a parameter, with lowering fed a wrapper that

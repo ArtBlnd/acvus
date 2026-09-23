@@ -6,9 +6,9 @@ use acvus_lsp::{
     CallShape, CompletionItem, CompletionKind, DocId, Document, Hover, LspError, LspSession, Mode,
     ParamHint,
 };
-use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
+use acvus_mir::graph::{Bindings, CompilationGraph, Context, FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    Effect, ParamTerm, PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_to_poly,
+    Effect, ParamTerm, PolyBuilder, PolyParam, Ty, TyTerm, TyVarBound, TypeRegistry, lift_to_poly,
 };
 use acvus_mir::typeck::BodyView;
 use acvus_utils::{Freeze, Interner};
@@ -69,7 +69,9 @@ fn open(
     source: &str,
 ) -> (LspSession, DocId) {
     let mut session = LspSession::new(interner, environment);
-    let id = session.open(document(interner, "test", mode, vec![]), source);
+    let id = session
+        .open(document(interner, "test", mode, vec![]), source)
+        .expect("the session opens no other document");
     (session, id)
 }
 
@@ -190,7 +192,9 @@ fn the_declared_inputs_are_offered_after_dollar() {
     ];
     let mut session = LspSession::new(&i, bare(vec![]));
     let source = "let local = 1; $";
-    let doc = session.open(document(&i, "test", Mode::Script, params), source);
+    let doc = session
+        .open(document(&i, "test", Mode::Script, params), source)
+        .expect("the session opens no other document");
     let items = session.completions(doc, source.len());
     assert_eq!(
         items,
@@ -303,6 +307,67 @@ fn a_single_candidate_is_offered_only_where_the_checker_takes_the_receiver() {
         CompletionKind::Method,
     ));
     assert!(methods.contains(&"sort".to_string()), "{methods:?}");
+}
+
+/// `half: Fn(x: T) -> T` with `T` bounded to `i64` and `f64`, the one
+/// function of its name.
+fn half(interner: &Interner) -> Function {
+    let mut pb = PolyBuilder::new();
+    let t = pb.fresh_ty_var();
+    Function {
+        qref: QualifiedRef::root(interner.intern("half")),
+        kind: FnKind::Extern {
+            bounds: vec![TyVarBound::one_of(vec![TyTerm::I64, TyTerm::Float])],
+            effect_bounds: vec![],
+            instances: Default::default(),
+            requires: vec![],
+        },
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::new(interner.intern("x"), t.clone())],
+            ret: Box::new(t),
+            captures: vec![],
+            effect: Effect::PURE.into(),
+        },
+    }
+}
+
+/// A single candidate whose declared bound the receiver is outside is not
+/// offered, and the checker refuses its call; one the receiver is inside
+/// is offered, and the checker accepts its call.
+#[test]
+fn a_single_candidate_is_offered_only_within_its_declared_bound() {
+    let i = Interner::new();
+    let graph = || environment(vec![], vec![half(&i)], TypeRegistry::default());
+    for (receiver, within) in [("let n = 1; n", true), ("let s = \"a\"; s", false)] {
+        let typing = format!("{receiver}.");
+        let (session, doc) = open(&i, graph(), Mode::Script, &typing);
+        let methods = labels(&of_kind(
+            &session.completions(doc, typing.len()),
+            CompletionKind::Method,
+        ));
+        assert_eq!(
+            methods.contains(&"half".to_string()),
+            within,
+            "{receiver}: {methods:?}"
+        );
+
+        let called = format!("{receiver}.half()");
+        let (session, doc) = open(&i, graph(), Mode::Script, &called);
+        let messages: Vec<String> = session
+            .diagnostics(doc)
+            .into_iter()
+            .map(|error| error.message)
+            .collect();
+        assert_eq!(messages.is_empty(), within, "{called}: {messages:?}");
+        if !within {
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.contains("outside the declared bound")),
+                "{called}: {messages:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -550,11 +615,17 @@ fn completion_leaves_the_graph_unchanged() {
     let contexts = root_contexts(&i, &[("name", Ty::String)]);
     let mut session = LspSession::new(&i, with_std(&i, contexts));
     let helper_source = "let n = @name; n";
-    let helper = session.open(document(&i, "helper", Mode::Script, vec![]), helper_source);
+    let helper = session
+        .open(document(&i, "helper", Mode::Script, vec![]), helper_source)
+        .expect("no other open document is `helper`");
     let main_source = "let s = helper(); let o = { a: s, }; o.a.tr";
-    let main = session.open(document(&i, "main", Mode::Script, vec![]), main_source);
+    let main = session
+        .open(document(&i, "main", Mode::Script, vec![]), main_source)
+        .expect("no other open document is `main`");
     let broken_source = "let t = 1; t * \"x\"; t";
-    let broken = session.open(document(&i, "broken", Mode::Script, vec![]), broken_source);
+    let broken = session
+        .open(document(&i, "broken", Mode::Script, vec![]), broken_source)
+        .expect("no other open document is `broken`");
     let documents = [
         Opened {
             doc: helper,

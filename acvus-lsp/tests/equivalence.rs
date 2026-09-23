@@ -115,7 +115,9 @@ fn batch_errors(interner: &Interner, environment: &CompilationGraph, source: &st
 /// Compile via LspSession, return error messages (sorted).
 fn lsp_errors(interner: &Interner, environment: &CompilationGraph, source: &str) -> Vec<String> {
     let mut session = LspSession::new(interner, environment.clone());
-    let doc = session.open(template_document(interner, "test"), source);
+    let doc = session
+        .open(template_document(interner, "test"), source)
+        .expect("the session opens no other document");
     let mut errs: Vec<String> = session
         .diagnostics(doc)
         .into_iter()
@@ -131,7 +133,9 @@ fn a_broken_template_reports_every_parse_error_and_what_parsed() {
     let source = "% let a = 1\n% let = 2\n{{ a + 1 }}\n{{ f( }}\n";
     let env = with_std(&i, root_contexts(&i, &[]));
     let mut session = LspSession::new(&i, env.clone());
-    let doc = session.open(template_document(&i, "test"), source);
+    let doc = session
+        .open(template_document(&i, "test"), source)
+        .expect("the session opens no other document");
     let categories: Vec<LspErrorCategory> = session
         .diagnostics(doc)
         .iter()
@@ -228,7 +232,9 @@ fn extension_type_equivalence() {
 fn a_new_environment_rechecks_open_documents() {
     let i = Interner::new();
     let mut session = LspSession::new(&i, bare(root_contexts(&i, &[("x", Ty::String)])));
-    let doc = session.open(template_document(&i, "test"), "{{ @x }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ @x }}")
+        .expect("the session opens no other document");
     assert!(session.diagnostics(doc).is_empty());
 
     session.set_environment(bare(root_contexts(&i, &[("x", Ty::I64)])));
@@ -254,7 +260,9 @@ fn an_open_document_replaces_the_environment_function_at_its_name() {
     let mut session = LspSession::new(&i, env.clone());
     assert!(!session.graph().diagnostics(qref).is_empty());
 
-    let doc = session.open(template_document(&i, "test"), "{{ @y }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ @y }}")
+        .expect("the session opens no other document");
     assert!(session.diagnostics(doc).is_empty());
 
     session.set_environment(env);
@@ -268,7 +276,9 @@ fn incremental_update_fixes_error() {
     let mut session = LspSession::new(&i, with_std(&i, root_contexts(&i, &[("x", Ty::I64)])));
 
     // Start with emit type error: Int not emittable in template.
-    let doc = session.open(template_document(&i, "test"), "{{ @x }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ @x }}")
+        .expect("the session opens no other document");
     let errs = session.diagnostics(doc);
     assert!(
         !errs.is_empty(),
@@ -291,7 +301,9 @@ fn incremental_update_introduces_error() {
     let mut session = LspSession::new(&i, with_std(&i, root_contexts(&i, &[("name", Ty::String)])));
 
     // Start correct.
-    let doc = session.open(template_document(&i, "test"), "hello {{ @name }}");
+    let doc = session
+        .open(template_document(&i, "test"), "hello {{ @name }}")
+        .expect("the session opens no other document");
     assert!(session.diagnostics(doc).is_empty());
 
     // Break it: unknown builtin.
@@ -310,7 +322,9 @@ fn namespace_context_isolation() {
     let mut session = LspSession::new(&i, bare(contexts));
 
     // Root function sees @global.
-    let doc_root = session.open(template_document(&i, "root_fn"), "{{ @global }}");
+    let doc_root = session
+        .open(template_document(&i, "root_fn"), "{{ @global }}")
+        .expect("the session opens no other document");
     assert!(
         session.diagnostics(doc_root).is_empty(),
         "root should see @global"
@@ -330,7 +344,9 @@ fn completion_offers_contexts_after_at() {
         )),
     );
 
-    let doc = session.open(template_document(&i, "test"), "{{ @n }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ @n }}")
+        .expect("the session opens no other document");
     let items = session.completions(doc, "{{ @n".len());
     assert!(!items.is_empty(), "should get context completions");
     assert!(
@@ -360,7 +376,9 @@ fn completion_offers_functions_at_a_pipe_stage() {
     );
 
     let source = "{{ @name | he }}";
-    let doc = session.open(template_document(&i, "test"), source);
+    let doc = session
+        .open(template_document(&i, "test"), source)
+        .expect("the session opens no other document");
     let items = session.completions(doc, "{{ @name | he".len());
     assert!(
         items
@@ -376,7 +394,9 @@ fn completion_offers_keywords_by_prefix() {
     let i = Interner::new();
     let mut session = LspSession::new(&i, bare(vec![]));
 
-    let doc = session.open(template_document(&i, "test"), "{{ tr }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ tr }}")
+        .expect("the session opens no other document");
     let items = session.completions(doc, "{{ tr".len());
     assert!(
         items
@@ -392,7 +412,9 @@ fn completion_empty_after_close() {
     let i = Interner::new();
     let mut session = LspSession::new(&i, bare(root_contexts(&i, &[("name", Ty::String)])));
 
-    let doc = session.open(template_document(&i, "test"), "{{ @n }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ @n }}")
+        .expect("the session opens no other document");
     session.close(doc);
     let items = session.completions(doc, "{{ @n".len());
     assert!(items.is_empty(), "closed doc should return no completions");
@@ -406,7 +428,9 @@ fn completion_updates_with_source() {
         bare(root_contexts(&i, &[("name", Ty::String), ("age", Ty::I64)])),
     );
 
-    let doc = session.open(template_document(&i, "test"), "{{ @n }}");
+    let doc = session
+        .open(template_document(&i, "test"), "{{ @n }}")
+        .expect("the session opens no other document");
     let items = session.completions(doc, "{{ @n".len());
     assert!(
         items.iter().any(|c| c.label == "@name"),
@@ -476,7 +500,9 @@ Explain for {{ $who }}
     fn a_document_shows_the_inputs_it_reads() {
         let interner = Interner::new();
         let mut session = LspSession::new(&interner, super::bare(vec![]));
-        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
+        let doc = session
+            .open(super::template_document(&interner, "test"), BY_MODE)
+            .expect("the session opens no other document");
         assert_eq!(
             shown(&session, doc),
             vec![
@@ -491,7 +517,9 @@ Explain for {{ $who }}
     fn a_binding_narrows_to_what_the_surviving_arm_reads() {
         let interner = Interner::new();
         let mut session = LspSession::new(&interner, super::bare(vec![]));
-        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
+        let doc = session
+            .open(super::template_document(&interner, "test"), BY_MODE)
+            .expect("the session opens no other document");
 
         session.set_environment(bound(&interner, "mode", text("review")));
         assert_eq!(shown(&session, doc), vec!["$rules: String".to_string()]);
@@ -514,7 +542,9 @@ Explain for {{ $who }}
     fn a_name_both_arms_read_survives_every_binding() {
         let interner = Interner::new();
         let mut session = LspSession::new(&interner, super::bare(vec![]));
-        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
+        let doc = session
+            .open(super::template_document(&interner, "test"), BY_MODE)
+            .expect("the session opens no other document");
         session.update_source(doc, BOTH_ARMS_READ_WHO);
 
         assert_eq!(
@@ -533,7 +563,9 @@ Explain for {{ $who }}
     fn a_source_that_does_not_parse_is_one_diagnostic_and_recovers() {
         let interner = Interner::new();
         let mut session = LspSession::new(&interner, super::bare(vec![]));
-        let doc = session.open(super::template_document(&interner, "test"), BY_MODE);
+        let doc = session
+            .open(super::template_document(&interner, "test"), BY_MODE)
+            .expect("the session opens no other document");
 
         session.update_source(doc, "% if\nbroken\n");
         assert_eq!(session.diagnostics(doc).len(), 1);
@@ -559,10 +591,12 @@ Explain for {{ $who }}
     fn a_document_that_never_parsed_is_one_diagnostic() {
         let interner = Interner::new();
         let mut session = LspSession::new(&interner, super::bare(vec![]));
-        let doc = session.open(
-            super::template_document(&interner, "test"),
-            "% if\nbroken\n",
-        );
+        let doc = session
+            .open(
+                super::template_document(&interner, "test"),
+                "% if\nbroken\n",
+            )
+            .expect("the session opens no other document");
         assert_eq!(session.diagnostics(doc).len(), 1);
         assert!(shown(&session, doc).is_empty());
         assert!(session.required_inputs(doc).is_empty());

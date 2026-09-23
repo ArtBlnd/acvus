@@ -640,8 +640,8 @@ pub struct Binder {
 
 /// A field in an object expression.
 /// Shorthand `{ name }` -> key="name", value=Ident("name", Value).
-/// Shorthand `{ $name }` -> key="name", value=Ident("name", Variable).
-/// Shorthand `{ @name }` -> key="name", value=Ident("name", Context).
+/// Shorthand `{ $name }` -> key="name", value=Ident("name", ExternParam).
+/// Shorthand `{ @name }` -> key="name", value=ContextRef("name").
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectExprField<S = Clean> {
     pub id: AstId,
