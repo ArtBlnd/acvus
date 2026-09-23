@@ -113,7 +113,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0066: a loop is analyzed and normalized in MIR, and the lowerer decides its shape (Proposed)
 - RFC-0081: a `while` that counts by one to an invariant bound is a range `for` (Proposed)
 - RFC-0083: a pure operation computed on every path to it is the value computed first (Proposed)
-- RFC-0084: a `for` whose body does nothing is a jump to its exit (Proposed)
+- RFC-0087: a `for` whose body does nothing is a jump to its exit (Proposed)
 
 ### [ownership.md](ownership.md)
 

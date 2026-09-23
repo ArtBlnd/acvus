@@ -379,7 +379,7 @@ fn no_loop_is_rewritten_by_both_passes() {
 
 /// Each inner loop also sums `r`, a merge it keeps carrying, so it stays a
 /// loop once `q` is canonicalized. A body that does nothing is removed
-/// (RFC-0084), which would leave one loop to judge.
+/// (RFC-0087), which would leave one loop to judge.
 const WEAK_IN_WEAK: &str = "let v = vec([0, 0, 0]); let j = 1; \
      for x in &mut v { let q = j; let r = 0; for k in 0..4 { q = q + 3; r = r + k; } \
      *x = q + r; j = j + 2; } \
