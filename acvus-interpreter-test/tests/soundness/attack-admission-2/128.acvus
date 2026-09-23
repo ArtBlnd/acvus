@@ -1,0 +1,2 @@
+// expect 1
+let f = | | -> { let g = | | -> 1; g() }; if true { f() } else { 0 }

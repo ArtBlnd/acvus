@@ -1,0 +1,2 @@
+// expect ab ab
+let f = |s| -> s.trim().to_string(); let t = " ab".to_string(); f(&t) + t

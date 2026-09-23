@@ -1,0 +1,2 @@
+// expect 3
+let f = |r| -> { let m = r[0u64].len(); m + r[1u64].len() }; f(&@ms)

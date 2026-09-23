@@ -1,0 +1,2 @@
+// expect 2
+let o = Some("a".to_string()); let f = | | -> match o { Some(k) => k.len(), None => 0, }; f() + f()

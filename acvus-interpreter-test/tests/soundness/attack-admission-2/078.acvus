@@ -1,0 +1,2 @@
+// expect true
+let f = |x| -> string::contains(&x, "l"); f(@s)

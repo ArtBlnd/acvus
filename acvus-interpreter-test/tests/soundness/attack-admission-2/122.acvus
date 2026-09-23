@@ -1,0 +1,2 @@
+// expect true
+let f = |v| -> v.contains(&1); f(vec([1]))

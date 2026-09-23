@@ -1,0 +1,2 @@
+// expect 4
+let f = |s| -> s.len() + s.len(); f("ab".to_string())

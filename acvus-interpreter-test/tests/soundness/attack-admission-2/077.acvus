@@ -1,0 +1,2 @@
+// expect 5
+let x = @s; string::len(&x)

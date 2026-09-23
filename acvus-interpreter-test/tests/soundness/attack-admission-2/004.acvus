@@ -1,0 +1,2 @@
+// refuse
+let f = |v| -> { let w = v.reverse(); v.len() }; f(vec([1]))

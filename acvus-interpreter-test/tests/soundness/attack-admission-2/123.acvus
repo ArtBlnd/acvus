@@ -1,0 +1,2 @@
+// expect 3
+let f = |s| -> { let n = 0; for i in 0..3 { if s.contains("a") { n = n + 1; } } n }; f("ab".to_string())

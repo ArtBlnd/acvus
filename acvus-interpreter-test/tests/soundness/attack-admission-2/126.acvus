@@ -1,0 +1,2 @@
+// expect true
+let f = |a, b| -> a == b; f("x".to_string(), "x")

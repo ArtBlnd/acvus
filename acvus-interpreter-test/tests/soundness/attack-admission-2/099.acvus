@@ -1,0 +1,2 @@
+// expect 2
+let t = (1, "a".to_string()); let f = | | -> match t { (n, s) => s.len() + *n, _ => 0, }; f()

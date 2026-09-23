@@ -1,0 +1,2 @@
+// refuse
+let f = |v| -> v.len(); let w = vec([1]); let a = f(w); w.len()

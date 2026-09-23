@@ -1,0 +1,2 @@
+// refuse
+let f = |s| -> match s { x => x, }; f("ab").len()

@@ -1,0 +1,2 @@
+// expect ab
+let k = "a".to_string(); let f = |x| -> k + x; let s = "b".to_string(); f(&s)

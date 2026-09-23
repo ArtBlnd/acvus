@@ -1,0 +1,2 @@
+// expect 2
+let f = |v| -> match max(v) { Some(x) => x, None => 0, }; let w = vec([1, 3]); let a = f(&w); w.len()

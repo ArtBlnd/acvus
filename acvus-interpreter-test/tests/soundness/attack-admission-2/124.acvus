@@ -1,0 +1,2 @@
+// refuse
+let f = |v| -> { let n = 0u64; for i in 0..2 { let w = v.reverse(); n = n + w.len(); } n }; f(vec([1]))

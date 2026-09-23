@@ -1,0 +1,2 @@
+// expect 5
+let f = |a| -> { *a = *a + 1; a + 1 }; let x = 1; f(&mut x) + x

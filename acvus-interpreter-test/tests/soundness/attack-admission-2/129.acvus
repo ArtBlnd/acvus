@@ -1,0 +1,2 @@
+// expect 5
+let f = |k| -> { let g = |y| -> y; g(k) }; if f(1) == 1 { 5 } else { 0 }

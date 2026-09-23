@@ -1,0 +1,2 @@
+// expect 1
+let v = vec([1]); let r = &v; let f = | | -> { let g = | | -> r.len(); g() }; f()

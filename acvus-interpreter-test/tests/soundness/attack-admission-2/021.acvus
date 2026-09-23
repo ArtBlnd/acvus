@@ -1,0 +1,2 @@
+// expect AB
+let f = |s| -> s.upper(); f(&"ab".to_string())

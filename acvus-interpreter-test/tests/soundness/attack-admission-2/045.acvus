@@ -1,0 +1,2 @@
+// expect 1
+let f = |r| -> swap(r, 0u64, 1u64); let a = [2, 1]; f(&mut a); a[0u64]

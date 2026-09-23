@@ -1,0 +1,2 @@
+// expect 3
+let f = |v| -> { let a = v.len(); v.push(1); a + v.len() }; f(vec([1]))

@@ -1,0 +1,2 @@
+// expect true
+let f = |r| -> r.contains("l"); f(&@s)

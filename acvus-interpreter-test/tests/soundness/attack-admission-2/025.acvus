@@ -1,0 +1,2 @@
+// expect 2
+let f = |r| -> { *r = "x".to_string(); r.len() }; let s = "abc".to_string(); f(&mut s) + s.len()

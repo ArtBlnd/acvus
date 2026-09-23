@@ -1,0 +1,2 @@
+// expect 2
+let x = 1; let r = &x; let f = | | -> r + 1; f()

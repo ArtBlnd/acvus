@@ -1,0 +1,2 @@
+// expect 1
+let f = |x| -> string::trim(&x).len(); f(" a ".to_string())

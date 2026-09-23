@@ -1,0 +1,2 @@
+// refuse
+let o = Some("a".to_string()); let f = | | -> match o { Some(k) => k, None => "".to_string(), }; f()

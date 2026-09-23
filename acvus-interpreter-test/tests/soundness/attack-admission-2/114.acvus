@@ -1,0 +1,2 @@
+// refuse
+let f = |s| -> [s, s]; let t = "hello".to_string(); let a = f(t.trim()); a[0u64].len() + a[1u64].len()

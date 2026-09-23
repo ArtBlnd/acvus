@@ -1,0 +1,2 @@
+// refuse
+let f = |s| -> { k: s, n: 1, }; let o = f("hello"); o.k.len() + o.n

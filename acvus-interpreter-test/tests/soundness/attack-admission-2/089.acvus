@@ -1,0 +1,2 @@
+// expect 2
+let o = Some(2); let f = | | -> { let g = | | -> o.unwrap(); g() }; f()

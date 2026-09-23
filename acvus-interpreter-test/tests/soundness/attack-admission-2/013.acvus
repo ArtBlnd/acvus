@@ -1,0 +1,2 @@
+// expect 2
+let f = |r| -> r.last(); let v = vec([1, 2]); match f(&v) { Some(x) => *x, None => 0, }

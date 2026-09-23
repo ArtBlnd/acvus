@@ -44,6 +44,54 @@ const KNOWN: &[Known] = &[
     // not the elements', the lender is dropped before the loop, and each
     // payload is read after its release, as a crash or an assertion.
     Known { program: "attack-control-2/d39.acvus", shows: "run failed: " },
+    Known {
+        program: "attack-admission-2/108.acvus",
+        shows: "prepare panicked: closure body not found",
+    },
+    Known {
+        program: "attack-admission-2/111.acvus",
+        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
+    },
+    Known {
+        program: "attack-admission-2/112.acvus",
+        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
+    },
+    Known {
+        program: "attack-admission-2/113.acvus",
+        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
+    },
+    Known {
+        program: "attack-admission-2/114.acvus",
+        shows: "admitted a program it should refuse, which ran to 0",
+    },
+    Known {
+        program: "attack-admission-2/115.acvus",
+        shows: "admitted a program it should refuse, which ran to 0",
+    },
+    Known {
+        program: "attack-admission-2/116.acvus",
+        shows: "admitted a program it should refuse, which ran to 6",
+    },
+    Known {
+        program: "attack-admission-2/120.acvus",
+        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
+    },
+    Known {
+        program: "attack-admission-2/127.acvus",
+        shows: "admitted a program it should refuse, which ran to \"\"",
+    },
+    Known {
+        program: "attack-admission-2/128.acvus",
+        shows: "prepare panicked: closure body not found",
+    },
+    Known {
+        program: "attack-admission-2/129.acvus",
+        shows: "prepare panicked: closure body not found",
+    },
+    Known {
+        program: "attack-admission-2/130.acvus",
+        shows: "prepare panicked: closure body not found",
+    },
 ];
 
 const LIMIT: Duration = Duration::from_secs(30);

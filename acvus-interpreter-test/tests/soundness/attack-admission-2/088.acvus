@@ -1,0 +1,2 @@
+// refuse
+let s = "ab".to_string(); let f = | | -> { let g = | | -> s.len(); g() }; f()

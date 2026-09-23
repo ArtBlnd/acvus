@@ -1,0 +1,2 @@
+// expect true
+let f = |it| -> it.contains(1); let r = range(0, 3); f(r)

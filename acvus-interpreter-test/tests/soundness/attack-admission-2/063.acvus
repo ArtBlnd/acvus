@@ -1,0 +1,2 @@
+// expect -2
+let f = |a| -> -a; let x = 2; f(&x)

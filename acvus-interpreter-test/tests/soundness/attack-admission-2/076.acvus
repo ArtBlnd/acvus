@@ -1,0 +1,2 @@
+// expect 2
+let f = |x| -> string::len(&x); let n = f("ab".to_string()); n

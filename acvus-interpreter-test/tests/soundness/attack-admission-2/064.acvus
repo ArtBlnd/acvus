@@ -1,0 +1,2 @@
+// expect false
+let f = |a| -> !a; f(&true)

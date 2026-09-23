@@ -1,0 +1,2 @@
+// expect true
+let f = |o| -> { let a = o.is_some(); o.is_some() }; f(Some(1))

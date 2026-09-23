@@ -1,0 +1,2 @@
+// expect true
+let f = |a, b| -> contains(a, b); let s = "abc".to_string(); let t = "b".to_string(); f(&s, &t)

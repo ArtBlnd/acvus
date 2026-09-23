@@ -1,0 +1,2 @@
+// refuse
+let f = |s| -> [s]; let a = f("hello"); a[0u64].to_string()

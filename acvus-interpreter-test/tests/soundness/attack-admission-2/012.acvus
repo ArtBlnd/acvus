@@ -1,0 +1,2 @@
+// refuse
+let f = |r| -> { r.sort(); 0 }; let v = vec([3, 1]); f(&v); v[0u64]

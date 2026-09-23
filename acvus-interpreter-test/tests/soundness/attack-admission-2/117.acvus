@@ -1,0 +1,2 @@
+// expect hello
+let f = |s| -> Some(s); match f("hello") { Some(x) => x.to_string(), None => "".to_string(), }

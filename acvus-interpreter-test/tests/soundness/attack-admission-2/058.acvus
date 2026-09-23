@@ -1,0 +1,2 @@
+// expect true
+let k = vec([1]); let f = |x| -> x == k; f(vec([1]))

@@ -1,0 +1,2 @@
+// expect true
+let f = |a, b| -> a >= b; let x = 3; f(&mut x, 2)

@@ -1,0 +1,2 @@
+// expect true
+let f = |x| -> slice::contains(&x, &1); f(vec([1]))

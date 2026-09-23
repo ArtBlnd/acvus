@@ -1,0 +1,2 @@
+// expect 3
+let f = |x| -> { let r = &x; string::len(r) }; f("abc".to_string())

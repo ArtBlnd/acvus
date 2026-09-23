@@ -1,0 +1,2 @@
+// expect true
+let o = Some(1); let f = |x| -> o == x; f(Some(1))

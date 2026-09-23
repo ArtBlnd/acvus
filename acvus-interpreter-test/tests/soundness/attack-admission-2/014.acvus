@@ -1,0 +1,2 @@
+// expect 5
+let f = |r| -> r.first(); let a = [5, 6]; match f(&a) { Some(x) => *x, None => 0, }

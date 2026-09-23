@@ -1,0 +1,2 @@
+// expect x
+let t = { a: 1, b: "x".to_string(), }; let f = | | -> t.b; f()

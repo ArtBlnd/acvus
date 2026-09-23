@@ -1,0 +1,2 @@
+// expect true
+let f = |s| -> s.contains("a"); let t = "ab".to_string(); f(&t) && t.len() == 2

@@ -1,0 +1,2 @@
+// expect true
+let f = |s| -> contains(s, "a"); let t = "ab".to_string(); f(&mut t)

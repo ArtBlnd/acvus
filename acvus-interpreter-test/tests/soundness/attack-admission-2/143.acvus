@@ -1,0 +1,2 @@
+// expect 2
+let x = 1; let r = &mut x; let f = | | -> { let a = *r; a + 1 }; f()

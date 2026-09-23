@@ -1,0 +1,2 @@
+// refuse
+let s = "a"; let f = | | -> { let g = | | -> s.len(); g() }; f()

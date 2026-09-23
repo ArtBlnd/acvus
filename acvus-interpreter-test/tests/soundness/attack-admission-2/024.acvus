@@ -1,0 +1,2 @@
+// expect 3
+let f = |r| -> r.len(); let s = "abc".to_string(); f(&mut s)

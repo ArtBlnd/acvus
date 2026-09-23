@@ -1,0 +1,2 @@
+// refuse
+let f = |s| -> contains(s, "a"); let t = "ab".to_string(); f(t)

@@ -1,0 +1,2 @@
+// expect 5
+let f = |r| -> r.get(0u64); let v = vec([5, 6]); match f(&v) { Some(x) => *x, None => 0, }

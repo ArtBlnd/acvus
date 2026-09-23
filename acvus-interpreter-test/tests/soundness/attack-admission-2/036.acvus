@@ -1,0 +1,2 @@
+// expect 3
+let f = |v| -> match max(v) { Some(x) => x, None => 0, }; f(&vec([3, 1, 2]))

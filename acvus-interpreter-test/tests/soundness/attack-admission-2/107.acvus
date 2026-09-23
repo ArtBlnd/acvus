@@ -1,0 +1,2 @@
+// expect 4
+let v = vec([1]); let f = |x| -> { let g = | | -> x.push(2); g(); x.len() }; f(&mut v) + v.len()

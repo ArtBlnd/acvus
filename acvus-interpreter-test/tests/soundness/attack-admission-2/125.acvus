@@ -1,0 +1,2 @@
+// expect 1
+let f = |r| -> r.sort(); let a = [3, 1]; f(&mut a); a[0u64]

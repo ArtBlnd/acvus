@@ -1,0 +1,2 @@
+// expect true
+let f = |a, b| -> a == b; f(&Some(1), Some(1))

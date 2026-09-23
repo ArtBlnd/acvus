@@ -1,0 +1,2 @@
+// expect xyx
+let f = |a| -> a + "y"; let s = "x".to_string(); f(&s) + s

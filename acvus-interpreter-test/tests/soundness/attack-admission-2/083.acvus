@@ -1,0 +1,2 @@
+// expect true
+slice::contains(&@xs, &2)

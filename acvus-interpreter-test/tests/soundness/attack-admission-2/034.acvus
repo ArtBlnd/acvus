@@ -1,0 +1,2 @@
+// expect 4
+let f = |v| -> { let a = v.len(); let b = v.len(); a + b }; f(vec([1, 2]))

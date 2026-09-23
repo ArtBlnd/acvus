@@ -1,0 +1,2 @@
+// expect 6
+let s = "ab".to_string(); let f = | | -> s.len(); f() + f() + s.len()

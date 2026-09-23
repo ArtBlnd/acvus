@@ -1,0 +1,2 @@
+// expect ab
+let f = |a, b| -> a + b; f("a".to_string(), "b".to_string())

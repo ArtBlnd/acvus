@@ -1,0 +1,2 @@
+// expect 5
+let n = 1; let f = | | -> { let g = | | -> n; g() }; match f() { 1 => 5, _ => 0, }

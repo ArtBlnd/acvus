@@ -1,0 +1,2 @@
+// expect 3
+let f = |o| -> o.unwrap(); f(Some(3))

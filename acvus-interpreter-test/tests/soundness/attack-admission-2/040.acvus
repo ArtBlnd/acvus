@@ -1,0 +1,2 @@
+// expect true
+let f = |a, b| -> contains(a, b); let v = vec([1, 2]); f(&v, &2)

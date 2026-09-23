@@ -1,0 +1,2 @@
+// expect true
+let k = 3; let r = &k; let f = |x| -> r < x; f(5)

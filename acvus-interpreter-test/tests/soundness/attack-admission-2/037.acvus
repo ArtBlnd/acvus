@@ -1,0 +1,2 @@
+// expect 3
+let f = |v| -> len(v); let a = [1, 2, 3]; f(&a)

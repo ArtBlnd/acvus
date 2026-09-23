@@ -1,0 +1,2 @@
+// expect 4
+let n = 3; let f = | | -> { let g = | | -> n + 1; g() }; f()

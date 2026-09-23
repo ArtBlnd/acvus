@@ -1,0 +1,2 @@
+// refuse
+let f = |x| -> x.abs(); let y = 0 - 3; let r = &y; f(r)
