@@ -29,8 +29,9 @@ help: the following other types implement trait `TransparentOver<Rt>`
   | | where
   | |     R: Runtime,
   | |     T: 'static,
-  | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
-  = note: required for `BySlice<i64, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+  | |     Self: crate::Unbranded,
+  | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
+  = note: required for `BySlice<i64, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `i64` is not the runtime's value under another name, so a run of the runtime's values is not a `[i64]`
@@ -64,6 +65,7 @@ help: the following other types implement trait `TransparentOver<Rt>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
-   = note: required for `BySlice<i64, acvus_extern::Mut>` to implement `for<'a> Arg<'a, __R>`
+   | |     Self: crate::Unbranded,
+   | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
+   = note: required for `BySlice<i64, acvus_extern::Mut>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -745,6 +745,7 @@ mod tests {
             identity_args: vec![crate::ty::IdentityTerm::Known(
                 <crate::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
             )],
+            region_params: 0,
         }
     }
 

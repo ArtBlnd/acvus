@@ -33,9 +33,10 @@ help: the following other types implement trait `TransparentOver<Rt>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
-   = note: required for `acvus_extern::Slice<Rendered, acvus_extern::Shared, __R>` to implement `Cross<__R>`
-   = note: required for `ByValue<acvus_extern::Slice<Rendered, acvus_extern::Shared, __R>>` to implement `for<'a> Arg<'a, __R>`
+   | |     Self: crate::Unbranded,
+   | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
+   = note: required for `acvus_extern::Slice<'_, Rendered, acvus_extern::Shared, __R>` to implement `Cross<__R>`
+   = note: required for `ByValue<acvus_extern::Slice<'_, Rendered, acvus_extern::Shared, __R>>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `Rendered` is not the runtime's value under another name, so a run of the runtime's values is not a `[Rendered]`
@@ -73,7 +74,8 @@ help: the following other types implement trait `TransparentOver<Rt>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
-   = note: required for `acvus_extern::Slice<Rendered, acvus_extern::Mut, __R>` to implement `Cross<__R>`
-   = note: required for `ByValue<acvus_extern::Slice<Rendered, acvus_extern::Mut, __R>>` to implement `for<'a> Arg<'a, __R>`
+   | |     Self: crate::Unbranded,
+   | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
+   = note: required for `acvus_extern::Slice<'_, Rendered, acvus_extern::Mut, __R>` to implement `Cross<__R>`
+   = note: required for `ByValue<acvus_extern::Slice<'_, Rendered, acvus_extern::Mut, __R>>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

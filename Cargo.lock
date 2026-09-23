@@ -78,7 +78,10 @@ dependencies = [
  "acvus-mir",
  "acvus-utils",
  "futures",
+ "proc-macro2",
+ "quote",
  "rustc-hash",
+ "syn 2.0.117",
  "tokio",
 ]
 

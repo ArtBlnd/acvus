@@ -168,8 +168,10 @@ where
 /// How one Rust parameter takes its argument out of a call's argument run.
 /// The mode — by value, by shared reference, by exclusive reference — is
 /// written in Rust and read by the macro (RFC-0023 rule 5); the width is the
-/// type's.
-pub trait Arg<'a, Rt>: Sited<Rt>
+/// type's. `'a` is the call and `'w` the lifetime of the call's `Ctx`: a
+/// carrier is handed out at the first, a required instance at the second
+/// (RFC-0079 rule 6).
+pub trait Arg<'a, 'w, Rt>: Sited<Rt>
 where
     Rt: Runtime,
 {
@@ -254,94 +256,96 @@ where
     T: Send + Sync + 'static,
     Rt: Runtime,
 {
-    type Site = Instance<S, I, Rt, T>;
+    type Site = Instance<'static, S, I, Rt, T>;
 
     const ARGUMENTS: usize = 0;
 
-    fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<S, I, Rt, T> {
+    fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<'static, S, I, Rt, T> {
         // SAFETY: `CallSite::new`'s contract, the one way a word reaches
         // `requires`: the word is the entry chosen for this site's `NTH`
         // requirement, whose signature is `S` and whose type is what the
-        // requirement's variable is filled with here.
+        // requirement's variable is filled with here, and the entry
+        // outlives every handler sited here.
         unsafe { Instance::at(site.requires[NTH]) }
     }
 }
 
-impl<'a, S, I, T, Rt, const NTH: usize> Arg<'a, Rt> for Required<S, I, T, NTH>
+impl<'a, 'w, S, I, T, Rt, const NTH: usize> Arg<'a, 'w, Rt> for Required<S, I, T, NTH>
 where
     S: Signature<Rt>,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
 {
-    type Out = Instance<S, I, Rt, T>;
+    type Out = Instance<'w, S, I, Rt, T>;
     type Form = Nothing;
 
     unsafe fn take<'s>(
         _: &'a Rt,
         _: &'a [Rt::Value],
-        site: &'s Instance<S, I, Rt, T>,
-    ) -> Instance<S, I, Rt, T> {
+        site: &'s Instance<'static, S, I, Rt, T>,
+    ) -> Instance<'w, S, I, Rt, T> {
         *site
     }
 }
 
-impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Uniform>
+impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Uniform>
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    type Out = T;
+    type Out = T::At<'a>;
     type Form = <T as Cross<Rt>>::Form;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T {
-        // SAFETY: the caller's contract, which is `Cross::from_run`'s.
-        unsafe { <T as Cross<Rt>>::from_run(rt, run) }
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
+        // SAFETY: the caller's contract, which is `Cross::from_run`'s, and
+        // what the value names is live for the call (RFC-0018).
+        unsafe { crate::brand::<T>(<T as Cross<Rt>>::from_run(rt, run)) }
     }
 }
 
-impl<'a, T, Rt> Arg<'a, Rt> for ByValue<T, Specialized>
+impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Specialized>
 where
     T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
-    type Out = T;
+    type Out = T::At<'a>;
     type Form = One;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
         // SAFETY: as the uniform impl's.
-        unsafe { <T as OneValue<Rt, Specialized>>::from_run(rt, run) }
+        unsafe { crate::brand::<T>(<T as OneValue<Rt, Specialized>>::from_run(rt, run)) }
     }
 }
 
-impl<'a, T, M, Rt> Arg<'a, Rt> for ByRef<T, M, Uniform>
+impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
 where
     T: Borrowable<Rt>,
     M: Loan,
     Rt: Runtime,
 {
-    type Out = M::Of<'a, T>;
+    type Out = M::Of<'a, T::At<'a>>;
     type Form = One;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T> {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
         // SAFETY: the caller's contract: a live storage of `T`, exclusively
         // named at a `Mut` loan (RFC-0018).
-        unsafe { M::borrow::<T, Uniform, Rt>(rt, &run[0]) }
+        unsafe { M::brand::<T>(M::borrow::<T, Uniform, Rt>(rt, &run[0])) }
     }
 }
 
-impl<'a, T, M, Rt> Arg<'a, Rt> for ByRef<T, M, Specialized>
+impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
 where
     T: BorrowableSpecialized<Rt>,
     M: Loan,
     Rt: Runtime,
 {
-    type Out = M::Of<'a, T>;
+    type Out = M::Of<'a, T::At<'a>>;
     type Form = One;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T> {
+    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
         // SAFETY: as the uniform impl's, at the specialized representation.
-        unsafe { M::borrow::<T, Specialized, Rt>(rt, &run[0]) }
+        unsafe { M::brand::<T>(M::borrow::<T, Specialized, Rt>(rt, &run[0])) }
     }
 }
 
@@ -586,15 +590,16 @@ where
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    type Of<'a> = T;
+    type Of<'a> = T::At<'a>;
     type Form = <T as Cross<Rt>>::ReturnForm;
 
     fn into_run(
-        value: T,
+        value: T::At<'_>,
         rt: &Rt,
         out: Out<'_, Rt>,
     ) -> <<T as Cross<Rt>>::ReturnForm as Returned>::Verdict {
-        <T as Cross<Rt>>::into_return_run(value, rt, out)
+        // SAFETY: the value is erased here, before safe code sees it again.
+        <T as Cross<Rt>>::into_return_run(unsafe { crate::unbrand::<T>(value) }, rt, out)
     }
 }
 
@@ -603,14 +608,15 @@ where
     T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
-    type Of<'a> = T;
+    type Of<'a> = T::At<'a>;
     /// The specialized crossing is the value and nothing beside it, so there
     /// is no run for a verdict to be returned beside and no `OptionOf` here
     /// (RFC-0041).
     type Form = One;
 
-    fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
-        <T as OneValue<Rt, Specialized>>::into_run(value, rt, out)
+    fn into_run(value: T::At<'_>, rt: &Rt, out: Out<'_, Rt>) {
+        // SAFETY: as the uniform impl's.
+        <T as OneValue<Rt, Specialized>>::into_run(unsafe { crate::unbrand::<T>(value) }, rt, out)
     }
 }
 
@@ -860,8 +866,9 @@ where
 {
     type Run: ArgRun;
     type Sites: Clone + Send + Sync + 'static;
-    /// What the Rust body's parameters are, at the call's own lifetime.
-    type Out<'a>;
+    /// What the Rust body's parameters are, at the call's own lifetime and
+    /// at its `Ctx`'s.
+    type Out<'a, 'w>;
 
     const ARITY: usize;
     /// How many of the runtime's values the whole argument run is.
@@ -871,11 +878,11 @@ where
 
     /// # Safety
     /// As `Arg::take`, for each parameter over its own values of `run`.
-    unsafe fn take<'a>(
+    unsafe fn take<'a, 'w>(
         rt: &'a Rt,
         run: &'a [Rt::Value],
         sites: &Self::Sites,
-    ) -> <Self as Parameters<Rt>>::Out<'a>;
+    ) -> <Self as Parameters<Rt>>::Out<'a, 'w>;
 }
 
 /// A parameter list every parameter of which survives the caller
@@ -1103,7 +1110,7 @@ where
 macro_rules! run_of {
     ($rt:ty, $run:ty) => { $run };
     ($rt:ty, $run:ty, $arg:ident $(, $rest:ident)*) => {
-        run_of!($rt, <<$arg as Arg<'static, $rt>>::Form as Form>::Onto<$run> $(, $rest)*)
+        run_of!($rt, <<$arg as Arg<'static, 'static, $rt>>::Form as Form>::Onto<$run> $(, $rest)*)
     };
 }
 
@@ -1115,14 +1122,14 @@ macro_rules! parameters {
         impl<Rt, $($arg,)*> Parameters<Rt> for ($($arg,)*)
         where
             Rt: Runtime,
-            $($arg: for<'a> Arg<'a, Rt> + 'static,)*
+            $($arg: for<'a, 'w> Arg<'a, 'w, Rt> + 'static,)*
         {
             type Run = run_of!(Rt, InRegisters<0> $(, $arg)*);
             type Sites = ($(<$arg as Sited<Rt>>::Site,)*);
-            type Out<'a> = ($(<$arg as Arg<'a, Rt>>::Out,)*);
+            type Out<'a, 'w> = ($(<$arg as Arg<'a, 'w, Rt>>::Out,)*);
 
             const ARITY: usize = 0 $(+ <$arg as Sited<Rt>>::ARGUMENTS)*;
-            const WIDTH: usize = 0 $(+ <$arg as Arg<'static, Rt>>::WIDTH)*;
+            const WIDTH: usize = 0 $(+ <$arg as Arg<'static, 'static, Rt>>::WIDTH)*;
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
             fn sites(site: &CallSite<'_, Rt>) -> Self::Sites {
@@ -1149,19 +1156,19 @@ macro_rules! parameters {
             /// the tail jump is gone.
             #[inline(always)]
             #[allow(unused_variables, unused_mut, unused_assignments)]
-            unsafe fn take<'a>(
+            unsafe fn take<'a, 'w>(
                 rt: &'a Rt,
                 run: &'a [Rt::Value],
                 sites: &Self::Sites,
-            ) -> <Self as Parameters<Rt>>::Out<'a> {
+            ) -> <Self as Parameters<Rt>>::Out<'a, 'w> {
                 let mut _at = 0usize;
                 $(
-                    let _width = <$arg as Arg<'_, Rt>>::WIDTH;
+                    let _width = <$arg as Arg<'a, 'w, Rt>>::WIDTH;
                     // SAFETY: the caller's contract: `run` is this
                     // declaration's whole argument run, so each parameter's
                     // own values are the next `WIDTH` of it.
                     let $out = unsafe {
-                        $arg::take(rt, &run[_at.._at + _width], &sites.$at)
+                        <$arg as Arg<'a, 'w, Rt>>::take(rt, &run[_at.._at + _width], &sites.$at)
                     };
                     _at += _width;
                 )*
@@ -1172,7 +1179,7 @@ macro_rules! parameters {
         impl<Rt, $($arg,)*> ValueParameters<Rt> for ($($arg,)*)
         where
             Rt: Runtime,
-            $($arg: for<'a> Arg<'a, Rt, Form: SurvivesSuspension> + 'static,)*
+            $($arg: for<'a, 'w> Arg<'a, 'w, Rt, Form: SurvivesSuspension> + 'static,)*
         {
         }
     };
@@ -1200,7 +1207,7 @@ pub fn glue<Rt, F, A, R>(f: F) -> Glue<Rt, F, A, R>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
     R: Ret<Rt>,
 {
     Glue {
@@ -1217,7 +1224,7 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
     E: AtInstance<Rt>,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
     R: Ret<Rt>,
 {
     Glue {
@@ -1234,7 +1241,7 @@ where
     A: Parameters<Rt>,
     F: for<'a, 'w> Fn(
         &'a mut Ctx<'w, Rt>,
-        <A as Parameters<Rt>>::Out<'a>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
     AsyncGlue {
@@ -1252,7 +1259,7 @@ where
     E: AtInstance<Rt>,
     F: for<'a, 'w> Fn(
         &'a mut Ctx<'w, Rt>,
-        <A as Parameters<Rt>>::Out<'a>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
     AsyncGlue {
@@ -1268,7 +1275,7 @@ where
     E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
 {
     type Args = <A as Parameters<Rt>>::Run;
@@ -1303,7 +1310,7 @@ where
     E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
 {
     fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>> {
@@ -1352,7 +1359,7 @@ where
     E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
     R: Ret<Rt> + 'static,
 {
     fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op {
@@ -1370,7 +1377,7 @@ where
     E: AtInstance<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
     R: Ret<Rt, Form: OneRegister> + 'static,
 {
 }
@@ -1383,7 +1390,7 @@ where
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
         &'a mut Ctx<'w, Rt>,
-        <A as Parameters<Rt>>::Out<'a>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
     const WIDTH: Width = Width {
@@ -1418,7 +1425,7 @@ where
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
         &'a mut Ctx<'w, Rt>,
-        <A as Parameters<Rt>>::Out<'a>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
     fn clone_box(&self) -> Box<dyn AsyncFactory<Rt>> {
@@ -1472,7 +1479,7 @@ where
     F: Send + Sync + 'static,
     F: for<'a, 'w> Fn(
         &'a mut Ctx<'w, Rt>,
-        <A as Parameters<Rt>>::Out<'a>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
     ) -> BoxFuture<'a, Rt::Value>,
 {
     fn into_op(self: Box<Self>, shape: Rt::AsyncShape) -> Rt::Op {

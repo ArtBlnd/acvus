@@ -24,6 +24,16 @@ use acvus_utils::Interner;
 /// without the pipeline asking for specialization.
 pub struct Same<A, B>(fn(A) -> B);
 
+// SAFETY: the witness holds the identity function and no value of `A` or
+// `B`.
+unsafe impl<A, B> acvus_extern::Branded for Same<A, B>
+where
+    A: 'static,
+    B: 'static,
+{
+    type At<'a> = Self;
+}
+
 impl<T> Same<T, T> {
     pub fn new() -> Self {
         Same(|x| x)
@@ -36,17 +46,19 @@ impl<A, B> Same<A, B> {
     }
 }
 
-pub enum Stage<In, Out, E, Rt>
+#[derive(acvus_extern::Branded)]
+pub enum Stage<'a, In, Out, E, Rt>
 where
     In: Var<kind::Type>,
     Out: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    Map(Closure<(In,), Out, E, Rt>),
+    Map(Closure<'a, (In,), Out, E, Rt>),
     Take { remaining: u64, same: Same<In, Out> },
 }
 
+#[derive(acvus_extern::Branded)]
 pub struct Source<T, Rt>
 where
     Rt: Runtime,
@@ -65,6 +77,7 @@ where
 }
 
 /// One stage and the pipeline beneath it.
+#[derive(acvus_extern::Branded)]
 pub struct Stages<S, Rest> {
     stage: S,
     rest: Rest,
@@ -76,12 +89,12 @@ pub trait TypeList<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
-    type Body<O, E>: Send + Sync + 'static
+    type Body<'a, O, E>: Send + Sync + 'a
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
 
-    fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
+    fn pull<O, E>(body: &mut Self::Body<'_, O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>;
@@ -91,7 +104,7 @@ impl<Rt> TypeList<Rt> for ()
 where
     Rt: Runtime,
 {
-    type Body<O, E>
+    type Body<'a, O, E>
         = Source<O, Rt>
     where
         O: Var<kind::Type>,
@@ -112,13 +125,13 @@ where
     Ts: TypeList<Rt>,
     Rt: Runtime,
 {
-    type Body<O, E>
-        = Stages<Stage<T, O, E, Rt>, Ts::Body<T, E>>
+    type Body<'a, O, E>
+        = Stages<Stage<'a, T, O, E, Rt>, Ts::Body<'a, T, E>>
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
 
-    fn pull<O, E>(body: &mut Self::Body<O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
+    fn pull<O, E>(body: &mut Self::Body<'_, O, E>, ctx: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
@@ -144,7 +157,7 @@ impl<const N: usize, Rt> TypeList<Rt> for ChosenNth<N>
 where
     Rt: Runtime,
 {
-    type Body<O, E>
+    type Body<'a, O, E>
         = Bottom
     where
         O: Var<kind::Type>,
@@ -163,7 +176,7 @@ where
 #[extern_type(name = "Pipe")]
 #[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
-pub struct Pipe<Ts, O, E, I, Rt>(<Ts as TypeList<Rt>>::Body<O, E>, PhantomData<I>)
+pub struct Pipe<'a, Ts, O, E, I, Rt>(<Ts as TypeList<Rt>>::Body<'a, O, E>, PhantomData<I>)
 where
     Ts: Var<kind::Type> + TypeList<Rt> + Chosen,
     O: Var<kind::Type>,
@@ -171,7 +184,7 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-impl<Ts, O, E, I, Rt> Pipe<Ts, O, E, I, Rt>
+impl<'a, Ts, O, E, I, Rt> Pipe<'a, Ts, O, E, I, Rt>
 where
     Ts: Var<kind::Type> + TypeList<Rt>,
     O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -179,7 +192,7 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    fn push<U>(self, stage: Stage<O, U, E, Rt>) -> Pipe<(O, Ts), U, E, I, Rt>
+    fn push<U>(self, stage: Stage<'a, O, U, E, Rt>) -> Pipe<'a, (O, Ts), U, E, I, Rt>
     where
         U: Var<kind::Type>,
     {
@@ -202,7 +215,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn ints<T, E, I, Rt>(items: Vec<T>) -> Pipe<(), T, E, I, Rt>
+fn ints<'a, T, E, I, Rt>(items: Vec<T>) -> Pipe<'a, (), T, E, I, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
@@ -227,7 +240,7 @@ mod sig {
         ns: "p",
         fn step<Ts, T, U, E, I, Rt>(
             it: Pipe<Ts, T, E, I, Rt>,
-            f: Closure<(T,), U, E, Rt>,
+            f: Closure<'_, (T,), U, E, Rt>,
         ) -> Pipe<(T, Ts), U, E, I, Rt>
         where
             Ts: Var<kind::Type> + Chosen,
@@ -265,10 +278,10 @@ mod sig {
 macro_rules! adaptor_instances {
     ($step:ident, $cut:ident, [$($v:ident),*], $($ts:tt)+) => {
         #[extern_fn(instance_of = sig::step, effect = pure)]
-        fn $step<$($v,)* T, U, E, I, Rt>(
-            it: Pipe<$($ts)+, T, E, I, Rt>,
-            f: Closure<(T,), U, E, Rt>,
-        ) -> Pipe<(T, $($ts)+), U, E, I, Rt>
+        fn $step<'a, $($v,)* T, U, E, I, Rt>(
+            it: Pipe<'a, $($ts)+, T, E, I, Rt>,
+            f: Closure<'a, (T,), U, E, Rt>,
+        ) -> Pipe<'a, (T, $($ts)+), U, E, I, Rt>
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
             T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -281,10 +294,10 @@ macro_rules! adaptor_instances {
         }
 
         #[extern_fn(instance_of = sig::cut, effect = pure)]
-        fn $cut<$($v,)* T, E, I, Rt>(
-            it: Pipe<$($ts)+, T, E, I, Rt>,
+        fn $cut<'a, $($v,)* T, E, I, Rt>(
+            it: Pipe<'a, $($ts)+, T, E, I, Rt>,
             n: u64,
-        ) -> Pipe<(T, $($ts)+), T, E, I, Rt>
+        ) -> Pipe<'a, (T, $($ts)+), T, E, I, Rt>
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
             T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -305,7 +318,7 @@ macro_rules! total_instance {
     ($name:ident, $now:ident, [$($v:ident),*], $($ts:tt)+) => {
         fn $now<$($v,)* O, E, I, Rt>(
             ctx: &mut Ctx<'_, Rt>,
-            it: Pipe<$($ts)+, O, E, I, Rt>,
+            it: Pipe<'_, $($ts)+, O, E, I, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
@@ -326,7 +339,7 @@ macro_rules! total_instance {
         #[extern_fn(instance_of = sig::total, effect = E, sync = $now)]
         async fn $name<$($v,)* O, E, I, Rt>(
             ctx: &mut Ctx<'_, Rt>,
-            it: Pipe<$($ts)+, O, E, I, Rt>,
+            it: Pipe<'_, $($ts)+, O, E, I, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*

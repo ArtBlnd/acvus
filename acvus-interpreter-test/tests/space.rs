@@ -35,6 +35,7 @@ fn deque_ty(i: &Interner, elem: Ty) -> Ty {
         type_args: vec![TypeArg::uniform(elem)],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     }
 }
 
@@ -531,7 +532,7 @@ where
     T: Var<kind::Type>,
     I: Var<kind::Identity>;
 
-#[derive(UniformPayload)]
+#[derive(UniformPayload, acvus_extern::Branded)]
 struct TallyState<T> {
     items: Vec<T>,
     settled: usize,
@@ -684,6 +685,7 @@ fn tally_ty(i: &Interner) -> Ty {
         type_args: vec![TypeArg::uniform(Ty::I64)],
         effect_args: vec![],
         identity_args: vec![IdentityTerm::Known(IdentityId::from_raw(0))],
+        region_params: 0,
     }
 }
 

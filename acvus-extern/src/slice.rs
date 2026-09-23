@@ -1,5 +1,6 @@
-//! `Slice<T, M, Rt>`: the acvus types `&[T]` and `&mut [T]`, the one thing the
-//! machine indexes (RFC-0047).
+//! `Slice<'a, T, M, Rt>`: the acvus types `&[T]` and `&mut [T]`, the one thing
+//! the machine indexes (RFC-0047). `'a` is the call it was handed to
+//! (RFC-0079 rule 6).
 //!
 //! A slice is a borrow of the container it was taken from: it holds that
 //! container's loan and is never stored beyond it (RFC-0018). Every
@@ -8,7 +9,7 @@
 //! `Elements` is therefore the only payload it carries, and the
 //! machine reads it without knowing any container's layout.
 //!
-//! A `Slice<T, M, Rt>` is made in one place: the crossing, as
+//! A `Slice<'a, T, M, Rt>` is made in one place: the crossing, as
 //! `Cross::from_run` of the register pair the machine keeps a slice the
 //! checker typed `&[T]` / `&mut [T]` in. That is the whole ground of `T`,
 //! so there is no constructor a handler can call: `of` over a `[Rt::Value]`
@@ -92,13 +93,23 @@ where
 /// A borrow of a run of a container's elements. Taking a `Mut` one is an
 /// exclusive take of the container, so no shared slice of it is live
 /// (RFC-0047 rule 2).
-pub struct Slice<T, M, Rt>(Elements<Rt>, PhantomData<(T, M)>)
+pub struct Slice<'a, T, M, Rt>(Elements<Rt>, PhantomData<(&'a (), T, M)>)
 where
     T: Send + Sync + 'static,
     M: Loan,
     Rt: Runtime;
 
-impl<T, M, Rt> Slice<T, M, Rt>
+// SAFETY: `At<'b>` changes the brand alone.
+unsafe impl<'a, T, M, Rt> crate::Branded for Slice<'a, T, M, Rt>
+where
+    T: Send + Sync + 'static,
+    M: Loan,
+    Rt: Runtime,
+{
+    type At<'b> = Slice<'b, T, M, Rt>;
+}
+
+impl<'b, T, M, Rt> Slice<'b, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -113,7 +124,7 @@ where
     }
 }
 
-impl<T, Rt> Slice<T, Shared, Rt>
+impl<'b, T, Rt> Slice<'b, T, Shared, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -126,7 +137,7 @@ where
     }
 }
 
-impl<T, Rt> Slice<T, Mut, Rt>
+impl<'b, T, Rt> Slice<'b, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -143,7 +154,7 @@ where
     }
 }
 
-impl<T, M, Rt> Var<kind::Type> for Slice<T, M, Rt>
+impl<T, M, Rt> Var<kind::Type> for Slice<'static, T, M, Rt>
 where
     T: Var<kind::Type>,
     M: Loan,
@@ -151,19 +162,20 @@ where
 {
 }
 
-// SAFETY: the element is its own canonical form's.
-unsafe impl<T, M, Rt> crate::Canonical<kind::Type> for Slice<T, M, Rt>
+// SAFETY: the element is its own canonical form's, and the brand is at
+// `'static`.
+unsafe impl<'a, T, M, Rt> crate::Canonical<kind::Type> for Slice<'a, T, M, Rt>
 where
     T: Var<kind::Type>,
     M: Loan,
     Rt: Runtime,
 {
-    type Canon = Slice<T::Canon, M, Rt>;
+    type Canon = Slice<'static, T::Canon, M, Rt>;
 }
 
 // SAFETY: a `Slice` is a pointer to the runtime's values and a length at
 // every `T` and `M`.
-unsafe impl<Mk, T, M, Rt> crate::UniformPayload<Mk> for Slice<T, M, Rt>
+unsafe impl<'a, Mk, T, M, Rt> crate::UniformPayload<Mk> for Slice<'a, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -172,7 +184,7 @@ where
 }
 
 /// The acvus type: a reference to the unsized `[T]`.
-impl<T, M, Rt> TyArg for Slice<T, M, Rt>
+impl<T, M, Rt> TyArg for Slice<'static, T, M, Rt>
 where
     T: TyArg + Send + Sync + 'static,
     M: Loan,
@@ -190,7 +202,7 @@ where
 
 /// A result declared `&[T]` / `&mut [T]` is returned as Rust's slice of a
 /// parameter the caller lent (RFC-0047 rule 3), and crosses as the pair.
-impl<T, Rt> crate::LentBack<Rt> for Slice<T, Shared, Rt>
+impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Shared, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -207,7 +219,7 @@ where
     }
 }
 
-impl<T, Rt> crate::LentBack<Rt> for Slice<T, Mut, Rt>
+impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -240,7 +252,7 @@ where
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<'a, T, Rt> crate::handler::Arg<'a, Rt> for BySlice<T, Shared>
+impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Shared>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -257,7 +269,7 @@ where
     }
 }
 
-impl<'a, T, Rt> crate::handler::Arg<'a, Rt> for BySlice<T, Mut>
+impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Mut>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -284,7 +296,7 @@ where
 /// say its length, since `with` reads the run as `[T]` under that layout
 /// alone. Such a parameter is refused at its declaration, where
 /// `TransparentOver`'s diagnostic names `Slice<Erased<Rt, T>, _, Rt>`.
-impl<T, M, Rt> Cross<Rt> for Slice<T, M, Rt>
+impl<T, M, Rt> Cross<Rt> for Slice<'static, T, M, Rt>
 where
     T: TransparentOver<Rt>,
     M: Loan,

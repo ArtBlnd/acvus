@@ -180,11 +180,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map<I, T, U, E, Rt>(
+fn map<'a, I, T, U, E, Rt>(
     it: I,
-    f: Closure<(T,), U, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> Map<I, T, U, E, Rt>
+    f: Closure<'a, (T,), U, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Map<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -218,11 +218,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn filter<I, T, E, Rt>(
+fn filter<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> Filter<I, T, E, Rt>
+    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Filter<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -233,11 +233,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn take<I, T, E, Rt>(
+fn take<'a, I, T, E, Rt>(
     it: I,
     n: u64,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> Take<I, T, E, Rt>
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Take<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -252,11 +252,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn skip<I, T, E, Rt>(
+fn skip<'a, I, T, E, Rt>(
     it: I,
     n: u64,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> Skip<I, T, E, Rt>
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Skip<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -271,11 +271,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn step_by<I, T, E, Rt>(
+fn step_by<'a, I, T, E, Rt>(
     it: I,
     n: u64,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> StepBy<I, T, E, Rt>
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> StepBy<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -292,11 +292,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn take_while<I, T, E, Rt>(
+fn take_while<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> TakeWhile<I, T, E, Rt>
+    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> TakeWhile<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -312,11 +312,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn skip_while<I, T, E, Rt>(
+fn skip_while<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> SkipWhile<I, T, E, Rt>
+    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> SkipWhile<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -332,11 +332,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn chunks<I, T, E, Rt>(
+fn chunks<'a, I, T, E, Rt>(
     it: I,
     n: u64,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> Chunks<I, T, E, Rt>
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> Chunks<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -352,11 +352,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn dedup<I, T, E, Rt>(
+fn dedup<'a, I, T, E, Rt>(
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    eq: Instance<core::eq<T, Rt>, T, Rt>,
-) -> Dedup<I, T, E, Rt>
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    eq: Instance<'a, core::eq<T, Rt>, T, Rt>,
+) -> Dedup<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + PassedByValue<Rt>,
@@ -367,12 +367,12 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn chain<A, B, T, E, Rt>(
+fn chain<'a, A, B, T, E, Rt>(
     a: A,
     b: B,
-    next_a: Instance<sig::next<A, T, E, Rt>, A, Rt, Later>,
-    next_b: Instance<sig::next<B, T, E, Rt>, B, Rt, Later>,
-) -> Chain<A, B, T, E, Rt>
+    next_a: Instance<'a, sig::next<A, T, E, Rt>, A, Rt, Later>,
+    next_b: Instance<'a, sig::next<B, T, E, Rt>, B, Rt, Later>,
+) -> Chain<'a, A, B, T, E, Rt>
 where
     A: Var<kind::Type>,
     B: Var<kind::Type>,
@@ -390,10 +390,10 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flatten<I, T, E, Rt>(
+fn flatten<'a, I, T, E, Rt>(
     it: I,
-    next: Instance<sig::next<I, Vec<T>, E, Rt>, I, Rt, Later>,
-) -> Flatten<I, Vec<T>, T, E, Rt>
+    next: Instance<'a, sig::next<I, Vec<T>, E, Rt>, I, Rt, Later>,
+) -> Flatten<'a, I, Vec<T>, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -408,10 +408,10 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flatten_arrays<I, T, N, E, Rt>(
+fn flatten_arrays<'a, I, T, N, E, Rt>(
     it: I,
-    next: Instance<sig::next<I, Arr<T, N>, E, Rt>, I, Rt, Later>,
-) -> Flatten<I, Arr<T, N>, T, E, Rt>
+    next: Instance<'a, sig::next<I, Arr<T, N>, E, Rt>, I, Rt, Later>,
+) -> Flatten<'a, I, Arr<T, N>, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -427,11 +427,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn flat_map<I, T, U, E, Rt>(
+fn flat_map<'a, I, T, U, E, Rt>(
     it: I,
-    f: Closure<(T,), Vec<U>, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> FlatMap<I, T, U, E, Rt>
+    f: Closure<'a, (T,), Vec<U>, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+) -> FlatMap<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -450,7 +450,7 @@ where
 fn collect_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Vec<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -470,7 +470,7 @@ where
 async fn collect<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Vec<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -490,7 +490,7 @@ fn join_now<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     sep: String,
-    next: Instance<sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
 ) -> String
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -511,7 +511,7 @@ async fn join<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     sep: String,
-    next: Instance<sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
 ) -> String
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -531,7 +531,7 @@ fn contains_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     needle: T,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -554,7 +554,7 @@ async fn contains<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     needle: T,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -575,8 +575,8 @@ where
 fn find_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -597,8 +597,8 @@ where
 async fn find<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -618,8 +618,8 @@ where
 fn reduce_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(T, T), T, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (T, T), T, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -639,8 +639,8 @@ where
 async fn reduce<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(T, T), T, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (T, T), T, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -660,8 +660,8 @@ fn fold_now<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     init: U,
-    f: Closure<(U, T), U, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (U, T), U, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> U
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -683,8 +683,8 @@ async fn fold<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     init: U,
-    f: Closure<(U, T), U, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (U, T), U, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> U
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -704,8 +704,8 @@ where
 fn any_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -726,8 +726,8 @@ where
 async fn any<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -747,8 +747,8 @@ where
 fn all_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -769,8 +769,8 @@ where
 async fn all<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -790,7 +790,7 @@ where
 fn count_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -810,7 +810,7 @@ where
 async fn count<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -829,7 +829,7 @@ where
 fn last_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -849,7 +849,7 @@ where
 async fn last<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -869,7 +869,7 @@ fn nth_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     n: u64,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -889,7 +889,7 @@ async fn nth<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     n: u64,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -907,8 +907,8 @@ where
 fn position_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -931,8 +931,8 @@ where
 async fn position<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -954,7 +954,7 @@ where
 fn sum_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -975,7 +975,7 @@ where
 async fn sum<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -995,7 +995,7 @@ where
 fn product_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1016,7 +1016,7 @@ where
 async fn product<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1036,7 +1036,7 @@ where
 fn min_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1061,7 +1061,7 @@ where
 async fn min<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1085,7 +1085,7 @@ where
 fn max_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1110,7 +1110,7 @@ where
 async fn max<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1154,8 +1154,8 @@ impl Extreme {
 async fn extreme_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
 where
@@ -1182,8 +1182,8 @@ where
 fn extreme_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
 where
@@ -1210,8 +1210,8 @@ where
 fn min_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1226,8 +1226,8 @@ where
 async fn min_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1241,8 +1241,8 @@ where
 fn max_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1257,8 +1257,8 @@ where
 async fn max_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,

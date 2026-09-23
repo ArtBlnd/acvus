@@ -68,7 +68,7 @@ pub mod sig {
     }
 }
 
-#[derive(UniformPayload)]
+#[derive(UniformPayload, acvus_extern::Branded)]
 pub struct ItemsBody<T> {
     rest: std::vec::IntoIter<T>,
 }
@@ -130,13 +130,13 @@ macro_rules! next_items_of {
 
 pub(crate) use next_items_of;
 
-#[derive(UniformPayload)]
-pub struct RefsBody<C, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct RefsBody<'a, C, Rt>
 where
     C: Var<kind::Type>,
     Rt: Runtime,
 {
-    pub(crate) items: Ref<C, Shared, Rt>,
+    pub(crate) items: Ref<'a, C, Shared, Rt>,
     pub(crate) at: usize,
 }
 
@@ -146,19 +146,19 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Refs")]
 #[repr(transparent)]
-pub struct Refs<C, I, Rt>(pub(crate) RefsBody<C, Rt>, PhantomData<I>)
+pub struct Refs<'a, C, I, Rt>(pub(crate) RefsBody<'a, C, Rt>, PhantomData<I>)
 where
     C: Var<kind::Type>,
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-impl<C, I, Rt> Refs<C, I, Rt>
+impl<'r, C, I, Rt> Refs<'r, C, I, Rt>
 where
     C: Var<kind::Type>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
-    pub fn of(items: Ref<C, Shared, Rt>) -> Self {
+    pub fn of(items: Ref<'r, C, Shared, Rt>) -> Self {
         Refs(RefsBody { items, at: 0 }, PhantomData)
     }
 
@@ -166,7 +166,7 @@ where
     pub fn step<'a, T>(
         &'a mut self,
         ctx: &Ctx<'_, Rt>,
-        at: impl FnOnce(&'a C, usize) -> Option<&'a T>,
+        at: impl FnOnce(&'a C::At<'a>, usize) -> Option<&'a T>,
     ) -> Option<&'a T>
     where
         C: Borrowable<Rt>,
@@ -181,7 +181,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 pub(crate) fn next_refs_vec<'a, T, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<Vec<T>, I, Rt>,
+    it: &'a mut Refs<'a, Vec<T>, I, Rt>,
 ) -> Option<&'a T>
 where
     T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
@@ -194,7 +194,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 pub(crate) fn next_refs_array<'a, T, N, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<Arr<T, N>, I, Rt>,
+    it: &'a mut Refs<'a, Arr<T, N>, I, Rt>,
 ) -> Option<&'a T>
 where
     T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
@@ -261,8 +261,8 @@ where
     Some(current)
 }
 
-#[derive(UniformPayload)]
-pub struct MapBody<I, T, U, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct MapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -271,14 +271,14 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<(T,), U, E, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<'a, (T,), U, E, Rt>,
 }
 
 #[derive(ExternType)]
 #[extern_type(name = "Map")]
 #[repr(transparent)]
-pub struct Map<I, T, U, E, Rt>(pub(crate) MapBody<I, T, U, E, Rt>)
+pub struct Map<'a, I, T, U, E, Rt>(pub(crate) MapBody<'a, I, T, U, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -286,7 +286,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_map_now<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Map<I, T, U, E, Rt>) -> Option<U>
+fn next_map_now<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Map<'_, I, T, U, E, Rt>) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -301,7 +301,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_map_now)]
 pub(crate) async fn next_map<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Map<I, T, U, E, Rt>,
+    it: &mut Map<'_, I, T, U, E, Rt>,
 ) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -314,14 +314,14 @@ where
     Some(it.0.f.call(ctx, (x,)).await)
 }
 
-#[derive(UniformPayload)]
+#[derive(UniformPayload, acvus_extern::Branded)]
 pub enum UnorderedDraw<U> {
     Undrawn,
     Drawn(VecDeque<U>),
 }
 
-#[derive(UniformPayload)]
-pub struct UnorderedBody<I, T, U, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct UnorderedBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -330,8 +330,8 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<(T,), U, E, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<'a, (T,), U, E, Rt>,
     pub(crate) draw: UnorderedDraw<U>,
 }
 
@@ -344,7 +344,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Unordered")]
 #[repr(transparent)]
-pub struct Unordered<I, T, U, E, Rt>(pub(crate) UnorderedBody<I, T, U, E, Rt>)
+pub struct Unordered<'a, I, T, U, E, Rt>(pub(crate) UnorderedBody<'a, I, T, U, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -355,7 +355,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E)]
 pub(crate) async fn next_unordered<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Unordered<I, T, U, E, Rt>,
+    it: &mut Unordered<'_, I, T, U, E, Rt>,
 ) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -379,7 +379,7 @@ where
 /// with the calls joined, one rooted frame per call (RFC-0075 rule 2).
 async fn draw_unordered<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    body: &mut UnorderedBody<I, T, U, E, Rt>,
+    body: &mut UnorderedBody<'_, I, T, U, E, Rt>,
 ) -> VecDeque<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -398,8 +398,8 @@ where
     futures::future::join_all(calls).await.into()
 }
 
-#[derive(UniformPayload)]
-pub struct FilterBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct FilterBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -407,21 +407,21 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
 }
 
 #[derive(ExternType)]
 #[extern_type(name = "Filter")]
 #[repr(transparent)]
-pub struct Filter<I, T, E, Rt>(pub(crate) FilterBody<I, T, E, Rt>)
+pub struct Filter<'a, I, T, E, Rt>(pub(crate) FilterBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_filter_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Filter<I, T, E, Rt>) -> Option<T>
+fn next_filter_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Filter<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
@@ -439,7 +439,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_filter_now)]
 pub(crate) async fn next_filter<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Filter<I, T, E, Rt>,
+    it: &mut Filter<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -455,8 +455,8 @@ where
     }
 }
 
-#[derive(UniformPayload)]
-pub struct TakeBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct TakeBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -464,7 +464,7 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) remaining: u64,
 }
 
@@ -472,14 +472,14 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Take")]
 #[repr(transparent)]
-pub struct Take<I, T, E, Rt>(pub(crate) TakeBody<I, T, E, Rt>)
+pub struct Take<'a, I, T, E, Rt>(pub(crate) TakeBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_take_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Take<I, T, E, Rt>) -> Option<T>
+fn next_take_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Take<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -493,7 +493,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_take_now)]
 pub(crate) async fn next_take<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Take<I, T, E, Rt>,
+    it: &mut Take<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -505,8 +505,8 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload)]
-pub struct SkipBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct SkipBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -514,7 +514,7 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) remaining: u64,
 }
 
@@ -523,14 +523,14 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Skip")]
 #[repr(transparent)]
-pub struct Skip<I, T, E, Rt>(pub(crate) SkipBody<I, T, E, Rt>)
+pub struct Skip<'a, I, T, E, Rt>(pub(crate) SkipBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_skip_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Skip<I, T, E, Rt>) -> Option<T>
+fn next_skip_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Skip<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -547,7 +547,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_now)]
 pub(crate) async fn next_skip<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Skip<I, T, E, Rt>,
+    it: &mut Skip<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -562,8 +562,8 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload)]
-pub struct StepByBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct StepByBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -571,7 +571,7 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) step: u64,
     pub(crate) started: bool,
 }
@@ -581,14 +581,14 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "StepBy")]
 #[repr(transparent)]
-pub struct StepBy<I, T, E, Rt>(pub(crate) StepByBody<I, T, E, Rt>)
+pub struct StepBy<'a, I, T, E, Rt>(pub(crate) StepByBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_step_by_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut StepBy<I, T, E, Rt>) -> Option<T>
+fn next_step_by_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut StepBy<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -607,7 +607,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_step_by_now)]
 pub(crate) async fn next_step_by<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut StepBy<I, T, E, Rt>,
+    it: &mut StepBy<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -624,8 +624,8 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload)]
-pub struct TakeWhileBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct TakeWhileBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -633,8 +633,8 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
     pub(crate) done: bool,
 }
 
@@ -644,7 +644,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "TakeWhile")]
 #[repr(transparent)]
-pub struct TakeWhile<I, T, E, Rt>(pub(crate) TakeWhileBody<I, T, E, Rt>)
+pub struct TakeWhile<'a, I, T, E, Rt>(pub(crate) TakeWhileBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -653,7 +653,7 @@ where
 
 fn next_take_while_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut TakeWhile<I, T, E, Rt>,
+    it: &mut TakeWhile<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -675,7 +675,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_take_while_now)]
 pub(crate) async fn next_take_while<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut TakeWhile<I, T, E, Rt>,
+    it: &mut TakeWhile<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -694,8 +694,8 @@ where
     None
 }
 
-#[derive(UniformPayload)]
-pub struct SkipWhileBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct SkipWhileBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -703,8 +703,8 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
     pub(crate) skipping: bool,
 }
 
@@ -713,7 +713,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "SkipWhile")]
 #[repr(transparent)]
-pub struct SkipWhile<I, T, E, Rt>(pub(crate) SkipWhileBody<I, T, E, Rt>)
+pub struct SkipWhile<'a, I, T, E, Rt>(pub(crate) SkipWhileBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -722,7 +722,7 @@ where
 
 fn next_skip_while_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut SkipWhile<I, T, E, Rt>,
+    it: &mut SkipWhile<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -743,7 +743,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_while_now)]
 pub(crate) async fn next_skip_while<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut SkipWhile<I, T, E, Rt>,
+    it: &mut SkipWhile<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -761,8 +761,8 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload)]
-pub struct ChunksBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct ChunksBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -770,7 +770,7 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) size: u64,
 }
 
@@ -780,7 +780,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Chunks")]
 #[repr(transparent)]
-pub struct Chunks<I, T, E, Rt>(pub(crate) ChunksBody<I, T, E, Rt>)
+pub struct Chunks<'a, I, T, E, Rt>(pub(crate) ChunksBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -789,7 +789,7 @@ where
 
 fn next_chunks_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Chunks<I, T, E, Rt>,
+    it: &mut Chunks<'_, I, T, E, Rt>,
 ) -> Option<Vec<T>>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -810,7 +810,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_chunks_now)]
 pub(crate) async fn next_chunks<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Chunks<I, T, E, Rt>,
+    it: &mut Chunks<'_, I, T, E, Rt>,
 ) -> Option<Vec<T>>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -832,7 +832,7 @@ where
 /// element it holds when it meets the next one that differs, one draw
 /// behind its source, because it keeps the element itself and requires no
 /// `core::clone` to keep a copy of it.
-#[derive(UniformPayload)]
+#[derive(UniformPayload, acvus_extern::Branded)]
 pub(crate) enum Held<T> {
     NothingDrawn,
     Drawn(T),
@@ -845,8 +845,8 @@ enum Step<T> {
     End,
 }
 
-#[derive(UniformPayload)]
-pub struct DedupBody<I, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct DedupBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + PassedByValue<Rt>,
@@ -854,12 +854,12 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) eq: Instance<core::eq<T, Rt>, T, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) eq: Instance<'a, core::eq<T, Rt>, T, Rt>,
     pub(crate) held: Held<T>,
 }
 
-impl<I, T, E, Rt> DedupBody<I, T, E, Rt>
+impl<I, T, E, Rt> DedupBody<'_, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
@@ -896,14 +896,14 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Dedup")]
 #[repr(transparent)]
-pub struct Dedup<I, T, E, Rt>(pub(crate) DedupBody<I, T, E, Rt>)
+pub struct Dedup<'a, I, T, E, Rt>(pub(crate) DedupBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-impl<I, T, E, Rt> Dedup<I, T, E, Rt>
+impl<'a, I, T, E, Rt> Dedup<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + PassedByValue<Rt>,
@@ -912,8 +912,8 @@ where
 {
     pub(crate) fn drawing(
         inner: I,
-        next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-        eq: Instance<core::eq<T, Rt>, T, Rt>,
+        next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+        eq: Instance<'a, core::eq<T, Rt>, T, Rt>,
     ) -> Self {
         Dedup(DedupBody {
             inner,
@@ -924,7 +924,7 @@ where
     }
 }
 
-fn next_dedup_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Dedup<I, T, E, Rt>) -> Option<T>
+fn next_dedup_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Dedup<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
@@ -945,7 +945,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_dedup_now)]
 pub(crate) async fn next_dedup<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Dedup<I, T, E, Rt>,
+    it: &mut Dedup<'_, I, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -964,8 +964,8 @@ where
     None
 }
 
-#[derive(UniformPayload)]
-pub struct ChainBody<A, B, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct ChainBody<'a, A, B, T, E, Rt>
 where
     A: Var<kind::Type>,
     B: Var<kind::Type>,
@@ -974,9 +974,9 @@ where
     Rt: Runtime,
 {
     pub(crate) first: A,
-    pub(crate) next_first: Instance<sig::next<A, T, E, Rt>, A, Rt, Later>,
+    pub(crate) next_first: Instance<'a, sig::next<A, T, E, Rt>, A, Rt, Later>,
     pub(crate) second: B,
-    pub(crate) next_second: Instance<sig::next<B, T, E, Rt>, B, Rt, Later>,
+    pub(crate) next_second: Instance<'a, sig::next<B, T, E, Rt>, B, Rt, Later>,
     pub(crate) on_first: bool,
 }
 
@@ -985,7 +985,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Chain")]
 #[repr(transparent)]
-pub struct Chain<A, B, T, E, Rt>(pub(crate) ChainBody<A, B, T, E, Rt>)
+pub struct Chain<'a, A, B, T, E, Rt>(pub(crate) ChainBody<'a, A, B, T, E, Rt>)
 where
     A: Var<kind::Type>,
     B: Var<kind::Type>,
@@ -993,7 +993,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_chain_now<A, B, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Chain<A, B, T, E, Rt>) -> Option<T>
+fn next_chain_now<A, B, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Chain<'_, A, B, T, E, Rt>) -> Option<T>
 where
     A: Var<kind::Type> + Deref<Target = Rt::Value>,
     B: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1013,7 +1013,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_chain_now)]
 pub(crate) async fn next_chain<A, B, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Chain<A, B, T, E, Rt>,
+    it: &mut Chain<'_, A, B, T, E, Rt>,
 ) -> Option<T>
 where
     A: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1031,8 +1031,8 @@ where
     it.0.next_second.call_await(ctx, &mut it.0.second, ()).await
 }
 
-#[derive(UniformPayload)]
-pub struct FlattenBody<I, C, T, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct FlattenBody<'a, I, C, T, E, Rt>
 where
     I: Var<kind::Type>,
     C: Var<kind::Type> + Cross<Rt> + PassedByValue<Rt>,
@@ -1041,7 +1041,7 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, C, E, Rt>, I, Rt, Later>,
+    pub(crate) next: Instance<'a, sig::next<I, C, E, Rt>, I, Rt, Later>,
     pub(crate) pending: std::vec::IntoIter<T>,
 }
 
@@ -1051,7 +1051,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Flatten")]
 #[repr(transparent)]
-pub struct Flatten<I, C, T, E, Rt>(pub(crate) FlattenBody<I, C, T, E, Rt>)
+pub struct Flatten<'a, I, C, T, E, Rt>(pub(crate) FlattenBody<'a, I, C, T, E, Rt>)
 where
     I: Var<kind::Type>,
     C: Var<kind::Type> + Cross<Rt> + PassedByValue<Rt>,
@@ -1061,7 +1061,7 @@ where
 
 fn next_flatten_now<I, C, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Flatten<I, C, T, E, Rt>,
+    it: &mut Flatten<'_, I, C, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1084,7 +1084,7 @@ where
 
 async fn next_flatten_at<I, C, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Flatten<I, C, T, E, Rt>,
+    it: &mut Flatten<'_, I, C, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1107,7 +1107,7 @@ where
 
 fn next_flatten_vecs_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Flatten<I, Vec<T>, T, E, Rt>,
+    it: &mut Flatten<'_, I, Vec<T>, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1121,7 +1121,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_vecs_now)]
 pub(crate) async fn next_flatten_vecs<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Flatten<I, Vec<T>, T, E, Rt>,
+    it: &mut Flatten<'_, I, Vec<T>, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1134,7 +1134,7 @@ where
 
 fn next_flatten_arrays_now<I, T, N, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Flatten<I, Arr<T, N>, T, E, Rt>,
+    it: &mut Flatten<'_, I, Arr<T, N>, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1149,7 +1149,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_arrays_now)]
 pub(crate) async fn next_flatten_arrays<I, T, N, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut Flatten<I, Arr<T, N>, T, E, Rt>,
+    it: &mut Flatten<'_, I, Arr<T, N>, T, E, Rt>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1161,8 +1161,8 @@ where
     next_flatten_at(ctx, it).await
 }
 
-#[derive(UniformPayload)]
-pub struct FlatMapBody<I, T, U, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct FlatMapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -1171,8 +1171,8 @@ where
     Rt: Runtime,
 {
     pub(crate) inner: I,
-    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<(T,), Vec<U>, E, Rt>,
+    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<'a, (T,), Vec<U>, E, Rt>,
     pub(crate) pending: std::vec::IntoIter<U>,
 }
 
@@ -1182,7 +1182,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "FlatMap")]
 #[repr(transparent)]
-pub struct FlatMap<I, T, U, E, Rt>(pub(crate) FlatMapBody<I, T, U, E, Rt>)
+pub struct FlatMap<'a, I, T, U, E, Rt>(pub(crate) FlatMapBody<'a, I, T, U, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -1192,7 +1192,7 @@ where
 
 fn next_flat_map_now<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut FlatMap<I, T, U, E, Rt>,
+    it: &mut FlatMap<'_, I, T, U, E, Rt>,
 ) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1213,7 +1213,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_flat_map_now)]
 pub(crate) async fn next_flat_map<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &mut FlatMap<I, T, U, E, Rt>,
+    it: &mut FlatMap<'_, I, T, U, E, Rt>,
 ) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,

@@ -18,5 +18,5 @@ error[E0277]: `std::option::Option<i64>` has no storage of its own type, so a pa
             `Vec<T>` implements `Borrowable<Rt>`
             `bool` implements `Borrowable<__Rt>`
           and $N others
-  = note: required for `ByRef<std::option::Option<i64>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+  = note: required for `ByRef<std::option::Option<i64>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

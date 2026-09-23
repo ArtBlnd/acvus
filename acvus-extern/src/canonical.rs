@@ -4,9 +4,10 @@ use crate::ty_arg::{Kind, Var};
 
 /// # Safety
 /// `Canon` is `Self` with the `X` of every `Erased<Rt, X>` at a uniform part
-/// replaced by `Never`, so that it is `Owned<Rt>` there. A `Chosen` part and
-/// any part that is not an `Erased` keep their own Rust type. Neither type's
-/// layout reaches such an `X` through a trait.
+/// replaced by `Never`, so that it is `Owned<Rt>` there, and with every
+/// lifetime at `'static`, so that a box key is `'static` (RFC-0079 rule 7).
+/// A `Chosen` part and any part that is not an `Erased` keep their own Rust
+/// type. Neither type's layout reaches such an `X` through a trait.
 ///
 /// A box is read at a type other than the one it was erased at, a `Self`
 /// named over a `Canon`'s bytes or the reverse, and that read rests on three

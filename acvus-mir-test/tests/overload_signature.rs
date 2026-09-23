@@ -34,7 +34,7 @@ mod fx_p {
     fn map_now<T, U, E, Rt>(
         ctx: &mut Ctx<'_, Rt>,
         val: Option<T>,
-        f: Closure<(T,), U, E, Rt>,
+        f: Closure<'_, (T,), U, E, Rt>,
     ) -> Option<U>
     where
         T: Var<kind::Type> + acvus_extern::OneValue<Rt> + acvus_extern::Cross<Rt>,
@@ -50,7 +50,7 @@ mod fx_p {
     pub async fn map<T, U, E, Rt>(
         ctx: &mut Ctx<'_, Rt>,
         val: Option<T>,
-        f: Closure<(T,), U, E, Rt>,
+        f: Closure<'_, (T,), U, E, Rt>,
     ) -> Option<U>
     where
         T: Var<kind::Type> + acvus_extern::OneValue<Rt> + acvus_extern::Cross<Rt>,

@@ -516,11 +516,11 @@ where
 async fn apply<T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     v: Boxed<T, E, Rt>,
-    f: acvus_extern::Closure<(T,), U, E, Rt>,
+    f: acvus_extern::Closure<'_, (T,), U, E, Rt>,
 ) -> Boxed<U, E, Rt>
 where
     T: Var<kind::Type> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -625,7 +625,7 @@ where
 fn count_where<T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     c: &Vec<T>,
-    keep: acvus_extern::Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    keep: acvus_extern::Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
 ) -> u64
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -687,7 +687,7 @@ where
 fn first_of<I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    front_at: Instance<front<I, Ref<Erased<Rt, i64>, Shared, Rt>, Rt>, I, Rt>,
+    front_at: Instance<'_, front<I, Ref<'static, Erased<Rt, i64>, Shared, Rt>, Rt>, I, Rt>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -737,7 +737,7 @@ extern_signature! { ns: "t", fn advance<I>(it: &mut I) -> i64 where I: Var<kind:
 fn advance_twice<I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut I,
-    inner: Instance<step<I, Rt>, I, Rt>,
+    inner: Instance<'_, step<I, Rt>, I, Rt>,
 ) -> i64
 where
     I: Var<kind::Type> + Borrowable<Rt> + Deref<Target = Rt::Value>,
@@ -858,6 +858,7 @@ fn generic_parameters_become_positional_variables() {
         type_args: vec![TypeArg::uniform(t)],
         effect_args: vec![EffectArg::uniform(EffectTerm::Var(0))],
         identity_args: vec![],
+        region_params: 0,
     };
     assert_eq!(apply.params[0], boxed_of(PolyTy::Var(0)));
     let PolyTy::Fn {
@@ -886,6 +887,7 @@ fn generic_parameters_become_positional_variables() {
             type_args: vec![TypeArg::uniform(PolyTy::Var(0))],
             effect_args: vec![EffectArg::specialized(EffectTerm::Known(Effect::PURE))],
             identity_args: vec![],
+            region_params: 0,
         }
     );
 }
@@ -1557,6 +1559,7 @@ fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
         type_args: vec![],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     };
     let front_entry = entry_of(&reg, &i, "front", 0);
     let front_at = [Tiny::instance_value(&front_entry)];
@@ -2010,6 +2013,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         type_args: vec![arg],
         effect_args: vec![EffectArg::specialized(EffectTerm::Known(Effect::PURE))],
         identity_args: vec![],
+        region_params: 0,
     };
     let ty = call_type(
         vec![boxed_of(TypeArg::specialized(acvus_extern::Ty::String))],
@@ -2051,6 +2055,7 @@ fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
         type_args: vec![arg],
         effect_args: vec![EffectArg::specialized(EffectTerm::Known(Effect::PURE))],
         identity_args: vec![],
+        region_params: 0,
     };
     let ty = call_type(
         vec![acvus_extern::Ty::Ref(
@@ -3013,6 +3018,7 @@ fn a_family_member_with_a_uniform_part() -> Registry<Tiny> {
             type_args: vec![arg],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         let t = PolyTy::Var(0);
         let handler = || {

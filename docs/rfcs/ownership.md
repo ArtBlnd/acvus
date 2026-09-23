@@ -247,7 +247,11 @@ Status: Proposed
    The handler is generic over the call's lifetime, so a carrier (`Ref`,
    `Slice`, `Closure`) is branded with it and Rust refuses keeping it past
    the call. An `Instance` names a prepared entry, not a program's storage,
-   and is branded with the run's lifetime instead.
+   and is branded with the run's lifetime instead. A type's brand is its
+   parts': an extension type's is its payload's, so a carrier it holds is
+   behind a region parameter it declares and never a type argument it holds
+   by value, and an `Erased` has a brand only where the type it was erased
+   from is `Unbranded` (RFC-0076 rule 1).
 7. **A box key erases lifetimes.** `Canonical::Canon` fills every lifetime
    with `'static`; a box is keyed there, and a value is read out at its
    branded form. Every box key is `'static`.

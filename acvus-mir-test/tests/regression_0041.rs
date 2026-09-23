@@ -115,6 +115,7 @@ fn vec_of(i: &Interner, arg: TypeArg<acvus_mir::ty::Concrete>) -> Ty {
         type_args: vec![arg],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     }
 }
 

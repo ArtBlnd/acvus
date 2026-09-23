@@ -483,6 +483,7 @@ fn vec_of(elem: PolyTy, interner: &Interner) -> PolyTy {
         type_args: vec![TypeArg::uniform(elem)],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     }
 }
 

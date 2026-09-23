@@ -6,6 +6,7 @@
 
 extern crate self as acvus_extern;
 
+mod brand;
 mod canonical;
 pub mod core;
 mod ctx;
@@ -32,6 +33,7 @@ mod ty_arg;
 mod uniform;
 mod vec;
 
+pub use brand::{Branded, Unbranded, brand, brand_mut, brand_ref, unbrand};
 pub use canonical::Canonical;
 pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
@@ -82,7 +84,7 @@ pub use uniform::UniformPayload;
 pub use vec::vec_ty;
 
 pub use acvus_extern_macro::{
-    ExternType, TyArg, UniformPayload, extern_fn, extern_registry, extern_signature,
+    Branded, ExternType, TyArg, UniformPayload, extern_fn, extern_registry, extern_signature,
 };
 
 pub use acvus_mir::graph::{FnKind, Function};

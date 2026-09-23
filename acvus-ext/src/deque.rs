@@ -7,16 +7,16 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
+    Branded, Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
     QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
-    TransparentOver, TyArg, TyVarBound, UniformPayload, UserDefinedDecl, Var, Visit, extern_fn,
+    TransparentOver, TyArg, TyVarBound, Unbranded, UniformPayload, UserDefinedDecl, Var, Visit, extern_fn,
     extern_registry, kind,
 };
 use acvus_mir::ty::Ty;
 
 use crate::iter::{Items, Refs, sig};
 
-#[derive(Debug, Clone, PartialEq, UniformPayload)]
+#[derive(Debug, Clone, PartialEq, UniformPayload, Branded)]
 pub struct Deque<T>
 where
     T: Var<kind::Type>,
@@ -140,7 +140,7 @@ where
 
 impl<T, Rt> acvus_extern::Stored<Rt> for Deque<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + Unbranded,
     Rt: Runtime,
 {
     acvus_extern::stored_as_canonical!();
@@ -148,7 +148,7 @@ where
 
 impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + Unbranded,
     Rt: Runtime,
 {
     acvus_extern::whole_box_in_place!(Deque<T>, Rt);
@@ -156,16 +156,16 @@ where
 
 impl<T, Rt> acvus_extern::BorrowableSpecialized<Rt> for Deque<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + Unbranded,
     Rt: Runtime,
 {
     acvus_extern::whole_box_in_place!(Deque<T>, Rt);
 }
 
-acvus_extern::cross_one_value!(Deque<T>, T: Var<kind::Type>);
-acvus_extern::borrowed_as_self!(Deque<T>, T: Var<kind::Type>);
-acvus_extern::cross_whole!(acvus_extern::Uniform, Deque<T>, T: Var<kind::Type>);
-acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Type>);
+acvus_extern::cross_one_value!(Deque<T>, T: Var<kind::Type> + Unbranded);
+acvus_extern::borrowed_as_self!(Deque<T>, T: Var<kind::Type> + Unbranded);
+acvus_extern::cross_whole!(acvus_extern::Uniform, Deque<T>, T: Var<kind::Type> + Unbranded);
+acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Type> + Unbranded);
 
 impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
 
@@ -189,6 +189,7 @@ where
             type_args: vec![T::held(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: <Self as ExternTypeDecl>::REGION_PARAMS,
         }
     }
 }
@@ -199,12 +200,15 @@ where
 {
     type DeclarationForm = Deque<()>;
 
+    const REGION_PARAMS: usize = 0;
+
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {
             qref: QualifiedRef::root(i.intern("Deque")),
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            region_params: Self::REGION_PARAMS,
             specializable: vec![true],
         }
     }

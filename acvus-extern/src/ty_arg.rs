@@ -376,6 +376,7 @@ impl<const N: usize> TyArg for ChosenNth<N> {
     }
 }
 
+crate::unbranded!(Nth<kind::Type, N>, const N: usize);
 crate::cross_one_value!(Nth<kind::Type, N>, const N: usize);
 
 /// The stand-ins appear inside types that ask their element to be
@@ -414,6 +415,14 @@ unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N
 {
 }
 
+// SAFETY: `At<'a>` is `Self`: a stand-in is uninhabited, so no value of
+// it reaches a handler to be kept.
+unsafe impl<T> crate::Branded for Spec<T>
+where
+    T: Send + Sync + 'static,
+{
+    type At<'a> = Self;
+}
 crate::cross_one_value!(Spec<T>, T: Send + Sync + 'static);
 
 impl<T, Rt> crate::OneValue<Rt> for Spec<T>
@@ -454,6 +463,7 @@ where
 {
 }
 
+crate::unbranded!(ChosenNth<N>, const N: usize);
 crate::cross_one_value!(ChosenNth<N>, const N: usize);
 
 impl<const N: usize, Rt> crate::OneValue<Rt> for ChosenNth<N>

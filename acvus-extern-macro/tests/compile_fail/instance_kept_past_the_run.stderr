@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/compile_fail/instance_kept_past_the_run.rs:22:34
+   |
+16 | fn keep<I, Rt>(it: I, step: Instance<advance<I, Rt>, I, Rt>) -> i64
+   |                       ---- has type `Instance<'1, advance<I, Rt>, I, Rt>`
+...
+22 |     *KEPT.lock().unwrap() = Some(Box::new(step));
+   |                                  ^^^^^^^^^^^^^^ coercion requires that `'1` must outlive `'static`

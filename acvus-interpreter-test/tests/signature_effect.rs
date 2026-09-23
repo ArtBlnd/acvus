@@ -123,7 +123,7 @@ macro_rules! step_instance {
         #[extern_fn(instance_of = sig::step, effect = pure)]
         fn $name<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$($ts)+, T, E, I, Rt>,
-            f: Closure<(T,), U, E, Rt>,
+            f: Closure<'_, (T,), U, E, Rt>,
         ) -> Pipe<(T, $($ts)+), U, E, I, Rt>
         where
             $($v: Var<kind::Type>,)*
@@ -147,7 +147,7 @@ macro_rules! drain_instance {
     ($name:ident, $now:ident, [$($v:ident),*], $($ts:tt)+) => {
         fn $now<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$($ts)+, T, E, I, Rt>,
-            f: Closure<(T,), U, E, Rt>,
+            f: Closure<'_, (T,), U, E, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type>,)*
@@ -164,7 +164,7 @@ macro_rules! drain_instance {
         #[extern_fn(instance_of = sig::drain, effect = E, sync = $now)]
         async fn $name<$($v,)* T, U, E, I, Rt>(
             it: Pipe<$($ts)+, T, E, I, Rt>,
-            f: Closure<(T,), U, E, Rt>,
+            f: Closure<'_, (T,), U, E, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type>,)*
@@ -186,7 +186,7 @@ drain_instance!(drain_1, drain_1_now, [A], (A, ()));
 #[extern_fn(instance_of = sig::drain, effect = pure)]
 fn drain_2<A, B, T, U, E, I, Rt>(
     it: Pipe<(A, (B, ())), T, E, I, Rt>,
-    f: Closure<(T,), U, E, Rt>,
+    f: Closure<'_, (T,), U, E, Rt>,
 ) -> i64
 where
     A: Var<kind::Type>,

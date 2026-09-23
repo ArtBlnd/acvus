@@ -14,10 +14,11 @@ use crate::runtime::Runtime;
 /// # Safety
 /// `Self` is `#[repr(transparent)]` over one non-zero-sized field, and `P`
 /// is that field's type with each uniform type parameter `X` replaced by
-/// `<X as Canonical<kind::Type>>::Canon`. The two differ as `Canonical`'s
-/// contract lets a type and its canonical form differ, and the read between
-/// them rests on its three layers; the derive proves the payload's part of
-/// the third as `UniformPayload`, or `unsafe(uniform_payload)` asserts it.
+/// `<X as Canonical<kind::Type>>::Canon` and each lifetime at `'static`. The
+/// two differ as `Canonical`'s contract lets a type and its canonical form
+/// differ, and the read between them rests on its three layers; the derive
+/// proves the payload's part of the third as `UniformPayload`, or
+/// `unsafe(uniform_payload)` asserts it.
 pub unsafe trait Transparent<P>: Sized {}
 
 pub fn erase<T, P, Rt>(value: T, rt: &Rt) -> Rt::Value

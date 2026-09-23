@@ -31,6 +31,7 @@ where
         type_args: vec![arg],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     }
 }
 
@@ -41,6 +42,7 @@ fn registry(i: &Interner) -> TypeRegistry {
         type_params: vec![TyVarBound::Any],
         effect_params: 0,
         identity_params: 0,
+        region_params: 0,
         specializable: vec![true],
     })
     .expect("one declaration per name");

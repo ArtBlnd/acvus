@@ -735,7 +735,17 @@ inherent methods, so safe code puts no value into another `Erased` that
 breaks its `T`.
 
 1. At a runtime that makes values, `Erased<R, T>` has no trait impl whose
-   existence or items depend on `T`. What reads `T` for the checker
+   existence or items depend on `T`, with one exception: `Branded`'s impl
+   exists only where `T` is `Unbranded` or is `Never`, and its `At<'a>` is
+   `Self`. A carrier, and a type that holds one, has no brand there, so
+   an `Erased` at it reaches no handler (RFC-0079 rule 6). `Branded` has no
+   item that reads, writes or lays out a value: its `At<'a>` renames
+   lifetimes at the type level. An impl of a trait that requires `Branded`
+   (`OneValue`, `Cross`, `Stored`, …) states `Self: Branded` or
+   `Self: Unbranded` and bounds `T` by nothing else, so it exists where
+   `Branded`'s does and no item of it answers by `T`. acvus-extern's
+   `tests/erased_impls.rs` reads every trait impl on `Erased` or `Owned`
+   the workspace writes and refuses any other. What reads `T` for the checker
    (`TyArg`) holds only at `Erased<TypesOnly, T>`, through `HoldsNoValues`,
    a sealed trait no other crate can name; the macro builds every
    declaration's checker-side types, its own parameters included, at
@@ -801,12 +811,18 @@ at either name sound. `X` can reach a layout only through a trait, so the
 rule keeps every `T`-dependent impl off a value-making `Erased`; a derived
 payload is the one place a downstream trait can reach `X`, which rule 4
 proves it does not, at a marker no downstream trait can name. An inherent method takes part in no specialization or projection,
-so `Owned`'s construction and mutable access keep rule 1.
+so `Owned`'s construction and mutable access keep rule 1. Rule 1 guards
+against a read of a box, a layout or a run-time dispatch answering by `T`;
+`Branded` does none of these, and without its exception a derived payload
+holding `Vec<Erased<R, T>>` kept a `Ref<'static, …>` past the call.
 
 **Cost.** Rule 1 binds acvus-extern only: the orphan rule lets another
 crate implement its own trait for `Erased<R, i64>` with a bound on `T`,
 and a payload under rule 5 that reads `X` through one breaks the
-obligation its author asserted. A payload's own struct derives
+obligation its author asserted. The test that holds the exception's
+boundary reads the workspace's sources, not another crate's. An `Erased`
+whose `T` names a lifetime has no `OneValue`, `Cross` or `Stored` either,
+since each requires `Branded`. A payload's own struct derives
 `UniformPayload`, and another crate's generic type the marker does not
 reach takes the `unsafe` attribute. A projection through a `Chosen`
 parameter takes it too: the proof does not see through a projection. A
@@ -820,6 +836,21 @@ stored as itself states its canonical form, so a concrete type under
   into one, and `as_ref` then reads a box that does not exist.
 - A trait impl on `Erased<R, Never>` alone for `Owned`'s construction and
   mutable access — an impl whose existence depends on `T`, against rule 1.
+- `Branded` for `Erased` at `At<'a> = Erased<R, T::At<'a>>` — it needs
+  `T: Branded`, which `Never` is not, and it admits an `Erased` of a
+  carrier at the call's brand, which no read can use (`as_ref` asks
+  `Stored`, and so `Unbranded`). Refusing admits fewer types and closes the
+  same path.
+- `Branded` implemented on `Never` — an impl on its alias conflicts (E0119)
+  with every other crate's `Branded` impl. `Never` is admitted through
+  `fn() -> !` instead, a sealed trait's impl disjoint from the one at
+  `fn() -> T` for an `Unbranded` `T`.
+- Refusing, in the derive, a type variable named inside `Erased` in a
+  payload unless it is bounded `Unbranded` — it reads names, which
+  RFC-0059 withdrew `returns_slice` for.
+- Requiring every extension type's type variable to be `Unbranded` — it
+  refuses `Refs<'a, HashSet<'static, …>>` (`as_iter_set`), and `Refs`
+  would have to be reshaped.
 - The language's `!` as the `Never` alias — each trait the language's `!`
   needs, written on the alias, conflicts (E0119) with every other crate's
   impl of that trait.

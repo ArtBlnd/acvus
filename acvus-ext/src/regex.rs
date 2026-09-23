@@ -276,7 +276,7 @@ fn replace_with_now<E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     re: &Regex,
     text: &String,
-    f: Closure<(Match,), String, E, Rt>,
+    f: Closure<'_, (Match,), String, E, Rt>,
 ) -> String
 where
     E: Var<kind::Effect>,
@@ -300,7 +300,7 @@ async fn replace_with<E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     re: &Regex,
     text: &String,
-    f: Closure<(Match,), String, E, Rt>,
+    f: Closure<'_, (Match,), String, E, Rt>,
 ) -> String
 where
     E: Var<kind::Effect>,

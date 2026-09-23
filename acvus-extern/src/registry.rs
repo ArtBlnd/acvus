@@ -227,6 +227,7 @@ impl FamilyPatterns {
             type_args,
             effect_args,
             identity_args,
+            region_params,
         } = specialized
         else {
             return None;
@@ -250,6 +251,7 @@ impl FamilyPatterns {
                 .collect(),
             effect_args: effect_vars.clone(),
             identity_args: identity_vars.clone(),
+            region_params: *region_params,
         };
         Some(FamilyPatterns {
             family: written(i, *id),
@@ -361,6 +363,10 @@ pub trait ExternTypeDecl {
     /// The type at `()` for each of its variables and `TypesOnly` for its
     /// runtime, whose `TypeId` is the identity behind its name.
     type DeclarationForm: 'static;
+
+    /// The type's lifetime parameters: `type_decl`'s `region_params`, and
+    /// the count every `TyTerm::UserDefined` of the type carries.
+    const REGION_PARAMS: usize;
 
     fn type_decl(interner: &Interner) -> UserDefinedDecl;
     /// The type's space hooks (RFC-0033); a type without them cannot be a

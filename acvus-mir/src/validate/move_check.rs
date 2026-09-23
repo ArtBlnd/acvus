@@ -1172,6 +1172,7 @@ mod tests {
             identity_args: vec![crate::ty::IdentityTerm::Known(
                 <crate::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
             )],
+            region_params: 0,
         }
     }
 
@@ -1213,6 +1214,7 @@ mod tests {
             type_args: vec![],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         assert_eq!(is_move_only(&plain), Some(true));
     }

@@ -1,10 +1,11 @@
-//! `Ref<T, M, Rt>`: the acvus types `&T` and `&mut T` in an extern
+//! `Ref<'a, T, M, Rt>`: the acvus types `&T` and `&mut T` in an extern
 //! declaration, carrying the reference value itself (RFC-0018, RFC-0028). A
 //! Rust parameter `&T` / `&mut T` declares the same type and is read at entry;
 //! a carrier is for a body that keeps the reference, returns it, or takes it
-//! inside a lambda or an iterator. Its region is the caller's.
+//! inside a lambda or an iterator. `'a` is the call it was handed to, so a
+//! handler cannot keep it past that call (RFC-0079 rule 6).
 //!
-//! A `Ref<T, M, Rt>` is made in one place: the crossing, as
+//! A `Ref<'a, T, M, Rt>` is made in one place: the crossing, as
 //! `OneValue::materialize` of a value the checker typed `&T` / `&mut T`. That
 //! is the whole ground of the `T` it carries, and it is why the type has no
 //! constructor a handler can call. A constructor from `Rt::Value` — a `new`,
@@ -45,38 +46,54 @@ use crate::obj::TransparentOver;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
-pub struct Ref<T, M, Rt>(Rt::Value, PhantomData<(T, M)>)
+pub struct Ref<'a, T, M, Rt>(Rt::Value, PhantomData<(&'a (), T, M)>)
 where
     T: Send + Sync + 'static,
     M: Loan,
     Rt: Runtime;
 
-impl<T, Rt> Ref<T, Shared, Rt>
+// SAFETY: `At<'b>` changes the brand alone.
+unsafe impl<'a, T, M, Rt> crate::Branded for Ref<'a, T, M, Rt>
+where
+    T: Send + Sync + 'static,
+    M: Loan,
+    Rt: Runtime,
+{
+    type At<'b> = Ref<'b, T, M, Rt>;
+}
+
+impl<'b, T, Rt> Ref<'b, T, Shared, Rt>
 where
     T: Borrowable<Rt>,
     Rt: Runtime,
 {
-    /// Read through the reference, at the storage `T`'s own crossing wrote.
-    pub fn with<'a, R>(&'a self, rt: &Rt, f: impl FnOnce(&'a T) -> R) -> R {
-        // SAFETY: the module's head: the storage holds a `T` and is live.
-        f(unsafe { <Shared as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &self.0) })
+    /// Read through the reference, at the storage `T`'s own crossing wrote,
+    /// with what `T` holds at the read's lifetime.
+    pub fn with<'a, R>(&'a self, rt: &Rt, f: impl FnOnce(&'a T::At<'a>) -> R) -> R {
+        // SAFETY: the module's head: the storage holds a `T` and is live,
+        // and what it holds is live for as long as this reference.
+        f(unsafe {
+            crate::brand_ref::<T>(<Shared as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &self.0))
+        })
     }
 }
 
-impl<T, Rt> Ref<T, Mut, Rt>
+impl<'b, T, Rt> Ref<'b, T, Mut, Rt>
 where
     T: Borrowable<Rt>,
     Rt: Runtime,
 {
     /// Read and write through the reference.
-    pub fn with<'a, R>(&'a mut self, rt: &Rt, f: impl FnOnce(&'a mut T) -> R) -> R {
+    pub fn with<'a, R>(&'a mut self, rt: &Rt, f: impl FnOnce(&'a mut T::At<'a>) -> R) -> R {
         // SAFETY: as the shared `with`'s, and an exclusive loan is the only
         // live name of its storage, which `&'a mut self` keeps.
-        f(unsafe { <Mut as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &self.0) })
+        f(unsafe {
+            crate::brand_mut::<T>(<Mut as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &self.0))
+        })
     }
 }
 
-impl<T, M, Rt> Var<kind::Type> for Ref<T, M, Rt>
+impl<T, M, Rt> Var<kind::Type> for Ref<'static, T, M, Rt>
 where
     T: Var<kind::Type>,
     M: Loan,
@@ -84,19 +101,20 @@ where
 {
 }
 
-// SAFETY: the referent is its own canonical form's.
-unsafe impl<T, M, Rt> crate::Canonical<kind::Type> for Ref<T, M, Rt>
+// SAFETY: the referent is its own canonical form's, and the brand is at
+// `'static`.
+unsafe impl<'a, T, M, Rt> crate::Canonical<kind::Type> for Ref<'a, T, M, Rt>
 where
     T: Var<kind::Type>,
     M: Loan,
     Rt: Runtime,
 {
-    type Canon = Ref<T::Canon, M, Rt>;
+    type Canon = Ref<'static, T::Canon, M, Rt>;
 }
 
 // SAFETY: a `Ref` is one `Rt::Value` at every `T` and `M`; the referent is
 // a box of its own, read through its own `Canonical`.
-unsafe impl<Mk, T, M, Rt> crate::UniformPayload<Mk> for Ref<T, M, Rt>
+unsafe impl<'a, Mk, T, M, Rt> crate::UniformPayload<Mk> for Ref<'a, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -104,7 +122,7 @@ where
 {
 }
 
-impl<T, M, Rt> TyArg for Ref<T, M, Rt>
+impl<T, M, Rt> TyArg for Ref<'static, T, M, Rt>
 where
     T: TyArg + Send + Sync + 'static,
     M: Loan,
@@ -118,7 +136,7 @@ where
     }
 }
 
-impl<T, M, Rt> crate::Cross<Rt> for Ref<T, M, Rt>
+impl<T, M, Rt> crate::Cross<Rt> for Ref<'static, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -145,7 +163,7 @@ where
 /// lives for the call by Rust's rule, and the reference word the crossing
 /// makes from it is kept no longer than the call by the runtime's
 /// (`Runtime::reference`, RFC-0018).
-impl<T, Rt> crate::Passed<Rt> for Ref<T, Shared, Rt>
+impl<T, Rt> crate::Passed<Rt> for Ref<'static, T, Shared, Rt>
 where
     T: TransparentOver<Rt> + Sync,
     Rt: Runtime,
@@ -167,7 +185,7 @@ where
     }
 }
 
-impl<T, Rt> crate::Passed<Rt> for Ref<T, Mut, Rt>
+impl<T, Rt> crate::Passed<Rt> for Ref<'static, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -191,7 +209,7 @@ where
 /// A result declared `&T` / `&mut T` is returned as Rust's borrow of a
 /// parameter the caller lent (RFC-0047 rule 3), and crosses as one reference
 /// word.
-impl<T, Rt> crate::LentBack<Rt> for Ref<T, Shared, Rt>
+impl<T, Rt> crate::LentBack<Rt> for Ref<'static, T, Shared, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -206,7 +224,7 @@ where
     }
 }
 
-impl<T, Rt> crate::LentBack<Rt> for Ref<T, Mut, Rt>
+impl<T, Rt> crate::LentBack<Rt> for Ref<'static, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -231,7 +249,7 @@ where
     unsafe { &*(item as *const T).cast::<Rt::Value>() }
 }
 
-impl<T, M, Rt> crate::OneValue<Rt> for Ref<T, M, Rt>
+impl<T, M, Rt> crate::OneValue<Rt> for Ref<'static, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
