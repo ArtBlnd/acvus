@@ -176,6 +176,7 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             slice,
             index,
             value,
+            bound: _,
         } => {
             remap_val(slice, remap);
             remap_val(index, remap);

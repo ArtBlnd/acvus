@@ -47,11 +47,11 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
    type: `Copy` for a word element (`dst` is the element), `Ref` otherwise
    (`dst` is a `Ref` into the slice's storage carrying its loan).
    `IndexSet { slice, index, value }` writes through `&mut [T]` with `assign`
-   semantics. The unchecked forms are the machine's alone: the MIR has no
-   unchecked instruction and the user cannot ask for one; only rule 7's proof
-   would emit one. `InstKind::ArrayIndex` stays distinct: it moves an element
-   out of an owned scrutinee at a constant position, which is destructuring,
-   not indexing.
+   semantics. Each carries `bound`, `Checked` or `Proven`; the user cannot
+   ask for `Proven`, only rule 7's pass writes it, and `prepare` emits the
+   unchecked form for it alone. `InstKind::ArrayIndex` stays distinct: it
+   moves an element out of an owned scrutinee at a constant position, which
+   is destructuring, not indexing.
 5. **Syntax and place semantics.** `a[i]` is a place, as in Rust. In value
    position its element must be a word, else the refusal is Rust's
    ``cannot move out of index of `Vec<T>` `` and the way is `clone(&a[i])`
@@ -81,14 +81,24 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
    belong to the frame the caller laid the arguments on, which is gone when
    the call resumes.
 7. **Bounds-check elimination is an interval domain and nothing more.** Each
-   `Int` value carries `[lo, hi]` whose endpoints are constants or one other
-   SSA value; constants and `± constant` are interval arithmetic, φ is join
-   with widening, everything else is ⊤. On the true edge of `i < n`,
-   `i.hi = n − 1`. `Index(s, i)` becomes unchecked when `i.hi < n`,
-   `s = as_slice(&c)`, `n = len(&c)` and `c` is not written between the `len`
-   and the `Index` (`Loans::storage_effect`, the hoist's own condition).
-   `a[i + 1]` and an index derived elsewhere stay checked. The pass is not
-   built, so every index is checked.
+   integer value carries `[lo, hi]`, each endpoint a constant, another SSA
+   value, a slice's length or a container's element count, plus a constant.
+   `± constant` is interval arithmetic, ⊤ where the width could wrap; φ is
+   join, widened at a loop header; everything else is ⊤. The edge of a
+   comparison that holds `i < n` sets `i.hi = n − 1`; a range `for` gives its
+   counter `[at, hi − 1]`. A call's result reads its callee's postconditions
+   (RFC-0082 rule 4): `ret = len(x)` makes it `x`'s length. A slice's length
+   is fixed while the slice lives. A container's element count holds from
+   the `len` that read it until an instruction that may write any storage —
+   an assignment, a move out, an element write, any call but a pure extern
+   of words and shared references — and an `AsSlice` of the same target and
+   path while it holds makes it the slice's length. The write condition is
+   the domain's own, coarser than `Loans::storage_effect`. `Index(s, i)` and
+   `IndexSet(s, i, _)` are marked `Proven` when `i.hi`, followed through the
+   upper bounds of the values it names, reaches `len(s) − k` with `k ≥ 1`.
+   `validate::bounds` runs the same domain over every module the pipeline
+   returns and refuses a mark it does not derive. `a[i + 1]`, `i ≤ n` and an
+   index derived elsewhere stay checked.
 8. **Motion.** `AsSlice` hoists as a shared borrow of its container, out of
    every loop that does not write the container; a checked `Index` does not,
    because it may panic (RFC-0007); an unchecked `Index` whose slice and index

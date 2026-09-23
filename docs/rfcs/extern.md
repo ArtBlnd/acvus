@@ -970,19 +970,25 @@ Status: Proposed
    registered `e() -> S`, named as rule 2 names an extern.
    `associative` and `identity` beside `fold` are refused: they are a
    binary function's.
-4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2))]` relates two terms
-   by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
+4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2, ..))]` relates two
+   terms by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
    parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and
-   `+`, `−`, `×` and `max` of terms. There is no quantifier, no condition
-   and no function of the author's.
+   `+`, `−`, `×` and `max` of terms. `len(x)` is the element count of a
+   slice or a container; a parameter or `ret` read as a number is an
+   integer. There is no quantifier, no condition and no function of the
+   author's. Rust's lexer refuses `≤`, `−` and `×` before a macro reads
+   them, so a declaration writes `<=`, `-` and `*`.
 5. **Both are the author's promise.** The checker and every pass trust a
    law and a postcondition as they trust an effect (RFC-0080 rule 3), and
    an extern that breaks one answers for what a pass does with it. A debug
-   build evaluates each postcondition at the extern's return; a law is
-   sampled only by tests. `#[extern_fn]` refuses a law on a signature it
-   is not stated over, and a word outside the vocabulary; combining the
-   registries refuses an identity or a combine that names no registered
-   extern or one of the wrong type.
+   build of the extension evaluates each postcondition at the function's
+   return, inside its own body, and a relation that fails panics there
+   with the relation and both sides' values; a law is sampled only by
+   tests. `#[extern_fn]` refuses a law on a signature it is not stated
+   over, a word outside the vocabulary, and a term naming no parameter; a
+   `len` of something neither a slice nor a container fails the bound the
+   evaluation names. Combining the registries refuses an identity or a
+   combine that names no registered extern or one of the wrong type.
 6. **The readers.** `analysis::carried` reads a law through a call's
    callee. A header parameter `p` whose back edges send `f(p, x)` for an
    associative `f`, or `f(x, p)` when `f` also commutes, where the body
@@ -991,9 +997,10 @@ Status: Proposed
    instance of an extern with a `fold` law, lending `s` through its first
    argument and no other, and which the loop reads only to lend it to those
    calls, is a merge through storage: it does not make the loop strong,
-   and it is carried state. Postconditions are read by the interval
-   analysis and are built with it. The merge names the extern instance,
-   and its identity and `combine` are for the split of RFC-0066 rule 10,
+   and it is carried state. `analysis::interval` reads a postcondition
+   through a call's callee (RFC-0047 rule 7). The merge names the extern
+   instance, and its identity and `combine` are for the split of RFC-0066
+   rule 10,
    which is not built; until it is, no pass reads them, and rule 1 holds
    them only by that reader to come.
 

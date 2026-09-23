@@ -13,7 +13,7 @@ use acvus_interpreter::{
     prepare_module,
 };
 use acvus_mir::ir::{
-    DebugInfo, ExternInstance, IndexMode, Inst, InstKind, MirBody, MirModule, RefTarget, ValueId,
+    DebugInfo, ExternInstance, IndexBound, IndexMode, Inst, InstKind, MirBody, MirModule, RefTarget, ValueId,
 };
 use acvus_mir::ty::{IntTy, LenTerm, Mutability, Task, Ty, TypeArg};
 use acvus_mir::validate::{ValidationErrorKind, validate};
@@ -197,6 +197,7 @@ fn array_body(interner: &Interner, mode: IndexMode, index: u64, dst_ty: Ty) -> M
             slice: v(4),
             index: v(5),
             mode,
+            bound: IndexBound::Checked,
         })
         .read_through(mode, v(6), v(7))
         .inst(InstKind::Drop { src: v(4) })
@@ -245,6 +246,7 @@ fn vec_body(interner: &Interner, mode: IndexMode, index: u64, dst_ty: Ty) -> Mir
             slice: v(2),
             index: v(3),
             mode,
+            bound: IndexBound::Checked,
         })
         .read_through(mode, v(4), v(5))
         .inst(InstKind::Drop { src: v(2) })
@@ -431,6 +433,7 @@ fn index_set_body(interner: &Interner) -> MirBody {
             slice: v(2),
             index: v(3),
             value: v(4),
+            bound: IndexBound::Checked,
         })
         .inst(InstKind::Drop { src: v(2) })
         .inst(InstKind::Const {
@@ -523,6 +526,7 @@ fn indexing_body(interner: &Interner, element: Ty, mode: IndexMode, dst_ty: Ty) 
             slice: v(2),
             index: v(3),
             mode,
+            bound: IndexBound::Checked,
         })
         .inst(InstKind::Return {
             value: v(4),
@@ -624,6 +628,7 @@ async fn a_live_slice_refuses_an_exclusive_take_of_its_container() {
             slice: v(2),
             index: v(4),
             mode: IndexMode::Copy,
+            bound: IndexBound::Checked,
         })
         .inst(InstKind::Return {
             value: v(5),

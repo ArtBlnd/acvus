@@ -1,0 +1,2 @@
+// expect 0
+let v = vec([1]); v.pop(); let t = 0; let i = 0; while i < v.len() { t = t + v[i]; i = i + 1; } t

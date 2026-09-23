@@ -8,9 +8,10 @@
 //! | `unchecked` | the same with the bound check removed |
 //!
 //! Nothing lowers `a[i]` yet, so each shape is a body built by hand. The
-//! last shape runs a handler `prepare` never emits: the probe substitutes
-//! it into the prepared body, which is the only way to reach it until the
-//! interval pass carries its own proof (RFC-0047 rule 7).
+//! last shape runs the unchecked handler, which the probe substitutes into
+//! the prepared body, so the three shapes are one body apart and nothing
+//! else; `prepare` emits it only for an `Index` marked `Proven`, which the
+//! MIR validator re-derives (RFC-0047 rule 7).
 //!
 //! These timings hold only under one pinned core and a fixed load base;
 //! `benches/README.md` states the protocol.
@@ -28,7 +29,7 @@ use acvus_interpreter::{
     SequentialExecutor, Value, prepare_module,
 };
 use acvus_mir::ir::{
-    DebugInfo, ExternInstance, IndexMode, Inst, InstKind, Label, MirBody, MirModule, RefTarget,
+    DebugInfo, ExternInstance, IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, RefTarget,
     ValueId,
 };
 use acvus_mir::ty::{Mutability, Task, Ty, TypeArg};
@@ -317,6 +318,7 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
                     slice: operand.loop_slice,
                     index: c.index,
                     mode: IndexMode::Copy,
+                    bound: IndexBound::Checked,
                 })
                 .push(InstKind::Drop {
                     src: operand.loop_slice,
@@ -328,6 +330,7 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
                     slice: operand.hoisted_slice,
                     index: c.index,
                     mode: IndexMode::Copy,
+                    bound: IndexBound::Checked,
                 });
             }
         }

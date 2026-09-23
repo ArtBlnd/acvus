@@ -261,6 +261,16 @@ pub enum IndexMode {
     Ref,
 }
 
+/// Whether an `Index` or `IndexSet` compares `index < len` when it runs
+/// (RFC-0047 rule 7). The lowering writes `Checked` everywhere;
+/// `optimize::bce` writes `Proven` where `analysis::interval` derives the
+/// bound, and `validate::bounds` refuses a `Proven` it cannot derive again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexBound {
+    Checked,
+    Proven,
+}
+
 /// How one `a[i]` reaches its element: which slice the container gives up,
 /// and how the element comes back (RFC-0047 rules 3 and 4). The checker settles
 /// both; the lowering reads them and decides neither.
@@ -501,12 +511,13 @@ pub enum InstKind {
         instance: ExternInstance,
     },
     /// Element `index` of `slice`. The index is `u64`; the one check is
-    /// `index < len`, and every `Index` the MIR holds is checked.
+    /// `index < len`, made unless `bound` is `Proven`.
     Index {
         dst: ValueId,
         slice: ValueId,
         index: ValueId,
         mode: IndexMode,
+        bound: IndexBound,
     },
     /// Write `value` into element `index` of a `&mut [T]`, dropping the
     /// element that was there.
@@ -514,6 +525,7 @@ pub enum InstKind {
         slice: ValueId,
         index: ValueId,
         value: ValueId,
+        bound: IndexBound,
     },
 
     /// Move a context's whole value out of the page into `dst` (RFC-0025).

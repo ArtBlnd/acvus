@@ -7,7 +7,7 @@
 //! freed: a slice owns nothing (RFC-0048).
 
 use acvus_extern::{Release, Words};
-use acvus_mir::ir::IndexMode;
+use acvus_mir::ir::{IndexBound, IndexMode};
 
 use crate::code::{Exit, Marked, Off, Op, SlicePair, successor};
 use crate::machine::Machine;
@@ -201,7 +201,7 @@ fn release_if<const LARGE: bool>(value: Value) {
     }
 }
 
-/// The operation an `Index` instruction prepares to.
+/// The operation an `Index` marked `Checked` prepares to.
 pub fn checked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
     match mode {
         IndexMode::Copy => Box::new(IndexCopy::<true> { read, next }),
@@ -209,14 +209,59 @@ pub fn checked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
     }
 }
 
-/// The same operation without the bound check (RFC-0047 rule 7). Nothing in
-/// `prepare` reaches it: the MIR holds no unchecked instruction, and until
-/// the interval pass carries its own proof the only way to run one is for a
-/// probe to substitute it into a prepared body.
-#[cfg(any(test, feature = "probe"))]
+/// The same operation without the bound check, which an `Index` marked
+/// `Proven` prepares to (RFC-0047 rule 7). What makes it sound is not here:
+/// `acvus_mir::validate::bounds` refuses a module holding a `Proven` mark
+/// the interval domain does not derive again, so a body `prepare` sees
+/// holds only marks whose index is below the slice's length.
 pub fn unchecked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
     match mode {
         IndexMode::Copy => Box::new(IndexCopy::<false> { read, next }),
         IndexMode::Ref => Box::new(IndexRef::<false> { read, next }),
+    }
+}
+
+/// The registers an element write names.
+#[derive(Clone, Copy)]
+pub struct Written {
+    pub slice: SlicePair,
+    pub index: Off,
+    pub value: Marked,
+}
+
+/// The operation an `IndexSet` prepares to: checked unless its bound is
+/// `Proven`, as `unchecked` is for a read, and releasing what it overwrites
+/// where the element type is `large`.
+pub fn set(bound: IndexBound, large: bool, written: Written, next: Box<dyn Op>) -> Box<dyn Op> {
+    let Written {
+        slice,
+        index,
+        value,
+    } = written;
+    match (bound, large) {
+        (IndexBound::Checked, true) => Box::new(IndexSet::<true, true> {
+            slice,
+            index,
+            value,
+            next,
+        }),
+        (IndexBound::Checked, false) => Box::new(IndexSet::<true, false> {
+            slice,
+            index,
+            value,
+            next,
+        }),
+        (IndexBound::Proven, true) => Box::new(IndexSet::<false, true> {
+            slice,
+            index,
+            value,
+            next,
+        }),
+        (IndexBound::Proven, false) => Box::new(IndexSet::<false, false> {
+            slice,
+            index,
+            value,
+            next,
+        }),
     }
 }

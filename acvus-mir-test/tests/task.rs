@@ -190,6 +190,7 @@ fn sync_or_async(i: &Interner) -> Function {
                         requires: vec![],
                         effect_bounds: vec![],
                         laws: Default::default(),
+                        ensures: Vec::new(),
                     },
                     InstanceSig {
                         ty: ty.clone(),
@@ -198,6 +199,7 @@ fn sync_or_async(i: &Interner) -> Function {
                         requires: vec![],
                         effect_bounds: vec![],
                         laws: Default::default(),
+                        ensures: Vec::new(),
                     },
                 ],
                 generic: None,

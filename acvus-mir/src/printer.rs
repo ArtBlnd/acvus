@@ -7,7 +7,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::ir::{
-    Callee, ExitTrip, ForSource, IndexMode, InstKind, Label, MirBody, MirModule, ValueId,
+    Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label, MirBody, MirModule, ValueId,
 };
 
 /// Normalizes ValueIds to sequential order of first appearance.
@@ -56,6 +56,13 @@ impl ValNormalizer {
             .map(|r| self.fmt_use(*r, consts, texts))
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+fn proven_suffix(bound: IndexBound) -> &'static str {
+    match bound {
+        IndexBound::Checked => "",
+        IndexBound::Proven => " proven",
     }
 }
 
@@ -608,26 +615,30 @@ fn write_body(
                 slice,
                 index,
                 mode,
+                bound,
             } => writeln!(
                 f,
-                "{} = {}{}[{}]",
+                "{} = {}{}[{}]{}",
                 vn.fmt_val(*dst),
                 match mode {
                     IndexMode::Copy => "",
                     IndexMode::Ref => "&",
                 },
                 vn.fmt_use(*slice, &consts, &texts),
-                vn.fmt_use(*index, &consts, &texts)
+                vn.fmt_use(*index, &consts, &texts),
+                proven_suffix(*bound)
             )?,
             InstKind::IndexSet {
                 slice,
                 index,
                 value,
+                bound,
             } => writeln!(
                 f,
-                "{}[{}] = {}",
+                "{}[{}]{} = {}",
                 vn.fmt_use(*slice, &consts, &texts),
                 vn.fmt_use(*index, &consts, &texts),
+                proven_suffix(*bound),
                 vn.fmt_use(*value, &consts, &texts)
             )?,
             InstKind::ArrayIndex {

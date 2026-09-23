@@ -1,0 +1,2 @@
+// expect index out of bounds: the len is 1 but the index is 1
+let v = vec([1, 2, 3]); let n = v.len(); let t = 0; let i = 0; while i < n { t = t + v[i]; v.pop(); v.pop(); i = i + 1; } t
