@@ -738,9 +738,8 @@ breaks its `T`.
    existence or items depend on `T`, with one exception: `Branded`'s impl
    exists only where `T` is `Unbranded` or is `Never`, and its `At<'a>` is
    `Self`. A carrier, and a type that holds one, has no brand there, so
-   an `Erased` at it reaches no handler (RFC-0079 rule 6). `Branded` has no
-   item that reads, writes or lays out a value: its `At<'a>` renames
-   lifetimes at the type level. An impl of a trait that requires `Branded`
+   an `Erased` at it reaches no handler (RFC-0079 rule 6). An impl of a
+   trait that requires `Branded`
    (`OneValue`, `Cross`, `Stored`, …) states `Self: Branded` or
    `Self: Unbranded` and bounds `T` by nothing else, so it exists where
    `Branded`'s does and no item of it answers by `T`. acvus-extern's
@@ -799,7 +798,7 @@ assertion,
 traits that do not follow `X`, and `Never` having no value. It does not rest
 on a promise that two instantiations of one `repr(Rust)` type share a
 layout; Rust makes none. `std::mem::TransmuteFrom` (unstable,
-`transmutability`) replaces this layer with a bound once it is stable.
+`transmutability`) replaces this layer with a bound once stable.
 
 **Why.** The checker types a generic constructor's `Bag<Owned>` and a
 declaration's `Bag<Erased<R, i64>>` alike, `Bag<i64>` with a uniform part,
@@ -813,20 +812,17 @@ payload is the one place a downstream trait can reach `X`, which rule 4
 proves it does not, at a marker no downstream trait can name. An inherent method takes part in no specialization or projection,
 so `Owned`'s construction and mutable access keep rule 1. Rule 1 guards
 against a read of a box, a layout or a run-time dispatch answering by `T`;
-`Branded` does none of these, and without its exception a derived payload
+`Branded` does none of these (its `At<'a>` renames lifetimes at the type
+level), and without its exception a derived payload
 holding `Vec<Erased<R, T>>` kept a `Ref<'static, …>` past the call.
 
 **Cost.** Rule 1 binds acvus-extern only: the orphan rule lets another
 crate implement its own trait for `Erased<R, i64>` with a bound on `T`,
 and a payload under rule 5 that reads `X` through one breaks the
-obligation its author asserted. The test that holds the exception's
-boundary reads the workspace's sources, not another crate's. An `Erased`
+obligation its author asserted. `erased_impls.rs` scans only the
+workspace. An `Erased`
 whose `T` names a lifetime has no `OneValue`, `Cross` or `Stored` either,
-since each requires `Branded`. A payload's own struct derives
-`UniformPayload`, and another crate's generic type the marker does not
-reach takes the `unsafe` attribute. A projection through a `Chosen`
-parameter takes it too: the proof does not see through a projection. A
-type
+since each requires `Branded`. A type
 stored as itself states its canonical form, so a concrete type under
 `cross_as_stored!` writes its `Var` and `Canonical` impls.
 
