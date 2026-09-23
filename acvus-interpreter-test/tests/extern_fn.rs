@@ -1065,3 +1065,45 @@ async fn io_inside_iterator_pipeline() {
     let items: Vec<i64> = list.iter().map(|v| v.as_int()).collect();
     assert_eq!(items, vec![10, 20, 30]);
 }
+
+// =======================================================================
+//  A captured parameter's effect reaches the capturing lambda (RFC-0014)
+// =======================================================================
+
+static TICKS: AtomicUsize = AtomicUsize::new(0);
+
+#[extern_fn(effect = opaque)]
+fn tick(x: i64) -> i64 {
+    TICKS.fetch_add(1, Ordering::SeqCst);
+    x
+}
+
+/// A lambda calling a parameter of its enclosing lambda takes the effect of
+/// the function that parameter settles to: the captured function flows into
+/// the type the body reads it at, so its effect is at most the reading's.
+#[tokio::test]
+async fn a_lambda_calling_a_captured_parameter_takes_its_effect() {
+    let registry = || -> Registry<AcvusRuntime> {
+        extern_registry! {
+            ns: "t",
+            fns: [tick],
+        }
+    };
+    let programs = [
+        ("let h = |g| -> (|x| -> g(x))(1); h(|y| -> tick(y))", 1),
+        ("let h = |g| -> { let k = |x| -> g(x); k(1) }; h(|y| -> tick(y))", 1),
+        ("let h = |g| -> { (|x| -> g(x))(1); 0 }; h(|y| -> tick(y))", 0),
+        (
+            "let each_any = |f| -> f(1); let h = |g| -> each_any(|x| -> g(x)); h(|y| -> tick(y))",
+            1,
+        ),
+    ];
+    for (source, value) in programs {
+        let i = Interner::new();
+        let before = TICKS.load(Ordering::SeqCst);
+        let result =
+            run_script_with_externs(&i, source, ctx(&i, vec![]), vec![registry()], Ty::I64).await;
+        assert_eq!(result.value.as_int(), value, "{source}");
+        assert_eq!(TICKS.load(Ordering::SeqCst) - before, 1, "{source}");
+    }
+}

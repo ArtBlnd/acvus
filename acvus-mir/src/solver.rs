@@ -2387,6 +2387,12 @@ impl<'src> Solver<'src> {
 
     /// The join a decision writes as its answer: a signature's
     /// representation variable takes the answer here (`ReprOwner`).
+    /// A captured value flows into the type the body reads it at, so a
+    /// captured function's effect is at most the one its callers see.
+    fn capture_flows(&mut self, captured: &InferTy, seen: &InferTy) -> Result<(), Mismatch> {
+        self.settle_join(captured, seen)
+    }
+
     fn settle_join(&mut self, a: &InferTy, b: &InferTy) -> Result<(), Mismatch> {
         self.terms
             .join(a, b, Position::Value, JoinKind::Decision, self.registry)
@@ -2917,7 +2923,7 @@ impl<'src> Solver<'src> {
             }
             CaptureOutcome::Reads { read, seen } => (read, seen),
         };
-        match self.settle_join(seen, &reads) {
+        match self.capture_flows(&reads, seen) {
             Ok(()) => Progress::Settled(Answer::Capture(read)),
             Err(Mismatch { expected, got, .. }) => Progress::Failed(Unsettled::LendMismatch {
                 decision: id,
@@ -2939,7 +2945,7 @@ impl<'src> Solver<'src> {
                 continue;
             }
             let (of, seen) = (of.clone(), seen.clone());
-            self.decisions[index].state = match self.settle_join(&of, &seen) {
+            self.decisions[index].state = match self.capture_flows(&of, &seen) {
                 Ok(()) => DecisionState::Settled(Answer::Capture(CaptureRead::Word)),
                 Err(Mismatch { expected, got, .. }) => {
                     failures.push(Unsettled::LendMismatch {
