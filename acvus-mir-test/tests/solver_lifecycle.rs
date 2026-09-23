@@ -42,7 +42,8 @@ fn registry(i: &Interner) -> TypeRegistry {
         effect_params: 0,
         identity_params: 0,
         specializable: vec![true],
-    });
+    })
+    .expect("one declaration per name");
     let mut pb = PolyBuilder::new();
     let t = pb.fresh_ty_var();
     reg.register_cast(CastRule {

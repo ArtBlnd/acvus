@@ -1276,6 +1276,7 @@ where
     extern_registry! {
         ns: "iter",
         types: [
+            Vec<_>,
             Items<_, _, Rt>, Refs<_, _, Rt>, Range<_, Rt>,
             Map<_, _, _, _, Rt>, Unordered<_, _, _, _, Rt>, Filter<_, _, _, Rt>,
             Take<_, _, _, Rt>, Skip<_, _, _, Rt>, StepBy<_, _, _, Rt>,

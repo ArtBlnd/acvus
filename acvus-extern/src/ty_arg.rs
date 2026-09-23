@@ -16,9 +16,11 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{
     EffectArg, EffectTerm, HeldTy, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy, TypeArg,
 };
-use acvus_utils::Interner;
+use acvus_utils::{Interner, QualifiedRef};
 
 use crate::canonical::Canonical;
+use crate::name::Named;
+use crate::registry::ExternTypeDecl;
 
 /// The variables a polymorphic ExternFn type ranges over, by kind and
 /// position. Built once per declaration from a `PolyBuilder`.
@@ -33,6 +35,7 @@ pub struct PolyVars {
     /// types have one each.
     next_repr: Cell<u32>,
     slot_reprs: RefCell<Vec<(PolyTy, u32)>>,
+    names: RefCell<Vec<Named>>,
 }
 
 impl PolyVars {
@@ -52,7 +55,39 @@ impl PolyVars {
             identities: (0..identities).map(|_| b.fresh_identity_var()).collect(),
             next_repr: Cell::new(0),
             slot_reprs: RefCell::new(Vec::new()),
+            names: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The name of the extension type `T`, which this declaration now
+    /// reaches.
+    pub fn extension<T>(&self, interner: &Interner) -> QualifiedRef
+    where
+        T: ExternTypeDecl + ?Sized,
+    {
+        self.reach(Named::extension::<T>(interner))
+    }
+
+    /// The name of the derived struct or enum `T`, which this declaration
+    /// now reaches.
+    pub fn derived<T>(&self, qref: QualifiedRef) -> QualifiedRef
+    where
+        T: 'static,
+    {
+        self.reach(Named::derived::<T>(qref))
+    }
+
+    fn reach(&self, named: Named) -> QualifiedRef {
+        let mut names = self.names.borrow_mut();
+        if !names.contains(&named) {
+            names.push(named);
+        }
+        named.qref
+    }
+
+    /// Every name this declaration's types reach.
+    pub fn names(&self) -> Vec<Named> {
+        self.names.borrow().clone()
     }
 
     /// A representation variable nothing in this declaration has yet.

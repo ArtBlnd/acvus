@@ -761,7 +761,7 @@ where
 {
     extern_registry! {
         ns: "t",
-        types: [Boxed<_, _, R>, Token<_>, Held<R>],
+        types: [Boxed<_, _, R>, Token<_>, Held<R>, Vec<_>],
         signatures: [eq, step, front, advance],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
               sum_slice, slice_first, at, count_where, eq_int, eq_string, step_int, drive,
@@ -1689,7 +1689,10 @@ fn a_second_instance_for_one_type_is_refused() {
     let err = Externs::combine(vec![registry::<TypesOnly>(), registry::<TypesOnly>()], &i)
         .err()
         .expect("two registries declare the same names");
-    assert!(matches!(err, acvus_extern::CombineError::DuplicateName(_)));
+    assert!(matches!(
+        err,
+        acvus_extern::CombineError::DuplicateName { .. }
+    ));
 }
 
 #[test]
@@ -1767,7 +1770,7 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
     assert_eq!(
         <ObjectShape as TyArg>::poly_ty(&i, &vars),
         PolyTy::Enum {
-            name: i.intern("ObjectShape"),
+            name: acvus_extern::QualifiedRef::root(i.intern("ObjectShape")),
             variants: [
                 (i.intern("Dot"), None),
                 (i.intern("Circle"), Some(Box::new(PolyTy::I64))),
@@ -1859,6 +1862,7 @@ where
 fn mono_registry<R: Runtime>() -> Registry<R> {
     extern_registry! {
         ns: "t",
+        types: [Boxed<_, _, R>],
         fns: [double, first_or, box_count, box_width, twice_ok],
     }
 }
@@ -2684,6 +2688,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     coercion: None,
                     instance_of: None,
                     requires: Vec::new(),
+                    names: Vec::new(),
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(
@@ -3016,7 +3021,7 @@ fn a_family_member_with_a_uniform_part() -> Registry<Tiny> {
             ))
         };
         let mut contribution = acvus_extern::Contribution::of(acvus_extern::Manifest {
-            types: vec![<Vec<i64> as acvus_extern::ExternTypeDecl>::type_decl(i)],
+            types: vec![acvus_extern::DeclaredType::of::<Vec<i64>>(i)],
             signatures: Vec::new(),
             fns: Vec::new(),
         });

@@ -18,6 +18,7 @@ mod identity;
 mod instance;
 mod len;
 mod loan;
+mod name;
 mod obj;
 mod owned;
 mod projection;
@@ -52,6 +53,7 @@ pub use instance::{
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
+pub use name::{DeclarationForm, DeclaredType, NameKind, Named};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, FromValue, InPlaceElement, Inline, Nothing, Obj, ObjectShape,
     One, OneRegister, OneValue, OptionOf, Pair, RetForms, Returned, Run, Stored,

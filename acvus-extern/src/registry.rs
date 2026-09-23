@@ -5,9 +5,9 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm, ParamTerm, Poly,
-    PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry,
-    UserDefinedDecl, Viewed, bind_chosen, matches_pattern, unify_patterns,
+    CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
+    ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg,
+    TypeRegistry, UserDefinedDecl, Viewed, bind_chosen, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -16,6 +16,7 @@ use crate::handler::RequiredInstance;
 
 use crate::handler::{DeclaredInstance, ExternHandler, Instances};
 use crate::instance::InstanceRun;
+use crate::name::{DeclarationForm, DeclaredType, NameKind, Named};
 use crate::runtime::Runtime;
 use crate::space::SpaceHooks;
 
@@ -35,6 +36,7 @@ pub struct FnDecl {
     /// The instances this declaration requires (RFC-0067 rule 1), in the order
     /// `#[extern_fn]` read its `Instance` parameters.
     pub requires: Vec<Requirement>,
+    pub names: Vec<Named>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,11 +85,12 @@ pub struct SignatureDecl {
     /// variable bounded by `Chosen`, whose slots are `#` at the instance's
     /// own tree.
     pub chosen: Vec<u32>,
+    pub names: Vec<Named>,
 }
 
 /// The declarations one registry contributes; nothing here names a runtime.
 pub struct Manifest {
-    pub types: Vec<UserDefinedDecl>,
+    pub types: Vec<DeclaredType>,
     pub signatures: Vec<SignatureDecl>,
     pub fns: Vec<FnDecl>,
 }
@@ -176,6 +179,7 @@ where
             coercion: Some(Coercion::Cast),
             instance_of: None,
             requires: Vec::new(),
+            names: Vec::new(),
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -297,6 +301,7 @@ where
             coercion: Some(Coercion::Cast),
             instance_of: None,
             requires: Vec::new(),
+            names: decl.names,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -353,6 +358,10 @@ impl WrittenErase {
 }
 
 pub trait ExternTypeDecl {
+    /// The type at `()` for each of its variables and `TypesOnly` for its
+    /// runtime, whose `TypeId` is the identity behind its name.
+    type DeclarationForm: 'static;
+
     fn type_decl(interner: &Interner) -> UserDefinedDecl;
     /// The type's space hooks (RFC-0033); a type without them cannot be a
     /// context a space holds.
@@ -427,7 +436,21 @@ impl<R: Runtime> Registry<R> {
 
 #[derive(Debug)]
 pub enum CombineError {
-    DuplicateName(QualifiedRef),
+    /// Two functions, two signatures, or two Rust types under one name.
+    DuplicateName {
+        name: String,
+    },
+    /// One Rust type under two names.
+    TwoNames {
+        rust: &'static str,
+        a: String,
+        b: String,
+    },
+    /// A declaration naming an extension type no registry declares.
+    UndeclaredType {
+        declaration: String,
+        ty: String,
+    },
     UnknownSignature {
         instance: QualifiedRef,
         signature: QualifiedRef,
@@ -487,7 +510,18 @@ pub enum CombineError {
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DuplicateName(q) => write!(f, "name {q:?} is declared twice"),
+            Self::DuplicateName { name } => write!(f, "name `{name}` is declared twice"),
+            Self::TwoNames { rust, a, b } => {
+                write!(
+                    f,
+                    "the Rust type {rust} is declared as both `{a}` and `{b}`"
+                )
+            }
+            Self::UndeclaredType { declaration, ty } => write!(
+                f,
+                "{declaration} names the type `{ty}`, which no registry declares: list it in \
+                 a registry's `types`"
+            ),
             Self::UnknownSignature {
                 instance,
                 signature,
@@ -557,6 +591,70 @@ fn written(i: &Interner, q: QualifiedRef) -> String {
     match q.namespace {
         Some(ns) => format!("{}::{}", i.resolve(ns), i.resolve(q.name)),
         None => i.resolve(q.name).to_string(),
+    }
+}
+
+fn duplicate(i: &Interner, q: QualifiedRef) -> CombineError {
+    CombineError::DuplicateName {
+        name: written(i, q),
+    }
+}
+
+/// Every type name the registries give, held to one Rust type each way.
+#[derive(Default)]
+struct TypeNames {
+    by_name: FxHashMap<QualifiedRef, Named>,
+    by_rust: FxHashMap<DeclarationForm, QualifiedRef>,
+    declared: FxHashSet<QualifiedRef>,
+}
+
+impl TypeNames {
+    /// Binds `named`, answering whether the name is new.
+    fn bind(&mut self, i: &Interner, named: Named) -> Result<bool, CombineError> {
+        if let Some(bound) = self.by_name.get(&named.qref) {
+            return match bound.rust == named.rust {
+                true => Ok(false),
+                false => Err(duplicate(i, named.qref)),
+            };
+        }
+        if let Some(other) = self.by_rust.get(&named.rust) {
+            return Err(CombineError::TwoNames {
+                rust: named.rust_path,
+                a: written(i, *other),
+                b: written(i, named.qref),
+            });
+        }
+        self.by_name.insert(named.qref, named);
+        self.by_rust.insert(named.rust, named.qref);
+        Ok(true)
+    }
+
+    /// Binds a type a registry's `types` lists, answering whether its
+    /// declaration is the first under its name.
+    fn declare(&mut self, i: &Interner, named: Named) -> Result<bool, CombineError> {
+        let fresh = self.bind(i, named)?;
+        self.declared.insert(named.qref);
+        Ok(fresh)
+    }
+
+    /// Binds the names `declaration`'s types reach; an extension type among
+    /// them is one a registry declares.
+    fn reach(
+        &mut self,
+        i: &Interner,
+        declaration: QualifiedRef,
+        reached: &[Named],
+    ) -> Result<(), CombineError> {
+        for named in reached {
+            self.bind(i, *named)?;
+            if named.kind == NameKind::Extension && !self.declared.contains(&named.qref) {
+                return Err(CombineError::UndeclaredType {
+                    declaration: written(i, declaration),
+                    ty: written(i, named.qref),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -665,6 +763,7 @@ impl<R: Runtime> Externs<R> {
         interner: &Interner,
     ) -> Result<Self, CombineError> {
         let mut types = TypeRegistry::new();
+        let mut type_names = TypeNames::default();
         let mut names: FxHashSet<QualifiedRef> = FxHashSet::default();
         let mut signatures: FxHashMap<QualifiedRef, Collected<R>> = FxHashMap::default();
         let mut plain: Vec<ExternFn<R>> = Vec::new();
@@ -675,10 +774,27 @@ impl<R: Runtime> Externs<R> {
             .collect();
 
         for c in &contributions {
+            for declared in &c.manifest.types {
+                if type_names.declare(interner, declared.named)? {
+                    types
+                        .register(declared.decl.clone())
+                        .map_err(|DuplicateType(qref)| duplicate(interner, qref))?;
+                }
+            }
+        }
+        for c in &contributions {
             for sig in &c.manifest.signatures {
                 if !names.insert(sig.qref) {
-                    return Err(CombineError::DuplicateName(sig.qref));
+                    return Err(duplicate(interner, sig.qref));
                 }
+                type_names.reach(interner, sig.qref, &sig.names)?;
+            }
+            let mut in_contribution: FxHashSet<QualifiedRef> = FxHashSet::default();
+            for decl in &c.manifest.fns {
+                if !in_contribution.insert(decl.qref) {
+                    return Err(duplicate(interner, decl.qref));
+                }
+                type_names.reach(interner, decl.qref, &decl.names)?;
             }
         }
         let mut plain_manifests = Vec::new();
@@ -689,9 +805,6 @@ impl<R: Runtime> Externs<R> {
                 instances,
                 space: hooks,
             } = c;
-            for decl in manifest.types {
-                types.register(decl);
-            }
             space.extend(hooks);
             for sig in manifest.signatures {
                 signatures.insert(
@@ -732,7 +845,7 @@ impl<R: Runtime> Externs<R> {
                             Some(existing) => existing.instances.add_concrete(instances.concrete),
                             None => {
                                 if !names.insert(decl.qref) {
-                                    return Err(CombineError::DuplicateName(decl.qref));
+                                    return Err(duplicate(interner, decl.qref));
                                 }
                                 plain.push(ExternFn { decl, instances });
                             }

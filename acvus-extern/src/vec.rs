@@ -125,7 +125,7 @@ where
 
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
-            id: QualifiedRef::root(i.intern("Vec")),
+            id: vars.extension::<Self>(i),
             type_args: vec![T::slot(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
@@ -136,7 +136,7 @@ where
     /// element is held as: no `ρ` enters a held tree.
     fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
         TypeArg::specialized(PolyTy::UserDefined {
-            id: QualifiedRef::root(i.intern("Vec")),
+            id: vars.extension::<Self>(i),
             type_args: vec![T::held(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
@@ -148,6 +148,8 @@ impl<T> ExternTypeDecl for Vec<T>
 where
     T: Send + Sync + 'static,
 {
+    type DeclarationForm = Vec<()>;
+
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {
             qref: QualifiedRef::root(i.intern("Vec")),

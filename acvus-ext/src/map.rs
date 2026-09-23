@@ -337,6 +337,13 @@ fn specializable<T>() -> bool {
     true
 }
 
+/// `()`, the declaration form's argument for a type variable `$k`.
+macro_rules! stand_in {
+    ($k:ident) => {
+        ()
+    };
+}
+
 /// The crossing of a declared extension type stored as itself, at the one
 /// runtime its own parameter names.
 ///
@@ -377,7 +384,7 @@ macro_rules! stored_extern_type {
         {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
                 PolyTy::UserDefined {
-                    id: QualifiedRef::root(i.intern($name)),
+                    id: vars.extension::<Self>(i),
                     type_args: vec![$($k::held(i, vars)),+],
                     effect_args: vec![held_effect::<E>(vars)],
                     identity_args: vec![],
@@ -391,6 +398,8 @@ macro_rules! stored_extern_type {
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
+            type DeclarationForm = $t<$(stand_in!($k),)+ (), acvus_extern::TypesOnly>;
+
             fn type_decl(i: &Interner) -> UserDefinedDecl {
                 UserDefinedDecl {
                     qref: QualifiedRef::root(i.intern($name)),

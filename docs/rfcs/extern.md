@@ -38,6 +38,24 @@ Status: Accepted
    stands at one of the declaration's type variables, combining also meets
    that variable's declared bound with `OneOf` the types the signature has
    instances at; a signature's own receiver variable is bounded the same way.
+6. A type's name is `ns::name`, for an extension type and for a derived
+   struct or enum alike. The namespace is the root unless the declaration
+   writes one: `#[extern_type(ns = "..")]`, `#[ty_arg(ns = "..")]`.
+7. Combining holds type names and Rust types to a bijection: one name is one
+   Rust type, and one Rust type is one name. A registry's `types` gives each
+   extension type's name with its Rust type. A function or signature
+   declaration gives the name and the Rust type of every type its Rust
+   types reach, recorded as its acvus type is built, so the author of a
+   derived type writes nothing for it. Combining refuses a name given two
+   Rust types, as it refuses any name declared twice; refuses a Rust type
+   given two names; refuses a declaration that reaches an extension type no
+   registry's `types` lists; and takes two declarations of one Rust type
+   under its one name as one.
+8. The Rust type behind a name is its `TypeId` at its declaration form:
+   the type with `()` for each of its variables and `TypesOnly` for its
+   runtime, the form a registry's `types: [X<_>]` names. It is compared only
+   with another declaration form's, never with a box's, since a box holds the
+   type at its run-time instantiation.
 
 **Why.** Joining a declaration to its handler in one value made a registry
 generic over a runtime even where only its declarations were wanted, and
@@ -46,12 +64,34 @@ held all of them. Shared signatures need that place. A parameter marked as
 state gives what a closure's capture gave, inside the one declaration form,
 and the declaration's acvus type does not mention it.
 
+The checker names a type by its acvus name and the runtime keys a box by the
+Rust type (RFC-0076). With nothing tying the two, two Rust types declared
+under one name were both admitted, and a box made as one was read as the
+other. Held to a bijection where the registries combine, the acvus type
+determines the box, and no second key is carried in the type.
+
+**Cost.** A script's `A::B` names the enum `A` at the root, so a script
+writes no literal of a derived enum declared under a namespace; it takes
+such a value from a declaration. A registry that may be combined without
+the registry declaring a type it names lists that type too, which combines
+as one. An extension type
+whose parameter carries a bound `()` does not meet has no declaration form,
+and its derive does not compile.
+
 **Rejected.**
 - Declaration by closure, a handler trait over closure types, `with_effect` —
   a second form every consumer meets; state is a parameter and the effect is
   on the attribute.
 - Registration one registry at a time, by side effect — no place holds every
   registry, and shared signatures need one.
+- A Rust key in the acvus type, a `TypeId` at each leaf — a declaration
+  form's `TypeId` is not the box's, and a leaf that holds a variable has
+  none.
+- A check at run time — the program was admitted; a name with two Rust types
+  is refused before anything is checked.
+- A derived type's module path as its namespace — automatic, but it moves
+  the name whenever the type moves; the root is the default, and a clash is
+  refused by the name it is on.
 
 ## RFC-0023: An ExternFn is declared once, as a Rust function under `#[extern_fn]`
 

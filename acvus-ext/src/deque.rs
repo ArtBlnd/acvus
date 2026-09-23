@@ -185,7 +185,7 @@ where
 
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
-            id: QualifiedRef::root(i.intern("Deque")),
+            id: vars.extension::<Self>(i),
             type_args: vec![T::held(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
@@ -197,6 +197,8 @@ impl<T> ExternTypeDecl for Deque<T>
 where
     T: Var<kind::Type>,
 {
+    type DeclarationForm = Deque<()>;
+
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {
             qref: QualifiedRef::root(i.intern("Deque")),

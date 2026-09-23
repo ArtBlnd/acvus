@@ -3537,7 +3537,7 @@ where
         let qualified = |tag: &Astr| match enum_name {
             Some(_) => format!(
                 "{}::{}",
-                self.interner.resolve(*name),
+                self.interner.resolve(name.name),
                 self.interner.resolve(*tag)
             ),
             None => self.interner.resolve(*tag).to_string(),
@@ -6301,7 +6301,7 @@ where
         variants.insert(tag, Some(Box::new(payload_ty)));
         self.calls.insert(callee_id, CallChoice::StructuralVariant);
         self.solver.construct(TyTerm::Enum {
-            name: enum_name,
+            name: QualifiedRef::root(enum_name),
             variants,
             home: crate::ty::Home::NONE,
         })
@@ -7837,7 +7837,7 @@ where
                 let mut variants = FxHashMap::default();
                 variants.insert(*tag, payload_ty);
                 let ty = self.solver.construct(TyTerm::Enum {
-                    name: *enum_name,
+                    name: QualifiedRef::root(*enum_name),
                     variants,
                     home: crate::ty::Home::NONE,
                 });
@@ -8031,17 +8031,17 @@ where
         let written = match payload {
             Some(_) => format!(
                 "{}::{}(_)",
-                self.interner.resolve(name),
+                self.interner.resolve(name.name),
                 self.interner.resolve(*tag)
             ),
             None => format!(
                 "{}::{}",
-                self.interner.resolve(name),
+                self.interner.resolve(name.name),
                 self.interner.resolve(*tag)
             ),
         };
         let scrutinee_ty = self.type_as_written(source_ty);
-        let near = self.near_variants(&scrutinee_ty, Some(name), *tag);
+        let near = self.near_variants(&scrutinee_ty, Some(name.name), *tag);
         self.error(
             MirErrorKind::UnreachablePattern {
                 pattern: written,
@@ -8696,7 +8696,7 @@ where
                 let mut variants = FxHashMap::default();
                 variants.insert(*tag, payload_ty.clone());
                 let enum_ty = TyTerm::Enum {
-                    name: *enum_name,
+                    name: QualifiedRef::root(*enum_name),
                     variants,
                     home: crate::ty::Home::NONE,
                 };

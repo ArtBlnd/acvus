@@ -24,6 +24,10 @@ pub struct UserDefinedDecl {
     pub specializable: Vec<bool>,
 }
 
+/// A declaration under a name the registry already has a type for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuplicateType(pub QualifiedRef);
+
 /// The width and signedness of an integer type: `i8` to `i64`, `u8` to
 /// `u64`. An integer literal takes the width its use demands and is `i64`
 /// where nothing demands one (RFC-0037).
@@ -1654,8 +1658,9 @@ impl TypeRegistry {
 
     // -- Type declarations -------------------------------------------
 
-    /// Register a declaration. Panics on duplicate qref.
-    pub fn register(&mut self, decl: UserDefinedDecl) {
+    /// Register a declaration. A second declaration under a name already
+    /// registered is refused: one name is one type.
+    pub fn register(&mut self, decl: UserDefinedDecl) -> Result<(), DuplicateType> {
         let qref = decl.qref;
         assert!(
             decl.identity_params <= 1,
@@ -1666,8 +1671,13 @@ impl TypeRegistry {
             decl.type_params.len(),
             "{qref:?}: one specializable flag per type parameter"
         );
-        let prev = self.decls.insert(qref, decl);
-        assert!(prev.is_none(), "duplicate UserDefined type: {qref:?}");
+        match self.decls.entry(qref) {
+            std::collections::hash_map::Entry::Occupied(_) => Err(DuplicateType(qref)),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(decl);
+                Ok(())
+            }
+        }
     }
 
     /// Look up a declaration by qref. Panics if not found - missing decl is a bug.
@@ -2421,7 +2431,7 @@ where
                 let mut sorted: Vec<_> = object.iter().collect();
                 sorted.sort_by_key(|(k, _)| self.interner.resolve(**k).to_string());
                 if let Some(name) = object.declaration() {
-                    write!(f, "{}", self.interner.resolve(name))?;
+                    write!(f, "{}", self.interner.resolve(name.name))?;
                 }
                 write!(f, "{{")?;
                 for (i, (k, v)) in sorted.iter().enumerate() {
@@ -2544,7 +2554,7 @@ where
                 Ok(())
             }
             TyTerm::Enum { name, variants, .. } => {
-                write!(f, "{}{{", self.interner.resolve(*name))?;
+                write!(f, "{}{{", self.interner.resolve(name.name))?;
                 let mut sorted: Vec<_> = variants.iter().collect();
                 sorted.sort_by_key(|(tag, _)| self.interner.resolve(**tag).to_string());
                 for (i, (tag, payload)) in sorted.iter().enumerate() {
@@ -3421,9 +3431,9 @@ impl<V: Phase> EffectArg<V> {
 /// (RFC-0042).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldSet {
-    /// The fields the struct `Astr` names declares. A value of the type has
-    /// exactly these.
-    Declared(Astr),
+    /// The fields the named struct declares; a value of the type has exactly
+    /// these. The registries hold the name to one Rust type (RFC-0021 rule 7).
+    Declared(QualifiedRef),
     /// The fields an object literal wrote. A field store adds to them.
     Written,
     /// At least the fields a read or a pattern named, which is what asking
@@ -3519,19 +3529,19 @@ where
     },
     /// A field `declared` names and an object of its type lacks.
     Lacks {
-        declared: Astr,
+        declared: QualifiedRef,
         field: Astr,
     },
     /// A field an object has and `declared` does not name.
     Undeclared {
-        declared: Astr,
+        declared: QualifiedRef,
         field: Astr,
     },
     /// Two declarations: a value has the fields of one declared struct and
     /// of no other.
     TwoDeclarations {
-        a: Astr,
-        b: Astr,
+        a: QualifiedRef,
+        b: QualifiedRef,
     },
     /// The union has more fields than [`ObjectTy::MAX_FIELDS`].
     TooWide {
@@ -3560,7 +3570,7 @@ where
     }
 
     /// The type of a struct `name` declares.
-    pub fn declared(name: Astr, fields: FxHashMap<Astr, TyTerm<V>>) -> Self {
+    pub fn declared(name: QualifiedRef, fields: FxHashMap<Astr, TyTerm<V>>) -> Self {
         Self {
             set: FieldSet::Declared(name),
             fields,
@@ -3590,7 +3600,7 @@ where
         self.set
     }
 
-    pub fn declaration(&self) -> Option<Astr> {
+    pub fn declaration(&self) -> Option<QualifiedRef> {
         match self.set {
             FieldSet::Declared(name) => Some(name),
             FieldSet::Written | FieldSet::AtLeast => None,
@@ -3672,7 +3682,7 @@ where
     /// carries. A value of the declared type has every field the struct
     /// names, so an object that is one and lacks a field is refused; what
     /// only asks an object for fields is not.
-    fn disagreement(declared: Astr, of: &Self, other: &Self) -> Option<ObjectMeet<V>> {
+    fn disagreement(declared: QualifiedRef, of: &Self, other: &Self) -> Option<ObjectMeet<V>> {
         if let Some(field) = other.only_in(of) {
             return Some(ObjectMeet::Undeclared { declared, field });
         }
@@ -3771,7 +3781,9 @@ pub enum TyTerm<V: Phase> {
         identity_args: Vec<IdentityTerm<V>>,
     },
     Enum {
-        name: Astr,
+        /// A script's `A::B` names `A` at the root; a derived enum's name is
+        /// held to one Rust type (RFC-0021 rule 7).
+        name: QualifiedRef,
         variants: FxHashMap<Astr, Option<Box<TyTerm<V>>>>,
         home: Home<V>,
     },
@@ -4890,14 +4902,14 @@ mod tests {
                 Ok(fields)
             }
             ObjectMeet::Lacks { declared, field } => {
-                Err(format!("lacks {}", named(declared, field)))
+                Err(format!("lacks {}", named(declared.name, field)))
             }
             ObjectMeet::Undeclared { declared, field } => {
-                Err(format!("undeclared {}", named(declared, field)))
+                Err(format!("undeclared {}", named(declared.name, field)))
             }
             ObjectMeet::TooWide { fields } => Err(format!("too wide {fields}")),
             ObjectMeet::TwoDeclarations { a, b } => {
-                Err(format!("two {} {}", i.resolve(a), i.resolve(b)))
+                Err(format!("two {} {}", i.resolve(a.name), i.resolve(b.name)))
             }
         }
     }
@@ -4922,7 +4934,10 @@ mod tests {
     #[test]
     fn a_written_object_lacking_a_declared_field_is_refused_by_its_name() {
         let i = Interner::new();
-        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let flags = ObjectTy::declared(
+            QualifiedRef::root(i.intern("Flags")),
+            fields_of(&i, &["a", "b"]),
+        );
         assert_eq!(
             meet_of(&i, flags, ObjectTy::written(fields_of(&i, &["a"]))),
             Err("lacks Flags b".to_string())
@@ -4932,7 +4947,10 @@ mod tests {
     #[test]
     fn an_object_carrying_a_field_no_declaration_names_is_refused_by_its_name() {
         let i = Interner::new();
-        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let flags = ObjectTy::declared(
+            QualifiedRef::root(i.intern("Flags")),
+            fields_of(&i, &["a", "b"]),
+        );
         assert_eq!(
             meet_of(
                 &i,
@@ -4946,12 +4964,18 @@ mod tests {
     #[test]
     fn the_join_of_a_declaration_and_a_written_object_of_its_fields_is_the_declared_type() {
         let i = Interner::new();
-        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let flags = ObjectTy::declared(
+            QualifiedRef::root(i.intern("Flags")),
+            fields_of(&i, &["a", "b"]),
+        );
         let written = ObjectTy::written(fields_of(&i, &["a", "b"]));
         let ObjectMeet::Joined { ty } = ObjectTy::meet(&flags, &written) else {
             panic!("the field sets agree")
         };
-        assert_eq!(ty.declaration(), Some(i.intern("Flags")));
+        assert_eq!(
+            ty.declaration(),
+            Some(QualifiedRef::root(i.intern("Flags")))
+        );
     }
 
     /// Reading a field asks the object for it; the object a declaration
@@ -4959,19 +4983,28 @@ mod tests {
     #[test]
     fn asking_a_declared_object_for_one_of_its_fields_joins_to_the_declared_type() {
         let i = Interner::new();
-        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let flags = ObjectTy::declared(
+            QualifiedRef::root(i.intern("Flags")),
+            fields_of(&i, &["a", "b"]),
+        );
         let ObjectMeet::Joined { ty } =
             ObjectTy::meet(&flags, &ObjectTy::at_least(fields_of(&i, &["a"])))
         else {
             panic!("a read of `a` is within the declaration")
         };
-        assert_eq!(ty.declaration(), Some(i.intern("Flags")));
+        assert_eq!(
+            ty.declaration(),
+            Some(QualifiedRef::root(i.intern("Flags")))
+        );
     }
 
     #[test]
     fn asking_a_declared_object_for_a_field_it_does_not_have_is_refused() {
         let i = Interner::new();
-        let flags = ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a", "b"]));
+        let flags = ObjectTy::declared(
+            QualifiedRef::root(i.intern("Flags")),
+            fields_of(&i, &["a", "b"]),
+        );
         assert_eq!(
             meet_of(&i, flags, ObjectTy::at_least(fields_of(&i, &["c"]))),
             Err("undeclared Flags c".to_string())
@@ -4984,10 +5017,26 @@ mod tests {
         assert_eq!(
             meet_of(
                 &i,
-                ObjectTy::declared(i.intern("Flags"), fields_of(&i, &["a"])),
-                ObjectTy::declared(i.intern("Other"), fields_of(&i, &["a"])),
+                ObjectTy::declared(QualifiedRef::root(i.intern("Flags")), fields_of(&i, &["a"])),
+                ObjectTy::declared(QualifiedRef::root(i.intern("Other")), fields_of(&i, &["a"])),
             ),
             Err("two Flags Other".to_string())
+        );
+    }
+
+    /// A declaration's name is `ns::name`: two structs of one name in two
+    /// namespaces are two declarations, fields alike or not.
+    #[test]
+    fn two_declarations_of_one_name_in_two_namespaces_are_two() {
+        let i = Interner::new();
+        let at = |ns: &str| QualifiedRef::qualified(i.intern(ns), i.intern("P"));
+        assert_eq!(
+            meet_of(
+                &i,
+                ObjectTy::declared(at("a"), fields_of(&i, &["x"])),
+                ObjectTy::declared(at("b"), fields_of(&i, &["x"])),
+            ),
+            Err("two P P".to_string())
         );
     }
 
@@ -5238,13 +5287,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(s.unify(&ud(id, vec![]), &ud(id, vec![])).is_ok());
@@ -5255,13 +5306,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(
@@ -5275,13 +5328,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         let p = s.fresh_ty_var();
@@ -5298,13 +5353,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         let p = s.fresh_ty_var();
@@ -5336,13 +5393,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(
@@ -5356,13 +5415,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         assert!(s.unify(&ud(id, vec![]), &TyTerm::I64).is_err());
@@ -5376,13 +5437,15 @@ mod tests {
         let mut sources = Sources::new();
         let id = fresh_qref();
         let mut registry = TypeRegistry::new();
-        registry.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![TyVarBound::Any],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: id,
+                type_params: vec![TyVarBound::Any],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false],
+            })
+            .expect("one declaration per name");
         let signatures = FxHashMap::default();
         let mut s = Solver::new(&mut sources, &registry, &signatures);
         let p = s.fresh_ty_var();
@@ -5411,31 +5474,26 @@ mod tests {
             effect_params: 0,
             identity_params: 0,
             specializable: vec![false],
-        });
+        })
+        .expect("one declaration per name");
         let decl = reg.get(id);
         assert_eq!(decl.qref, id);
         assert_eq!(decl.type_params.len(), 1);
     }
 
     #[test]
-    #[should_panic(expected = "duplicate")]
-    fn type_registry_duplicate_panics() {
+    fn type_registry_refuses_a_second_declaration_under_one_name() {
         let mut reg = TypeRegistry::new();
         let id = fresh_qref();
-        reg.register(UserDefinedDecl {
+        let decl = || UserDefinedDecl {
             qref: id,
             type_params: vec![],
             effect_params: 0,
             identity_params: 0,
             specializable: vec![],
-        });
-        reg.register(UserDefinedDecl {
-            qref: id,
-            type_params: vec![],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![],
-        });
+        };
+        reg.register(decl()).expect("one declaration per name");
+        assert_eq!(reg.register(decl()), Err(DuplicateType(id)));
     }
 
     #[test]
@@ -5479,7 +5537,8 @@ mod tests {
             effect_params: 0,
             identity_params: 0,
             specializable: vec![false; type_param_count],
-        });
+        })
+        .expect("one declaration per name");
         reg.register_cast(CastRule {
             from,
             to,
@@ -5677,7 +5736,8 @@ mod tests {
             effect_params: 0,
             identity_params: 0,
             specializable: vec![false],
-        });
+        })
+        .expect("one declaration per name");
         reg.from_rules.entry(id).or_default().push(rule_a);
         reg.from_rules.entry(id).or_default().push(rule_b);
         let signatures = FxHashMap::default();
@@ -5711,7 +5771,8 @@ mod tests {
             effect_params: 0,
             identity_params: 0,
             specializable: vec![false],
-        });
+        })
+        .expect("one declaration per name");
         reg.register_cast(CastRule {
             from: TyTerm::UserDefined {
                 id,
@@ -5751,7 +5812,8 @@ mod tests {
             effect_params: 0,
             identity_params: 0,
             specializable: vec![false],
-        });
+        })
+        .expect("one declaration per name");
         let mut builder1 = PolyBuilder::new();
         let t1 = builder1.fresh_ty_var();
         reg.register_cast(CastRule {

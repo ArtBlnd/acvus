@@ -109,6 +109,7 @@ mod fx_vec {
     pub fn registry() -> Registry<TypesOnly> {
         extern_registry! {
             ns: "fx_vec",
+            types: [Vec<_>],
             fns: [consume],
         }
     }

@@ -156,7 +156,8 @@ fn instantiate_pair_shares_params() {
         effect_params: 0,
         identity_params: 0,
         specializable: vec![false],
-    });
+    })
+    .expect("one declaration per name");
     let mut builder = PolyBuilder::new();
     let t = builder.fresh_ty_var();
     let from = PolyTy::UserDefined {

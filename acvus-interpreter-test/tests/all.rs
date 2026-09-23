@@ -64,6 +64,7 @@ mod never;
 mod num;
 mod num_std;
 mod object_field_drop;
+mod one_name_one_type;
 mod operators;
 mod option_form;
 mod option_methods;

@@ -1043,11 +1043,17 @@ impl Terms {
                     }
                     ObjectMeet::Lacks { declared, field } => Err(mismatch_for(
                         self,
-                        MismatchReason::ObjectLacksDeclaredField { declared, field },
+                        MismatchReason::ObjectLacksDeclaredField {
+                            declared: declared.name,
+                            field,
+                        },
                     )),
                     ObjectMeet::Undeclared { declared, field } => Err(mismatch_for(
                         self,
-                        MismatchReason::ObjectFieldNotDeclared { declared, field },
+                        MismatchReason::ObjectFieldNotDeclared {
+                            declared: declared.name,
+                            field,
+                        },
                     )),
                     ObjectMeet::TooWide { fields } => {
                         Err(mismatch_for(self, MismatchReason::ObjectTooWide { fields }))

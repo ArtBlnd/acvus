@@ -9,9 +9,7 @@ mod plain;
 mod request;
 mod response;
 
-use acvus_extern::{
-    Contribution, ExternTypeDecl, Interner, Manifest, Registry, Runtime, SharedSignature, TyArg,
-};
+use acvus_extern::{Contribution, Interner, Manifest, Registry, Runtime, SharedSignature, TyArg};
 
 pub use client::{Client, ClientSettings};
 pub use error::HttpError;
@@ -73,10 +71,10 @@ where
 {
     let mut c: Contribution<R> = Contribution::of(Manifest {
         types: vec![
-            <Client as ExternTypeDecl>::type_decl(i),
-            <Request as ExternTypeDecl>::type_decl(i),
-            <IdempotentRequest as ExternTypeDecl>::type_decl(i),
-            <Response as ExternTypeDecl>::type_decl(i),
+            acvus_extern::DeclaredType::of::<Client>(i),
+            acvus_extern::DeclaredType::of::<Request>(i),
+            acvus_extern::DeclaredType::of::<IdempotentRequest>(i),
+            acvus_extern::DeclaredType::of::<Response>(i),
         ],
         signatures: vec![
             <request::sig::header as SharedSignature>::signature_decl(i),

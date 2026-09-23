@@ -877,7 +877,7 @@ fn loop_depths(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use acvus_mir::ty::ObjectTy;
-    use acvus_utils::Interner;
+    use acvus_utils::{Interner, QualifiedRef};
 
     use crate::regs::MAX_SCALAR_SLOTS;
 
@@ -894,7 +894,7 @@ mod tests {
 
     fn enum_of(i: &Interner, variants: &[(&str, Option<Ty>)]) -> Ty {
         Ty::Enum {
-            name: i.intern("E"),
+            name: QualifiedRef::root(i.intern("E")),
             variants: variants
                 .iter()
                 .map(|(name, ty)| (i.intern(name), ty.clone().map(Box::new)))
@@ -967,7 +967,7 @@ mod tests {
     fn a_declared_struct_lays_in_string_order_like_any_other_object() {
         let i = Interner::new();
         let ty = Ty::Object(ObjectTy::declared(
-            i.intern("Point"),
+            QualifiedRef::root(i.intern("Point")),
             [(i.intern("y"), Ty::I64), (i.intern("x"), Ty::String)]
                 .into_iter()
                 .collect(),

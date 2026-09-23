@@ -18,7 +18,7 @@ fn flag_and_outside_enum(i: &Interner) -> FxHashMap<acvus_utils::Astr, Ty> {
         (
             i.intern("e"),
             Ty::Enum {
-                name: i.intern("E"),
+                name: acvus_utils::QualifiedRef::root(i.intern("E")),
                 variants: FxHashMap::from_iter([
                     (i.intern("A"), Some(Box::new(Ty::I64))),
                     (i.intern("B"), Some(Box::new(Ty::I64))),

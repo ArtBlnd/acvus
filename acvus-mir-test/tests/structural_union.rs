@@ -38,7 +38,7 @@ fn object_ab(i: &Interner) -> TyTerm<Poly> {
 
 fn shape(i: &Interner, variants: &[&str]) -> TyTerm<Poly> {
     TyTerm::Enum {
-        name: i.intern("Shape"),
+        name: QualifiedRef::root(i.intern("Shape")),
         variants: variants
             .iter()
             .map(|v| (i.intern(v), Some(Box::new(TyTerm::I64))))

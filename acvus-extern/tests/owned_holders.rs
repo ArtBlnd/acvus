@@ -794,7 +794,7 @@ pub struct JustX {
 /// a projection's site table is built from.
 fn point_ty(i: &Interner) -> acvus_extern::Ty {
     acvus_extern::Ty::Object(acvus_extern::ObjectTy::declared(
-        i.intern("Point"),
+        acvus_extern::QualifiedRef::root(i.intern("Point")),
         [
             (
                 i.intern("x"),
@@ -1025,7 +1025,7 @@ pub enum Shape {
 /// `variant::arm_of` finds no arm and panics.
 fn shape_ty(i: &Interner) -> acvus_extern::Ty {
     acvus_extern::Ty::Enum {
-        name: i.intern("Shape"),
+        name: acvus_extern::QualifiedRef::root(i.intern("Shape")),
         variants: [
             (i.intern("Empty"), None),
             (

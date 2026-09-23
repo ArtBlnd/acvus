@@ -1821,7 +1821,7 @@ fn structural_enum_payload_type_propagates_through_context() {
         &[(
             "r",
             Ty::Enum {
-                name: i.intern("R"),
+                name: QualifiedRef::root(i.intern("R")),
                 variants,
                 home: acvus_mir::ty::Home::NONE,
             },

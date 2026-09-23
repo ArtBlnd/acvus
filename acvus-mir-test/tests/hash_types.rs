@@ -75,14 +75,16 @@ fn registry(i: &Interner) -> TypeRegistry {
         effect_params: 0,
         identity_params: 0,
         specializable: vec![true],
-    });
+    })
+    .expect("one declaration per name");
     reg.register(UserDefinedDecl {
         qref: box2_ref(i),
         type_params: vec![TyVarBound::Any],
         effect_params: 0,
         identity_params: 0,
         specializable: vec![false],
-    });
+    })
+    .expect("one declaration per name");
     reg
 }
 

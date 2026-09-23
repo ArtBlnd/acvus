@@ -22,7 +22,7 @@ fn fields(i: &Interner, names: &[&str]) -> FxHashMap<Astr, TyTerm<Poly>> {
 
 fn point_ty(i: &Interner) -> TyTerm<Poly> {
     TyTerm::Object(ObjectTy::declared(
-        i.intern("Point"),
+        QualifiedRef::root(i.intern("Point")),
         fields(i, &["x", "y"]),
     ))
 }

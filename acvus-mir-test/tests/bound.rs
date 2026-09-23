@@ -38,13 +38,15 @@ fn add_fn(i: &Interner) -> Function {
 fn types(i: &Interner) -> TypeRegistry {
     let mut registry = TypeRegistry::new();
     for (name, params) in [("Counter", 0), ("Doubled", 1)] {
-        registry.register(UserDefinedDecl {
-            qref: QualifiedRef::root(i.intern(name)),
-            type_params: vec![TyVarBound::Any; params],
-            effect_params: 0,
-            identity_params: 0,
-            specializable: vec![false; params],
-        });
+        registry
+            .register(UserDefinedDecl {
+                qref: QualifiedRef::root(i.intern(name)),
+                type_params: vec![TyVarBound::Any; params],
+                effect_params: 0,
+                identity_params: 0,
+                specializable: vec![false; params],
+            })
+            .expect("one declaration per name");
     }
     registry
 }

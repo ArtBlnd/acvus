@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 
 fn flags_ty(i: &Interner) -> TyTerm<Poly> {
     TyTerm::Object(ObjectTy::declared(
-        i.intern("Flags"),
+        QualifiedRef::root(i.intern("Flags")),
         [(i.intern("a"), TyTerm::Bool), (i.intern("b"), TyTerm::Bool)]
             .into_iter()
             .collect(),

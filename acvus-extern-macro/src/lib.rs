@@ -1230,17 +1230,21 @@ fn generate_extern_fn(
             #state_arc
             let mut __casts: ::std::vec::Vec<::acvus_extern::ExternFn<__R>> = ::std::vec::Vec::new();
             #(#casts)*
+            let __ty = #declared_ty;
+            let __bounds = vec![#(#bounds),*];
+            let __instances = #instances;
             let __declared = ::acvus_extern::ExternFn {
                 decl: ::acvus_extern::FnDecl {
                     qref: #qref,
-                    ty: #declared_ty,
-                    bounds: vec![#(#bounds),*],
+                    ty: __ty,
+                    bounds: __bounds,
                     effect_bounds: vec![#(#effect_bounds),*],
                     coercion: #coercion,
                     instance_of: #instance_of,
                     requires: __requires,
+                    names: __vars.names(),
                 },
-                instances: #instances,
+                instances: __instances,
             };
             ::core::iter::once(__declared).chain(__casts).collect()
         }
@@ -1616,6 +1620,20 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
 
     let qref = qref_expr_in(attr.ns.as_deref(), &name);
+    let declaration_form = {
+        let args = input.generics.params.iter().map(|param| match param {
+            GenericParam::Lifetime(_) => quote! { 'static },
+            GenericParam::Type(tp) if vars.runtime_ident() == Some(&tp.ident) => {
+                quote! { ::acvus_extern::TypesOnly }
+            }
+            GenericParam::Type(_) => quote! { () },
+            GenericParam::Const(c) => {
+                let ident = &c.ident;
+                quote! { #ident }
+            }
+        });
+        quote! { #ident<#(#args),*> }
+    };
     let space_hooks = match attr.space {
         false => quote! {},
         true => {
@@ -1729,7 +1747,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 __vars: &::acvus_extern::PolyVars,
             ) -> ::acvus_extern::PolyTy {
                 ::acvus_extern::PolyTy::UserDefined {
-                    id: #qref,
+                    id: __vars.extension::<Self>(__i),
                     type_args: vec![#(#type_arg_exprs),*],
                     effect_args: vec![#(#effect_arg_exprs),*],
                     identity_args: vec![#(#identity_arg_exprs),*],
@@ -1826,6 +1844,8 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
 
         impl #impl_generics ::acvus_extern::ExternTypeDecl for #ident #ty_generics #where_clause {
+            type DeclarationForm = #declaration_form;
+
             fn type_decl(__i: &::acvus_extern::Interner) -> ::acvus_extern::UserDefinedDecl {
                 ::acvus_extern::UserDefinedDecl {
                     qref: #qref,
@@ -2031,7 +2051,24 @@ fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::Toke
 
 // -- #[derive(TyArg)] ------------------------------------------------
 
-#[proc_macro_derive(TyArg, attributes(projection))]
+/// `#[ty_arg(ns = "..")]`: the namespace the type's name is under, the root
+/// when absent.
+fn parse_ty_arg_ns(attrs: &[Attribute]) -> syn::Result<Option<String>> {
+    let mut ns = None;
+    for attr in attrs.iter().filter(|a| a.path().is_ident("ty_arg")) {
+        attr.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("ns") {
+                return Err(meta.error("expected `ns`"));
+            }
+            meta.input.parse::<Token![=]>()?;
+            ns = Some(meta.input.parse::<LitStr>()?.value());
+            Ok(())
+        })?;
+    }
+    Ok(ns)
+}
+
+#[proc_macro_derive(TyArg, attributes(projection, ty_arg))]
 pub fn derive_ty_arg(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match generate_ty_arg(input) {
@@ -2048,6 +2085,10 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             "a structural type has no generic parameters",
         ));
     }
+    let qref = qref_expr_in(
+        parse_ty_arg_ns(&input.attrs)?.as_deref(),
+        &ident.to_string(),
+    );
     match &input.data {
         syn::Data::Struct(data) => {
             let syn::Fields::Named(fields) = &data.fields else {
@@ -2057,7 +2098,7 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 ));
             };
             let shape = ObjectShape::of(fields);
-            let ty = shape.declared_poly_ty(&ident.to_string());
+            let ty = shape.declared_poly_ty(ident, &qref);
             let erase = shape.erase(quote! { self });
             let materialize = shape.materialize(quote! { __value }, quote! { Self });
             let projected = input.attrs.iter().any(|a| a.path().is_ident("projection"));
@@ -2080,7 +2121,7 @@ fn generate_ty_arg(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         }
         syn::Data::Enum(data) => {
             let projected = input.attrs.iter().any(|a| a.path().is_ident("projection"));
-            generate_enum_ty_arg(ident, data, projected)
+            generate_enum_ty_arg(ident, &qref, data, projected)
         }
         syn::Data::Union(_) => Err(syn::Error::new(
             ident.span(),
@@ -2306,11 +2347,15 @@ impl<'a> ObjectShape<'a> {
 
     /// The type of the struct `name` declares: these fields and no others,
     /// so an object reaching it has all of them (RFC-0042).
-    fn declared_poly_ty(&self, name: &str) -> proc_macro2::TokenStream {
+    fn declared_poly_ty(
+        &self,
+        ident: &Ident,
+        qref: &proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
         let fields = self.fields();
         quote! {
             ::acvus_extern::PolyTy::Object(
-                ::acvus_extern::ObjectTy::declared(__i.intern(#name), #fields),
+                ::acvus_extern::ObjectTy::declared(__vars.derived::<#ident>(#qref), #fields),
             )
         }
     }
@@ -2670,6 +2715,7 @@ impl<'a> ObjectShape<'a> {
 /// struct variant's payload is the object its fields spell.
 fn generate_enum_ty_arg(
     ident: &Ident,
+    qref: &proc_macro2::TokenStream,
     data: &syn::DataEnum,
     projected: bool,
 ) -> syn::Result<proc_macro2::TokenStream> {
@@ -2784,7 +2830,7 @@ fn generate_enum_ty_arg(
 
     let ty = quote! {
         ::acvus_extern::PolyTy::Enum {
-            name: __i.intern(#name),
+            name: __vars.derived::<#ident>(#qref),
             variants: [#(#variant_tys),*].into_iter().collect(),
             home: ::acvus_extern::Home::NONE,
         }
@@ -3293,7 +3339,7 @@ pub fn extern_registry(input: TokenStream) -> TokenStream {
         ::acvus_extern::Registry::new(move |__i: &::acvus_extern::Interner| {
             let __ns: ::core::option::Option<&str> = ::core::option::Option::Some(#ns);
             let mut __contribution = ::acvus_extern::Contribution::of(::acvus_extern::Manifest {
-                types: vec![#(<#types as ::acvus_extern::ExternTypeDecl>::type_decl(__i)),*],
+                types: vec![#(::acvus_extern::DeclaredType::of::<#types>(__i)),*],
                 signatures: vec![#(
                     <#signatures as ::acvus_extern::SharedSignature>::signature_decl(__i)
                 ),*],
@@ -3495,6 +3541,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                     },
                     bounds: vec![#(#bounds),*],
                     chosen: vec![#(#chosen),*],
+                    names: __vars.names(),
                 }
             }
         }

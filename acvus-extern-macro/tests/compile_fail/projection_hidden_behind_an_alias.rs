@@ -17,3 +17,10 @@ where
     T: Var<kind::Type> + Holds;
 
 fn main() {}
+
+// An extension type's declaration form fills each parameter with `()`
+// (RFC-0021 rule 8), so `()` meets the bound the struct writes; the refusal
+// above is the payload's alone.
+impl Holds for () {
+    type Held<M> = i64;
+}

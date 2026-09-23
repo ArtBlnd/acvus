@@ -232,6 +232,9 @@ pub enum SerFieldSet {
     Written,
     AtLeast,
     Declared {
+        /// The declaration's namespace; absent at the root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<std::string::String>,
         name: std::string::String,
     },
 }
@@ -284,6 +287,9 @@ pub enum SerTy {
         err: Box<SerTy>,
     },
     Enum {
+        /// The enum's namespace; absent at the root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<std::string::String>,
         name: std::string::String,
         variants: BTreeMap<std::string::String, Option<Box<SerTy>>>,
     },
@@ -309,7 +315,8 @@ impl Ty {
             Ty::Object(object) => SerTy::Object {
                 field_set: match object.field_set() {
                     FieldSet::Declared(name) => SerFieldSet::Declared {
-                        name: interner.resolve(name).to_string(),
+                        namespace: name.namespace.map(|ns| interner.resolve(ns).to_string()),
+                        name: interner.resolve(name.name).to_string(),
                     },
                     FieldSet::Written => SerFieldSet::Written,
                     FieldSet::AtLeast => SerFieldSet::AtLeast,
@@ -362,7 +369,8 @@ impl Ty {
                 err: Box::new(err.to_ser(interner)),
             },
             Ty::Enum { name, variants, .. } => SerTy::Enum {
-                name: interner.resolve(*name).to_string(),
+                namespace: name.namespace.map(|ns| interner.resolve(ns).to_string()),
+                name: interner.resolve(name.name).to_string(),
                 variants: variants
                     .iter()
                     .map(|(k, v)| {
@@ -404,9 +412,13 @@ impl SerTy {
                     .map(|(k, v)| (interner.intern(k), v.to_ty(interner)))
                     .collect();
                 Ty::Object(match field_set {
-                    SerFieldSet::Declared { name } => {
-                        ObjectTy::declared(interner.intern(name), fields)
-                    }
+                    SerFieldSet::Declared { namespace, name } => ObjectTy::declared(
+                        QualifiedRef {
+                            namespace: namespace.as_deref().map(|ns| interner.intern(ns)),
+                            name: interner.intern(name),
+                        },
+                        fields,
+                    ),
                     SerFieldSet::Written => ObjectTy::written(fields),
                     SerFieldSet::AtLeast => ObjectTy::at_least(fields),
                 })
@@ -446,8 +458,15 @@ impl SerTy {
             SerTy::Result { ok, err } => {
                 Ty::Result(Box::new(ok.to_ty(interner)), Box::new(err.to_ty(interner)))
             }
-            SerTy::Enum { name, variants } => Ty::Enum {
-                name: interner.intern(name),
+            SerTy::Enum {
+                namespace,
+                name,
+                variants,
+            } => Ty::Enum {
+                name: QualifiedRef {
+                    namespace: namespace.as_deref().map(|ns| interner.intern(ns)),
+                    name: interner.intern(name),
+                },
                 variants: variants
                     .iter()
                     .map(|(k, v)| {

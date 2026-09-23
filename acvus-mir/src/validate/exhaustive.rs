@@ -159,7 +159,7 @@ fn missed_variants(
 /// write `E::B` rather than a bare tag.
 fn enum_name_of(body: &MirBody, value: ValueId) -> Option<Astr> {
     match &*scrutinee_ty(body, value)? {
-        Ty::Enum { name, .. } => Some(*name),
+        Ty::Enum { name, .. } => Some(name.name),
         _ => None,
     }
 }
