@@ -24,6 +24,15 @@ fn runs_to(source: &str, value: &str) {
     }
 }
 
+fn refused_with(source: &str, words: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        match outcome(source, opt) {
+            Outcome::Refused(why) => assert!(why.contains(words), "at {opt:?}: {why}"),
+            other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
+        }
+    }
+}
+
 #[test]
 fn corpus_child() {
     corpus::child();
@@ -123,6 +132,70 @@ fn a_list_pattern_reads_its_head_and_its_tail() {
     runs_to(
         "let a = [1, 2, 3]; match &a { [x, .., y] => *x + *y, _ => 0, }",
         "4",
+    );
+}
+
+/// RFC-0024 rule 5: a pattern on a source whose type is still open is
+/// checked against its own referent and joined when the type settles.
+#[test]
+fn a_list_pattern_on_a_lambda_parameter() {
+    runs_to(
+        "let f = |r| -> match r { [1, x, _z] => *x, _ => 0, }; let a = [1, 5, 9]; f(&a)",
+        "5",
+    );
+}
+
+/// A `..` rest at a source still open: the length the call settles is held
+/// to at least the parts, and a tail part is placed by it.
+#[test]
+fn a_list_pattern_with_a_rest_on_a_lambda_parameter() {
+    runs_to(
+        "let f = |r| -> match r { [1, x, ..] => *x, _ => 0, }; let a = [1, 5, 9, 11]; f(&a)",
+        "5",
+    );
+    runs_to(
+        "let f = |r| -> match r { [1, .., y] => *y, _ => 0, }; let a = [1, 5, 9, 11]; f(&a)",
+        "11",
+    );
+}
+
+/// RFC-0024 rule 2: a source the call settles to a value binds its words by
+/// value.
+#[test]
+fn a_list_pattern_on_a_lambda_parameter_passed_by_value() {
+    runs_to(
+        "let f = |r| -> match r { [1, x, _z] => x, _ => 0, }; let a = [1, 5, 9]; f(a)",
+        "5",
+    );
+}
+
+/// A list pattern's length is checked, not tested: a source the call
+/// settles to a length the pattern cannot match is refused, as a known one
+/// is, and does not fall to `_`.
+#[test]
+fn a_list_pattern_on_a_lambda_parameter_of_another_length_is_refused() {
+    refused_with(
+        "let f = |r| -> match r { [1, x, _z] => *x, _ => 0, }; let a = [1, 5]; f(&a)",
+        "array pattern needs length 3, got 2",
+    );
+    refused_with(
+        "let f = |r| -> match r { [1, x, y, ..] => *x, _ => 0, }; let a = [1, 5]; f(&a)",
+        "array pattern needs length at least 3, got 2",
+    );
+}
+
+/// RFC-0024 rule 5: a head nothing settles reads the value, and nothing
+/// settles its length either; a length has no least element to take, so
+/// the pattern is refused.
+#[test]
+fn a_list_pattern_on_a_source_nothing_settles_is_refused() {
+    refused_with(
+        "let f = |r| -> match r { [1, x, _z] => 1, _ => 0, }; 3",
+        "array length is not known here",
+    );
+    refused_with(
+        "let f = |r| -> match r { [1, x, ..] => 1, _ => 0, }; 3",
+        "array length is not known here",
     );
 }
 

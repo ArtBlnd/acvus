@@ -64,16 +64,6 @@ fn an_option_holds_a_reference() {
     runs_to("let x = 5; match Some(&x) { Some(r) => *r, _ => 0, }", "5");
 }
 
-/// RFC-0024 rule 5: a pattern on a source whose type is still open is
-/// checked against its own referent and joined when the type settles.
-#[test]
-fn a_list_pattern_on_a_lambda_parameter() {
-    runs_to(
-        "let f = |r| -> match r { [1, x, _z] => *x, _ => 0, }; let a = [1, 5, 9]; f(&a)",
-        "5",
-    );
-}
-
 /// RFC-0062 rule 3: a string pattern admits a `String` or `&str`
 /// scrutinee; RFC-0042 rule 1: a pattern is a lower bound.
 #[test]

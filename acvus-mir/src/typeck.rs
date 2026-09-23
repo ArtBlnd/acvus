@@ -1115,6 +1115,17 @@ struct ReadUnderOpenHead {
     span: Span,
 }
 
+/// A list pattern's demand on its source's length: exactly its parts
+/// without `..`, at least them with it. The length is read once the solve
+/// has joined every pattern with its source, so a source still open at the
+/// pattern is held to it as a known one is.
+struct ListPatternLength {
+    len: LenTerm<Infer>,
+    pattern_min: usize,
+    exact: bool,
+    span: Span,
+}
+
 /// What an open head was read by: a field reads a value or through a
 /// reference, and `*` only through one.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1227,6 +1238,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     deferred_context_binds: Vec<Span>,
     context_binds_under_open_head: Vec<DeferredContextBind>,
     reads_under_open_head: Vec<ReadUnderOpenHead>,
+    list_pattern_lengths: Vec<ListPatternLength>,
     /// Accumulated errors.
     errors: Vec<MirError>,
     /// What the expression under check is read for. One field, so
@@ -1324,6 +1336,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             deferred_context_binds: Vec::new(),
             context_binds_under_open_head: Vec::new(),
             reads_under_open_head: Vec::new(),
+            list_pattern_lengths: Vec::new(),
             demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
             effect_bound_sites: Vec::new(),
@@ -3586,6 +3599,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.place_opened_children();
         self.report_unsettled(unsettled);
         self.check_reads_under_open_head();
+        self.check_list_pattern_lengths();
         for BranchMismatch { then, else_, span } in std::mem::take(&mut self.branch_mismatches) {
             self.error(
                 MirErrorKind::UnificationFailure {
@@ -7600,6 +7614,41 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// Every list pattern's length, as the solve left it: a known length
+    /// is held to the pattern's parts, and one nothing settled is refused,
+    /// since the lowering places a tail part by it.
+    fn check_list_pattern_lengths(&mut self) {
+        let lengths = std::mem::take(&mut self.list_pattern_lengths);
+        for ListPatternLength {
+            len,
+            pattern_min,
+            exact,
+            span,
+        } in lengths
+        {
+            match self.solver.resolve_len(&len) {
+                LenTerm::Known(got) => {
+                    let fits = if exact {
+                        got == pattern_min
+                    } else {
+                        got >= pattern_min
+                    };
+                    if !fits {
+                        self.error(
+                            MirErrorKind::ArrayLengthMismatch {
+                                pattern_min,
+                                exact,
+                                got,
+                            },
+                            span,
+                        );
+                    }
+                }
+                LenTerm::Var(_) => self.error(MirErrorKind::ArrayLengthUnknown, span),
+            }
+        }
+    }
+
     /// A context holds data, and data holds no reference (RFC-0014): a
     /// context bound by a pattern that read through a reference is
     /// refused, whether the head said so at once or only once it settled.
@@ -7751,28 +7800,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         (var, len)
                     }
                 };
-                let pattern_min = head.len() + tail.len();
-                let exact = rest.is_none();
-                match self.solver.resolve_len(&len) {
-                    LenTerm::Known(got) => {
-                        let fits = if exact {
-                            got == pattern_min
-                        } else {
-                            got >= pattern_min
-                        };
-                        if !fits {
-                            self.error(
-                                MirErrorKind::ArrayLengthMismatch {
-                                    pattern_min,
-                                    exact,
-                                    got,
-                                },
-                                span,
-                            );
-                        }
-                    }
-                    LenTerm::Var(_) => self.error(MirErrorKind::ArrayLengthUnknown, span),
-                }
+                self.list_pattern_lengths.push(ListPatternLength {
+                    len,
+                    pattern_min: head.len() + tail.len(),
+                    exact: rest.is_none(),
+                    span,
+                });
                 for p in head.iter().chain(tail.iter()) {
                     self.check_pattern(p, &elem_ty, PatternSource::Member, span);
                 }
