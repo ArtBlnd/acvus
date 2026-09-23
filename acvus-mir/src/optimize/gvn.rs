@@ -5,14 +5,14 @@
 
 use std::mem::Discriminant;
 
-use acvus_ast::{BinOp, Literal};
+use acvus_ast::Literal;
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::ir::{InstKind, ValueId};
+use crate::ir::{BinOp, InstKind, ValueId};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, Ty};
 
@@ -81,6 +81,8 @@ fn commutes(op: BinOp, operand: &Ty) -> bool {
                 | BinOp::BitAnd
                 | BinOp::BitOr
                 | BinOp::Xor
+                | BinOp::Min
+                | BinOp::Max
         ),
         Ty::Bool => matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Xor),
         Ty::Float | Ty::Char => matches!(op, BinOp::Eq | BinOp::Neq),
@@ -406,6 +408,9 @@ impl Numbering {
                 .get(&operand.number)
                 .and_then(|word| word.int_value())
         };
+        if matches!(op, BinOp::Min | BinOp::Max) && left.number == right.number {
+            return Some(left.value);
+        }
         match (op, int(left), int(right)) {
             (BinOp::Add | BinOp::Sub, _, Some(0)) | (BinOp::Mul, _, Some(1)) => Some(left.value),
             (BinOp::Add, Some(0), _) | (BinOp::Mul, Some(1), _) => Some(right.value),

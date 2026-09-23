@@ -1,6 +1,6 @@
 //! Intent tests for RFC-0020.
 
-use acvus_ast::BinOp;
+use acvus_mir::ir::BinOp;
 use acvus_mir::ir::{Callee, InstKind, MirModule, ValueId};
 use acvus_mir::ty::Ty;
 use acvus_mir_test::*;

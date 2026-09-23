@@ -1,6 +1,8 @@
 use std::fmt;
 
-use acvus_ast::{BinOp, Literal, UnaryOp};
+use acvus_ast::{Literal, UnaryOp};
+
+use crate::ir::BinOp;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -81,26 +83,33 @@ fn fmt_literal(lit: &Literal) -> String {
     }
 }
 
-fn fmt_binop(op: BinOp) -> &'static str {
+enum Spelling {
+    Infix(&'static str),
+    Call(&'static str),
+}
+
+fn fmt_binop(op: BinOp) -> Spelling {
     match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
-        BinOp::Div => "/",
-        BinOp::Eq => "==",
-        BinOp::Neq => "!=",
-        BinOp::Lt => "<",
-        BinOp::Gt => ">",
-        BinOp::Lte => "<=",
-        BinOp::Gte => ">=",
-        BinOp::And => "&&",
-        BinOp::Or => "||",
-        BinOp::Xor => "^",
-        BinOp::BitAnd => "&",
-        BinOp::BitOr => "|",
-        BinOp::Shl => "<<",
-        BinOp::Shr => ">>",
-        BinOp::Mod => "%",
+        BinOp::Add => Spelling::Infix("+"),
+        BinOp::Sub => Spelling::Infix("-"),
+        BinOp::Mul => Spelling::Infix("*"),
+        BinOp::Div => Spelling::Infix("/"),
+        BinOp::Eq => Spelling::Infix("=="),
+        BinOp::Neq => Spelling::Infix("!="),
+        BinOp::Lt => Spelling::Infix("<"),
+        BinOp::Gt => Spelling::Infix(">"),
+        BinOp::Lte => Spelling::Infix("<="),
+        BinOp::Gte => Spelling::Infix(">="),
+        BinOp::And => Spelling::Infix("&&"),
+        BinOp::Or => Spelling::Infix("||"),
+        BinOp::Xor => Spelling::Infix("^"),
+        BinOp::BitAnd => Spelling::Infix("&"),
+        BinOp::BitOr => Spelling::Infix("|"),
+        BinOp::Shl => Spelling::Infix("<<"),
+        BinOp::Shr => Spelling::Infix(">>"),
+        BinOp::Mod => Spelling::Infix("%"),
+        BinOp::Min => Spelling::Call("min"),
+        BinOp::Max => Spelling::Call("max"),
     }
 }
 
@@ -388,14 +397,17 @@ fn write_body(
                 op,
                 left,
                 right,
-            } => writeln!(
-                f,
-                "{} = {} {} {}",
-                vn.fmt_val(*dst),
-                vn.fmt_use(*left, &consts, &texts),
-                fmt_binop(*op),
-                vn.fmt_use(*right, &consts, &texts)
-            )?,
+            } => {
+                let (dst, left, right) = (
+                    vn.fmt_val(*dst),
+                    vn.fmt_use(*left, &consts, &texts),
+                    vn.fmt_use(*right, &consts, &texts),
+                );
+                match fmt_binop(*op) {
+                    Spelling::Infix(op) => writeln!(f, "{dst} = {left} {op} {right}")?,
+                    Spelling::Call(name) => writeln!(f, "{dst} = {name}({left}, {right})")?,
+                }
+            }
             InstKind::UnaryOp { dst, op, operand } => writeln!(
                 f,
                 "{} = {}{}",

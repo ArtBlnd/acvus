@@ -1,0 +1,2 @@
+// expect 600
+let s = 0; for i in -100i8..100i8 { s = s + 3; } s

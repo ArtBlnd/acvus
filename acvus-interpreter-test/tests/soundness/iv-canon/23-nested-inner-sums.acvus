@@ -1,0 +1,2 @@
+// expect 7192123
+let v = vec([0, 0, 0]); let j = 1; for x in &mut v { let q = j; let r = 0; for k in 0..4 { q = q + 3; r = r + k; } *x = q + r; j = j + 2; } j * 1000000 + v[0u64] * 10000 + v[1u64] * 100 + v[2u64]

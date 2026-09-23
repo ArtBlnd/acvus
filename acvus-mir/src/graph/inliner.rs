@@ -1264,7 +1264,7 @@ mod tests {
             vec![
                 InstKind::BinOp {
                     dst: v(1),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(0),
                 },
@@ -1520,7 +1520,7 @@ mod tests {
             (0..adds)
                 .map(|n| InstKind::BinOp {
                     dst: ValueId::from_raw(n + 1),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(n),
                     right: v(0),
                 })

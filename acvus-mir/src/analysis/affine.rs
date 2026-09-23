@@ -32,7 +32,7 @@
 //! `optimize::lsr` rewrites from that and does not match the instructions
 //! a second time.
 
-use acvus_ast::BinOp;
+use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
 
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, Term};

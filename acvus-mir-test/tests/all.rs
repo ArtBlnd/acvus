@@ -19,6 +19,7 @@ mod diamond;
 mod e2e;
 mod effect;
 mod effect_floor;
+mod empty_loop;
 mod error_types;
 mod exclusion;
 mod fold;

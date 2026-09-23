@@ -1,0 +1,2 @@
+// expect 30
+let s = 0; for i in 250u8..(@top as u8) { s = s + 6; } s

@@ -83,12 +83,15 @@ fn loop_tests_before(body: &str, needle: &str) -> usize {
 
 /// The exit post-dominates the header, so post-dominance alone would take
 /// this multiplication into the header and run it once per iteration.
+///
+/// The loop sums `s` so that it stays a loop: a body left doing nothing is
+/// removed (RFC-0084), and there would be no header to stay out of.
 #[test]
 fn a_multiplication_after_a_loop_stays_after_it() {
     let i = Interner::new();
     let ir = compile_script_mode_optimized(
         &i,
-        "let i = 0; while i < @n { i = i + 1; } i * 2",
+        "let i = 0; let s = 0; while i < @n { s = s + i; i = i + 1; } i * 2 + s",
         &ctx(&i, &[("n", Ty::I64)]),
     )
     .unwrap();
@@ -98,14 +101,15 @@ fn a_multiplication_after_a_loop_stays_after_it() {
 
 /// The same instruction one level in: written between the inner loop and
 /// the outer one, it belongs to the outer loop's body and not to the inner
-/// loop's head.
+/// loop's head. The inner loop sums `s` for the reason the loop above does.
 #[test]
 fn a_multiplication_between_two_loops_stays_between_them() {
     let i = Interner::new();
     let ir = compile_script_mode_optimized(
         &i,
         "let total = 1; let t = 0; \
-         while t < @n { let j = 0; while j < @n { j = j + 1; } total = total * j; t = t + 1; } \
+         while t < @n { let j = 0; let s = 0; while j < @n { s = s + j; j = j + 1; } \
+         total = total * j + s; t = t + 1; } \
          total",
         &ctx(&i, &[("n", Ty::I64)]),
     )

@@ -27,7 +27,9 @@
 //! extern's declared effect does not say that it returns: `unwrap` is
 //! `pure` and panics. A bound that holds either keeps the loop a `while`.
 
-use acvus_ast::{BinOp, Literal, Span, SuffixedInt};
+use acvus_ast::{Literal, Span, SuffixedInt};
+
+use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 

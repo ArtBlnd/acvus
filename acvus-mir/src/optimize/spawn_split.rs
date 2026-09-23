@@ -344,7 +344,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(1),
                 },

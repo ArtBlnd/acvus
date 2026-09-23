@@ -1,0 +1,2 @@
+// expect 12
+let t = 0; for i in 0..@hi { let q = 0; for k in 0..@hi { } t = t + 1; } t * 6

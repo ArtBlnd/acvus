@@ -26,7 +26,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use acvus_ast::{BinOp, Literal, Span};
+use acvus_ast::{Literal, Span};
+
+use crate::ir::BinOp;
 use acvus_utils::{Astr, LocalFactory};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;

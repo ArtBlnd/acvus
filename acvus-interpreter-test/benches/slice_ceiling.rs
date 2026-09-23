@@ -287,7 +287,7 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     })
     .push(InstKind::BinOp {
         dst: c.test,
-        op: acvus_ast::BinOp::Lt,
+        op: acvus_mir::ir::BinOp::Lt,
         left: c.index,
         right: c.length,
     })
@@ -336,19 +336,19 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     let [query, keys] = operands();
     b.push(InstKind::BinOp {
         dst: c.product,
-        op: acvus_ast::BinOp::Mul,
+        op: acvus_mir::ir::BinOp::Mul,
         left: query.element,
         right: keys.element,
     })
     .push(InstKind::BinOp {
         dst: c.sum,
-        op: acvus_ast::BinOp::Add,
+        op: acvus_mir::ir::BinOp::Add,
         left: c.accumulator,
         right: c.product,
     })
     .push(InstKind::BinOp {
         dst: c.next_index,
-        op: acvus_ast::BinOp::Add,
+        op: acvus_mir::ir::BinOp::Add,
         left: c.index,
         right: c.one,
     })

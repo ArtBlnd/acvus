@@ -72,7 +72,9 @@
 //! it is not reduced: the pattern RFC-0056 states multiplies a carried
 //! header parameter.
 
-use acvus_ast::{BinOp, Span};
+use acvus_ast::Span;
+
+use crate::ir::BinOp;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};

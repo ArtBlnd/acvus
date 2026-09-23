@@ -1,0 +1,2 @@
+// expect 7
+for i in 0..@hi { } 7
