@@ -277,7 +277,9 @@ fn a_loop_merging_through_a_lawful_extern_is_left_as_written() {
     );
     assert_eq!(
         where_it_multiplies(&lawless),
-        [format!("{ENTRY}: 2")],
-        "`saturating_add` declares no law, so the loop is strong and reduced:\n{lawless}"
+        Vec::<String>::new(),
+        "`saturating_add` declares no law, so the loop is strong and reduced: its \
+         body keeps no `i * @k`, and the start `0 * @k + @x` and step `1 * @k` \
+         are `@x` and `@k` (RFC-0083):\n{lawless}"
     );
 }
