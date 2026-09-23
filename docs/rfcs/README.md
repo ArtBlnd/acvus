@@ -81,6 +81,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0076: A box is keyed by its payload's canonical type, and an extension holds values through `Erased`
 - RFC-0077: A converted `&place` argument is taken out of its slot for the call
 - RFC-0080: A fact unsafe code relies on is held by a type or asserted with `unsafe`
+- RFC-0082: An extern states its laws and its postconditions in a closed vocabulary, and a pass reads each (Proposed)
 
 ### [identity.md](identity.md)
 

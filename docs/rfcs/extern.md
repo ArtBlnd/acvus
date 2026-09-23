@@ -917,3 +917,50 @@ such fact visible where it is made.
   alone, so the trait is `Runtime`'s supertrait and a handler reaches it
   through the same bound; `unsafe` is what keeps it from a handler.
 - Debug asserts on the trusted facts — they vanish in the build that runs.
+
+## RFC-0082: An extern states its laws and its postconditions in a closed vocabulary, and a pass reads each
+
+Status: Proposed
+
+1. **A declaration has a reader.** An extern states only what a pass reads.
+   A law or a postcondition no pass reads is not written, and a form is
+   added to the vocabulary with the pass that reads it.
+2. **Laws of a binary extern.** `#[extern_fn(law(associative, commutative,
+   identity = e))]` on `f(a, b)` states that `f` is associative, that it is
+   commutative, and that `e`, a constant or a registered extern of no
+   argument, is its identity. Any subset may be stated.
+3. **Laws of a storage write.** `#[extern_fn(law(fold(combine = g,
+   identity = e)))]` on `f(&mut s, x)` states that a run of `f` over `s`
+   equals `g` applied to the states that runs over its parts reach, each
+   part started from `e`. Without `commutative`, `g` keeps the parts in
+   order. `g` and `e` are registered externs.
+4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2))]` relates two terms
+   by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
+   parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and
+   `+`, `−`, `×` and `max` of terms. There is no quantifier, no condition
+   and no function of the author's.
+5. **Both are the author's promise.** The checker and every pass trust a
+   law and a postcondition as they trust an effect (RFC-0080 rule 3), and
+   an extern that breaks one answers for what a pass does with it. A debug
+   build evaluates each postcondition at the extern's return; a law is
+   sampled only by tests.
+6. **The readers.** `analysis::carried` classifies a header parameter
+   whose back edges send `f(p, x)` for an associative `f`, or pass it to a
+   storage write with a `fold` law, as a `Merge` (RFC-0066 rule 5), exact
+   when `f` is. Postconditions are read by the interval analysis and are
+   built with it.
+
+**Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
+extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no
+pass can see. The author of an extension is the one who knows them, as
+with effects. A vocabulary sized to what a pass reads keeps every
+declaration meaningful and keeps the promise small enough to state.
+**Cost.** A second kind of trusted promise beside effects, and a debug
+evaluation of postconditions at every return.
+**Rejected.**
+- Quantifiers, conditional relations and functions of the author's — the
+  language becomes a proof assistant, and no pass reads what it states.
+- Preconditions a checker proves at each call — a refinement type system,
+  far beyond what any pass needs.
+- Laws inferred from the handler's body — the body is Rust, opaque to the
+  checker.
