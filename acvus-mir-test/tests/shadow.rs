@@ -7,12 +7,12 @@
 //! `vec`, `deque` and `string`, and `count` by `iter`.
 
 use acvus_extern::{Externs, TypesOnly};
-use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
 use acvus_mir::ir::Callee;
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm};
+use acvus_mir::typeck::CallTarget;
 use acvus_utils::{Freeze, Interner};
 
 fn script_fn(i: &Interner, source: &str) -> Function {

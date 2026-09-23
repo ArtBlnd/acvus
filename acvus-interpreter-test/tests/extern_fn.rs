@@ -1091,8 +1091,14 @@ async fn a_lambda_calling_a_captured_parameter_takes_its_effect() {
     };
     let programs = [
         ("let h = |g| -> (|x| -> g(x))(1); h(|y| -> tick(y))", 1),
-        ("let h = |g| -> { let k = |x| -> g(x); k(1) }; h(|y| -> tick(y))", 1),
-        ("let h = |g| -> { (|x| -> g(x))(1); 0 }; h(|y| -> tick(y))", 0),
+        (
+            "let h = |g| -> { let k = |x| -> g(x); k(1) }; h(|y| -> tick(y))",
+            1,
+        ),
+        (
+            "let h = |g| -> { (|x| -> g(x))(1); 0 }; h(|y| -> tick(y))",
+            0,
+        ),
         (
             "let each_any = |f| -> f(1); let h = |g| -> each_any(|x| -> g(x)); h(|y| -> tick(y))",
             1,
@@ -1129,7 +1135,10 @@ fn make_tags(n: i64) -> Vec<Tag> {
 }
 
 #[extern_fn(effect = pure)]
-fn sum_tag_slice<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<acvus_extern::Shared, Rt>) -> i64
+fn sum_tag_slice<Rt>(
+    ctx: &mut acvus_extern::Ctx<'_, Rt>,
+    xs: TagSlice<acvus_extern::Shared, Rt>,
+) -> i64
 where
     Rt: acvus_extern::Runtime,
 {
@@ -1152,7 +1161,10 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn grow_tags<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<acvus_extern::Shared, Rt>) -> Vec<Tag>
+fn grow_tags<Rt>(
+    ctx: &mut acvus_extern::Ctx<'_, Rt>,
+    xs: TagSlice<acvus_extern::Shared, Rt>,
+) -> Vec<Tag>
 where
     Rt: acvus_extern::Runtime,
 {
@@ -1338,7 +1350,9 @@ const MAP_OF_INTS: &str =
 
 #[test]
 fn a_derived_type_at_a_known_effect_is_not_the_one_a_generic_constructor_made() {
-    let messages = held_refusal(&format!("{MAP_OF_INTS} let k = keys(&m); keys_at_pure(&mut k)"));
+    let messages = held_refusal(&format!(
+        "{MAP_OF_INTS} let k = keys(&m); keys_at_pure(&mut k)"
+    ));
     assert!(
         messages.contains("expected &mut Keys<i64, i64, #Pure>, got &mut Keys<i64, i64, Pure>"),
         "{messages}"
@@ -1347,8 +1361,9 @@ fn a_derived_type_at_a_known_effect_is_not_the_one_a_generic_constructor_made() 
 
 #[test]
 fn a_derived_type_at_a_known_effect_by_value_is_not_the_one_a_generic_constructor_made() {
-    let messages =
-        held_refusal(&format!("{MAP_OF_INTS} let k = keys(&m); keys_at_pure_by_value(k)"));
+    let messages = held_refusal(&format!(
+        "{MAP_OF_INTS} let k = keys(&m); keys_at_pure_by_value(k)"
+    ));
     assert!(
         messages.contains("expected Keys<i64, i64, #Pure>, got Keys<i64, i64, Pure>"),
         "{messages}"
@@ -1366,8 +1381,7 @@ fn a_map_at_concrete_types_by_value_is_not_the_one_a_generic_constructor_made() 
 
 #[test]
 fn a_deque_at_a_concrete_type_by_value_is_not_the_one_a_generic_constructor_made() {
-    let messages =
-        held_refusal("let d = deque(); push_back(&mut d, 1); deque_at_ints_by_value(d)");
+    let messages = held_refusal("let d = deque(); push_back(&mut d, 1); deque_at_ints_by_value(d)");
     assert!(
         messages.contains("expected Deque<#i64>, got Deque<i64>"),
         "{messages}"

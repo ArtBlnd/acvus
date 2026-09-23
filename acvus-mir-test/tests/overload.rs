@@ -15,12 +15,12 @@ use acvus_ext::Items;
 use acvus_extern::{
     Arr, Closure, Externs, Registry, Runtime, TypesOnly, Var, extern_fn, extern_registry, kind,
 };
-use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
 use acvus_mir::ir::Callee;
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeRegistry};
+use acvus_mir::typeck::CallTarget;
 use acvus_utils::{Freeze, Interner};
 
 mod fx_a {

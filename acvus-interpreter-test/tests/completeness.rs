@@ -89,10 +89,7 @@ fn a_field_read_through_a_lambda_parameter() {
 /// mutably.
 #[test]
 fn a_store_through_a_lambda_parameter() {
-    runs_to(
-        "let x = 0; let f = |r| -> { *r = 1; 0 }; f(&mut x); x",
-        "1",
-    );
+    runs_to("let x = 0; let f = |r| -> { *r = 1; 0 }; f(&mut x); x", "1");
 }
 
 /// RFC-0018 rule 9: a holder is live to its last read, as liveness counts

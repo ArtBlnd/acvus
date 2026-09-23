@@ -107,10 +107,7 @@ fn nested_objects_tuples_and_arrays_compare_at_every_depth() {
         ),
         "false",
     );
-    runs_to(
-        "[{ a: 1, }, { a: 2, }] == [{ a: 1, }, { a: 3, }]",
-        "false",
-    );
+    runs_to("[{ a: 1, }, { a: 2, }] == [{ a: 1, }, { a: 3, }]", "false");
     runs_to("{ a: 1, } != { a: 2, }", "true");
     runs_to("{ a: 1, } != { a: 1, }", "false");
 }
@@ -225,18 +222,12 @@ fn a_named_eq_compares_field_by_field() {
 
 #[test]
 fn a_lambda_parameter_settled_to_a_structural_type() {
-    runs_to(
-        "let f = |a, b| -> a == b; f({ x: 1, }, { x: 1, })",
-        "true",
-    );
+    runs_to("let f = |a, b| -> a == b; f({ x: 1, }, { x: 1, })", "true");
     runs_to(
         "let f = |a, b| -> a == b; let o = { x: 1, }; let p = { x: 2, }; f(&o, &p)",
         "false",
     );
-    runs_to(
-        "let f = |r| -> clone(r); let o = { x: 3, }; f(&o).x",
-        "3",
-    );
+    runs_to("let f = |r| -> clone(r); let o = { x: 3, }; f(&o).x", "3");
 }
 
 #[test]

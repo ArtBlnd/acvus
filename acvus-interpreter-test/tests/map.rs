@@ -153,7 +153,9 @@ fn a_string_keyed_map_over_the_key_s_own_instances_finds_an_equal_string() {
 #[test]
 fn a_set_over_the_key_s_own_instances_keeps_one_of_each_key() {
     assert_eq!(
-        count("let s = hash_set(); insert(&mut s, 1); insert(&mut s, 1); insert(&mut s, 2); len(&s)"),
+        count(
+            "let s = hash_set(); insert(&mut s, 1); insert(&mut s, 1); insert(&mut s, 2); len(&s)"
+        ),
         2
     );
     assert!(boolean(

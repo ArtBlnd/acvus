@@ -14,7 +14,10 @@ const LINEAR_WORK_LIMIT: Duration = Duration::from_secs(20);
 #[test]
 fn a_run_of_branches_is_validated_in_time_linear_in_its_length() {
     let source: String = std::iter::once("let x = 0;\n".to_string())
-        .chain((0..BRANCHES).map(|i| format!("if @a == {i} {{ x = x + 1; }} else {{ x = x + 2; }};\n")))
+        .chain(
+            (0..BRANCHES)
+                .map(|i| format!("if @a == {i} {{ x = x + 1; }} else {{ x = x + 2; }};\n")),
+        )
         .chain(std::iter::once("x\n".to_string()))
         .collect();
     let (sent, received) = mpsc::channel();

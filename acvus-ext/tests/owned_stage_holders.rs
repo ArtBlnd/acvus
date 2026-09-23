@@ -275,7 +275,8 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract, exclusively.
-        let target = unsafe { <V as acvus_extern::Borrowable<Counted>>::deref_mut(self, reference) };
+        let target =
+            unsafe { <V as acvus_extern::Borrowable<Counted>>::deref_mut(self, reference) };
         open_mut::<T>(target)
     }
 

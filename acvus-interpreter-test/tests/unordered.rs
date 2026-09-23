@@ -166,7 +166,11 @@ async fn results_keep_input_order_when_completion_is_reversed() {
         &p,
     )
     .await;
-    assert_eq!(p.completed(), vec![4, 3, 2, 1, 0], "the calls completed last first");
+    assert_eq!(
+        p.completed(),
+        vec![4, 3, 2, 1, 0],
+        "the calls completed last first"
+    );
     assert_eq!(v, IN_ORDER, "the results come out in input order");
 }
 

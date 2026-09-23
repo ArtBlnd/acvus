@@ -136,7 +136,10 @@ fn an_operator_on_an_extension_value_is_a_call_of_its_shared_signature() {
 fn a_call_of_the_wrong_arity_is_refused_in_every_form() {
     refused_with("abs(1, 2)", "function `abs` expects 1 arguments, got 2");
     refused_with("max(1, 2, 3)", "no `max` takes a call of type");
-    refused_with("(0 - 1).abs(2)", "function `abs` expects 1 arguments, got 2");
+    refused_with(
+        "(0 - 1).abs(2)",
+        "function `abs` expects 1 arguments, got 2",
+    );
     refused_with("[1].len(2)", "no `len` takes a call of type");
     refused_with("1 | abs(2)", "function `abs` expects 1 arguments, got 2");
     refused_with(

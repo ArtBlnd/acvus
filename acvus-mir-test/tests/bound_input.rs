@@ -138,7 +138,10 @@ fn binding_an_integer_decides_a_comparison() {
         required(BY_SIZE, &[("n", Literal::Int(5))]),
         names(&["many"])
     );
-    assert_eq!(required(BY_SIZE, &[("n", Literal::Int(1))]), names(&["few"]));
+    assert_eq!(
+        required(BY_SIZE, &[("n", Literal::Int(1))]),
+        names(&["few"])
+    );
 }
 
 #[test]

@@ -3,7 +3,6 @@
 //! admissible answers that settles when one remains, and a body is
 //! checked, then queried, then solved once.
 
-use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -13,6 +12,7 @@ use acvus_mir::ty::{
     CastRule, Effect, Instances, LenTerm, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Scheme,
     Solver, Sources, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
 };
+use acvus_mir::typeck::CallTarget;
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 

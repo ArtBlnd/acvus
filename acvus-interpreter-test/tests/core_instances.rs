@@ -42,7 +42,11 @@ fn both(source: &str, ret: Ty) -> Value {
         .unwrap_or_else(|r| panic!("Opt::Full refused:\n  {}", r.messages.join("\n  ")));
     let none = compile_and_run(source, ret, Opt::None)
         .unwrap_or_else(|r| panic!("Opt::None refused:\n  {}", r.messages.join("\n  ")));
-    assert_eq!(full.bits(), none.bits(), "the two optimization levels agree");
+    assert_eq!(
+        full.bits(),
+        none.bits(),
+        "the two optimization levels agree"
+    );
     full
 }
 
@@ -107,7 +111,9 @@ fn the_instances_at_bool_order_false_before_true() {
     assert_eq!(int("let a = true; let b = true; cmp(&a, &b)"), 0);
     assert!(boolean("let a = true; let b = true; eq(&a, &b)"));
     assert!(boolean("let a = true; clone(&a)"));
-    assert!(boolean("let a = false; let b = false; hash(&a) == hash(&b)"));
+    assert!(boolean(
+        "let a = false; let b = false; hash(&a) == hash(&b)"
+    ));
 }
 
 #[test]
@@ -127,10 +133,7 @@ fn the_instances_at_string_order_bytewise_and_hash_equal_strings_alike() {
         boolean(r#"let a = "abc".to_string(); let b = "abc".to_string(); hash(&a) == hash(&b)"#),
         "two equal strings hash equal"
     );
-    assert_eq!(
-        count(r#"let a = "abc".to_string(); clone(&a).len()"#),
-        3
-    );
+    assert_eq!(count(r#"let a = "abc".to_string(); clone(&a).len()"#), 3);
 }
 
 #[test]
@@ -150,7 +153,9 @@ const NESTED_VECS: &str = "let outer = vec([vec([1, 2]), vec([3])]); ";
 #[test]
 fn clone_at_a_nested_vec_copies_through_the_element_s_own_clone() {
     assert!(
-        boolean(&format!("{NESTED_VECS} let copy = clone(&outer); eq(&outer, &copy)")),
+        boolean(&format!(
+            "{NESTED_VECS} let copy = clone(&outer); eq(&outer, &copy)"
+        )),
         "the copy holds what the original holds"
     );
     assert_eq!(
@@ -178,9 +183,15 @@ fn eq_at_a_vec_of_strings_asks_the_string_instance_per_element() {
 
 #[test]
 fn cmp_at_a_vec_is_lexicographic_and_a_prefix_comes_first() {
-    assert_eq!(int("let a = vec([1, 2]); let b = vec([1, 3]); cmp(&a, &b)"), -1);
+    assert_eq!(
+        int("let a = vec([1, 2]); let b = vec([1, 3]); cmp(&a, &b)"),
+        -1
+    );
     assert_eq!(int("let a = vec([1, 2]); let b = vec([1]); cmp(&a, &b)"), 1);
-    assert_eq!(int("let a = vec([1, 2]); let b = vec([1, 2]); cmp(&a, &b)"), 0);
+    assert_eq!(
+        int("let a = vec([1, 2]); let b = vec([1, 2]); cmp(&a, &b)"),
+        0
+    );
 }
 
 #[test]

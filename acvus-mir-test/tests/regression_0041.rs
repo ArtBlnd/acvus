@@ -4,12 +4,12 @@
 //! member registry. A test that fails is a finding, kept as it fails.
 
 use acvus_extern::{Externs, Monomorphize, TypesOnly, extern_fn, extern_registry};
-use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
 use acvus_mir::ir::{Callee, CastKind, InstKind};
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeArg, TypeRegistry};
+use acvus_mir::typeck::CallTarget;
 use acvus_utils::{Freeze, Interner};
 
 // -- The member functions -------------------------------------------------

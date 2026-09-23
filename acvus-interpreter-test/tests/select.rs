@@ -59,8 +59,14 @@ async fn a_select_carries_the_word_of_the_side_the_condition_picked() {
 #[tokio::test]
 async fn a_dividing_arm_stays_a_diamond() {
     let source = "let acc = 7; if @z != 0 { acc = acc / @z; }; acc";
-    assert_eq!(count_on_page(source, "Select", |i| int_context(i, "z", 0)), 0);
-    assert_eq!(count_on_page(source, "Diamond", |i| int_context(i, "z", 0)), 1);
+    assert_eq!(
+        count_on_page(source, "Select", |i| int_context(i, "z", 0)),
+        0
+    );
+    assert_eq!(
+        count_on_page(source, "Diamond", |i| int_context(i, "z", 0)),
+        1
+    );
 
     let i = Interner::new();
     let v = run_script(&i, source, int_context(&i, "z", 0), Ty::I64).await;
@@ -70,8 +76,14 @@ async fn a_dividing_arm_stays_a_diamond() {
 #[tokio::test]
 async fn a_remainder_arm_stays_a_diamond() {
     let source = "let acc = 7; if @z != 0 { acc = acc % @z; }; acc";
-    assert_eq!(count_on_page(source, "Select", |i| int_context(i, "z", 0)), 0);
-    assert_eq!(count_on_page(source, "Diamond", |i| int_context(i, "z", 0)), 1);
+    assert_eq!(
+        count_on_page(source, "Select", |i| int_context(i, "z", 0)),
+        0
+    );
+    assert_eq!(
+        count_on_page(source, "Diamond", |i| int_context(i, "z", 0)),
+        1
+    );
 
     let i = Interner::new();
     let v = run_script(&i, source, int_context(&i, "z", 0), Ty::I64).await;
@@ -99,8 +111,14 @@ async fn an_arm_of_two_operations_stays_a_diamond() {
 #[tokio::test]
 async fn two_computing_arms_stay_a_diamond() {
     let source = "let d = if @n % 2 == 0 { @n + 1 } else { @n + 2 }; d";
-    assert_eq!(count_on_page(source, "Select", |i| int_context(i, "n", 5)), 0);
-    assert_eq!(count_on_page(source, "Diamond", |i| int_context(i, "n", 5)), 1);
+    assert_eq!(
+        count_on_page(source, "Select", |i| int_context(i, "n", 5)),
+        0
+    );
+    assert_eq!(
+        count_on_page(source, "Diamond", |i| int_context(i, "n", 5)),
+        1
+    );
 
     let i = Interner::new();
     let v = run_script(&i, source, int_context(&i, "n", 5), Ty::I64).await;

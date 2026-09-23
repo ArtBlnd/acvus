@@ -21,18 +21,27 @@ fn value(source: &str) -> String {
 #[test]
 fn an_if_without_else_is_a_statement() {
     assert_eq!(value("let a = 1; if a == 1 { a = 2; } a"), "2");
-    assert_eq!(value("let o = Some(4); let a = 0; if let Some(x) = o { a = x; } a"), "4");
+    assert_eq!(
+        value("let o = Some(4); let a = 0; if let Some(x) = o { a = x; } a"),
+        "4"
+    );
 }
 
 #[test]
 fn an_if_with_else_is_a_statement_and_its_value_is_dropped() {
-    assert_eq!(value("let a = 1; if a == 2 { a = 5; } else { a = 7; } a"), "7");
+    assert_eq!(
+        value("let a = 1; if a == 2 { a = 5; } else { a = 7; } a"),
+        "7"
+    );
     assert_eq!(value("let a = 1; if a == 1 { 10 } else { 20 } a"), "1");
 }
 
 #[test]
 fn a_match_is_a_statement() {
-    assert_eq!(value("let a = 0; match 2 { 1 => { a = 1; }, _ => { a = 3; } } a"), "3");
+    assert_eq!(
+        value("let a = 0; match 2 { 1 => { a = 1; }, _ => { a = 3; } } a"),
+        "3"
+    );
 }
 
 #[test]
@@ -57,7 +66,9 @@ fn a_semicolon_after_the_last_one_makes_it_a_statement() {
 #[test]
 fn inside_a_for_it_is_a_statement() {
     assert_eq!(
-        value("let v = vec([{ a: 1, }, { a: 3, }]); for x in &mut v { if x.a == 1 { x.a = 2; } } v.len()"),
+        value(
+            "let v = vec([{ a: 1, }, { a: 3, }]); for x in &mut v { if x.a == 1 { x.a = 2; } } v.len()"
+        ),
         "2"
     );
     assert_eq!(

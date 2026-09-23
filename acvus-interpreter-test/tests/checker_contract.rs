@@ -96,7 +96,10 @@ fn a_local_closure_called_as_a_method_takes_its_receiver_as_its_parameter_does()
 /// A `String` copies (RFC-0018): the copy is the language's at every level.
 #[test]
 fn a_string_used_twice_is_copied_at_every_level() {
-    runs_to("let s = \"a\".to_string(); let t = s; let u = s; t + &u", "\"aa\"");
+    runs_to(
+        "let s = \"a\".to_string(); let t = s; let u = s; t + &u",
+        "\"aa\"",
+    );
     runs_to(
         "let s = \"abc\".to_string(); let f = |x| -> x; let a = f(s); let b = f(s); a + &b",
         "\"abcabc\"",
@@ -130,7 +133,10 @@ fn an_unused_owned_element_of_a_loop_by_value_is_dropped_where_it_arrives() {
 
 #[test]
 fn a_field_of_a_loop_element_by_value_is_the_element_s() {
-    runs_to("let a = [{ n: 1, }]; let t = 0; for o in a { t = o.n; } t", "1");
+    runs_to(
+        "let a = [{ n: 1, }]; let t = 0; for o in a { t = o.n; } t",
+        "1",
+    );
     runs_to("let t = 0; for o in [{ n: 1, }] { t = t + o.n; } t", "1");
 }
 
@@ -156,7 +162,10 @@ fn a_receiver_whose_type_settles_after_its_call_is_passed_as_what_it_is() {
 
 #[test]
 fn a_name_bound_twice_in_one_pattern_is_refused() {
-    refused_with("match (1, 2) { (x, x) => x, _ => 0, }", "`x` is bound twice in one pattern");
+    refused_with(
+        "match (1, 2) { (x, x) => x, _ => 0, }",
+        "`x` is bound twice in one pattern",
+    );
     refused_with(
         "let o = Some({ z: 1, b: 2, }); match o { Some({ z: x, b: x, }) => x, _ => 0, }",
         "`x` is bound twice in one pattern",
@@ -195,7 +204,10 @@ fn a_field_under_a_head_the_call_settles_is_checked_as_under_a_known_one() {
 /// rule 5).
 #[test]
 fn an_option_of_a_word_is_read_through_a_reference() {
-    runs_to("let o = Some(2); let r = &o; match *r { Some(x) => x, None => 0, }", "2");
+    runs_to(
+        "let o = Some(2); let r = &o; match *r { Some(x) => x, None => 0, }",
+        "2",
+    );
 }
 
 /// RFC-0018 rule 4: `*r` yields a word and nothing else. An `Option` of a

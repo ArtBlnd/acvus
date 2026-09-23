@@ -13,8 +13,8 @@ use acvus_extern::{
     extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::{
-    AcvusRuntime, Commit, InterpreterContext, Log, Mode, NodeKind, Plain, Record, SequentialExecutor,
-    Space, Value,
+    AcvusRuntime, Commit, InterpreterContext, Log, Mode, NodeKind, Plain, Record,
+    SequentialExecutor, Space, Value,
 };
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;

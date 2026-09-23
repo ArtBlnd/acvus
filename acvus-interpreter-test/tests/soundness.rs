@@ -36,8 +36,14 @@ const KNOWN: &[Known] = &[
     // A pattern on `&Option<&T>` binds its payload at the wrong depth
     // (RFC-0024 rule 3, RFC-0029 rule 3): the validator refuses it at a
     // word payload, the machine asserts at a `String` one.
-    Known { program: "attack-control-2/d33.acvus", shows: "Take takes dst as &i64, and it is i64" },
-    Known { program: "attack-control-2/d38.acvus", shows: "is not large" },
+    Known {
+        program: "attack-control-2/d33.acvus",
+        shows: "Take takes dst as &i64, and it is i64",
+    },
+    Known {
+        program: "attack-control-2/d38.acvus",
+        shows: "is not large",
+    },
     // A `for` over an owned array of `Option<&T>`: the array's loans are
     // not the elements', the lender is dropped before the loop, and each
     // payload is read after its release, as a crash or an assertion.
@@ -48,7 +54,12 @@ const LIMIT: Duration = Duration::from_secs(30);
 
 /// The words the MIR type validator writes: it checks the lowered body, and
 /// a refusal of its own is a program the checker should have refused.
-const PAST_THE_CHECKER: &[&str] = &[" and got ", ", and it is ", "has no type", "reaches the machine"];
+const PAST_THE_CHECKER: &[&str] = &[
+    " and got ",
+    ", and it is ",
+    "has no type",
+    "reaches the machine",
+];
 
 /// A program's own trap (RFC-0038): an outcome like a value, the same at
 /// both levels.
@@ -102,7 +113,11 @@ fn contexts_of(program: &Path) -> serde_json::Map<String, serde_json::Value> {
     }
 }
 
-fn outcome(source: &str, contexts: &serde_json::Map<String, serde_json::Value>, opt: Opt) -> Outcome {
+fn outcome(
+    source: &str,
+    contexts: &serde_json::Map<String, serde_json::Value>,
+    opt: Opt,
+) -> Outcome {
     match acvus_interpreter_test::attempt_within!(
         source,
         contexts = contexts,
@@ -140,9 +155,9 @@ fn contradicts(expected: &Expected, outcome: &Outcome) -> Option<String> {
         {
             Some(format!("a wrong value: expected {want}, got {got}"))
         }
-        (Expected::Refused, Outcome::Value(got)) => {
-            Some(format!("admitted a program it should refuse, which ran to {got}"))
-        }
+        (Expected::Refused, Outcome::Value(got)) => Some(format!(
+            "admitted a program it should refuse, which ran to {got}"
+        )),
         _ => None,
     }
 }
@@ -168,7 +183,8 @@ fn hole(none: &Outcome, full: &Outcome) -> Option<String> {
     }
     match (none, full) {
         (Outcome::Refused(_), Outcome::Refused(_)) => None,
-        (Outcome::Value(a), Outcome::Value(b)) | (Outcome::RunPanicked(a), Outcome::RunPanicked(b))
+        (Outcome::Value(a), Outcome::Value(b))
+        | (Outcome::RunPanicked(a), Outcome::RunPanicked(b))
             if a == b =>
         {
             None

@@ -565,10 +565,16 @@ async fn a_rotation_past_the_length_is_refused_at_the_bound_rust_states() {
 
 #[tokio::test]
 async fn starts_with_and_ends_with_match_a_prefix_and_a_suffix() {
-    assert!(bool_of("let v = vec([1, 2, 3]); let p = vec([1, 2]); slice::starts_with(&v, &p)").await);
-    assert!(!bool_of("let v = vec([1, 2, 3]); let p = vec([2, 3]); slice::starts_with(&v, &p)").await);
+    assert!(
+        bool_of("let v = vec([1, 2, 3]); let p = vec([1, 2]); slice::starts_with(&v, &p)").await
+    );
+    assert!(
+        !bool_of("let v = vec([1, 2, 3]); let p = vec([2, 3]); slice::starts_with(&v, &p)").await
+    );
     assert!(bool_of("let v = vec([1, 2, 3]); let s = vec([2, 3]); slice::ends_with(&v, &s)").await);
-    assert!(!bool_of("let v = vec([1, 2, 3]); let s = vec([1, 2]); slice::ends_with(&v, &s)").await);
+    assert!(
+        !bool_of("let v = vec([1, 2, 3]); let s = vec([1, 2]); slice::ends_with(&v, &s)").await
+    );
 }
 
 /// A part longer than the whole matches neither end, and says so rather
@@ -581,14 +587,19 @@ async fn a_part_longer_than_the_whole_matches_neither_end() {
 
 #[tokio::test]
 async fn an_empty_part_matches_both_ends() {
-    assert!(bool_of("let v = vec([1, 2]); let p = with_capacity(1); slice::starts_with(&v, &p)").await);
-    assert!(bool_of("let v = vec([1, 2]); let p = with_capacity(1); slice::ends_with(&v, &p)").await);
+    assert!(
+        bool_of("let v = vec([1, 2]); let p = with_capacity(1); slice::starts_with(&v, &p)").await
+    );
+    assert!(
+        bool_of("let v = vec([1, 2]); let p = with_capacity(1); slice::ends_with(&v, &p)").await
+    );
 }
 
 #[tokio::test]
 async fn repeat_lays_the_run_down_that_many_times() {
     assert_eq!(
-        int_of("let v = vec([1, 2]); let r = slice::repeat(&v, 3u64); r.len() as i64 * 10 + r[4]").await,
+        int_of("let v = vec([1, 2]); let r = slice::repeat(&v, 3u64); r.len() as i64 * 10 + r[4]")
+            .await,
         61
     );
     assert_eq!(
@@ -686,7 +697,10 @@ async fn the_least_of_an_empty_vec_is_none() {
 #[tokio::test]
 async fn the_least_float_is_read_at_the_order_sort_uses() {
     assert_eq!(
-        float_of("let v = vec([2.5, 0.5, 1.5]); if let Some(x) = slice::min(&v) { x } else { 0.0 }").await,
+        float_of(
+            "let v = vec([2.5, 0.5, 1.5]); if let Some(x) = slice::min(&v) { x } else { 0.0 }"
+        )
+        .await,
         0.5
     );
 }

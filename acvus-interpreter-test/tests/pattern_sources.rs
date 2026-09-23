@@ -76,7 +76,10 @@ fn a_pattern_on_a_local_reads_its_place() {
 
 #[test]
 fn a_pattern_on_a_borrowed_local_reads_through_the_reference() {
-    runs_to("let o = Some(4); match &o { Some(v) => *v, None => 0, }", "4");
+    runs_to(
+        "let o = Some(4); match &o { Some(v) => *v, None => 0, }",
+        "4",
+    );
     runs_to(
         "let o = (5, Some(6)); let n = match &o { (a, Some(b)) => *a * 10 + *b, _ => 0, }; match o { (a, _) => n + a, _ => 0, }",
         "61",

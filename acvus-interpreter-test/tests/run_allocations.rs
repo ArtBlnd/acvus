@@ -199,8 +199,22 @@ async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
     for opt in [Opt::None, Opt::Full] {
         let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
         let (few, many) = (1_000i64, 5_000i64);
-        let low = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, few, opt, std_registries).await;
-        let high = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, many, opt, std_registries).await;
+        let low = balance(
+            PAYLOAD_READ_BY_PATTERNS,
+            no_helpers,
+            few,
+            opt,
+            std_registries,
+        )
+        .await;
+        let high = balance(
+            PAYLOAD_READ_BY_PATTERNS,
+            no_helpers,
+            many,
+            opt,
+            std_registries,
+        )
+        .await;
         drop(measuring);
         let span = (many - few) as f64;
         let allocated = (high.allocations as f64 - low.allocations as f64) / span;
@@ -520,7 +534,8 @@ let acc = 0; let i = 0; while i < @n { acc = acc + f(vec([1, 2])); i = i + 1; } 
 #[tokio::test]
 async fn a_held_argument_converted_by_value_leaves_nothing_behind() {
     for opt in [Opt::None, Opt::Full] {
-        let left = left_per_iteration(HELD_BY_VALUE, no_helpers, opt, |n| 201 * n as u64, weighing).await;
+        let left =
+            left_per_iteration(HELD_BY_VALUE, no_helpers, opt, |n| 201 * n as u64, weighing).await;
         println!("at {opt:?}: left behind per iteration: {left:.3}");
         assert!(
             left.abs() < 0.01,
@@ -578,7 +593,9 @@ async fn a_conversion_through_a_reference_leaves_nothing_behind() {
     for (source, each) in sources {
         for (set, registries) in sets {
             for opt in [Opt::None, Opt::Full] {
-                let left = left_per_iteration(source, no_helpers, opt, |n| each * n as u64, registries).await;
+                let left =
+                    left_per_iteration(source, no_helpers, opt, |n| each * n as u64, registries)
+                        .await;
                 println!("{set} at {opt:?}: left behind per iteration: {left:.3}");
                 assert!(
                     left.abs() < 0.01,

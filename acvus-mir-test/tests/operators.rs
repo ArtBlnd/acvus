@@ -42,8 +42,7 @@ fn inequality_on_strings_is_the_negated_string_eq() {
 #[test]
 fn eq_named_on_a_string_is_a_call_and_the_operator_is_not() {
     let i = Interner::new();
-    let named =
-        compile_script_ir(&i, "eq(&@role, &@role)", &string_context(&i, "role")).unwrap();
+    let named = compile_script_ir(&i, "eq(&@role, &@role)", &string_context(&i, "role")).unwrap();
     assert!(named.contains("call"), "{named}");
     assert!(!named.contains("string_eq"), "{named}");
     let operator = compile_script_ir(&i, "@role == @role", &string_context(&i, "role")).unwrap();
@@ -189,20 +188,14 @@ fn an_array_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
 fn a_string_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k < 7; f(\"a\".to_string())").unwrap_err();
-    assert!(
-        err.contains("type mismatch in `<`: i64 vs String"),
-        "{err}"
-    );
+    assert!(err.contains("type mismatch in `<`: i64 vs String"), "{err}");
 }
 
 #[test]
 fn a_float_literal_operand_refuses_an_integer_literal_argument() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k + 7.0; f(1)").unwrap_err();
-    assert!(
-        err.contains("type mismatch in `+`: Float vs i64"),
-        "{err}"
-    );
+    assert!(err.contains("type mismatch in `+`: Float vs i64"), "{err}");
     let ir = script(&i, "let f = |k| -> k + 7.0; f(1.0)").unwrap();
     assert!(ir.contains("Fn(Float) -> Float"), "{ir}");
 }
@@ -254,8 +247,7 @@ fn a_value_mode_receiver_does_not_move_a_large_out_of_a_reference() {
         script_with_value_overloads(&i, "let o = { v: vec([1]), }; let r = &o; r.v.consume()")
             .unwrap_err();
     assert!(
-        err.contains("cannot move Vec<")
-            && err.contains("used through the reference or cloned"),
+        err.contains("cannot move Vec<") && err.contains("used through the reference or cloned"),
         "{err}"
     );
 }
@@ -273,10 +265,7 @@ fn a_value_mode_receiver_of_an_owned_place_is_moved_as_before() {
 fn a_string_literal_operand_fixes_the_parameter_against_an_integer_call() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k + \"a\".to_string(); f(1)").unwrap_err();
-    assert!(
-        err.contains("type mismatch in `+`: String vs i64"),
-        "{err}"
-    );
+    assert!(err.contains("type mismatch in `+`: String vs i64"), "{err}");
     assert!(
         err.starts_with("[infer:"),
         "the checker refuses the call, so validate is never reached: {err}"
@@ -299,10 +288,7 @@ fn a_string_literal_operand_leaves_the_parameter_taking_a_string() {
 fn an_integer_literal_operand_refuses_a_float_call() {
     let i = Interner::new();
     let err = script(&i, "let g = |k| -> k + 1; g(2.5)").unwrap_err();
-    assert!(
-        err.contains("type mismatch in `+`: i64 vs Float"),
-        "{err}"
-    );
+    assert!(err.contains("type mismatch in `+`: i64 vs Float"), "{err}");
 }
 
 #[test]

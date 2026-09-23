@@ -9,10 +9,10 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use acvus_extern::{
-    ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectArg, EffectTerm, Erased, ExternHandler, ExternType,
-    Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneRegister, OneValue, Owned, PolyTy,
-    Pure, Ref, Registry, Runtime, Shared, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var,
-    Words, extern_fn, extern_registry, extern_signature, kind,
+    ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectArg, EffectTerm, Erased, ExternHandler,
+    ExternType, Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneRegister, OneValue,
+    Owned, PolyTy, Pure, Ref, Registry, Runtime, Shared, Task, TransparentOver, TyArg, TypeArg,
+    TypesOnly, Var, Words, extern_fn, extern_registry, extern_signature, kind,
 };
 
 // -- A runtime for this test ------------------------------------------

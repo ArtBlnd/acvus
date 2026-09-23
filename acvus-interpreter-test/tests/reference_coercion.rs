@@ -46,8 +46,14 @@ fn corpus_child() {
 #[test]
 fn a_mutable_reference_is_passed_where_a_shared_one_is_taken() {
     runs_to("let v = vec([1]); let t = &mut v; len(t)", "1");
-    runs_to("let s = \"a\".to_string(); let t = &mut s; clone(t)", "\"a\"");
-    runs_to("let v = vec([1, 2]); let t = &mut v; contains(t, &2)", "true");
+    runs_to(
+        "let s = \"a\".to_string(); let t = &mut s; clone(t)",
+        "\"a\"",
+    );
+    runs_to(
+        "let v = vec([1, 2]); let t = &mut v; contains(t, &2)",
+        "true",
+    );
     runs_to(
         "let s = \"ab\".to_string(); let t = &mut s; contains(t, \"a\")",
         "true",
@@ -106,7 +112,10 @@ fn a_mutable_view_is_reborrowed_as_itself() {
         "let v = vec([1, 2]); let s = v.as_slice_mut(); let r = &s; len(r)",
         "2",
     );
-    runs_to("let v = vec([1, 2]); let s = v.as_slice_mut(); s.len()", "2");
+    runs_to(
+        "let v = vec([1, 2]); let s = v.as_slice_mut(); s.len()",
+        "2",
+    );
     runs_to("let v = vec([1, 2]); let s = v.as_slice_mut(); len(s)", "2");
 }
 

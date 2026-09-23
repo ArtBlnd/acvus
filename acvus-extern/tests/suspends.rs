@@ -128,7 +128,10 @@ fn a_signature_s_instance_carries_its_suspending_bound() {
         panic!("t::run is extern");
     };
     assert!(effect_bounds.is_empty(), "{effect_bounds:?}");
-    let bounds: Vec<&Vec<EffectVarBound>> =
-        instances.concrete.iter().map(|sig| &sig.effect_bounds).collect();
+    let bounds: Vec<&Vec<EffectVarBound>> = instances
+        .concrete
+        .iter()
+        .map(|sig| &sig.effect_bounds)
+        .collect();
     assert_eq!(bounds, vec![&vec![EffectVarBound::Suspends]]);
 }

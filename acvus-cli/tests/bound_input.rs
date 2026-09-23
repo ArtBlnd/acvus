@@ -59,7 +59,10 @@ fn an_input_no_binding_fixed_refuses_the_run() {
     let out = acvus(written(dir.path()), &["run", "prompt.acvt"]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "");
-    assert_eq!(text(&out.stderr), "error: `$mode` is required and not bound\n");
+    assert_eq!(
+        text(&out.stderr),
+        "error: `$mode` is required and not bound\n"
+    );
 }
 
 #[test]
