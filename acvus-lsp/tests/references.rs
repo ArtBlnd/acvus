@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, DocId, Document, DocumentSpec, Edit, Environment,
-    Host, HostDiagnostic, Listing, Location, LspSession, Mode, RenameRefusal, Vfs, Workspace,
+    Host, HostDiagnostic, Listing, Location, LspSession, Mode, RenameRefusal, Sites, Vfs,
+    Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -433,6 +434,7 @@ impl Host for Documents {
                 environment: Ok(Environment {
                     graph: bare(root_contexts(interner, &[("name", Ty::String)])),
                     host: (),
+                    sites: Sites::default(),
                 }),
                 documents,
             }],

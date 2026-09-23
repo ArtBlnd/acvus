@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Definition, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Hover, Listing, Location, LspErrorCategory, LspSession, Mode, OpenRefusal, Vfs,
-    Workspace,
+    HostDiagnostic, Hover, Listing, Location, LspErrorCategory, LspSession, Mode, OpenRefusal,
+    Sites, Vfs, Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
 use acvus_mir::ty::{
-    Effect, Mutability, PolyBuilder, Ty, TyTerm, TypeArg, TypeRegistry, lift_to_poly,
+    Effect, Mutability, ParamTerm, PolyBuilder, Ty, TyTerm, TypeArg, TypeRegistry, lift_to_poly,
 };
 use acvus_utils::{Freeze, Interner};
 
@@ -48,6 +48,20 @@ fn with_std(interner: &Interner, contexts: Vec<Context>) -> CompilationGraph {
     } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
         .expect("standard registries combine");
     environment(contexts, functions, types)
+}
+
+fn script_reading_int_x(interner: &Interner, name: &str) -> Document {
+    let mut pb = PolyBuilder::new();
+    Document {
+        qref: QualifiedRef::root(interner.intern(name)),
+        mode: Mode::Script,
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::new(interner.intern("x"), lift_to_poly(&Ty::I64))],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: Effect::OPAQUE.into(),
+        },
+    }
 }
 
 fn document(interner: &Interner, name: &str, mode: Mode) -> Document {
@@ -356,7 +370,7 @@ fn template_context_hover_and_statement_binding() {
 }
 
 #[test]
-fn a_context_and_an_extern_call_have_no_definition() {
+fn a_context_is_a_definition_the_host_places_and_an_extern_call_has_none() {
     let i = Interner::new();
     let source = "{{ @count.to_string() }}";
     let (session, doc) = open(
@@ -370,8 +384,30 @@ fn a_context_and_an_extern_call_have_no_definition() {
         "{:?}",
         session.diagnostics(doc)
     );
-    assert_eq!(session.definition(doc, nth(source, "count", 0)), None);
+    assert_eq!(
+        session.definition(doc, nth(source, "count", 0)),
+        Some(Definition::Context(QualifiedRef::root(i.intern("count"))))
+    );
     assert_eq!(session.definition(doc, nth(source, "to_string", 0)), None);
+}
+
+#[test]
+fn an_input_is_a_definition_the_host_places() {
+    let i = Interner::new();
+    let source = "$x + 1";
+    let mut session = LspSession::new(&i, bare(vec![]));
+    let doc = session
+        .open(script_reading_int_x(&i, "test"), source)
+        .expect("the session opens no other document");
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    assert_eq!(
+        session.definition(doc, nth(source, "x", 0)),
+        Some(Definition::Input(i.intern("x")))
+    );
 }
 
 #[test]
@@ -439,6 +475,7 @@ impl Host for TwoDocuments {
                 environment: Ok(Environment {
                     graph: bare(vec![]),
                     host: (),
+                    sites: Sites::default(),
                 }),
                 documents: vec![spec("greet"), spec("caller")],
             }],
@@ -496,6 +533,7 @@ impl Host for OneFunctionTwice {
                 environment: Ok(Environment {
                     graph: bare(vec![]),
                     host: (),
+                    sites: Sites::default(),
                 }),
                 documents: vec![spec("first.acvt"), spec("second.acvt")],
             }],
@@ -547,6 +585,153 @@ fn a_second_document_of_one_function_is_a_host_refusal() {
     let used = nth(source, "x", 1);
     let hover = workspace.hover(&first, used).expect("the use has a type");
     assert_eq!(hover.span, (used, used + 1));
+}
+
+struct SitedHost {
+    root: PathBuf,
+    with_sites: bool,
+}
+
+impl SitedHost {
+    fn context_site(&self) -> Location {
+        Location {
+            path: self.root.join("decl.txt"),
+            span: (3, 9),
+        }
+    }
+
+    fn input_site(&self) -> Location {
+        Location {
+            path: self.root.join("decl.txt"),
+            span: (12, 15),
+        }
+    }
+}
+
+impl Host for SitedHost {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+        let sites = match self.with_sites {
+            true => Sites {
+                contexts: [(
+                    QualifiedRef::root(interner.intern("name")),
+                    self.context_site(),
+                )]
+                .into_iter()
+                .collect(),
+                inputs: [(interner.intern("x"), self.input_site())]
+                    .into_iter()
+                    .collect(),
+            },
+            false => Sites::default(),
+        };
+        Listing {
+            compilations: vec![CompilationSpec {
+                id: CompilationId(self.root.join("main.id")),
+                environment: Ok(Environment {
+                    graph: bare(root_contexts(interner, &[("name", Ty::I64)])),
+                    host: (),
+                    sites,
+                }),
+                documents: vec![DocumentSpec {
+                    path: self.root.join("main.acvus"),
+                    document: script_reading_int_x(interner, "main"),
+                }],
+            }],
+            refusals: Vec::new(),
+        }
+    }
+
+    fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        Vec::new()
+    }
+}
+
+const READS_NAME_AND_X: &str = "let y = @name + $x; @name + y";
+
+fn sited(interner: &Interner, with_sites: bool) -> (tempfile::TempDir, Workspace<SitedHost>) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let root = dir.path().to_path_buf();
+    std::fs::write(root.join("main.acvus"), READS_NAME_AND_X).expect("write main");
+    let workspace = Workspace::new(interner, SitedHost { root, with_sites });
+    let diagnostics = workspace.diagnostics();
+    assert!(diagnostics.values().all(Vec::is_empty), "{diagnostics:?}");
+    (dir, workspace)
+}
+
+#[test]
+fn a_context_and_an_input_go_to_the_sites_the_host_gave_them() {
+    let i = Interner::new();
+    let (dir, workspace) = sited(&i, true);
+    let host = workspace.host();
+    let main = dir.path().join("main.acvus");
+    let source = READS_NAME_AND_X;
+    assert_eq!(
+        workspace.definition(&main, nth(source, "name", 1)),
+        Some(host.context_site())
+    );
+    assert_eq!(
+        workspace.definition(&main, nth(source, "x", 0)),
+        Some(host.input_site())
+    );
+}
+
+#[test]
+fn a_context_and_an_input_without_a_site_have_no_definition() {
+    let i = Interner::new();
+    let (dir, workspace) = sited(&i, false);
+    let main = dir.path().join("main.acvus");
+    let source = READS_NAME_AND_X;
+    assert_eq!(workspace.definition(&main, nth(source, "name", 0)), None);
+    assert_eq!(workspace.definition(&main, nth(source, "x", 0)), None);
+}
+
+#[test]
+fn references_include_a_site_only_as_the_declaration() {
+    let i = Interner::new();
+    let (dir, workspace) = sited(&i, true);
+    let host = workspace.host();
+    let main = dir.path().join("main.acvus");
+    let source = READS_NAME_AND_X;
+    let at = |needle: &str, n: usize| {
+        let start = nth(source, needle, n);
+        Location {
+            path: main.clone(),
+            span: (start, start + needle.len()),
+        }
+    };
+    let names = vec![at("@name", 0), at("@name", 1)];
+    assert_eq!(
+        workspace.references(&main, nth(source, "name", 0), false),
+        Some(names.clone())
+    );
+    let mut with_site = names;
+    with_site.push(host.context_site());
+    with_site.sort();
+    assert_eq!(
+        workspace.references(&main, nth(source, "name", 0), true),
+        Some(with_site)
+    );
+    assert_eq!(
+        workspace.references(&main, nth(source, "x", 0), false),
+        Some(vec![at("$x", 0)])
+    );
+    let mut with_site = vec![at("$x", 0), host.input_site()];
+    with_site.sort();
+    assert_eq!(
+        workspace.references(&main, nth(source, "x", 0), true),
+        Some(with_site)
+    );
+
+    let (dir, unplaced) = sited(&i, false);
+    let main = dir.path().join("main.acvus");
+    assert_eq!(
+        unplaced
+            .references(&main, nth(source, "x", 0), true)
+            .map(|found| found.len()),
+        Some(1)
+    );
 }
 
 #[test]

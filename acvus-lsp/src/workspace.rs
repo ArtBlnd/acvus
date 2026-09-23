@@ -5,10 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use acvus_ast::Span;
-use acvus_mir::graph::{CompilationGraph, ContextInfo};
+use acvus_mir::graph::{CompilationGraph, ContextInfo, QualifiedRef};
 use acvus_mir::ty::Ty;
 use acvus_mir::typeck::Resolved;
-use acvus_utils::Interner;
+use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::session::{
@@ -47,6 +47,15 @@ pub struct CompilationSpec<C> {
 pub struct Environment<C> {
     pub graph: CompilationGraph,
     pub host: C,
+    pub sites: Sites,
+}
+
+/// Where the host declares the contexts and inputs of a compilation,
+/// which the graph types but does not place.
+#[derive(Debug, Default)]
+pub struct Sites {
+    pub contexts: FxHashMap<QualifiedRef, Location>,
+    pub inputs: FxHashMap<Astr, Location>,
 }
 
 pub struct DocumentSpec {
@@ -137,6 +146,7 @@ fn unreadable(path: &Path, error: &std::io::Error) -> LspError {
 
 struct Loaded<C> {
     host: C,
+    sites: Sites,
     session: LspSession,
     specs: FxHashMap<PathBuf, Document>,
     documents: FxHashMap<PathBuf, Held>,
@@ -156,6 +166,7 @@ impl<C> Loaded<C> {
     ) -> Self {
         let mut loaded = Loaded {
             host: environment.host,
+            sites: environment.sites,
             session: LspSession::new(interner, environment.graph),
             specs: FxHashMap::default(),
             documents: FxHashMap::default(),
@@ -443,7 +454,8 @@ where
     }
 
     /// A function resolves to the document of the same compilation that
-    /// defines it, at its start.
+    /// defines it, at its start; a context or an input to the site its
+    /// host gave it.
     pub fn definition(&self, path: &Path, offset: usize) -> Option<Location> {
         let (loaded, id) = self.open_in_first(path)?;
         match loaded.session.definition(id, offset)? {
@@ -459,6 +471,8 @@ where
                     path: defining.clone(),
                     span: (0, 0),
                 }),
+            Definition::Context(qref) => loaded.sites.contexts.get(&qref).cloned(),
+            Definition::Input(name) => loaded.sites.inputs.get(&name).cloned(),
         }
     }
 
@@ -466,8 +480,9 @@ where
     /// every compilation that holds the document open: a local's or an
     /// input's in the document, a context's or a function's in every
     /// document of the compilation. A function's declaration is the start
-    /// of the document that defines it. `None` where no name at `offset`
-    /// resolved in any of them.
+    /// of the document that defines it; a context's or an input's is the
+    /// site the compilation's host gave it, where it gave one. `None` where
+    /// no name at `offset` resolved in any of them.
     pub fn references(
         &self,
         path: &Path,
@@ -502,6 +517,14 @@ where
                             span,
                         }),
                 );
+            }
+            let site = match referent {
+                Resolved::Context(qref) => loaded.sites.contexts.get(&qref),
+                Resolved::Input(name) => loaded.sites.inputs.get(&name),
+                Resolved::Local(_) | Resolved::Function(_) => None,
+            };
+            if include_declaration {
+                locations.extend(site.cloned());
             }
         }
         found.map(|locations| locations.into_iter().collect())

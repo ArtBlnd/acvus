@@ -25,7 +25,7 @@ use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
 use acvus_mir::ty::{PolyTy, TyTerm};
 use acvus_mir::typeck::{BodyView, DeclarationFit, ProbeProduct, Resolved};
-use acvus_utils::{Freeze, Interner};
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 // -- Public types ----------------------------------------------------
@@ -143,6 +143,8 @@ pub enum Definition {
     },
     /// A function whose body is in the graph.
     Function(QualifiedRef),
+    Context(QualifiedRef),
+    Input(Astr),
 }
 
 /// Replace the source at `span` with `text`.
@@ -659,8 +661,8 @@ impl LspSession {
     }
 
     /// Where the name at `offset` is defined: the binder of a local, the
-    /// binder itself included, or the function a call settled on where the
-    /// graph holds its body.
+    /// binder itself included, the function a call settled on where the
+    /// graph holds its body, or the context or input it reads.
     pub fn definition(&self, id: DocId, offset: usize) -> Option<Definition> {
         let (nodes, view) = self.checked_body(id)?;
         let name = nodes.name_at(offset)?;
@@ -680,7 +682,8 @@ impl LspSession {
                 FnKind::Local(_) => Some(Definition::Function(qref)),
                 FnKind::Extern { .. } => None,
             },
-            Resolved::Context(_) | Resolved::Input(_) => None,
+            Resolved::Context(qref) => Some(Definition::Context(qref)),
+            Resolved::Input(name) => Some(Definition::Input(name)),
         }
     }
 

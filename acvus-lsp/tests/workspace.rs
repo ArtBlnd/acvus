@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Listing, LspErrorCategory, LspSession, Mode, Vfs, Workspace,
+    HostDiagnostic, Listing, LspErrorCategory, LspSession, Mode, Sites, Vfs, Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, QualifiedRef};
 use acvus_mir::ty::{Effect, PolyBuilder, Ty, TyTerm, lift_to_poly};
@@ -101,6 +101,7 @@ impl Host for TestHost {
                             name: "a.id",
                             holds_a: true,
                         },
+                        sites: Sites::default(),
                     }),
                     documents: vec![spec("a"), spec("shared")],
                 },
@@ -112,6 +113,7 @@ impl Host for TestHost {
                             name: "b.id",
                             holds_a: false,
                         },
+                        sites: Sites::default(),
                     }),
                     documents: vec![spec("shared")],
                 },

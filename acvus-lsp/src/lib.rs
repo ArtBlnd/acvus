@@ -7,5 +7,5 @@ pub use session::{
 };
 pub use workspace::{
     Checked, CompilationId, CompilationSpec, DocumentSpec, Environment, Host, HostDiagnostic,
-    Listing, Location, Vfs, Workspace,
+    Listing, Location, Sites, Vfs, Workspace,
 };
