@@ -1,0 +1,3 @@
+// expect 1
+// a Vec holds a non-view reference under the borrow check
+let s = "a".to_string(); let v = vec([]); v.push(&s); v.len()

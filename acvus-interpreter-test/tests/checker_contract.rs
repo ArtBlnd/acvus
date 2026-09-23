@@ -355,6 +355,57 @@ fn a_captured_view_is_refused_at_a_known_and_a_settled_type() {
     );
 }
 
+/// RFC-0062 rule 5: an extern type's argument is one runtime value or its
+/// Rust type, and a view is neither, whether the type stores it or not and
+/// whether it settled at a known or a lambda's parameter type.
+#[test]
+fn a_view_as_an_extern_types_argument_is_refused_at_a_known_and_a_settled_type() {
+    refused_only_with(
+        "let v = vec([]); v.push(\"ab\"); v.len()",
+        "a view cannot be a type's argument, and &str is one of Vec<&str>; \
+         write `.to_string()` for the owned text",
+    );
+    refused_only_with(
+        "let f = |s| -> { let v = vec([]); v.push(s); v.len() }; f(\"ab\")",
+        "a view cannot be a type's argument, and &str is one of Vec<&str>; \
+         write `.to_string()` for the owned text",
+    );
+    refused_only_with(
+        "let d = deque(); d.push_back(\"ab\"); d.len()",
+        "a view cannot be a type's argument, and &str is one of Deque<&str>; \
+         write `.to_string()` for the owned text",
+    );
+    refused_only_with(
+        "let a = vec([1, 2]); let v = vec([]); v.push(a.as_slice()); v.len()",
+        "a view cannot be a type's argument, and &[i64] is one of Vec<&[i64]>",
+    );
+}
+
+/// The control: a reference that is not a view stands as an extern type's
+/// argument, in a stage that stores none and in a container under the
+/// borrow check.
+#[test]
+fn a_reference_that_is_not_a_view_as_an_extern_types_argument_runs() {
+    runs_to(
+        "let v = vec([\"ab\".to_string(), \"cde\".to_string()]); \
+         v.as_iter().map(|s| -> s.len()).count()",
+        "2",
+    );
+    runs_to(
+        "let scores = vec([1.0, 3.0]); as_iter(&scores) | map(|s| -> *s) | sum",
+        "4.0",
+    );
+    runs_to(
+        "let s = \"a\".to_string(); let v = vec([]); v.push(&s); v.len()",
+        "1",
+    );
+    runs_to(
+        "let v = vec([\"ab\".to_string(), \"ab\".to_string()]); \
+         let w = v.as_iter().collect(); w.len()",
+        "2",
+    );
+}
+
 /// The control: a view that flows only into a parameter that takes a view
 /// is admitted wherever the parameter's type settles, and a `String` is
 /// stored where a view is not.

@@ -833,6 +833,70 @@ fn closure_in_arg(arg: &TypeArg<Infer>) -> Option<&InferTy> {
     }
 }
 
+/// A view found at an extern type's type argument.
+struct ViewArgument<'t> {
+    taker: &'t InferTy,
+    view: &'t InferTy,
+}
+
+/// An extern type's argument is one runtime value when uniform, or its Rust
+/// type when `#` (RFC-0041); a view is the two registers `is_pair` names,
+/// which are neither (RFC-0062 rule 5), so it is refused there whether the
+/// type stores it or not. A reference is one word whatever it names, so the
+/// storage below one is searched as a value. A function type is not
+/// searched: its parameters and return are a signature, not a value this
+/// run holds.
+fn view_argument<'t>(
+    ty: &'t InferTy,
+    argument_of: Option<&'t InferTy>,
+) -> Option<ViewArgument<'t>> {
+    if let Some(taker) = argument_of
+        && is_pair(ty)
+    {
+        return Some(ViewArgument { taker, view: ty });
+    }
+    match ty {
+        TyTerm::UserDefined { type_args, .. } => type_args
+            .iter()
+            .find_map(|arg| view_in_arg(arg, Some(ty))),
+        TyTerm::Ref(_, target) => view_in_arg(target, None),
+        TyTerm::Array(inner, _)
+        | TyTerm::Slice(inner)
+        | TyTerm::Option(inner)
+        | TyTerm::Handle(inner) => view_argument(inner, argument_of),
+        TyTerm::Result(ok, err) => {
+            view_argument(ok, argument_of).or_else(|| view_argument(err, argument_of))
+        }
+        TyTerm::Tuple(elems) => elems.iter().find_map(|e| view_argument(e, argument_of)),
+        TyTerm::Object(object) => object
+            .iter()
+            .find_map(|(_, field)| view_argument(field, argument_of)),
+        TyTerm::Enum { variants, .. } => variants
+            .iter()
+            .filter_map(|(_, payload)| payload.as_ref())
+            .find_map(|payload| view_argument(payload, argument_of)),
+        _ => None,
+    }
+}
+
+/// A `#` part over a type variable is no view, as the variable is not.
+fn view_in_arg<'t>(
+    arg: &'t TypeArg<Infer>,
+    argument_of: Option<&'t InferTy>,
+) -> Option<ViewArgument<'t>> {
+    match arg {
+        TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => view_argument(ty, argument_of),
+        TypeArg::Specialized(held) => match held {
+            HeldTy::Leaf(leaf) => view_argument(leaf.ty(), argument_of),
+            HeldTy::Held(_) => None,
+            HeldTy::Tuple(_) | HeldTy::Option(_) | HeldTy::Result(..) | HeldTy::Array(..) => held
+                .parts()
+                .into_iter()
+                .find_map(|part| view_in_arg(part, argument_of)),
+        },
+    }
+}
+
 /// Obligation across artifacts: the same predicate as
 /// `acvus_interpreter::prepare::is_slice` on a frozen `Ty` — one level of
 /// reference over `Str` or `Slice`, and the two adjacent registers
@@ -1241,15 +1305,18 @@ struct ListPatternLength {
     span: Span,
 }
 
-/// A value stored in data, returned from a body, or captured, read once the
-/// solve has settled its type: a type still open where the value was written
-/// is held to RFC-0062 rules 5 and 6 and RFC-0064 rule 5 as a known one is.
+/// A value stored in data, returned from a body, captured, or defined, read
+/// once the solve has settled its type: a type still open where the value
+/// was written is held to RFC-0062 rules 5 and 6 and RFC-0064 rule 5 as a
+/// known one is.
 struct ValueSite {
     at: ValuePosition,
     span: Span,
 }
 
 enum ValuePosition {
+    /// A value a name binds or a call returns.
+    Defined(InferTy),
     /// A component of data built here.
     Data(InferTy, DataShape),
     /// A body's or a lambda's result.
@@ -2778,7 +2845,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// A name for a value: its type is a variable of the solver, so what
     /// the value grows to (a field stored, a variant added) is seen by
     /// every use of the name.
-    fn define_var(&mut self, name: Astr, ty: InferTy, binder: AstId) {
+    fn define_var(&mut self, name: Astr, ty: InferTy, binder: AstId, span: Span) {
+        let ty = self.as_defined(ty, span);
         let ty = match ty {
             TyTerm::Var(_) => ty,
             term => {
@@ -2994,7 +3062,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Some(t) => t.clone(),
                 None => self.solver.fresh_ty_var(),
             };
-            self.define_var(p.name, pt.clone(), p.id);
+            self.define_var(p.name, pt.clone(), p.id, p.span);
             self.record(p.id, pt.clone());
             param_types.push(ParamTerm::new(p.name, pt));
         }
@@ -3102,6 +3170,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             resolved if holds_a_loan(&resolved) => Some(MirErrorKind::ReferenceInData(shape)),
             _ => None,
         }
+    }
+
+    /// A value a name binds or a call returns, held to `view_argument` once
+    /// its type is settled.
+    fn as_defined(&mut self, ty: InferTy, span: Span) -> InferTy {
+        self.value_sites.push(ValueSite {
+            at: ValuePosition::Defined(ty.clone()),
+            span,
+        });
+        ty
     }
 
     /// A component of data, held to `reference_in_data` once its type is
@@ -6446,7 +6524,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span: _,
             } => {
                 let ty = self.check_expr(expr);
-                self.define_var(binder.name, ty.clone(), binder.id);
+                self.define_var(binder.name, ty.clone(), binder.id, binder.span);
                 self.record(*id, ty);
             }
             acvus_ast::Stmt::LetUninit {
@@ -6455,7 +6533,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span: _,
             } => {
                 let ty = self.solver.fresh_ty_var();
-                self.define_var(binder.name, ty.clone(), binder.id);
+                self.define_var(binder.name, ty.clone(), binder.id, binder.span);
                 self.record(*id, ty);
             }
             acvus_ast::Stmt::Assign {
@@ -6610,7 +6688,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         self.push_scope();
         self.loop_depth += 1;
-        self.define_var(binder.name, binding_ty, binder.id);
+        self.define_var(binder.name, binding_ty, binder.id, binder.span);
         for s in body {
             self.check_stmt(s);
         }
@@ -7365,6 +7443,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let ty = self.check_func_call(func, args, None, *span);
+                let ty = self.as_defined(ty, *span);
                 self.record_ret(*id, ty)
             }
 
@@ -7380,6 +7459,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     true => self.check_probed_method_call(*id, receiver, *name, args, *span),
                     false => self.check_method_call(*callee_id, receiver, *name, args, *span),
                 };
+                let ty = self.as_defined(ty, *span);
                 self.record_ret(*id, ty)
             }
 
@@ -7387,7 +7467,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 id,
                 left,
                 right,
-                span: _,
+                span,
             } => {
                 // Desugar: `a | f(b, c)` -> `f(a, b, c)`
                 // `a | f` -> `f(a)`
@@ -7412,6 +7492,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         self.check_callable(&rt, Some(&first), &[], stage)
                     }
                 };
+                let ty = self.as_defined(ty, *span);
                 self.record_ret(*id, ty)
             }
 
@@ -8123,8 +8204,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// Every value stored in data, returned from a body, or captured, at
-    /// the type the solve settled (RFC-0062 rules 5 and 6, RFC-0064 rule 5).
+    /// Every value stored in data, returned from a body, captured, or
+    /// defined, at the type the solve settled (RFC-0062 rules 5 and 6,
+    /// RFC-0064 rule 5).
     fn check_value_sites(&mut self) {
         let sites = std::mem::take(&mut self.value_sites);
         let mut refused_in_data = false;
@@ -8137,11 +8219,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 refused_in_data = true;
             }
         }
-        for ValueSite { at, span } in sites {
+        for ValueSite { at, span } in &sites {
+            let span = *span;
             match at {
-                ValuePosition::Data(..) => {}
+                ValuePosition::Data(..) | ValuePosition::Defined(_) => {}
                 ValuePosition::Result(ty, crossing) => {
-                    let resolved = self.solver.resolve_ty(&ty);
+                    let resolved = self.solver.resolve_ty(ty);
                     match crossing.unreturnable(&resolved) {
                         // A reference inside the result's data, where a
                         // component of data was refused, is that refusal's
@@ -8173,6 +8256,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     }
                 }
             }
+        }
+        // A view at a type's argument in a program already refused is that
+        // refusal's consequence: a lambda refused for returning `&str` still
+        // makes the stage mapping with it take `&str`, and a call refused
+        // for its result `Vec<&str>` still gives the name that type. Every
+        // value that holds the view carries it on, so the first is the one
+        // refusal.
+        if !self.errors.is_empty() {
+            return;
+        }
+        for ValueSite { at, span } in &sites {
+            let ValuePosition::Defined(ty) = at else {
+                continue;
+            };
+            let resolved = self.solver.resolve_ty(ty);
+            let Some(ViewArgument { taker, view }) = view_argument(&resolved, None) else {
+                continue;
+            };
+            let kind = MirErrorKind::ViewAsTypeArgument {
+                view: self.type_as_written(view),
+                taker: self.type_as_written(taker),
+            };
+            self.error(kind, *span);
+            return;
         }
     }
 
@@ -8261,7 +8368,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             binding
                         }
                     };
-                    self.define_var(*name, ty, *id);
+                    self.define_var(*name, ty, *id, span);
                 }
             },
 

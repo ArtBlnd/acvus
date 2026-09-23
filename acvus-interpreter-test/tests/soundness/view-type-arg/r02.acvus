@@ -1,0 +1,3 @@
+// refuse
+// a view pushed into a Vec inside a lambda whose parameter settles to &str
+let f = |s| -> { let v = vec([]); v.push(s); v.len() }; f("ab")

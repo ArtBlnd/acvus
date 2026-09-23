@@ -1,0 +1,3 @@
+// refuse
+// a view pushed into a Vec settles its element to &str
+let v = vec([]); v.push("ab"); v.len()

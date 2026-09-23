@@ -1,0 +1,3 @@
+// expect 4.0
+// a map stage over &Float in pipe form
+let scores = vec([1.0, 3.0]); as_iter(&scores) | map(|s| -> *s) | sum

@@ -555,6 +555,10 @@ pub enum MirErrorKind {
     ViewCaptured,
     ReferenceInData(DataShape),
     ViewInData(DataShape),
+    ViewAsTypeArgument {
+        view: Ty,
+        taker: Ty,
+    },
     /// A script body returned a reference.
     ReferenceReturnedFromBody(Ty),
     /// RFC-0069 rule 1: the entry's result reaches the host, which outlives
@@ -861,6 +865,18 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     f,
                     "a reference cannot be stored in {shape}; \
                      write `.to_string()` to store the text"
+                )
+            }
+            MirErrorKind::ViewAsTypeArgument { view, taker } => {
+                write!(
+                    f,
+                    "a view cannot be a type's argument, and {} is one of {}{}",
+                    view.display(self.interner),
+                    taker.display(self.interner),
+                    match is_text_view(view) {
+                        true => COPY_OF_A_VIEW,
+                        false => "",
+                    }
                 )
             }
             MirErrorKind::ClosureReturnedToTheHost(ty) => {
