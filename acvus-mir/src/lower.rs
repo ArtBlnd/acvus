@@ -1610,12 +1610,15 @@ impl<'a> Lowerer<'a> {
         if let Passing::AsIs = self.passing(operand) {
             return self.lower_expr(operand);
         }
-        let ty = self.type_of_id(operand.id());
         let span = operand.span();
         let Projected { base, fields } = projected(operand);
         if let Some(target) = self.base_target(base) {
+            // A place a `&mut` holds is lent as the shared reborrow of what
+            // it names, as `&r` is (RFC-0029 rule 3).
+            let ty = self.place_ty(operand.id(), base.id(), &fields);
             return self.emit_ref(span, target, self::fields(&fields), Mutability::Shared, ty);
         }
+        let ty = self.type_of_id(operand.id());
         let value = self.lower_expr(operand);
         let owned = self.temporary(span, value, ty.clone());
         self.emit_ref(span, owned, vec![], Mutability::Shared, ty)

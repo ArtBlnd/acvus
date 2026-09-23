@@ -179,7 +179,7 @@ fn an_array_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k + 7; f([1.0, 2.0])").unwrap_err();
     assert!(
-        err.contains("type mismatch: expected i64, got Array<Float, 2>"),
+        err.contains("type mismatch in `+`: i64 vs Array<Float, 2>"),
         "{err}"
     );
 }
@@ -189,7 +189,7 @@ fn a_string_against_an_integer_literal_operand_is_refused_as_a_mismatch() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k < 7; f(\"a\".to_string())").unwrap_err();
     assert!(
-        err.contains("type mismatch: expected i64, got String"),
+        err.contains("type mismatch in `<`: i64 vs String"),
         "{err}"
     );
 }
@@ -199,7 +199,7 @@ fn a_float_literal_operand_refuses_an_integer_literal_argument() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k + 7.0; f(1)").unwrap_err();
     assert!(
-        err.contains("type mismatch: expected Float, got i64"),
+        err.contains("type mismatch in `+`: Float vs i64"),
         "{err}"
     );
     let ir = script(&i, "let f = |k| -> k + 7.0; f(1.0)").unwrap();
@@ -273,7 +273,7 @@ fn a_string_literal_operand_fixes_the_parameter_against_an_integer_call() {
     let i = Interner::new();
     let err = script(&i, "let f = |k| -> k + \"a\".to_string(); f(1)").unwrap_err();
     assert!(
-        err.contains("type mismatch: expected String, got i64"),
+        err.contains("type mismatch in `+`: String vs i64"),
         "{err}"
     );
     assert!(
@@ -299,7 +299,7 @@ fn an_integer_literal_operand_refuses_a_float_call() {
     let i = Interner::new();
     let err = script(&i, "let g = |k| -> k + 1; g(2.5)").unwrap_err();
     assert!(
-        err.contains("type mismatch: expected i64, got Float"),
+        err.contains("type mismatch in `+`: i64 vs Float"),
         "{err}"
     );
 }

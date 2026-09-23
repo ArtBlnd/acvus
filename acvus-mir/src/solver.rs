@@ -2740,6 +2740,16 @@ impl<'src> Solver<'src> {
     /// nor could take a least element.
     pub fn solve(&mut self) -> Vec<Unsettled> {
         let mut failures = self.settle();
+        // A pattern's mode closes first. Before a width or a text takes its
+        // least element: no least element is a reference, so a head still
+        // open here closes to `Value` in either order, and the join that
+        // closing makes is what carries a type between the scrutinee and
+        // its referent before either is defaulted apart. Before a lend: a
+        // binding closed to a value is what a lend of that name then lends,
+        // and a lend closed first would name a referent the pattern had not
+        // yet settled, which is how a `&&T` would be formed (RFC-0029).
+        self.close_matches_by_least_element(&mut failures);
+        failures.extend(self.settle());
         for index in 0..self.terms.ty_bounds.len() {
             let TypeBound::Unresolved { bound } = &self.terms.ty_bounds[index] else {
                 continue;
@@ -2760,12 +2770,6 @@ impl<'src> Solver<'src> {
                 self.terms.repr_vars[index] = ReprBound::Bound(Repr::Uniform);
             }
         }
-        // A pattern's mode closes before a lend does: a binding closed to
-        // a value is what a lend of that name then lends, and a lend
-        // closed first would name a referent the pattern had not yet
-        // settled, which is how a `&&T` would be formed (RFC-0029).
-        self.close_matches_by_least_element(&mut failures);
-        failures.extend(self.settle());
         self.close_lends_by_least_element(&mut failures);
         failures.extend(self.settle());
         self.close_captures_by_least_element(&mut failures);

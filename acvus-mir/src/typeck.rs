@@ -693,8 +693,9 @@ struct OperatorSite {
     signature: OperatorSignature,
 }
 
-/// An operator's operand as its call takes it: its type, and the
-/// expression a conversion to the parameter is recorded at.
+/// An operator's operand as its call takes it: the type it is read at,
+/// what it names (`read_operand_through`), and the expression a
+/// conversion to the parameter is recorded at.
 #[derive(Clone, Copy)]
 struct Operand<'t> {
     ty: &'t InferTy,
@@ -1280,10 +1281,12 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
-    /// The operator each of its operands' head decisions and its call's
-    /// instance decision was opened for: a failure of one is that
-    /// operator's refusal.
+    /// The operator each of its call's instance decisions was opened for:
+    /// a failure of one is that operator's refusal.
     operator_decisions: FxHashMap<DecisionId, OperatorSite>,
+    /// The operator each of its operands' head decisions was opened for:
+    /// a failure of one is that operator's mismatch.
+    operand_decisions: FxHashMap<DecisionId, &'static str>,
     requirer_of: FxHashMap<DecisionId, DecisionId>,
     /// The declaration whose scheme opened each instance decision: the
     /// callee for a call's own instance, and the declaration that carries
@@ -1344,6 +1347,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
             operator_decisions: FxHashMap::default(),
+            operand_decisions: FxHashMap::default(),
             requirer_of: FxHashMap::default(),
             decision_callees: FxHashMap::default(),
             source_begins_by_decision: FxHashMap::default(),
@@ -4247,8 +4251,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     subject: ShownValue::Anonymous,
                 },
                 Unsettled::MatchMismatch { expected, got, .. }
-                    if let Some(&OperatorSite { op, .. }) =
-                        self.operator_decisions.get(&decision) =>
+                    if let Some(&op) = self.operand_decisions.get(&decision) =>
                 {
                     MirErrorKind::TypeMismatchBinOp {
                         op,
@@ -5634,7 +5637,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn named_by_open_operand(
         &mut self,
         operand: &InferTy,
-        operator: OperatorSite,
+        op: &'static str,
         span: Span,
     ) -> InferTy {
         let named = self.solver.fresh_ty_var();
@@ -5644,7 +5647,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             bindings: Vec::new(),
         });
         self.decision_sites.insert(decision, span);
-        self.operator_decisions.insert(decision, operator);
+        self.operand_decisions.insert(decision, op);
         named
     }
 
@@ -5699,15 +5702,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             no_instance(self);
             return None;
         }
-        for (&Operand { ty: given, at }, param) in operands.iter().zip(&call_type.params) {
-            let named = match self.solver.shallow_resolve_ty(given) {
-                TyTerm::Ref(_, named) => named.ty,
-                TyTerm::Var(var) if self.solver.bound_of_var(var).admits_a_reference() => {
-                    self.named_by_open_operand(given, operator, span)
-                }
-                other => other,
-            };
-            let borrowed = TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(named)));
+        for (&Operand { ty: named, at }, param) in operands.iter().zip(&call_type.params) {
+            let borrowed = TyTerm::Ref(
+                Mutability::Shared,
+                Box::new(TypeArg::uniform(named.clone())),
+            );
             let site = ConversionSite {
                 id: at,
                 span,
@@ -5736,11 +5735,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// referent is a word and the lend of RFC-0020 where the operator
     /// keeps the reference. A referent still open is read through as well,
     /// because the operand bound the operator then imposes leaves it a
-    /// word.
-    fn read_operand_through(&mut self, operand: &InferTy, stays_lent: bool) -> InferTy {
+    /// word. An operand whose head is still open is read at what it names
+    /// once the head settles, so the two operands meet at their referents
+    /// whether the head is known here or later.
+    fn read_operand_through(
+        &mut self,
+        operand: &InferTy,
+        op: &'static str,
+        stays_lent: bool,
+        span: Span,
+    ) -> InferTy {
         let resolved = self.solver.resolve_ty(operand);
-        let TyTerm::Ref(_, inner) = &resolved else {
-            return resolved;
+        let inner = match &resolved {
+            TyTerm::Ref(_, inner) => inner,
+            TyTerm::Var(var) if self.solver.bound_of_var(*var).admits_a_reference() => {
+                return self.named_by_open_operand(operand, op, span);
+            }
+            _ => return resolved,
         };
         let referent = self.solver.resolve_ty(&inner.ty);
         let word = referent.is_word() != Some(false);
@@ -6420,8 +6431,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         mutability: Mutability::Shared,
                     });
                 }
-                let lt = self.read_operand_through(&lt, operand_stays_lent(*op));
-                let rt = self.read_operand_through(&rt, operand_stays_lent(*op));
+                let lt =
+                    self.read_operand_through(&lt, op_str(*op), operand_stays_lent(*op), *span);
+                let rt =
+                    self.read_operand_through(&rt, op_str(*op), operand_stays_lent(*op), *span);
 
                 // Early guard: if either operand is Error, suppress cascading errors.
                 if Self::is_error(&lt) || Self::is_error(&rt) {
@@ -6633,7 +6646,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             place: operand.id(),
                             mutability: Mutability::Shared,
                         });
-                        self.read_operand_through(&ot, true)
+                        self.read_operand_through(&ot, "-", true, *span)
                     }
                     None => self.solver.resolve_ty(&ot),
                 };

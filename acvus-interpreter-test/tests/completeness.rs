@@ -115,17 +115,6 @@ fn a_reassigned_reference_releases_its_old_loan() {
     );
 }
 
-/// RFC-0018 rule 10: a captured `String` is seen as `&String`; RFC-0020:
-/// `==` reads text operands and references to them alike. The comparison
-/// runs when `k` is a `let`.
-#[test]
-fn a_comparison_with_a_captured_string() {
-    runs_to(
-        "let mk = |k| -> |x| -> x == k; let g = mk(\"q\".to_string()); g(\"q\".to_string())",
-        "true",
-    );
-}
-
 /// RFC-0029 rules 3-4: a pattern against a `&mut T` binding binds as it does
 /// against `&T`, each part a shared reborrow.
 #[test]

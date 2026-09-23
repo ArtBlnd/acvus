@@ -176,9 +176,9 @@ fn a_call_against_a_parameter_a_literal_operand_fixed_is_a_compile_error() {
     let err = text(&out.stderr);
     assert_eq!(
         err.lines().next(),
-        Some("error: type mismatch: expected String, got i64")
+        Some("error: type mismatch in `+`: String vs i64")
     );
-    assert!(err.contains("--> cat.acvus:2:3"), "{err}");
+    assert!(err.contains("--> cat.acvus:1:16"), "{err}");
     assert!(!err.contains("inst #"), "{err}");
 
     write(
