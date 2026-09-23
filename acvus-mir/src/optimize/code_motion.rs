@@ -290,10 +290,9 @@ fn backing_storages(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         _ => return SmallVec::new(),
     };
     loans
-        .region(through)
-        .loans
+        .names(through)
         .iter()
-        .map(|loan| loan.storage.value())
+        .filter_map(|loan| loan.storage.slot())
         .collect()
 }
 
@@ -513,11 +512,9 @@ impl StorageWrites {
         let live = crate::analysis::liveness::analyze(cfg);
         let held_mutably = |value: ValueId| {
             loans
-                .region(value)
-                .loans
-                .iter()
+                .holds(value)
                 .filter(|loan| loan.mutability == Mutability::Mut)
-                .map(|loan| loan.storage.value())
+                .filter_map(|loan| loan.storage.slot())
                 .collect::<SmallVec<[ValueId; 2]>>()
         };
         Self {
@@ -647,14 +644,15 @@ fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
             container,
             mutability: Mutability::Shared,
             ..
-        } => match loans.region(*container).loans.as_slice() {
+        } => match loans.names(*container) {
             [
                 Loan {
                     storage,
                     mutability: Mutability::Shared,
                 },
-            ] => Hoistable::SharedBorrow {
-                storage: storage.value(),
+            ] => match storage.slot() {
+                Some(storage) => Hoistable::SharedBorrow { storage },
+                None => Hoistable::No,
             },
             _ => Hoistable::No,
         },
@@ -1033,10 +1031,9 @@ fn taken_exclusively(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
             RefTarget::Through(reference) => {
                 taken.extend(
                     loans
-                        .region(*reference)
-                        .loans
+                        .names(*reference)
                         .iter()
-                        .map(|l| l.storage.value()),
+                        .filter_map(|l| l.storage.slot()),
                 );
             }
         }

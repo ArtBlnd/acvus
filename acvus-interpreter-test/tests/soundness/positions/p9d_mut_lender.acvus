@@ -1,0 +1,2 @@
+// refuse
+let s = "a string long enough to live on the heap".to_string(); let d = deque(); push_back(&mut d, &s); let m = &mut s; *m = "other".to_string(); match pop_front(&mut d) { Some(r) => r.len(), None => 0 }

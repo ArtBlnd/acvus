@@ -6,7 +6,7 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::{ParamLoan, Summaries, Summary};
+use crate::analysis::loans::{ResultLoan, Summaries, Summary, positions};
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
@@ -185,10 +185,11 @@ fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<Qual
     crate::graph::infer::tarjan_scc(&ids, &edges)
 }
 
-/// A summary's loans are distinct `ParamLoan`s, each a parameter index and a
-/// `Mutability`. Give `Mutability` a third value and this factor moves with
+/// A summary's loans are distinct `ResultLoan`s: a result position, a
+/// parameter index, one of the parameter's positions or the whole of it, and
+/// a `Mutability`. Give `Mutability` a third value and this factor moves with
 /// it, or the fixpoint's bound below stops being one.
-const LOANS_PER_PARAM: usize = 2;
+const LOANS_PER_PARAM_POSITION: usize = 2;
 
 /// One strongly connected component of the call graph, and the least fixpoint
 /// of the borrow check over its summaries (RFC-0064 rule 4).
@@ -233,7 +234,16 @@ impl<'a> Component<'a> {
     fn capacity(&self) -> usize {
         self.members
             .iter()
-            .map(|qref| self.modules[qref].main.params.len() * LOANS_PER_PARAM)
+            .map(|qref| {
+                let module = &self.modules[qref];
+                let param_positions: usize = module
+                    .main
+                    .params
+                    .iter()
+                    .map(|(_, value)| module.main.val_types.get(value).map_or(0, positions) + 1)
+                    .sum();
+                positions(&module.ret) * param_positions * LOANS_PER_PARAM_POSITION
+            })
             .sum()
     }
 
@@ -260,7 +270,7 @@ impl<'a> Component<'a> {
             );
             settled[at].1 = checked.errors;
             let held = &summaries[&qref];
-            let lost: Vec<ParamLoan> = held
+            let lost: Vec<ResultLoan> = held
                 .loans
                 .iter()
                 .copied()

@@ -1,0 +1,2 @@
+// refuse
+let a = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]; let b = ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()]; let o = get(&a, 0u64); let m = &mut o; *m = get(&b, 0u64); b = ["c".to_string()]; match o { Some(p) => len(p), None => 0u64, }
