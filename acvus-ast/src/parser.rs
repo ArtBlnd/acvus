@@ -974,10 +974,12 @@ where
         Expr::Ident {
             name,
             ref_kind: RefKind::Value,
+            span: name_span,
             ..
         } => Ok(Stmt::Assign {
             id: AstId::alloc(),
             name: name.name,
+            name_span,
             expr: rhs,
             span,
         }),
@@ -1037,18 +1039,20 @@ pub(crate) fn stated<S>((mut stmts, last): (Vec<Stmt<S>>, Expr<S>)) -> Vec<Stmt<
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
+/// The callee covers `ns::f`, where the name is written, and not the call.
 pub fn build_call<S>(func: Expr<S>, args: Vec<Expr<S>>, span: Span) -> Expr<S> {
     let func = match func {
         Expr::Variant {
             enum_name: Some(namespace),
             tag,
             payload: None,
+            span: name_span,
             ..
         } => Expr::Ident {
             id: AstId::alloc(),
             name: QualifiedRef::qualified(namespace, tag),
             ref_kind: RefKind::Value,
-            span,
+            span: name_span,
         },
         other => other,
     };
@@ -1892,6 +1896,39 @@ mod tests {
         };
         assert_eq!(interner.resolve(*name), "o");
         assert!(matches!(expr, Expr::Object { .. }));
+    }
+
+    /// A method call, an assignment and a qualified callee each record
+    /// where their name is written, and that source is the name.
+    #[test]
+    fn a_name_span_covers_the_name() {
+        let interner = Interner::new();
+        let source = "let total = 0; total = xs.fold(0); ns::f(1)";
+        let s = parse_script(&interner, source).unwrap();
+        let Stmt::Assign {
+            name,
+            name_span,
+            expr,
+            ..
+        } = &s.stmts[1]
+        else {
+            panic!("expected Assign");
+        };
+        assert_eq!(&source[name_span.start..name_span.end], "total");
+        assert_eq!(interner.resolve(*name), "total");
+        let Expr::MethodCall {
+            name, name_span, ..
+        } = expr
+        else {
+            panic!("expected MethodCall");
+        };
+        assert_eq!(&source[name_span.start..name_span.end], "fold");
+        assert_eq!(interner.resolve(*name), "fold");
+        let Some(Expr::FuncCall { func, .. }) = s.tail.as_deref() else {
+            panic!("expected FuncCall");
+        };
+        let callee = func.span();
+        assert_eq!(&source[callee.start..callee.end], "ns::f");
     }
 
     // -- Store -------------------------------------------------------

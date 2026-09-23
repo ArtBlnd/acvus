@@ -315,11 +315,30 @@ impl IncrementalGraph {
 
     /// What the checker sees at `marker` with `probed` as the local body of
     /// its `qref`, which the graph may not hold, as while a document's text
-    /// does not parse, and the rest of the graph as it stands. The body's
-    /// SCC is inferred again, from the call edges its AST has, on a copy of
-    /// the sources, so nothing the graph holds changes. `None` where `qref`
-    /// is an extern or `probed` is not local.
+    /// does not parse, and the rest of the graph as it stands. `None` where
+    /// `qref` is an extern or `probed` is not local.
     pub fn probe(&self, probed: Function, marker: acvus_ast::AstId) -> Option<ProbeProduct> {
+        let qref = probed.qref;
+        self.check_as(probed, Some(Probe { body: qref, marker }))?
+            .probe
+    }
+
+    /// The view of `probed` checked as the local body of its `qref`, as
+    /// `probe` checks it: what the graph would record were the body
+    /// replaced, while the graph keeps the body it holds. `None` where
+    /// `qref` is an extern or `probed` is not local.
+    pub fn view_as(&self, probed: Function) -> Option<Freeze<crate::typeck::BodyView>> {
+        let qref = probed.qref;
+        self.check_as(probed, None)?
+            .outcomes
+            .get(&qref)
+            .expect("the checked SCC holds the replaced body")
+            .view()
+    }
+
+    /// `probed`'s SCC inferred again, from the call edges its AST has, on
+    /// a copy of the sources, so nothing the graph holds changes.
+    fn check_as(&self, probed: Function, probe: Option<Probe>) -> Option<SccInferResult> {
         let qref = probed.qref;
         if let Some(Function {
             kind: FnKind::Extern { .. },
@@ -379,7 +398,7 @@ impl IncrementalGraph {
             .collect();
 
         let mut sources = self.sources.clone();
-        infer_scc(
+        Some(infer_scc(
             &self.interner,
             &scc_order[at],
             self.entry,
@@ -391,9 +410,8 @@ impl IncrementalGraph {
             &super::infer::declared_bounds(self.functions.values()),
             &mut sources,
             &self.types,
-            Some(Probe { body: qref, marker }),
-        )
-        .probe
+            probe,
+        ))
     }
 
     // -- Internal: Extract -------------------------------------------

@@ -96,6 +96,8 @@ pub enum Stmt<S = Clean> {
     Assign {
         id: AstId,
         name: Astr,
+        /// Where `name` is written.
+        name_span: Span,
         expr: Expr<S>,
         span: Span,
     },
@@ -392,6 +394,8 @@ pub enum Expr<S = Clean> {
         callee_id: AstId,
         receiver: Box<Expr<S>>,
         name: Astr,
+        /// Where `name` is written, which is where the callee is.
+        name_span: Span,
         args: Vec<Expr<S>>,
         span: Span,
     },

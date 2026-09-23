@@ -1,7 +1,7 @@
 //! The compilations a host describes, kept checked as the editor changes
 //! files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use acvus_ast::Span;
@@ -11,8 +11,8 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 use crate::session::{
-    CompletionItem, Definition, DocId, Document, Hover, LspError, LspErrorCategory, LspSession,
-    Mode, parse_error_to_lsp,
+    CompletionItem, Definition, DocId, Document, Edit, Hover, LspError, LspErrorCategory,
+    LspSession, Mode, Referent, RenameRefusal, parse_error_to_lsp,
 };
 
 pub trait Host {
@@ -53,7 +53,8 @@ pub struct DocumentSpec {
     pub document: Document,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Ordered by path, then span.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Location {
     pub path: PathBuf,
     pub span: (usize, usize),
@@ -422,8 +423,82 @@ where
         }
     }
 
+    /// The places that refer to what the name at `offset` refers to, in
+    /// every compilation that holds the document open: a local's or an
+    /// input's in the document, a context's or a function's in every
+    /// document of the compilation. A function's declaration is the start
+    /// of the document that defines it. `None` where no name at `offset`
+    /// resolved in any of them.
+    pub fn references(
+        &self,
+        path: &Path,
+        offset: usize,
+        include_declaration: bool,
+    ) -> Option<Vec<Location>> {
+        let mut found: Option<BTreeSet<Location>> = None;
+        for (loaded, id) in self.open_in_all(path) {
+            let Some(referent) = loaded.session.referent(id, offset) else {
+                continue;
+            };
+            let searched: Vec<(&Path, DocId)> = match referent {
+                Referent::Local(_) | Referent::Input(_) => vec![(path, id)],
+                Referent::Function(_) | Referent::Context(_) => loaded
+                    .documents
+                    .iter()
+                    .filter_map(|(searched, held)| match held {
+                        Held::Open(id) => Some((searched.as_path(), *id)),
+                        Held::Unreadable(_) => None,
+                    })
+                    .collect(),
+            };
+            let locations = found.get_or_insert_default();
+            for (searched, id) in searched {
+                locations.extend(
+                    loaded
+                        .session
+                        .references_to(id, referent, include_declaration)
+                        .into_iter()
+                        .map(|span| Location {
+                            path: searched.to_path_buf(),
+                            span,
+                        }),
+                );
+            }
+        }
+        found.map(|locations| locations.into_iter().collect())
+    }
+
+    /// The edits that rename the local at `offset`, planned in the first
+    /// compilation, in id order, that holds the document open, and checked
+    /// in every one that does, since each may resolve its names apart.
+    pub fn rename(
+        &self,
+        path: &Path,
+        offset: usize,
+        new_name: &str,
+    ) -> Result<Vec<(PathBuf, Edit)>, RenameRefusal> {
+        let (loaded, id) = self.open_in_first(path).ok_or(RenameRefusal::NotAName)?;
+        let plan = loaded.session.plan_rename(id, offset, new_name)?;
+        for (loaded, id) in self.open_in_all(path) {
+            loaded.session.check_rename(id, &plan)?;
+        }
+        Ok(plan
+            .edits()
+            .iter()
+            .map(|edit| (path.to_path_buf(), edit.clone()))
+            .collect())
+    }
+
     fn open_in_first(&self, path: &Path) -> Option<(&Loaded<H::Compilation>, DocId)> {
-        self.compilations.iter().find_map(|compilation| {
+        self.open_in_all(path).next()
+    }
+
+    /// The compilations, in id order, that hold the document open.
+    fn open_in_all<'w>(
+        &'w self,
+        path: &Path,
+    ) -> impl Iterator<Item = (&'w Loaded<H::Compilation>, DocId)> {
+        self.compilations.iter().filter_map(move |compilation| {
             let State::Loaded(loaded) = &compilation.state else {
                 return None;
             };

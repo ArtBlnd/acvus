@@ -502,8 +502,8 @@ PostfixExpr<Lead>: Expr<S> = {
 };
 
 CalleeExpr<Lead>: Expr<S> = {
-    <l:@L> <recv:PostfixExpr<Lead>> "." <name:"ident"> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
-        Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver: Box::new(recv), name, args, span: Span::new(l, r) },
+    <l:@L> <recv:PostfixExpr<Lead>> "." <nl:@L> <name:"ident"> <nr:@R> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+        Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver: Box::new(recv), name, name_span: Span::new(nl, nr), args, span: Span::new(l, r) },
     <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
         build_call(func, args, Span::new(l, r)),
     Lead,

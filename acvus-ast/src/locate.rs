@@ -15,9 +15,23 @@ pub struct Node {
     pub callee_id: Option<AstId>,
 }
 
+/// Where a node, or the callee a node records, is written as a name: a
+/// binder, a name read or assigned, `$name`, `@name`, a callee's `f` or
+/// `ns::f`, a method call's name. The id is the one the checker records
+/// the name's resolution under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Name {
+    pub id: AstId,
+    pub span: Span,
+    /// The name is also the key of an object field written as shorthand,
+    /// `{ a }`, so another name written here must keep the key: `a: b`.
+    pub shorthand: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Nodes {
     preorder: Vec<Node>,
+    names: Vec<Name>,
 }
 
 impl Nodes {
@@ -27,6 +41,7 @@ impl Nodes {
     {
         let mut nodes = Self {
             preorder: Vec::new(),
+            names: Vec::new(),
         };
         nodes.push(script.id, script.span, None);
         nodes.stmts(&script.stmts);
@@ -42,6 +57,7 @@ impl Nodes {
     {
         let mut nodes = Self {
             preorder: Vec::new(),
+            names: Vec::new(),
         };
         nodes.push(template.id, template.span, None);
         nodes.stmts(&template.body);
@@ -69,6 +85,39 @@ impl Nodes {
             .collect()
     }
 
+    /// Every name of the body, in source order.
+    pub fn names(&self) -> &[Name] {
+        &self.names
+    }
+
+    /// The name whose span holds `offset`, `start <= offset < end`, as
+    /// `at` reads a span. Names do not overlap, so there is at most one.
+    pub fn name_at(&self, offset: usize) -> Option<Name> {
+        self.names
+            .iter()
+            .find(|name| name.span.start <= offset && offset < name.span.end)
+            .copied()
+    }
+
+    fn name(&mut self, id: AstId, span: Span) {
+        self.names.push(Name {
+            id,
+            span,
+            shorthand: false,
+        });
+    }
+
+    /// The field `{ a }` is written as its value's name.
+    fn shorthand(&mut self, value: AstId) {
+        let name = self
+            .names
+            .iter_mut()
+            .rev()
+            .find(|name| name.id == value)
+            .expect("a shorthand field's value is a name");
+        name.shorthand = true;
+    }
+
     fn push(&mut self, id: AstId, span: Span, callee_id: Option<AstId>) {
         self.preorder.push(Node {
             id,
@@ -87,6 +136,7 @@ impl Nodes {
 
     fn binder(&mut self, binder: &Binder) {
         self.push(binder.id, binder.span, None);
+        self.name(binder.id, binder.span);
     }
 
     fn stmts<S>(&mut self, stmts: &[Stmt<S>])
@@ -138,8 +188,15 @@ impl Nodes {
                 self.push(*id, *span, None);
                 self.binder(binder);
             }
-            Stmt::Assign { id, expr, span, .. } => {
+            Stmt::Assign {
+                id,
+                name: _,
+                name_span,
+                expr,
+                span,
+            } => {
                 self.push(*id, *span, None);
+                self.name(*id, *name_span);
                 self.expr(expr);
             }
             Stmt::Break { id, span } | Stmt::Continue { id, span } => self.push(*id, *span, None),
@@ -201,7 +258,10 @@ impl Nodes {
         S: Slot,
     {
         match place {
-            Place::Base(PlaceBase::Root { id, span, .. }) => self.push(*id, *span, None),
+            Place::Base(PlaceBase::Root { id, span, .. }) => {
+                self.push(*id, *span, None);
+                self.name(*id, *span);
+            }
             Place::Base(PlaceBase::Element {
                 id,
                 callee_id,
@@ -227,9 +287,11 @@ impl Nodes {
         S: Slot,
     {
         match expr {
-            Expr::Ident { id, span, .. }
-            | Expr::Literal { id, span, .. }
-            | Expr::ContextRef { id, span, .. } => self.push(*id, *span, None),
+            Expr::Ident { id, span, .. } | Expr::ContextRef { id, span, .. } => {
+                self.push(*id, *span, None);
+                self.name(*id, *span);
+            }
+            Expr::Literal { id, span, .. } => self.push(*id, *span, None),
             Expr::BinaryOp {
                 id,
                 left,
@@ -308,12 +370,14 @@ impl Nodes {
                 id,
                 callee_id,
                 receiver,
+                name: _,
+                name_span,
                 args,
                 span,
-                ..
             } => {
                 self.push(*id, *span, Some(*callee_id));
                 self.expr(receiver);
+                self.name(*callee_id, *name_span);
                 for arg in args {
                     self.expr(arg);
                 }
@@ -353,6 +417,9 @@ impl Nodes {
                 for field in fields {
                     self.push(field.id, field.span, None);
                     self.expr(&field.value);
+                    if field.value.span() == field.span {
+                        self.shorthand(field.value.id());
+                    }
                 }
             }
             Expr::Tuple { id, elements, span } => {
@@ -458,10 +525,13 @@ impl Nodes {
         S: Slot,
     {
         match pattern {
-            Pattern::Binding { id, span, .. }
-            | Pattern::ContextBind { id, span, .. }
-            | Pattern::Literal { id, span, .. }
-            | Pattern::Wildcard { id, span } => self.push(*id, *span, None),
+            Pattern::Binding { id, span, .. } | Pattern::ContextBind { id, span, .. } => {
+                self.push(*id, *span, None);
+                self.name(*id, *span);
+            }
+            Pattern::Literal { id, span, .. } | Pattern::Wildcard { id, span } => {
+                self.push(*id, *span, None);
+            }
             Pattern::List {
                 id,
                 head,
@@ -479,6 +549,9 @@ impl Nodes {
                 for field in fields {
                     self.push(field.id, field.span, None);
                     self.pattern(&field.pattern);
+                    if field.pattern.span() == field.span {
+                        self.shorthand(field.pattern.id());
+                    }
                 }
             }
             Pattern::Tuple { id, elements, span } => {

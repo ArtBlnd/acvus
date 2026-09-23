@@ -1078,9 +1078,17 @@ pub struct BodyView {
     /// them, so a poisoned position is `Ty::Error`.
     pub types: FxHashMap<AstId, Ty>,
     pub binder_of: FxHashMap<AstId, AstId>,
+    /// Every binder the body defines, a use of it or not.
+    pub binders: FxHashSet<AstId>,
     /// Keyed by the id the call's callee is recorded under, which for a
     /// method call or an index is the AST's `callee_id` and not the call.
     pub declaration_of: FxHashMap<AstId, QualifiedRef>,
+    /// The context each `@name` the checker found declared reads, writes
+    /// or binds, keyed by the node the `@name` is.
+    pub context_of: FxHashMap<AstId, QualifiedRef>,
+    /// The input each `$name` the checker admitted reads, keyed by the
+    /// node the `$name` is.
+    pub input_of: FxHashMap<AstId, Astr>,
 }
 
 enum SettledCallee {
@@ -1485,6 +1493,8 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     binder_of: FxHashMap<AstId, AstId>,
     candidate_binder_of: FxHashMap<AstId, AstId>,
     binder_types: FxHashMap<AstId, InferTy>,
+    context_of: FxHashMap<AstId, QualifiedRef>,
+    input_of: FxHashMap<AstId, Astr>,
     /// Extern parameters in Signature order, which is the order iteration
     /// must keep.
     param_types: smallvec::SmallVec<[ExternParam; 4]>,
@@ -1660,6 +1670,8 @@ where
             binder_of: FxHashMap::default(),
             candidate_binder_of: FxHashMap::default(),
             binder_types: FxHashMap::default(),
+            context_of: FxHashMap::default(),
+            input_of: FxHashMap::default(),
             env,
             namespace: None,
             param_types: smallvec::smallvec![],
@@ -2251,7 +2263,10 @@ where
         Freeze::new(BodyView {
             types,
             binder_of,
+            binders: self.binder_types.keys().copied().collect(),
             declaration_of,
+            context_of: self.context_of.clone(),
+            input_of: self.input_of.clone(),
         })
     }
 
@@ -3342,7 +3357,7 @@ where
             }) => {
                 let qref = QualifiedRef::root(*name);
                 self.note_access(Effect::write(qref), span);
-                let ty = self.resolve_context_type(qref, span);
+                let ty = self.resolve_context_type(*id, qref, span);
                 self.record_ret(*id, ty)
             }
             acvus_ast::Place::Base(acvus_ast::PlaceBase::Root {
@@ -4924,9 +4939,12 @@ where
         ty
     }
 
-    fn resolve_context_type(&mut self, qref: QualifiedRef, span: Span) -> InferTy {
+    /// The type of the context `@name` at `id` names, recording `id` as a
+    /// reference to it where it is declared.
+    fn resolve_context_type(&mut self, id: AstId, qref: QualifiedRef, span: Span) -> InferTy {
         self.note_context_use(qref, span);
         if let Some(ty) = self.env.contexts.get(&qref) {
+            self.context_of.insert(id, qref);
             return ty.clone();
         }
         let labels = self.declared_contexts().into_iter().collect();
@@ -6641,6 +6659,7 @@ where
             acvus_ast::Stmt::Assign {
                 id,
                 name,
+                name_span: _,
                 expr,
                 span,
             } => {
@@ -7008,7 +7027,7 @@ where
                 name: qref,
                 span,
             } => {
-                let ty = self.resolve_context_type(*qref, *span);
+                let ty = self.resolve_context_type(*id, *qref, *span);
                 self.note_access(Effect::read(*qref), *span);
                 self.record_ret(*id, ty)
             }
@@ -7023,7 +7042,10 @@ where
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
                         let ty = match self.param_types.iter().find(|p| p.name == name.name) {
-                            Some(param) => param.ty.clone(),
+                            Some(param) => {
+                                self.input_of.insert(*id, name.name);
+                                param.ty.clone()
+                            }
                             None => match self.free_param {
                                 FreeParam::Discovered => {
                                     let ty = self.solver.fresh_ty_var();
@@ -7032,6 +7054,7 @@ where
                                         ty: ty.clone(),
                                         first_read: Some(*span),
                                     });
+                                    self.input_of.insert(*id, name.name);
                                     ty
                                 }
                                 FreeParam::Bound => {
@@ -7559,6 +7582,7 @@ where
                 callee_id,
                 receiver,
                 name,
+                name_span: _,
                 args,
                 span,
             } => {
@@ -8422,7 +8446,7 @@ where
     ) {
         let source_resolved = self.solver.resolve_ty(source_ty);
         match pattern {
-            Pattern::ContextBind { name: qref, .. } => {
+            Pattern::ContextBind { id, name: qref, .. } => {
                 match self.pattern_mode {
                     PatternMode::Through => {
                         self.error(MirErrorKind::ReferenceInData(DataShape::Aggregate), span);
@@ -8432,7 +8456,7 @@ where
                     PatternMode::Value => {}
                 }
                 self.note_access(Effect::write(*qref), span);
-                let ctx_ty = self.resolve_context_type(*qref, span);
+                let ctx_ty = self.resolve_context_type(*id, *qref, span);
                 let joined = match source {
                     PatternSource::Expr(id) => {
                         let site = ConversionSite {

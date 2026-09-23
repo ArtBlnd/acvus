@@ -7,13 +7,18 @@
 //! - MirError -> LspError conversion
 //! - Where a completion is asked and how its items read; what they are is
 //!   the checker's answer (`IncrementalGraph::probe`)
+//! - The names that refer to what a name refers to, and the edits that
+//!   rename a local; which name refers to what is the checker's record
+//!   (`BodyView`), and a rename is checked by the checker again
+//!   (`IncrementalGraph::view_as`)
 
 use std::collections::BTreeMap;
+use std::fmt;
 
-use acvus_ast::lexer::{Line, Piece, scan_template};
-use acvus_ast::locate::Nodes;
+use acvus_ast::lexer::{ExprTokenizer, Line, Piece, scan_template};
+use acvus_ast::locate::{Name, Nodes};
 use acvus_ast::report::Label;
-use acvus_ast::token::KEYWORDS;
+use acvus_ast::token::{KEYWORDS, Token};
 use acvus_ast::{AstId, Span};
 use acvus_mir::error::Refusal;
 use acvus_mir::graph::ContextInfo;
@@ -21,7 +26,7 @@ use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
 use acvus_mir::ty::PolyTy;
 use acvus_mir::typeck::{BodyView, ProbeProduct};
-use acvus_utils::{Freeze, Interner};
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
 // -- Public types ----------------------------------------------------
@@ -116,6 +121,137 @@ pub enum Definition {
     },
     /// A function whose body is in the graph.
     Function(QualifiedRef),
+}
+
+/// What a name refers to, as the checker resolved it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Referent {
+    /// The binder of a local, which is a node of one document.
+    Local(AstId),
+    Function(QualifiedRef),
+    Context(QualifiedRef),
+    Input(Astr),
+}
+
+/// Replace the source at `span` with `text`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    pub span: (usize, usize),
+    pub text: String,
+}
+
+/// Why `rename` wrote no edits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameRefusal {
+    /// The offset is on no name the checker resolved.
+    NotAName,
+    /// A function is named by the path of the file that defines it.
+    Function,
+    /// A context is declared by the host's context file.
+    Context,
+    /// An input is bound by the host.
+    Input,
+    Keyword(String),
+    NotAnIdentifier(String),
+    /// Checked with the new name, some name of the source resolves to a
+    /// binding other than the one it resolved to before.
+    ResolutionChanged(String),
+}
+
+impl fmt::Display for RenameRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RenameRefusal::NotAName => write!(f, "there is no local binding to rename here"),
+            RenameRefusal::Function => write!(
+                f,
+                "a function is named by the path of its file, which a rename here does not change"
+            ),
+            RenameRefusal::Context => write!(
+                f,
+                "a context is declared by the host's context file, which a rename here does not change"
+            ),
+            RenameRefusal::Input => write!(
+                f,
+                "an input is bound by the host, which a rename here does not change"
+            ),
+            RenameRefusal::Keyword(name) => write!(f, "`{name}` is a keyword"),
+            RenameRefusal::NotAnIdentifier(name) => write!(f, "`{name}` is not an identifier"),
+            RenameRefusal::ResolutionChanged(name) => write!(
+                f,
+                "renaming to `{name}` changes which binding a name of this document refers to"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RenameRefusal {}
+
+/// The names a rename writes anew, which every compilation holding the
+/// document must resolve as before.
+#[derive(Debug, Clone)]
+pub(crate) struct RenamePlan {
+    new_name: String,
+    /// In source order.
+    renamed: Vec<Name>,
+    /// One per renamed name, in the same order.
+    edits: Vec<Edit>,
+}
+
+impl RenamePlan {
+    /// One edit per name: the new name, or for a shorthand field `{ a }`
+    /// the key kept, `a: b`.
+    fn new(source: &str, new_name: &str, renamed: Vec<Name>) -> Self {
+        let edits = renamed
+            .iter()
+            .map(|name| Edit {
+                span: (name.span.start, name.span.end),
+                text: match name.shorthand {
+                    true => format!("{}: {new_name}", &source[name.span.start..name.span.end]),
+                    false => new_name.to_string(),
+                },
+            })
+            .collect();
+        Self {
+            new_name: new_name.to_string(),
+            renamed,
+            edits,
+        }
+    }
+
+    pub(crate) fn edits(&self) -> &[Edit] {
+        &self.edits
+    }
+
+    /// Where a span of the source is after the edits: a renamed name at the
+    /// new name, anything else moved by the edits before its ends.
+    fn moved(&self, span: Span) -> Span {
+        let shift = |at: usize| -> usize {
+            let grown: usize = self
+                .edits
+                .iter()
+                .filter(|edit| edit.span.1 <= at)
+                .map(|edit| edit.text.len())
+                .sum();
+            let shrunk: usize = self
+                .edits
+                .iter()
+                .filter(|edit| edit.span.1 <= at)
+                .map(|edit| edit.span.1 - edit.span.0)
+                .sum();
+            at + grown - shrunk
+        };
+        match self.renamed.iter().find(|name| name.span == span) {
+            Some(name) => {
+                let key = match name.shorthand {
+                    true => span.end - span.start + ": ".len(),
+                    false => 0,
+                };
+                let start = shift(span.start) + key;
+                Span::new(start, start + self.new_name.len())
+            }
+            None => Span::new(shift(span.start), shift(span.end)),
+        }
+    }
 }
 
 // -- LspSession ------------------------------------------------------
@@ -425,6 +561,162 @@ impl LspSession {
         }
     }
 
+    /// The places in this document that refer to what the name at `offset`
+    /// refers to: a local's uses, and with `include_declaration` its
+    /// binder; a function's call sites, and its declaration, the start of
+    /// its document, where that is this one; a context's or an input's
+    /// references. `None` where no name at `offset` resolved.
+    pub fn references(
+        &self,
+        id: DocId,
+        offset: usize,
+        include_declaration: bool,
+    ) -> Option<Vec<(usize, usize)>> {
+        let referent = self.referent(id, offset)?;
+        Some(self.references_to(id, referent, include_declaration))
+    }
+
+    /// What the name at `offset` refers to.
+    pub(crate) fn referent(&self, id: DocId, offset: usize) -> Option<Referent> {
+        let (nodes, view) = self.checked_body(id)?;
+        let name = nodes.name_at(offset)?;
+        if view.binders.contains(&name.id) {
+            return Some(Referent::Local(name.id));
+        }
+        if let Some(binder) = view.binder_of.get(&name.id) {
+            return Some(Referent::Local(*binder));
+        }
+        if let Some(qref) = view.declaration_of.get(&name.id) {
+            return Some(Referent::Function(*qref));
+        }
+        if let Some(qref) = view.context_of.get(&name.id) {
+            return Some(Referent::Context(*qref));
+        }
+        view.input_of
+            .get(&name.id)
+            .map(|name| Referent::Input(*name))
+    }
+
+    /// The names of this document that refer to `referent`, in source
+    /// order.
+    pub(crate) fn references_to(
+        &self,
+        id: DocId,
+        referent: Referent,
+        include_declaration: bool,
+    ) -> Vec<(usize, usize)> {
+        let Some((nodes, view)) = self.checked_body(id) else {
+            return vec![];
+        };
+        let refers = |name: &Name| match referent {
+            Referent::Local(binder) => {
+                (include_declaration && name.id == binder)
+                    || view.binder_of.get(&name.id) == Some(&binder)
+            }
+            Referent::Function(qref) => view.declaration_of.get(&name.id) == Some(&qref),
+            Referent::Context(qref) => view.context_of.get(&name.id) == Some(&qref),
+            Referent::Input(input) => view.input_of.get(&name.id) == Some(&input),
+        };
+        let declared_here = match referent {
+            Referent::Function(qref) => include_declaration && self.function_ref(id) == Some(qref),
+            Referent::Local(_) | Referent::Context(_) | Referent::Input(_) => false,
+        };
+        let mut spans: Vec<(usize, usize)> = nodes
+            .names()
+            .iter()
+            .filter(|name| refers(name))
+            .map(|name| (name.span.start, name.span.end))
+            .chain(declared_here.then_some((0, 0)))
+            .collect();
+        spans.sort_unstable();
+        spans.dedup();
+        spans
+    }
+
+    /// The edits that rename the local at `offset` to `new_name`: its
+    /// binder and every use. Refused unless the source with the edits,
+    /// checked beside the graph as it stands, resolves every name as this
+    /// one does, the renamed ones to the renamed binder.
+    pub fn rename(
+        &self,
+        id: DocId,
+        offset: usize,
+        new_name: &str,
+    ) -> Result<Vec<Edit>, RenameRefusal> {
+        let plan = self.plan_rename(id, offset, new_name)?;
+        self.check_rename(id, &plan)?;
+        Ok(plan.edits)
+    }
+
+    pub(crate) fn plan_rename(
+        &self,
+        id: DocId,
+        offset: usize,
+        new_name: &str,
+    ) -> Result<RenamePlan, RenameRefusal> {
+        let binder = match self.referent(id, offset) {
+            Some(Referent::Local(binder)) => binder,
+            Some(Referent::Function(_)) => return Err(RenameRefusal::Function),
+            Some(Referent::Context(_)) => return Err(RenameRefusal::Context),
+            Some(Referent::Input(_)) => return Err(RenameRefusal::Input),
+            None => return Err(RenameRefusal::NotAName),
+        };
+        if KEYWORDS.contains(&new_name) {
+            return Err(RenameRefusal::Keyword(new_name.to_string()));
+        }
+        let tokens: Vec<(usize, Token, usize)> =
+            ExprTokenizer::new(new_name, 0, self.graph.interner()).collect();
+        let [(0, Token::Ident(_), end)] = tokens.as_slice() else {
+            return Err(RenameRefusal::NotAnIdentifier(new_name.to_string()));
+        };
+        if *end != new_name.len() {
+            return Err(RenameRefusal::NotAnIdentifier(new_name.to_string()));
+        }
+        let (nodes, view) = self
+            .checked_body(id)
+            .expect("a document with a referent is checked");
+        let source = self
+            .doc_sources
+            .get(&id)
+            .expect("a document with a referent has a source");
+        let renamed = nodes
+            .names()
+            .iter()
+            .filter(|name| name.id == binder || view.binder_of.get(&name.id) == Some(&binder))
+            .copied()
+            .collect();
+        Ok(RenamePlan::new(source, new_name, renamed))
+    }
+
+    /// Whether this open document with `plan`'s edits, checked as its
+    /// function's body on a copy of the graph's sources, resolves each name
+    /// as it does now, compared by where the names are after the edits.
+    pub(crate) fn check_rename(&self, id: DocId, plan: &RenamePlan) -> Result<(), RenameRefusal> {
+        let source = &self.doc_sources[&id];
+        let document = &self.documents[&id];
+        let (nodes, view) = self
+            .checked_body(id)
+            .expect("an open document's body is checked");
+        let renamed_source = apply(source, &plan.edits);
+        let interner = self.graph.interner();
+        let Parsed { ast, .. } = document.mode.parse(interner, &renamed_source);
+        let renamed_nodes = nodes_of(&ast);
+        let renamed_view = self
+            .graph
+            .view_as(Function {
+                qref: document.qref,
+                kind: FnKind::Local(ast),
+                ty: document.ty.clone(),
+            })
+            .expect("a document's function is local, so its body is checked");
+        let expected = Resolution::of(&nodes, &view, |span| plan.moved(span));
+        let found = Resolution::of(&renamed_nodes, &renamed_view, |span| span);
+        match expected == found {
+            true => Ok(()),
+            false => Err(RenameRefusal::ResolutionChanged(plan.new_name.clone())),
+        }
+    }
+
     fn checked_body(&self, id: DocId) -> Option<(Nodes, Freeze<BodyView>)> {
         let qref = self.function_ref(id)?;
         let FnKind::Local(ast) = &self.graph.function(qref)?.kind else {
@@ -432,6 +724,61 @@ impl LspSession {
         };
         Some((nodes_of(ast), self.graph.view(qref)?))
     }
+}
+
+/// What the names of a body resolve to, by where the names are written.
+/// A name the checker records no resolution for is not in it, so a name
+/// that comes to resolve is a difference as much as one that stops.
+#[derive(Debug, PartialEq, Eq)]
+struct Resolution {
+    binder_of: FxHashMap<Span, Span>,
+    declaration_of: FxHashMap<Span, QualifiedRef>,
+}
+
+impl Resolution {
+    fn of<F>(nodes: &Nodes, view: &BodyView, at: F) -> Self
+    where
+        F: Fn(Span) -> Span,
+    {
+        let spans: FxHashMap<AstId, Span> = nodes
+            .names()
+            .iter()
+            .map(|name| (name.id, name.span))
+            .collect();
+        let span_of = |id: &AstId| {
+            *spans
+                .get(id)
+                .expect("the checker resolves a binder and its uses only where a name is written")
+        };
+        Self {
+            binder_of: view
+                .binder_of
+                .iter()
+                .map(|(used, binder)| (at(span_of(used)), at(span_of(binder))))
+                .collect(),
+            // An index's or a `for`'s callee is written as no name: the
+            // instance it settles on follows from the types of what the
+            // names resolve to, so it is compared through them.
+            declaration_of: view
+                .declaration_of
+                .iter()
+                .filter_map(|(callee, qref)| Some((at(*spans.get(callee)?), *qref)))
+                .collect(),
+        }
+    }
+}
+
+/// `edits` are in source order and do not overlap.
+fn apply(source: &str, edits: &[Edit]) -> String {
+    let mut applied = String::with_capacity(source.len());
+    let mut copied = 0;
+    for edit in edits {
+        applied.push_str(&source[copied..edit.span.0]);
+        applied.push_str(&edit.text);
+        copied = edit.span.1;
+    }
+    applied.push_str(&source[copied..]);
+    applied
 }
 
 fn nodes_of(ast: &ParsedAst) -> Nodes {
