@@ -347,6 +347,13 @@ fn a_parse_error_names_what_the_grammar_wanted_in_the_language_s_words() {
         Some("error: expected a statement, found `}`")
     );
 
+    write(dir.path(), "loop.acvus", "for x in [1] { };\n");
+    let err = text(&acvus(dir.path(), &["check", "loop.acvus"]).stderr);
+    assert_eq!(
+        err,
+        "error: `;` is not allowed after a `for` block\n  --> loop.acvus:1:17\n  |\n1 | for x in [1] { };\n  |                 ^\n"
+    );
+
     write(dir.path(), "paren.acvus", "let x = (1;\n");
     let err = text(&acvus(dir.path(), &["check", "paren.acvus"]).stderr);
     assert_eq!(

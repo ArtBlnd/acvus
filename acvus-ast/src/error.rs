@@ -59,6 +59,25 @@ pub enum ParseErrorKind {
 
     // Script errors
     InvalidAssignTarget,
+    /// A `;` after the `}` closing a loop: a loop is a statement, not an
+    /// expression a `;` ends.
+    SemicolonAfterLoop(Loop),
+}
+
+/// The loop a diagnostic names by its keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Loop {
+    For,
+    While,
+}
+
+impl Loop {
+    fn keyword(self) -> &'static str {
+        match self {
+            Loop::For => "for",
+            Loop::While => "while",
+        }
+    }
 }
 
 impl fmt::Display for ParseErrorKind {
@@ -99,6 +118,11 @@ impl fmt::Display for ParseErrorKind {
                 "not an assignment target: the left of `=` is a place -- a name, \
                  an `@context` or a `$parameter` under any path of `.field` and \
                  `[index]` steps -- or `*reference`"
+            ),
+            ParseErrorKind::SemicolonAfterLoop(keyword) => write!(
+                f,
+                "`;` is not allowed after a `{}` block",
+                keyword.keyword()
             ),
         }
     }

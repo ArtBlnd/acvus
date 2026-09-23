@@ -3,9 +3,9 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use crate::ast::*;
 use crate::span::Span;
 use crate::token::Token;
-use crate::error::{ParseError, ParseErrorKind};
+use crate::error::{Loop, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
-use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern};
+use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern, loop_closed};
 use crate::literal::{self, IntWidth, SuffixedInt};
 
 grammar(interner: &Interner);
@@ -168,20 +168,26 @@ Stmt: Stmt = {
     <l:@L> "let" <name:"ident"> ";" <r:@R> =>
         Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
     // while cond { body }
-    <l:@L> "while" <cond:Expr> "{" <body:Stmt*> "}" <r:@R> =>
-        Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) },
+    <l:@L> "while" <cond:Expr> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+        loop_closed(Loop::While, semicolon)?;
+        Ok(Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) })
+    },
     // while let pattern = source { body }
-    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" <r:@R> =>?
+    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+        loop_closed(Loop::While, semicolon)?;
         Ok(Stmt::WhileLet {
             id: AstId::alloc(),
             pattern: expr_to_pattern(&lhs)?,
             source: rhs,
             body,
             span: Span::new(l, r),
-        }),
+        })
+    },
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
-    <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:Stmt*> "}" <r:@R> =>
-        Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) },
+    <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+        loop_closed(Loop::For, semicolon)?;
+        Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) })
+    },
     // break; | continue;  -- the innermost loop, no labels (RFC-0057 rule 4)
     <l:@L> "break" ";" <r:@R> =>
         Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
@@ -196,6 +202,11 @@ Stmt: Stmt = {
     // expression statement
     <e:Expr> ";" => Stmt::Expr(e),
 };
+
+// A `;` after the `}` closing a loop, which the loop's rule reads so that it
+// is reported as what it is: no statement begins with `;`, so reading it
+// here takes nothing from another rule.
+StraySemicolon: Span = <l:@L> ";" <r:@R> => Span::new(l, r);
 
 // `lo..hi` is a `for` head and not a value: there is no `Range` type, so
 // `..` appears in no expression rule (RFC-0057 rule 1).
