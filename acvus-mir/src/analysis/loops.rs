@@ -5,10 +5,12 @@
 //! dominates its tail names one, and its body is the head together with
 //! every block that reaches the tail without passing the head.
 //!
-//! Both `optimize::code_motion`, which asks only how deep a block sits, and
-//! `optimize::lsr`, which asks for the header, the latches and the body,
-//! read the definition from here, so the two passes cannot drift apart on
-//! what a loop is or on which values one iteration shares with the next.
+//! `optimize::code_motion`, which asks how deep a block sits and which block
+//! enters a loop, `optimize::lsr`, which asks for the header, the latches,
+//! the entering block and the body, and `analysis::affine` and
+//! `analysis::carried` read the definition from here, so none of them can
+//! drift from the others on what a loop is or on which values one
+//! iteration shares with the next.
 //!
 //! A retreating edge whose target does not dominate its source is
 //! irreducible control flow, which has no natural loop. The lowering emits
@@ -19,10 +21,30 @@
 //! header -- so it is a natural loop here without a word added. What its
 //! terminator gives on top of that is the header without the search and the
 //! induction variable without a pattern match: [`for_headers`].
+//!
+//! # The nest
+//!
+//! [`LoopNest`] is these loops with what a reader of a loop asks next: the
+//! loop that contains it, the loops it contains, whether a terminator
+//! states its traversal, and how many times its body runs. The parent is
+//! the smallest other loop that contains the header; natural loops of a
+//! reducible body are nested or disjoint, so that loop contains the whole
+//! body. The trip count is a [`Term`] over what one entry to the loop
+//! fixes: `max(hi − at, 0)` for a range and `len(source)` for a slice or
+//! an array, both read off the terminator (RFC-0057 rule 3). A `while` has
+//! no such statement, and its count is [`Trip::Unknown`] rather than one
+//! derived from its recurrence (RFC-0066). A loop is rectangular in its
+//! parent when its trip count is a term every atom of which is invariant
+//! in the parent, so every entry to it runs the same number of times.
+//!
+//! A term denotes an integer, not a value at a width: a trip count is a
+//! count and does not wrap. `analysis::affine` builds its base and step
+//! from the same atoms and the same operations, and there the integer is
+//! taken at the value's width (RFC-0037).
 
 use crate::analysis::domtree::DomTree;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ForSource, InstKind, ValueId};
+use crate::ir::{ForSource, InstKind, Label, ValueId};
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
@@ -97,10 +119,39 @@ pub fn back_edges(cfg: &CfgBody, domtree: &DomTree) -> Vec<BackEdge> {
 pub struct NaturalLoop {
     pub header: BlockIdx,
     pub latches: Vec<BlockIdx>,
+    /// The header's predecessors outside the body: the blocks every entry
+    /// to the loop leaves from.
+    pub entering: Vec<BlockIdx>,
     body: Vec<bool>,
 }
 
 impl NaturalLoop {
+    /// The one value every back edge sends header parameter `param`, or
+    /// `None` when two back edges send different values or a latch reaches
+    /// the header by more than one edge.
+    pub fn back_arg(&self, cfg: &CfgBody, param: usize) -> Option<ValueId> {
+        self.sole_arg(cfg, &self.latches, param)
+    }
+
+    /// The one value every entering edge sends header parameter `param`,
+    /// as [`Self::back_arg`] is for the back edges.
+    pub fn entry_arg(&self, cfg: &CfgBody, param: usize) -> Option<ValueId> {
+        self.sole_arg(cfg, &self.entering, param)
+    }
+
+    fn sole_arg(&self, cfg: &CfgBody, from: &[BlockIdx], param: usize) -> Option<ValueId> {
+        let label = cfg.blocks[self.header.0].label;
+        let mut found: Option<ValueId> = None;
+        for block in from {
+            let arg = edge_args(&cfg.blocks[block.0].terminator, label)?[param];
+            match found {
+                Some(seen) if seen != arg => return None,
+                _ => found = Some(arg),
+            }
+        }
+        found
+    }
+
     pub fn contains(&self, block: BlockIdx) -> bool {
         self.body[block.0]
     }
@@ -132,9 +183,12 @@ impl NaturalLoop {
 /// it, with the price named: the constant is re-emitted above the header
 /// rather than moved. Which literals are words and which build a heap value
 /// is the same split `code_motion::hoistable` makes on `Const`.
-#[derive(Clone)]
+///
+/// Each case carries what a reader above the header reads: the value
+/// itself, or the word to write again.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Invariant {
-    Outside,
+    Outside(ValueId),
     Word(Literal),
 }
 
@@ -176,9 +230,131 @@ impl Invariants {
 
     pub fn at(&self, loop_: &NaturalLoop, value: ValueId) -> Option<Invariant> {
         if !loop_.contains(self.def_block(value)) {
-            return Some(Invariant::Outside);
+            return Some(Invariant::Outside(value));
         }
         self.words.get(&value).cloned().map(Invariant::Word)
+    }
+}
+
+/// The arguments the one edge of `term` to `label` carries, or `None` when
+/// `term` has no such edge or more than one. A `For`'s body edge is not
+/// among them: it carries only the parameters after the ones the
+/// terminator fills, so its arguments do not line up with its target's
+/// parameters (RFC-0057). Its exit edge carries its target's whole list.
+pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
+    let mut edges: Vec<&[ValueId]> = Vec::new();
+    match term {
+        Terminator::Jump { label: l, args } => {
+            if *l == label {
+                edges.push(args);
+            }
+        }
+        Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        } => {
+            if *then_label == label {
+                edges.push(then_args);
+            }
+            if *else_label == label {
+                edges.push(else_args);
+            }
+        }
+        Terminator::Switch { arms, default, .. } => {
+            for (_, l, args) in arms {
+                if *l == label {
+                    edges.push(args);
+                }
+            }
+            if let Some((l, args)) = default {
+                if *l == label {
+                    edges.push(args);
+                }
+            }
+        }
+        Terminator::For {
+            exit, exit_args, ..
+        } => {
+            if *exit == label {
+                edges.push(exit_args);
+            }
+        }
+        Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
+    }
+    match edges[..] {
+        [args] => Some(args),
+        _ => None,
+    }
+}
+
+/// A symbolic integer over what one entry to a loop fixes (RFC-0066): a
+/// constant, a value invariant in the loop, the length of a `for`'s
+/// source, and `+`, `−`, `×` and `max` of those. It is written as the
+/// analysis found it and not simplified; a reader evaluates it where it
+/// knows the atoms.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Term {
+    Const(Literal),
+    Value(ValueId),
+    /// The element count of a `Slice`, `SliceMut` or `Array` source, which
+    /// the loop cannot change: the source's borrow or move holds it for
+    /// the loop's extent (RFC-0057 rules 2 and 5).
+    Len(ValueId),
+    Add(Box<Term>, Box<Term>),
+    Sub(Box<Term>, Box<Term>),
+    Mul(Box<Term>, Box<Term>),
+    Max(Box<Term>, Box<Term>),
+}
+
+impl Term {
+    pub fn int(value: i128) -> Term {
+        Term::Const(Literal::Int(value))
+    }
+
+    pub fn add(self, other: Term) -> Term {
+        Term::Add(Box::new(self), Box::new(other))
+    }
+
+    pub fn sub(self, other: Term) -> Term {
+        Term::Sub(Box::new(self), Box::new(other))
+    }
+
+    pub fn mul(self, other: Term) -> Term {
+        Term::Mul(Box::new(self), Box::new(other))
+    }
+
+    pub fn max(self, other: Term) -> Term {
+        Term::Max(Box::new(self), Box::new(other))
+    }
+
+    /// The values the term reads, `Len`'s source among them.
+    pub fn atoms(&self) -> Vec<ValueId> {
+        match self {
+            Term::Const(_) => Vec::new(),
+            Term::Value(value) | Term::Len(value) => vec![*value],
+            Term::Add(a, b) | Term::Sub(a, b) | Term::Mul(a, b) | Term::Max(a, b) => {
+                a.atoms().into_iter().chain(b.atoms()).collect()
+            }
+        }
+    }
+}
+
+impl From<Invariant> for Term {
+    fn from(invariant: Invariant) -> Term {
+        match invariant {
+            Invariant::Outside(value) => Term::Value(value),
+            Invariant::Word(literal) => Term::Const(literal),
+        }
     }
 }
 
@@ -209,6 +385,7 @@ pub fn natural_loops_innermost_first(cfg: &CfgBody, domtree: &DomTree) -> Vec<Na
             NaturalLoop {
                 header: edge.head,
                 latches: Vec::new(),
+                entering: Vec::new(),
                 body,
             }
         });
@@ -230,8 +407,155 @@ pub fn natural_loops_innermost_first(cfg: &CfgBody, domtree: &DomTree) -> Vec<Na
     }
 
     let mut loops: Vec<NaturalLoop> = by_header.into_values().collect();
+    for loop_ in &mut loops {
+        loop_.entering = preds
+            .get(&loop_.header)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|p| !loop_.body[p.0])
+            .collect();
+    }
     loops.sort_by_key(|l| (l.block_count(), l.header.0));
     loops
+}
+
+// -- The nest -------------------------------------------------------
+
+/// A loop's index in its [`LoopNest`], innermost first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LoopId(pub usize);
+
+/// What ends the header: a `for` terminator, which states the traversal,
+/// or any other, which is a `while` or a `while let`.
+#[derive(Clone, Copy, Debug)]
+pub enum LoopKind {
+    For { source: ForSource },
+    While,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Trip {
+    Known(Term),
+    /// A `while`: nothing states its exit.
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nesting {
+    Outermost,
+    Inside { parent: LoopId, rectangular: bool },
+}
+
+pub struct Loop {
+    pub natural: NaturalLoop,
+    pub kind: LoopKind,
+    pub trip: Trip,
+    pub nesting: Nesting,
+    pub children: Vec<LoopId>,
+}
+
+pub struct LoopNest {
+    loops: Vec<Loop>,
+}
+
+impl LoopNest {
+    pub fn of(cfg: &CfgBody, domtree: &DomTree, invariants: &Invariants) -> Self {
+        let headers = for_headers(cfg);
+        let naturals = natural_loops_innermost_first(cfg, domtree);
+        let parents: Vec<Option<LoopId>> = naturals
+            .iter()
+            .enumerate()
+            .map(|(i, inner)| {
+                naturals
+                    .iter()
+                    .enumerate()
+                    .skip(i + 1)
+                    .find(|(_, outer)| outer.contains(inner.header))
+                    .map(|(j, _)| LoopId(j))
+            })
+            .collect();
+
+        let mut loops: Vec<Loop> = naturals
+            .into_iter()
+            .map(|natural| {
+                let kind = match headers.get(&natural.header) {
+                    Some(source) => LoopKind::For { source: *source },
+                    None => LoopKind::While,
+                };
+                let trip = trip_count(&natural, kind, invariants);
+                Loop {
+                    natural,
+                    kind,
+                    trip,
+                    nesting: Nesting::Outermost,
+                    children: Vec::new(),
+                }
+            })
+            .collect();
+
+        for (i, parent) in parents.iter().enumerate() {
+            let Some(parent) = *parent else {
+                continue;
+            };
+            let rectangular = match &loops[i].trip {
+                Trip::Known(term) => term
+                    .atoms()
+                    .into_iter()
+                    .all(|atom| invariants.at(&loops[parent.0].natural, atom).is_some()),
+                Trip::Unknown => false,
+            };
+            loops[i].nesting = Nesting::Inside {
+                parent,
+                rectangular,
+            };
+            loops[parent.0].children.push(LoopId(i));
+        }
+        Self { loops }
+    }
+
+    pub fn get(&self, id: LoopId) -> &Loop {
+        &self.loops[id.0]
+    }
+
+    /// Every loop with its id, innermost first.
+    pub fn iter(&self) -> impl Iterator<Item = (LoopId, &Loop)> + '_ {
+        self.loops.iter().enumerate().map(|(i, l)| (LoopId(i), l))
+    }
+
+    pub fn by_header(&self, header: BlockIdx) -> Option<LoopId> {
+        self.loops
+            .iter()
+            .position(|l| l.natural.header == header)
+            .map(LoopId)
+    }
+}
+
+/// How many times one entry to the loop runs its body: what the `for`
+/// terminator states.
+///
+/// # Panics
+/// If a `for` source reads a value defined inside its own loop: every
+/// source is settled before the header runs (`ir::ForSource`).
+fn trip_count(natural: &NaturalLoop, kind: LoopKind, invariants: &Invariants) -> Trip {
+    let LoopKind::For { source } = kind else {
+        return Trip::Unknown;
+    };
+    let settled = |value: ValueId| {
+        Term::from(invariants.at(natural, value).unwrap_or_else(|| {
+            panic!(
+                "the `for` headed at block {} reads {value:?}, which its own body defines",
+                natural.header.0
+            )
+        }))
+    };
+    Trip::Known(match source {
+        ForSource::Range { at, hi } => settled(hi).sub(settled(at)).max(Term::int(0)),
+        ForSource::Slice(source) | ForSource::SliceMut(source) | ForSource::Array(source) => {
+            settled(source);
+            Term::Len(source)
+        }
+    })
 }
 
 pub struct LoopDepth {
@@ -395,10 +719,7 @@ mod tests {
         let domtree = DomTree::build(&cfg);
         let invariants = Invariants::of(&cfg);
         for loop_ in natural_loops_innermost_first(&cfg, &domtree) {
-            assert!(matches!(
-                invariants.at(&loop_, v(0)),
-                Some(Invariant::Outside)
-            ));
+            assert_eq!(invariants.at(&loop_, v(0)), Some(Invariant::Outside(v(0))));
         }
     }
 }

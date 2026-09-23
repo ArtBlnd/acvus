@@ -106,7 +106,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0060: a small pure closure called where it was made is its body
 - RFC-0061: a store nothing reads is dead
 - RFC-0063: an `if` whose arms rejoin is a `Diamond` terminator
-- RFC-0066: a loop is analyzed, and the lowerer decides (Proposed)
+- RFC-0066: a loop is analyzed and normalized in MIR, and the lowerer decides its shape (Proposed)
 
 ### [ownership.md](ownership.md)
 

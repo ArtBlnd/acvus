@@ -713,10 +713,9 @@ fn coalesce_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
     let mut loops = natural_loops_innermost_first(cfg, &domtree);
     loops.reverse();
-    let preds = cfg.predecessors();
 
     for loop_ in &loops {
-        let Some(preheader) = sole_entry(&preds, loop_) else {
+        let [preheader] = loop_.entering[..] else {
             continue;
         };
         let taken = slices_taken_in(cfg, loop_);
@@ -732,22 +731,6 @@ fn coalesce_pass(cfg: &mut CfgBody) -> bool {
         }
     }
     false
-}
-
-/// The one predecessor of a loop's header from outside it, which every
-/// entry to the loop therefore runs.
-fn sole_entry(
-    preds: &FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
-    loop_: &NaturalLoop,
-) -> Option<BlockIdx> {
-    let mut outside = preds
-        .get(&loop_.header)
-        .into_iter()
-        .flatten()
-        .copied()
-        .filter(|&p| !loop_.contains(p));
-    let first = outside.next()?;
-    outside.next().is_none().then_some(first)
 }
 
 /// Every `AsSlice` inside the loop whose container is a `Ref` to a storage

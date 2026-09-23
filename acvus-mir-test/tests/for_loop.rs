@@ -1,10 +1,14 @@
 //! A `for` loop is a terminator (RFC-0057): the four heads it admits, what
 //! the header holds, and what it refuses.
 
+use acvus_mir::analysis::affine::AffineValues;
+use acvus_mir::analysis::carried::CarriedState;
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loops::{for_headers, natural_loops_innermost_first};
+use acvus_mir::analysis::loans::{Loans, Summaries};
+use acvus_mir::analysis::loops::{
+    Invariants, LoopNest, for_headers, natural_loops_innermost_first,
+};
 use acvus_mir::cfg::{BlockIdx, promote};
-use acvus_mir::optimize::spawn_split::iterations_run_apart;
 use acvus_mir::optimize::{dce, ssa_pass};
 use acvus_mir_test::{compile_script_ir, compile_script_optimized, lowered_script_module};
 use acvus_utils::Interner;
@@ -210,7 +214,13 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
         let [header] = headers.keys().copied().collect::<Vec<_>>()[..] else {
             panic!("{source} holds one `for`")
         };
-        assert_eq!(iterations_run_apart(&cfg, header), apart, "{source}");
+        let invariants = Invariants::of(&cfg);
+        let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
+        let loop_ = nest.get(nest.by_header(header).expect("the header heads a loop"));
+        let affine = AffineValues::of(&cfg, loop_, &invariants);
+        let loans = Loans::build(&cfg, Summaries::NONE);
+        let state = CarriedState::of(&cfg, loop_, &affine, &loans);
+        assert_eq!(state.runs_apart(), apart, "{source}");
     }
 }
 

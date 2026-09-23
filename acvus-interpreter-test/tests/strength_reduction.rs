@@ -1,12 +1,15 @@
 //! What `optimize::lsr` must leave untouched: the value a loop produces and
 //! the iteration on which it stops (RFC-0056).
 //!
-//! Each script holds the same sum twice. The first loop writes `i * @k + @x`
-//! straight in the body, which the pass reduces to a derived induction
-//! variable; the second writes it under an `if`, whose block does not
-//! dominate the latch, so the pass leaves that multiplication where it is.
-//! The two are the reduced and the unreduced form of one computation, in one
-//! program, on one run, and the test reads their difference.
+//! Each script holds the same recurrence twice. The first loop writes
+//! `i * @k + @x` straight in the body, which the pass reduces to a derived
+//! induction variable; the second writes it under an `if`, whose block does
+//! not dominate the latch, so the pass leaves that multiplication where it
+//! is. The two are the reduced and the unreduced form of one computation, in
+//! one program, on one run, and the test reads their difference. The
+//! accumulator doubles before it adds, `acc * 2 + …`: a plain sum is a merge,
+//! which makes the loop weak, and the pass reduces only strong loops
+//! (`analysis::carried`).
 //!
 //! `*` and `+` wrap at the operand's width (RFC-0037), so no product of an
 //! induction variable can raise and there is no trap to move. What the
@@ -44,17 +47,25 @@ fn reference(case: &Case) -> i64 {
     })
 }
 
+/// `acc * 2 + (i * k + x)` over the iterations, at the same width and wrap.
+fn doubling_reference(case: &Case) -> i64 {
+    (0..case.n).fold(0i64, |acc, i| {
+        acc.wrapping_mul(2)
+            .wrapping_add(i.wrapping_mul(case.factor).wrapping_add(case.offset))
+    })
+}
+
 const BOTH_FORMS: &str = "\
 let reduced = 0; \
 let i = 0; \
 while i < @n { \
-    reduced = reduced + (i * @k + @x); \
+    reduced = reduced * 2 + (i * @k + @x); \
     i = i + 1; \
 } \
 let unreduced = 0; \
 let j = 0; \
 while j < @n { \
-    if j + 1 > j { unreduced = unreduced + (j * @k + @x); }; \
+    if j + 1 > j { unreduced = unreduced * 2 + (j * @k + @x); }; \
     j = j + 1; \
 } \
 reduced - unreduced";
@@ -63,7 +74,7 @@ const REDUCED_ONLY: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < @n { \
-    acc = acc + (i * @k + @x); \
+    acc = acc * 2 + (i * @k + @x); \
     i = i + 1; \
 } \
 acc";
@@ -122,8 +133,8 @@ async fn the_reduced_form_and_the_unreduced_one_agree() {
         );
         assert_eq!(
             run_case(REDUCED_ONLY, &case).await,
-            reference(&case),
-            "n={n} k={factor} x={offset}: the reduced loop does not compute the sum"
+            doubling_reference(&case),
+            "n={n} k={factor} x={offset}: the reduced loop does not compute the recurrence"
         );
     }
 }
@@ -145,7 +156,7 @@ async fn a_product_that_wraps_carries_the_same_bits_in_both_forms() {
         );
         assert_eq!(
             run_case(REDUCED_ONLY, &case).await,
-            reference(&case),
+            doubling_reference(&case),
             "n={n}: the reduced loop does not wrap as `*` and `+` do"
         );
     }

@@ -145,7 +145,6 @@ struct LoopShape {
 impl LoopShape {
     fn of(cfg: &CfgBody) -> LoopShape {
         let domtree = DomTree::build(cfg);
-        let preds = cfg.predecessors();
         let mut shape = LoopShape {
             held: FxHashSet::default(),
             headers: FxHashSet::default(),
@@ -154,12 +153,7 @@ impl LoopShape {
             let header = cfg.blocks[loop_.header.0].label;
             shape.headers.insert(header);
             shape.held.insert(header);
-            let entering = preds
-                .get(&loop_.header)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|block| !loop_.contains(*block));
+            let entering = loop_.entering.iter().copied();
             let leaving = loop_
                 .blocks()
                 .flat_map(|block| cfg.successors(block))

@@ -4,55 +4,9 @@
 //! This pass does not reorder. Moving independent instructions between a
 //! `Spawn` and its `Eval` is `optimize::reorder`'s job.
 
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::cfg::CfgBody;
 use crate::ir::*;
 use crate::ty::{Task, Ty};
-
-/// Whether the iterations of a `for` are independent of one another
-/// (RFC-0057 rule 3): the header carries no value from one iteration to
-/// the next -- its parameters are the carried values and it has none -- and
-/// every element the body writes it writes through the element the terminator
-/// hands it, which is a different element each time.
-///
-/// The split this admits is a later section of RFC-0057; what exists here is
-/// the question, asked of the terminator and the body once, where a
-/// dependence analysis over an index loop would have to rediscover it.
-pub fn iterations_run_apart(cfg: &CfgBody, header: BlockIdx) -> bool {
-    let Terminator::For {
-        source,
-        body,
-        body_args,
-        ..
-    } = &cfg.blocks[header.0].terminator
-    else {
-        return false;
-    };
-    if !body_args.is_empty()
-        || !cfg.blocks[header.0].params.is_empty()
-        || !matches!(source, ForSource::SliceMut(_))
-    {
-        return false;
-    }
-    let Some(&body) = cfg.label_to_block.get(body) else {
-        return false;
-    };
-    let element = cfg.blocks[body.0].params[0];
-    cfg.blocks[body.0]
-        .insts
-        .iter()
-        .all(|inst| writes_only_through(&inst.kind, element))
-}
-
-/// Whether an instruction writes nothing the next iteration could read: a
-/// write through `element`, or no write at all.
-fn writes_only_through(kind: &InstKind, element: ValueId) -> bool {
-    match kind {
-        InstKind::Assign { target, .. } => matches!(target, RefTarget::Through(r) if *r == element),
-        InstKind::IndexSet { slice, .. } => *slice == element,
-        InstKind::Commit { .. } => false,
-        _ => true,
-    }
-}
 
 /// An `Eval` awaits, so a body this pass splits anything in runs at
 /// `Task::Async` however synchronous its callees were declared: the pass

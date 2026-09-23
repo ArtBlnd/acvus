@@ -1,13 +1,24 @@
 //! Loop strength reduction: a loop multiplies once.
 //!
 //! An induction variable is a header block parameter `i` whose latch
-//! argument is `i + c` with `c` loop-invariant (`analysis::loops`, which
-//! `code_motion` reads the same term from). An expression `i * k + x` with
-//! `k` and `x` loop-invariant is then itself an induction variable: it
-//! starts at `i0 * k + x` and advances by `c * k`. The pass gives it its own
-//! header parameter, computes the start and the step in the preheader, adds
-//! the step in the latch, and replaces the body's multiplication and sum
-//! with the parameter. `i` itself stays: the loop condition reads it.
+//! argument is `i + c` with `c` loop-invariant, and `i * k + x` with `k` and
+//! `x` loop-invariant is then affine too: it starts at `i0 * k + x` and
+//! advances by `c * k`. Both are `analysis::affine`'s, and the pass reads
+//! the rule that made each value affine rather than matching the
+//! instructions itself. The pass gives `i * k + x` its own header parameter,
+//! computes the start and the step in the preheader, adds the step in the
+//! latch, and replaces the body's multiplication and sum with the
+//! parameter. `i` itself stays: the loop condition reads it.
+//!
+//! # Strong loops only
+//!
+//! The pass transforms a loop that `analysis::carried` classifies strong and
+//! leaves a weak one exactly as it is (RFC-0056). A weak loop's iterations
+//! may run in any order, and its counters are IV canonicalization's to
+//! normalize (RFC-0066), which keeps each iteration computing `i * k + x`
+//! from its own `i`; a derived counter would make it wait for the previous
+//! iteration's value. A strong loop runs in order anyway, so the
+//! accumulated form costs it no independence.
 //!
 //! # The count is the rule
 //!
@@ -46,8 +57,9 @@
 //! form carries the rounding error of every earlier step. The measurement
 //! that settles it is in RFC-0056 — on mandelbrot's 200x100x200 grid the
 //! accumulated `cx` differs from the recomputed one by up to 6.4e-15 and 34
-//! of the 20000 pixels change escape count — so `exact_under_wrapping`
-//! admits integers and refuses floats.
+//! of the 20000 pixels change escape count — so
+//! `analysis::affine::exact_under_wrapping` admits integers and refuses
+//! floats.
 //!
 //! # What it does not look at
 //!
@@ -56,14 +68,19 @@
 //! no scalar evolution here: a derived variable of a derived variable, a
 //! step that is itself an induction variable, and a loop whose counter is
 //! rewritten through memory are all outside the pattern and stay as they
-//! are.
+//! are. A `for`'s counter is affine from its terminator, and a product of
+//! it is not reduced: the pattern RFC-0056 states multiplies a carried
+//! header parameter.
 
-use acvus_ast::{BinOp, Literal, Span};
+use acvus_ast::{BinOp, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};
+use crate::analysis::carried::{CarriedState, Strength};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loops::{Invariant, Invariants, NaturalLoop, natural_loops_innermost_first};
+use crate::analysis::loans::{Loans, Summaries};
+use crate::analysis::loops::{Invariant, Invariants, LoopNest, NaturalLoop, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValOrigin, ValueId};
 use crate::optimize::ssa_pass::apply_subst;
@@ -71,19 +88,23 @@ use crate::ty::Ty;
 
 pub fn run(cfg: &mut CfgBody) {
     let domtree = DomTree::build(cfg);
-    for loop_ in natural_loops_innermost_first(cfg, &domtree) {
-        let Some(frame) = Frame::of(cfg, &loop_) else {
+    let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
+    let loans = Loans::build(cfg, Summaries::NONE);
+    for (_, loop_) in nest.iter() {
+        let Some(frame) = Frame::of(cfg, &loop_.natural) else {
             continue;
         };
         let invariants = Invariants::of(cfg);
-        let ivs = induction_variables(cfg, &loop_, &frame, &invariants);
+        let affine = AffineValues::of(cfg, loop_, &invariants);
+        if CarriedState::of(cfg, loop_, &affine, &loans).strength() == Strength::Weak {
+            continue;
+        }
         let uses = use_blocks(cfg);
         let reductions = Scope {
             cfg,
-            loop_: &loop_,
+            loop_: &loop_.natural,
             frame: &frame,
-            ivs: &ivs,
-            invariants: &invariants,
+            affine: &affine,
             uses: &uses,
             domtree: &domtree,
         }
@@ -108,89 +129,21 @@ impl Frame {
         let [latch] = loop_.latches[..] else {
             return None;
         };
-        let header_label = cfg.blocks[loop_.header.0].label;
-        let preds = cfg.predecessors();
-        let entering: Vec<BlockIdx> = preds
-            .get(&loop_.header)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(|b| !loop_.contains(*b))
-            .collect();
-        let [preheader] = entering[..] else {
+        let [preheader] = loop_.entering[..] else {
             return None;
         };
+        let header_label = cfg.blocks[loop_.header.0].label;
         match cfg.blocks[preheader.0].terminator {
             Terminator::Jump { label, .. } if label == header_label => {}
             _ => return None,
         }
-        sole_edge_args(&cfg.blocks[latch.0].terminator, header_label)?;
+        edge_args(&cfg.blocks[latch.0].terminator, header_label)?;
         Some(Frame {
             header: loop_.header,
             header_label,
             preheader,
             latch,
         })
-    }
-}
-
-fn sole_edge_args(term: &Terminator, label: Label) -> Option<&Vec<ValueId>> {
-    let mut edges: Vec<&Vec<ValueId>> = Vec::new();
-    match term {
-        Terminator::Jump { label: l, args } => {
-            if *l == label {
-                edges.push(args);
-            }
-        }
-        Terminator::JumpIf {
-            then_label,
-            then_args,
-            else_label,
-            else_args,
-            ..
-        }
-        | Terminator::Diamond {
-            then_label,
-            then_args,
-            else_label,
-            else_args,
-            ..
-        } => {
-            if *then_label == label {
-                edges.push(then_args);
-            }
-            if *else_label == label {
-                edges.push(else_args);
-            }
-        }
-        Terminator::Switch { arms, default, .. } => {
-            for (_, l, args) in arms {
-                if *l == label {
-                    edges.push(args);
-                }
-            }
-            if let Some((l, args)) = default {
-                if *l == label {
-                    edges.push(args);
-                }
-            }
-        }
-        // A `For`'s exit edge carries its target's whole parameter list. Its
-        // body edge carries only the parameters after the ones the
-        // terminator fills, so it is not an edge whose arguments a reader
-        // can line up with that block's parameters (RFC-0057).
-        Terminator::For {
-            exit, exit_args, ..
-        } => {
-            if *exit == label {
-                edges.push(exit_args);
-            }
-        }
-        Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
-    }
-    match edges[..] {
-        [args] => Some(args),
-        _ => None,
     }
 }
 
@@ -251,97 +204,7 @@ fn sole_edge_args_mut(term: &mut Terminator, label: Label) -> &mut Vec<ValueId> 
     }
 }
 
-// -- Induction variables --------------------------------------------
-
-/// A value the preheader's arithmetic reads: one that already reaches the
-/// preheader, or a word to re-emit there because the hoist could not lift
-/// it out of the body (`analysis::loops::Invariant`).
-#[derive(Clone)]
-enum Source {
-    Ready(ValueId),
-    Word(Literal),
-}
-
-impl Source {
-    fn of(invariant: Invariant, value: ValueId) -> Source {
-        match invariant {
-            Invariant::Outside => Source::Ready(value),
-            Invariant::Word(literal) => Source::Word(literal),
-        }
-    }
-}
-
-struct Iv {
-    var: ValueId,
-    init: ValueId,
-    step: Source,
-}
-
-fn induction_variables(
-    cfg: &CfgBody,
-    loop_: &NaturalLoop,
-    frame: &Frame,
-    invariants: &Invariants,
-) -> Vec<Iv> {
-    let header = &cfg.blocks[frame.header.0];
-    let init_args = sole_edge_args(
-        &cfg.blocks[frame.preheader.0].terminator,
-        frame.header_label,
-    )
-    .expect("the preheader ends in a Jump to the header");
-    let next_args = sole_edge_args(&cfg.blocks[frame.latch.0].terminator, frame.header_label)
-        .expect("the latch has one edge to the header");
-    assert_eq!(
-        init_args.len(),
-        header.params.len(),
-        "the preheader sends the header a different number of arguments than it has parameters"
-    );
-    assert_eq!(
-        next_args.len(),
-        header.params.len(),
-        "the latch sends the header a different number of arguments than it has parameters"
-    );
-
-    let defining = defining_insts(cfg);
-    header
-        .params
-        .iter()
-        .enumerate()
-        .filter_map(|(p, &var)| {
-            let Some(InstKind::BinOp {
-                op: BinOp::Add,
-                left,
-                right,
-                ..
-            }) = defining.get(&next_args[p])
-            else {
-                return None;
-            };
-            let step = match (*left == var, *right == var) {
-                (true, false) => *right,
-                (false, true) => *left,
-                _ => return None,
-            };
-            invariants.at(loop_, step).map(|invariant| Iv {
-                var,
-                init: init_args[p],
-                step: Source::of(invariant, step),
-            })
-        })
-        .collect()
-}
-
-fn defining_insts(cfg: &CfgBody) -> FxHashMap<ValueId, InstKind> {
-    cfg.blocks
-        .iter()
-        .flat_map(|block| block.insts.iter())
-        .flat_map(|inst| {
-            inst_info::defs(&inst.kind)
-                .into_iter()
-                .map(move |d| (d, inst.kind.clone()))
-        })
-        .collect()
-}
+// -- Uses ------------------------------------------------------------
 
 fn use_blocks(cfg: &CfgBody) -> FxHashMap<ValueId, Vec<BlockIdx>> {
     let mut uses: FxHashMap<ValueId, Vec<BlockIdx>> = FxHashMap::default();
@@ -351,49 +214,11 @@ fn use_blocks(cfg: &CfgBody) -> FxHashMap<ValueId, Vec<BlockIdx>> {
                 uses.entry(u).or_default().push(BlockIdx(bi));
             }
         }
-        for u in terminator_uses(&block.terminator) {
+        for u in inst_info::terminator_uses(&block.terminator) {
             uses.entry(u).or_default().push(BlockIdx(bi));
         }
     }
     uses
-}
-
-fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
-    match term {
-        Terminator::Jump { args, .. } => args.clone(),
-        Terminator::JumpIf {
-            cond,
-            then_args,
-            else_args,
-            ..
-        }
-        | Terminator::Diamond {
-            cond,
-            then_args,
-            else_args,
-            ..
-        } => std::iter::once(*cond)
-            .chain(then_args.iter().copied())
-            .chain(else_args.iter().copied())
-            .collect(),
-        Terminator::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => source
-            .uses()
-            .into_iter()
-            .chain(body_args.iter().copied())
-            .chain(exit_args.iter().copied())
-            .collect(),
-        Terminator::Switch { tag, arms, default } => std::iter::once(*tag)
-            .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
-            .chain(default.iter().flat_map(|(_, args)| args.iter().copied()))
-            .collect(),
-        Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
-        Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
-    }
 }
 
 // -- Candidates ------------------------------------------------------
@@ -407,8 +232,7 @@ struct Site {
 struct Sum {
     site: Site,
     dst: ValueId,
-    offset: ValueId,
-    invariant: Invariant,
+    offset: Operand,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -418,37 +242,23 @@ struct DerivedKey {
     offset: ValueId,
 }
 
-struct IvFactor<'a> {
-    iv: &'a Iv,
-    factor: ValueId,
-}
-
 struct Reduction {
     span: Span,
     dst: ValueId,
     ty: Ty,
     iv_init: ValueId,
-    iv_step: Source,
-    factor: Source,
-    offset: Source,
+    iv_step: Invariant,
+    factor: Invariant,
+    offset: Invariant,
     product: Site,
     sum: Site,
-}
-
-fn exact_under_wrapping(ty: &Ty) -> bool {
-    match ty {
-        Ty::Int(_) => true,
-        Ty::Float => false,
-        _ => false,
-    }
 }
 
 struct Scope<'a> {
     cfg: &'a CfgBody,
     loop_: &'a NaturalLoop,
     frame: &'a Frame,
-    ivs: &'a [Iv],
-    invariants: &'a Invariants,
+    affine: &'a AffineValues,
     uses: &'a FxHashMap<ValueId, Vec<BlockIdx>>,
     domtree: &'a DomTree,
 }
@@ -470,14 +280,10 @@ impl Scope<'_> {
         self.uses.get(&value).map_or(0, Vec::len)
     }
 
-    fn iv_factor(&self, left: ValueId, right: ValueId) -> Option<IvFactor<'_>> {
-        self.ivs
-            .iter()
-            .find_map(|iv| match (left == iv.var, right == iv.var) {
-                (true, false) => Some(IvFactor { iv, factor: right }),
-                (false, true) => Some(IvFactor { iv, factor: left }),
-                _ => None,
-            })
+    fn derivation(&self, value: ValueId) -> Option<&Derivation> {
+        self.affine
+            .get(value)
+            .map(|Affine { derivation, .. }| derivation)
     }
 
     fn candidates(&self) -> Vec<Reduction> {
@@ -492,23 +298,17 @@ impl Scope<'_> {
                 let InstKind::BinOp {
                     dst,
                     op: BinOp::Mul,
-                    left,
-                    right,
+                    ..
                 } = &item.kind
                 else {
                     continue;
                 };
-                let Some(IvFactor { iv, factor }) = self.iv_factor(*left, *right) else {
+                let Some(Derivation::Scaled { of: iv, factor }) = self.derivation(*dst) else {
                     continue;
                 };
-                let Some(factor_invariant) = self.invariants.at(self.loop_, factor) else {
+                let Some(Derivation::Carried { init, step }) = self.derivation(*iv) else {
                     continue;
                 };
-                let ty = &self.cfg.val_types[dst];
-                if !exact_under_wrapping(ty) {
-                    continue;
-                }
-
                 let Some(sum) = self.sole_invariant_sum(*dst) else {
                     continue;
                 };
@@ -516,9 +316,9 @@ impl Scope<'_> {
                     continue;
                 }
                 let key = DerivedKey {
-                    iv: iv.var,
-                    factor,
-                    offset: sum.offset,
+                    iv: *iv,
+                    factor: factor.value,
+                    offset: sum.offset.value,
                 };
                 if !taken.insert(key) {
                     continue;
@@ -526,11 +326,11 @@ impl Scope<'_> {
                 found.push(Reduction {
                     span: item.span,
                     dst: sum.dst,
-                    ty: ty.clone(),
-                    iv_init: iv.init,
-                    iv_step: iv.step.clone(),
-                    factor: Source::of(factor_invariant, factor),
-                    offset: Source::of(sum.invariant, sum.offset),
+                    ty: self.cfg.val_types[dst].clone(),
+                    iv_init: *init,
+                    iv_step: step.invariant.clone(),
+                    factor: factor.invariant.clone(),
+                    offset: sum.offset.invariant,
                     product: Site { block, inst },
                     sum: sum.site,
                 });
@@ -551,22 +351,21 @@ impl Scope<'_> {
                 let InstKind::BinOp {
                     dst,
                     op: BinOp::Add,
-                    left,
-                    right,
+                    ..
                 } = &item.kind
                 else {
                     continue;
                 };
-                let offset = match (*left == product, *right == product) {
-                    (true, false) => *right,
-                    (false, true) => *left,
-                    _ => continue,
+                let Some(Derivation::Offset { of, offset }) = self.derivation(*dst) else {
+                    continue;
                 };
-                return self.invariants.at(self.loop_, offset).map(|invariant| Sum {
+                if *of != product {
+                    continue;
+                }
+                return Some(Sum {
                     site: Site { block, inst },
                     dst: *dst,
-                    offset,
-                    invariant,
+                    offset: offset.clone(),
                 });
             }
         }
@@ -597,10 +396,10 @@ impl Emit<'_> {
         value
     }
 
-    fn read(&mut self, source: &Source) -> ValueId {
-        match source {
-            Source::Ready(value) => *value,
-            Source::Word(literal) => {
+    fn read(&mut self, invariant: &Invariant) -> ValueId {
+        match invariant {
+            Invariant::Outside(value) => *value,
+            Invariant::Word(literal) => {
                 let dst = self.fresh();
                 let value = literal.clone();
                 let span = self.span;

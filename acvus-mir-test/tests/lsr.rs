@@ -1,5 +1,7 @@
 //! The listing `optimize::lsr` leaves (RFC-0056), and the shapes it
-//! declines.
+//! declines. The pass reduces only strong loops (`analysis::carried`), so
+//! every loop here that is meant to be reduced carries a recurrence:
+//! `acc * 2 + …` reads the accumulator outside a merge.
 //!
 //! `acvus-interpreter-test/tests/strength_reduction.rs` runs the same two
 //! loops and reads their values; this file is what says the two loops are
@@ -83,13 +85,13 @@ const BOTH_FORMS: &str = "\
 let reduced = 0; \
 let i = 0; \
 while i < @n { \
-    reduced = reduced + (i * @k + @x); \
+    reduced = reduced * 2 + (i * @k + @x); \
     i = i + 1; \
 } \
 let unreduced = 0; \
 let j = 0; \
 while j < @n { \
-    if j + 1 > j { unreduced = unreduced + (j * @k + @x); }; \
+    if j + 1 > j { unreduced = unreduced * 2 + (j * @k + @x); }; \
     j = j + 1; \
 } \
 reduced - unreduced";
@@ -103,9 +105,14 @@ fn the_reduced_body_multiplies_and_the_unreduced_one_still_does() {
 
     assert_eq!(
         where_it_multiplies(&listing),
-        [format!("{ENTRY}: 2"), "L6: 1".to_string()],
-        "the reduction's start and step stand above the first loop, and the \
-         only multiplication left is the one under the `if`:\n{listing}"
+        [
+            format!("{ENTRY}: 2"),
+            "L1: 1".to_string(),
+            "L6: 2".to_string()
+        ],
+        "the reduction's start and step stand above the first loop, whose body \
+         keeps only `reduced * 2`; under the `if`, `j * @k` stays beside \
+         `unreduced * 2`:\n{listing}"
     );
 }
 
@@ -164,5 +171,43 @@ fn a_float_product_keeps_its_multiplication() {
         multiplications(&listing),
         1,
         "`x * 2.0` stays where it is: accumulating it would round differently:\n{listing}"
+    );
+}
+
+const WEAK: &str = "\
+let acc = 0; \
+let i = 0; \
+while i < @n { \
+    acc = acc + (i * @k + @x); \
+    i = i + 1; \
+} \
+acc";
+
+const STRONG: &str = "\
+let acc = 0; \
+let i = 0; \
+while i < @n { \
+    acc = acc * 2 + (i * @k + @x); \
+    i = i + 1; \
+} \
+acc";
+
+#[test]
+fn a_weak_loop_is_left_as_written_and_a_strong_one_is_reduced() {
+    let i = Interner::new();
+    let names = ctx(&i, &["n", "k", "x"]);
+    let weak = compile_script_optimized(&i, WEAK, &names).expect("it compiles");
+    let strong = compile_script_optimized(&i, STRONG, &names).expect("it compiles");
+    assert_eq!(
+        where_it_multiplies(&weak),
+        ["L1: 1".to_string()],
+        "the accumulator is a merge and `i` an induction variable, so the loop \
+         is weak and keeps `i * @k` in its body (RFC-0056):\n{weak}"
+    );
+    assert_eq!(
+        where_it_multiplies(&strong),
+        [format!("{ENTRY}: 2"), "L1: 1".to_string()],
+        "`acc * 2` is a recurrence, so the loop is strong: the reduction's \
+         start and step stand above it and the body keeps only `acc * 2`:\n{strong}"
     );
 }

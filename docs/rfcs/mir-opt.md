@@ -3,8 +3,9 @@
 What shape MIR gives a loop and a branch, and what the optimizer may do to a
 body. A terminator carries the control shape the source wrote, so no pass
 rediscovers it. Every pass here keeps the program's result bit for bit and
-declines where it cannot show that. Loop parallelization is analysis that
-the lowerer reads, not a rewrite of MIR, and it is still a proposal.
+declines where it cannot show that. A loop's facts are analyses; a pass may
+normalize a loop the same way on every target, and the shape that depends on
+the target is the lowerer's.
 
 ## RFC-0057: a `for` loop is one terminator that is its own condition
 
@@ -262,16 +263,24 @@ the same on every iteration. A second answer to any of these is a defect. A
 
 **An induction variable is a header parameter plus an invariant.** `i` is one
 when the latch sends the header `i + c` and `c` is the same on every
-iteration. This holds for `while` loops as well as `for` loops. Nothing
-deeper is examined: a counter rewritten through memory, a step that is
-itself an induction variable, and a derived variable of a derived variable
-are outside the pattern.
+iteration. This holds for `while` loops as well as `for` loops.
+`analysis::affine` owns this and `i * k + x` (RFC-0066 rule 4), and the pass
+reads the rule that made each value affine. Nothing deeper is examined: a
+counter rewritten through memory, a step that is itself an induction
+variable, and a derived variable of a derived variable are outside the
+pattern.
 
 **A value is the same on every iteration when it is defined outside the loop
 or is a word constant.** The first case is what the hoist produces. The
 second is the case the hoist cannot reach: control equivalence keeps a
 `Const` inside the body, yet it reads nothing and writes the same word every
 time. Such a constant is re-emitted above the header, not moved.
+
+**Only a strong loop is reduced** (RFC-0066 rule 7). A weak loop's
+iterations may run in any order, and its counters are canonicalized instead,
+so each iteration computes `i * k + x` from its own `i`. A derived counter
+would carry that value from the previous iteration and order the loop. A
+strong loop is ordered already, so the reduction costs it nothing.
 
 **`i * k + x`, where only that sum reads the product, becomes a header
 parameter.** It is started in the preheader and advanced in the latch. The
@@ -410,87 +419,134 @@ changes only which closures qualify.
 - Splicing a direct callee that makes a closure — needs a closure-label
   namespace the two modules share, which is a separate decision.
 
-## RFC-0066: a loop is analyzed, and the lowerer decides
+## RFC-0066: a loop is analyzed and normalized in MIR, and the lowerer decides its shape
 
 Status: Proposed
 
-Parallelizing a loop is analysis written into side tables that the lowerer
-reads. No layer rewrites MIR. Each layer rests on the one below it, and no
-layer holds a number that nobody measured. None of it is built. What exists
-is `spawn_split`'s `Heavy` call split (RFC-0046) and RFC-0057 rule 3's
-independence question.
+A loop's facts are analyses over MIR that every reader shares:
+`analysis::loops` for the nest and the trip count, `analysis::affine` for the
+values that advance by a fixed step, and `analysis::carried` for what one
+iteration hands the next. A pass may rewrite MIR into a normal form that holds
+on every target. The shape of a loop that depends on the target, the runtime
+or the actual `n` is the lowerer's, and no MIR pass writes it.
 
-1. **A cost table is measured, not written.** At first compilation on a
+1. **Normalization is the optimizer's; the target's shape is the
+   lowerer's.** A MIR pass may rewrite a loop when the result is the same
+   program on every target: IV canonicalization, collapsing a rectangular
+   nest, separating a merge's join from the body. Unrolling, tiling and
+   blocking, a chunk size, and whether to split a loop at all depend on the
+   target, the runtime or `n`, and they are the lowerer's.
+
+2. **The nest.** Every natural loop (RFC-0056) has its parent, the smallest
+   other loop that contains its header, and its children. Its kind is
+   `For { source }` when its header ends in a `for` terminator and `While`
+   otherwise. Its trip count is a term: `max(hi − at, 0)` for a range and
+   `len(source)` for a slice or an array, read off the terminator
+   (RFC-0057). A `while`'s is unknown. A loop is rectangular in its parent
+   when its trip count is known and every value the term reads is invariant
+   in the parent.
+
+3. **The term.** A term is a constant, a value invariant in the loop, a
+   source's length, or `+`, `−`, `×` or `max` of terms. It denotes an
+   integer. It is kept as found and evaluated where the lowerer knows the
+   atoms, never simplified. A value is invariant in a loop when it is
+   defined outside the loop, or is a word `Const`, which reads nothing and
+   writes the same word each time (RFC-0056).
+
+4. **Affine values.** A value `v` is affine in a loop when
+   `v = base + k·step` over the iteration number `k`, with `base` and `step`
+   terms of rule 3. A `for`'s counter is affine from its terminator: a
+   range's element is `{at, 1}` and a slice's or an array's index is
+   `{0, 1}`. A header parameter entered with `b` whose back edges all send
+   `p + c`, `c` invariant, is `{b, c}`. `a·v` and `v + b` of an affine `v`,
+   `a` and `b` invariant, are affine. Only integers are affine, because
+   wrapping `+` and `*` are exact (RFC-0037). The analysis is one loop
+   deep.
+
+5. **Carried state.** Each header parameter is exactly one of `Iv`, affine
+   by rule 4; `Merge { op, exact }`, whose back edges send `p ⊕ x` where the
+   body reads `p` only as that operand and `p ⊕ x` only on the back edges;
+   or `Recurrence`, anything else. Integer `+` and `*` are exact merges.
+   Float `+` and `*` are inexact merges. `&&`, `||`, `min` and `max` are
+   exact operations, but they reach MIR as a short-circuit `Diamond` and as
+   extension calls, and their recognition is open.
+
+6. **Weak and strong, by kind.** A loop is weak when every carried
+   parameter is an `Iv` or a `Merge`, no instruction of the body carries an
+   `Order` (RFC-0013, RFC-0046), and every storage the body writes is its
+   `SliceMut` source's, reached through the element (RFC-0057 rule 3).
+   Otherwise it is strong. The kind of the carried state decides, never its
+   count: how many merges a loop carries is a cost, and cost is the
+   lowerer's. An inexact merge is weak and marked inexact, and whether to
+   split one is the lowerer's, by its reassociation policy. A merge through
+   storage, such as `v.push(x)` in a loop, is a write and strong; what kind
+   of merge such an operation is, ordered or not, is declared by the extern,
+   not discovered here. A loop left from anywhere but its header, by a
+   `break` or a `return`, is strong: the iterations after the one that
+   leaves never run. RFC-0057 rule 3's question
+   is a weak loop that carries nothing.
+
+7. **One normalization per loop.** Strength reduction (RFC-0056) applies to
+   strong loops, which run in order anyway. IV canonicalization applies to
+   weak loops, and keeps each iteration computed from its own counter. A
+   loop gets one or the other.
+
+8. **A cost table is measured, not written.** At first compilation on a
    target, the runtime measures every operation kind it can emit (each `Op`
    family at its register forms, a spawn, a join, a frame bind) and caches
    the table per target. The cache is invalidated when the runtime binary
    changes. Every later cost is a sum of rows in the table's own unit. The
    table records ranges, and the lowerer compares against the conservative
-   end. A target with no table runs every loop on one thread.
+   end. A target with no table runs every loop on one thread. A loop's cost
+   is its body's rows times its trip count, a lower bound.
 
-2. **An invariant table over SSA chains, and its bound.** For each chain, the
-   table records what is known at entry and exit and what the chain costs.
-   The induction variable a split reads is `for`'s: entry, exit and step come
-   from RFC-0057's terminator. A `while` loop does have induction variables
-   (RFC-0056), but they carry no exit, so its trip count is 1 (a lower bound)
-   and it is never divided. A value is invariant when it is defined outside
-   the loop and the header carries no parameter for it. A storage is
-   unwritten when the loans' element-write split says so. The trip count is
-   the symbolic `(exit − entry) / step` over invariants, and nested `for`s
-   multiply. Its alphabet is constants, invariants, `+`, `×`, `min` and
-   `max`, and it is evaluated at rule 5's points, not simplified. An index is
-   understood only as the induction variable plus a constant. A bound check
-   the invariants imply is absorbed as a row of the table, not rewritten. The
-   cost is the chain's rows times the trip count, which is a lower bound.
-
-3. **Regions.** A region is a set of chains evaluated as one unit without
+9. **Regions.** A region is a weak loop's body evaluated as one unit without
    crossing a jump the analysis cannot see through. A jump's target must be
-   inside it. A diamond inside it must have both arms free of ordered effects
-   (RFC-0013, RFC-0046); an ordered effect ends the region at the branch. A
-   storage written inside it is written only through the induction
-   variable's index. A loop whose body is not one region is not divided.
+   inside it. It carries the entry and exit values of every variable
+   crossing its boundary, its cost per iteration, and its merges with their
+   exactness. A loop whose body is not one region is not divided.
 
-4. **A region carries its invariants.** It carries the entry and exit values
-   of every variable crossing its boundary, its cost per iteration, its
-   effect class, and whether its carried state recombines exactly (integer
-   sums, counts, min/max; a float reduction is marked inexact). A region is
-   splittable when its iteration space partitions and its carried state
-   recombines exactly. RFC-0057 rule 3's question is this rule's case with
-   nothing carried.
+10. **The lowerer decides.** `prepare` chooses between a split region
+    (chunks as `Heavy` spawns joined through the merges), a region
+    evaluated in place, and a region unrolled at the operation level. The
+    choice is one comparison of sums of rule 8's table. Where the count is
+    known only at run time, the lowerer inserts one dispatch point ahead of
+    the loop. It reads `n`, compares against a threshold folded from the
+    table at a few concrete points, and continues into the split chain
+    (cold, laid out of line) or the in-place chain (hot). A loop never
+    worth splitting costs one compare. The lowerer splits nested regions at
+    one level, and the level is a comparison over rule 8's table.
 
-5. **The lowerer decides.** `prepare` chooses between a split region (chunks
-   as `Heavy` spawns joined through the exact reduction), a region evaluated
-   in place, and a region unrolled at the operation level. The choice is one
-   comparison of sums of rule 1's table. Where the count is known only at
-   run time, the lowerer inserts one dispatch point ahead of the loop. It
-   reads `n`, compares against a threshold folded from the table at a few
-   concrete points, and continues into the split chain (cold, laid out of
-   line) or the in-place chain (hot). A loop never worth splitting costs one
-   compare. The lowerer splits nested regions at one level, and the level is
-   a comparison over rule 1's table.
-
-**Why.** Transformations that expose parallelism in MIR are guesses about the
-lowerer, which knows the target, the runtime and the actual `n`. The author
-writes the loop, and the system finds the parallelism from facts the checker
+**Why.** A normal form that holds on every target is the same program
+everywhere, so writing it into MIR decides nothing a target could decide
+better. A shape chosen for a target is a guess about the lowerer, which
+knows the target, the runtime and the actual `n`. Strength is read from the
+kind of the carried state because the kind says whether iterations can be
+reordered, and a count says only what reordering costs. The author writes
+the loop, and the system finds the parallelism from facts the checker
 already establishes.
-**Cost.** A measurement step per target, two side tables computed at pass 0,
-and a family of split operations (chunk, spawn, join-with-reduction).
-RFC-0057's and RFC-0064's analyses become inputs whose promises must stay
-stable.
+**Cost.** Three analyses built per body and read by every loop pass. A
+measurement step per target and a family of split operations (chunk, spawn,
+join through a merge). A loop's normalization is chosen by its strength, so
+a change in the analysis moves a loop between two passes. RFC-0057's and
+RFC-0064's analyses become inputs whose promises must stay stable.
 **Rejected.**
-- Transforming MIR (unrolling, blocking, permutation) — a lowerer's guess
-  written into the program's meaning, and nothing undoes it when the guess is
-  wrong for a target.
+- Unrolling, tiling, blocking or permutation as MIR passes — a lowerer's
+  guess written into the program's meaning, and nothing undoes it when the
+  guess is wrong for a target.
+- Strength decided by the number of carried values — a count is a cost, and
+  a loop with one recurrence is ordered where a loop with ten sums is not.
 - Constant costs in source — true on one machine on one day.
 - Scalar evolution alone — it answers the trip count and nothing when that
-  fails. The invariant table gives a cost lower bound and what is unwritten.
+  fails.
 - A `while` trip count derived from its recurrence — the door to general
   scalar evolution. A `while` is promoted to `for` only by a recognizer that
   is exact, or it stays undivided.
 - An explicit `par for` — the facts the split needs are the checker's. Where
   they are not established, the author is told why, not asked to assert them.
 
-**Open.** Whether rule 3's jump-boundary conditions reduce to effect
-boundaries alone. Whether the machine offers an explicitly reassociable float
-reduction, which is a language decision. What a failed join drops and in what
-order, which is answered in rule 5's operation family.
+**Open.** How `&&`, `||`, `min` and `max` are recognized as merges. Whether
+rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
+the machine offers an explicitly reassociable float reduction, which is a
+language decision. What a failed join drops and in what order, which is
+answered in rule 10's operation family.

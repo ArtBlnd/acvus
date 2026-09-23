@@ -7,6 +7,7 @@
 
 use smallvec::{SmallVec, smallvec};
 
+use crate::cfg::Terminator;
 use crate::ir::{Callee, InstKind, RefTarget, ValueId};
 
 /// ValueIds defined by this instruction.
@@ -234,6 +235,46 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             }
             v
         }
+    }
+}
+
+/// ValueIds a block's terminator reads: what [`uses`] gives the control
+/// flow instruction the terminator was promoted from.
+pub fn terminator_uses(term: &Terminator) -> SmallVec<[ValueId; 4]> {
+    match term {
+        Terminator::Jump { args, .. } => args.iter().copied().collect(),
+        Terminator::JumpIf {
+            cond,
+            then_args,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => std::iter::once(*cond)
+            .chain(then_args.iter().copied())
+            .chain(else_args.iter().copied())
+            .collect(),
+        Terminator::For {
+            source,
+            body_args,
+            exit_args,
+            ..
+        } => source
+            .uses()
+            .into_iter()
+            .chain(body_args.iter().copied())
+            .chain(exit_args.iter().copied())
+            .collect(),
+        Terminator::Switch { tag, arms, default } => std::iter::once(*tag)
+            .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
+            .chain(default.iter().flat_map(|(_, args)| args.iter().copied()))
+            .collect(),
+        Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
+        Terminator::Diverge | Terminator::Fallthrough => SmallVec::new(),
     }
 }
 

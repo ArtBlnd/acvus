@@ -1,3 +1,5 @@
+pub mod affine;
+pub mod carried;
 pub mod dataflow;
 pub mod domain;
 pub mod domtree;

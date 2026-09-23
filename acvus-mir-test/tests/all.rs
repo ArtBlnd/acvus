@@ -34,6 +34,7 @@ mod lend;
 mod lent_iterator_liveness;
 mod literal;
 mod loans;
+mod loop_analysis;
 mod loop_invariant_phi;
 mod lsr;
 mod machine_coercion;
