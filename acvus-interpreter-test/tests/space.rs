@@ -9,8 +9,8 @@ use std::sync::Arc;
 use acvus_ext::Deque;
 use acvus_extern::{
     Borrowable, Decode, Encode, ExternType, ExternTypeDecl, Externs, Journaled, NodeHash,
-    OneValue, Owned, Registry, Runtime, SpaceError, SpaceResult, Var, Visit, extern_fn,
-    extern_registry, kind,
+    OneValue, Owned, Registry, Runtime, SpaceError, SpaceResult, UniformPayload, Var, Visit,
+    extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::{
     AcvusRuntime, Commit, InterpreterContext, Log, Mode, NodeKind, Plain, Record, SequentialExecutor,
@@ -524,13 +524,14 @@ fn a_host_s_mode_decides_the_nodes_and_the_history_reads_back() {
 /// `space` switch, and `Journaled`. It has one type parameter and one
 /// identity parameter, and its box is keyed by its payload.
 #[derive(ExternType)]
-#[extern_type(name = "Tally", space, unsafe(uniform_payload))]
+#[extern_type(name = "Tally", space)]
 #[repr(transparent)]
 struct Tally<T, I>(TallyState<T>, PhantomData<I>)
 where
     T: Var<kind::Type>,
     I: Var<kind::Identity>;
 
+#[derive(UniformPayload)]
 struct TallyState<T> {
     items: Vec<T>,
     settled: usize,
