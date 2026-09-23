@@ -2049,8 +2049,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.slice_coercion(&referent, viewed, &lent_as, param_ty, site.id, site.span)
     }
 
-    /// The declaration the referent's evidence settles on, recorded as the
-    /// coercion at `at`.
+    /// The one declaration that takes the referent, recorded as the coercion
+    /// at `at`. A referent the solve left open is storage, which is never a
+    /// view (RFC-0062 rule 1), so it is what the declaration lending the view
+    /// takes.
     fn slice_coercion(
         &mut self,
         referent: &InferTy,
@@ -2061,34 +2063,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> SliceCoercion {
         let Viewed { view, mutability } = viewed;
-        let head = match view {
-            View::Str => None,
-            View::Slice => match sliceable_head(referent) {
-                Some(head) => Some(head),
-                None => return SliceCoercion::NoDeclaration,
-            },
+        let open = matches!(referent, TyTerm::Var(_));
+        let takes_referent = |takes: &crate::ty::PolyTy| {
+            open || match view {
+                View::Str => matches!((takes, referent), (TyTerm::String, TyTerm::String)),
+                View::Slice => sliceable_head(referent)
+                    .is_some_and(|head| sliceable_head(takes) == Some(head)),
+            }
         };
-        let takes_referent = |takes: &crate::ty::PolyTy| match view {
-            View::Str => matches!(takes, TyTerm::String),
-            View::Slice => sliceable_head(takes) == head,
-        };
-        let taker: Option<(QualifiedRef, crate::ty::Scheme)> = self
+        let takers: Vec<(QualifiedRef, crate::ty::Scheme)> = self
             .env
             .machine_views(viewed)
             .into_iter()
-            .find(
+            .filter(
                 |(_, scheme)| match scheme.params().first().map(|param| &param.ty) {
                     Some(TyTerm::Ref(_, takes)) => takes_referent(&takes.ty),
                     _ => false,
                 },
             )
-            .map(|(qref, scheme)| (qref, scheme.clone()));
-        let Some((qref, scheme)) = taker else {
+            .map(|(qref, scheme)| (qref, scheme.clone()))
+            .collect();
+        let [(qref, scheme)] = takers.as_slice() else {
             return SliceCoercion::NoDeclaration;
         };
-        if view == View::Str && !matches!(referent, TyTerm::String) {
-            return SliceCoercion::NoDeclaration;
-        }
+        let (qref, scheme) = (*qref, scheme.clone());
         let taken = self.applied_at(qref, &scheme, arg_ty, param_ty, span);
         self.coercions.push(PendingCoercion {
             at,
@@ -2200,8 +2198,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Ref(_, container) => self.solver.resolve_ty(&container.ty),
             other => other,
         };
+        let open = matches!(referent, TyTerm::Var(_));
         match self.slice_coercion(&referent, viewed, arg, param, at, span) {
             SliceCoercion::Coerced => {}
+            SliceCoercion::NoDeclaration if open => {
+                let resolved_ty = self.type_as_written(arg);
+                self.error(MirErrorKind::AmbiguousType { resolved_ty }, span);
+            }
             SliceCoercion::NoDeclaration => self.meet_settled_argument(arg, param, span),
         }
     }

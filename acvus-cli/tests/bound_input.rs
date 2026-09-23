@@ -115,3 +115,34 @@ fn an_unbound_input_of_an_expression_is_refused_rather_than_read() {
     assert_eq!(bound.status.code(), Some(0), "{}", text(&bound.stderr));
     assert_eq!(text(&bound.stdout), "42\n");
 }
+
+const LENDS_TO_A_STR: &str = "\
+% let on = string::contains(&$input, \"X\")
+{{ if on { \"yes\" } else { \"no\" } }}
+";
+
+/// `&$input` at a `&str` parameter types the input `String`, which lends the
+/// parameter its view, at both optimization levels.
+#[test]
+fn an_input_lent_to_a_str_parameter_is_a_string_that_prepares() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("lends.acvt"), LENDS_TO_A_STR).expect("write a fixture");
+    for opt in ["full", "none"] {
+        let out = acvus(dir.path(), &["check", "lends.acvt", "--opt", opt]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stderr), "input $input: String\n");
+
+        let out = acvus(dir.path(), &["ops", "lends.acvt", "--opt", opt]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+
+        for (input, shown) in [("\"aXb\"", "yes\n"), ("\"ab\"", "no\n")] {
+            let binding = format!("input={input}");
+            let out = acvus(
+                dir.path(),
+                &["run", "lends.acvt", "--opt", opt, "--bind", &binding],
+            );
+            assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), shown);
+        }
+    }
+}
