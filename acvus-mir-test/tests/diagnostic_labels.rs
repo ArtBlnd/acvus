@@ -379,12 +379,12 @@ mod reference_returned_from_body {
         );
     }
 
-    /// The payload is refused where the variant is built (RFC-0064 rule 5),
-    /// and the result that holds it is that refusal's consequence.
+    /// A variant's payload holds the reference (RFC-0079 rule 10); the
+    /// body's result that holds the variant is refused (RFC-0079 rule 9).
     #[test]
-    fn a_reference_inside_a_variant_payload_is_refused() {
+    fn a_reference_inside_a_variant_payload_is_refused_as_the_result() {
         let (message, _) = only("let xs = [1]; nope::len(&xs)", &nothing);
-        assert_eq!(message, "a reference cannot be stored in an enum's payload");
+        assert_eq!(message, WORDS);
     }
 
     #[test]
@@ -394,9 +394,10 @@ mod reference_returned_from_body {
     }
 }
 
-/// A reference is not an `Option`'s or a `Result`'s payload. `MakeSome`
-/// moves one value where a view is two, so `Some("ab")` read a neighbouring
-/// register for the length until this refusal existed.
+/// A view is not an `Option`'s or a `Result`'s payload. `MakeSome` moves
+/// one value where a view is two, so `Some("ab")` read a neighbouring
+/// register for the length until this refusal existed. A plain reference is
+/// a payload (RFC-0079 rule 10).
 mod reference_in_a_payload {
     use super::*;
 
@@ -416,17 +417,19 @@ mod reference_in_a_payload {
     }
 
     #[test]
-    fn a_reference_in_an_ok_is_refused() {
-        let (message, labels) = only("let s = \"ab\".to_string(); let r = Ok(&s); 0", &nothing);
-        assert_eq!(message, WORDS);
-        assert_eq!(labels, []);
+    fn a_reference_in_an_ok_is_admitted() {
+        let source = "let s = \"ab\".to_string(); let r = Ok(&s); 0";
+        let i = Interner::new();
+        let compiled = refuse_script_mode_optimized(&i, source, &nothing(&i));
+        assert!(compiled.is_ok(), "{source}: {:#?}", compiled.err().map(|r| words(&r)));
     }
 
     #[test]
-    fn a_reference_in_an_err_is_refused() {
-        let (message, labels) = only("let s = \"ab\".to_string(); let r = Err(&s); 0", &nothing);
-        assert_eq!(message, WORDS);
-        assert_eq!(labels, []);
+    fn a_reference_in_an_err_is_admitted() {
+        let source = "let s = \"ab\".to_string(); let r = Err(&s); 0";
+        let i = Interner::new();
+        let compiled = refuse_script_mode_optimized(&i, source, &nothing(&i));
+        assert!(compiled.is_ok(), "{source}: {:#?}", compiled.err().map(|r| words(&r)));
     }
 }
 

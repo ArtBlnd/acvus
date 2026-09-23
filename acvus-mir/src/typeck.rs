@@ -735,11 +735,13 @@ pub type CallMap = FxHashMap<AstId, CallTarget>;
 
 /// The reference a body's result names, itself or inside the data it holds.
 ///
-/// A reference inside data built here is refused where the data is built
-/// (`MirErrorKind::ReferenceInData`); data an extern returns has no such
-/// site, and `nope::len(&xs)` builds one whose referent the body releases
-/// before it returns, so reading the result then reads freed storage. A function type is not searched: its parameters and
-/// return are a signature, not storage this run holds.
+/// A payload holds a reference whether the body built it or an extern
+/// returned it, and `nope::len(&xs)` returns one whose referent the body
+/// releases before it returns, so reading the result then reads freed
+/// storage. A reference inside a result's data is refused, whatever it
+/// names, until a function type labels which parameter its result borrows
+/// (RFC-0079 rules 5 and 9). A function type is not searched: its
+/// parameters and return are a signature, not storage this run holds.
 fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
     match ty {
         TyTerm::Ref(..) => Some(ty),
@@ -1040,7 +1042,9 @@ pub struct TypeResolution {
     /// expression, reaches what takes it.
     pub passing: FxHashMap<AstId, Passing>,
     /// How each `match` / `if let` / `while let` source, keyed by its own
-    /// expression, is read by its patterns (RFC-0024).
+    /// expression, is read by its patterns, and how each member a
+    /// sub-pattern stands for, keyed by that pattern, is read by it
+    /// (RFC-0024).
     pub pattern_modes: FxHashMap<AstId, MatchMode>,
     /// Where the base of each expression the lowering reads as a place
     /// lives, keyed by the base's own id. The checker settled it from the
@@ -3518,16 +3522,27 @@ where
         ty
     }
 
-    /// A reference is never data (RFC-0018), and neither is a lambda that
-    /// holds one (RFC-0064 rule 5).
+    /// An aggregate's refusal of a reference and of a lambda that holds one
+    /// is RFC-0064 rule 5, kept by decision: the loans carry an element's
+    /// positions as they carry a payload's (RFC-0079 rule 2), and admitting
+    /// them there is not built yet. A view is refused in a payload as well,
+    /// because a payload is one `Value` and a view is two registers
+    /// (RFC-0047 rule 6).
     fn reference_in_data(&self, ty: &InferTy, shape: DataShape) -> Option<MirErrorKind> {
-        match self.solver.resolve_ty(ty) {
-            TyTerm::Ref(_, inner) if matches!(*inner.ty(), TyTerm::Str) => {
+        let resolved = self.solver.resolve_ty(ty);
+        match (&resolved, shape) {
+            (TyTerm::Ref(_, inner), _) if matches!(*inner.ty(), TyTerm::Str) => {
                 Some(MirErrorKind::ViewInData(shape))
             }
-            TyTerm::Ref(..) => Some(MirErrorKind::ReferenceInData(shape)),
-            resolved if holds_a_loan(&resolved) => Some(MirErrorKind::ReferenceInData(shape)),
-            _ => None,
+            (TyTerm::Ref(..), _) if is_pair(&resolved) => {
+                Some(MirErrorKind::ReferenceInData(shape))
+            }
+            (_, DataShape::Payload | DataShape::Variant) => None,
+            (TyTerm::Ref(..), DataShape::Aggregate) => Some(MirErrorKind::ReferenceInData(shape)),
+            (_, DataShape::Aggregate) if holds_a_loan(&resolved) => {
+                Some(MirErrorKind::ReferenceInData(shape))
+            }
+            (_, DataShape::Aggregate) => None,
         }
     }
 
@@ -8497,9 +8512,11 @@ where
                 }
             },
         };
-        if let PatternSource::Expr(id) = source {
-            self.source_modes.insert(id, mode);
-        }
+        let read = match source {
+            PatternSource::Expr(id) => id,
+            PatternSource::Member => pattern.id(),
+        };
+        self.source_modes.insert(read, mode);
     }
 
     /// The scrutinee's head is still a variable, so how the pattern reads

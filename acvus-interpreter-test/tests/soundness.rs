@@ -24,19 +24,7 @@ struct Known {
     shows: &'static str,
 }
 
-const KNOWN: &[Known] = &[
-    // A pattern on `&Option<&T>` binds its payload at the wrong depth
-    // (RFC-0024 rule 3, RFC-0029 rule 3): the validator refuses it at a
-    // word payload, the machine asserts at a `String` one.
-    Known {
-        program: "attack-control-2/d33.acvus",
-        shows: "Take takes dst as &i64, and it is i64",
-    },
-    Known {
-        program: "attack-control-2/d38.acvus",
-        shows: "is not large",
-    },
-];
+const KNOWN: &[Known] = &[];
 
 const LIMIT: Duration = Duration::from_secs(30);
 

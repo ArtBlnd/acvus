@@ -1,0 +1,2 @@
+// expect 5
+let x = 5; let y = 7; let c = true; let o = if c { Ok(&x) } else { Err(&y) }; match o { Ok(r) => *r, Err(e) => *e * 10, }

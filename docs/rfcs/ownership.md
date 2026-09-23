@@ -275,10 +275,13 @@ Status: Proposed
    of their positions may hold a loan; a lambda or named function's result
    holds only `Param` loans (RFC-0064 rule 5).
 10. **The check is RFC-0064's.** A loan in any position of a live value is
-    held; invalidating it is a conflict. When this decision is accepted,
-    RFC-0064 rules 2, 3 and 6 become its rules 5 and 6, and an option,
-    result or enum payload is no longer refused for holding a reference;
-    RFC-0064 rule 5 is otherwise unchanged.
+    held; invalidating it is a conflict. An option, result or enum payload
+    holds a reference or a lambda that holds one, since its positions are
+    the value's; a view stays refused there, since a payload is one value
+    and a view two registers (RFC-0047 rule 6). A list element and an
+    object or tuple field keep RFC-0064 rule 5's refusal by decision,
+    though their positions are carried alike. When this decision is
+    accepted, RFC-0064 rules 2, 3 and 6 become its rules 5 and 6.
 
 **Why.** One region per value cannot say which loans a value reached through
 it holds: `&Option<&T>` read through its outer reference lost the inner

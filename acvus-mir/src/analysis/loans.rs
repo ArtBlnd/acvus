@@ -75,28 +75,60 @@ pub fn layout(ty: &Ty) -> Vec<PositionKind> {
     out
 }
 
+/// Behind a `&T`, a `&mut` reaches its pointee only as a shared reborrow
+/// (RFC-0029 rule 5).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    Owned,
+    BehindShared,
+}
+
+impl Access {
+    fn bound(self, mutability: Mutability) -> Mutability {
+        match self {
+            Self::Owned => mutability,
+            Self::BehindShared => Mutability::Shared,
+        }
+    }
+}
+
 fn lay_out(ty: &Ty, out: &mut Vec<PositionKind>) {
+    lay_out_under(ty, Access::Owned, out)
+}
+
+fn lay_out_under(ty: &Ty, access: Access, out: &mut Vec<PositionKind>) {
     match ty {
         Ty::Ref(mutability, inner) => {
-            out.push(PositionKind::Ref(*mutability));
-            lay_out(&inner.ty(), out);
+            let mutability = access.bound(*mutability);
+            out.push(PositionKind::Ref(mutability));
+            let inner_access = match mutability {
+                Mutability::Shared => Access::BehindShared,
+                Mutability::Mut => access,
+            };
+            lay_out_under(&inner.ty(), inner_access, out);
         }
-        Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => lay_out(inner, out),
+        Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => {
+            lay_out_under(inner, access, out)
+        }
         Ty::Handle(inner) => {
             out.push(PositionKind::InFlight);
-            lay_out(inner, out);
+            lay_out_under(inner, access, out);
         }
         Ty::Result(ok, err) => {
-            lay_out(ok, out);
-            lay_out(err, out);
+            lay_out_under(ok, access, out);
+            lay_out_under(err, access, out);
         }
-        Ty::Tuple(items) => items.iter().for_each(|item| lay_out(item, out)),
+        Ty::Tuple(items) => items
+            .iter()
+            .for_each(|item| lay_out_under(item, access, out)),
         Ty::Object(_) | Ty::Enum { .. } => {
             for part in parts_in_order(ty) {
-                lay_out(&part.ty, out);
+                lay_out_under(&part.ty, access, out);
             }
         }
-        Ty::Fn { .. } => out.push(PositionKind::Captures(held_loan(ty))),
+        Ty::Fn { .. } => out.push(PositionKind::Captures(
+            held_loan(ty).map(|mutability| access.bound(mutability)),
+        )),
         Ty::UserDefined {
             type_args,
             region_params,
@@ -104,7 +136,7 @@ fn lay_out(ty: &Ty, out: &mut Vec<PositionKind>) {
         } => {
             out.extend(std::iter::repeat_n(PositionKind::RegionParam, *region_params));
             for arg in type_args {
-                lay_out(&arg.ty(), out);
+                lay_out_under(&arg.ty(), access, out);
             }
         }
         _ => {}
@@ -1227,7 +1259,7 @@ impl RegionAnalysis<'_> {
                                 mutability: *mutability,
                             }],
                         };
-                        let held = state.get(*s);
+                        let held = state.get(*s).through(*s);
                         let contents: Vec<Region> = self
                             .content_range(storage)
                             .map(|k| held.positions.get(k).cloned().unwrap_or_default())
@@ -1237,7 +1269,7 @@ impl RegionAnalysis<'_> {
                             ty => ty.cloned(),
                         };
                         let pointee = self.project(&contents, contents_ty.as_ref(), path, width);
-                        self.reference(names, pointee, &[])
+                        self.reference(names, pointee, &held.via)
                     }
                     // A shared reborrow holds what it reborrows as shared
                     // (RFC-0029 rule 3).

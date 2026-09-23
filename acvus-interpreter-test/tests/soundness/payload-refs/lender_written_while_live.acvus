@@ -1,0 +1,2 @@
+// refuse
+let x = 5; let o = Some(&x); x = 6; match o { Some(r) => *r, None => 0, }

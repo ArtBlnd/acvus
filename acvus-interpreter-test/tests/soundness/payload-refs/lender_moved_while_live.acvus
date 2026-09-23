@@ -1,0 +1,2 @@
+// refuse
+let x = "hello".to_string(); let o = Some(&x); let y = x; match o { Some(r) => len(r), None => 0u64, }

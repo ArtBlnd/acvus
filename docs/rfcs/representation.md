@@ -377,9 +377,11 @@ Status: Accepted
    `Ret::Of<'a>` is a GAT over the arguments' lifetime). A `heavy` or `async`
    declaration may neither take nor return `&str`: its frame is gone on
    resume.
-5. **A view is frame-bound.** As every reference (RFC-0018), a `&str` is not
-   stored in an object, a container or a context and does not outlive its
-   `String`; its extent is its loans (RFC-0064). A regex `Match` holds byte
+5. **A view is frame-bound.** A `&str` is not stored in an object, a
+   container, an option, result or enum payload, or a context, and does not
+   outlive its `String`; its extent is its loans (RFC-0064). A payload may
+   hold a plain reference (RFC-0079 rule 10), but it is one value, and a
+   view is the pair. A regex `Match` holds byte
    offsets, and its text is `substring(&text, m.start, m.end)`.
 6. **A body returns a view in the pair; a lambda does not.** A direct call's
    destination is the two registers of the pair, and a body's `Return` writes

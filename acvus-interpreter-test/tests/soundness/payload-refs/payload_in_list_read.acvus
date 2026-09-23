@@ -1,0 +1,2 @@
+// expect 5
+let x = 5; let l = [Some(&x)]; match l[0u64] { Some(r) => *r, None => 0, }

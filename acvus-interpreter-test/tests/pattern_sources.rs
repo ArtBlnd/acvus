@@ -86,6 +86,33 @@ fn a_pattern_on_a_borrowed_local_reads_through_the_reference() {
     );
 }
 
+/// A member the checker reads through a reference binds that reference
+/// and compares a literal through it (RFC-0024 rule 3, RFC-0029 rule 3).
+#[test]
+fn a_reference_member_is_read_through_at_its_own_depth() {
+    runs_to(
+        "let a = [5, 6]; let o = get(&a, 0u64); let r = &o; let n = match r { Some(p) => *p, None => 0, }; n + a[1]",
+        "11",
+    );
+    runs_to(
+        "let a = [5, 6]; let t = (get(&a, 1u64), 1); let n = match &t { (Some(p), k) => *p * 10 + *k, _ => 0, }; n + a[0]",
+        "66",
+    );
+    runs_to(
+        "let a = [5, 6]; let o = Some(get(&a, 0u64)); let n = match &o { Some(Some(p)) => *p, _ => 0, }; n + a[1]",
+        "11",
+    );
+    runs_to(
+        "let a = [5, 6]; let o = get(&a, 0u64); let r = &o; let n = match r { Some(5) => 1, Some(x) => 2, _ => 0, }; n + a[1]",
+        "7",
+    );
+    runs_to("let a = [5, 6]; match get(&a, 0u64) { Some(5) => 1, _ => 0, }", "1");
+    runs_to(
+        "let x = 5; let o = Some(&mut x); let r = &o; let n = match r { Some(p) => *p, None => 0, }; x = 3; n + x",
+        "8",
+    );
+}
+
 #[test]
 fn a_pattern_on_a_lambda_s_reference_parameter_reads_through_it() {
     runs_to(

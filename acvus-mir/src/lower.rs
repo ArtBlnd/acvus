@@ -3724,30 +3724,90 @@ impl<'a> Lowerer<'a> {
         self.pattern_parts(pattern, placed.ty())
             .into_iter()
             .map(|part| {
-                let projected = self.project(&placed, part.seg, part.ty, span);
+                let projected = self.project_member(&placed, part.seg, part.ty, part.pattern, span);
                 (PatSrc::Placed(projected), part.pattern)
             })
             .collect()
     }
 
-    fn project_payload(&mut self, src: &PatSrc, tag: Astr, span: Span) -> PatSrc {
+    fn project_payload(&mut self, src: &PatSrc, tag: Astr, payload: &Pattern, span: Span) -> PatSrc {
         let ty = self.payload_type(src.ty(), tag);
         match src {
             PatSrc::Placed(placed) => {
-                PatSrc::Placed(self.project(placed, PathSeg::Payload, ty, span))
+                PatSrc::Placed(self.project_member(placed, PathSeg::Payload, ty, payload, span))
             }
             PatSrc::Value { value, .. } => {
-                let payload = self.alloc_val();
-                self.set_val_type(payload, ty.clone());
+                let unwrapped = self.alloc_val();
+                self.set_val_type(unwrapped, ty.clone());
                 self.emit_inst(
                     span,
                     InstKind::UnwrapVariant {
-                        dst: payload,
+                        dst: unwrapped,
                         src: *value,
                     },
                 );
-                PatSrc::Value { value: payload, ty }
+                match self.member_mode(payload) {
+                    MatchMode::Value => PatSrc::Value {
+                        value: unwrapped,
+                        ty,
+                    },
+                    MatchMode::Through => PatSrc::Placed(self.behind(span, unwrapped, ty)),
+                }
             }
+        }
+    }
+
+    /// How the checker read the member `pattern` stands for (RFC-0024).
+    fn member_mode(&self, pattern: &Pattern) -> MatchMode {
+        *self
+            .resolution
+            .pattern_modes
+            .get(&pattern.id())
+            .expect("the checker records how every member pattern is read")
+    }
+
+    /// The part at `seg` of `src`, as the member `pattern` reads it. A
+    /// member the checker read through is a reference, which is read out
+    /// of its storage, so no `&&T` is formed (RFC-0029 rule 3).
+    fn project_member(&mut self, src: &Placed, seg: PathSeg, ty: Ty, pattern: &Pattern, span: Span) -> Placed {
+        match self.member_mode(pattern) {
+            MatchMode::Value => self.project(src, seg, ty, span),
+            MatchMode::Through => {
+                let reference = match src {
+                    Placed::Place { target, path, .. } => {
+                        let path = path.iter().copied().chain([seg]).collect();
+                        self.emit_take(span, *target, path, ty.clone())
+                    }
+                    Placed::Through { reference, .. } => {
+                        self.emit_take(span, RefTarget::Through(*reference), vec![seg], ty.clone())
+                    }
+                };
+                self.behind(span, reference, ty)
+            }
+        }
+    }
+
+    /// A pattern source read through `reference`, of type `ty`. Every name
+    /// bound behind a reference is a shared reference (RFC-0024 rule 6), so
+    /// a `&mut` is reborrowed shared.
+    fn behind(&mut self, span: Span, reference: ValueId, ty: Ty) -> Placed {
+        let Ty::Ref(mutability, referent) = ty else {
+            panic!("the checker reads a member through a reference only where it is one")
+        };
+        let referent = referent.into_ty();
+        let reference = match mutability {
+            Mutability::Shared => reference,
+            Mutability::Mut => self.emit_ref(
+                span,
+                RefTarget::Through(reference),
+                vec![],
+                Mutability::Shared,
+                referent.clone(),
+            ),
+        };
+        Placed::Through {
+            reference,
+            ty: referent,
         }
     }
 
@@ -3859,7 +3919,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let pending = self.open_diamond(span, tag_ok, labels);
                 self.emit_label(span, labels.then_label);
-                let payload_src = self.project_payload(src, *tag, span);
+                let payload_src = self.project_payload(src, *tag, payload, span);
                 let payload_ok = self.lower_pattern_test(payload, &payload_src, span);
                 let result = self.emit_fail_merge(span, payload_ok, labels);
                 self.close_diamond(pending);
@@ -3893,7 +3953,7 @@ impl<'a> Lowerer<'a> {
                 let Some(payload) = payload.as_deref() else {
                     return;
                 };
-                let payload_src = self.project_payload(src, *tag, span);
+                let payload_src = self.project_payload(src, *tag, payload, span);
                 self.lower_pattern_bind(payload, &payload_src, span);
             }
             Pattern::Error(clean) => match *clean {},

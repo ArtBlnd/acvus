@@ -1,0 +1,2 @@
+// refuse
+let x = 5; let o = Some(&mut x); let r = &o; let p = match r { Some(p) => p, None => &0, }; x = 3; *p

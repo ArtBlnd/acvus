@@ -1,0 +1,2 @@
+// expect 5
+let x = 5; let o = Some(&mut x); match o { Some(r) => *r, None => 0, }

@@ -1,0 +1,2 @@
+// refuse
+let f = |r| -> Some(r); let x = 5; match f(&x) { Some(r) => *r, None => 0, }

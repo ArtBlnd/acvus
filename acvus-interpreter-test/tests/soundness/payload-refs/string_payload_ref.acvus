@@ -1,0 +1,2 @@
+// expect 5
+let s = "hello".to_string(); let o = Some(&s); match o { Some(r) => len(r), None => 0u64, }

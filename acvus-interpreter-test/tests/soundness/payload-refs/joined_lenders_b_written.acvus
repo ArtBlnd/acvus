@@ -1,0 +1,2 @@
+// refuse
+let a = 1; let b = 2; let c = true; let o = if c { Some(&a) } else { Some(&b) }; b = 3; match o { Some(r) => *r, None => 0, }

@@ -1,0 +1,2 @@
+// expect 9
+let x = 5; let o = Some(&mut x); let r = o.unwrap(); *r = 9; x

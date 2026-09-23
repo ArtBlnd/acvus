@@ -371,3 +371,22 @@ fn a_context_bound_by_a_pattern_whose_head_settles_on_a_reference_is_refused() {
         "a context holds data (RFC-0014): {err}"
     );
 }
+
+/// A member the checker reads through a reference is read out of its
+/// storage, whether the source is a value, a place or a reference.
+#[test]
+fn a_reference_member_binds_the_reference_itself() {
+    let i = Interner::new();
+    for source in [
+        "let a = [5, 6]; let o = get(&a, 0u64); let r = &o; let n = match r { Some(p) => *p, None => 0, }; n + a[1]",
+        "let a = [5, 6]; let t = (get(&a, 1u64), 1); let n = match &t { (Some(p), k) => *p * 10 + *k, _ => 0, }; n + a[0]",
+        "let a = [5, 6]; let o = Some(get(&a, 0u64)); let n = match &o { Some(Some(p)) => *p, _ => 0, }; n + a[1]",
+        "let x = 5; let o = Some(&mut x); let r = &o; match r { Some(p) => *p, None => 0, }",
+        "let x = 5; let o = Some(&mut x); match o { Some(p) => *p, None => 0, }",
+    ] {
+        let raw = compile_script_raw(&i, source, &FxHashMap::default()).unwrap();
+        assert!(raw.contains("(p) : &i64"), "{raw}");
+        assert!(!raw.contains("&&"), "{raw}");
+        compile_script_ir(&i, source, &FxHashMap::default()).unwrap();
+    }
+}

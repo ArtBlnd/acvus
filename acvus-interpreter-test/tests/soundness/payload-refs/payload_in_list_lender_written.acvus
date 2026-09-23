@@ -1,0 +1,2 @@
+// refuse
+let x = 5; let l = [Some(&x)]; x = 7; match l[0u64] { Some(r) => *r, None => 0, }

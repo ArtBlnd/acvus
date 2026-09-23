@@ -1,0 +1,2 @@
+// refuse
+let y = "hello".to_string(); let o = if false { Ok(1) } else { Err(&y) }; y = "x".to_string(); match o { Ok(n) => n, Err(e) => len(e), }

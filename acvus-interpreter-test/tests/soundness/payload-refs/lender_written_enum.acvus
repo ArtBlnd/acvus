@@ -1,0 +1,2 @@
+// refuse
+let x = 5; let c = true; let e = if c { E::A(&x) } else { E::B }; x = 1; match e { E::A(r) => *r, E::B => 0, }

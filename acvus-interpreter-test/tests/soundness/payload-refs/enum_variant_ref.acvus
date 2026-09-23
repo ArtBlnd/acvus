@@ -1,0 +1,2 @@
+// expect 10
+let x = 5; let c = true; let e = if c { E::A(&x) } else { E::B }; let n = match e { E::A(r) => *r, E::B => 0, }; n + x

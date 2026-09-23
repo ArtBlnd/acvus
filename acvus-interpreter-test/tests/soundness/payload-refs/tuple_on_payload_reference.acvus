@@ -1,0 +1,2 @@
+// expect 1
+let a = [(5, 1)]; match get(&a, 0u64) { Some((5, k)) => *k, _ => 0, }

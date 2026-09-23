@@ -1,0 +1,2 @@
+// expect 5
+let x = 5; match Some(&x) { Some(r) => *r, _ => 0, }
