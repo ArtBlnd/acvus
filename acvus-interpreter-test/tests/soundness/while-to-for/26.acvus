@@ -1,0 +1,2 @@
+// expect 3
+let s = 0; let i = 3; while i < @n / @zero { s = s + i; i = i + 1; } s * 100 + i

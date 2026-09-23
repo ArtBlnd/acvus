@@ -1,0 +1,2 @@
+// expect 2107
+let n = @n; let s = 0; let i = 0; while i < n * 2 { s = s + i; n = n - 1; i = i + 1; } s * 100 + i

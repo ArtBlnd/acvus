@@ -1,0 +1,2 @@
+// expect 7
+let s = 0; let i = 7; while i < @zero - @n { s = s + i; i = i + 1; } s * 100 + i

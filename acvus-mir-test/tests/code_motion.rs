@@ -116,13 +116,15 @@ fn a_multiplication_between_two_loops_stays_between_them() {
 
 /// The header post-dominates the entry and is no deeper than it, so a
 /// multiplication the condition rebuilds every iteration still leaves the
-/// loop entirely.
+/// loop entirely. Tested with `<=` so that it stays a `while`: RFC-0079
+/// turns `i < @n * 2` into a range `for` and writes the multiplication
+/// above the header itself.
 #[test]
 fn a_loop_invariant_multiplication_in_the_header_rises_to_the_entry() {
     let i = Interner::new();
     let ir = compile_script_mode_optimized(
         &i,
-        "let s = 0; let i = 0; while i < @n * 2 { s = s + i; i = i + 1; } s",
+        "let s = 0; let i = 0; while i <= @n * 2 { s = s + i; i = i + 1; } s",
         &ctx(&i, &[("n", Ty::I64)]),
     )
     .unwrap();

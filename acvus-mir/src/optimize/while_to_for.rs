@@ -17,10 +17,15 @@
 //! while-to-for` is what disagrees across optimization levels.
 //!
 //! The machine reads a range's bounds on the edge that enters the loop,
-//! before the header runs. A bound written as a literal inside the loop, as
-//! `while i < 10` lowers, is therefore written again at the end of the
-//! entering block, as `optimize::lsr` writes a literal again above a header
-//! (RFC-0056).
+//! before the header runs. A bound the header computes is therefore
+//! computed again at the end of the entering block, from the same operands:
+//! a literal, as `while i < 10` lowers, the way `optimize::lsr` writes a
+//! literal again above a header (RFC-0056), and `@n * 2` the same way. That
+//! one evaluation gives the value every header visit computes, on an entry
+//! that runs the body zero times as well, because nothing a [`Step`] does
+//! can trap, has an effect or reads storage. A `/` or `%` can trap, and an
+//! extern's declared effect does not say that it returns: `unwrap` is
+//! `pure` and panics. A bound that holds either keeps the loop a `while`.
 
 use acvus_ast::{BinOp, Literal, Span, SuffixedInt};
 use rustc_hash::FxHashMap;
@@ -28,6 +33,7 @@ use smallvec::SmallVec;
 
 use crate::analysis::affine::{AffineValues, Derivation};
 use crate::analysis::domtree::DomTree;
+use crate::analysis::inst_info;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
@@ -57,15 +63,64 @@ pub fn run(cfg: &mut CfgBody) {
     }
 }
 
-enum Hi {
+enum Bound {
     Outside(ValueId),
-    ReemittedWord(Literal),
+    Computed { steps: Vec<Step>, value: ValueId },
+}
+
+struct Step {
+    span: Span,
+    dst: ValueId,
+    kind: StepKind,
+}
+
+enum StepKind {
+    Word(Literal),
+    Wrapping {
+        op: Wrapping,
+        left: Operand,
+        right: Operand,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum Operand {
+    Outside(ValueId),
+    Step(ValueId),
+}
+
+/// `+`, `-` and `*` at an integer width wrap in the machine and cannot
+/// trap (RFC-0037). That is the machine's half of what lets the pass
+/// evaluate one of them ahead of the header.
+#[derive(Clone, Copy)]
+enum Wrapping {
+    Add,
+    Sub,
+    Mul,
+}
+
+impl Wrapping {
+    fn of(op: BinOp) -> Option<Self> {
+        match op {
+            BinOp::Add => Some(Self::Add),
+            BinOp::Sub => Some(Self::Sub),
+            BinOp::Mul => Some(Self::Mul),
+            _ => None,
+        }
+    }
+
+    fn op(self) -> BinOp {
+        match self {
+            Self::Add => BinOp::Add,
+            Self::Sub => BinOp::Sub,
+            Self::Mul => BinOp::Mul,
+        }
+    }
 }
 
 struct Condition {
     counter: ValueId,
     bound: ValueId,
-    span: Span,
 }
 
 struct Counted {
@@ -77,9 +132,7 @@ struct Counted {
     exit: Label,
     exit_args: Vec<ValueId>,
     at: ValueId,
-    hi: Hi,
-    ty: Ty,
-    span: Span,
+    hi: Bound,
 }
 
 struct Recognizer<'a> {
@@ -132,10 +185,10 @@ impl Recognizer<'_> {
         if !self.is_one(&step.invariant) {
             return None;
         }
-        let hi = match self.invariants.at(natural, condition.bound)? {
-            Invariant::Outside(hi) => Hi::Outside(hi),
-            Invariant::Word(literal) => Hi::ReemittedWord(literal),
-        };
+        let hi = self.bound(condition.bound)?;
+        if matches!(hi, Bound::Computed { .. }) && !self.only_enters_the_header(entering) {
+            return None;
+        }
 
         let ty = self.cfg.val_types[&condition.counter].clone();
         if !matches!(ty, Ty::Int(_))
@@ -155,9 +208,57 @@ impl Recognizer<'_> {
             exit_args: else_args.clone(),
             at: *at,
             hi,
-            ty,
-            span: condition.span,
         })
+    }
+
+    fn bound(&self, value: ValueId) -> Option<Bound> {
+        let mut steps = Vec::new();
+        Some(match self.evaluate(value, &mut steps)? {
+            Operand::Outside(value) => Bound::Outside(value),
+            Operand::Step(value) => Bound::Computed { steps, value },
+        })
+    }
+
+    fn evaluate(&self, value: ValueId, steps: &mut Vec<Step>) -> Option<Operand> {
+        let natural = &self.loop_.natural;
+        if let Some(Invariant::Outside(value)) = self.invariants.at(natural, value) {
+            return Some(Operand::Outside(value));
+        }
+        if steps.iter().any(|step| step.dst == value) {
+            return Some(Operand::Step(value));
+        }
+        let inst = self.cfg.blocks[natural.header.0]
+            .insts
+            .iter()
+            .find(|inst| inst_info::defs(&inst.kind).contains(&value))?;
+        let kind = match &inst.kind {
+            InstKind::Const { .. } => match self.invariants.at(natural, value)? {
+                Invariant::Word(literal) => StepKind::Word(literal),
+                Invariant::Outside(_) => return None,
+            },
+            InstKind::BinOp {
+                op, left, right, ..
+            } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => StepKind::Wrapping {
+                op: Wrapping::of(*op)?,
+                left: self.evaluate(*left, steps)?,
+                right: self.evaluate(*right, steps)?,
+            },
+            _ => return None,
+        };
+        steps.push(Step {
+            span: inst.span,
+            dst: value,
+            kind,
+        });
+        Some(Operand::Step(value))
+    }
+
+    fn only_enters_the_header(&self, block: BlockIdx) -> bool {
+        let header = self.cfg.blocks[self.loop_.natural.header.0].label;
+        matches!(
+            &self.cfg.blocks[block.0].terminator,
+            Terminator::Jump { label, .. } if *label == header
+        )
     }
 
     fn condition(&self, header: BlockIdx, cond: ValueId) -> Option<Condition> {
@@ -173,7 +274,6 @@ impl Recognizer<'_> {
                 } if dst == cond => Some(Condition {
                     counter: left,
                     bound: right,
-                    span: inst.span,
                 }),
                 InstKind::BinOp {
                     dst,
@@ -183,7 +283,6 @@ impl Recognizer<'_> {
                 } if dst == cond => Some(Condition {
                     counter: right,
                     bound: left,
-                    span: inst.span,
                 }),
                 _ => None,
             })
@@ -238,18 +337,36 @@ fn const_literals(cfg: &CfgBody) -> FxHashMap<ValueId, Literal> {
 
 impl Counted {
     fn apply(self, cfg: &mut CfgBody) {
+        let ty = cfg.val_types[&self.at].clone();
         let hi = match self.hi {
-            Hi::Outside(hi) => hi,
-            Hi::ReemittedWord(value) => {
-                let dst = fresh(cfg, &self.ty);
-                cfg.blocks[self.entering.0].insts.push(Inst {
-                    span: self.span,
-                    kind: InstKind::Const { dst, value },
-                });
-                dst
+            Bound::Outside(hi) => hi,
+            Bound::Computed { steps, value } => {
+                let mut renamed: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+                for step in steps {
+                    let copy = fresh(cfg, &cfg.val_types[&step.dst].clone());
+                    let read = |operand: Operand| match operand {
+                        Operand::Outside(value) => value,
+                        Operand::Step(value) => renamed[&value],
+                    };
+                    let kind = match step.kind {
+                        StepKind::Word(value) => InstKind::Const { dst: copy, value },
+                        StepKind::Wrapping { op, left, right } => InstKind::BinOp {
+                            dst: copy,
+                            op: op.op(),
+                            left: read(left),
+                            right: read(right),
+                        },
+                    };
+                    cfg.blocks[self.entering.0].insts.push(Inst {
+                        span: step.span,
+                        kind,
+                    });
+                    renamed.insert(step.dst, copy);
+                }
+                renamed[&value]
             }
         };
-        let counter = fresh(cfg, &self.ty);
+        let counter = fresh(cfg, &ty);
         cfg.blocks[self.body_block.0].params.insert(0, counter);
         cfg.blocks[self.header.0].terminator = Terminator::For {
             source: ForSource::Range { at: self.at, hi },

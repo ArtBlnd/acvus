@@ -248,7 +248,7 @@ struct BlockText {
     terminator: String,
 }
 
-fn assert_terminator_alone_changes(source: &str, literal_bound: bool) {
+fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
     let i = Interner::new();
     let module = lowered_script_module(&i, source, &[]).unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(module.main);
@@ -299,32 +299,107 @@ fn assert_terminator_alone_changes(source: &str, literal_bound: bool) {
             grew.push(is.insts[was.insts.len()..].to_vec());
         }
     }
-    match literal_bound {
-        true => {
-            let [added] = &grew[..] else {
-                panic!("one block gained the bound's copy: {grew:?}");
-            };
-            let [constant] = &added[..] else {
-                panic!("one instruction: {added:?}");
-            };
-            assert!(constant.starts_with("Const"), "{constant}");
-        }
-        false => assert_eq!(grew, Vec::<Vec<String>>::new()),
-    }
+    let grew: Vec<&str> = grew
+        .iter()
+        .flatten()
+        .map(|inst| {
+            inst.split(|c: char| !c.is_alphanumeric())
+                .next()
+                .expect("a `Debug` of an instruction starts with its kind")
+        })
+        .collect();
+    assert_eq!(
+        grew, added,
+        "the entering block gains the bound's computation and nothing else"
+    );
 }
 
 #[test]
 fn the_pass_rewrites_the_terminator_alone() {
-    assert_terminator_alone_changes(
+    assert_computation_alone_is_added(
         "let n = 10; let s = 0; let i = 0; while i < n { s = s + i; i = i + 1; } s + i",
-        false,
+        &[],
     );
 }
 
 #[test]
 fn a_literal_bound_adds_its_copy_and_nothing_else() {
-    assert_terminator_alone_changes(
+    assert_computation_alone_is_added(
         "let s = 0; let i = 0; while i < 10 { s = s + i; i = i + 1; } s + i",
-        true,
+        &["Const"],
+    );
+}
+
+const UNFOLDED_N_AND_M: &str = "let n = [1, 2, 3, 4, 5].len(); let m = [1, 2, 3].len();";
+
+#[test]
+fn a_bound_the_header_computes_from_invariant_operands_is_a_range_for() {
+    for bound in ["n * 2", "n + m", "(n - 1) * m"] {
+        assert_converted(&format!(
+            "{UNFOLDED_N_AND_M} let s = 0; let i = 0; while i < {bound} {{ s = s + i; i = i + 1; }} s"
+        ));
+    }
+}
+
+#[test]
+fn a_computed_bound_nested_in_a_for_reads_the_outer_counter() {
+    let o = Optimized::of(
+        "let s = 0; for j in 0..5 { let i = 0; while i < j * 2 + 1 { s = s + i; i = i + 1; } } s",
+    );
+    assert!(
+        o.nest.iter().all(|(_, l)| matches!(
+            l.kind,
+            LoopKind::For {
+                source: ForSource::Range { .. }
+            }
+        )),
+        "both loops are range `for`s: {:?}",
+        o.nest.iter().map(|(_, l)| l.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_computed_bound_over_an_operand_the_loop_writes_is_declined() {
+    assert_declined(&format!(
+        "{UNFOLDED_N_AND_M} let s = 0; let i = 0; \
+         while i < n * 2 {{ s = s + i; n = n - 1; i = i + 1; }} s"
+    ));
+}
+
+#[test]
+fn a_computed_bound_that_can_trap_is_declined() {
+    for bound in ["n / m", "n % m"] {
+        assert_declined(&format!(
+            "{UNFOLDED_N_AND_M} let s = 0; let i = 0; while i < {bound} {{ s = s + i; i = i + 1; }} s"
+        ));
+    }
+}
+
+/// `len` is declared `pure`, and so is `unwrap`, which panics: no declared
+/// fact says a call returns, so a call is never evaluated ahead of the
+/// header, whether or not the loop writes what it reads.
+#[test]
+fn a_bound_that_calls_an_extern_is_declined() {
+    assert_declined(
+        "let v = [1, 2, 3]; let s = 0; let i = 0; \
+         while i < v.len() { s = s + i; i = i + 1; } s",
+    );
+}
+
+#[test]
+fn a_len_bound_over_a_vector_the_loop_writes_is_declined() {
+    assert_declined(
+        "let v = vec([1]); let s = 0; let i = 0; \
+         while i < v.len() { if i < 3 { v.push(i); }; s = s + i; i = i + 1; } s",
+    );
+}
+
+#[test]
+fn the_pass_adds_the_computation_of_the_bound_and_nothing_else() {
+    assert_computation_alone_is_added(
+        &format!(
+            "{UNFOLDED_N_AND_M} let s = 0; let i = 0; while i < n * 2 + m {{ s = s + i; i = i + 1; }} s + i"
+        ),
+        &["Const", "BinOp", "BinOp"],
     );
 }

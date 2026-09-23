@@ -600,14 +600,20 @@ trip count, IV canonicalization, the region and the lowerer's split
    - `c` is `i < n` or `n > i`, computed in the header;
    - `i` is a header parameter that every entering edge sends `b` and every
      back edge sends `i + 1`, with `1` the integer one (RFC-0066 rule 4);
-   - `n` is invariant in the loop (RFC-0066 rule 3);
+   - `n` is invariant in the loop (RFC-0066 rule 3), or the header
+     computes it as a term of rule 3 from such values: word literals and
+     values defined outside the loop, joined by `+`, `-` and `*` at an
+     integer width;
    - `i`, `b` and `n` have one integer type. A range admits every width
      (RFC-0057 rule 1), so no width is declined and nothing is cast;
    - no block of the loop but the header has an edge out of it or returns,
      so a `break`, a `return` or a branch into a block that diverges
      declines;
    - the body block and the exit block each have one predecessor, the
-     header.
+     header;
+   - when the pass writes the bound above the header, the entering block
+     ends in a jump to the header, so what it writes runs once per entry
+     and on no other path.
 
 2. **The terminator alone changes.** The header's branch becomes
    `For { source: Range { at: b, hi: n } }` with the branch's two edges and
@@ -618,13 +624,26 @@ trip count, IV canonicalization, the region and the lowerer's split
    loses its reader and `dce` sweeps it, and with it `i` and its `i + 1`
    when the comparison was their only reader. The pass computes no exit
    value: the exit edge carries `i` as it did, and what `i` is after the
-   loop is IV canonicalization's (RFC-0066 rule 7). A bound that is a word
-   constant inside the loop, as `while i < 10` lowers, is written again at
-   the end of the entering block, because the machine reads a range's
-   bounds on the entering edge (RFC-0057 rule 7). That is RFC-0056's
-   re-emission of a word.
+   loop is IV canonicalization's (RFC-0066 rule 7). A bound the header
+   computes is computed again at the end of the entering block from the
+   same operands, because the machine reads a range's bounds on the
+   entering edge (RFC-0057 rule 7). For a word constant, as `while i < 10`
+   lowers, that is RFC-0056's re-emission of a word. The header's own
+   computation loses its reader with the comparison.
 
-3. **The two loops are one program at every entry.** Both start at `b` on
+3. **A computed bound is the same value above the header.** Its operands
+   are the same on every iteration, and `+`, `-` and `*` wrap at their
+   width (RFC-0037): none can trap, has an effect or reads storage. One
+   evaluation where the loop is entered therefore gives the value each
+   header visit computes, on an entry that runs the body zero times too.
+   A bound that holds a `/` or a `%`, which trap (RFC-0037), or a call,
+   stays a `while`. An extern's declared effect says whether a call may be
+   reissued and what contexts it touches, and not whether it returns:
+   `unwrap` is `pure` and panics. So `while i < v.len()` is declined even
+   where the loop does not write `v`, and admitting it needs a declared
+   fact that a call returns.
+
+4. **The two loops are one program at every entry.** Both start at `b` on
    each entry, so the `k`-th visit of the header holds `b + k` in both. The
    range runs its body while its counter is below `n`, by the comparison
    `i < n` makes at the same width, and advances by one, wrapping as
@@ -632,21 +651,23 @@ trip count, IV canonicalization, the region and the lowerer's split
    runs only after the counter compared below `n`, so it never wraps, and
    `n` at the width's maximum ends both loops at `n`.
 
-4. **Placement.** The pass runs after the SSA construction, which makes
+5. **Placement.** The pass runs after the SSA construction, which makes
    `i` a header parameter, and after the fold, which settles a constant
    bound. It runs before `dce`, which sweeps the comparison, and so before
    `code_motion`, `lsr` and IV canonicalization, each of which then sees the
-   loop as a `for`.
+   loop as a `for`. A bound the header computes is not hoisted yet at that
+   point, which is why rule 2 computes it again rather than finding it
+   above the header.
 
 **Why.** A counted `while` is common, and a `for` is what every loop pass
 and the lowerer read a traversal from. Rewriting the terminator alone keeps
 the rewrite checkable by reading it: the body and the value after the loop
 are the ones the source wrote.
 **Cost.** Every other form stays a `while`: `i <= n`, a step of two, a
-bound computed in the header such as `while i < v.len()`, and a loop with a
-`break`. A literal bound costs one constant above the header. Until IV
-canonicalization replaces `i` with the counter, a body that reads `i`
-carries both. Every converted loop loses its head's comparison, and in the
+bound that divides or calls such as `while i < v.len()`, and a loop with a
+`break`. A computed bound costs its instructions above the header, once
+per entry, and a literal bound one constant. Until IV canonicalization
+replaces `i` with the counter, a body that reads `i` carries both. Every converted loop loses its head's comparison, and in the
 attention kernel each loop that holds another prepares one more back-edge
 move than its `while` did.
 **Rejected.**
@@ -659,3 +680,11 @@ move than its `while` did.
   it from the trip count is IV canonicalization's.
 - Declining `n > i` — it is `i < n` on integers, and the spelling would
   decide the optimization.
+- Running after `code_motion`, which would have hoisted the bound — the
+  hoist moves no call, so `v.len()` gains nothing, and it moves the
+  header's `/` by control equivalence, so which bound is promoted would be
+  that pass's rule instead of this one's. The pass would also need a
+  `dce` after it to sweep the comparison, and `code_motion` would see a
+  `while` where it now sees a `for`.
+- Moving a `pure` call whose storage the loop does not write — the
+  effect does not say the call returns, so a panic could move.
