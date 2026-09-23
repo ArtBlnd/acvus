@@ -204,7 +204,7 @@ identity, and with it the checker states what a signature would have.
   parameter it equals the union, and it would rest on a rule the macro
   states rather than one Rust checks.
 
-## RFC-0079: A type names its region positions, and a call follows the flows its callee's type states
+## RFC-0079: A type names its region positions, and a call joins each output from the inputs its callee's signature labels alike
 
 Status: Proposed
 
@@ -230,51 +230,75 @@ Status: Proposed
    storage `m`'s loans name, so a write never shrinks a region there. An
    assign of a whole local slot replaces its positions: nothing names the
    slot while it is assigned (RFC-0029).
-5. **A function type states its flows.** A flow is an edge from a result
-   position to a parameter position or to the capture position, written as
-   a pair of type paths and made positional when the types are frozen. A
-   call's result position is the join of the argument positions its flows
-   name. A lambda's flows are inferred by the type checker from its body; a
-   named function's are a flow variable per member of its call-graph
-   component, solved to the least fixpoint as its effect is (RFC-0064).
-   Where two function types meet, their flows join by union. A call through
-   a value of function type reads the flows from that type, as a direct
-   call does.
-6. **An extern states flows with lifetimes.** `#[extern_fn]` and
-   `#[derive(ExternType)]` take lifetime parameters. A result position
-   written with `'a` flows from every parameter position written with `'a`.
-   An elided lifetime follows Rust's elision rules; `'static` names no loan.
-   The handler is generic over the call's lifetime, so a carrier (`Ref`,
-   `Slice`, `Closure`) is branded with it and Rust refuses keeping it past
-   the call. An `Instance` names a prepared entry, not a program's storage,
-   and is branded with the run's lifetime instead. A type's brand is its
-   parts': an extension type's is its payload's, so a carrier it holds is
-   behind a region parameter it declares and never a type argument it holds
-   by value, and an `Erased` has a brand only where the type it was erased
-   from is `Unbranded` (RFC-0076 rule 1).
+5. **A function type labels its positions.** Each parameter and result
+   position carries a label: a region the signature names, or the k-th
+   position of a type variable, `(T, k)`. The *outputs* are the result's
+   positions and the positions a `&mut` parameter points at; the inputs are
+   every parameter position, a `&mut` pointee's included, since a write
+   joins (rule 4). At a call each output position becomes the join of the
+   input positions that share its label. A value of type `T` is opaque to
+   the callee, so its k-th position reaches only a k-th position of `T`. A
+   lambda's labels are inferred by the type checker from its body; a named
+   function's are a label variable per member of its call-graph component,
+   solved to the least fixpoint as its effect is (RFC-0064). Where two
+   function types meet, their labels join by union. A call through a value
+   of function type reads the labels from that type, as a direct call
+   does.
+6. **An extern's labels are its Rust signature.** `#[extern_fn]` and
+   `#[derive(ExternType)]` take lifetime parameters. A position written
+   with `'a` is labelled `'a`, an elided lifetime is labelled by Rust's
+   elision rules, `'static` names no loan, and a position inside a type
+   variable `T` is labelled `(T, k)`. Rust checks the handler against the
+   same signature, so the labels the checker reads are the flows the body
+   can perform. The handler is generic over the call's lifetime, so a
+   carrier (`Ref`, `Slice`, `Closure`) is branded with it and Rust refuses
+   keeping it past the call. An `Instance` names a prepared entry, not a
+   program's storage, and is branded with the run's lifetime instead. A
+   type's brand is its parts': an extension type's is its payload's, so a
+   carrier it holds is behind a region parameter it declares and never a
+   type argument it holds by value, and an `Erased` has a brand only where
+   the type it was erased from is `Unbranded` (RFC-0076 rule 1).
 7. **A box key erases lifetimes.** `Canonical::Canon` fills every lifetime
    with `'static`; a box is keyed there, and a value is read out at its
    branded form. Every box key is `'static`.
-8. **The check is RFC-0064's.** A loan in any position of a live value is
-   held; invalidating it is a conflict. When this decision is accepted,
-   RFC-0064 rules 2, 3 and 6 become its rules 5 and 6, and an option,
-   result or enum payload is no longer refused for holding a reference;
-   RFC-0064 rule 5 is otherwise unchanged.
+8. **A type variable is opaque or lent.** An opaque variable, the
+   default, is filled only by a type with no position, so no loan reaches
+   the callee through it and the callee may keep its values. A lent
+   variable, declared so, may be filled by any type; the handler receives
+   its values at the call's brand, as a carrier, so Rust refuses keeping
+   them past the call. Where the brand cannot be carried, a lent variable
+   is asserted not kept with `unsafe` (RFC-0080).
+9. **A value crossing out of the body holds no loan.** A body's result to
+   the host, a context write and a spawn's argument are refused where any
+   of their positions may hold a loan; a lambda or named function's result
+   holds only `Param` loans (RFC-0064 rule 5).
+10. **The check is RFC-0064's.** A loan in any position of a live value is
+    held; invalidating it is a conflict. When this decision is accepted,
+    RFC-0064 rules 2, 3 and 6 become its rules 5 and 6, and an option,
+    result or enum payload is no longer refused for holding a reference;
+    RFC-0064 rule 5 is otherwise unchanged.
 
 **Why.** One region per value cannot say which loans a value reached through
 it holds: `&Option<&T>` read through its outer reference lost the inner
 loan, and a write through `&mut Option<&T>` lost the loan written. Positions
-kept by the storage give the loans a place to stay, and a flow on the
-callee's type makes a direct call, a lambda call and a call through a
-function value one rule. Loans stay sets joined by union, so no outlives
+kept by the storage give the loans a place to stay. Labels read from one
+signature make an extern's flows the ones Rust checks its handler for, and
+make a direct call, a lambda call and a call through a function value one
+rule; a write through an extern's `&mut` (`push_back(&mut d, &s)`) is an
+output like a result. Loans stay sets joined by union, so no outlives
 constraint is solved.
 **Cost.** Every value's region becomes a vector; a function type carries
-its flows, and meeting two function types joins them. Extern authors write
+its labels, and meeting two function types joins them. A container extern
+declares its type variables lent. Extern authors write
 lifetimes where a result borrows from more than one parameter, and an
 extension that holds a carrier declares a region parameter.
 **Rejected.**
 - Region variables solved by the type checker — loans exist per MIR slot
   and instruction; the checker would solve what the MIR check solves again.
+- Flows as written edges beside lifetimes — a type variable's flows would
+  be a second rule; a label covers lifetimes and type variables alike.
+- Every type variable lent — every generic handler would carry a brand for
+  values that hold no loan.
 - Flows from body summaries alone — a call through a function value has no
   body, and would fall back to the union of its arguments: a second rule.
 - One region with a transitive deref — a value read through `&o` would also
