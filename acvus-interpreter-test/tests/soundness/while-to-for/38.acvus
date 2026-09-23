@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let d = 0; let s = 0; let i = 0; while i < { d = @n / @d0; @n % @d0 } { s = s + i + d; i = i + 1; } s * 100 + i

@@ -1,0 +1,2 @@
+// expect attempt to calculate the remainder with overflow
+let lo = @min8 as i8; let d = @minus_one as i8; let s = 0i8; let i = 0i8; while i < lo % d { s = s + i; i = i + 1i8; } s

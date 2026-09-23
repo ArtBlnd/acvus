@@ -1,0 +1,2 @@
+// expect 0
+let v = vec([1]); v.clear(); let s = v.as_slice(); let t = 0; let i = 0; while i < s.len() { t = t + 1; i = i + 1; } t * 100 + (i as i64)

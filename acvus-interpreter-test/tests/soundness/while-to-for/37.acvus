@@ -1,0 +1,2 @@
+// expect 605
+let d = 0; let s = 0; let i = 0; while i < { d = opaque(@n); @n / 2 } { s = s + i + d; i = i + 1; } s * 10 + i

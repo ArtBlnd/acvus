@@ -1,0 +1,2 @@
+// expect attempt to divide with overflow
+let s = 0; let i = 0; while i < @min / @minus_one { s = s + i; i = i + 1; } s * 100 + i

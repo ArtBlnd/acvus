@@ -1,0 +1,2 @@
+// expect 1004
+let v = [1, 2, 3, 4]; let s = v.as_slice(); let t = 0; let i = 0; while i < s.len() { t = t + v[i]; i = i + 1; } t * 100 + (i as i64)

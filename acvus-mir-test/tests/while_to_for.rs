@@ -10,8 +10,10 @@ use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{ForSource, ValueId};
-use acvus_mir::optimize::{dce, fold, ssa_pass, while_to_for};
+use acvus_mir::optimize::{dce, fold, reborrow, ssa_pass, while_to_for};
+use acvus_mir::ty::{Effect, EffectTerm, Instances, ParamTerm, Poly, PolyTy, Ty, lift_to_poly};
 use acvus_mir_test::lowered_script_module;
 use acvus_utils::Interner;
 
@@ -23,12 +25,17 @@ struct Promoted {
 
 impl Promoted {
     fn of(source: &str) -> Self {
+        Self::with_externs(source, |_| Vec::new())
+    }
+
+    fn with_externs(source: &str, externs: impl FnOnce(&Interner) -> Vec<Function>) -> Self {
         let i = Interner::new();
-        let module =
-            lowered_script_module(&i, source, &[]).unwrap_or_else(|e| panic!("{source}\n{e}"));
+        let module = lowered_script_module(&i, source, &externs(&i))
+            .unwrap_or_else(|e| panic!("{source}\n{e}"));
         let mut cfg = promote(module.main);
         ssa_pass::run(&mut cfg);
         fold::run(&mut cfg);
+        reborrow::run(&mut cfg);
         while_to_for::run(&mut cfg);
         dce::run(&mut cfg);
         let invariants = Invariants::of(&cfg);
@@ -138,7 +145,10 @@ fn assert_converted(source: &str) -> Promoted {
 }
 
 fn assert_declined(source: &str) {
-    let o = Promoted::of(source);
+    assert_still_a_while(&Promoted::of(source), source);
+}
+
+fn assert_still_a_while(o: &Promoted, source: &str) {
     let loop_ = o.sole_loop();
     assert!(
         matches!(loop_.kind, LoopKind::While),
@@ -367,26 +377,6 @@ fn a_computed_bound_over_an_operand_the_loop_writes_is_declined() {
 }
 
 #[test]
-fn a_computed_bound_that_can_trap_is_declined() {
-    for bound in ["n / m", "n % m"] {
-        assert_declined(&format!(
-            "{UNFOLDED_N_AND_M} let s = 0; let i = 0; while i < {bound} {{ s = s + i; i = i + 1; }} s"
-        ));
-    }
-}
-
-/// `len` is declared `pure`, and so is `unwrap`, which panics: no declared
-/// fact says a call returns, so a call is never evaluated ahead of the
-/// header, whether or not the loop writes what it reads.
-#[test]
-fn a_bound_that_calls_an_extern_is_declined() {
-    assert_declined(
-        "let v = [1, 2, 3]; let s = 0; let i = 0; \
-         while i < v.len() { s = s + i; i = i + 1; } s",
-    );
-}
-
-#[test]
 fn a_len_bound_over_a_vector_the_loop_writes_is_declined() {
     assert_declined(
         "let v = vec([1]); let s = 0; let i = 0; \
@@ -402,4 +392,131 @@ fn the_pass_adds_the_computation_of_the_bound_and_nothing_else() {
         ),
         &["Const", "BinOp", "BinOp"],
     );
+}
+
+#[test]
+fn a_bound_that_divides_is_a_range_for() {
+    for bound in ["n / 2", "n % m", "n / m + n % m"] {
+        assert_converted(&format!(
+            "{UNFOLDED_N_AND_M} let s = 0; let i = 0; while i < {bound} {{ s = s + i; i = i + 1; }} s"
+        ));
+    }
+}
+
+#[test]
+fn a_len_bound_over_a_slice_made_above_the_loop_is_a_range_for() {
+    assert_converted(
+        "let v = [1, 2, 3]; let s = v.as_slice(); let t = 0; let i = 0; \
+         while i < s.len() { t = t + i; i = i + 1; } t",
+    );
+}
+
+#[test]
+fn a_len_bound_over_a_reference_made_above_the_loop_is_a_range_for() {
+    assert_converted(
+        "let v = [1, 2, 3]; let r = &v; let t = 0; let i = 0; \
+         while i < r.len() { t = t + i; i = i + 1; } t",
+    );
+}
+
+#[test]
+fn a_pure_call_combined_with_word_operations_is_a_range_for() {
+    assert_converted(&format!(
+        "{UNFOLDED_N_AND_M} let v = [1, 2, 3]; let s = v.as_slice(); let t = 0; let i = 0; \
+         while i < s.len() * 2 + n {{ t = t + i; i = i + 1; }} t"
+    ));
+}
+
+#[test]
+fn a_pure_call_adds_its_copy_in_the_order_of_the_header() {
+    assert_computation_alone_is_added(
+        "let v = [1, 2, 3]; let s = v.as_slice(); let t = 0; let i = 0; \
+         while i < s.len() / 2 { t = t + i; i = i + 1; } t + i",
+        &["FunctionCall", "Const", "BinOp"],
+    );
+}
+
+/// The header makes `&v` on every visit, so the receiver is not defined
+/// outside the loop.
+#[test]
+fn a_len_bound_over_a_receiver_the_header_makes_is_declined() {
+    assert_declined(
+        "let v = [1, 2, 3]; let s = 0; let i = 0; \
+         while i < v.len() { s = s + i; i = i + 1; } s",
+    );
+}
+
+#[test]
+fn a_reference_a_step_computes_is_declined_as_an_argument() {
+    assert_declined(
+        "let v = [1, 2, 3]; let r = &v; let t = 0; let i = 0; \
+         while i < r.as_slice().len() { t = t + i; i = i + 1; } t",
+    );
+}
+
+#[test]
+fn a_pure_call_given_a_mutable_reference_is_declined() {
+    assert_declined(
+        "let v = vec([5, 6, 7]); let r = &mut v; let t = 0; let i = 0; \
+         while i < r.remove(0) { t = t + i; i = i + 1; } t",
+    );
+}
+
+fn opaque(i: &Interner) -> Vec<Function> {
+    vec![Function {
+        qref: QualifiedRef::root(i.intern("opaque")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            effect_bounds: vec![],
+            instances: Instances::default(),
+            requires: vec![],
+        },
+        ty: PolyTy::Fn {
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::I64)),
+            captures: vec![],
+            effect: EffectTerm::<Poly>::Known(Effect::OPAQUE),
+        },
+    }]
+}
+
+const WORD_N_AND_M: &str = "let n = [1, 2, 3, 4, 5].len() as i64; let m = [1, 2, 3].len() as i64;";
+
+#[test]
+fn a_bound_that_calls_an_extern_not_declared_pure_is_declined() {
+    let source = format!(
+        "{WORD_N_AND_M} let s = 0; let i = 0; while i < opaque(n) {{ s = s + i; i = i + 1; }} s"
+    );
+    assert_still_a_while(&Promoted::with_externs(&source, opaque), &source);
+}
+
+#[test]
+fn an_effect_before_a_step_that_traps_is_declined() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let s = 0; let i = 0; \
+         while i < {{ d = opaque(n); n / m }} {{ s = s + i + d; i = i + 1; }} s"
+    );
+    assert_still_a_while(&Promoted::with_externs(&source, opaque), &source);
+}
+
+#[test]
+fn a_trap_before_a_step_that_traps_is_declined() {
+    assert_declined(&format!(
+        "{UNFOLDED_N_AND_M} let d = 0; let s = 0; let i = 0; \
+         while i < {{ d = n / m; n % m }} {{ s = s + i + d; i = i + 1; }} s"
+    ));
+}
+
+#[test]
+fn an_effect_before_a_step_that_cannot_trap_is_no_obstacle() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let s = 0; let i = 0; \
+         while i < {{ d = opaque(n); n * m }} {{ s = s + i + d; i = i + 1; }} s"
+    );
+    let o = Promoted::with_externs(&source, opaque);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
 }

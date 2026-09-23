@@ -605,9 +605,7 @@ trip count, IV canonicalization, the region and the lowerer's split
    - `i` is a header parameter that every entering edge sends `b` and every
      back edge sends `i + 1`, with `1` the integer one (RFC-0066 rule 4);
    - `n` is invariant in the loop (RFC-0066 rule 3), or the header
-     computes it as a term of rule 3 from such values: word literals and
-     values defined outside the loop, joined by `+`, `-` and `*` at an
-     integer width;
+     computes it from such values in the steps rule 3 admits;
    - `i`, `b` and `n` have one integer type. A range admits every width
      (RFC-0057 rule 1), so no width is declined and nothing is cast;
    - no block of the loop but the header has an edge out of it or returns,
@@ -635,17 +633,40 @@ trip count, IV canonicalization, the region and the lowerer's split
    lowers, that is RFC-0056's re-emission of a word. The header's own
    computation loses its reader with the comparison.
 
-3. **A computed bound is the same value above the header.** Its operands
-   are the same on every iteration, and `+`, `-` and `*` wrap at their
-   width (RFC-0037): none can trap, has an effect or reads storage. One
-   evaluation where the loop is entered therefore gives the value each
-   header visit computes, on an entry that runs the body zero times too.
-   A bound that holds a `/` or a `%`, which trap (RFC-0037), or a call,
-   stays a `while`. An extern's declared effect says whether a call may be
-   reissued and what contexts it touches, and not whether it returns:
-   `unwrap` is `pure` and panics. So `while i < v.len()` is declined even
-   where the loop does not write `v`, and admitting it needs a declared
-   fact that a call returns.
+3. **A computed bound is the header's first visit, moved to the entry.**
+   The header runs on every entry before any body block. A step computed
+   from word literals, values defined outside the loop and earlier steps
+   gives the same value, and raises the same trap, on every visit, when
+   the step is deterministic:
+   - `+`, `-`, `*`, `/` and `%` at an integer width. The machine computes
+     each from its two words at the width (RFC-0037): `+`, `-` and `*`
+     wrap; at every width `/` panics with `attempt to divide by zero` on a
+     zero divisor and `%` with `attempt to calculate the remainder with a
+     divisor of zero`; at a signed width `MIN / -1` panics with `attempt
+     to divide with overflow` and `MIN % -1` with `attempt to calculate the
+     remainder with overflow`; an unsigned width has no other failure.
+   - a call of an extern whose declared effect is `pure` and touches no
+     context, the author's promise (RFC-0080 rule 3). Each argument is a
+     shared reference defined outside the loop, which the borrow check
+     keeps unwritten while the loop runs, since the header reads it on
+     every visit (RFC-0064), or a scalar. A `&mut` argument is declined,
+     since the call writes through it; so is a reference the header makes
+     (`while i < v.len()`, `&v` made on each visit) or a step computes,
+     neither being defined outside, and any other argument, which the
+     header moves.
+
+   Evaluating the steps once, in the header's order, at the end of the
+   entering block is exact when moving them ahead of the header's other
+   instructions changes nothing observable. A `/`, a `%` and a call can
+   trap, since `pure` does not say that a call returns: `unwrap` is `pure`
+   and panics. So when the bound holds one, no instruction before its last
+   such step in the header, other than a step of the bound, may have an
+   effect or trap; only a constant, a reference, a cast and a binary
+   operation that is not an integer `/` or `%` qualify. Then the entry
+   raises exactly the trap the first header visit raised, on an entry that
+   runs the body zero times too, and a bound with no trapping step moves
+   freely. One rule covers `/`, `%` and a `pure` call; which of them trap
+   and when does not enter it.
 
 4. **The two loops are one program at every entry.** Both start at `b` on
    each entry, so the `k`-th visit of the header holds `b + k` in both. The
@@ -668,8 +689,9 @@ and the lowerer read a traversal from. Rewriting the terminator alone keeps
 the rewrite checkable by reading it: the body and the value after the loop
 are the ones the source wrote.
 **Cost.** Every other form stays a `while`: `i <= n`, a step of two, a
-bound that divides or calls such as `while i < v.len()`, and a loop with a
-`break`. A computed bound costs its instructions above the header, once
+bound that calls through a reference the header makes, such as
+`while i < v.len()`, a bound whose trapping step follows an effect or
+another trap, and a loop with a `break`. A computed bound costs its instructions above the header, once
 per entry, and a literal bound one constant. Until IV canonicalization
 replaces `i` with the counter, a body that reads `i` carries both. Every converted loop loses its head's comparison, and in the
 attention kernel each loop that holds another prepares one more back-edge
@@ -690,8 +712,9 @@ move than its `while` did.
   that pass's rule instead of this one's. The pass would also need a
   `dce` after it to sweep the comparison, and `code_motion` would see a
   `while` where it now sees a `for`.
-- Moving a `pure` call whose storage the loop does not write — the
-  effect does not say the call returns, so a panic could move.
+- A `no_panic` declaration for promotion — the header's first visit
+  already raises the trap the entry raises; a later reader, hoisting from a
+  body, may add it.
 
 ## RFC-0083: a pure operation computed on every path to it is the value computed first
 

@@ -20,12 +20,20 @@
 //! before the header runs. A bound the header computes is therefore
 //! computed again at the end of the entering block, from the same operands:
 //! a literal, as `while i < 10` lowers, the way `optimize::lsr` writes a
-//! literal again above a header (RFC-0056), and `@n * 2` the same way. That
-//! one evaluation gives the value every header visit computes, on an entry
-//! that runs the body zero times as well, because nothing a [`Step`] does
-//! can trap, has an effect or reads storage. A `/` or `%` can trap, and an
-//! extern's declared effect does not say that it returns: `unwrap` is
-//! `pure` and panics. A bound that holds either keeps the loop a `while`.
+//! literal again above a header (RFC-0056), and `@n * 2` the same way.
+//!
+//! A [`Step`] is deterministic: a word operation, or a call of an extern
+//! declared `pure` whose reference arguments are shared and defined
+//! outside the loop, which the borrow check keeps unwritten while the
+//! header reads them (RFC-0064). Over operands defined outside the loop it
+//! gives the same value, and raises the same trap, on every header visit.
+//! The header runs on every entry before any body block, so one evaluation
+//! on the entering edge is that first visit moved ahead of the header's
+//! other instructions. A `/`, a `%` and a call can trap, so a bound holding
+//! one is promoted only when no header instruction before its last such
+//! step, other than a step of the bound, has an effect or can trap: then
+//! the entry raises exactly the trap the first visit raised, and in the
+//! header's order.
 
 use acvus_ast::{Literal, Span, SuffixedInt};
 
@@ -38,8 +46,8 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
-use crate::ty::Ty;
+use crate::ir::{Callee, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::ty::{Mutability, Ty};
 
 pub fn run(cfg: &mut CfgBody) {
     let domtree = DomTree::build(cfg);
@@ -72,17 +80,38 @@ enum Bound {
 
 struct Step {
     span: Span,
+    /// The copies are written in this order, so two steps that trap raise
+    /// in the order the header raised them.
+    header_position: usize,
     dst: ValueId,
     kind: StepKind,
 }
 
 enum StepKind {
     Word(Literal),
-    Wrapping {
-        op: Wrapping,
+    Arith {
+        op: Arith,
         left: Operand,
         right: Operand,
     },
+    Call {
+        callee: Callee,
+        callee_ty: Ty,
+        args: Vec<Operand>,
+    },
+}
+
+impl StepKind {
+    /// Whether evaluating the step may end the run. A `pure` extern
+    /// declares that the call may be reissued, not that it returns:
+    /// `unwrap` is `pure` and panics.
+    fn traps(&self) -> bool {
+        match self {
+            Self::Word(_) => false,
+            Self::Arith { op, .. } => op.traps(),
+            Self::Call { .. } => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -91,22 +120,26 @@ enum Operand {
     Step(ValueId),
 }
 
-/// `+`, `-` and `*` at an integer width wrap in the machine and cannot
-/// trap (RFC-0037). That is the machine's half of what lets the pass
-/// evaluate one of them ahead of the header.
+/// The integer operations a bound may hold. Each is a function of its two
+/// words at the width (RFC-0037): `+`, `-` and `*` wrap, and `/` and `%`
+/// panic on a zero divisor and on the signed minimum divided by `-1`.
 #[derive(Clone, Copy)]
-enum Wrapping {
+enum Arith {
     Add,
     Sub,
     Mul,
+    Div,
+    Rem,
 }
 
-impl Wrapping {
+impl Arith {
     fn of(op: BinOp) -> Option<Self> {
         match op {
             BinOp::Add => Some(Self::Add),
             BinOp::Sub => Some(Self::Sub),
             BinOp::Mul => Some(Self::Mul),
+            BinOp::Div => Some(Self::Div),
+            BinOp::Mod => Some(Self::Rem),
             _ => None,
         }
     }
@@ -116,6 +149,15 @@ impl Wrapping {
             Self::Add => BinOp::Add,
             Self::Sub => BinOp::Sub,
             Self::Mul => BinOp::Mul,
+            Self::Div => BinOp::Div,
+            Self::Rem => BinOp::Mod,
+        }
+    }
+
+    fn traps(self) -> bool {
+        match self {
+            Self::Add | Self::Sub | Self::Mul => false,
+            Self::Div | Self::Rem => true,
         }
     }
 }
@@ -217,7 +259,13 @@ impl Recognizer<'_> {
         let mut steps = Vec::new();
         Some(match self.evaluate(value, &mut steps)? {
             Operand::Outside(value) => Bound::Outside(value),
-            Operand::Step(value) => Bound::Computed { steps, value },
+            Operand::Step(value) => {
+                if !self.moves_ahead_unobserved(&steps) {
+                    return None;
+                }
+                steps.sort_by_key(|step| step.header_position);
+                Bound::Computed { steps, value }
+            }
         })
     }
 
@@ -229,10 +277,11 @@ impl Recognizer<'_> {
         if steps.iter().any(|step| step.dst == value) {
             return Some(Operand::Step(value));
         }
-        let inst = self.cfg.blocks[natural.header.0]
+        let (header_position, inst) = self.cfg.blocks[natural.header.0]
             .insts
             .iter()
-            .find(|inst| inst_info::defs(&inst.kind).contains(&value))?;
+            .enumerate()
+            .find(|(_, inst)| inst_info::defs(&inst.kind).contains(&value))?;
         let kind = match &inst.kind {
             InstKind::Const { .. } => match self.invariants.at(natural, value)? {
                 Invariant::Word(literal) => StepKind::Word(literal),
@@ -240,19 +289,76 @@ impl Recognizer<'_> {
             },
             InstKind::BinOp {
                 op, left, right, ..
-            } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => StepKind::Wrapping {
-                op: Wrapping::of(*op)?,
+            } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => StepKind::Arith {
+                op: Arith::of(*op)?,
                 left: self.evaluate(*left, steps)?,
                 right: self.evaluate(*right, steps)?,
+            },
+            InstKind::FunctionCall {
+                callee: callee @ Callee::Extern { .. },
+                callee_ty,
+                args,
+                ..
+            } if callee_ty.effect().is_some_and(|effect| effect.is_empty()) => StepKind::Call {
+                callee: callee.clone(),
+                callee_ty: callee_ty.clone(),
+                args: args
+                    .iter()
+                    .map(|&arg| self.argument(arg, steps))
+                    .collect::<Option<_>>()?,
             },
             _ => return None,
         };
         steps.push(Step {
             span: inst.span,
+            header_position,
             dst: value,
             kind,
         });
         Some(Operand::Step(value))
+    }
+
+    fn argument(&self, arg: ValueId, steps: &mut Vec<Step>) -> Option<Operand> {
+        match &self.cfg.val_types[&arg] {
+            Ty::Ref(mutability, _) => {
+                if *mutability == Mutability::Mut {
+                    return None;
+                }
+                match self.evaluate(arg, steps)? {
+                    outside @ Operand::Outside(_) => Some(outside),
+                    Operand::Step(_) => None,
+                }
+            }
+            ty if ty.is_scalar() => self.evaluate(arg, steps),
+            _ => None,
+        }
+    }
+
+    fn moves_ahead_unobserved(&self, steps: &[Step]) -> bool {
+        let Some(last_trap) = steps
+            .iter()
+            .filter(|step| step.kind.traps())
+            .map(|step| step.header_position)
+            .max()
+        else {
+            return true;
+        };
+        self.cfg.blocks[self.loop_.natural.header.0].insts[..last_trap]
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| !steps.iter().any(|step| step.header_position == *position))
+            .all(|(_, inst)| self.neither_acts_nor_traps(&inst.kind))
+    }
+
+    fn neither_acts_nor_traps(&self, kind: &InstKind) -> bool {
+        match kind {
+            InstKind::Const { .. } | InstKind::Ref { .. } | InstKind::Cast { .. } => true,
+            InstKind::BinOp { op, left, .. } => {
+                !(matches!(op, BinOp::Div | BinOp::Mod)
+                    && matches!(self.cfg.val_types[left], Ty::Int(_)))
+            }
+            _ => false,
+        }
     }
 
     fn only_enters_the_header(&self, block: BlockIdx) -> bool {
@@ -352,11 +458,22 @@ impl Counted {
                     };
                     let kind = match step.kind {
                         StepKind::Word(value) => InstKind::Const { dst: copy, value },
-                        StepKind::Wrapping { op, left, right } => InstKind::BinOp {
+                        StepKind::Arith { op, left, right } => InstKind::BinOp {
                             dst: copy,
                             op: op.op(),
                             left: read(left),
                             right: read(right),
+                        },
+                        StepKind::Call {
+                            callee,
+                            callee_ty,
+                            args,
+                        } => InstKind::FunctionCall {
+                            dst: copy,
+                            callee,
+                            callee_ty,
+                            args: args.into_iter().map(read).collect(),
+                            order: None,
                         },
                     };
                     cfg.blocks[self.entering.0].insts.push(Inst {
