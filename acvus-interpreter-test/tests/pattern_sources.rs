@@ -127,6 +127,54 @@ fn a_list_pattern_reads_its_head_and_its_tail() {
 }
 
 #[test]
+fn a_string_part_read_by_a_pattern_is_copied_and_the_place_keeps_it() {
+    runs_to(
+        "let e = A::X(\"s\".to_string()); let a = match e { A::X(t) => t, }; let b = match e { A::X(t) => t, }; a + &b",
+        "\"ss\"",
+    );
+    runs_to(
+        "let e = A::X(\"s\".to_string()); let a = match e { A::X(t) => t, }; let b = match e { A::X(t) => t, }; let c = match e { A::X(t) => t, }; a + &b + &c",
+        "\"sss\"",
+    );
+    runs_to(
+        "let o = Ok(\"o\".to_string()); let a = match o { Ok(t) => t, Err(e) => e, }; let b = match o { Ok(t) => t, Err(e) => e, }; a + &b",
+        "\"oo\"",
+    );
+    runs_to(
+        "let o = if true { Err(\"e\".to_string()) } else { Ok(\"o\".to_string()) }; let a = match o { Ok(t) => t, Err(e) => e, }; let b = match o { Ok(t) => t, Err(e) => e, }; a + &b",
+        "\"ee\"",
+    );
+    runs_to(
+        "let p = { s: \"a\".to_string(), n: 1, }; let a = match p { { s, n, } => s, _ => \"z\".to_string(), }; let b = match p { { s, n, } => s, _ => \"z\".to_string(), }; a + &b",
+        "\"aa\"",
+    );
+    runs_to(
+        "let p = (\"a\".to_string(), 1); let a = match p { (x, _) => x, _ => \"z\".to_string(), }; let b = match p { (x, _) => x, _ => \"z\".to_string(), }; a + &b",
+        "\"aa\"",
+    );
+    runs_to(
+        "let e = A::X({ s: \"q\".to_string(), n: 1, }); let a = match e { A::X({ s, n, }) => s, }; let b = match e { A::X({ s, n, }) => s, }; a + &b",
+        "\"qq\"",
+    );
+}
+
+#[test]
+fn a_place_whose_string_part_a_pattern_read_is_then_used_whole() {
+    runs_to(
+        "let e = A::X(\"s\".to_string()); let a = match e { A::X(t) => t, }; let g = |x| -> match x { A::X(t) => t, }; a + &g(e)",
+        "\"ss\"",
+    );
+    runs_to(
+        "let o = Ok(\"s\".to_string()); let a = match o { Ok(t) => t, Err(e) => e, }; a + &o.unwrap()",
+        "\"ss\"",
+    );
+    runs_to(
+        "let e = A::X(\"s\".to_string()); let a = match e { A::X(t) => t, }; let v = [e]; a + &v.len().to_string()",
+        "\"s1\"",
+    );
+}
+
+#[test]
 fn a_literal_arm_compares_the_value_it_is_applied_to() {
     runs_to(
         "let f = |x| -> x + 1; match f(1) { 1 => 10, 2 => 20, _ => 0, }",

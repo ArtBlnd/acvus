@@ -1,1 +1,2 @@
+// expect "s"
 let e = A::X("s".to_string()); let a = match e { A::X(t) => t, }; let b = match e { A::X(t) => t, }; a

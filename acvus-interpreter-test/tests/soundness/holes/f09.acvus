@@ -1,1 +1,2 @@
+// expect "s"
 let o = Ok("s".to_string()); let b = match o { Ok(t) => t, Err(e) => e, }; let c = match o { Ok(t) => t, Err(e) => e, }; c

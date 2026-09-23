@@ -55,43 +55,6 @@ const KNOWN: &[Known] = &[
         program: "attack-cleanups/s38.acvus",
         shows: "Take takes a primitive through a reference",
     },
-    // A `String` payload taken out of a variant still in its storage, twice.
-    Known {
-        program: "b18/w02.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "b19/v08.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "b20/u04.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "b20/u05.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "b21/y07.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "b23/f04.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "b23/f06.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "holes/f09.acvus",
-        shows: "Crashed",
-    },
-    Known {
-        program: "holes/f11.acvus",
-        shows: "Crashed",
-    },
 ];
 
 const LIMIT: Duration = Duration::from_secs(30);

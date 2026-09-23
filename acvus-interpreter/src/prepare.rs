@@ -3911,15 +3911,28 @@ impl<'a> Prepare<'a> {
                 };
                 make_ref(slots, through_target(target), &under.path)
             }
+            // Obligation across artifacts: the move check reads the take of a
+            // `String` part as a copy that leaves the storage owning the
+            // string, and drop insertion releases the run with its storage, so
+            // a move here would give one string two owners. The heap storage's
+            // take below copies for the same reason.
             InstKind::Take { dst, target, path } if self.run_field(target, path).is_some() => {
                 let src = self
                     .run_field(target, path)
                     .expect("the guard read the same register");
-                let owns = self.owns(*dst);
-                let dst = self.marked(*dst);
-                match owns {
-                    true => node(move |next| control::Mov::<true, false> { dst, src, next }),
-                    false => node(move |next| control::Mov::<false, false> { dst, src, next }),
+                if self.is_string(*dst) {
+                    let slots = Unary {
+                        dst: self.marked(*dst),
+                        src,
+                    };
+                    node(move |next| string::CloneString::<false> { slots, next })
+                } else {
+                    let owns = self.owns(*dst);
+                    let dst = self.marked(*dst);
+                    match owns {
+                        true => node(move |next| control::Mov::<true, false> { dst, src, next }),
+                        false => node(move |next| control::Mov::<false, false> { dst, src, next }),
+                    }
                 }
             }
             InstKind::Take { dst, target, path } => {

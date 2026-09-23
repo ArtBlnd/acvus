@@ -1,1 +1,2 @@
+// expect "ss"
 let e = A::X("s".to_string()); let t = match e { A::X(t) => t, }; let u = match e { A::X(t) => t, }; t + &u

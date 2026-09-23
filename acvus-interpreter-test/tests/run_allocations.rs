@@ -8,13 +8,20 @@
 //! pass every assertion there and fail the numbers here.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_interpreter_test::{Context, int_context, run_script};
+use acvus_interpreter::{AcvusRuntime, SequentialExecutor};
+use acvus_interpreter_test::{
+    Context, check_source, execute_compiled, int_context, run_script, split_context,
+};
+use acvus_mir::graph::ParsedAst;
+use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static RELEASES: AtomicUsize = AtomicUsize::new(0);
 
 struct Counting;
 
@@ -28,6 +35,7 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        RELEASES.fetch_add(1, Ordering::Relaxed);
         // SAFETY: the caller's contract, forwarded.
         unsafe { System.dealloc(ptr, layout) }
     }
@@ -121,4 +129,68 @@ async fn a_heap_resident_variant_is_one_allocation() {
         (heap - 3.0).abs() < 0.05,
         "the heap variant script allocates {heap} per iteration"
     );
+}
+
+/// A `String` payload of a run-resident variant, read by a pattern in a loop
+/// and once more after it. At `Opt::None` no pass scalarizes `e`, so every
+/// read is a take of a register of the run.
+const PAYLOAD_READ_BY_PATTERNS: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+let e = if i % 2 == 0 { E::A(i.to_string()) } else { E::B((i + 1).to_string()) }; \
+let j = 0; while j < 1 { match e { E::A(v) => { acc = acc + v.len(); }, \
+E::B(v) => { acc = acc + v.len(); } }; j = j + 1; } \
+let c = match e { E::A(t) => t, E::B(t) => t, }; acc = acc + c.len(); \
+i = i + 1; } acc";
+
+struct Balance {
+    allocations: usize,
+    releases: usize,
+}
+
+async fn balance(source: &str, n: i64, opt: Opt) -> Balance {
+    let interner = Interner::new();
+    let (context_types, snapshot) = split_context(&interner, int_context(&interner, "n", n));
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, source).expect("parse error"));
+    let compiled = check_source(
+        &interner,
+        ast,
+        &context_types,
+        acvus_ext::std_registries::<AcvusRuntime>(),
+        Ty::U64,
+        opt,
+        |_| {},
+    )
+    .unwrap_or_else(|refusal| panic!("at {opt:?}: {}", refusal.messages.join("\n")));
+    let (_shared, mut interp) =
+        execute_compiled(&interner, compiled, snapshot, Arc::new(SequentialExecutor));
+    let allocated = ALLOCATIONS.load(Ordering::Relaxed);
+    let released = RELEASES.load(Ordering::Relaxed);
+    let answer = interp.execute().await;
+    let balance = Balance {
+        allocations: ALLOCATIONS.load(Ordering::Relaxed) - allocated,
+        releases: RELEASES.load(Ordering::Relaxed) - released,
+    };
+    std::hint::black_box(answer);
+    balance
+}
+
+#[tokio::test]
+async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
+    for opt in [Opt::None, Opt::Full] {
+        let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
+        let (few, many) = (1_000i64, 5_000i64);
+        let low = balance(PAYLOAD_READ_BY_PATTERNS, few, opt).await;
+        let high = balance(PAYLOAD_READ_BY_PATTERNS, many, opt).await;
+        drop(measuring);
+        let span = (many - few) as f64;
+        let allocated = (high.allocations as f64 - low.allocations as f64) / span;
+        let left = ((high.allocations as f64 - high.releases as f64)
+            - (low.allocations as f64 - low.releases as f64))
+            / span;
+        println!("at {opt:?}: allocations per iteration: {allocated:.3}, left behind: {left:.3}");
+        assert!(
+            left.abs() < 0.01,
+            "at {opt:?}, an iteration leaves {left} allocations behind"
+        );
+    }
 }
