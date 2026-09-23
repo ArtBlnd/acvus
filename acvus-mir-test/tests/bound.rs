@@ -44,6 +44,7 @@ fn types(i: &Interner) -> TypeRegistry {
                 type_params: vec![TyVarBound::Any; params],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false; params],
             })
             .expect("one declaration per name");
@@ -57,6 +58,7 @@ fn user(i: &Interner, name: &str, args: Vec<acvus_mir::ty::PolyTy>) -> acvus_mir
         type_args: args.into_iter().map(TypeArg::uniform).collect(),
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     }
 }
 

@@ -96,6 +96,8 @@ impl TyArg for StrView {
     }
 }
 
+crate::unbranded!(StrView);
+
 impl<Rt> Cross<Rt> for StrView
 where
     Rt: Runtime,
@@ -151,7 +153,7 @@ where
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<'a, Rt> Arg<'a, Rt> for ByStr
+impl<'a, 'w, Rt> Arg<'a, 'w, Rt> for ByStr
 where
     Rt: Runtime,
 {

@@ -19,6 +19,7 @@ fn iterator_registry(i: &Interner) -> TypeRegistry {
         type_params: vec![acvus_mir::ty::TyVarBound::Any],
         effect_params: 1,
         identity_params: 1,
+        region_params: 0,
         specializable: vec![false],
     })
     .expect("one declaration per name");
@@ -33,6 +34,7 @@ fn iter_poly(i: &Interner, identity: IdentityTerm<Poly>) -> PolyTy {
             acvus_mir::ty::Effect::PURE.into(),
         )],
         identity_args: vec![identity],
+        region_params: 0,
     }
 }
 
@@ -168,6 +170,7 @@ fn a_declared_context_never_shares_a_source_with_a_new_one() {
         identity_args: vec![IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
+        region_params: 0,
     };
     let ctx = rustc_hash::FxHashMap::from_iter([
         (i.intern("src"), declared),

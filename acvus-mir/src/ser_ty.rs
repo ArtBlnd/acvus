@@ -278,6 +278,7 @@ pub enum SerTy {
         type_args: Vec<SerTypeArg>,
         effect_args: Vec<SerEffectArg>,
         identity_args: Vec<u32>,
+        region_params: usize,
     },
     Option {
         inner: Box<SerTy>,
@@ -349,8 +350,10 @@ impl Ty {
                 type_args,
                 effect_args,
                 identity_args,
+                region_params,
             } => SerTy::UserDefined {
                 id: qref_to_ser(id, interner),
+                region_params: *region_params,
                 type_args: type_args.iter().map(|t| arg_to_ser(t, interner)).collect(),
                 effect_args: effect_args
                     .iter()
@@ -442,8 +445,10 @@ impl SerTy {
                 type_args,
                 effect_args,
                 identity_args,
+                region_params,
             } => Ty::UserDefined {
                 id: ser_to_qref(id, interner),
+                region_params: *region_params,
                 type_args: type_args.iter().map(|t| ser_to_arg(t, interner)).collect(),
                 effect_args: effect_args
                     .iter()
@@ -506,6 +511,7 @@ mod tests {
             type_args: vec![TypeArg::uniform(Ty::I64)],
             effect_args: vec![EffectArg::specialized(Effect::OPAQUE.into())],
             identity_args: vec![],
+            region_params: 0,
         };
         assert_eq!(ud.to_ser(&i).to_ty(&i), ud);
     }

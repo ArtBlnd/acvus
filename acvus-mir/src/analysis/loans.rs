@@ -846,14 +846,14 @@ pub fn contains_ref(ty: &Ty) -> bool {
         Ty::Object(fields) => fields.values().any(contains_ref),
         Ty::Tuple(items) => items.iter().any(contains_ref),
         Ty::Fn { captures, ret, .. } => captures.iter().any(contains_ref) || contains_ref(ret),
-        // An extension type with an identity is tied to what built it
-        // (docs/identity-type-system.md) and may hold its references; one
-        // without holds only what its type arguments show.
+        // An extension type holds a reference in a region parameter its
+        // declaration states, and otherwise only what its type arguments
+        // show (RFC-0079 rule 2).
         Ty::UserDefined {
             type_args,
-            identity_args,
+            region_params,
             ..
-        } => !identity_args.is_empty() || type_args.iter().any(|a| contains_ref(&a.ty())),
+        } => *region_params > 0 || type_args.iter().any(|a| contains_ref(&a.ty())),
         Ty::Enum { variants, .. } => variants.values().flatten().any(|t| contains_ref(t)),
         _ => false,
     }

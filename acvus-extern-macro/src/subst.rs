@@ -48,6 +48,30 @@ pub fn substitute(ty: &Type, lookup: &dyn Fn(&Ident) -> Option<Type>) -> Type {
     }
 }
 
+/// `ty` with every lifetime it names at `'static`: the form a marker names a
+/// type at, whose `Branded::At<'a>` the glue hands the handler (RFC-0079
+/// rule 6).
+pub fn at_static(ty: &Type) -> Type {
+    let mut ty = ty.clone();
+    syn::visit_mut::VisitMut::visit_type_mut(&mut Static, &mut ty);
+    ty
+}
+
+/// As `at_static`, for a predicate a `'static` impl restates.
+pub fn predicate_at_static(predicate: &syn::WherePredicate) -> syn::WherePredicate {
+    let mut predicate = predicate.clone();
+    syn::visit_mut::VisitMut::visit_where_predicate_mut(&mut Static, &mut predicate);
+    predicate
+}
+
+struct Static;
+
+impl syn::visit_mut::VisitMut for Static {
+    fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
+        *lifetime = syn::Lifetime::new("'static", lifetime.apostrophe);
+    }
+}
+
 /// `Vec<_>` -> `Vec<()>`: an inferred argument in a registry's type list
 /// stands for any instantiation.
 pub fn infer_to_unit(ty: &Type) -> Type {

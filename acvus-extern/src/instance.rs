@@ -80,24 +80,39 @@ impl CalledAt for Later {
     const TASK: Task = Task::Async;
 }
 
-pub struct Instance<S, I, Rt, T = Now>
+/// `'r` is the run: the entry an instance names is the prepared program's,
+/// not a call's storage (RFC-0079 rule 6). The glue hands a handler its
+/// required instances at the lifetime of its `Ctx`, which the runtime
+/// builds over what it keeps for the run.
+pub struct Instance<'r, S, I, Rt, T = Now>
 where
     S: Signature<Rt>,
     Rt: Runtime,
 {
     value: Rt::Value,
-    at: PhantomData<fn() -> (S, I, T)>,
+    at: PhantomData<(&'r (), fn() -> (S, I, T))>,
+}
+
+// SAFETY: `At<'b>` changes the brand alone.
+unsafe impl<'r, S, I, Rt, T> crate::Branded for Instance<'r, S, I, Rt, T>
+where
+    S: Signature<Rt>,
+    I: 'static,
+    Rt: Runtime,
+    T: 'static,
+{
+    type At<'b> = Instance<'b, S, I, Rt, T>;
 }
 
 // SAFETY: an `Instance` is one `Rt::Value` at every `S`, `I` and `T`.
-unsafe impl<M, S, I, Rt, T> crate::UniformPayload<M> for Instance<S, I, Rt, T>
+unsafe impl<'r, M, S, I, Rt, T> crate::UniformPayload<M> for Instance<'r, S, I, Rt, T>
 where
     S: Signature<Rt>,
     Rt: Runtime,
 {
 }
 
-impl<S, I, Rt, T> Clone for Instance<S, I, Rt, T>
+impl<'r, S, I, Rt, T> Clone for Instance<'r, S, I, Rt, T>
 where
     S: Signature<Rt>,
     Rt: Runtime,
@@ -107,26 +122,27 @@ where
     }
 }
 
-impl<S, I, Rt, T> Copy for Instance<S, I, Rt, T>
+impl<'r, S, I, Rt, T> Copy for Instance<'r, S, I, Rt, T>
 where
     S: Signature<Rt>,
     Rt: Runtime,
 {
 }
 
-impl<S, I, Rt, T> Instance<S, I, Rt, T>
+impl<'r, S, I, Rt, T> Instance<'r, S, I, Rt, T>
 where
     S: Signature<Rt>,
     Rt: Runtime,
 {
     const ONE_VALUE: () = assert!(
-        size_of::<Instance<S, I, Rt, T>>() == size_of::<Rt::Value>(),
+        size_of::<Instance<'r, S, I, Rt, T>>() == size_of::<Rt::Value>(),
         "an instance is one of the runtime's values and nothing else"
     );
 
     /// # Safety
     /// `value` was made by `Runtime::instance_value` from an entry of an
-    /// instance of `S` standing at the type `I` is filled with.
+    /// instance of `S` standing at the type `I` is filled with, and the
+    /// entry is live for `'r`.
     #[doc(hidden)]
     #[inline(always)]
     pub unsafe fn at(value: Rt::Value) -> Self {
@@ -138,13 +154,13 @@ where
     }
 }
 
-impl<S, I, Rt> Instance<S, I, Rt, Now>
+impl<'w, S, I, Rt> Instance<'w, S, I, Rt, Now>
 where
     S: Signature<Rt>,
     Rt: Runtime,
 {
     #[inline(always)]
-    pub fn into_async(self) -> Instance<S, I, Rt, Later> {
+    pub fn into_async(self) -> Instance<'w, S, I, Rt, Later> {
         Instance {
             value: self.value,
             at: PhantomData,
@@ -166,7 +182,7 @@ where
     }
 }
 
-impl<S, I, Rt> Instance<S, I, Rt, Later>
+impl<'w, S, I, Rt> Instance<'w, S, I, Rt, Later>
 where
     S: Signature<Rt>,
     Rt: Runtime,
@@ -366,41 +382,47 @@ pub trait RestoreByValue<Rt>
 where
     Rt: Runtime,
 {
-    type Out;
+    type Out<'b>;
 
     /// # Safety
-    /// `crossed` was erased from what the instance stands at.
-    unsafe fn restore_by_value(rt: &Rt, crossed: Owned<Rt>) -> Self::Out;
+    /// `crossed` was erased from what the instance stands at, and what it
+    /// names is live for `'b`.
+    unsafe fn restore_by_value<'b>(rt: &Rt, crossed: Owned<Rt>) -> Self::Out<'b>;
 }
 
 impl<T, C, Rt> RestoreShared<Rt> for ByRef<T, Shared, C>
 where
-    T: Send + Sync + 'static,
+    T: crate::Branded + Send + Sync + 'static,
     C: Lends<T, Rt>,
     Rt: Runtime,
 {
     type Out<'b>
-        = &'b T
+        = &'b T::At<'b>
     where
         Self: 'b;
 
     #[inline(always)]
-    unsafe fn restore_shared<'b>(rt: &Rt, at: &'b mut Rt::Value, crossed: &'b Rt::Value) -> &'b T {
+    unsafe fn restore_shared<'b>(
+        rt: &Rt,
+        at: &'b mut Rt::Value,
+        crossed: &'b Rt::Value,
+    ) -> &'b T::At<'b> {
         // SAFETY: the caller's contract: `crossed` is live for `'b`.
         *at = unsafe { rt.reference(crossed) };
-        // SAFETY: the reference names the storage the caller lent.
-        unsafe { <Shared as Loan>::borrow::<T, C, Rt>(rt, at) }
+        // SAFETY: the reference names the storage the caller lent, and what
+        // that storage holds is live for `'b`.
+        unsafe { <Shared as Loan>::brand::<T>(<Shared as Loan>::borrow::<T, C, Rt>(rt, at)) }
     }
 }
 
-impl<T, M, C, Rt> RestoreShared<Rt> for ByValue<Ref<T, M, Rt>, C>
+impl<T, M, C, Rt> RestoreShared<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
 where
     T: Send + Sync + 'static,
     M: Loan,
     Rt: Runtime,
 {
     type Out<'b>
-        = Ref<T, M, Rt>
+        = Ref<'b, T, M, Rt>
     where
         Self: 'b;
 
@@ -409,22 +431,24 @@ where
         rt: &Rt,
         _: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
-    ) -> Ref<T, M, Rt> {
+    ) -> Ref<'b, T, M, Rt> {
         // SAFETY: the caller's contract: `crossed` is the caller's own
         // value at the type the checker gave this position, the storage
         // outlives the call, and RFC-0018 keeps the reference within it.
-        unsafe { <Ref<T, M, Rt> as OneValue<Rt>>::materialize(rt, rt.reference(crossed)) }
+        unsafe {
+            crate::brand::<Ref<'static, T, M, Rt>>(OneValue::materialize(rt, rt.reference(crossed)))
+        }
     }
 }
 
 impl<T, C, Rt> RestoreExclusive<Rt> for ByRef<T, Mut, C>
 where
-    T: Send + Sync + 'static,
+    T: crate::Branded + Send + Sync + 'static,
     C: Lends<T, Rt>,
     Rt: Runtime,
 {
     type Out<'b>
-        = &'b mut T
+        = &'b mut T::At<'b>
     where
         Self: 'b;
 
@@ -433,22 +457,22 @@ where
         rt: &Rt,
         at: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
-    ) -> &'b mut T {
+    ) -> &'b mut T::At<'b> {
         // SAFETY: as `RestoreShared`'s, exclusively.
         *at = unsafe { rt.reference(crossed) };
         // SAFETY: as `RestoreShared`'s, exclusively.
-        unsafe { <Mut as Loan>::borrow::<T, C, Rt>(rt, at) }
+        unsafe { <Mut as Loan>::brand::<T>(<Mut as Loan>::borrow::<T, C, Rt>(rt, at)) }
     }
 }
 
-impl<T, M, C, Rt> RestoreExclusive<Rt> for ByValue<Ref<T, M, Rt>, C>
+impl<T, M, C, Rt> RestoreExclusive<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
 where
     T: Send + Sync + 'static,
     M: Loan,
     Rt: Runtime,
 {
     type Out<'b>
-        = Ref<T, M, Rt>
+        = Ref<'b, T, M, Rt>
     where
         Self: 'b;
 
@@ -457,9 +481,11 @@ where
         rt: &Rt,
         _: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
-    ) -> Ref<T, M, Rt> {
+    ) -> Ref<'b, T, M, Rt> {
         // SAFETY: as the shared impl's, exclusively.
-        unsafe { <Ref<T, M, Rt> as OneValue<Rt>>::materialize(rt, rt.reference(crossed)) }
+        unsafe {
+            crate::brand::<Ref<'static, T, M, Rt>>(OneValue::materialize(rt, rt.reference(crossed)))
+        }
     }
 }
 
@@ -468,11 +494,11 @@ where
     T: OneValue<Rt, C>,
     Rt: Runtime,
 {
-    type Out = T;
+    type Out<'b> = T::At<'b>;
 
     #[inline(always)]
-    unsafe fn restore_by_value(rt: &Rt, crossed: Owned<Rt>) -> T {
+    unsafe fn restore_by_value<'b>(rt: &Rt, crossed: Owned<Rt>) -> T::At<'b> {
         // SAFETY: the caller's contract, at the one value an `Owned` holds.
-        unsafe { <T as OneValue<Rt, C>>::materialize(rt, crossed.into_value()) }
+        unsafe { crate::brand::<T>(<T as OneValue<Rt, C>>::materialize(rt, crossed.into_value())) }
     }
 }

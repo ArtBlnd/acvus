@@ -1183,17 +1183,20 @@ impl Terms {
                     type_args: ta_args,
                     effect_args: ea_args,
                     identity_args: ia_args,
+                    region_params: ra,
                 },
                 TyTerm::UserDefined {
                     id: id_b,
                     type_args: tb_args,
                     effect_args: eb_args,
                     identity_args: ib_args,
+                    region_params: rb,
                 },
             ) => {
                 if id_a != id_b {
                     return Err(mismatch(self));
                 }
+                assert_eq!(ra, rb, "one declaration states one count of region parameters");
                 assert_eq!(ta_args.len(), tb_args.len());
                 assert_eq!(ea_args.len(), eb_args.len());
                 assert_eq!(ia_args.len(), ib_args.len());
@@ -4995,6 +4998,7 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
             type_args,
             effect_args,
             identity_args,
+            region_params,
         } => TyTerm::UserDefined {
             id,
             type_args: type_args
@@ -5004,6 +5008,7 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
                 .collect(),
             effect_args,
             identity_args,
+            region_params,
         },
         TyTerm::Ref(m, inner) => TyTerm::Ref(m, Box::new(arg(*inner, true, registry))),
         TyTerm::Array(inner, len) => TyTerm::Array(Box::new(uniform_slots(*inner, registry)), len),

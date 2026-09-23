@@ -369,36 +369,37 @@ impl Vars {
     /// Compile-time substitution with the Monomorphize variable set to
     /// `Spec<member>`, the form whose slots are `#`.
     pub fn to_compile_time_instance(&self, ty: &Type, member: Option<&Type>) -> Type {
-        subst::substitute(ty, &|ident| {
+        subst::at_static(&subst::substitute(ty, &|ident| {
             let v = self.0.iter().find(|v| v.ident == *ident)?;
             match (&v.mono, member) {
                 (Some(_), Some(m)) => Some(syn::parse_quote! { ::acvus_extern::Spec<#m> }),
                 _ => Some(Self::compile_time_stand_in(v)),
             }
-        })
+        }))
     }
 
     /// Compile-time substitution with the Monomorphize variable set to
     /// `member` itself, the form whose slots are uniform.
     pub fn to_compile_time_uniform(&self, ty: &Type, member: &Type) -> Type {
-        subst::substitute(ty, &|ident| {
+        subst::at_static(&subst::substitute(ty, &|ident| {
             let v = self.0.iter().find(|v| v.ident == *ident)?;
             match &v.mono {
                 Some(_) => Some(member.clone()),
                 None => Some(Self::compile_time_stand_in(v)),
             }
-        })
+        }))
     }
 
-    /// Runtime substitution with the Monomorphize variable set to `member`.
+    /// Runtime substitution with the Monomorphize variable set to `member`,
+    /// at the marker's `'static`.
     pub fn to_runtime_instance(&self, ty: &Type, member: Option<&Type>) -> Type {
-        subst::substitute(ty, &|ident| {
+        subst::at_static(&subst::substitute(ty, &|ident| {
             let v = self.0.iter().find(|v| v.ident == *ident)?;
             match (&v.mono, member) {
                 (Some(_), Some(m)) => Some(m.clone()),
                 _ => Some(Self::runtime_stand_in(v)),
             }
-        })
+        }))
     }
 
     /// The kind bound of every variable, as a where predicate: what a

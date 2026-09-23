@@ -165,11 +165,19 @@ impl Mode {
     fn acvus_ty(self, ty: &Type, rt: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         match self {
             Mode::Value => quote! { #ty },
-            Mode::Borrow => quote! { ::acvus_extern::Ref<#ty, ::acvus_extern::Shared, #rt> },
-            Mode::BorrowMut => quote! { ::acvus_extern::Ref<#ty, ::acvus_extern::Mut, #rt> },
+            Mode::Borrow => {
+                quote! { ::acvus_extern::Ref<'static, #ty, ::acvus_extern::Shared, #rt> }
+            }
+            Mode::BorrowMut => {
+                quote! { ::acvus_extern::Ref<'static, #ty, ::acvus_extern::Mut, #rt> }
+            }
             Mode::Str => quote! { ::acvus_extern::StrView },
-            Mode::Slice => quote! { ::acvus_extern::Slice<#ty, ::acvus_extern::Shared, #rt> },
-            Mode::SliceMut => quote! { ::acvus_extern::Slice<#ty, ::acvus_extern::Mut, #rt> },
+            Mode::Slice => {
+                quote! { ::acvus_extern::Slice<'static, #ty, ::acvus_extern::Shared, #rt> }
+            }
+            Mode::SliceMut => {
+                quote! { ::acvus_extern::Slice<'static, #ty, ::acvus_extern::Mut, #rt> }
+            }
             Mode::Projection => {
                 let at_static = at_static(ty);
                 quote! { #at_static }
@@ -260,8 +268,8 @@ impl LentShape {
             false => quote! { ::acvus_extern::Shared },
         };
         match self.slice {
-            true => quote! { ::acvus_extern::Slice<#filled, #loan, #rt> },
-            false => quote! { ::acvus_extern::Ref<#filled, #loan, #rt> },
+            true => quote! { ::acvus_extern::Slice<'static, #filled, #loan, #rt> },
+            false => quote! { ::acvus_extern::Ref<'static, #filled, #loan, #rt> },
         }
     }
 }
@@ -342,39 +350,38 @@ impl Returning {
     }
 }
 
-/// The test is the lifetime and not the type's name because reading a
-/// crossing out of a path's last segment is exactly what RFC-0059
-/// withdrew `returns_slice` for: an alias defeated it.
-fn borrows_caller(ty: &Type) -> bool {
+/// A projection is a borrow of one declared aggregate the caller lent: its
+/// arguments are the borrow's lifetime and, for an enum's exclusive form, the
+/// runtime, and it names no type it carries. A carrier or an extension type
+/// with a region parameter is a value that names what it carries beside its
+/// lifetime, `Ref<'a, T, M, Rt>` or `Refs<'a, C, I, Rt>`, and crosses by value
+/// (RFC-0079 rule 6). The test reads the arguments and not the type's name,
+/// because reading a crossing out of a name is what RFC-0059 withdrew
+/// `returns_slice` for: an alias defeated it.
+fn borrows_caller(ty: &Type, runtime: Option<&Ident>) -> bool {
     let Type::Path(p) = ty else {
         return false;
     };
-    p.path.segments.iter().any(|segment| {
-        let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
-            return false;
-        };
-        args.args
-            .iter()
-            .any(|arg| matches!(arg, syn::GenericArgument::Lifetime(_)))
-    })
-}
-
-/// `TyArg` and an `Arg` marker are both `'static`, so a projection reaches
-/// them with its lifetimes at `'static`, and `Projected::At<'a>` hands the
-/// handler's body the same projection at the call's own lifetime.
-fn at_static(ty: &Type) -> Type {
-    struct Static;
-
-    impl syn::visit_mut::VisitMut for Static {
-        fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
-            *lifetime = syn::Lifetime::new("'static", lifetime.apostrophe);
+    let Some(syn::PathArguments::AngleBracketed(args)) =
+        p.path.segments.last().map(|segment| &segment.arguments)
+    else {
+        return false;
+    };
+    let lends = args
+        .args
+        .iter()
+        .any(|arg| matches!(arg, syn::GenericArgument::Lifetime(_)));
+    let carries = args.args.iter().any(|arg| match arg {
+        syn::GenericArgument::Lifetime(_) => false,
+        syn::GenericArgument::Type(Type::Path(t)) => {
+            !runtime.is_some_and(|runtime| t.qself.is_none() && t.path.is_ident(runtime))
         }
-    }
-
-    let mut ty = ty.clone();
-    syn::visit_mut::VisitMut::visit_type_mut(&mut Static, &mut ty);
-    ty
+        _ => true,
+    });
+    lends && !carries
 }
+
+use subst::at_static;
 
 /// A parameter marked `#[state]`: supplied when the registry is built,
 /// held by the handler, and absent from the acvus type (RFC-0021).
@@ -778,8 +785,9 @@ fn generate_extern_fn(
                 quote! {
                     // SAFETY: the entry's `requires` holds, at this
                     // declaration's own order, the word of the entry
-                    // `prepare` chose for this requirement.
-                    let #ident: ::acvus_extern::Instance<#sig, #var, __R, #task> =
+                    // `prepare` chose for this requirement, and that entry
+                    // lives as long as the one this glue runs.
+                    let #ident: ::acvus_extern::Instance<'__w, #sig, #var, __R, #task> =
                         unsafe { ::acvus_extern::Instance::at(__entry.requires[#at]) };
                 }
             })
@@ -801,15 +809,19 @@ fn generate_extern_fn(
                         <__R as ::acvus_extern::Runtime>::reference(__rt, &*__ctx.receiver())
                     };
                     let #at = unsafe {
-                        <#loan as ::acvus_extern::Loan>::borrow::<#ty, #c, __R>(
-                            __rt, &__recv_at,
+                        <#loan as ::acvus_extern::Loan>::brand::<#ty>(
+                            <#loan as ::acvus_extern::Loan>::borrow::<#ty, #c, __R>(
+                                __rt, &__recv_at,
+                            ),
                         )
                     };
                 },
                 _ => quote! {
                     let #at = unsafe {
-                        <#ty as ::acvus_extern::OneValue<__R, #c>>::materialize(
-                            __rt, *__ctx.receiver(),
+                        ::acvus_extern::brand::<#ty>(
+                            <#ty as ::acvus_extern::OneValue<__R, #c>>::materialize(
+                                __rt, *__ctx.receiver(),
+                            ),
                         )
                     };
                 },
@@ -888,9 +900,20 @@ fn generate_extern_fn(
                     ),
                 }
             }
+            // SAFETY: `Returned::cross` erases the result at once.
             _ => (
-                quote! { <#rt_ret as #sig_mod::Returned<__R>>::cross(__rt, #call) },
-                quote! { <#rt_ret as #sig_mod::Returned<__R>>::cross(__rt, (#call).await) },
+                quote! {
+                    <#rt_ret as #sig_mod::Returned<__R>>::cross(
+                        __rt,
+                        unsafe { ::acvus_extern::unbrand::<#rt_ret>(#call) },
+                    )
+                },
+                quote! {
+                    <#rt_ret as #sig_mod::Returned<__R>>::cross(
+                        __rt,
+                        unsafe { ::acvus_extern::unbrand::<#rt_ret>((#call).await) },
+                    )
+                },
             ),
         };
         if awaits && has_glue {
@@ -901,9 +924,9 @@ fn generate_extern_fn(
             let sig_mod = sig_mod.as_ref().expect("has_glue names a signature");
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
-                unsafe fn #glue_ident<'__a, __R>(
+                unsafe fn #glue_ident<'__a, '__w, __R>(
                     #entry_param: &'__a ::acvus_extern::InstanceEntry<__R>,
-                    __ctx: &'__a mut ::acvus_extern::Ctx<'_, __R>,
+                    __ctx: &'__a mut ::acvus_extern::Ctx<'__w, __R>,
                     #rest_param: #sig_mod::Rest<'__a, __R>,
                 ) -> ::acvus_extern::BoxFuture<'__a, #sig_mod::Ret<__R>>
                 where
@@ -956,6 +979,8 @@ fn generate_extern_fn(
                         let __rt = __ctx.rt;
                         ::std::boxed::Box::pin(async move {
                             let __r = (#call).await;
+                            // SAFETY: the result is erased here.
+                            let __r = unsafe { ::acvus_extern::unbrand::<#rt_ret>(__r) };
                             <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
                         })
                     })
@@ -971,6 +996,8 @@ fn generate_extern_fn(
                             let __rt = __ctx.rt;
                             ::std::boxed::Box::pin(async move {
                                 let __r = (#call).await;
+                                // SAFETY: the result is erased here.
+                                let __r = unsafe { ::acvus_extern::unbrand::<#rt_ret>(__r) };
                                 <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
                             })
                         }
@@ -985,9 +1012,9 @@ fn generate_extern_fn(
             let sig_mod = sig_mod.as_ref().expect("has_glue names a signature");
             entries.borrow_mut().push(quote! {
                 #[doc(hidden)]
-                unsafe fn #glue_ident<__R>(
+                unsafe fn #glue_ident<'__w, __R>(
                     #entry_param: &::acvus_extern::InstanceEntry<__R>,
-                    __ctx: &mut ::acvus_extern::Ctx<'_, __R>,
+                    __ctx: &mut ::acvus_extern::Ctx<'__w, __R>,
                     #rest_param: #sig_mod::Rest<'_, __R>,
                 ) -> #sig_mod::Ret<__R>
                 where
@@ -1347,7 +1374,7 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
                 Type::Slice(s) => ((*s.elem).clone(), Mode::Slice),
                 elem => (elem.clone(), Mode::Borrow),
             },
-            ty if borrows_caller(ty) => (ty.clone(), Mode::Projection),
+            ty if borrows_caller(ty, runtime) => (ty.clone(), Mode::Projection),
             ty => (ty.clone(), Mode::Value),
         };
         params.push(RustParam::Acvus(ExternParam {
@@ -1562,7 +1589,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
     }
 
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let (_, ty_generics, _) = input.generics.split_for_impl();
     let arg_impl_generics = vars.arg_impl_generics();
     let impl_params = {
         let params = &input.generics.params;
@@ -1572,6 +1599,43 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             quote! { #params, }
         }
     };
+    // Each lifetime parameter is a region parameter of the type (RFC-0079
+    // rule 6). The traits a marker names are `'static`, so they hold at the
+    // type with every lifetime at `'static`; `Branded`, `Canonical`,
+    // `UniformPayload` and `Transparent` hold at every lifetime.
+    let lifetimes: Vec<syn::Lifetime> = input
+        .generics
+        .lifetimes()
+        .map(|lt| lt.lifetime.clone())
+        .collect();
+    let n_regions = lifetimes.len();
+    let static_params = {
+        let params = input
+            .generics
+            .params
+            .iter()
+            .filter(|param| !matches!(param, GenericParam::Lifetime(_)));
+        quote! { #(#params,)* }
+    };
+    let self_at = |lifetime: proc_macro2::TokenStream| -> proc_macro2::TokenStream {
+        let args = input.generics.params.iter().map(|param| match param {
+            GenericParam::Lifetime(_) => lifetime.clone(),
+            GenericParam::Type(tp) => {
+                let ident = &tp.ident;
+                quote! { #ident }
+            }
+            GenericParam::Const(c) => {
+                let ident = &c.ident;
+                quote! { #ident }
+            }
+        });
+        match input.generics.params.is_empty() {
+            true => quote! { #ident },
+            false => quote! { #ident<#(#args),*> },
+        }
+    };
+    let static_self = self_at(quote! { 'static });
+    let branded_at = self_at(quote! { '__at });
     // The key and the canonical form name each uniform parameter's
     // canonical form, so every impl that names either restates the struct's
     // predicates at it.
@@ -1601,11 +1665,37 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         })
         .collect();
     let where_predicates = quote! { #(#struct_predicates,)* #(#restated,)* };
+    let static_predicates = struct_predicates
+        .iter()
+        .chain(&restated)
+        .map(subst::predicate_at_static);
+    let static_where = quote! { #(#static_predicates,)* };
+    // The type's brand is its payload's: `At` puts the type's own lifetimes
+    // at the brand, which holds where the payload's `At` is the payload with
+    // those lifetimes at the brand. A payload that names no parameter is one
+    // type at every lifetime.
+    let payload_branded = (names_any(payload_ty, &type_param_idents_owned(&input.generics))
+        || names_lifetime(payload_ty, &lifetimes))
+    .then(|| {
+        let at_b = ToBrand {
+            lifetimes: &lifetimes,
+            mapped: &[],
+            at: syn::parse_quote! { '__b },
+        }
+        .apply(payload_ty);
+        let at_static_payload = at_static(payload_ty);
+        (
+            quote! { #payload_ty: for<'__b> ::acvus_extern::Branded<At<'__b> = #at_b>, },
+            quote! { #at_static_payload: for<'__b> ::acvus_extern::Branded<At<'__b> = #at_b>, },
+        )
+    });
+    let (payload_branded, unbranded_vars) = payload_branded.unzip();
     let key_ty = {
         let mut key = payload_ty.clone();
         syn::visit_mut::VisitMut::visit_type_mut(&mut Canonicalize { uniform: &uniform }, &mut key);
-        key
+        at_static(&key)
     };
+    let type_param_idents: Vec<&Ident> = input.generics.type_params().map(|tp| &tp.ident).collect();
     let canon_args = input.generics.params.iter().map(|param| match param {
         GenericParam::Type(tp) if uniform.contains(&tp.ident) => {
             let ident = &tp.ident;
@@ -1615,10 +1705,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             let ident = &tp.ident;
             quote! { #ident }
         }
-        GenericParam::Lifetime(lt) => {
-            let lifetime = &lt.lifetime;
-            quote! { #lifetime }
-        }
+        GenericParam::Lifetime(_) => quote! { 'static },
         GenericParam::Const(c) => {
             let ident = &c.ident;
             quote! { #ident }
@@ -1724,85 +1811,26 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
     };
-
-    Ok(quote! {
-        impl<#impl_params> ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident #ty_generics
+    let stored = (n_regions == 0).then(|| quote! {
+        impl<#static_params __R> ::acvus_extern::Stored<__R> for #static_self
         where
-            #where_predicates
+            __R: ::acvus_extern::Runtime,
+            #static_where
+            #unbranded_vars
         {
-        }
+            type Payload = #key_ty;
 
-        #uniform_check
+            fn from_payload<'__p>(__payload: &'__p #key_ty) -> &'__p Self {
+                ::acvus_extern::derive::transparent::from_payload::<Self, #key_ty>(__payload)
+            }
 
-        // SAFETY: the struct is `#[repr(transparent)]` over its payload, which
-        // is bounded by `UniformPayload` here where it names a type
-        // parameter, or asserted to be one by `unsafe(uniform_payload)`.
-        unsafe impl<__M, #impl_params> ::acvus_extern::UniformPayload<__M> for #ident #ty_generics
-        where
-            #where_predicates
-            #payload_bound
-        {
-        }
-
-        // SAFETY: the canonical form takes each uniform parameter to its own
-        // and keeps every other, and the payload is `UniformPayload`, proved
-        // above with each type variable held as itself, or asserted to be by
-        // `unsafe(uniform_payload)`.
-        unsafe impl<#impl_params> ::acvus_extern::Canonical<::acvus_extern::kind::Type>
-            for #ident #ty_generics
-        where
-            #where_predicates
-        {
-            type Canon = #ident<#(#canon_args),*>;
-        }
-
-        impl #arg_impl_generics ::acvus_extern::TyArg for #ident #ty_generics
-        where
-            #where_predicates
-        {
-            fn poly_ty(
-                __i: &::acvus_extern::Interner,
-                __vars: &::acvus_extern::PolyVars,
-            ) -> ::acvus_extern::PolyTy {
-                ::acvus_extern::PolyTy::UserDefined {
-                    id: __vars.extension::<Self>(__i),
-                    type_args: vec![#(#type_arg_exprs),*],
-                    effect_args: vec![#(#effect_arg_exprs),*],
-                    identity_args: vec![#(#identity_arg_exprs),*],
-                }
+            fn from_payload_mut<'__p>(__payload: &'__p mut #key_ty) -> &'__p mut Self {
+                ::acvus_extern::derive::transparent::from_payload_mut::<Self, #key_ty>(__payload)
             }
         }
-
-        impl<#impl_params __R> ::acvus_extern::Cross<__R> for #ident #ty_generics
-        where
-            __R: ::acvus_extern::Runtime,
-            #where_predicates
-        {
-            #one_value_run
-        }
-
-        impl<#impl_params __R> ::acvus_extern::OneValue<__R> for #ident #ty_generics
-        where
-            __R: ::acvus_extern::Runtime,
-            #where_predicates
-        {
-            #payload_crossing
-        }
-
-        impl<#impl_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
-            for #ident #ty_generics
-        where
-            __R: ::acvus_extern::Runtime,
-            #where_predicates
-        {
-            #payload_crossing
-        }
-
-        impl<#impl_params __R> ::acvus_extern::Passed<__R> for #ident #ty_generics
-        where
-            __R: ::acvus_extern::Runtime,
-            #where_predicates
-        {
+    });
+    let passed = match n_regions {
+        0 => quote! {
             type As<'__a> = Self;
 
             fn cross(__rt: &__R, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
@@ -1816,12 +1844,139 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 // SAFETY: the caller's contract, which is `materialize`'s.
                 unsafe { <Self as ::acvus_extern::OneValue<__R>>::materialize(__rt, __word) }
             }
+        },
+        _ => quote! {
+            type As<'__a> = <Self as ::acvus_extern::Branded>::At<'__a>;
+
+            fn cross(
+                __rt: &__R,
+                __passed: Self::As<'_>,
+            ) -> <__R as ::acvus_extern::Runtime>::Value {
+                // SAFETY: the value is erased here.
+                let __passed = unsafe { ::acvus_extern::unbrand::<Self>(__passed) };
+                <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
+            }
+
+            unsafe fn restore<'__a>(
+                __rt: &__R,
+                __word: <__R as ::acvus_extern::Runtime>::Value,
+            ) -> Self::As<'__a> {
+                // SAFETY: the caller's contract, which is `materialize`'s,
+                // and what the value names is live for `'__a`.
+                unsafe {
+                    ::acvus_extern::brand::<Self>(
+                        <Self as ::acvus_extern::OneValue<__R>>::materialize(__rt, __word),
+                    )
+                }
+            }
+        },
+    };
+
+    Ok(quote! {
+        impl<#static_params> ::acvus_extern::Var<::acvus_extern::kind::Type> for #static_self
+        where
+            #static_where
+        {
         }
 
-        impl<#impl_params __R> ::acvus_extern::BorrowableSpecialized<__R> for #ident #ty_generics
+        #uniform_check
+
+        // SAFETY: `At<'__at>` puts each lifetime parameter at `'__at` and
+        // keeps every other parameter. The payload, the one field that is not
+        // `PhantomData`, is bounded here to be, at `'__at`, itself with the
+        // type's lifetimes at `'__at`; a payload that names no parameter is
+        // one type at every lifetime.
+        unsafe impl<#impl_params> ::acvus_extern::Branded for #ident #ty_generics
+        where
+            #where_predicates
+            #(#type_param_idents: 'static,)*
+            #payload_branded
+        {
+            type At<'__at> = #branded_at;
+        }
+
+        // SAFETY: the struct is `#[repr(transparent)]` over its payload, which
+        // is bounded by `UniformPayload` here where it names a type
+        // parameter, or asserted to be one by `unsafe(uniform_payload)`.
+        unsafe impl<#impl_params __M> ::acvus_extern::UniformPayload<__M> for #ident #ty_generics
+        where
+            #where_predicates
+            #payload_bound
+        {
+        }
+
+        // SAFETY: the canonical form takes each uniform parameter to its own,
+        // each lifetime to `'static`, and keeps every other, and the payload
+        // is `UniformPayload`, proved above with each type variable held as
+        // itself, or asserted to be by `unsafe(uniform_payload)`.
+        unsafe impl<#impl_params> ::acvus_extern::Canonical<::acvus_extern::kind::Type>
+            for #ident #ty_generics
+        where
+            #where_predicates
+        {
+            type Canon = #ident<#(#canon_args),*>;
+        }
+
+        impl #arg_impl_generics ::acvus_extern::TyArg for #static_self
+        where
+            #static_where
+        {
+            fn poly_ty(
+                __i: &::acvus_extern::Interner,
+                __vars: &::acvus_extern::PolyVars,
+            ) -> ::acvus_extern::PolyTy {
+                ::acvus_extern::PolyTy::UserDefined {
+                    id: __vars.extension::<Self>(__i),
+                    type_args: vec![#(#type_arg_exprs),*],
+                    effect_args: vec![#(#effect_arg_exprs),*],
+                    identity_args: vec![#(#identity_arg_exprs),*],
+                    region_params: <Self as ::acvus_extern::ExternTypeDecl>::REGION_PARAMS,
+                }
+            }
+        }
+
+        impl<#static_params __R> ::acvus_extern::Cross<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
-            #where_predicates
+            #static_where
+            #unbranded_vars
+        {
+            #one_value_run
+        }
+
+        impl<#static_params __R> ::acvus_extern::OneValue<__R> for #static_self
+        where
+            __R: ::acvus_extern::Runtime,
+            #static_where
+            #unbranded_vars
+        {
+            #payload_crossing
+        }
+
+        impl<#static_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
+            for #static_self
+        where
+            __R: ::acvus_extern::Runtime,
+            #static_where
+            #unbranded_vars
+        {
+            #payload_crossing
+        }
+
+        impl<#static_params __R> ::acvus_extern::Passed<__R> for #static_self
+        where
+            __R: ::acvus_extern::Runtime,
+            #static_where
+            #unbranded_vars
+        {
+            #passed
+        }
+
+        impl<#static_params __R> ::acvus_extern::BorrowableSpecialized<__R> for #static_self
+        where
+            __R: ::acvus_extern::Runtime,
+            #static_where
+            #unbranded_vars
         {
             #payload_in_place
         }
@@ -1829,40 +1984,32 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         // SAFETY: the struct is `#[repr(transparent)]`, checked above, with the
         // payload as its one non-zero-sized field: every other field is
         // `PhantomData`, also checked above. The key is the payload with each
-        // uniform parameter at its canonical form, as the canonical form of
-        // the struct is.
+        // uniform parameter at its canonical form and each lifetime at
+        // `'static`, as the canonical form of the struct is.
         unsafe impl<#impl_params> ::acvus_extern::Transparent<#key_ty> for #ident #ty_generics
         where
             #where_predicates
         {
         }
 
-        impl<#impl_params __R> ::acvus_extern::Borrowable<__R> for #ident #ty_generics
+        impl<#static_params __R> ::acvus_extern::Borrowable<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
-            #where_predicates
+            #static_where
+            #unbranded_vars
         {
             #payload_in_place
         }
 
-        impl<#impl_params __R> ::acvus_extern::Stored<__R> for #ident #ty_generics
+        #stored
+
+        impl<#static_params> ::acvus_extern::ExternTypeDecl for #static_self
         where
-            __R: ::acvus_extern::Runtime,
-            #where_predicates
+            #static_where
         {
-            type Payload = #key_ty;
-
-            fn from_payload(__payload: &#key_ty) -> &Self {
-                ::acvus_extern::derive::transparent::from_payload::<Self, #key_ty>(__payload)
-            }
-
-            fn from_payload_mut(__payload: &mut #key_ty) -> &mut Self {
-                ::acvus_extern::derive::transparent::from_payload_mut::<Self, #key_ty>(__payload)
-            }
-        }
-
-        impl #impl_generics ::acvus_extern::ExternTypeDecl for #ident #ty_generics #where_clause {
             type DeclarationForm = #declaration_form;
+
+            const REGION_PARAMS: usize = #n_regions;
 
             fn type_decl(__i: &::acvus_extern::Interner) -> ::acvus_extern::UserDefinedDecl {
                 ::acvus_extern::UserDefinedDecl {
@@ -1870,6 +2017,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     type_params: vec![::acvus_extern::TyVarBound::Any; #n_tys],
                     effect_params: #n_effects,
                     identity_params: #n_identities,
+                    region_params: Self::REGION_PARAMS,
                     specializable: vec![true; #n_tys],
                 }
             }
@@ -1928,7 +2076,7 @@ fn uniform_check(
     quote! {
         const _: () = {
             #[allow(dead_code)]
-            fn __uniform_payload<__M, #(#params),*>()
+            fn __uniform_payload<#(#params,)* __M>()
             where
                 #(#predicates,)*
                 #(#type_vars: ::acvus_extern::UniformPayload<__M>,)*
@@ -2052,19 +2200,170 @@ fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::Toke
         .where_clause
         .iter()
         .flat_map(|w| w.predicates.iter());
-    let params = &input.generics.params;
+    let params = input.generics.params.iter();
     let (_, ty_generics, _) = input.generics.split_for_impl();
     Ok(quote! {
         // SAFETY: each field that names a type parameter is bounded by
         // `UniformPayload` here, and a field that names none has one layout
         // at every instantiation.
-        unsafe impl<__M, #params> ::acvus_extern::UniformPayload<__M> for #ident #ty_generics
+        unsafe impl<#(#params,)* __M> ::acvus_extern::UniformPayload<__M> for #ident #ty_generics
         where
             #(#written,)*
             #(#bounded: ::acvus_extern::UniformPayload<__M>,)*
         {
         }
     })
+}
+
+// -- #[derive(Branded)] ----------------------------------------------
+
+#[proc_macro_derive(Branded)]
+pub fn derive_branded(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match generate_branded(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn generate_branded(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let ident = &input.ident;
+    let fields: Vec<&syn::Field> = match &input.data {
+        syn::Data::Struct(data) => data.fields.iter().collect(),
+        syn::Data::Enum(data) => data.variants.iter().flat_map(|v| v.fields.iter()).collect(),
+        syn::Data::Union(_) => {
+            return Err(syn::Error::new(
+                ident.span(),
+                "Branded is derived on a struct or an enum",
+            ));
+        }
+    };
+    let lifetimes: Vec<syn::Lifetime> = input
+        .generics
+        .lifetimes()
+        .map(|lt| lt.lifetime.clone())
+        .collect();
+    let type_params = type_param_idents_owned(&input.generics);
+    let predicates = struct_predicates(&input.generics);
+    let (kept, mapped): (Vec<Ident>, Vec<Ident>) = type_params
+        .iter()
+        .cloned()
+        .partition(|param| predicates.iter().any(|predicate| names_any(predicate, &[param.clone()])));
+    let to_brand = ToBrand {
+        lifetimes: &lifetimes,
+        mapped: &mapped,
+        at: syn::parse_quote! { '__b },
+    };
+    let bounded = fields
+        .iter()
+        .map(|field| &field.ty)
+        .filter(|ty| names_any(*ty, &type_params) || names_lifetime(*ty, &lifetimes))
+        .filter(|ty| !mapped.iter().any(|param| Vars::is_exactly(ty, param)))
+        .map(|ty| {
+            let at_b = to_brand.apply(ty);
+            quote! { #ty: for<'__b> ::acvus_extern::Branded<At<'__b> = #at_b> }
+        });
+    let self_at = {
+        let args = input.generics.params.iter().map(|param| match param {
+            GenericParam::Lifetime(_) => quote! { '__b },
+            GenericParam::Type(tp) => {
+                let ident = &tp.ident;
+                let ty: Type = syn::parse_quote! { #ident };
+                let at = to_brand.apply(&ty);
+                quote! { #at }
+            }
+            GenericParam::Const(c) => {
+                let ident = &c.ident;
+                quote! { #ident }
+            }
+        });
+        match input.generics.params.is_empty() {
+            true => quote! { #ident },
+            false => quote! { #ident<#(#args),*> },
+        }
+    };
+    let params = input.generics.params.iter();
+    let (_, ty_generics, _) = input.generics.split_for_impl();
+    Ok(quote! {
+        // SAFETY: `At<'__b>` puts the type's own lifetimes at `'__b`, each
+        // type parameter no predicate names at its own `At<'__b>`, and keeps
+        // every other parameter. Each field that names a parameter is, at
+        // `'__b`, itself so changed: bounded here, or that parameter itself.
+        // A field that names none is one type at every lifetime, built by Rust
+        // code at that type and never read from a box of another.
+        unsafe impl<#(#params,)*> ::acvus_extern::Branded for #ident #ty_generics
+        where
+            #(#predicates,)*
+            #(#kept: 'static,)*
+            #(#mapped: ::acvus_extern::Branded,)*
+            #(#bounded,)*
+        {
+            type At<'__b> = #self_at;
+        }
+    })
+}
+
+/// A type as `Branded::At<'__b>` gives it: each of `lifetimes` at `at`,
+/// and each of `mapped` at its own `At`.
+struct ToBrand<'a> {
+    lifetimes: &'a [syn::Lifetime],
+    mapped: &'a [Ident],
+    at: syn::Lifetime,
+}
+
+impl ToBrand<'_> {
+    fn apply(&self, ty: &Type) -> Type {
+        let mut ty = ty.clone();
+        syn::visit_mut::VisitMut::visit_type_mut(&mut &*self, &mut ty);
+        ty
+    }
+}
+
+impl syn::visit_mut::VisitMut for &ToBrand<'_> {
+    fn visit_type_mut(&mut self, ty: &mut Type) {
+        if let Type::Path(path) = ty
+            && path.qself.is_none()
+            && let Some(ident) = path.path.get_ident()
+            && self.mapped.contains(ident)
+        {
+            let (ident, at) = (ident.clone(), &self.at);
+            *ty = syn::parse_quote! { <#ident as ::acvus_extern::Branded>::At<#at> };
+            return;
+        }
+        syn::visit_mut::visit_type_mut(self, ty);
+    }
+
+    fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
+        if self.lifetimes.contains(lifetime) {
+            *lifetime = self.at.clone();
+        }
+    }
+}
+
+/// The type parameters `generics` declares.
+fn type_param_idents_owned(generics: &syn::Generics) -> Vec<Ident> {
+    generics.type_params().map(|tp| tp.ident.clone()).collect()
+}
+
+/// Whether `ty` names one of `lifetimes`.
+fn names_lifetime(ty: &Type, lifetimes: &[syn::Lifetime]) -> bool {
+    struct Find<'a> {
+        lifetimes: &'a [syn::Lifetime],
+        found: bool,
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
+        fn visit_lifetime(&mut self, lifetime: &'ast syn::Lifetime) {
+            self.found |= self.lifetimes.contains(lifetime);
+        }
+    }
+
+    let mut find = Find {
+        lifetimes,
+        found: false,
+    };
+    syn::visit::Visit::visit_type(&mut find, ty);
+    find.found
 }
 
 // -- #[derive(TyArg)] ------------------------------------------------
@@ -2216,6 +2515,8 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
     let borrowable = borrowing.borrowable(ident);
     quote! {
         impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident {}
+
+        ::acvus_extern::unbranded!(#ident);
 
         // SAFETY: a type with no type parameter reaches none.
         unsafe impl<__M> ::acvus_extern::UniformPayload<__M> for #ident {}
@@ -2609,11 +2910,15 @@ impl<'a> ObjectShape<'a> {
                 }
             }
 
+            // SAFETY: `At<'__a>` changes the projection's lifetime alone.
+            unsafe impl<'__x> ::acvus_extern::Branded for #shared<'__x> {
+                type At<'__a> = #shared<'__a>;
+            }
+
             impl<'__x, __R> ::acvus_extern::Projected<__R> for #shared<'__x>
             where
                 __R: ::acvus_extern::Runtime,
             {
-                type At<'__a> = #shared<'__a>;
                 type Table = #table_ty;
 
                 fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -2636,11 +2941,15 @@ impl<'a> ObjectShape<'a> {
                 }
             }
 
+            // SAFETY: `At<'__a>` changes the projection's lifetime alone.
+            unsafe impl<'__x> ::acvus_extern::Branded for #exclusive<'__x> {
+                type At<'__a> = #exclusive<'__a>;
+            }
+
             impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x>
             where
                 __R: ::acvus_extern::Runtime,
             {
-                type At<'__a> = #exclusive<'__a>;
                 type Table = #table_ty;
 
                 fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -3154,11 +3463,15 @@ fn enum_projection(
             }
         }
 
+        // SAFETY: `At<'__a>` changes the projection's lifetime alone.
+        unsafe impl<'__x> ::acvus_extern::Branded for #shared<'__x> {
+            type At<'__a> = #shared<'__a>;
+        }
+
         impl<'__x, __R> ::acvus_extern::Projected<__R> for #shared<'__x>
         where
             __R: ::acvus_extern::Runtime,
         {
-            type At<'__a> = #shared<'__a>;
             type Table = #table_ty;
 
             fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -3177,11 +3490,18 @@ fn enum_projection(
             }
         }
 
-        impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x, __R>
+        // SAFETY: `At<'__a>` changes the projection's lifetime alone.
+        unsafe impl<'__x, __R> ::acvus_extern::Branded for #exclusive<'__x, __R>
         where
             __R: ::acvus_extern::Runtime,
         {
             type At<'__a> = #exclusive<'__a, __R>;
+        }
+
+        impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
             type Table = #table_ty;
 
             fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -3756,7 +4076,7 @@ impl RestAt {
                 quote! { <#marker as ::acvus_extern::RestoreExclusive<#runtime>>::Out<'__b> }
             }
             Self::VariableValue => {
-                quote! { <#marker as ::acvus_extern::RestoreByValue<#runtime>>::Out }
+                quote! { <#marker as ::acvus_extern::RestoreByValue<#runtime>>::Out<'__b> }
             }
             Self::Itself(Mode::Borrow) => quote! { &'__b #ty },
             Self::Itself(Mode::BorrowMut) => quote! { &'__b mut #ty },

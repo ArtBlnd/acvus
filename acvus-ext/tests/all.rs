@@ -5,6 +5,7 @@ mod erased;
 mod hash_instances;
 mod owned_in_scripts;
 mod owned_stage_holders;
+mod region_params;
 mod regression_0041;
 mod slice_entry;
 mod vec_ops;

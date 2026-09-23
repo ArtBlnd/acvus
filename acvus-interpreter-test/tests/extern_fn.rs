@@ -1127,7 +1127,7 @@ async fn a_lambda_calling_a_captured_parameter_takes_its_effect() {
 #[repr(transparent)]
 struct Tag(i64);
 
-type TagSlice<M, Rt> = acvus_extern::Slice<acvus_extern::Erased<Rt, Tag>, M, Rt>;
+type TagSlice<'a, M, Rt> = acvus_extern::Slice<'a, acvus_extern::Erased<Rt, Tag>, M, Rt>;
 
 #[extern_fn(effect = pure)]
 fn make_tags(n: i64) -> Vec<Tag> {
@@ -1137,7 +1137,7 @@ fn make_tags(n: i64) -> Vec<Tag> {
 #[extern_fn(effect = pure)]
 fn sum_tag_slice<Rt>(
     ctx: &mut acvus_extern::Ctx<'_, Rt>,
-    xs: TagSlice<acvus_extern::Shared, Rt>,
+    xs: TagSlice<'_, acvus_extern::Shared, Rt>,
 ) -> i64
 where
     Rt: acvus_extern::Runtime,
@@ -1147,7 +1147,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn bump_tags<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<acvus_extern::Mut, Rt>)
+fn bump_tags<Rt>(ctx: &mut acvus_extern::Ctx<'_, Rt>, xs: TagSlice<'_, acvus_extern::Mut, Rt>)
 where
     Rt: acvus_extern::Runtime,
 {
@@ -1163,7 +1163,7 @@ where
 #[extern_fn(effect = pure)]
 fn grow_tags<Rt>(
     ctx: &mut acvus_extern::Ctx<'_, Rt>,
-    xs: TagSlice<acvus_extern::Shared, Rt>,
+    xs: TagSlice<'_, acvus_extern::Shared, Rt>,
 ) -> Vec<Tag>
 where
     Rt: acvus_extern::Runtime,

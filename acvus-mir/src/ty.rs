@@ -18,6 +18,11 @@ pub struct UserDefinedDecl {
     /// Identity parameters, at most one: a value of a type with one is a
     /// distinct source, and the type is move-only.
     pub identity_params: usize,
+    /// Region parameters: the lifetimes the declaring Rust type takes, one
+    /// position each in front of its type arguments' (RFC-0079 rules 2 and
+    /// 6). A type that holds a reference, a slice, a closure or an instance
+    /// declares one.
+    pub region_params: usize,
     /// Per type parameter, whether the type lays its storage out by that
     /// argument, so the argument is a specializing position
     /// (hash-types.md, R1). One entry per `type_params` entry.
@@ -981,15 +986,18 @@ where
                     type_args,
                     effect_args,
                     identity_args,
+                    region_params,
                 },
                 TyTerm::UserDefined {
                     id: pid,
                     type_args: pargs,
                     effect_args: peffects,
                     identity_args: pidentities,
+                    region_params: pregions,
                 },
             ) => {
                 id == pid
+                    && region_params == pregions
                     && type_args.len() == pargs.len()
                     && effect_args.len() == peffects.len()
                     && identity_args.len() == pidentities.len()
@@ -1293,15 +1301,18 @@ impl PatternSubst {
                     type_args: ta,
                     effect_args: ea,
                     identity_args: na,
+                    region_params: ra,
                 },
                 TyTerm::UserDefined {
                     id: ib,
                     type_args: tb,
                     effect_args: eb,
                     identity_args: nb,
+                    region_params: rb,
                 },
             ) => {
                 ia == ib
+                    && ra == rb
                     && ta.len() == tb.len()
                     && ea.len() == eb.len()
                     && na.len() == nb.len()
@@ -1424,14 +1435,17 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
                     type_args: ta,
                     effect_args: ea,
                     identity_args: ida,
+                    region_params: ra,
                 },
                 TyTerm::UserDefined {
                     id: ib,
                     type_args: tb,
                     effect_args: eb,
                     identity_args: idb,
+                    region_params: rb,
                 },
             ) if ia == ib
+                && ra == rb
                 && ta.len() == tb.len()
                 && ea.len() == eb.len()
                 && ida.len() == idb.len()
@@ -1472,6 +1486,7 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
                     type_args,
                     effect_args,
                     identity_args,
+                    region_params: *ra,
                 }
             }
             (x, y) if x == y => x.clone(),
@@ -2531,6 +2546,7 @@ where
                 type_args,
                 effect_args,
                 identity_args: _,
+                region_params: _,
             } => {
                 let name = self.interner.resolve(id.name);
                 write!(f, "{name}")?;
@@ -3787,6 +3803,10 @@ pub enum TyTerm<V: Phase> {
         type_args: Vec<TypeArg<V>>,
         effect_args: Vec<EffectArg<V>>,
         identity_args: Vec<IdentityTerm<V>>,
+        /// The declaration's `region_params`, carried on the term as
+        /// `identity_args` mirrors `identity_params`: a pass holding no
+        /// registry reads a value's positions off its type (RFC-0079 rule 2).
+        region_params: usize,
     },
     Enum {
         /// A script's `A::B` names `A` at the root; a derived enum's name is
@@ -4231,15 +4251,18 @@ impl<V: Phase> TyTerm<V> {
                     type_args: a_args,
                     effect_args: a_effects,
                     identity_args: _,
+                    region_params: a_regions,
                 },
                 TyTerm::UserDefined {
                     id: b_id,
                     type_args: b_args,
                     effect_args: b_effects,
                     identity_args: _,
+                    region_params: b_regions,
                 },
             ) => {
                 a_id == b_id
+                    && a_regions == b_regions
                     && a_effects == b_effects
                     && a_args.len() == b_args.len()
                     && a_args
@@ -4352,6 +4375,7 @@ impl<V: Phase> TyTerm<V> {
                 type_args,
                 effect_args,
                 identity_args,
+                region_params,
             } => TyTerm::UserDefined {
                 id: *id,
                 type_args: type_args
@@ -4360,6 +4384,7 @@ impl<V: Phase> TyTerm<V> {
                     .collect(),
                 effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
                 identity_args: identity_args.iter().map(|i| i.map(on_identity)).collect(),
+                region_params: *region_params,
             },
             TyTerm::Enum { name, variants, .. } => TyTerm::Enum {
                 name: *name,
@@ -4474,7 +4499,9 @@ impl<V: Phase> TyTerm<V> {
                 type_args,
                 effect_args,
                 identity_args,
+                region_params,
             } => Ok(TyTerm::UserDefined {
+                region_params: *region_params,
                 id: *id,
                 type_args: type_args
                     .iter()
@@ -4632,8 +4659,10 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                 type_args,
                 effect_args,
                 identity_args,
+                region_params,
             } => TyTerm::UserDefined {
                 id: *id,
+                region_params: *region_params,
                 type_args: type_args.iter().map(|t| arg(t, builder)).collect(),
                 effect_args: effect_args.iter().map(effect_arg).collect(),
                 identity_args: identity_args
@@ -4795,6 +4824,7 @@ mod tests {
             type_args: vec![],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         }
     }
 
@@ -5285,6 +5315,7 @@ mod tests {
             type_args: type_args.into_iter().map(TypeArg::uniform).collect(),
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         }
     }
 
@@ -5301,6 +5332,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5320,6 +5352,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5342,6 +5375,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5367,6 +5401,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5407,6 +5442,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5429,6 +5465,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5451,6 +5488,7 @@ mod tests {
                 type_params: vec![TyVarBound::Any],
                 effect_params: 0,
                 identity_params: 0,
+                region_params: 0,
                 specializable: vec![false],
             })
             .expect("one declaration per name");
@@ -5481,6 +5519,7 @@ mod tests {
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            region_params: 0,
             specializable: vec![false],
         })
         .expect("one declaration per name");
@@ -5498,6 +5537,7 @@ mod tests {
             type_params: vec![],
             effect_params: 0,
             identity_params: 0,
+            region_params: 0,
             specializable: vec![],
         };
         reg.register(decl()).expect("one declaration per name");
@@ -5536,6 +5576,7 @@ mod tests {
             type_args: params.iter().cloned().map(TypeArg::uniform).collect(),
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         let to = build_to(&params);
         let mut reg = TypeRegistry::new();
@@ -5544,6 +5585,7 @@ mod tests {
             type_params: vec![TyVarBound::Any; type_param_count],
             effect_params: 0,
             identity_params: 0,
+            region_params: 0,
             specializable: vec![false; type_param_count],
         })
         .expect("one declaration per name");
@@ -5576,6 +5618,7 @@ mod tests {
             type_args: vec![TypeArg::uniform(TyTerm::I64)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         let to = arr(TyTerm::I64, 3);
         let conversion = s.decide(Decision::conversion(&from, &to));
@@ -5602,6 +5645,7 @@ mod tests {
             type_args: vec![TypeArg::uniform(TyTerm::I64)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         let consumer_param = s.fresh_ty_var();
         let to = arr(consumer_param.clone(), 3);
@@ -5630,6 +5674,7 @@ mod tests {
             type_args: vec![],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         let conversion = s.decide(Decision::conversion(&from, &TyTerm::I64));
         assert!(s.settle().is_empty());
@@ -5657,6 +5702,7 @@ mod tests {
             type_args: vec![TypeArg::uniform(TyTerm::I64)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         assert!(s.unify(&from, &TyTerm::String).is_err());
     }
@@ -5675,6 +5721,7 @@ mod tests {
             type_args: vec![],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         assert!(s.unify(&from, &TyTerm::I64).is_err());
     }
@@ -5695,6 +5742,7 @@ mod tests {
             type_args: vec![],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         assert!(s.unify(&from, &TyTerm::I64).is_err());
     }
@@ -5720,6 +5768,7 @@ mod tests {
                 type_args: vec![TypeArg::uniform(t1.clone())],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
             to: arr(t1, 3),
             fn_ref: fn_id_a,
@@ -5731,6 +5780,7 @@ mod tests {
                 type_args: vec![TypeArg::uniform(t2.clone())],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
             to: arr(t2, 3),
             fn_ref: fn_id_b,
@@ -5743,6 +5793,7 @@ mod tests {
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            region_params: 0,
             specializable: vec![false],
         })
         .expect("one declaration per name");
@@ -5756,6 +5807,7 @@ mod tests {
             type_args: vec![TypeArg::uniform(TyTerm::I64)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         assert!(s.unify(&from, &arr(TyTerm::I64, 3)).is_err());
     }
@@ -5778,6 +5830,7 @@ mod tests {
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            region_params: 0,
             specializable: vec![false],
         })
         .expect("one declaration per name");
@@ -5787,6 +5840,7 @@ mod tests {
                 type_args: vec![TypeArg::uniform(t.clone())],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
             to: arr(t.clone(), 3),
             fn_ref: fn_id_a,
@@ -5800,6 +5854,7 @@ mod tests {
                 type_args: vec![TypeArg::uniform(t2.clone())],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
             to: arr(t2, 3),
             fn_ref: fn_id_b,
@@ -5819,6 +5874,7 @@ mod tests {
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            region_params: 0,
             specializable: vec![false],
         })
         .expect("one declaration per name");
@@ -5830,6 +5886,7 @@ mod tests {
                 type_args: vec![TypeArg::uniform(t1.clone())],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
             to: arr(t1, 3),
             fn_ref: fn_id_a,
@@ -5843,6 +5900,7 @@ mod tests {
                 type_args: vec![TypeArg::uniform(t2.clone())],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
             to: TyTerm::Option(Box::new(t2)),
             fn_ref: fn_id_b,
@@ -5890,6 +5948,7 @@ mod tests {
             type_args: vec![TypeArg::uniform(fn_ty)],
             effect_args,
             identity_args,
+            region_params: 0,
         };
         assert!(!over_fn.is_data());
     }

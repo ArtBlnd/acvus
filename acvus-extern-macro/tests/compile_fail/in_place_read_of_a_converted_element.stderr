@@ -14,7 +14,8 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -33,7 +34,8 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
    = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
 note: required by a bound in `acvus_extern::Loan::borrow`
@@ -45,7 +47,7 @@ note: required by a bound in `acvus_extern::Loan::borrow`
    |         Rep: Lends<T, Rt>,
    |              ^^^^^^^^^^^^ required by this bound in `Loan::borrow`
 
-error[E0599]: the method `with` exists for reference `&acvus_extern::Ref<Vec<i64>, acvus_extern::Shared, Rt>`, but its trait bounds were not satisfied
+error[E0599]: the method `with` exists for reference `&acvus_extern::Ref<'_, Vec<i64>, acvus_extern::Shared, Rt>`, but its trait bounds were not satisfied
   --> tests/compile_fail/in_place_read_of_a_converted_element.rs:28:7
    |
 28 |     r.with(rt, |xs| xs.len())
@@ -76,7 +78,8 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
    = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
    = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `RestoreShared<Rt>`
@@ -97,7 +100,8 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
    = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
    = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `RestoreExclusive<Rt>`

@@ -42,6 +42,14 @@ where
     unsafe { Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity()) }
 }
 
+// SAFETY: the element is its own `At<'a>`.
+unsafe impl<T> crate::Branded for Vec<T>
+where
+    T: crate::Branded,
+{
+    type At<'a> = Vec<T::At<'a>>;
+}
+
 crate::cross_one_value!(Vec<T>, T: crate::OneValue<__Rt>);
 
 impl<T, Rt> OneValue<Rt> for Vec<T>
@@ -97,11 +105,11 @@ where
     }
 }
 
-crate::cross_whole!(crate::Specialized, Vec<T>, T: Var<kind::Type>);
+crate::cross_whole!(crate::Specialized, Vec<T>, T: Var<kind::Type> + crate::Branded);
 
 impl<T, Rt> crate::BorrowableSpecialized<Rt> for Vec<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + crate::Branded,
     Rt: Runtime,
 {
     crate::whole_box_in_place!(Vec<T>, Rt);
@@ -129,6 +137,7 @@ where
             type_args: vec![T::slot(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: <Self as ExternTypeDecl>::REGION_PARAMS,
         }
     }
 
@@ -140,6 +149,7 @@ where
             type_args: vec![T::held(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: <Self as ExternTypeDecl>::REGION_PARAMS,
         })
     }
 }
@@ -150,12 +160,15 @@ where
 {
     type DeclarationForm = Vec<()>;
 
+    const REGION_PARAMS: usize = 0;
+
     fn type_decl(i: &Interner) -> UserDefinedDecl {
         UserDefinedDecl {
             qref: QualifiedRef::root(i.intern("Vec")),
             type_params: vec![TyVarBound::Any],
             effect_params: 0,
             identity_params: 0,
+            region_params: Self::REGION_PARAMS,
             specializable: vec![true],
         }
     }
@@ -168,5 +181,6 @@ pub fn vec_ty(interner: &Interner, elem: Ty) -> Ty {
         type_args: vec![TypeArg::uniform(elem)],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: <Vec<()> as ExternTypeDecl>::REGION_PARAMS,
     }
 }

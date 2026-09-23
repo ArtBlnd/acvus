@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/compile_fail/slice_kept_past_the_call.rs:17:34
+   |
+13 | fn keep<Rt>(s: Slice<Erased<Rt, i64>, Shared, Rt>) -> i64
+   |             - has type `acvus_extern::Slice<'1, Erased<Rt, i64>, acvus_extern::Shared, Rt>`
+...
+17 |     *KEPT.lock().unwrap() = Some(Box::new(s));
+   |                                  ^^^^^^^^^^^ coercion requires that `'1` must outlive `'static`

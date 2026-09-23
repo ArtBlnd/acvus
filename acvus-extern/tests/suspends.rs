@@ -11,9 +11,9 @@ use acvus_extern::{
 #[extern_fn(effect = pure)]
 async fn both<D, E, F, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    first: Closure<(i64,), i64, D, Rt>,
-    second: Closure<(i64,), i64, E, Rt>,
-    third: Closure<(i64,), i64, F, Rt>,
+    first: Closure<'_, (i64,), i64, D, Rt>,
+    second: Closure<'_, (i64,), i64, E, Rt>,
+    third: Closure<'_, (i64,), i64, F, Rt>,
 ) -> i64
 where
     D: Var<kind::Effect>,
@@ -25,7 +25,7 @@ where
 }
 
 #[extern_fn(effect = E)]
-async fn each<E, Rt>(ctx: &mut Ctx<'_, Rt>, f: Closure<(i64,), i64, E, Rt>) -> i64
+async fn each<E, Rt>(ctx: &mut Ctx<'_, Rt>, f: Closure<'_, (i64,), i64, E, Rt>) -> i64
 where
     E: Var<kind::Effect> + Suspends,
     Rt: Runtime,
@@ -44,7 +44,7 @@ extern_signature! {
 }
 
 #[extern_fn(instance_of = run, effect = E)]
-async fn run_each<E, Rt>(ctx: &mut Ctx<'_, Rt>, f: Closure<(i64,), i64, E, Rt>) -> i64
+async fn run_each<E, Rt>(ctx: &mut Ctx<'_, Rt>, f: Closure<'_, (i64,), i64, E, Rt>) -> i64
 where
     E: Var<kind::Effect> + Suspends,
     Rt: Runtime,

@@ -18,5 +18,5 @@ error[E0308]: mismatched types
 note: method defined here
   --> $WORKSPACE/acvus-extern/src/instance.rs
    |
-   |     pub fn call<'r>(
+   |     pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
    |            ^^^^

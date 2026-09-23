@@ -518,6 +518,7 @@ fn vec_of(i: &Interner, arg: TypeArg<acvus_extern::Poly>) -> PolyTy {
         type_args: vec![arg],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     }
 }
 

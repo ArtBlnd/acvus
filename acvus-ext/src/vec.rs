@@ -273,7 +273,7 @@ where
 // loan at the place (RFC-0047).
 
 #[extern_fn(effect = pure)]
-fn get<T, Rt>(c: &Vec<T>, at: u64) -> Option<&T>
+fn get<'a, T, Rt>(c: &Vec<T>, at: u64) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     Rt: Runtime,
@@ -287,7 +287,7 @@ where
 // by `docs/std/vec.md`, and a registry's namespace is the name a script
 // writes.
 
-type KeyOf<T, E, Rt> = Closure<(Ref<T, Shared, Rt>,), i64, E, Rt>;
+type KeyOf<'a, T, E, Rt> = Closure<'a, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>;
 
 fn keyed_order(keys: Vec<i64>) -> Vec<usize> {
     let mut order: Vec<usize> = (0..keys.len()).collect();
@@ -295,7 +295,7 @@ fn keyed_order(keys: Vec<i64>) -> Vec<usize> {
     order
 }
 
-fn sort_by_key_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: KeyOf<T, E, Rt>)
+fn sort_by_key_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: KeyOf<'_, T, E, Rt>)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -309,7 +309,7 @@ where
 }
 
 #[extern_fn(effect = E, sync = sort_by_key_now)]
-async fn sort_by_key<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: KeyOf<T, E, Rt>)
+async fn sort_by_key<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: KeyOf<'_, T, E, Rt>)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -339,13 +339,13 @@ fn merge_runs(n: usize, width: usize) -> impl Iterator<Item = MergeRun> {
 
 /// The comparator answers −1/0/1, the protocol `string::cmp` already
 /// speaks; the language has no `Ordering` type for it to return.
-fn takes_left(verdict: i64) -> bool {
+fn takes_left<'a>(verdict: i64) -> bool {
     verdict <= 0
 }
 
-type Comparator<T, E, Rt> = Closure<(Ref<T, Shared, Rt>, Ref<T, Shared, Rt>), i64, E, Rt>;
+type Comparator<'a, T, E, Rt> = Closure<'a, (Ref<'static, T, Shared, Rt>, Ref<'static, T, Shared, Rt>), i64, E, Rt>;
 
-fn sort_by_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: Comparator<T, E, Rt>)
+fn sort_by_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: Comparator<'_, T, E, Rt>)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -383,7 +383,7 @@ where
 }
 
 #[extern_fn(effect = E, sync = sort_by_now)]
-async fn sort_by<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: Comparator<T, E, Rt>)
+async fn sort_by<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: Comparator<'_, T, E, Rt>)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -430,7 +430,7 @@ fn eq_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
     b: &Vec<T>,
-    elem: Instance<core::eq<T, Rt>, T, Rt>,
+    elem: Instance<'_, core::eq<T, Rt>, T, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -451,7 +451,7 @@ where
 fn clone_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
-    elem: Instance<core::clone<T, Rt>, T, Rt>,
+    elem: Instance<'_, core::clone<T, Rt>, T, Rt>,
 ) -> Vec<T>
 where
     T: Var<kind::Type>
@@ -473,7 +473,7 @@ fn cmp_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
     b: &Vec<T>,
-    elem: Instance<core::cmp<T, Rt>, T, Rt>,
+    elem: Instance<'_, core::cmp<T, Rt>, T, Rt>,
 ) -> i64
 where
     T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -492,7 +492,7 @@ where
 fn hash_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
-    elem: Instance<core::hash<T, Rt>, T, Rt>,
+    elem: Instance<'_, core::hash<T, Rt>, T, Rt>,
 ) -> u64
 where
     T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,

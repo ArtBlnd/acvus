@@ -9,7 +9,7 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
 
 [dev-dependencies]
 acvus-extern = { path = "../acvus-extern" }

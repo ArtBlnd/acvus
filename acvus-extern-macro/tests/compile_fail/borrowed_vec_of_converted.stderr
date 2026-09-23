@@ -18,9 +18,10 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<Rendered>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Vec<Rendered>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Vec<Rendered>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -39,9 +40,10 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<i64>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -60,9 +62,10 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Vec<i64>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -81,7 +84,8 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | | where
    | |     R: Runtime,
    | |     T: 'static,
-   | |_______________^
+   | |     Self: crate::Branded,
+   | |_________________________^
    = note: required for `Arr<i64, ()>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Arr<i64, ()>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Arr<i64, ()>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

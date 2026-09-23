@@ -35,6 +35,7 @@ fn iter_ty(interner: &Interner, elem: Ty) -> Ty {
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
+        region_params: 0,
     }
 }
 
@@ -48,6 +49,7 @@ fn iter_ity(interner: &Interner, elem: InferTy) -> InferTy {
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
+        region_params: 0,
     }
 }
 
@@ -155,6 +157,7 @@ fn instantiate_pair_shares_params() {
         type_params: vec![acvus_mir::ty::TyVarBound::Any],
         effect_params: 0,
         identity_params: 0,
+        region_params: 0,
         specializable: vec![false],
     })
     .expect("one declaration per name");
@@ -165,6 +168,7 @@ fn instantiate_pair_shares_params() {
         type_args: vec![TypeArg::uniform(t.clone())],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     };
     let to = PolyTy::Array(Box::new(t), acvus_mir::ty::LenTerm::Known(3));
 
@@ -179,6 +183,7 @@ fn instantiate_pair_shares_params() {
         type_args: vec![TypeArg::uniform(it(&Ty::I64))],
         effect_args: vec![],
         identity_args: vec![],
+        region_params: 0,
     };
     assert!(s.unify(&concrete_from, &inst_from).is_ok());
 

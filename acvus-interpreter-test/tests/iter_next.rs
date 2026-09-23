@@ -66,8 +66,8 @@ fn next_nrange(it: &mut NRange) -> Option<i64> {
     })
 }
 
-#[derive(acvus_extern::UniformPayload)]
-pub struct NMapBody<I, T, U, E, Rt>
+#[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+pub struct NMapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -76,14 +76,14 @@ where
     Rt: Runtime,
 {
     inner: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
-    f: Closure<(T,), U, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+    f: Closure<'a, (T,), U, E, Rt>,
 }
 
 #[derive(ExternType)]
 #[extern_type(name = "NMap")]
 #[repr(transparent)]
-pub struct NMap<I, T, U, E, Rt>(NMapBody<I, T, U, E, Rt>)
+pub struct NMap<'a, I, T, U, E, Rt>(NMapBody<'a, I, T, U, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -92,11 +92,11 @@ where
     Rt: Runtime;
 
 #[extern_fn(effect = pure)]
-fn nmap<I, T, U, E, Rt>(
+fn nmap<'a, I, T, U, E, Rt>(
     it: I,
-    f: Closure<(T,), U, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
-) -> NMap<I, T, U, E, Rt>
+    f: Closure<'a, (T,), U, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+) -> NMap<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -108,7 +108,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::next, effect = E)]
-fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, T, U, E, Rt>) -> Option<U>
+fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<'_, I, T, U, E, Rt>) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -120,8 +120,8 @@ where
     Some(it.0.f.call_now(ctx, (x,)))
 }
 
-#[derive(acvus_extern::UniformPayload)]
-pub struct NFilterBody<I, T, E, Rt>
+#[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+pub struct NFilterBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -129,14 +129,14 @@ where
     Rt: Runtime,
 {
     inner: I,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
 }
 
 #[derive(ExternType)]
 #[extern_type(name = "NFilter")]
 #[repr(transparent)]
-pub struct NFilter<I, T, E, Rt>(NFilterBody<I, T, E, Rt>)
+pub struct NFilter<'a, I, T, E, Rt>(NFilterBody<'a, I, T, E, Rt>)
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -144,11 +144,11 @@ where
     Rt: Runtime;
 
 #[extern_fn(effect = pure)]
-fn nfilter<I, T, E, Rt>(
+fn nfilter<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<(Ref<T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt>,
-) -> NFilter<I, T, E, Rt>
+    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+) -> NFilter<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -159,7 +159,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::next, effect = E)]
-fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, T, E, Rt>) -> Option<T>
+fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
@@ -179,7 +179,7 @@ where
 fn nsum<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
+    next: Instance<'_, sig::next<I, i64, E, Rt>, I, Rt>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -194,26 +194,26 @@ where
     acc
 }
 
-#[derive(acvus_extern::UniformPayload)]
-pub struct NSlowedBody<I, Rt>
+#[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+pub struct NSlowedBody<'a, I, Rt>
 where
     I: Var<kind::Type>,
     Rt: Runtime,
 {
     inner: I,
-    next: Instance<sig::next<I, i64, Pure, Rt>, I, Rt>,
+    next: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt>,
 }
 
 #[derive(ExternType)]
 #[extern_type(name = "NSlowed")]
 #[repr(transparent)]
-pub struct NSlowed<I, Rt>(NSlowedBody<I, Rt>)
+pub struct NSlowed<'a, I, Rt>(NSlowedBody<'a, I, Rt>)
 where
     I: Var<kind::Type>,
     Rt: Runtime;
 
 #[extern_fn(effect = pure)]
-fn nslowed<I, Rt>(it: I, next: Instance<sig::next<I, i64, Pure, Rt>, I, Rt>) -> NSlowed<I, Rt>
+fn nslowed<'a, I, Rt>(it: I, next: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt>) -> NSlowed<'a, I, Rt>
 where
     I: Var<kind::Type>,
     Rt: Runtime,
@@ -225,7 +225,7 @@ where
 /// inner stage through `into_async` — the sync instance `nslowed` was
 /// handed, called at the async task (RFC-0067 rule 5).
 #[extern_fn(instance_of = sig::next, effect = pure)]
-async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<I, Rt>) -> Option<i64>
+async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<'_, I, Rt>) -> Option<i64>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
@@ -243,7 +243,7 @@ where
 async fn nsum_await<I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    next: Instance<sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
+    next: Instance<'_, sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,

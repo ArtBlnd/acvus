@@ -86,17 +86,15 @@ pub struct VariantAt<const K: usize, P> {
 
 /// A projection type a handler names in its signature.
 ///
-/// The glue's marker holds `Self` at `'static` because a marker type is
-/// `'static`, and `At<'a>` is the same projection at the call's own lifetime.
-/// The derive writes one impl for `SRef<'_>`, which reads through a shared
-/// borrow, and one for `SMut<'_>`, which reads through an exclusive one, so
-/// the choice between the two is the projection's own: the macro sees a type
-/// with a lifetime argument and needs to know nothing further about it.
-pub trait Projected<Rt>: Sized
+/// The glue's marker holds `Self` at `'static`, and the handler receives it
+/// at `Branded::At<'a>`, as every crossing type. The derive writes one impl
+/// for `SRef<'_>`, which reads through a shared borrow, and one for
+/// `SMut<'_>`, which reads through an exclusive one, so the choice between
+/// the two is the projection's own.
+pub trait Projected<Rt>: crate::Branded + Sized
 where
     Rt: Runtime,
 {
-    type At<'a>;
     type Table: Clone + Send + Sync + 'static;
 
     fn table(at: ArgAt<'_>) -> Self::Table;
@@ -439,12 +437,12 @@ where
     }
 }
 
-impl<'a, P, Rt> Arg<'a, Rt> for ByProjection<P>
+impl<'a, 'w, P, Rt> Arg<'a, 'w, Rt> for ByProjection<P>
 where
     P: Projected<Rt> + 'static,
     Rt: Runtime,
 {
-    type Out = <P as Projected<Rt>>::At<'a>;
+    type Out = <P as crate::Branded>::At<'a>;
     type Form = One;
 
     unsafe fn take<'s>(

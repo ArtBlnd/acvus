@@ -44,8 +44,8 @@ use crate::iter::{Items, Refs, sig};
 /// table keeps them: at the key type and the effect the map's own type
 /// carries. A closure is stored at the types it was declared with and is
 /// not re-spelled (RFC-0068 rule 1).
-type HashOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>,), u64, E, Rt>;
-type EqOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>, Ref<K, Shared, Rt>), bool, E, Rt>;
+type HashOf<'a, K, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>,), u64, E, Rt>;
+type EqOf<'a, K, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>, Ref<'static, K, Shared, Rt>), bool, E, Rt>;
 
 /// Concrete, and not `Box<dyn>`. `ClosureFn::call_now` takes the context as
 /// `&mut Ctx<'_, Rt>`, a pointer to the one the machine owns; behind a
@@ -53,24 +53,24 @@ type EqOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>, Ref<K, Shared, Rt>), bool, E,
 /// LLVM must assume keeps it, and its sibling-call rule then refuses the
 /// tail jump every operation owes its successor (RFC-0052, enforced by
 /// `acvus-interpreter-test/benches/asm_probe.rs`).
-#[derive(UniformPayload)]
-enum Keying<K, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+enum Keying<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
     Closures {
-        hash: HashOf<K, E, Rt>,
-        eq: EqOf<K, E, Rt>,
+        hash: HashOf<'a, K, E, Rt>,
+        eq: EqOf<'a, K, E, Rt>,
     },
     Instances {
-        hash: Instance<core::hash<K, Rt>, K, Rt>,
-        eq: Instance<core::eq<K, Rt>, K, Rt>,
+        hash: Instance<'a, core::hash<K, Rt>, K, Rt>,
+        eq: Instance<'a, core::eq<K, Rt>, K, Rt>,
     },
 }
 
-impl<K, E, Rt> Keying<K, E, Rt>
+impl<K, E, Rt> Keying<'_, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -105,14 +105,14 @@ where
     }
 }
 
-#[derive(UniformPayload)]
+#[derive(UniformPayload, acvus_extern::Branded)]
 struct Entry<K, V> {
     hash: u64,
     binding: Binding<K, V>,
 }
 
 /// A key and the value it names, each at the type the declaration gave it.
-#[derive(UniformPayload)]
+#[derive(UniformPayload, acvus_extern::Branded)]
 struct Binding<K, V> {
     key: K,
     value: V,
@@ -141,8 +141,8 @@ struct Placed<K, V> {
 /// insertion order, and the positions each hash occupies. A set's value
 /// slot is `()`: nothing reads it, and a runtime value written there would
 /// be a value the table owns for no reader.
-#[derive(UniformPayload)]
-pub struct Table<K, V, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct Table<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Send + Sync + 'static,
@@ -151,17 +151,17 @@ where
 {
     entries: Vec<Entry<K, V>>,
     positions: FxHashMap<u64, Vec<usize>>,
-    keying: Keying<K, E, Rt>,
+    keying: Keying<'a, K, E, Rt>,
 }
 
-impl<K, V, E, Rt> Table<K, V, E, Rt>
+impl<'a, K, V, E, Rt> Table<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Send + Sync + 'static,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn new(keying: Keying<K, E, Rt>, capacity: usize) -> Self {
+    fn new(keying: Keying<'a, K, E, Rt>, capacity: usize) -> Self {
         Self {
             entries: Vec::with_capacity(capacity),
             positions: FxHashMap::default(),
@@ -248,7 +248,7 @@ where
 /// Everything a lookup reaches: the key crosses into the two closures as
 /// Rust's `&K`, which is the passed form of the `&K` their declaration
 /// names (`Passed`, RFC-0018).
-impl<K, V, E, Rt> Table<K, V, E, Rt>
+impl<K, V, E, Rt> Table<'_, K, V, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     V: Send + Sync + 'static,
@@ -362,9 +362,14 @@ macro_rules! stand_in {
 /// the impls are here. The second runtime parameter `cross_as_stored!`
 /// would add is what this does not have: it would let a value of one runtime
 /// erase into another.
+///
+/// The table holds the closures or the instances it hashes and compares
+/// with, so the type has one region parameter (RFC-0079 rule 6): every
+/// trait a marker names holds at `'static`, and `Branded` hands the handler
+/// the map at the call's lifetime.
 macro_rules! stored_extern_type {
     ($t:ident<$($k:ident),+>, name: $name:literal) => {
-        impl<$($k,)+ E, Rt> Var<kind::Type> for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> Var<kind::Type> for $t<'static, $($k,)+ E, Rt>
         where
             $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
@@ -372,17 +377,18 @@ macro_rules! stored_extern_type {
         {
         }
 
-        // SAFETY: each type argument is its own canonical form's.
-        unsafe impl<$($k,)+ E, Rt> acvus_extern::Canonical<kind::Type> for $t<$($k,)+ E, Rt>
+        // SAFETY: each type argument is its own canonical form's, and the
+        // region parameter is at `'static`.
+        unsafe impl<'a, $($k,)+ E, Rt> acvus_extern::Canonical<kind::Type> for $t<'a, $($k,)+ E, Rt>
         where
             $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            type Canon = $t<$(<$k as acvus_extern::Canonical<kind::Type>>::Canon,)+ E, Rt>;
+            type Canon = $t<'static, $(<$k as acvus_extern::Canonical<kind::Type>>::Canon,)+ E, Rt>;
         }
 
-        impl<$($k,)+ E, Rt> TyArg for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> TyArg for $t<'static, $($k,)+ E, Rt>
         where
             $($k: TyArg + Var<kind::Type>,)+
             E: Term<kind::Effect> + Var<kind::Effect>,
@@ -394,17 +400,20 @@ macro_rules! stored_extern_type {
                     type_args: vec![$($k::held(i, vars)),+],
                     effect_args: vec![held_effect::<E>(vars)],
                     identity_args: vec![],
+                    region_params: <Self as ExternTypeDecl>::REGION_PARAMS,
                 }
             }
         }
 
-        impl<$($k,)+ E, Rt> ExternTypeDecl for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> ExternTypeDecl for $t<'static, $($k,)+ E, Rt>
         where
             $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            type DeclarationForm = $t<$(stand_in!($k),)+ (), acvus_extern::TypesOnly>;
+            type DeclarationForm = $t<'static, $(stand_in!($k),)+ (), acvus_extern::TypesOnly>;
+
+            const REGION_PARAMS: usize = 1;
 
             fn type_decl(i: &Interner) -> UserDefinedDecl {
                 UserDefinedDecl {
@@ -412,41 +421,33 @@ macro_rules! stored_extern_type {
                     type_params: vec![$(unbounded::<$k>()),+],
                     effect_params: 1,
                     identity_params: 0,
+                    region_params: Self::REGION_PARAMS,
                     specializable: vec![$(specializable::<$k>()),+],
                 }
             }
         }
 
-        impl<$($k,)+ E, Rt> Stored<Rt> for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<'static, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type>,)+
+            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::stored_as_canonical!();
+            acvus_extern::whole_box_in_place!($t<'static, $($k,)+ E, Rt>, Rt);
         }
 
-        impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> BorrowableSpecialized<Rt> for $t<'static, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type>,)+
+            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::whole_box_in_place!($t<$($k,)+ E, Rt>, Rt);
+            acvus_extern::whole_box_in_place!($t<'static, $($k,)+ E, Rt>, Rt);
         }
 
-        impl<$($k,)+ E, Rt> BorrowableSpecialized<Rt> for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> Cross<Rt> for $t<'static, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type>,)+
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            acvus_extern::whole_box_in_place!($t<$($k,)+ E, Rt>, Rt);
-        }
-
-        impl<$($k,)+ E, Rt> Cross<Rt> for $t<$($k,)+ E, Rt>
-        where
-            $($k: Var<kind::Type>,)+
+            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
@@ -467,26 +468,26 @@ macro_rules! stored_extern_type {
             }
         }
 
-        impl<$($k,)+ E, Rt> OneValue<Rt> for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> OneValue<Rt> for $t<'static, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type>,)+
+            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::whole_box!($t<$($k,)+ E, Rt>, Rt);
+            acvus_extern::whole_box!($t<'static, $($k,)+ E, Rt>, Rt);
         }
 
-        impl<$($k,)+ E, Rt> OneValue<Rt, Specialized> for $t<$($k,)+ E, Rt>
+        impl<$($k,)+ E, Rt> OneValue<Rt, Specialized> for $t<'static, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type>,)+
+            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::whole_box!($t<$($k,)+ E, Rt>, Rt);
+            acvus_extern::whole_box!($t<'static, $($k,)+ E, Rt>, Rt);
         }
 
         borrowed_as_self!(
-            $t<$($k,)+ E, Rt>,
+            $t<'static, $($k,)+ E, Rt>,
             $($k: Var<kind::Type>,)+ E: Var<kind::Effect>, Rt: Runtime
         );
     };
@@ -494,8 +495,8 @@ macro_rules! stored_extern_type {
 
 // -- The map ------------------------------------------------------------
 
-#[derive(UniformPayload)]
-pub struct HashMap<K, V, E, Rt>(Table<K, V, E, Rt>, PhantomData<(K, V, E)>)
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct HashMap<'a, K, V, E, Rt>(Table<'a, K, V, E, Rt>, PhantomData<(K, V, E)>)
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -504,7 +505,7 @@ where
 
 stored_extern_type!(HashMap<K, V>, name: "HashMap");
 
-fn new_map<K, V, E, Rt>(keying: Keying<K, E, Rt>, capacity: usize) -> HashMap<K, V, E, Rt>
+fn new_map<K, V, E, Rt>(keying: Keying<'_, K, E, Rt>, capacity: usize) -> HashMap<'_, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -515,10 +516,10 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn hash_map<K, V, E, Rt>(
-    hash: Instance<core::hash<K, Rt>, K, Rt>,
-    eq: Instance<core::eq<K, Rt>, K, Rt>,
-) -> HashMap<K, V, E, Rt>
+fn hash_map<'a, K, V, E, Rt>(
+    hash: Instance<'a, core::hash<K, Rt>, K, Rt>,
+    eq: Instance<'a, core::eq<K, Rt>, K, Rt>,
+) -> HashMap<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -529,7 +530,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn hash_map_by<K, V, E, Rt>(hash: HashOf<K, E, Rt>, eq: EqOf<K, E, Rt>) -> HashMap<K, V, E, Rt>
+fn hash_map_by<'a, K, V, E, Rt>(hash: HashOf<'a, K, E, Rt>, eq: EqOf<'a, K, E, Rt>) -> HashMap<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -540,11 +541,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn with_capacity<K, V, E, Rt>(
+fn with_capacity<'a, K, V, E, Rt>(
     n: u64,
-    hash: HashOf<K, E, Rt>,
-    eq: EqOf<K, E, Rt>,
-) -> HashMap<K, V, E, Rt>
+    hash: HashOf<'a, K, E, Rt>,
+    eq: EqOf<'a, K, E, Rt>,
+) -> HashMap<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -555,7 +556,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn len<K, V, E, Rt>(m: &HashMap<K, V, E, Rt>) -> u64
+fn len<K, V, E, Rt>(m: &HashMap<'_, K, V, E, Rt>) -> u64
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -566,7 +567,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn is_empty<K, V, E, Rt>(m: &HashMap<K, V, E, Rt>) -> bool
+fn is_empty<K, V, E, Rt>(m: &HashMap<'_, K, V, E, Rt>) -> bool
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -577,7 +578,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn clear<K, V, E, Rt>(m: &mut HashMap<K, V, E, Rt>)
+fn clear<K, V, E, Rt>(m: &mut HashMap<'_, K, V, E, Rt>)
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -593,15 +594,15 @@ where
 /// type. A map has two element types and a stage carries one `iter::next`,
 /// so reading the keys and reading the values are two stages, each with a
 /// body of its own.
-#[derive(UniformPayload)]
-pub struct KeysBody<K, V, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct KeysBody<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    map: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
+    map: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>,
     at: usize,
 }
 
@@ -609,7 +610,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Keys")]
 #[repr(transparent)]
-pub struct Keys<K, V, E, I, Rt>(KeysBody<K, V, E, Rt>, PhantomData<I>)
+pub struct Keys<'a, K, V, E, I, Rt>(KeysBody<'a, K, V, E, Rt>, PhantomData<I>)
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -617,10 +618,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-impl<K, V, E, I, Rt> Keys<K, V, E, I, Rt>
+impl<K, V, E, I, Rt> Keys<'_, K, V, E, I, Rt>
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type>,
+    K: Var<kind::Type> + acvus_extern::Unbranded,
+    V: Var<kind::Type> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -636,15 +637,15 @@ where
 }
 
 /// As `KeysBody`, over the values.
-#[derive(UniformPayload)]
-pub struct ValuesBody<K, V, E, Rt>
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct ValuesBody<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    map: Ref<HashMap<K, V, E, Rt>, Shared, Rt>,
+    map: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>,
     at: usize,
 }
 
@@ -652,7 +653,7 @@ where
 #[derive(ExternType)]
 #[extern_type(name = "Values")]
 #[repr(transparent)]
-pub struct Values<K, V, E, I, Rt>(ValuesBody<K, V, E, Rt>, PhantomData<I>)
+pub struct Values<'a, K, V, E, I, Rt>(ValuesBody<'a, K, V, E, Rt>, PhantomData<I>)
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -660,10 +661,10 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-impl<K, V, E, I, Rt> Values<K, V, E, I, Rt>
+impl<K, V, E, I, Rt> Values<'_, K, V, E, I, Rt>
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type>,
+    K: Var<kind::Type> + acvus_extern::Unbranded,
+    V: Var<kind::Type> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -679,7 +680,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn keys<K, V, E, I, Rt>(m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>) -> Keys<K, V, E, I, Rt>
+fn keys<'a, K, V, E, I, Rt>(m: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>) -> Keys<'a, K, V, E, I, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type>,
@@ -693,11 +694,11 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_keys<'a, K, V, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Keys<K, V, E, I, Rt>,
+    it: &'a mut Keys<'_, K, V, E, I, Rt>,
 ) -> Option<&'a K>
 where
-    K: Var<kind::Type> + TransparentOver<Rt>,
-    V: Var<kind::Type>,
+    K: Var<kind::Type> + acvus_extern::Unbranded + TransparentOver<Rt>,
+    V: Var<kind::Type> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -706,7 +707,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn values<K, V, E, I, Rt>(m: Ref<HashMap<K, V, E, Rt>, Shared, Rt>) -> Values<K, V, E, I, Rt>
+fn values<'a, K, V, E, I, Rt>(m: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>) -> Values<'a, K, V, E, I, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type> + TransparentOver<Rt>,
@@ -720,11 +721,11 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_values<'a, K, V, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Values<K, V, E, I, Rt>,
+    it: &'a mut Values<'_, K, V, E, I, Rt>,
 ) -> Option<&'a V>
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type> + TransparentOver<Rt>,
+    K: Var<kind::Type> + acvus_extern::Unbranded,
+    V: Var<kind::Type> + acvus_extern::Unbranded + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -739,7 +740,7 @@ where
 // exclusive loan the boundary does carry, one key at a time.
 
 #[extern_fn(effect = pure)]
-fn into_keys<K, V, E, I, Rt>(m: HashMap<K, V, E, Rt>) -> Items<K, I, Rt>
+fn into_keys<K, V, E, I, Rt>(m: HashMap<'_, K, V, E, Rt>) -> Items<K, I, Rt>
 where
     K: Var<kind::Type> + Stored<Rt> + Cross<Rt>,
     V: Var<kind::Type>,
@@ -751,7 +752,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn into_values<K, V, E, I, Rt>(m: HashMap<K, V, E, Rt>) -> Items<V, I, Rt>
+fn into_values<K, V, E, I, Rt>(m: HashMap<'_, K, V, E, Rt>) -> Items<V, I, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type> + Stored<Rt> + Cross<Rt>,
@@ -764,7 +765,7 @@ where
 
 fn insert_now<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
     key: K,
     value: V,
 ) -> Option<V>
@@ -780,7 +781,7 @@ where
 #[extern_fn(effect = E, sync = insert_now)]
 async fn insert<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
     key: K,
     value: V,
 ) -> Option<V>
@@ -800,7 +801,7 @@ where
 #[extern_fn(effect = E)]
 fn get<'m, K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &'m HashMap<K, V, E, Rt>,
+    m: &'m HashMap<'_, K, V, E, Rt>,
     key: &K,
 ) -> Option<&'m V>
 where
@@ -818,7 +819,7 @@ where
 #[extern_fn(effect = E)]
 fn get_mut<'m, K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &'m mut HashMap<K, V, E, Rt>,
+    m: &'m mut HashMap<'_, K, V, E, Rt>,
     key: &K,
 ) -> Option<&'m mut V>
 where
@@ -831,7 +832,7 @@ where
     Some(&mut m.0.entries[at].binding.value)
 }
 
-fn contains_key_now<K, V, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<K, V, E, Rt>, key: &K) -> bool
+fn contains_key_now<K, V, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<'_, K, V, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     V: Var<kind::Type>,
@@ -842,7 +843,7 @@ where
 }
 
 #[extern_fn(effect = E, sync = contains_key_now)]
-async fn contains_key<K, V, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<K, V, E, Rt>, key: &K) -> bool
+async fn contains_key<K, V, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<'_, K, V, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     V: Var<kind::Type>,
@@ -854,7 +855,7 @@ where
 
 fn remove_now<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
     key: &K,
 ) -> Option<V>
 where
@@ -870,7 +871,7 @@ where
 #[extern_fn(effect = E, sync = remove_now)]
 async fn remove<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
     key: &K,
 ) -> Option<V>
 where
@@ -888,7 +889,7 @@ where
 #[extern_fn(effect = E)]
 fn or_insert<'m, K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &'m mut HashMap<K, V, E, Rt>,
+    m: &'m mut HashMap<'_, K, V, E, Rt>,
     key: K,
     value: V,
 ) -> &'m mut V
@@ -904,8 +905,8 @@ where
 
 fn extend_now<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
-    other: HashMap<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
+    other: HashMap<'_, K, V, E, Rt>,
 ) where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     V: Var<kind::Type>,
@@ -920,8 +921,8 @@ fn extend_now<K, V, E, Rt>(
 #[extern_fn(effect = E, sync = extend_now)]
 async fn extend<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
-    other: HashMap<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
+    other: HashMap<'_, K, V, E, Rt>,
 ) where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     V: Var<kind::Type>,
@@ -933,12 +934,12 @@ async fn extend<K, V, E, Rt>(
     }
 }
 
-type KeepOf<K, V, E, Rt> = Closure<(Ref<K, Shared, Rt>, Ref<V, Shared, Rt>), bool, E, Rt>;
+type KeepOf<'a, K, V, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>, Ref<'static, V, Shared, Rt>), bool, E, Rt>;
 
 fn retain_now<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
-    keep: KeepOf<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
+    keep: KeepOf<'_, K, V, E, Rt>,
 ) where
     K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type> + TransparentOver<Rt>,
@@ -957,8 +958,8 @@ fn retain_now<K, V, E, Rt>(
 #[extern_fn(effect = E, sync = retain_now)]
 async fn retain<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    m: &mut HashMap<K, V, E, Rt>,
-    keep: KeepOf<K, V, E, Rt>,
+    m: &mut HashMap<'_, K, V, E, Rt>,
+    keep: KeepOf<'_, K, V, E, Rt>,
 ) where
     K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type> + TransparentOver<Rt>,
@@ -983,7 +984,7 @@ where
 {
     extern_registry! {
         ns: "map",
-        types: [HashMap<_, _, _, Rt>, Keys<_, _, _, _, Rt>, Values<_, _, _, _, Rt>],
+        types: [HashMap<'_, _, _, _, Rt>, Keys<'_, _, _, _, _, Rt>, Values<'_, _, _, _, _, Rt>],
         fns: [
             hash_map, hash_map_by, with_capacity, len, is_empty, clear,
             keys, next_keys, values, next_values, into_keys, into_values,
@@ -996,10 +997,10 @@ where
 
 /// A set's value slot is `()`: the table's shape is the map's, and the only
 /// thing a set does not have is a value to hold.
-type SetTable<K, E, Rt> = Table<K, (), E, Rt>;
+type SetTable<'a, K, E, Rt> = Table<'a, K, (), E, Rt>;
 
-#[derive(UniformPayload)]
-pub struct HashSet<K, E, Rt>(SetTable<K, E, Rt>, PhantomData<(K, E)>)
+#[derive(UniformPayload, acvus_extern::Branded)]
+pub struct HashSet<'a, K, E, Rt>(SetTable<'a, K, E, Rt>, PhantomData<(K, E)>)
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1007,17 +1008,17 @@ where
 
 stored_extern_type!(HashSet<K>, name: "HashSet");
 
-impl<K, E, Rt> HashSet<K, E, Rt>
+impl<'a, K, E, Rt> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn table(&self) -> &SetTable<K, E, Rt> {
+    fn table(&self) -> &SetTable<'a, K, E, Rt> {
         &self.0
     }
 
-    fn table_mut(&mut self) -> &mut SetTable<K, E, Rt> {
+    fn table_mut(&mut self) -> &mut SetTable<'a, K, E, Rt> {
         &mut self.0
     }
 }
@@ -1028,10 +1029,10 @@ fn keyed<K>(key: K) -> Binding<K, ()> {
 }
 
 #[extern_fn(effect = pure)]
-fn hash_set<K, E, Rt>(
-    hash: Instance<core::hash<K, Rt>, K, Rt>,
-    eq: Instance<core::eq<K, Rt>, K, Rt>,
-) -> HashSet<K, E, Rt>
+fn hash_set<'a, K, E, Rt>(
+    hash: Instance<'a, core::hash<K, Rt>, K, Rt>,
+    eq: Instance<'a, core::eq<K, Rt>, K, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1041,7 +1042,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn hash_set_by<K, E, Rt>(hash: HashOf<K, E, Rt>, eq: EqOf<K, E, Rt>) -> HashSet<K, E, Rt>
+fn hash_set_by<'a, K, E, Rt>(hash: HashOf<'a, K, E, Rt>, eq: EqOf<'a, K, E, Rt>) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1051,7 +1052,7 @@ where
 }
 
 #[extern_fn(name = "len", effect = pure)]
-fn set_len<K, E, Rt>(s: &HashSet<K, E, Rt>) -> u64
+fn set_len<K, E, Rt>(s: &HashSet<'_, K, E, Rt>) -> u64
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1061,7 +1062,7 @@ where
 }
 
 #[extern_fn(name = "is_empty", effect = pure)]
-fn set_is_empty<K, E, Rt>(s: &HashSet<K, E, Rt>) -> bool
+fn set_is_empty<K, E, Rt>(s: &HashSet<'_, K, E, Rt>) -> bool
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1071,7 +1072,7 @@ where
 }
 
 #[extern_fn(name = "clear", effect = pure)]
-fn set_clear<K, E, Rt>(s: &mut HashSet<K, E, Rt>)
+fn set_clear<K, E, Rt>(s: &mut HashSet<'_, K, E, Rt>)
 where
     K: Var<kind::Type>,
     E: Var<kind::Effect>,
@@ -1084,7 +1085,7 @@ where
 /// the set itself; only the `iter::next` that reads a set by position is
 /// declared here.
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_set<K, E, I, Rt>(s: Ref<HashSet<K, E, Rt>, Shared, Rt>) -> Refs<HashSet<K, E, Rt>, I, Rt>
+fn as_iter_set<'a, K, E, I, Rt>(s: Ref<'a, HashSet<'static, K, E, Rt>, Shared, Rt>) -> Refs<'a, HashSet<'static, K, E, Rt>, I, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -1097,7 +1098,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_refs_set<'a, K, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<HashSet<K, E, Rt>, I, Rt>,
+    it: &'a mut Refs<'_, HashSet<'static, K, E, Rt>, I, Rt>,
 ) -> Option<&'a K>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
@@ -1111,7 +1112,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::into_iter, effect = pure)]
-fn into_iter_set<K, E, I, Rt>(s: HashSet<K, E, Rt>) -> Items<K, I, Rt>
+fn into_iter_set<K, E, I, Rt>(s: HashSet<'_, K, E, Rt>) -> Items<K, I, Rt>
 where
     K: Var<kind::Type> + Stored<Rt> + Cross<Rt>,
     E: Var<kind::Effect>,
@@ -1123,7 +1124,7 @@ where
 
 /// Rust's `HashSet::insert` answers whether the set gained the key, and a
 /// key already there is left as it was.
-fn set_insert_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: K) -> bool
+fn set_insert_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<'_, K, E, Rt>, key: K) -> bool
 where
     K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1136,7 +1137,7 @@ where
 }
 
 #[extern_fn(name = "insert", effect = E, sync = set_insert_now)]
-async fn set_insert<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: K) -> bool
+async fn set_insert<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<'_, K, E, Rt>, key: K) -> bool
 where
     K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1149,7 +1150,7 @@ where
         .is_none()
 }
 
-fn contains_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<K, E, Rt>, key: &K) -> bool
+fn contains_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<'_, K, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1159,7 +1160,7 @@ where
 }
 
 #[extern_fn(effect = E, sync = contains_now)]
-async fn contains<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<K, E, Rt>, key: &K) -> bool
+async fn contains<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<'_, K, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1169,7 +1170,7 @@ where
 }
 
 /// Rust's `HashSet::remove` answers whether the key was there.
-fn set_remove_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: &K) -> bool
+fn set_remove_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<'_, K, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1184,7 +1185,7 @@ where
 }
 
 #[extern_fn(name = "remove", effect = E, sync = set_remove_now)]
-async fn set_remove<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<K, E, Rt>, key: &K) -> bool
+async fn set_remove<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<'_, K, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1200,8 +1201,8 @@ where
 
 fn set_extend_now<K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    s: &mut HashSet<K, E, Rt>,
-    other: HashSet<K, E, Rt>,
+    s: &mut HashSet<'_, K, E, Rt>,
+    other: HashSet<'_, K, E, Rt>,
 ) where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1215,8 +1216,8 @@ fn set_extend_now<K, E, Rt>(
 #[extern_fn(name = "extend", effect = E, sync = set_extend_now)]
 async fn set_extend<K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    s: &mut HashSet<K, E, Rt>,
-    other: HashSet<K, E, Rt>,
+    s: &mut HashSet<'_, K, E, Rt>,
+    other: HashSet<'_, K, E, Rt>,
 ) where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1227,11 +1228,11 @@ async fn set_extend<K, E, Rt>(
     }
 }
 
-fn union_now<K, E, Rt>(
+fn union_now<'a, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut a: HashSet<K, E, Rt>,
-    b: HashSet<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+    mut a: HashSet<'a, K, E, Rt>,
+    b: HashSet<'a, K, E, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1244,11 +1245,11 @@ where
 }
 
 #[extern_fn(effect = E, sync = union_now)]
-async fn union<K, E, Rt>(
+async fn union<'a, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut a: HashSet<K, E, Rt>,
-    b: HashSet<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+    mut a: HashSet<'a, K, E, Rt>,
+    b: HashSet<'a, K, E, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1262,7 +1263,7 @@ where
 
 /// Whether `b` holds the key: `b`'s own hasher and comparator decide, as
 /// they do for every lookup in `b`.
-fn keeps_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &K) -> bool
+fn keeps_now<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<'_, K, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1271,7 +1272,7 @@ where
     b.table().seek_now(ctx, key).at.is_some()
 }
 
-async fn keeps<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<K, E, Rt>, key: &K) -> bool
+async fn keeps<K, E, Rt>(ctx: &mut Ctx<'_, Rt>, b: &HashSet<'_, K, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1285,11 +1286,11 @@ where
 /// `Runtime` offers no clone of a value, so these two consume both sets and
 /// return the one that is left. The hasher and comparator kept are the
 /// receiver's.
-fn intersection_now<K, E, Rt>(
+fn intersection_now<'a, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut a: HashSet<K, E, Rt>,
-    b: HashSet<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+    mut a: HashSet<'a, K, E, Rt>,
+    b: HashSet<'a, K, E, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1306,11 +1307,11 @@ where
 }
 
 #[extern_fn(effect = E, sync = intersection_now)]
-async fn intersection<K, E, Rt>(
+async fn intersection<'a, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut a: HashSet<K, E, Rt>,
-    b: HashSet<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+    mut a: HashSet<'a, K, E, Rt>,
+    b: HashSet<'a, K, E, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1326,11 +1327,11 @@ where
     a
 }
 
-fn difference_now<K, E, Rt>(
+fn difference_now<'a, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut a: HashSet<K, E, Rt>,
-    b: HashSet<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+    mut a: HashSet<'a, K, E, Rt>,
+    b: HashSet<'a, K, E, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1347,11 +1348,11 @@ where
 }
 
 #[extern_fn(effect = E, sync = difference_now)]
-async fn difference<K, E, Rt>(
+async fn difference<'a, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    mut a: HashSet<K, E, Rt>,
-    b: HashSet<K, E, Rt>,
-) -> HashSet<K, E, Rt>
+    mut a: HashSet<'a, K, E, Rt>,
+    b: HashSet<'a, K, E, Rt>,
+) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
@@ -1369,8 +1370,8 @@ where
 
 fn is_subset_now<K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    a: &HashSet<K, E, Rt>,
-    b: &HashSet<K, E, Rt>,
+    a: &HashSet<'_, K, E, Rt>,
+    b: &HashSet<'_, K, E, Rt>,
 ) -> bool
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -1388,8 +1389,8 @@ where
 #[extern_fn(effect = E, sync = is_subset_now)]
 async fn is_subset<K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    a: &HashSet<K, E, Rt>,
-    b: &HashSet<K, E, Rt>,
+    a: &HashSet<'_, K, E, Rt>,
+    b: &HashSet<'_, K, E, Rt>,
 ) -> bool
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -1404,13 +1405,13 @@ where
     true
 }
 
-fn from_iter_now<It, K, E, Rt>(
+fn from_iter_now<'a, It, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: It,
-    hash: HashOf<K, E, Rt>,
-    eq: EqOf<K, E, Rt>,
-    next: Instance<sig::next<It, K, E, Rt>, It, Rt, Later>,
-) -> HashSet<K, E, Rt>
+    hash: HashOf<'a, K, E, Rt>,
+    eq: EqOf<'a, K, E, Rt>,
+    next: Instance<'a, sig::next<It, K, E, Rt>, It, Rt, Later>,
+) -> HashSet<'a, K, E, Rt>
 where
     It: Var<kind::Type> + Deref<Target = Rt::Value>,
     K: Var<kind::Type>
@@ -1431,13 +1432,13 @@ where
 }
 
 #[extern_fn(effect = E, sync = from_iter_now)]
-async fn from_iter<It, K, E, Rt>(
+async fn from_iter<'a, It, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: It,
-    hash: HashOf<K, E, Rt>,
-    eq: EqOf<K, E, Rt>,
-    next: Instance<sig::next<It, K, E, Rt>, It, Rt, Later>,
-) -> HashSet<K, E, Rt>
+    hash: HashOf<'a, K, E, Rt>,
+    eq: EqOf<'a, K, E, Rt>,
+    next: Instance<'a, sig::next<It, K, E, Rt>, It, Rt, Later>,
+) -> HashSet<'a, K, E, Rt>
 where
     It: Var<kind::Type> + Deref<Target = Rt::Value>,
     K: Var<kind::Type>
@@ -1463,7 +1464,7 @@ where
 {
     extern_registry! {
         ns: "set",
-        types: [HashSet<_, _, Rt>],
+        types: [HashSet<'_, _, _, Rt>],
         fns: [
             hash_set, hash_set_by, set_len, set_is_empty, set_clear,
             as_iter_set, next_refs_set, into_iter_set,

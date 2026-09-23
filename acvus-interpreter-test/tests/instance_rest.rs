@@ -80,7 +80,7 @@ fn tally_of<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: T,
     b: Option<T>,
-    tally: Instance<sig::tally<T, Rt>, T, Rt>,
+    tally: Instance<'_, sig::tally<T, Rt>, T, Rt>,
 ) -> i64
 where
     T: Var<kind::Type> + Deref<Target = Rt::Value> + Into<Owned<Rt>>,

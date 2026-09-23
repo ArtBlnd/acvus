@@ -154,7 +154,7 @@ where
 #[extern_fn(instance_of = crate::iter::sig::into_iter, effect = pure)]
 fn into_iter_result<T, Er, I, Rt>(val: Result<T, Er>) -> Items<T, I, Rt>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -165,7 +165,7 @@ where
 fn is_ok_and_now<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(T,), bool, E, Rt>,
+    f: Closure<'_, (T,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
@@ -183,7 +183,7 @@ where
 async fn is_ok_and<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(T,), bool, E, Rt>,
+    f: Closure<'_, (T,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
@@ -200,7 +200,7 @@ where
 fn is_err_and_now<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), bool, E, Rt>,
+    f: Closure<'_, (Er,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type>,
@@ -218,7 +218,7 @@ where
 async fn is_err_and<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), bool, E, Rt>,
+    f: Closure<'_, (Er,), bool, E, Rt>,
 ) -> bool
 where
     T: Var<kind::Type>,
@@ -235,12 +235,12 @@ where
 fn map_err_now<T, Er, F, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), F, E, Rt>,
+    f: Closure<'_, (Er,), F, E, Rt>,
 ) -> Result<T, F>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    F: Var<kind::Type> + OneValue<Rt>,
+    F: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -251,12 +251,12 @@ where
 async fn map_err<T, Er, F, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), F, E, Rt>,
+    f: Closure<'_, (Er,), F, E, Rt>,
 ) -> Result<T, F>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    F: Var<kind::Type> + OneValue<Rt>,
+    F: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -270,11 +270,11 @@ fn map_or_now<T, U, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     default: U,
-    f: Closure<(T,), U, E, Rt>,
+    f: Closure<'_, (T,), U, E, Rt>,
 ) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -290,11 +290,11 @@ async fn map_or<T, U, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
     default: U,
-    f: Closure<(T,), U, E, Rt>,
+    f: Closure<'_, (T,), U, E, Rt>,
 ) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -308,12 +308,12 @@ where
 fn map_or_else_now<T, U, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    default: Closure<(Er,), U, E, Rt>,
-    f: Closure<(T,), U, E, Rt>,
+    default: Closure<'_, (Er,), U, E, Rt>,
+    f: Closure<'_, (T,), U, E, Rt>,
 ) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -328,12 +328,12 @@ where
 async fn map_or_else<T, U, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    default: Closure<(Er,), U, E, Rt>,
-    f: Closure<(T,), U, E, Rt>,
+    default: Closure<'_, (Er,), U, E, Rt>,
+    f: Closure<'_, (T,), U, E, Rt>,
 ) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -347,12 +347,12 @@ where
 fn and_then_now<T, U, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(T,), Result<U, Er>, E, Rt>,
+    f: Closure<'_, (T,), Result<U, Er>, E, Rt>,
 ) -> Result<U, Er>
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
+    Er: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -363,12 +363,12 @@ where
 async fn and_then<T, U, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(T,), Result<U, Er>, E, Rt>,
+    f: Closure<'_, (T,), Result<U, Er>, E, Rt>,
 ) -> Result<U, Er>
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt>,
-    Er: Var<kind::Type> + OneValue<Rt>,
+    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
+    Er: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -381,12 +381,12 @@ where
 fn or_else_now<T, Er, F, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), Result<T, F>, E, Rt>,
+    f: Closure<'_, (Er,), Result<T, F>, E, Rt>,
 ) -> Result<T, F>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    F: Var<kind::Type> + OneValue<Rt>,
+    F: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -397,12 +397,12 @@ where
 async fn or_else<T, Er, F, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), Result<T, F>, E, Rt>,
+    f: Closure<'_, (Er,), Result<T, F>, E, Rt>,
 ) -> Result<T, F>
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
-    F: Var<kind::Type> + OneValue<Rt>,
+    F: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -415,10 +415,10 @@ where
 fn unwrap_or_else_now<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), T, E, Rt>,
+    f: Closure<'_, (Er,), T, E, Rt>,
 ) -> T
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -430,10 +430,10 @@ where
 async fn unwrap_or_else<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Result<T, Er>,
-    f: Closure<(Er,), T, E, Rt>,
+    f: Closure<'_, (Er,), T, E, Rt>,
 ) -> T
 where
-    T: Var<kind::Type> + OneValue<Rt>,
+    T: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
     Er: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + acvus_extern::PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,

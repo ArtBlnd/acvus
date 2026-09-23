@@ -2321,6 +2321,7 @@ fn iter_int_ty(interner: &Interner) -> Ty {
         identity_args: vec![acvus_mir::ty::IdentityTerm::Known(
             <acvus_mir::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
         )],
+        region_params: 0,
     }
 }
 

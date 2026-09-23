@@ -1,7 +1,9 @@
-//! Function-typed parameters: `Closure<A, R, E, Rt>`, where `A` is the tuple of the
-//! closure's parameter types — `()`, `(T,)`, `(T, U)`, … It names
+//! Function-typed parameters: `Closure<'a, A, R, E, Rt>`, where `A` is the tuple
+//! of the closure's parameter types — `()`, `(T,)`, `(T, U)`, … It names
 //! `Fn(...) -> R with E` in an extern signature — the type solver reads the
 //! closure's type from it — and holds the runtime's closure as a plain value.
+//! `'a` is the call it was handed to, and a call of it returns `R` at `'a`
+//! (RFC-0079 rule 6).
 //!
 //! A `Closure` is made in one place: the crossing, as `OneValue::materialize`
 //! of a value the checker typed at exactly `A`, `R` and `E`. That is the
@@ -54,9 +56,10 @@ where
     unsafe fn restore<'a>(rt: &Rt, word: Rt::Value) -> Self::As<'a>;
 }
 
-/// A closure parameter that is passed as the value itself: what a handler
-/// bounds a type variable with where it calls a closure at that variable.
-pub trait PassedByValue<Rt>: for<'a> Passed<Rt, As<'a> = Self>
+/// A closure parameter that is passed as the value itself, and a closure
+/// result that is returned as itself: what a handler bounds a type variable
+/// with where it calls a closure at that variable.
+pub trait PassedByValue<Rt>: for<'a> Passed<Rt, As<'a> = Self> + crate::Unbranded
 where
     Rt: Runtime,
 {
@@ -64,7 +67,7 @@ where
 
 impl<T, Rt> PassedByValue<Rt> for T
 where
-    T: for<'a> Passed<Rt, As<'a> = T>,
+    T: for<'a> Passed<Rt, As<'a> = T> + crate::Unbranded,
     Rt: Runtime,
 {
 }
@@ -140,14 +143,25 @@ pub trait ClosureFn<Rt: Runtime> {
     ) -> impl Future<Output = Self::Ret> + Send + 'a;
 }
 
-pub struct Closure<A, R, E, Rt>(Owned<Rt>, bool, PhantomData<(A, R, E)>)
+pub struct Closure<'a, A, R, E, Rt>(Owned<Rt>, bool, PhantomData<(&'a (), A, R, E)>)
 where
     A: Send + Sync + 'static,
     R: Send + Sync + 'static,
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-impl<A, R, E, Rt> Closure<A, R, E, Rt>
+// SAFETY: `At<'b>` changes the brand alone.
+unsafe impl<'a, A, R, E, Rt> crate::Branded for Closure<'a, A, R, E, Rt>
+where
+    A: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    type At<'b> = Closure<'b, A, R, E, Rt>;
+}
+
+impl<'a, A, R, E, Rt> Closure<'a, A, R, E, Rt>
 where
     A: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -161,7 +175,7 @@ where
     }
 }
 
-impl<A, R, E, Rt> Closure<A, R, E, Rt>
+impl<'a, A, R, E, Rt> Closure<'a, A, R, E, Rt>
 where
     A: CallArgs<Rt>,
     R: OneValue<Rt>,
@@ -173,11 +187,11 @@ where
     /// The rooted `Ctx` is made and used inside the future and never lent
     /// to the handler, so the handler holds no second `Ctx` to exchange
     /// its own with.
-    pub fn call_rooted<'a>(
-        &'a self,
-        rt: &'a Rt,
-        args: A::Passed<'a>,
-    ) -> impl Future<Output = R> + Send + 'a {
+    pub fn call_rooted<'c>(
+        &'c self,
+        rt: &'c Rt,
+        args: A::Passed<'c>,
+    ) -> impl Future<Output = R::At<'a>> + Send + 'c {
         async move {
             if self.1 {
                 let mut rooted = rt.rooted();
@@ -185,22 +199,22 @@ where
                 // leaves this block.
                 let ctx = unsafe { Rt::ctx_of(&mut rooted) };
                 // SAFETY: as `ClosureFn::call_now`'s.
-                return returned(rt, unsafe {
+                return returned::<R, Rt>(rt, unsafe {
                     rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
                 });
             }
             // SAFETY: as `ClosureFn::call_now`'s.
-            returned(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
+            returned::<R, Rt>(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
         }
     }
 }
 
 crate::cross_one_value!(
-    Closure<A, R, E, __Rt>,
+    Closure<'static, A, R, E, __Rt>,
     A: Send + Sync + 'static, R: Send + Sync + 'static, E: Var<kind::Effect>
 );
 
-impl<A, R, E, Rt> crate::OneValue<Rt> for Closure<A, R, E, Rt>
+impl<A, R, E, Rt> crate::OneValue<Rt> for Closure<'static, A, R, E, Rt>
 where
     A: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -217,7 +231,7 @@ where
     }
 }
 
-impl<A, R, E, Rt> Var<kind::Type> for Closure<A, R, E, Rt>
+impl<A, R, E, Rt> Var<kind::Type> for Closure<'static, A, R, E, Rt>
 where
     A: ArgTypes,
     R: Var<kind::Type>,
@@ -226,22 +240,23 @@ where
 {
 }
 
-// SAFETY: the result is its own canonical form's. `A` is kept: at a
-// runtime that makes values it holds no `Erased`, since `ArgTypes` asks
-// `TyArg` of each parameter, which an `Erased` has only at `TypesOnly`.
-unsafe impl<A, R, E, Rt> crate::Canonical<kind::Type> for Closure<A, R, E, Rt>
+// SAFETY: the result is its own canonical form's, and the brand is at
+// `'static`. `A` is kept: at a runtime that makes values it holds no
+// `Erased`, since `ArgTypes` asks `TyArg` of each parameter, which an
+// `Erased` has only at `TypesOnly`.
+unsafe impl<'a, A, R, E, Rt> crate::Canonical<kind::Type> for Closure<'a, A, R, E, Rt>
 where
     A: ArgTypes,
     R: Var<kind::Type>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    type Canon = Closure<A, R::Canon, E, Rt>;
+    type Canon = Closure<'static, A, R::Canon, E, Rt>;
 }
 
 // SAFETY: a `Closure` is an `Owned<Rt>` and a flag at every `A`, `R` and
 // `E`.
-unsafe impl<M, A, R, E, Rt> crate::UniformPayload<M> for Closure<A, R, E, Rt>
+unsafe impl<'a, M, A, R, E, Rt> crate::UniformPayload<M> for Closure<'a, A, R, E, Rt>
 where
     A: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -250,7 +265,7 @@ where
 {
 }
 
-impl<A, R, E, Rt> TyArg for Closure<A, R, E, Rt>
+impl<A, R, E, Rt> TyArg for Closure<'static, A, R, E, Rt>
 where
     A: ArgTypes,
     R: TyArg + Send + Sync + 'static,
@@ -267,7 +282,7 @@ where
     }
 }
 
-impl<A, R, E, Rt> ClosureFn<Rt> for Closure<A, R, E, Rt>
+impl<'a, A, R, E, Rt> ClosureFn<Rt> for Closure<'a, A, R, E, Rt>
 where
     A: CallArgs<Rt>,
     R: OneValue<Rt>,
@@ -275,9 +290,9 @@ where
     Rt: Runtime,
 {
     type Args = A;
-    type Ret = R;
+    type Ret = R::At<'a>;
 
-    fn call_now(&self, ctx: &mut Ctx<'_, Rt>, args: A::Passed<'_>) -> R {
+    fn call_now(&self, ctx: &mut Ctx<'_, Rt>, args: A::Passed<'_>) -> R::At<'a> {
         debug_assert!(
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
@@ -285,38 +300,39 @@ where
         // SAFETY: `self.0` is the closure value this `Closure` was built
         // over, and `A` is the argument list its declaration names.
         let rt = ctx.rt;
-        returned(rt, unsafe {
+        returned::<R, Rt>(rt, unsafe {
             rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
         })
     }
 
-    fn call<'a>(
-        &'a self,
-        ctx: &'a mut Ctx<'_, Rt>,
-        args: A::Passed<'a>,
-    ) -> impl Future<Output = R> + Send + 'a {
+    fn call<'c>(
+        &'c self,
+        ctx: &'c mut Ctx<'_, Rt>,
+        args: A::Passed<'c>,
+    ) -> impl Future<Output = R::At<'a>> + Send + 'c {
         async move {
             let rt = ctx.rt;
             if self.1 {
                 // SAFETY: as `call_now`'s.
-                return returned(rt, unsafe {
+                return returned::<R, Rt>(rt, unsafe {
                     rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
                 });
             }
             // SAFETY: as `call_now`'s.
-            returned(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
+            returned::<R, Rt>(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
         }
     }
 }
 
 /// The value a call produced, read at the closure's declared return type.
-fn returned<R, Rt>(rt: &Rt, out: Rt::Value) -> R
+fn returned<'a, R, Rt>(rt: &Rt, out: Rt::Value) -> R::At<'a>
 where
     R: OneValue<Rt>,
     Rt: Runtime,
 {
-    // SAFETY: the closure's declared return type is `R`.
-    unsafe { R::materialize(rt, out) }
+    // SAFETY: the closure's declared return type is `R`, and what a result
+    // at that type names outlives the call the closure was handed to.
+    unsafe { crate::brand::<R>(R::materialize(rt, out)) }
 }
 
 impl Args for () {}

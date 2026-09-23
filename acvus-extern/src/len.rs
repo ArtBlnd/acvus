@@ -30,7 +30,6 @@ unsafe impl Canonical<kind::Length> for () {
 #[repr(transparent)]
 pub struct Arr<T, N>(pub Vec<T>, PhantomData<N>)
 where
-    T: Send + Sync + 'static,
     N: Var<kind::Length>;
 
 impl<T, N> Arr<T, N>

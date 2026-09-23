@@ -1,0 +1,9 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/ref_in_an_erased_payload_kept_past_the_call.rs:24:1
+   |
+24 | #[extern_fn(effect = opaque)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+   |
+   = note: expected struct `acvus_extern::Ref<'a, std::string::String, acvus_extern::Shared, __R>`
+              found struct `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, __R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

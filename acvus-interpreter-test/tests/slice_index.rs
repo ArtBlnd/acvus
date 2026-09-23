@@ -375,6 +375,7 @@ fn counted_ty(interner: &Interner) -> Ty {
         type_args: Vec::new(),
         effect_args: Vec::new(),
         identity_args: Vec::new(),
+        region_params: 0,
     }
 }
 

@@ -9694,6 +9694,7 @@ mod tests {
                 type_args: vec![],
                 effect_args: vec![],
                 identity_args: vec![],
+                region_params: 0,
             },
         )]);
         let src = "% let x = @conn";
@@ -9708,6 +9709,7 @@ mod tests {
             type_args: vec![],
             effect_args: vec![],
             identity_args: vec![],
+            region_params: 0,
         };
         let ctx = FxHashMap::from_iter([(i.intern("conn"), conn_ty.clone())]);
         let fns = FxHashMap::from_iter([(

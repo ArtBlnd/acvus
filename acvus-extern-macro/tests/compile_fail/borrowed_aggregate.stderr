@@ -12,17 +12,17 @@ help: the trait `BorrowedWhole<__R>` is not implemented for `Point`
    = note: a borrowed aggregate crosses as its projection: where `Point` is a `#[derive(TyArg)] #[projection]` aggregate, write `PointRef<'_>`, or `PointMut<'_>` for a struct and `PointMut<'_, Rt>` for an enum (RFC-0050 rule 6).
    = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
    = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
-help: the following other types implement trait `Arg<'a, Rt>`
+help: the following other types implement trait `Arg<'a, 'w, Rt>`
   --> $WORKSPACE/acvus-extern/src/handler.rs
    |
-   | / impl<'a, T, M, Rt> Arg<'a, Rt> for ByRef<T, M, Uniform>
+   | / impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
    | | where
    | |     T: Borrowable<Rt>,
    | |     M: Loan,
    | |     Rt: Runtime,
    | |________________^ `ByRef<T, M>`
 ...
-   | / impl<'a, T, M, Rt> Arg<'a, Rt> for ByRef<T, M, Specialized>
+   | / impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
    | | where
    | |     T: BorrowableSpecialized<Rt>,
    | |     M: Loan,
@@ -37,5 +37,5 @@ note: required for `Point` to implement `Borrowable<__R>`
  8 | pub struct Point {
    |            ^^^^^
    = help: consider manually implementing `Borrowable<__R>` to avoid undesired bounds
-   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
