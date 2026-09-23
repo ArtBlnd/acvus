@@ -110,3 +110,13 @@ fn a_receiver_that_is_already_a_reference_is_passed_as_it_is() {
         Ty::String
     );
 }
+
+/// `sort` is the one function of its name: a receiver that lends its
+/// `&mut [T]` head is refused where no instance takes the element, which
+/// is the verdict completion offers it by.
+#[test]
+fn a_single_candidate_method_is_refused_where_no_instance_takes_the_receiver() {
+    let err = check("let v = [Some(1)]; v.sort(); 0").expect_err("no `sort` over options");
+    assert!(err.contains("no instance of slice::sort"), "{err}");
+    check("let v = [2, 1]; v.sort(); 0").expect("`sort` over integers");
+}

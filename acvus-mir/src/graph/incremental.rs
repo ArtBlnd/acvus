@@ -10,9 +10,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::error::Refusal;
 use crate::ir::MirModule;
 use crate::ty::{PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
+use crate::typeck::ProbeProduct;
 
 use super::extract::{ParsedSource, extract_one};
-use super::infer::{FnInferOutcome, SccInferResult, extract_call_edges, infer_scc, tarjan_scc};
+use super::infer::{
+    FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
+};
 use super::lower::lower_one;
 use super::optimize::{Opt, optimize};
 use super::types::*;
@@ -292,26 +295,105 @@ impl IncrementalGraph {
         }
     }
 
-    /// All contexts visible from a namespace (own namespace + root).
-    /// Used by LSP for completions.
-    pub fn visible_contexts(&self, ns: Option<Astr>) -> Vec<(Option<Astr>, Astr, &Context)> {
+    /// The contexts a body can name: `@name` is the root context `name`,
+    /// the one key the checker reads it at, and the grammar writes no
+    /// qualified context.
+    pub fn visible_contexts(&self) -> impl Iterator<Item = &Context> {
         self.contexts
             .values()
-            .filter(|c| c.qref.namespace.is_none() || c.qref.namespace == ns)
-            .map(|c| (c.qref.namespace, c.qref.name, c))
-            .collect()
+            .filter(|context| context.qref.namespace.is_none())
     }
 
-    /// All functions callable from a namespace:
-    /// - Root functions (unqualified)
-    /// - Same-namespace functions (would need qualified, but are accessible)
-    /// Used by LSP for completions.
-    pub fn visible_functions(&self, ns: Option<Astr>) -> Vec<(Option<Astr>, Astr, &Function)> {
-        self.functions
+    /// Every function, which is every one a body can call: a bare name
+    /// reaches the functions of that name in every namespace
+    /// (`TypeEnv::resolve_fn`), and `ns::f` the one in `ns`.
+    pub fn functions(&self) -> impl Iterator<Item = &Function> {
+        self.functions.values()
+    }
+
+    // -- Probe --------------------------------------------------------
+
+    /// What the checker sees at `marker` with `probed` as the local body of
+    /// its `qref`, which the graph may not hold, as while a document's text
+    /// does not parse, and the rest of the graph as it stands. The body's
+    /// SCC is inferred again, from the call edges its AST has, on a copy of
+    /// the sources, so nothing the graph holds changes. `None` where `qref`
+    /// is an extern or `probed` is not local.
+    pub fn probe(&self, probed: Function, marker: acvus_ast::AstId) -> Option<ProbeProduct> {
+        let qref = probed.qref;
+        if let Some(Function {
+            kind: FnKind::Extern { .. },
+            ..
+        }) = self.functions.get(&qref)
+        {
+            return None;
+        }
+        let parsed = extract_one(&self.interner, &probed)?;
+
+        let mut call_edges = self.call_edges.clone();
+        call_edges.insert(
+            qref,
+            extract_call_edges(&parsed, &self.root_fn_names(), qref),
+        );
+        let local_qrefs: Vec<QualifiedRef> = self
+            .functions
             .values()
-            .filter(|f| f.qref.namespace.is_none() || f.qref.namespace == ns)
-            .map(|f| (f.qref.namespace, f.qref.name, f))
-            .collect()
+            .filter(|f| f.qref != qref && matches!(f.kind, FnKind::Local(_)))
+            .map(|f| f.qref)
+            .chain(std::iter::once(qref))
+            .collect();
+        let scc_order = tarjan_scc(&local_qrefs, &call_edges);
+        let at = scc_order
+            .iter()
+            .position(|scc| scc.contains(&qref))
+            .expect("a local function is in one SCC");
+
+        // An SCC before the probe's reaches no body the probe changed, so
+        // its members' types are the ones the graph settled.
+        let mut resolved_fn_types = self.extern_fn_types();
+        for member in scc_order[..at].iter().flatten() {
+            let settled = self.fn_to_scc[member];
+            let resolved = &self.infer_cache[settled]
+                .as_ref()
+                .expect("every SCC was inferred by the last settle")
+                .resolved_types[member];
+            resolved_fn_types.insert(*member, lift_to_poly(resolved));
+        }
+
+        let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
+            .functions
+            .iter()
+            .filter(|(member, f)| **member != qref && matches!(f.kind, FnKind::Local(_)))
+            .map(|(&member, f)| (member, f))
+            .chain(std::iter::once((qref, &probed)))
+            .collect();
+        let parsed_for_scc: FxHashMap<QualifiedRef, &ParsedSource> = scc_order[at]
+            .iter()
+            .filter_map(|&member| match member == qref {
+                true => Some((member, &parsed)),
+                false => self
+                    .extract_cache
+                    .get(&member)
+                    .map(|entry| (member, &entry.parsed)),
+            })
+            .collect();
+
+        let mut sources = self.sources.clone();
+        infer_scc(
+            &self.interner,
+            &scc_order[at],
+            self.entry,
+            &self.bindings,
+            &fn_by_id,
+            &parsed_for_scc,
+            &self.known_context_types(),
+            &resolved_fn_types,
+            &super::infer::declared_bounds(self.functions.values()),
+            &mut sources,
+            &self.types,
+            Some(Probe { body: qref, marker }),
+        )
+        .probe
     }
 
     // -- Internal: Extract -------------------------------------------
@@ -323,16 +405,7 @@ impl IncrementalGraph {
 
         // Run extract.
         if let Some(parsed) = extract_one(&self.interner, func) {
-            // Update call edges.
-            // TODO: qualified call edges once AST supports ns:func() syntax.
-            // For now, only unqualified (root) names are resolved.
-            let root_fn_names: FxHashMap<Astr, QualifiedRef> = self
-                .functions
-                .iter()
-                .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(_)))
-                .map(|(&q, _)| (q.name, q))
-                .collect();
-            let new_edges = extract_call_edges(&parsed, &root_fn_names, qref);
+            let new_edges = extract_call_edges(&parsed, &self.root_fn_names(), qref);
             self.remove_reverse_edges(qref);
             for &callee in &new_edges {
                 self.reverse_edges.entry(callee).or_default().push(qref);
@@ -346,6 +419,16 @@ impl IncrementalGraph {
             self.call_edges.remove(&qref);
             self.remove_reverse_edges(qref);
         }
+    }
+
+    // TODO: qualified call edges once AST supports ns:func() syntax.
+    // For now, only unqualified (root) names are resolved.
+    fn root_fn_names(&self) -> FxHashMap<Astr, QualifiedRef> {
+        self.functions
+            .iter()
+            .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(_)))
+            .map(|(&q, _)| (q.name, q))
+            .collect()
     }
 
     fn remove_reverse_edges(&mut self, qref: QualifiedRef) {
@@ -388,13 +471,7 @@ impl IncrementalGraph {
 
     fn run_infer(&mut self) {
         let known_ctx = self.known_context_types();
-        let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
-        // Seed with extern function types (always known upfront).
-        for (qref, func) in &self.functions {
-            if let FnKind::Extern { .. } = &func.kind {
-                resolved_fn_types.insert(*qref, func.ty.clone());
-            }
-        }
+        let mut resolved_fn_types = self.extern_fn_types();
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
@@ -441,6 +518,7 @@ impl IncrementalGraph {
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
                 &self.types,
+                None,
             );
 
             resolved_fn_types.extend(
@@ -463,13 +541,7 @@ impl IncrementalGraph {
 
         // Re-run infer from this SCC onwards.
         let known_ctx = self.known_context_types();
-        let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
-        // Seed with extern function types.
-        for (qref, func) in &self.functions {
-            if let FnKind::Extern { .. } = &func.kind {
-                resolved_fn_types.insert(*qref, func.ty.clone());
-            }
-        }
+        let mut resolved_fn_types = self.extern_fn_types();
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
@@ -536,6 +608,7 @@ impl IncrementalGraph {
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
                 &self.types,
+                None,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -687,6 +760,14 @@ impl IncrementalGraph {
     }
 
     // -- Helpers -----------------------------------------------------
+
+    fn extern_fn_types(&self) -> FxHashMap<QualifiedRef, PolyTy> {
+        self.functions
+            .iter()
+            .filter(|(_, func)| matches!(func.kind, FnKind::Extern { .. }))
+            .map(|(&qref, func)| (qref, func.ty.clone()))
+            .collect()
+    }
 
     fn known_context_types(&self) -> FxHashMap<QualifiedRef, PolyTy> {
         self.contexts

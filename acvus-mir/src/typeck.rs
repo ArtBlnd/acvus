@@ -6,6 +6,7 @@ use acvus_ast::{
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use crate::error::{
     DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
@@ -16,18 +17,18 @@ use crate::place::{
     Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
 };
 use crate::solver::{
-    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead,
-    CompilerInstances, Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation,
-    ComponentOffer, Handed, InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding,
-    MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair,
-    RequiredDecision, SettledSignature, SignatureCandidate, SignatureName, SignatureOption,
-    UndecidedCall, UnjoinedArgument, Unsettled, Withholds, takes_a_language_owned_type,
+    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CompilerInstances,
+    ComponentOffer, Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, Handed,
+    InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode, MatchOutcome,
+    Mismatch, MismatchReason, ReceiverMode, ReferencePair, RequiredDecision, SettledSignature,
+    SignatureCandidate, SignatureName, SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
+    Withholds, takes_a_language_owned_type,
 };
 use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy,
-    ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed,
+    Param, ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed,
     lift_ty,
 };
 use crate::variant::VariantPayload;
@@ -869,9 +870,14 @@ struct ExternParam {
 /// How one candidate of a method call takes the receiver, seen as the type
 /// that candidate's mode gives it (RFC-0043).
 struct ReceiverAdmission {
-    seen: CandidateReceiver,
+    mode: ReceiverMode,
     seen_as: InferTy,
     admission: Admission,
+}
+
+struct CandidateAdmission {
+    candidate: SignatureCandidate,
+    receiver: ReceiverAdmission,
 }
 
 /// A call resolved to a named function, at the instance the solver fixed
@@ -1000,6 +1006,92 @@ enum SettledCallee {
 pub struct Checked {
     pub resolution: Result<Freeze<TypeResolution>, Vec<MirError>>,
     pub view: Freeze<BodyView>,
+    /// What the checker saw at the node `with_probe` marked; `None` where
+    /// no node was marked or checking never reached the marked one.
+    pub probe: Option<ProbeProduct>,
+}
+
+/// What a name written at the marked node could be, answered by the rules
+/// checking applies there. Types are as written (RFC-0043), so a refused
+/// body, which a body holding an unknown name is, still answers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProbeProduct {
+    /// The marker is a name read as a value, or a `$` input.
+    Value {
+        /// The innermost binding of each name in scope at the marker, in
+        /// name order.
+        scope: Vec<Visible>,
+        /// The `$` inputs of the body other than the marker itself: the
+        /// declared parameters and bound inputs, or where none is declared,
+        /// the ones the body reads.
+        inputs: Vec<Param>,
+    },
+    /// The marker is the name a field access or a method call reads off a
+    /// receiver.
+    Member {
+        receiver: Ty,
+        /// The fields of the object the receiver is or references other
+        /// than the marker, which reading it may have added, in name order;
+        /// empty where it is no object.
+        fields: Vec<ProbedField>,
+        /// Every function name with a declaration whose first parameter
+        /// admits the receiver as `receive` admits it, in name order. Empty
+        /// where the receiver's head is still open, since no candidate's
+        /// mode can be admitted then.
+        methods: Vec<ProbedMethod>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Visible {
+    pub name: Astr,
+    pub binder: AstId,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbedField {
+    pub name: Astr,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbedMethod {
+    pub name: Astr,
+    pub admitted: Vec<AdmittedDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmittedDeclaration {
+    pub qref: QualifiedRef,
+    pub ty: crate::ty::PolyTy,
+}
+
+/// What checking recorded at the marked node, held as the solver's types
+/// until the body is solved.
+enum Probed {
+    Value { marker: Astr, scope: Vec<InScope> },
+    Member(ProbedMember),
+}
+
+struct ProbedMember {
+    marker: Astr,
+    receiver: ProbedReceiver,
+    receiver_as_written: Expr,
+    marker_site: CalleeSite,
+}
+
+struct InScope {
+    name: Astr,
+    binder: AstId,
+    ty: InferTy,
+}
+
+/// RFC-0030, RFC-0043: `receive` admits a place in each candidate's own
+/// mode, and a value in the mode the candidates agree on.
+enum ProbedReceiver {
+    Place(InferTy),
+    Value(InferTy),
 }
 
 struct Bound {
@@ -1354,6 +1446,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Maps lambda expression AstId -> body expression AstId.
     /// Effect variable of the body being checked; every call raises its lower bound.
     body_effect: EffectTerm<Infer>,
+    probe: Option<AstId>,
+    probed: Option<Probed>,
 }
 
 impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
@@ -1415,11 +1509,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             lambda_captures: FxHashMap::default(),
             capture_moves: Vec::new(),
             body_effect,
+            probe: None,
+            probed: None,
         }
     }
 
     pub fn with_body_effect(mut self, effect: EffectTerm<Infer>) -> Self {
         self.body_effect = effect;
+        self
+    }
+
+    /// Mark the node whose name completion asks about: an identifier, or a
+    /// field access or method call whose name is the marker. Checking is
+    /// unchanged, and `Checked::probe` carries what it saw there.
+    pub fn with_probe(mut self, marker: AstId) -> Self {
+        self.probe = Some(marker);
         self
     }
 
@@ -1646,6 +1750,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return self.refused();
         }
         let view = self.view(type_map.clone(), |ty| self.closed(ty));
+        let probe = self.probe_product();
         let resolution = Freeze::new(TypeResolution {
             type_map,
             coercion_map,
@@ -1665,6 +1770,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Checked {
             resolution: Ok(resolution),
             view,
+            probe,
         }
     }
 
@@ -1675,10 +1781,272 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .map(|(id, ty)| (*id, self.type_as_written(ty)))
             .collect();
         let view = self.view(written, |ty| self.type_as_written(ty));
+        let probe = self.probe_product();
         Checked {
             resolution: Err(self.reported()),
             view,
+            probe,
         }
+    }
+
+    fn probe_product(&self) -> Option<ProbeProduct> {
+        Some(match self.probed.as_ref()? {
+            Probed::Value { marker, scope } => ProbeProduct::Value {
+                scope: scope
+                    .iter()
+                    .map(|in_scope| Visible {
+                        name: in_scope.name,
+                        binder: in_scope.binder,
+                        ty: self.type_as_written(&in_scope.ty),
+                    })
+                    .collect(),
+                inputs: self
+                    .param_types
+                    .iter()
+                    .filter(|param| param.name != *marker)
+                    .map(|param| Param::new(param.name, self.type_as_written(&param.ty)))
+                    .collect(),
+            },
+            Probed::Member(member) => {
+                let (ProbedReceiver::Place(owned) | ProbedReceiver::Value(owned)) =
+                    &member.receiver;
+                let shown = self.type_as_written(owned);
+                let mut fields: Vec<ProbedField> = match behind_a_reference(&shown).as_ref() {
+                    TyTerm::Object(object) => object
+                        .iter()
+                        .filter(|(name, _)| **name != member.marker)
+                        .map(|(name, ty)| ProbedField {
+                            name: *name,
+                            ty: ty.clone(),
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                fields.sort_by(|a, b| {
+                    self.interner
+                        .resolve(a.name)
+                        .cmp(self.interner.resolve(b.name))
+                });
+                ProbeProduct::Member {
+                    receiver: shown,
+                    fields,
+                    methods: self.methods_receiving(member),
+                }
+            }
+        })
+    }
+
+    fn methods_receiving(&self, member: &ProbedMember) -> Vec<ProbedMethod> {
+        let mut names: Vec<Astr> = self
+            .env
+            .functions
+            .keys()
+            .chain(self.env.machine.keys())
+            .map(|qref| qref.name)
+            .collect();
+        names.sort_by(|a, b| self.interner.resolve(*a).cmp(self.interner.resolve(*b)));
+        names.dedup();
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let mut by_arity: BTreeMap<usize, Vec<SignatureCandidate>> = BTreeMap::new();
+                for candidate in self.declared_signatures(QualifiedRef::root(name)) {
+                    let Some(arity) = candidate.arity().filter(|arity| *arity >= 1) else {
+                        continue;
+                    };
+                    by_arity.entry(arity).or_default().push(candidate);
+                }
+                let admitted: Vec<AdmittedDeclaration> = by_arity
+                    .into_values()
+                    .flat_map(|taking| self.admitted_receiving(taking, member, name))
+                    .filter_map(|candidate| match candidate {
+                        SignatureCandidate::Named { qref, scheme } => Some(AdmittedDeclaration {
+                            qref,
+                            ty: scheme.ty,
+                        }),
+                        SignatureCandidate::Local { .. } => None,
+                    })
+                    .collect();
+                (!admitted.is_empty()).then_some(ProbedMethod { name, admitted })
+            })
+            .collect()
+    }
+
+    fn admitted_receiving(
+        &self,
+        candidates: Vec<SignatureCandidate>,
+        member: &ProbedMember,
+        name: Astr,
+    ) -> Vec<SignatureCandidate> {
+        match Signatures::of(candidates) {
+            None => Vec::new(),
+            Some(Signatures::One(one)) => {
+                // Admission stays in front of the trial: it reads the first
+                // parameter's declared bound, which the checker verifies
+                // only when the body freezes, and the trial stops at the
+                // settle before that.
+                let admitted = self.admitted_at_receiver(vec![one.clone()], &member.receiver);
+                match !admitted.is_empty() && self.one_takes_receiver(&one, member, name) {
+                    true => admitted,
+                    false => Vec::new(),
+                }
+            }
+            Some(Signatures::Several(several)) => {
+                self.admitted_at_receiver(several, &member.receiver)
+            }
+        }
+    }
+
+    fn one_takes_receiver(
+        &self,
+        candidate: &SignatureCandidate,
+        member: &ProbedMember,
+        name: Astr,
+    ) -> bool {
+        let call = NamedCall {
+            callee: member.marker_site,
+            name,
+            args: &[],
+            span: member.marker_site.span,
+            refused_as: CallRefusal::NoMatchingFunction,
+        };
+        let mode = self.solver.receiver_mode(candidate);
+        self.solver.trial(|solver| {
+            let opened = solver.decisions_opened();
+            let mut trial =
+                TypeChecker::new(self.interner, self.env, solver).with_namespace(self.namespace);
+            trial.type_map = self.type_map.clone();
+            let written = &member.receiver_as_written;
+            let first = match &member.receiver {
+                ProbedReceiver::Place(owned) => {
+                    trial.receiver_in(written, owned.clone(), mode, call.span)
+                }
+                ProbedReceiver::Value(ty) => {
+                    trial.value_receiver_in(written, ty.clone(), mode, call.span)
+                }
+            };
+            trial.admit_call(Signatures::One(candidate.clone()), Some(first), &call);
+            // `settle`, not `solve`: the arguments after the receiver are
+            // absent here, and closing what they would fix by its least
+            // element would refuse calls that those arguments complete.
+            trial.errors.is_empty()
+                && trial
+                    .solver
+                    .settle()
+                    .iter()
+                    .all(|failure| (failure.decision().0 as usize) < opened)
+        })
+    }
+
+    fn admitted_at_receiver(
+        &self,
+        candidates: Vec<SignatureCandidate>,
+        receiver: &ProbedReceiver,
+    ) -> Vec<SignatureCandidate> {
+        match receiver {
+            ProbedReceiver::Place(owned) => {
+                let Some(referent) = self.named_referent(owned, Mutability::Shared) else {
+                    return Vec::new();
+                };
+                candidates
+                    .into_iter()
+                    .filter(|candidate| {
+                        !matches!(
+                            self.receiver_admission(candidate, owned, &referent)
+                                .admission,
+                            Admission::Refused
+                        )
+                    })
+                    .collect()
+            }
+            ProbedReceiver::Value(ty) => {
+                let agreed = agreed_receiver_mode(
+                    candidates
+                        .iter()
+                        .map(|candidate| self.solver.receiver_mode(candidate)),
+                );
+                let Some(handed) = self.value_receiver_handed(ty, lent_only_if_agreed(agreed))
+                else {
+                    return Vec::new();
+                };
+                candidates
+                    .into_iter()
+                    .filter(|candidate| {
+                        !matches!(
+                            self.solver.admits(candidate, 0, &handed),
+                            Admission::Refused
+                        )
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn probe_scope(&mut self, id: AstId, marker: Astr) {
+        if self.probe != Some(id) {
+            return;
+        }
+        let mut scope: Vec<InScope> = Vec::new();
+        for bound_here in self.scopes.iter().rev() {
+            for (&name, bound) in bound_here {
+                if scope.iter().all(|in_scope| in_scope.name != name) {
+                    scope.push(InScope {
+                        name,
+                        binder: bound.binder,
+                        ty: bound.ty.clone(),
+                    });
+                }
+            }
+        }
+        scope.sort_by(|a, b| {
+            self.interner
+                .resolve(a.name)
+                .cmp(self.interner.resolve(b.name))
+        });
+        self.probed = Some(Probed::Value { marker, scope });
+    }
+
+    fn probe_receiver(
+        &mut self,
+        marker_site: CalleeSite,
+        marker: Astr,
+        receiver: &Expr,
+        ty: &InferTy,
+    ) {
+        if self.probe != Some(marker_site.id) {
+            return;
+        }
+        let probed = match names_a_place(receiver) {
+            true => ProbedReceiver::Place(ty.clone()),
+            false => ProbedReceiver::Value(ty.clone()),
+        };
+        self.probed = Some(Probed::Member(ProbedMember {
+            marker,
+            receiver: probed,
+            receiver_as_written: receiver.clone(),
+            marker_site,
+        }));
+    }
+
+    /// A method call whose name is the marker: its receiver is checked for
+    /// the probe, and the name, which no function has, is refused as
+    /// `check_method_call` refuses it.
+    fn check_probed_method_call(
+        &mut self,
+        id: AstId,
+        receiver: &Expr,
+        name: Astr,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        let owned = self.check_expr(receiver);
+        let marker_site = CalleeSite {
+            id,
+            span: call_span,
+        };
+        self.probe_receiver(marker_site, name, receiver, &owned);
+        self.check_unadmitted_args(None, args);
+        self.undefined_function(QualifiedRef::root(name), call_span)
     }
 
     fn view<F>(&self, mut types: FxHashMap<AstId, Ty>, bound: F) -> Freeze<BodyView>
@@ -2521,6 +2889,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// RFC-0043.
     fn signature_set(&mut self, name: QualifiedRef, callee: AstId) -> Vec<SignatureCandidate> {
+        let mut candidates = self.declared_signatures(name);
+        if name.namespace.is_none()
+            && let Some(ty) = self.local_signature(name.name, callee)
+        {
+            candidates.push(SignatureCandidate::Local { ty });
+        }
+        candidates
+    }
+
+    fn declared_signatures(&self, name: QualifiedRef) -> Vec<SignatureCandidate> {
         let mut candidates: Vec<SignatureCandidate> = match self.env.resolve_fn(name) {
             crate::ty::FnLookup::Found(qref, scheme) => vec![SignatureCandidate::Named {
                 qref,
@@ -2536,11 +2914,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             crate::ty::FnLookup::Missing => Vec::new(),
         };
         candidates.extend(self.view_signatures(name));
-        if name.namespace.is_none()
-            && let Some(ty) = self.local_signature(name.name, callee)
-        {
-            candidates.push(SignatureCandidate::Local { ty });
-        }
         candidates
     }
 
@@ -5247,11 +5620,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         OpenReceiver { place, referent }: OpenReceiver,
     ) -> Option<Narrowed> {
         narrowing.options.retain(|option| {
-            let (_, seen) = self
-                .solver
-                .receiver_seen_by(&option.candidate, owned, &referent);
             !matches!(
-                self.solver.admits(&option.candidate, 0, &seen),
+                self.receiver_admission(&option.candidate, owned, &referent)
+                    .admission,
                 Admission::Refused
             )
         });
@@ -5285,12 +5656,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (vec![candidate], mode)
             }
             Signatures::Several(candidates) => {
-                let referent = match self.solver.lend(&owned, Mutability::Shared) {
-                    LendOutcome::Names { referent, .. }
-                    | LendOutcome::MutableBorrowOfShared { referent } => referent,
-                    LendOutcome::HeadOpen => {
-                        return self.hold_open_receiver(candidates, receiver, owned, call);
-                    }
+                let Some(referent) = self.named_referent(&owned, Mutability::Shared) else {
+                    return self.hold_open_receiver(candidates, receiver, owned, call);
                 };
                 let Some(admitted) = self.admit_receiver(candidates, &owned, &referent, call)
                 else {
@@ -5345,22 +5712,24 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         referent: &InferTy,
         call: &NamedCall<'_>,
     ) -> Option<(Vec<SignatureCandidate>, ReceiverMode)> {
-        let admitted: Vec<ReceiverAdmission> = candidates
+        let admitted: Vec<CandidateAdmission> = candidates
             .into_iter()
-            .map(|candidate| {
-                let (mode, seen_as) = self.solver.receiver_seen_by(&candidate, owned, referent);
-                ReceiverAdmission {
-                    admission: self.solver.admits(&candidate, 0, &seen_as),
-                    seen: CandidateReceiver { candidate, mode },
-                    seen_as,
-                }
+            .map(|candidate| CandidateAdmission {
+                receiver: self.receiver_admission(&candidate, owned, referent),
+                candidate,
             })
             .collect();
-        let kept_among = Kept::among(admitted.iter().map(|one| &one.admission));
+        let kept_among = Kept::among(admitted.iter().map(|one| &one.receiver.admission));
         let kept: Vec<(CandidateReceiver, InferTy)> = admitted
             .into_iter()
-            .filter(|one| kept_among.keeps(&one.admission))
-            .map(|one| (one.seen, one.seen_as))
+            .filter(|one| kept_among.keeps(&one.receiver.admission))
+            .map(|one| {
+                let seen = CandidateReceiver {
+                    candidate: one.candidate,
+                    mode: one.receiver.mode,
+                };
+                (seen, one.receiver.seen_as)
+            })
             .collect();
         let Some(mode) = self.one_receiver_mode(&kept) else {
             let shown =
@@ -5380,6 +5749,58 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ))
     }
 
+    /// The one admission rule of a receiver place, which a method call and
+    /// completion's probe both apply.
+    fn receiver_admission(
+        &self,
+        candidate: &SignatureCandidate,
+        owned: &InferTy,
+        referent: &InferTy,
+    ) -> ReceiverAdmission {
+        let (mode, seen_as) = self.solver.receiver_seen_by(candidate, owned, referent);
+        ReceiverAdmission {
+            admission: self.solver.admits(candidate, 0, &seen_as),
+            mode,
+            seen_as,
+        }
+    }
+
+    /// What a lend of a place of type `owned` names; `None` where its head
+    /// is still open.
+    fn named_referent(&self, owned: &InferTy, mutability: Mutability) -> Option<InferTy> {
+        match self.solver.lend(owned, mutability) {
+            LendOutcome::Names { referent, .. }
+            | LendOutcome::MutableBorrowOfShared { referent } => Some(referent),
+            LendOutcome::HeadOpen => None,
+        }
+    }
+
+    /// The type a receiver that is a value is handed to the first parameter
+    /// as, in `mode`, as `receiver_arg` hands it; `None` where a lend of it
+    /// waits on a head still open.
+    fn value_receiver_handed(&self, ty: &InferTy, mode: ReceiverMode) -> Option<InferTy> {
+        match mode {
+            ReceiverMode::Lent(_) if self.passes_as_is(ty) => Some(ty.clone()),
+            ReceiverMode::Lent(mutability) => {
+                let referent = self.named_referent(ty, mutability)?;
+                Some(TyTerm::Ref(
+                    mutability,
+                    Box::new(TypeArg::uniform(referent)),
+                ))
+            }
+            ReceiverMode::Value => Some(ty.clone()),
+        }
+    }
+
+    /// RFC-0030: a receiver value that is a reference already is passed as
+    /// it is where the parameter takes one.
+    fn passes_as_is(&self, ty: &InferTy) -> bool {
+        matches!(
+            self.solver.resolve_ty(ty),
+            TyTerm::Ref(..) | TyTerm::Error(_)
+        )
+    }
+
     /// A receiver that is a place is lent as the parameter asks; a receiver
     /// that is already a reference value is passed as it is (RFC-0030); a
     /// receiver that is a value is bound to a temporary storage and that
@@ -5389,29 +5810,35 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let owned = self.check_receiver_place(receiver, Some(mode));
             return self.receiver_in(receiver, owned, mode, taken_by);
         }
+        let ty = self.check_expr(receiver);
+        self.value_receiver_in(receiver, ty, mode, taken_by)
+    }
+
+    fn value_receiver_in(
+        &mut self,
+        receiver: &Expr,
+        ty: InferTy,
+        mode: ReceiverMode,
+        taken_by: Span,
+    ) -> FirstArg {
         let (first, passing) = match mode {
+            ReceiverMode::Lent(_) if self.passes_as_is(&ty) => {
+                let first = FirstArg {
+                    ty,
+                    site: ArgSite::value(receiver, taken_by),
+                };
+                (first, Passing::AsIs)
+            }
             ReceiverMode::Lent(mutability) => {
-                let ty = self.check_expr(receiver);
-                if matches!(
-                    self.solver.resolve_ty(&ty),
-                    TyTerm::Ref(..) | TyTerm::Error(_)
-                ) {
-                    let first = FirstArg {
-                        ty,
-                        site: ArgSite::value(receiver, taken_by),
-                    };
-                    (first, Passing::AsIs)
-                } else {
-                    let first = FirstArg {
-                        ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
-                        site: ArgSite::lent(receiver, taken_by),
-                    };
-                    (first, Passing::Lent(mutability))
-                }
+                let first = FirstArg {
+                    ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
+                    site: ArgSite::lent(receiver, taken_by),
+                };
+                (first, Passing::Lent(mutability))
             }
             ReceiverMode::Value => {
                 let first = FirstArg {
-                    ty: self.check_expr(receiver),
+                    ty,
                     site: ArgSite::value(receiver, taken_by),
                 };
                 (first, Passing::Value)
@@ -6407,6 +6834,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ref_kind,
                 span,
             } => {
+                self.probe_scope(*id, name.name);
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
                         let ty = match self.param_types.iter().find(|p| p.name == name.name) {
@@ -6802,6 +7230,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let outer = std::mem::replace(&mut self.demand, through);
                 let ot_raw = self.check_expr(object);
                 self.demand = outer;
+                let marker_site = CalleeSite {
+                    id: *id,
+                    span: *span,
+                };
+                self.probe_receiver(marker_site, *field, object, &ot_raw);
                 self.note_place(expr);
                 if outer == PlaceDemand::Value {
                     self.note_value_read(expr);
@@ -6943,7 +7376,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 args,
                 span,
             } => {
-                let ty = self.check_method_call(*callee_id, receiver, *name, args, *span);
+                let ty = match self.probe == Some(*id) {
+                    true => self.check_probed_method_call(*id, receiver, *name, args, *span),
+                    false => self.check_method_call(*callee_id, receiver, *name, args, *span),
+                };
                 self.record_ret(*id, ty)
             }
 
@@ -7473,6 +7909,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let resolved = self.solver.shallow_resolve_ty(&ft);
             return self.check_callable(&resolved, first.as_ref(), args, call_span);
         };
+        self.probe_scope(func.id(), name.name);
         let candidates = self.signature_set(*name, func.id());
         if candidates.is_empty() {
             if let Some(ns) = name.namespace {

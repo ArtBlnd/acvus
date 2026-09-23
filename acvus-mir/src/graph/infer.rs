@@ -16,7 +16,7 @@ use crate::ty::{
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
-use crate::typeck::{BodyView, Checked};
+use crate::typeck::{BodyView, Checked, ProbeProduct};
 
 // -- Phase 1 output --------------------------------------------------
 
@@ -486,6 +486,16 @@ pub struct SccInferResult {
     pub outcomes: FxHashMap<QualifiedRef, FnInferOutcome>,
     /// QualifiedRef -> resolved Ty::Fn (for passing to next SCC).
     pub resolved_types: FxHashMap<QualifiedRef, Ty>,
+    /// What the checker saw at the probe's marker, where `infer_scc` was
+    /// given a probe of a body in this SCC.
+    pub probe: Option<ProbeProduct>,
+}
+
+/// A body of the SCC checked with a marked node (`TypeChecker::with_probe`).
+#[derive(Debug, Clone, Copy)]
+pub struct Probe {
+    pub body: QualifiedRef,
+    pub marker: acvus_ast::AstId,
 }
 
 impl SccInferResult {
@@ -652,6 +662,7 @@ pub fn infer_scc(
     declared: &FxHashMap<QualifiedRef, Declared>,
     sources: &mut Sources,
     registry: &TypeRegistry,
+    probe: Option<Probe>,
 ) -> SccInferResult {
     let signatures = declared_instances(declared);
     let mut solver = Solver::new(sources, registry, &signatures);
@@ -667,6 +678,7 @@ pub fn infer_scc(
     let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
     let mut fn_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
     let mut fn_checked: FxHashMap<QualifiedRef, Checked> = FxHashMap::default();
+    let mut probed: Option<ProbeProduct> = None;
 
     // Build PolyTy::Fn templates for functions in this SCC.
     // Solver ret vars are kept separately for unification.
@@ -742,7 +754,11 @@ pub fn infer_scc(
             .with_declared_params(fn_declared_params[&fid].clone())
             .with_bound_inputs(bound_inputs(bindings))
             .with_body_effect(fn_effect_vars[&fid].clone());
-        let checked = match parsed {
+        let checker = match probe {
+            Some(probe) if probe.body == fid => checker.with_probe(probe.marker),
+            Some(_) | None => checker,
+        };
+        let mut checked = match parsed {
             ParsedSource::Script(script) => {
                 checker.check_script(script, expected_tail_ty.as_ref(), crossing_of(entry, fid))
             }
@@ -772,6 +788,9 @@ pub fn infer_scc(
                 .map(|(name, ty)| Param::new(*name, ty.clone()))
                 .collect();
             fn_bind_params.insert(fid, bind);
+        }
+        if let Some(product) = checked.probe.take() {
+            probed = Some(product);
         }
         fn_checked.insert(fid, checked);
     }
@@ -808,6 +827,7 @@ pub fn infer_scc(
             Some(Checked {
                 resolution: Ok(resolution),
                 view,
+                probe: _,
             }) => FnInferOutcome::Complete {
                 tail_ty: resolution.tail_ty.clone(),
                 resolution,
@@ -817,6 +837,7 @@ pub fn infer_scc(
             Some(Checked {
                 resolution: Err(errors),
                 view,
+                probe: _,
             }) => FnInferOutcome::Incomplete {
                 meta,
                 errors,
@@ -834,6 +855,7 @@ pub fn infer_scc(
     SccInferResult {
         outcomes,
         resolved_types,
+        probe: probed,
     }
 }
 
@@ -1061,6 +1083,7 @@ pub fn infer(
             Some(Checked {
                 resolution: Ok(resolution),
                 view,
+                probe: _,
             }) => FnInferOutcome::Complete {
                 tail_ty: resolution.tail_ty.clone(),
                 resolution,
@@ -1071,6 +1094,7 @@ pub fn infer(
             Some(Checked {
                 resolution: Err(errors),
                 view,
+                probe: _,
             }) => FnInferOutcome::Incomplete {
                 meta,
                 errors,

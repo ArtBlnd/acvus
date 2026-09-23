@@ -5,17 +5,23 @@
 //! handled by `IncrementalGraph`. This layer only provides:
 //! - DocId <-> FunctionId mapping
 //! - MirError -> LspError conversion
-//! - Completion logic (context, pipe, keyword)
+//! - Where a completion is asked and how its items read; what they are is
+//!   the checker's answer (`IncrementalGraph::probe`)
 
+use std::collections::BTreeMap;
+
+use acvus_ast::lexer::{Line, Piece, scan_template};
 use acvus_ast::locate::Nodes;
 use acvus_ast::report::Label;
+use acvus_ast::token::KEYWORDS;
+use acvus_ast::{AstId, Span};
 use acvus_mir::error::Refusal;
 use acvus_mir::graph::ContextInfo;
 use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
 use acvus_mir::ty::PolyTy;
-use acvus_mir::typeck::BodyView;
-use acvus_utils::{Astr, Freeze, Interner};
+use acvus_mir::typeck::{BodyView, ProbeProduct};
+use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 
 // -- Public types ----------------------------------------------------
@@ -79,18 +85,25 @@ pub enum LspErrorCategory {
     Host,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionItem {
     pub label: String,
     pub kind: CompletionKind,
     pub detail: String,
+    /// What replaces the identifier the cursor is in, which never holds the
+    /// `$`, `@`, `ns::` or `.` before it.
     pub insert_text: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `completions` lists items in this order, then by label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CompletionKind {
-    Context,
+    Local,
+    Param,
+    Field,
+    Method,
     Function,
+    Context,
     Keyword,
 }
 
@@ -239,21 +252,144 @@ impl LspSession {
         self.graph.context_info(qref)
     }
 
-    /// Completions at cursor position.
+    /// The names that can be written where the identifier at `cursor`
+    /// is, starting with what is typed of it up to `cursor`. In a template
+    /// only a `%` line and a `{{ }}` tag hold names.
     pub fn completions(&self, id: DocId, cursor: usize) -> Vec<CompletionItem> {
-        let Some(source) = self.doc_sources.get(&id) else {
+        let (Some(source), Some(document)) = (self.doc_sources.get(&id), self.documents.get(&id))
+        else {
             return vec![];
         };
-        let before = &source[..cursor.min(source.len())];
+        let Some(site) = CompletionSite::at(source, cursor, document.mode) else {
+            return vec![];
+        };
         let interner = self.graph.interner();
-        let ns = self.function_ref(id).and_then(|qref| qref.namespace);
+        let mut items = match site.after {
+            Sigil::None => {
+                let mut items = self.function_items(None);
+                items.extend(keyword_items());
+                if let Some(ProbeProduct::Value { scope, .. }) = self.probe(document, source, &site)
+                {
+                    items.extend(scope.iter().map(|visible| CompletionItem {
+                        label: interner.resolve(visible.name).to_string(),
+                        kind: CompletionKind::Local,
+                        detail: visible.ty.display(interner).to_string(),
+                        insert_text: interner.resolve(visible.name).to_string(),
+                    }));
+                }
+                items
+            }
+            Sigil::Input => match self.probe(document, source, &site) {
+                Some(ProbeProduct::Value { inputs, .. }) => inputs
+                    .iter()
+                    .map(|input| CompletionItem {
+                        label: format!("${}", interner.resolve(input.name)),
+                        kind: CompletionKind::Param,
+                        detail: input.ty.display(interner).to_string(),
+                        insert_text: interner.resolve(input.name).to_string(),
+                    })
+                    .collect(),
+                Some(ProbeProduct::Member { .. }) | None => vec![],
+            },
+            Sigil::Context => self
+                .graph
+                .visible_contexts()
+                .map(|context| CompletionItem {
+                    label: format!("@{}", interner.resolve(context.qref.name)),
+                    kind: CompletionKind::Context,
+                    detail: context.ty.display(interner).to_string(),
+                    insert_text: interner.resolve(context.qref.name).to_string(),
+                })
+                .collect(),
+            Sigil::Qualifier(namespace) => self.function_items(Some(namespace)),
+            Sigil::Member => match self.probe(document, source, &site) {
+                Some(ProbeProduct::Member {
+                    fields, methods, ..
+                }) => {
+                    let fields = fields.iter().map(|field| CompletionItem {
+                        label: interner.resolve(field.name).to_string(),
+                        kind: CompletionKind::Field,
+                        detail: field.ty.display(interner).to_string(),
+                        insert_text: interner.resolve(field.name).to_string(),
+                    });
+                    let methods = methods.iter().map(|method| {
+                        let types: Vec<&PolyTy> = method
+                            .admitted
+                            .iter()
+                            .map(|declaration| &declaration.ty)
+                            .collect();
+                        CompletionItem {
+                            label: interner.resolve(method.name).to_string(),
+                            kind: CompletionKind::Method,
+                            detail: shown_types(&types, interner),
+                            insert_text: interner.resolve(method.name).to_string(),
+                        }
+                    });
+                    fields.chain(methods).collect()
+                }
+                Some(ProbeProduct::Value { .. }) | None => vec![],
+            },
+        };
+        items.retain(|item| item.insert_text.starts_with(site.typed));
+        items.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.label.cmp(&b.label)));
+        items
+    }
 
-        match detect_trigger(before) {
-            Trigger::Context { prefix } => self.context_completions(ns, &prefix, interner),
-            Trigger::Pipe => self.pipe_completions(interner),
-            Trigger::Keyword { prefix } => keyword_completions(&prefix),
-            Trigger::None => vec![],
+    /// The functions a bare name reaches, one item per name, or the ones
+    /// `namespace::` qualifies.
+    fn function_items(&self, namespace: Option<&str>) -> Vec<CompletionItem> {
+        let interner = self.graph.interner();
+        let mut by_name: BTreeMap<&str, Vec<&PolyTy>> = BTreeMap::new();
+        for function in self.graph.functions() {
+            let qualified_as = function.qref.namespace.map(|ns| interner.resolve(ns));
+            if namespace.is_some() && qualified_as != namespace {
+                continue;
+            }
+            by_name
+                .entry(interner.resolve(function.qref.name))
+                .or_default()
+                .push(&function.ty);
         }
+        by_name
+            .into_iter()
+            .map(|(name, types)| CompletionItem {
+                label: name.to_string(),
+                kind: CompletionKind::Function,
+                detail: shown_types(&types, interner),
+                insert_text: name.to_string(),
+            })
+            .collect()
+    }
+
+    /// What the checker sees with the identifier at `site` replaced by a
+    /// name no binding of the source has.
+    fn probe(
+        &self,
+        document: &Document,
+        source: &str,
+        site: &CompletionSite<'_>,
+    ) -> Option<ProbeProduct> {
+        let interner = self.graph.interner();
+        let marker = unwritten_name(source);
+        let probed = format!(
+            "{}{marker}{}",
+            &source[..site.word.start],
+            &source[site.word.end..]
+        );
+        let ast = document.mode.parse(interner, &probed).ok()?;
+        let marked: AstId = match &ast {
+            ParsedAst::Script(script) => Nodes::of_script(script),
+            ParsedAst::Template(template) => Nodes::of_template(template),
+        }
+        .at(site.word.start)
+        .first()?
+        .id;
+        let body = Function {
+            qref: document.qref,
+            kind: FnKind::Local(ast),
+            ty: document.ty.clone(),
+        };
+        self.graph.probe(body, marked)
     }
 
     /// The type of the innermost node at `offset` that has one.
@@ -307,112 +443,129 @@ impl LspSession {
         };
         Some((nodes, self.graph.view(qref)?))
     }
-
-    // -- Completion helpers ------------------------------------------
-
-    fn context_completions(
-        &self,
-        ns: Option<Astr>,
-        prefix: &str,
-        interner: &Interner,
-    ) -> Vec<CompletionItem> {
-        let mut items = Vec::new();
-        for (ctx_ns, name, ctx) in self.graph.visible_contexts(ns) {
-            let name_str = interner.resolve(name);
-            let label = match ctx_ns {
-                None => format!("@{name_str}"),
-                Some(ns_name) => {
-                    let ns_str = interner.resolve(ns_name);
-                    format!("@{ns_str}:{name_str}")
-                }
-            };
-            if !label[1..].starts_with(prefix) {
-                continue;
-            }
-            let ty = format!("{:?}", ctx.ty);
-            items.push(CompletionItem {
-                label: label.clone(),
-                kind: CompletionKind::Context,
-                detail: ty,
-                insert_text: label[1..].to_string(), // strip @
-            });
-        }
-        items.sort_by(|a, b| a.label.cmp(&b.label));
-        items
-    }
-
-    fn pipe_completions(&self, interner: &Interner) -> Vec<CompletionItem> {
-        // All root functions as pipe candidates.
-        let mut items = Vec::new();
-        for (_, name, _func) in self.graph.visible_functions(None) {
-            let name_str = interner.resolve(name);
-            items.push(CompletionItem {
-                label: name_str.to_string(),
-                kind: CompletionKind::Function,
-                detail: String::new(),
-                insert_text: format!(" {name_str}"),
-            });
-        }
-        items.sort_by(|a, b| a.label.cmp(&b.label));
-        items
-    }
 }
 
-// -- Trigger detection -----------------------------------------------
+// -- Completion site -------------------------------------------------
 
-enum Trigger {
-    Context { prefix: String },
-    Pipe,
-    Keyword { prefix: String },
+/// What precedes the identifier completion replaces, which says what kind
+/// of name it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sigil<'s> {
     None,
+    Input,
+    Context,
+    Qualifier(&'s str),
+    Member,
 }
 
-fn detect_trigger(before: &str) -> Trigger {
-    let trimmed = before.trim_end();
-    if trimmed.is_empty() {
-        return Trigger::None;
-    }
-    if trimmed.ends_with('|') {
-        return Trigger::Pipe;
-    }
-    // @prefix or @ns:prefix
-    if let Some(at_pos) = before.rfind('@') {
-        let after_at = &before[at_pos + 1..];
-        if after_at
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
-        {
-            return Trigger::Context {
-                prefix: after_at.to_string(),
-            };
+struct CompletionSite<'s> {
+    word: Span,
+    typed: &'s str,
+    after: Sigil<'s>,
+}
+
+impl<'s> CompletionSite<'s> {
+    fn at(source: &'s str, cursor: usize, mode: Mode) -> Option<Self> {
+        if !source.is_char_boundary(cursor) {
+            return None;
         }
-    }
-    let last_word = before
-        .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
-        .next()
-        .unwrap_or("");
-    if !last_word.is_empty() {
-        return Trigger::Keyword {
-            prefix: last_word.to_string(),
+        let code = code_around(source, cursor, mode)?;
+        let start = source[code.start..cursor]
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| is_identifier_char(c))
+            .last()
+            .map_or(cursor, |(at, _)| code.start + at);
+        let end = source[cursor..code.end]
+            .char_indices()
+            .find(|&(_, c)| !is_identifier_char(c))
+            .map_or(code.end, |(at, _)| cursor + at);
+        if source[start..end].starts_with(|c: char| c.is_numeric()) {
+            return None;
+        }
+        let before = &source[code.start..start];
+        let after = if before.ends_with('$') {
+            Sigil::Input
+        } else if before.ends_with('@') {
+            Sigil::Context
+        } else if let Some(qualified) = before.strip_suffix("::") {
+            let namespace = trailing_identifier(qualified);
+            if namespace.is_empty() {
+                return None;
+            }
+            Sigil::Qualifier(namespace)
+        } else if before.ends_with('.') && !before.ends_with("..") {
+            Sigil::Member
+        } else {
+            Sigil::None
         };
+        Some(Self {
+            word: Span::new(start, end),
+            typed: &source[start..cursor],
+            after,
+        })
     }
-    Trigger::None
 }
 
-fn keyword_completions(prefix: &str) -> Vec<CompletionItem> {
-    let keywords = [
-        "true", "false", "in", "Some", "None", "let", "if", "else", "for", "while",
-    ];
-    keywords
+/// The source that holds code around `cursor`: all of a script; in a
+/// template, the `%` line or the `{{ }}` tag the cursor is in.
+fn code_around(source: &str, cursor: usize, mode: Mode) -> Option<Span> {
+    let holds = |span: Span| span.start <= cursor && cursor <= span.end;
+    match mode {
+        Mode::Script => Some(Span::new(0, source.len())),
+        Mode::Template => scan_template(source)
+            .ok()?
+            .into_iter()
+            .find_map(|line| match line {
+                Line::Stmt { span, .. } => holds(span).then_some(span),
+                Line::Text { pieces, .. } => pieces.into_iter().find_map(|piece| match piece {
+                    Piece::Tag { inner_span, .. } => holds(inner_span).then_some(inner_span),
+                    Piece::Text { .. } => None,
+                }),
+            }),
+    }
+}
+
+/// The characters of `[\p{L}_][\p{L}\p{N}_]*`, the lexer's identifier.
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+fn trailing_identifier(text: &str) -> &str {
+    let start = text
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| is_identifier_char(c))
+        .last()
+        .map_or(text.len(), |(at, _)| at);
+    &text[start..]
+}
+
+/// An identifier the source does not contain, so no binding, input or
+/// field of the source is named by it.
+fn unwritten_name(source: &str) -> String {
+    (0..)
+        .map(|n| format!("__acvus_completion_{n}"))
+        .find(|name| !source.contains(name.as_str()))
+        .expect("a source holds finitely many names")
+}
+
+fn keyword_items() -> impl Iterator<Item = CompletionItem> {
+    KEYWORDS.iter().map(|keyword| CompletionItem {
+        label: keyword.to_string(),
+        kind: CompletionKind::Keyword,
+        detail: "keyword".to_string(),
+        insert_text: keyword.to_string(),
+    })
+}
+
+/// The types of the declarations one name reaches.
+fn shown_types(types: &[&PolyTy], interner: &Interner) -> String {
+    types
         .iter()
-        .filter(|kw| kw.starts_with(prefix) && **kw != prefix)
-        .map(|kw| CompletionItem {
-            label: kw.to_string(),
-            kind: CompletionKind::Keyword,
-            detail: "keyword".to_string(),
-            insert_text: kw.to_string(),
-        })
-        .collect()
+        .map(|ty| ty.display(interner).to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 // -- Refusal -> LspError ---------------------------------------------

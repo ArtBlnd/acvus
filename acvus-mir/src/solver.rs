@@ -121,7 +121,10 @@ pub struct Origin {
 ///
 /// An identity minted where no expression is in hand has no `Origin`, and
 /// a refusal over it names the places it can name and no more.
-#[derive(Debug, Default)]
+///
+/// `Clone` is for a check whose identities must not reach the compilation:
+/// a completion probe mints into a copy.
+#[derive(Debug, Default, Clone)]
 pub struct Sources {
     ids: acvus_utils::LocalFactory<IdentityId>,
     origins: FxHashMap<IdentityId, Origin>,
@@ -1721,7 +1724,7 @@ enum StructuralHead {
     Refuses,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SettledStructural {
     pub call: InferTy,
     pub offer: Rc<ComponentOffer>,
@@ -2065,7 +2068,9 @@ pub enum Handed {
     /// `ty` is the type of a receiver's place, handed in the mode the
     /// candidate's first parameter asks (RFC-0043 rule 6); `referent` is what
     /// a reference to the place names.
-    Receiver { referent: InferTy },
+    Receiver {
+        referent: InferTy,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2459,6 +2464,26 @@ impl<'src> Solver<'src> {
         self.registry
     }
 
+    pub fn trial<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Solver<'_>) -> R,
+    {
+        let mut sources = self.sources.clone();
+        let mut trial = Solver {
+            terms: self.terms.clone(),
+            decisions: self.decisions.clone(),
+            begun_by_decisions: self.begun_by_decisions.clone(),
+            children: self.children.clone(),
+            structural: self.structural.clone(),
+            opened_children: self.opened_children.clone(),
+            instance_bounds: self.instance_bounds.clone(),
+            sources: &mut sources,
+            registry: self.registry,
+            signatures: self.signatures,
+        };
+        f(&mut trial)
+    }
+
     // -- Sources -----------------------------------------------------
 
     pub fn source_begins_at(&mut self, id: IdentityId, span: Span) {
@@ -2715,6 +2740,10 @@ impl<'src> Solver<'src> {
 
     // -- Decide --------------------------------------------------------
 
+    pub fn decisions_opened(&self) -> usize {
+        self.decisions.len()
+    }
+
     pub fn decide(&mut self, decision: Decision) -> DecisionId {
         self.decisions.push(DecisionSlot {
             decision,
@@ -2911,15 +2940,7 @@ impl<'src> Solver<'src> {
                 required,
                 tie,
                 structural,
-            } => self.step_instance(
-                id,
-                &call,
-                candidates,
-                generic,
-                required,
-                tie,
-                structural,
-            ),
+            } => self.step_instance(id, &call, candidates, generic, required, tie, structural),
             Decision::Conversion { from, to } => self.step_conversion(id, &from, &to),
             Decision::Signature {
                 name,

@@ -189,6 +189,85 @@ pub enum Token {
     FmtStringEnd(String),
 }
 
+/// Every word the lexer reserves, each as `Token::keyword` names it.
+pub const KEYWORDS: &[&str] = &[
+    "true", "false", "_", "Some", "None", "Ok", "Err", "let", "if", "else", "while", "for", "in",
+    "break", "continue", "return", "anyorder", "match", "mut", "as",
+];
+
+impl Token {
+    /// The word a keyword token is written as.
+    pub fn keyword(&self) -> Option<&'static str> {
+        match self {
+            Token::True => Some("true"),
+            Token::False => Some("false"),
+            Token::Underscore => Some("_"),
+            Token::Some => Some("Some"),
+            Token::None => Some("None"),
+            Token::Ok => Some("Ok"),
+            Token::Err => Some("Err"),
+            Token::Let => Some("let"),
+            Token::If => Some("if"),
+            Token::Else => Some("else"),
+            Token::While => Some("while"),
+            Token::For => Some("for"),
+            Token::In => Some("in"),
+            Token::Break => Some("break"),
+            Token::Continue => Some("continue"),
+            Token::Return => Some("return"),
+            Token::Anyorder => Some("anyorder"),
+            Token::Match => Some("match"),
+            Token::Mut => Some("mut"),
+            Token::As => Some("as"),
+            Token::Ident(_)
+            | Token::ParamRef(_)
+            | Token::ContextRef(_)
+            | Token::FloatLit(_)
+            | Token::IntLitOf(_)
+            | Token::IntLit(_)
+            | Token::StringLit(_)
+            | Token::CharLit(_)
+            | Token::ByteLit(_)
+            | Token::ByteStrLit(_)
+            | Token::DoubleColon
+            | Token::AndAnd
+            | Token::OrOr
+            | Token::Eq
+            | Token::Neq
+            | Token::Lte
+            | Token::Gte
+            | Token::Arrow
+            | Token::FatArrow
+            | Token::DotDot
+            | Token::Plus
+            | Token::Minus
+            | Token::Star
+            | Token::Slash
+            | Token::Percent
+            | Token::Bang
+            | Token::Question
+            | Token::Amp
+            | Token::Lt
+            | Token::Gt
+            | Token::Assign
+            | Token::Dot
+            | Token::Pipe
+            | Token::LParen
+            | Token::RParen
+            | Token::LBracket
+            | Token::RBracket
+            | Token::LBrace
+            | Token::RBrace
+            | Token::Comma
+            | Token::Colon
+            | Token::Semicolon
+            | Token::FmtStringStart(_)
+            | Token::FmtStringMid(_)
+            | Token::FmtStringEnd(_) => None,
+        }
+    }
+}
+
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -258,5 +337,40 @@ impl fmt::Display for Token {
             Token::FmtStringMid(s) => write!(f, "fmt_mid({s:?})"),
             Token::FmtStringEnd(s) => write!(f, "fmt_end({s:?})"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_listed_keyword_lexes_to_its_token() {
+        for &word in KEYWORDS {
+            let tokens: Vec<Token> = Token::lexer_with_extras(word, Interner::new())
+                .collect::<Result<_, _>>()
+                .unwrap_or_else(|()| panic!("`{word}` does not lex"));
+            let [token] = tokens.as_slice() else {
+                panic!("`{word}` lexes to {} tokens", tokens.len());
+            };
+            assert_eq!(token.keyword(), Some(word), "`{word}` lexes to {token}");
+        }
+    }
+
+    /// A keyword is an exact `#[token]` whose text an identifier could
+    /// spell, so the definitions above name every one there is.
+    #[test]
+    fn every_keyword_token_is_listed() {
+        let spelled_as_identifiers: Vec<&str> = include_str!("token.rs")
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("#[token(\""))
+            .filter_map(|rest| rest.split_once('"').map(|(text, _)| text))
+            .filter(|text| text.chars().all(|c| c.is_alphanumeric() || c == '_'))
+            .collect();
+        assert!(!spelled_as_identifiers.is_empty());
+        for text in &spelled_as_identifiers {
+            assert!(KEYWORDS.contains(text), "`{text}` is not in KEYWORDS");
+        }
+        assert_eq!(spelled_as_identifiers.len(), KEYWORDS.len());
     }
 }

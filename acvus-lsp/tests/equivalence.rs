@@ -2,7 +2,7 @@
 //! as the batch compilation pipeline.
 
 use acvus_extern::{Externs, TypesOnly};
-use acvus_lsp::{Document, LspSession, Mode};
+use acvus_lsp::{CompletionKind, Document, LspSession, Mode};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeRegistry, lift_to_poly};
@@ -33,7 +33,12 @@ fn environment(
 }
 
 fn bare(contexts: Vec<Context>) -> CompilationGraph {
-    environment(contexts, vec![], TypeRegistry::default(), Bindings::default())
+    environment(
+        contexts,
+        vec![],
+        TypeRegistry::default(),
+        Bindings::default(),
+    )
 }
 
 fn with_std(interner: &Interner, contexts: Vec<Context>) -> CompilationGraph {
@@ -266,16 +271,18 @@ fn namespace_context_isolation() {
 // -- Completion tests -----------------------------------------------
 
 #[test]
-fn completion_context_trigger() {
+fn completion_offers_contexts_after_at() {
     let i = Interner::new();
     let mut session = LspSession::new(
         &i,
-        bare(root_contexts(&i, &[("name", Ty::String), ("count", Ty::I64)])),
+        bare(root_contexts(
+            &i,
+            &[("name", Ty::String), ("count", Ty::I64)],
+        )),
     );
 
     let doc = session.open(template_document(&i, "test"), "{{ @n }}");
-    // Cursor after "@n" -> context trigger with prefix "n"
-    let items = session.completions(doc, 5); // "{{ @n" = 5 chars
+    let items = session.completions(doc, "{{ @n".len());
     assert!(!items.is_empty(), "should get context completions");
     assert!(
         items.iter().any(|c| c.label == "@name"),
@@ -288,10 +295,11 @@ fn completion_context_trigger() {
     );
 }
 
+/// A pipe stage is a call, so the functions are offered where one is
+/// written.
 #[test]
-fn completion_pipe_trigger() {
+fn completion_offers_functions_at_a_pipe_stage() {
     let i = Interner::new();
-    // Add a helper function so visible_functions returns something.
     let mut session = LspSession::new(
         &i,
         environment(
@@ -302,27 +310,29 @@ fn completion_pipe_trigger() {
         ),
     );
 
-    let doc = session.open(template_document(&i, "test"), "{{ @name | helper }}");
-    // Cursor after "| " -> pipe trigger (user is about to type after |)
-    let items = session.completions(doc, 10); // "{{ @name |" = 10 chars
-    assert!(!items.is_empty(), "should get pipe completions (functions)");
+    let source = "{{ @name | he }}";
+    let doc = session.open(template_document(&i, "test"), source);
+    let items = session.completions(doc, "{{ @name | he".len());
     assert!(
-        items.iter().any(|c| c.label == "helper"),
+        items
+            .iter()
+            .any(|c| c.label == "helper" && c.kind == CompletionKind::Function),
         "should suggest helper, got: {:?}",
         items.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn completion_keyword_trigger() {
+fn completion_offers_keywords_by_prefix() {
     let i = Interner::new();
     let mut session = LspSession::new(&i, bare(vec![]));
 
     let doc = session.open(template_document(&i, "test"), "{{ tr }}");
-    // Cursor after "tr" -> keyword trigger
-    let items = session.completions(doc, 5); // "{{ tr" = 5 chars
+    let items = session.completions(doc, "{{ tr".len());
     assert!(
-        items.iter().any(|c| c.label == "true"),
+        items
+            .iter()
+            .any(|c| c.label == "true" && c.kind == CompletionKind::Keyword),
         "should suggest 'true', got: {:?}",
         items.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
@@ -335,7 +345,7 @@ fn completion_empty_after_close() {
 
     let doc = session.open(template_document(&i, "test"), "{{ @n }}");
     session.close(doc);
-    let items = session.completions(doc, 5);
+    let items = session.completions(doc, "{{ @n".len());
     assert!(items.is_empty(), "closed doc should return no completions");
 }
 
@@ -348,15 +358,14 @@ fn completion_updates_with_source() {
     );
 
     let doc = session.open(template_document(&i, "test"), "{{ @n }}");
-    let items = session.completions(doc, 5);
+    let items = session.completions(doc, "{{ @n".len());
     assert!(
         items.iter().any(|c| c.label == "@name"),
         "should match @name"
     );
 
-    // Update source to "@a"
     session.update_source(doc, "{{ @a }}");
-    let items = session.completions(doc, 5);
+    let items = session.completions(doc, "{{ @a".len());
     assert!(
         items.iter().any(|c| c.label == "@age"),
         "after update should match @age, got: {:?}",
@@ -501,7 +510,10 @@ Explain for {{ $who }}
     fn a_document_that_never_parsed_is_one_diagnostic() {
         let interner = Interner::new();
         let mut session = LspSession::new(&interner, super::bare(vec![]));
-        let doc = session.open(super::template_document(&interner, "test"), "% if\nbroken\n");
+        let doc = session.open(
+            super::template_document(&interner, "test"),
+            "% if\nbroken\n",
+        );
         assert_eq!(session.diagnostics(doc).len(), 1);
         assert!(shown(&session, doc).is_empty());
         assert!(session.required_inputs(doc).is_empty());
