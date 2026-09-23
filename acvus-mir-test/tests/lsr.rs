@@ -271,7 +271,7 @@ fn a_loop_merging_through_a_lawful_extern_is_left_as_written() {
     let lawful = compile_script_optimized(&i, MERGED_BY_LAW, &names).expect("it compiles");
     let lawless = compile_script_optimized(&i, MERGED_WITHOUT_LAW, &names).expect("it compiles");
     assert_eq!(
-        where_it_multiplies(&lawful),
+        where_it_multiplies_by_context(&lawful, "@k"),
         ["L1: 1".to_string()],
         "`max` is a declared merge and `i` an induction variable, so the loop is \
          weak and keeps `i * @k` in its body:\n{lawful}"

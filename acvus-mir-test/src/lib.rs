@@ -641,6 +641,17 @@ pub fn compile_script_module_at(
     context: &FxHashMap<Astr, Ty>,
     opt: Opt,
 ) -> Result<MirModule, String> {
+    compile_script_at(interner, source, context, opt).map(|compiled| compiled.module)
+}
+
+/// `compile_script_module_at` with the law table the pipeline read, for a
+/// test that runs an analysis over the result.
+pub fn compile_script_at(
+    interner: &Interner,
+    source: &str,
+    context: &FxHashMap<Astr, Ty>,
+    opt: Opt,
+) -> Result<LoweredScript, String> {
     let mut pb = PolyBuilder::new();
     let contexts: Vec<Context> = context
         .iter()
@@ -692,12 +703,8 @@ pub fn compile_script_module_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(
-        interner,
-        &LawTable::of(graph.functions.iter()),
-        result.modules,
-        opt,
-    );
+    let laws = LawTable::of(graph.functions.iter());
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &laws, result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -709,11 +716,12 @@ pub fn compile_script_module_at(
         return Err(errors.join("\n"));
     }
 
-    opt_result
+    let module = opt_result
         .modules
         .get(&test_qref)
         .cloned()
-        .ok_or_else(|| "no module produced for target".to_string())
+        .ok_or_else(|| "no module produced for target".to_string())?;
+    Ok(LoweredScript { module, laws })
 }
 
 /// One stage's refusal of a source: the stage that raised it, the words, the

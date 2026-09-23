@@ -19,7 +19,8 @@ use acvus_mir::ir::{ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModu
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{CastTy, IntTy, Ty};
 use acvus_mir::validate::type_check::{ValidationErrorKind, check_types};
-use acvus_mir_test::compile_script_module_at;
+use acvus_mir::laws::LawTable;
+use acvus_mir_test::compile_script_at;
 use acvus_utils::{Astr, Interner, LocalFactory};
 use rustc_hash::FxHashMap;
 
@@ -37,13 +38,15 @@ struct Compiled {
     nest: LoopNest,
     invariants: Invariants,
     loans: Loans,
+    laws: LawTable,
 }
 
 impl Compiled {
     fn of(source: &str, opt: Opt) -> Self {
         let interner = Interner::new();
-        let module = compile_script_module_at(&interner, source, &ctx(&interner), opt)
+        let compiled = compile_script_at(&interner, source, &ctx(&interner), opt)
             .unwrap_or_else(|e| panic!("{source} at {opt:?}\n{e}"));
+        let module = compiled.module;
         let listing = dump_with(&interner, &module);
         let cfg = promote(module.main);
         let invariants = Invariants::of(&cfg);
@@ -56,6 +59,7 @@ impl Compiled {
             nest,
             invariants,
             loans,
+            laws: compiled.laws,
         }
     }
 
@@ -67,7 +71,7 @@ impl Compiled {
 
     fn state(&self, loop_: &Loop) -> CarriedState {
         let affine = AffineValues::of(&self.cfg, loop_, &self.invariants);
-        CarriedState::of(&self.cfg, loop_, &affine, &self.loans)
+        CarriedState::of(&self.cfg, loop_, &affine, &self.loans, &self.laws)
     }
 
     fn carried(&self, loop_: &Loop) -> Vec<Carried> {
