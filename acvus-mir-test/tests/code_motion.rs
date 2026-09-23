@@ -116,7 +116,7 @@ fn a_multiplication_between_two_loops_stays_between_them() {
 
 /// The header post-dominates the entry and is no deeper than it, so a
 /// multiplication the condition rebuilds every iteration still leaves the
-/// loop entirely. Tested with `<=` so that it stays a `while`: RFC-0079
+/// loop entirely. Tested with `<=` so that it stays a `while`: RFC-0081
 /// turns `i < @n * 2` into a range `for` and writes the multiplication
 /// above the header itself.
 #[test]
