@@ -13,11 +13,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor};
 use acvus_interpreter_test::{
-    Context, check_source, execute_compiled, int_context, run_script, split_context,
+    Context, Helper, check_graph, execute_compiled, int_context, run_script, split_context,
 };
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ty::Ty;
+use acvus_mir::ty::{ParamTerm, Poly, Ty, lift_to_poly};
 use acvus_utils::Interner;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -148,13 +148,20 @@ struct Balance {
     answer: u64,
 }
 
-async fn balance(source: &str, n: i64, opt: Opt) -> Balance {
+type Helpers = fn(&Interner) -> Vec<Helper<'static>>;
+
+fn no_helpers(_: &Interner) -> Vec<Helper<'static>> {
+    Vec::new()
+}
+
+async fn balance(source: &str, helpers: Helpers, n: i64, opt: Opt) -> Balance {
     let interner = Interner::new();
     let (context_types, snapshot) = split_context(&interner, int_context(&interner, "n", n));
     let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, source).expect("parse error"));
-    let compiled = check_source(
+    let compiled = check_graph(
         &interner,
         ast,
+        &helpers(&interner),
         &context_types,
         acvus_ext::std_registries::<AcvusRuntime>(),
         Ty::U64,
@@ -179,8 +186,8 @@ async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
     for opt in [Opt::None, Opt::Full] {
         let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
         let (few, many) = (1_000i64, 5_000i64);
-        let low = balance(PAYLOAD_READ_BY_PATTERNS, few, opt).await;
-        let high = balance(PAYLOAD_READ_BY_PATTERNS, many, opt).await;
+        let low = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, few, opt).await;
+        let high = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, many, opt).await;
         drop(measuring);
         let span = (many - few) as f64;
         let allocated = (high.allocations as f64 - low.allocations as f64) / span;
@@ -199,14 +206,14 @@ async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
 
 /// What one iteration of `source` leaves allocated, at `opt`, with the run's
 /// answer at the larger count checked against `answer`.
-async fn left_per_iteration<F>(source: &str, opt: Opt, answer: F) -> f64
+async fn left_per_iteration<F>(source: &str, helpers: Helpers, opt: Opt, answer: F) -> f64
 where
     F: Fn(i64) -> u64,
 {
     let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
     let (few, many) = (1_000i64, 5_000i64);
-    let low = balance(source, few, opt).await;
-    let high = balance(source, many, opt).await;
+    let low = balance(source, helpers, few, opt).await;
+    let high = balance(source, helpers, many, opt).await;
     drop(measuring);
     assert_eq!(low.answer, answer(few), "at {opt:?}, the answer at {few}");
     assert_eq!(high.answer, answer(many), "at {opt:?}, the answer at {many}");
@@ -223,8 +230,15 @@ async fn leaves_nothing_behind<F>(source: &str, answer: F)
 where
     F: Fn(i64) -> u64,
 {
+    each_iteration_gives_back_all(source, no_helpers, answer).await;
+}
+
+async fn each_iteration_gives_back_all<F>(source: &str, helpers: Helpers, answer: F)
+where
+    F: Fn(i64) -> u64,
+{
     for opt in [Opt::None, Opt::Full] {
-        let left = left_per_iteration(source, opt, &answer).await;
+        let left = left_per_iteration(source, helpers, opt, &answer).await;
         println!("at {opt:?}: left behind per iteration: {left:.3}");
         assert!(
             left.abs() < 0.01,
@@ -322,4 +336,62 @@ i = i + 1; } acc";
 #[tokio::test]
 async fn a_break_out_of_an_array_of_objects_releases_the_elements_not_taken() {
     leaves_nothing_behind(BREAK_IN_OBJECTS, |n| 2 * n as u64).await;
+}
+
+fn owned_string(i: &Interner, source: &'static str) -> Vec<Helper<'static>> {
+    vec![Helper {
+        name: "h",
+        source,
+        params: vec![ParamTerm::<Poly>::new(
+            i.intern("p"),
+            lift_to_poly(&Ty::String),
+        )],
+    }]
+}
+
+fn lends_its_string(i: &Interner) -> Vec<Helper<'static>> {
+    owned_string(i, "len(&$p)\n")
+}
+
+fn compares_its_string(i: &Interner) -> Vec<Helper<'static>> {
+    owned_string(i, "(if $p == \"ab\" { 2 } else { 0 }) as u64\n")
+}
+
+fn reads_then_returns_its_string(i: &Interner) -> Vec<Helper<'static>> {
+    owned_string(i, "if len(&$p) == 2 { $p } else { \"\".to_string() }\n")
+}
+
+const FRESH_ARGUMENT: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+acc = acc + h(\"ab\".to_string()); i = i + 1; } acc";
+
+const REUSED_ARGUMENT: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+let s = \"ab\".to_string(); acc = acc + h(s) + h(s); i = i + 1; } acc";
+
+const RETURNED_ARGUMENT: &str = "\
+let acc = 0; let i = 0; while i < @n { \
+let r = h(\"ab\".to_string()); acc = acc + len(&r); i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_body_lending_its_fresh_string_releases_it() {
+    each_iteration_gives_back_all(FRESH_ARGUMENT, lends_its_string, |n| 2 * n as u64).await;
+}
+
+#[tokio::test]
+async fn a_body_comparing_its_fresh_string_releases_it() {
+    each_iteration_gives_back_all(FRESH_ARGUMENT, compares_its_string, |n| 2 * n as u64).await;
+}
+
+#[tokio::test]
+async fn a_body_lending_a_reused_string_releases_both_copies() {
+    each_iteration_gives_back_all(REUSED_ARGUMENT, lends_its_string, |n| 4 * n as u64).await;
+}
+
+#[tokio::test]
+async fn a_body_returning_its_string_releases_it_once() {
+    each_iteration_gives_back_all(RETURNED_ARGUMENT, reads_then_returns_its_string, |n| {
+        2 * n as u64
+    })
+    .await;
 }

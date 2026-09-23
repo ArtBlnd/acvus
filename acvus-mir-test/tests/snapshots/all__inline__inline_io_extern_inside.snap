@@ -5,29 +5,31 @@ expression: ir
 === main ===
      0 |   assign $order = r0
      2 |   r1 = take $order
-     3 |   assign $order = r1
-     4 |   r2 = take $v3
-     5 |   r3 = take $order
-     6 |   r4 = call #0(r2) [r3 -> r5]
-     7 |   assign $order = r5
-     8 |   r6 = take $order
-     9 |   assign $order = r6
-    10 |   r7 = take $order
-    11 |   return r4 [r7]
+     3 |   assign v8 = 1 (r2)
+     4 |   assign $order = r1
+     5 |   r3 = take v8
+     6 |   r4 = take $order
+     7 |   r5 = call #0(r3) [r4 -> r6]
+     8 |   assign $order = r6
+     9 |   r7 = take $order
+    10 |   assign $order = r7
+    11 |   r8 = take $order
+    12 |   return r5 [r8]
 
     ; orders: what the body's yielded Order waits for
-    ;   r7(entry)
+    ;   r8(entry)
 
     ; r0 (v1) : Order
     ; r1 (v5) : Order
-    ; r2 ($id) : i64
-    ; r3 (v13) : Order
-    ; r4 (fetch(...)) : String
-    ; r5 (v14) : Order
-    ; r6 (v15) : Order
-    ; r7 (v7) : Order
-    ; r8 (v3) : i64
+    ; r2 (v3) : i64
+    ; r3 ($id) : i64
+    ; r4 (v13) : Order
+    ; r5 (fetch(...)) : String
+    ; r6 (v14) : Order
+    ; r7 (v15) : Order
+    ; r8 (v7) : Order
     ; r9 ($order) : Order
     ; r10 (v6) : Order
     ; r11 ($order) : Order
-    ; r12 (wrapper(...)) : String
+    ; r12 (v8) : i64
+    ; r13 (wrapper(...)) : String

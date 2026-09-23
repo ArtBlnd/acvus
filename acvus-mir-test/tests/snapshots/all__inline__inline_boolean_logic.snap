@@ -3,20 +3,24 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     2 |   r0 = take $v1
-     3 |   if r0 -> L0 else L1 join L2
-     4 | L0:
-     5 |   r1 = take $v2
-     6 |   jump L2(r1)
-     7 | L1:
-     9 |   jump L2(false (r2))
-    10 | L2(r3: Bool):
-    11 |   return r3
+     2 |   assign v4 = true (r0)
+     3 |   assign v5 = false (r1)
+     4 |   r2 = take v4
+     5 |   if r2 -> L0 else L1 join L2
+     6 | L0:
+     7 |   r3 = take v5
+     8 |   jump L2(r3)
+     9 | L1:
+    11 |   jump L2(false (r4))
+    12 | L2(r5: Bool):
+    13 |   return r5
 
-    ; r0 ($a) : Bool
-    ; r1 ($b) : Bool
-    ; r2 (v9) : Bool
-    ; r3 (v7) : Bool
-    ; r4 (both(...)) : Bool
-    ; r5 (v1) : Bool
-    ; r6 (v2) : Bool
+    ; r0 (v1) : Bool
+    ; r1 (v2) : Bool
+    ; r2 ($a) : Bool
+    ; r3 ($b) : Bool
+    ; r4 (v9) : Bool
+    ; r5 (v7) : Bool
+    ; r6 (both(...)) : Bool
+    ; r7 (v5) : Bool
+    ; r8 (v4) : Bool

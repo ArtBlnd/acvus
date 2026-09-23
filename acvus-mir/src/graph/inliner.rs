@@ -140,15 +140,30 @@ fn inline_body(
                 let label_offset = current.label_count;
                 current.label_count += callee_body.label_count;
 
-                // Map callee capture_regs and param_regs directly to caller args.
+                // Map callee capture_regs directly to caller args.
                 // LLVM-style: direct SSA value substitution.
                 let mut substituted_regs: FxHashSet<ValueId> = FxHashSet::default();
                 for bound in &captures {
                     bound.substitute(&mut callee_remap, &mut substituted_regs);
                 }
+                // Spliced, a parameter the callee names as storage is a local
+                // the argument fills, as `bind` makes a bound `$` one;
+                // `validate::type_check` refuses a `RefTarget::Param` that
+                // names anything but a parameter of its body.
                 for ((_, param_reg), arg) in callee_body.params.iter().zip(args.iter()) {
-                    callee_remap.insert(*param_reg, *arg);
-                    substituted_regs.insert(*param_reg);
+                    if names_as_storage(callee_body, *param_reg) {
+                        new_insts.push(Inst {
+                            span: inst.span,
+                            kind: InstKind::Assign {
+                                target: RefTarget::Var(remap_one(*param_reg, &callee_remap)),
+                                path: Vec::new(),
+                                value: *arg,
+                            },
+                        });
+                    } else {
+                        callee_remap.insert(*param_reg, *arg);
+                        substituted_regs.insert(*param_reg);
+                    }
                 }
                 // The callee's entry Order is the Order the call waited for.
                 match (callee_body.order_param, order) {
@@ -203,8 +218,12 @@ fn inline_body(
                         }
 
                         _ => {
-                            let remapped =
-                                remap_inst(&callee_inst.kind, &callee_remap, label_offset);
+                            let remapped = remap_inst(
+                                &callee_inst.kind,
+                                &callee_remap,
+                                label_offset,
+                                ParamTargets::BecomeLocals,
+                            );
                             new_insts.push(Inst {
                                 span: callee_inst.span,
                                 kind: remapped,
@@ -216,7 +235,7 @@ fn inline_body(
                 changed = true;
             } else {
                 // Non-inlineable: emit as-is, applying val_remap.
-                let remapped = remap_inst(&inst.kind, &val_remap, 0);
+                let remapped = remap_inst(&inst.kind, &val_remap, 0, ParamTargets::StayParams);
                 new_insts.push(Inst {
                     span: inst.span,
                     kind: remapped,
@@ -748,15 +767,38 @@ fn remap_one(val: ValueId, remap: &FxHashMap<ValueId, ValueId>) -> ValueId {
     remap.get(&val).copied().unwrap_or(val)
 }
 
+fn names_as_storage(callee: &MirBody, param: ValueId) -> bool {
+    callee.insts.iter().any(|inst| match &inst.kind {
+        InstKind::Ref { target, .. }
+        | InstKind::Take { target, .. }
+        | InstKind::Assign { target, .. } => *target == RefTarget::Param(param),
+        _ => false,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ParamTargets {
+    StayParams,
+    BecomeLocals,
+}
+
 /// Remap a Label with an offset.
 fn remap_target(
     target: &crate::ir::RefTarget,
     remap: &FxHashMap<ValueId, ValueId>,
+    params: ParamTargets,
 ) -> crate::ir::RefTarget {
-    match target {
-        crate::ir::RefTarget::Var(slot) => crate::ir::RefTarget::Var(remap_one(*slot, remap)),
-        crate::ir::RefTarget::Param(slot) => crate::ir::RefTarget::Param(remap_one(*slot, remap)),
-        crate::ir::RefTarget::Through(r) => crate::ir::RefTarget::Through(remap_one(*r, remap)),
+    match (target, params) {
+        (crate::ir::RefTarget::Var(slot), _)
+        | (crate::ir::RefTarget::Param(slot), ParamTargets::BecomeLocals) => {
+            crate::ir::RefTarget::Var(remap_one(*slot, remap))
+        }
+        (crate::ir::RefTarget::Param(slot), ParamTargets::StayParams) => {
+            crate::ir::RefTarget::Param(remap_one(*slot, remap))
+        }
+        (crate::ir::RefTarget::Through(r), _) => {
+            crate::ir::RefTarget::Through(remap_one(*r, remap))
+        }
     }
 }
 
@@ -773,6 +815,7 @@ fn remap_inst(
     kind: &InstKind,
     val_remap: &FxHashMap<ValueId, ValueId>,
     label_offset: u32,
+    params: ParamTargets,
 ) -> InstKind {
     let r = |v: ValueId| -> ValueId { remap_one(v, val_remap) };
     let rl = |l: Label| -> Label { remap_label(l, label_offset) };
@@ -797,13 +840,13 @@ fn remap_inst(
             mutability,
         } => InstKind::Ref {
             dst: r(*dst),
-            target: remap_target(target, val_remap),
+            target: remap_target(target, val_remap, params),
             path: path.clone(),
             mutability: *mutability,
         },
         InstKind::Take { dst, target, path } => InstKind::Take {
             dst: r(*dst),
-            target: remap_target(target, val_remap),
+            target: remap_target(target, val_remap, params),
             path: path.clone(),
         },
         InstKind::Assign {
@@ -811,7 +854,7 @@ fn remap_inst(
             path,
             value,
         } => InstKind::Assign {
-            target: remap_target(target, val_remap),
+            target: remap_target(target, val_remap, params),
             path: path.clone(),
             value: r(*value),
         },

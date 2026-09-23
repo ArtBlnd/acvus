@@ -17,58 +17,60 @@ expression: opt
      6 |   r5 = fetch @user_id
      7 |   r6 = spawn #0(r5) [r7 ->]
      9 |   r8 = const_str T0
-    10 |   r9 = ref &$fetch_profile(...)
-    11 |   r10 = call #1(r9)
-    12 |   assign b = r10
-    13 |   r11 = const_str T1
-    14 |   r12 = ref &$v86
-    15 |   r13 = call #1(r12)
-    16 |   assign d = r13
-    17 |   r14 = const_str T2
-    18 |   r15 = ref &b
-    19 |   r16 = as_slice &r15
-    20 |   r17 = call #2(r8, r16)
-    21 |   drop r18
-    22 |   assign ab = r17
-    23 |   r19 = ref &ab
-    24 |   r20 = as_slice &r19
-    25 |   r21 = call #2(r20, r11)
-    26 |   drop r22
-    27 |   assign abc = r21
-    28 |   r23 = ref &abc
-    29 |   r24 = as_slice &r23
-    30 |   r25 = ref &d
-    31 |   r26 = as_slice &r25
-    32 |   r27 = call #2(r24, r26)
-    33 |   drop r28
-    34 |   drop r29
-    35 |   assign abcd = r27
-    36 |   r30 = ref &abcd
-    37 |   r31 = as_slice &r30
-    38 |   r32 = call #2(r31, r14)
-    39 |   drop r33
-    40 |   r34 = eval r6 [-> r35]
-    41 |   r36 = spawn #3(r5) [r35 ->]
-    42 |   r37 = eval r36 [-> r38]
-    43 |   r39 = r34 + r37
-    44 |   r40 = r39 * r1
-    45 |   r41 = r40 / 100 (r42)
-    46 |   r43 = r41 > r4
-    47 |   r44 = test r43 == true
-    48 |   if r44 -> L0 else L1(r38, r2) join L1
-    49 | L0:
-    50 |   r45 = spawn #4(r5, r41) [r38 ->]
-    52 |   r46 = r2 + 1 (r47)
-    53 |   r48 = eval r45 [-> r49]
-    54 |   jump L1(r49, r46)
-    55 | L1(r50: Order, r51: i64):
-    56 |   commit @result_label = r32
-    57 |   commit @weight = r1
-    58 |   commit @alert_count = r51
-    59 |   commit @result_score = r41
-    60 |   commit @threshold = r4
-    61 |   commit @user_id = r5
-    62 |   return r41 [r50]
+    10 |   r9 = const_str T1
+    11 |   r10 = const_str T2
+    12 |   r11 = eval r6 [-> r12]
+    13 |   r13 = spawn #1(r5) [r12 ->]
+    14 |   r14 = eval r13 [-> r15]
+    15 |   r16 = r11 + r14
+    16 |   r17 = r16 * r1
+    17 |   r18 = r17 / 100 (r19)
+    18 |   assign v87 = r11
+    19 |   assign v88 = r18
+    20 |   r20 = ref &v87
+    21 |   r21 = call #2(r20)
+    22 |   assign b = r21
+    23 |   r22 = ref &v88
+    24 |   r23 = call #2(r22)
+    25 |   assign d = r23
+    26 |   r24 = ref &b
+    27 |   r25 = as_slice &r24
+    28 |   r26 = call #3(r8, r25)
+    29 |   drop r27
+    30 |   assign ab = r26
+    31 |   r28 = ref &ab
+    32 |   r29 = as_slice &r28
+    33 |   r30 = call #3(r29, r9)
+    34 |   drop r31
+    35 |   assign abc = r30
+    36 |   r32 = ref &abc
+    37 |   r33 = as_slice &r32
+    38 |   r34 = ref &d
+    39 |   r35 = as_slice &r34
+    40 |   r36 = call #3(r33, r35)
+    41 |   drop r37
+    42 |   drop r38
+    43 |   assign abcd = r36
+    44 |   r39 = ref &abcd
+    45 |   r40 = as_slice &r39
+    46 |   r41 = call #3(r40, r10)
+    47 |   drop r42
+    48 |   r43 = r18 > r4
+    49 |   r44 = test r43 == true
+    50 |   if r44 -> L0 else L1(r15, r2) join L1
+    51 | L0:
+    52 |   r45 = spawn #4(r5, r18) [r15 ->]
+    54 |   r46 = r2 + 1 (r47)
+    55 |   r48 = eval r45 [-> r49]
+    56 |   jump L1(r49, r46)
+    57 | L1(r50: Order, r51: i64):
+    58 |   commit @result_label = r41
+    59 |   commit @weight = r1
+    60 |   commit @alert_count = r51
+    61 |   commit @result_score = r18
+    62 |   commit @threshold = r4
+    63 |   commit @user_id = r5
+    64 |   return r18 [r50]
 
     ; orders: what the body's yielded Order waits for
     ;   r50(entry)
@@ -82,40 +84,40 @@ expression: opt
     ; r6 (v127) : Handle<i64>
     ; r7 (v1) : Order
     ; r8 (v89) : &str
-    ; r9 ($param_1.) : &i64
-    ; r10 (to_string(...)) : String
-    ; r11 (v94) : &str
-    ; r12 ($param_2.) : &i64
-    ; r13 (to_string(...)) : String
-    ; r14 (v99) : &str
-    ; r15 (@alert_count.) : &String
-    ; r16 (v104) : &str
-    ; r17 (concat(...)) : String
-    ; r18 (b) : String
-    ; r19 (@user_id.) : &String
-    ; r20 (v108) : &str
-    ; r21 (concat(...)) : String
-    ; r22 (ab) : String
-    ; r23 (history.) : &String
-    ; r24 (v114) : &str
-    ; r25 (@threshold.) : &String
-    ; r26 (v116) : &str
-    ; r27 (concat(...)) : String
-    ; r28 (abc) : String
-    ; r29 (d) : String
-    ; r30 (var_32.) : &String
-    ; r31 (v120) : &str
-    ; r32 (concat(...)) : String
-    ; r33 (abcd) : String
-    ; r34 (fetch_profile(...)) : i64
-    ; r35 (v18) : Order
-    ; r36 (v128) : Handle<i64>
-    ; r37 (fetch_history(...)) : i64
-    ; r38 (v23) : Order
-    ; r39 (v82) : i64
-    ; r40 (v84) : i64
-    ; r41 (v86) : i64
-    ; r42 (v85) : i64
+    ; r9 (v94) : &str
+    ; r10 (v99) : &str
+    ; r11 (fetch_profile(...)) : i64
+    ; r12 (v18) : Order
+    ; r13 (v128) : Handle<i64>
+    ; r14 (fetch_history(...)) : i64
+    ; r15 (v23) : Order
+    ; r16 (v82) : i64
+    ; r17 (v84) : i64
+    ; r18 (v86) : i64
+    ; r19 (v85) : i64
+    ; r20 ($param_1.) : &i64
+    ; r21 (to_string(...)) : String
+    ; r22 ($param_2.) : &i64
+    ; r23 (to_string(...)) : String
+    ; r24 (@alert_count.) : &String
+    ; r25 (v104) : &str
+    ; r26 (concat(...)) : String
+    ; r27 (b) : String
+    ; r28 (@user_id.) : &String
+    ; r29 (v108) : &str
+    ; r30 (concat(...)) : String
+    ; r31 (ab) : String
+    ; r32 (history.) : &String
+    ; r33 (v114) : &str
+    ; r34 (@threshold.) : &String
+    ; r35 (v116) : &str
+    ; r36 (concat(...)) : String
+    ; r37 (abc) : String
+    ; r38 (d) : String
+    ; r39 (var_32.) : &String
+    ; r40 (v120) : &str
+    ; r41 (concat(...)) : String
+    ; r42 (abcd) : String
     ; r43 (v36) : Bool
     ; r44 (v37) : Bool
     ; r45 (v129) : Handle<i64>
@@ -126,71 +128,73 @@ expression: opt
     ; r50 (v74) : Order
     ; r51 (v71) : i64
     ; r52 (profile) : i64
-    ; r53 (v50) : String
-    ; r54 (v125) : &str
-    ; r55 (v69) : i64
-    ; r56 (v52) : i64
-    ; r57 (v64) : i64
-    ; r58 (history) : i64
-    ; r59 (v75) : i64
-    ; r60 (e) : &str
+    ; r53 (v88) : i64
+    ; r54 (v50) : String
+    ; r55 (v75) : i64
+    ; r56 (v56) : Order
+    ; r57 (@weight) : i64
+    ; r58 (score) : i64
+    ; r59 (e) : &str
+    ; r60 (v125) : &str
     ; r61 (v62) : i64
-    ; r62 (history) : i64
-    ; r63 (score) : i64
-    ; r64 (@threshold) : i64
-    ; r65 (v124) : &str
-    ; r66 (v61) : i64
-    ; r67 (score) : i64
-    ; r68 (v73) : i64
-    ; r69 (@threshold) : i64
-    ; r70 (v60) : i64
-    ; r71 (v22) : Order
-    ; r72 (label) : String
-    ; r73 (v72) : i64
-    ; r74 (@result_score) : i64
-    ; r75 (score) : i64
-    ; r76 (v59) : i64
-    ; r77 (v109) : &str
-    ; r78 (v46) : Unit
-    ; r79 (label) : String
-    ; r80 (v121) : &str
-    ; r81 (v58) : String
-    ; r82 ($weight) : i64
-    ; r83 (@user_id) : i64
-    ; r84 (v70) : i64
-    ; r85 (@alert_count) : i64
-    ; r86 (c) : &str
-    ; r87 (format_label(...)) : String
-    ; r88 (v57) : Order
-    ; r89 (profile) : i64
-    ; r90 (score) : i64
-    ; r91 (v56) : Order
-    ; r92 ($history) : i64
-    ; r93 (@alert_count) : i64
-    ; r94 (v68) : String
-    ; r95 (@weight) : i64
-    ; r96 (profile) : i64
-    ; r97 (v55) : i64
-    ; r98 ($profile) : i64
-    ; r99 (v17) : Order
-    ; r100 (v67) : String
-    ; r101 (score) : i64
-    ; r102 (v54) : i64
-    ; r103 (v41) : Order
-    ; r104 (v66) : i64
-    ; r105 (@result_label) : String
-    ; r106 (compute_score(...)) : i64
-    ; r107 (v53) : i64
-    ; r108 (@user_id) : i64
-    ; r109 (v65) : i64
-    ; r110 ($order) : Order
-    ; r111 (a) : &str
-    ; r112 (@weight) : i64
-    ; r113 (score) : i64
-    ; r114 (v51) : i64
-    ; r115 (v76) : i64
-    ; r116 (@user_id) : i64
-    ; r117 (v101) : &str
+    ; r62 (v87) : i64
+    ; r63 (history) : i64
+    ; r64 (score) : i64
+    ; r65 (@threshold) : i64
+    ; r66 (v124) : &str
+    ; r67 (v61) : i64
+    ; r68 (score) : i64
+    ; r69 (v73) : i64
+    ; r70 (@threshold) : i64
+    ; r71 (v60) : i64
+    ; r72 (v22) : Order
+    ; r73 (label) : String
+    ; r74 (v72) : i64
+    ; r75 (@result_score) : i64
+    ; r76 (score) : i64
+    ; r77 (v59) : i64
+    ; r78 (v109) : &str
+    ; r79 (v46) : Unit
+    ; r80 (label) : String
+    ; r81 (v121) : &str
+    ; r82 (v58) : String
+    ; r83 ($weight) : i64
+    ; r84 (@user_id) : i64
+    ; r85 (v70) : i64
+    ; r86 (@alert_count) : i64
+    ; r87 (c) : &str
+    ; r88 (format_label(...)) : String
+    ; r89 (v57) : Order
+    ; r90 (profile) : i64
+    ; r91 (v69) : i64
+    ; r92 (score) : i64
+    ; r93 ($history) : i64
+    ; r94 (@alert_count) : i64
+    ; r95 (v68) : String
+    ; r96 (@weight) : i64
+    ; r97 (profile) : i64
+    ; r98 (v55) : i64
+    ; r99 ($profile) : i64
+    ; r100 (v17) : Order
+    ; r101 (v67) : String
+    ; r102 (score) : i64
+    ; r103 (v54) : i64
+    ; r104 (v41) : Order
+    ; r105 (v66) : i64
+    ; r106 (@result_label) : String
+    ; r107 (compute_score(...)) : i64
+    ; r108 (v53) : i64
+    ; r109 (@user_id) : i64
+    ; r110 (v65) : i64
+    ; r111 ($order) : Order
+    ; r112 (a) : &str
+    ; r113 (v52) : i64
+    ; r114 (v64) : i64
+    ; r115 (history) : i64
+    ; r116 (v51) : i64
+    ; r117 (v76) : i64
     ; r118 (@user_id) : i64
-    ; r119 (v126) : &str
-    ; r120 (v63) : i64
+    ; r119 (v101) : &str
+    ; r120 (@user_id) : i64
+    ; r121 (v126) : &str
+    ; r122 (v63) : i64

@@ -3,31 +3,39 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = take $v1
-     2 |   r1 = take $x
-     3 |   r2 = take $x
-     5 |   r3 = r2 + 1 (r4)
-     6 |   r5 = take $x
-     7 |   r6 = take $x
-     9 |   r7 = r6 + 1 (r8)
-    10 |   r9 = r3 + r7
-    12 |   r10 = r9 * 2 (r11)
-    13 |   return r10
+     1 |   assign v3 = 10 (r0)
+     2 |   r1 = take v3
+     3 |   assign v8 = r1
+     4 |   r2 = take v8
+     5 |   assign v14 = r2
+     6 |   r3 = take v14
+     8 |   r4 = r3 + 1 (r5)
+     9 |   r6 = take v8
+    10 |   assign v18 = r6
+    11 |   r7 = take v18
+    13 |   r8 = r7 + 1 (r9)
+    14 |   r10 = r4 + r8
+    16 |   r11 = r10 * 2 (r12)
+    17 |   return r11
 
-    ; r0 ($x) : i64
+    ; r0 (v1) : i64
     ; r1 ($x) : i64
     ; r2 ($x) : i64
-    ; r3 (v17) : i64
-    ; r4 (v16) : i64
-    ; r5 ($x) : i64
+    ; r3 ($x) : i64
+    ; r4 (v17) : i64
+    ; r5 (v16) : i64
     ; r6 ($x) : i64
-    ; r7 (v21) : i64
-    ; r8 (v20) : i64
-    ; r9 (v13) : i64
-    ; r10 (v7) : i64
-    ; r11 (v6) : i64
-    ; r12 (v1) : i64
-    ; r13 (a(...)) : i64
-    ; r14 (a(...)) : i64
-    ; r15 (c(...)) : i64
-    ; r16 (b(...)) : i64
+    ; r7 ($x) : i64
+    ; r8 (v21) : i64
+    ; r9 (v20) : i64
+    ; r10 (v13) : i64
+    ; r11 (v7) : i64
+    ; r12 (v6) : i64
+    ; r13 (v3) : i64
+    ; r14 (v14) : i64
+    ; r15 (a(...)) : i64
+    ; r16 (v18) : i64
+    ; r17 (c(...)) : i64
+    ; r18 (b(...)) : i64
+    ; r19 (a(...)) : i64
+    ; r20 (v8) : i64

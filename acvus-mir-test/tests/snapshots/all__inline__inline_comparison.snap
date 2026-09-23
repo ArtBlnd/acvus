@@ -3,12 +3,14 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = take $v1
-     3 |   r1 = r0 > 0 (r2)
-     4 |   return r1
+     1 |   assign v3 = 42 (r0)
+     2 |   r1 = take v3
+     4 |   r2 = r1 > 0 (r3)
+     5 |   return r2
 
-    ; r0 ($x) : i64
-    ; r1 (v6) : Bool
-    ; r2 (v5) : i64
-    ; r3 (v1) : i64
-    ; r4 (is_positive(...)) : Bool
+    ; r0 (v1) : i64
+    ; r1 ($x) : i64
+    ; r2 (v6) : Bool
+    ; r3 (v5) : i64
+    ; r4 (v3) : i64
+    ; r5 (is_positive(...)) : Bool

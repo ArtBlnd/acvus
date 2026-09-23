@@ -174,6 +174,10 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                     .unwrap_or_else(|| "a local".to_string());
                 write!(f, "a reference to {named} cannot leave the body")
             }
+            ValidationErrorKind::NotAParameter { value_id } => write!(
+                f,
+                "Val({value_id}) is named as a parameter's storage and is not a parameter of the body"
+            ),
             ValidationErrorKind::BorrowConflict { storage, touch, .. } => {
                 let named = written_as(self.interner, storage.as_ref())
                     .unwrap_or_else(|| "the storage".to_string());

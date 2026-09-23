@@ -167,6 +167,13 @@ pub enum ValidationErrorKind {
     ReferenceToLocalLeavesBody {
         storage: Option<ValOrigin>,
     },
+    /// A parameter's register is storage the call fills before the body's
+    /// first instruction. Any other register is a definition, and
+    /// `inst_info::uses` does not count a storage target as its read, so
+    /// `dce` sweeps the instruction that made it.
+    NotAParameter {
+        value_id: u32,
+    },
 }
 
 /// What the conflicting instruction does to the storage, in the word the
@@ -406,6 +413,21 @@ impl CheckCtx {
                 &body.insts,
                 errors,
             );
+            if let InstKind::Ref { target, .. }
+            | InstKind::Take { target, .. }
+            | InstKind::Assign { target, .. } = &inst.kind
+                && let RefTarget::Param(slot) = target
+                && !body.params.iter().any(|(_, param)| param == slot)
+            {
+                errors.push(ValidationError {
+                    scope: self.scope_name.clone(),
+                    inst_index: pc,
+                    span: inst.span,
+                    kind: ValidationErrorKind::NotAParameter {
+                        value_id: slot.to_raw() as u32,
+                    },
+                });
+            }
             for value in crate::analysis::inst_info::defs(&inst.kind) {
                 if matches!(body.val_types.get(&value), Some(Ty::Error(_))) {
                     errors.push(ValidationError {
@@ -2287,6 +2309,64 @@ mod tests {
     fn a_body_declaring_never_accepts_the_value_it_returns() {
         let module = make_closure_module(Ty::Never, Ty::I64);
         assert!(check_types(&module).is_empty());
+    }
+
+    enum LentSlot {
+        Parameter,
+        DefinedByConst,
+    }
+
+    fn lends_through_param(slot_is: LentSlot) -> MirModule {
+        let mut vf = LocalFactory::<ValueId>::new();
+        let slot = vf.next();
+        let lent = vf.next();
+        let mut vt = FxHashMap::default();
+        vt.insert(slot, Ty::I64);
+        vt.insert(
+            lent,
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
+        );
+        let loan = inst(InstKind::Ref {
+            dst: lent,
+            target: RefTarget::Param(slot),
+            path: Vec::new(),
+            mutability: Mutability::Shared,
+        });
+        let interner = acvus_utils::Interner::new();
+        let (insts, params) = match slot_is {
+            LentSlot::Parameter => (vec![loan], vec![(interner.intern("p"), slot)]),
+            LentSlot::DefinedByConst => {
+                let defined = inst(InstKind::Const {
+                    dst: slot,
+                    value: Literal::Int(1),
+                });
+                (vec![defined, loan], Vec::new())
+            }
+        };
+        let mut module = make_module(insts, vt);
+        module.main.params = params;
+        module.main.val_factory = vf;
+        module
+    }
+
+    #[test]
+    fn a_parameter_lent_as_a_parameter_is_accepted() {
+        assert!(check_types(&lends_through_param(LentSlot::Parameter)).is_empty());
+    }
+
+    #[test]
+    fn a_register_an_instruction_defines_is_not_a_parameter() {
+        let errors = check_types(&lends_through_param(LentSlot::DefinedByConst));
+        let [
+            ValidationError {
+                kind: ValidationErrorKind::NotAParameter { value_id: 0 },
+                inst_index: 1,
+                ..
+            },
+        ] = errors.as_slice()
+        else {
+            panic!("expected one NotAParameter at the loan, got {errors:?}");
+        };
     }
 
     #[test]

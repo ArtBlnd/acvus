@@ -3,21 +3,25 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     1 |   r0 = take $v1
-     3 |   r1 = r0 + 1 (r2)
-     5 |   r3 = take $v3
-     7 |   r4 = r3 + 1 (r5)
-     8 |   r6 = r1 + r4
-     9 |   return r6
+     1 |   assign v6 = 1 (r0)
+     2 |   r1 = take v6
+     4 |   r2 = r1 + 1 (r3)
+     6 |   assign v10 = 2 (r4)
+     7 |   r5 = take v10
+     9 |   r6 = r5 + 1 (r7)
+    10 |   r8 = r2 + r6
+    11 |   return r8
 
-    ; r0 ($x) : i64
-    ; r1 (v9) : i64
-    ; r2 (v8) : i64
-    ; r3 ($x) : i64
-    ; r4 (v13) : i64
-    ; r5 (v12) : i64
-    ; r6 (v5) : i64
-    ; r7 (v3) : i64
-    ; r8 (inc(...)) : i64
-    ; r9 (v1) : i64
-    ; r10 (inc(...)) : i64
+    ; r0 (v1) : i64
+    ; r1 ($x) : i64
+    ; r2 (v9) : i64
+    ; r3 (v8) : i64
+    ; r4 (v3) : i64
+    ; r5 ($x) : i64
+    ; r6 (v13) : i64
+    ; r7 (v12) : i64
+    ; r8 (v5) : i64
+    ; r9 (v10) : i64
+    ; r10 (v6) : i64
+    ; r11 (inc(...)) : i64
+    ; r12 (inc(...)) : i64

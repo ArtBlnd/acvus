@@ -9,13 +9,14 @@ expression: ir
 === main ===
      0 |   r0 = const_str T0
      1 |   r1 = call #0(r0)
-     2 |   r2 = const_str T1
-     3 |   assign h = r2
-     4 |   r3 = take h
-     5 |   r4 = ref &$to_string(...)
-     6 |   r5 = as_slice &r4
-     7 |   r6 = call #1(r3, r5)
-     8 |   return r6
+     2 |   assign v4 = r1
+     3 |   r2 = const_str T1
+     4 |   assign h = r2
+     5 |   r3 = take h
+     6 |   r4 = ref &v4
+     7 |   r5 = as_slice &r4
+     8 |   r6 = call #1(r3, r5)
+     9 |   return r6
 
     ; r0 (v1) : &str
     ; r1 (to_string(...)) : String
@@ -26,3 +27,4 @@ expression: ir
     ; r6 (concat(...)) : String
     ; r7 (greet(...)) : String
     ; r8 (h) : &str
+    ; r9 (v4) : String

@@ -4,9 +4,10 @@ expression: ir
 ---
 === main ===
      3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 |   r4 = ref &$v4
-     5 |   r5 = call #0(r4)
-     6 |   return r5
+     4 |   assign v6 = r0
+     5 |   r4 = ref &v6
+     6 |   r5 = call #0(r4)
+     7 |   return r5
 
     ; r0 (v4) : Array<i64, 3>
     ; r1 (v1) : i64
@@ -14,4 +15,5 @@ expression: ir
     ; r3 (v3) : i64
     ; r4 ($param_1.) : &Array<i64, 3>
     ; r5 (len(...)) : u64
-    ; r6 (count(...)) : u64
+    ; r6 (v6) : Array<i64, 3>
+    ; r7 (count(...)) : u64
