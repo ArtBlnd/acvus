@@ -301,19 +301,27 @@ fn write_body(
                 mutability.prefix(),
                 fmt_place(body, ctx, &mut vn, target, path)
             )?,
-            InstKind::Take { dst, target, path } => writeln!(
+            InstKind::Take {
+                dst,
+                target,
+                path,
+                taken_out,
+            } => writeln!(
                 f,
-                "{} = take {}",
+                "{} = {} {}",
                 vn.fmt_val(*dst),
+                if *taken_out { "take-out" } else { "take" },
                 fmt_place(body, ctx, &mut vn, target, path)
             )?,
             InstKind::Assign {
                 target,
                 path,
                 value,
+                restores,
             } => writeln!(
                 f,
-                "assign {} = {}",
+                "{} {} = {}",
+                if *restores { "restore" } else { "assign" },
                 fmt_place(body, ctx, &mut vn, target, path),
                 vn.fmt_use(*value, &consts, &texts)
             )?,

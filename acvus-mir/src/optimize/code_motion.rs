@@ -2122,6 +2122,7 @@ mod tests {
                 target: RefTarget::Through(v(2)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             });
         }
 
@@ -2134,6 +2135,7 @@ mod tests {
                 target: RefTarget::Var(v(1)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             },
             InstKind::Ref {
                 dst: v(2),
@@ -2248,6 +2250,7 @@ mod tests {
                 target: RefTarget::Var(v(1)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             });
         }
 
@@ -2260,6 +2263,7 @@ mod tests {
                 target: RefTarget::Var(v(1)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             },
             InstKind::Const {
                 dst: v(3),
@@ -2360,6 +2364,7 @@ mod tests {
                 target: RefTarget::Var(v(1)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             });
         }
 
@@ -2372,6 +2377,7 @@ mod tests {
                 target: RefTarget::Var(v(1)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             },
             InstKind::Const {
                 dst: v(3),
@@ -2566,6 +2572,7 @@ mod tests {
                 target: RefTarget::Var(v(1)),
                 path: vec![],
                 value: v(0),
+                restores: false,
             },
             InstKind::Ref {
                 dst: v(2),

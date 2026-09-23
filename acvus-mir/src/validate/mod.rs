@@ -178,6 +178,15 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 f,
                 "Val({value_id}) is named as a parameter's storage and is not a parameter of the body"
             ),
+            ValidationErrorKind::LentToCall { storage, touch, .. } => {
+                let named = written_as(self.interner, storage.as_ref())
+                    .unwrap_or_else(|| "the storage".to_string());
+                write!(
+                    f,
+                    "{named} is {} here while it is lent to a call",
+                    touch.word()
+                )
+            }
             ValidationErrorKind::BorrowConflict { storage, touch, .. } => {
                 let named = written_as(self.interner, storage.as_ref())
                     .unwrap_or_else(|| "the storage".to_string());

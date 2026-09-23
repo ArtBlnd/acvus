@@ -63,6 +63,7 @@ impl Body {
                 dst: word,
                 target: RefTarget::Through(reference),
                 path: Vec::new(),
+                taken_out: false,
             }),
         }
     }

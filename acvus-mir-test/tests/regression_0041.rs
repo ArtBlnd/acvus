@@ -8,7 +8,7 @@ use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
-use acvus_mir::ir::{Callee, CastKind};
+use acvus_mir::ir::{Callee, CastKind, InstKind};
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeArg, TypeRegistry};
 use acvus_utils::{Freeze, Interner};
 
@@ -259,6 +259,42 @@ fn instance_of(checked: &Checked, name: &str) -> usize {
 
 const THROUGH_REF: &str = "&materialize/erase";
 
+/// The casts the lowered IR calls, by name, sorted, once the move check has
+/// passed the module.
+fn lowered_casts(i: &Interner, source: &str) -> Vec<String> {
+    let module = lowered(i, source).unwrap_or_else(|e| panic!("{e}"));
+    let mut casts: Vec<String> = module
+        .main
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::FunctionCall {
+                callee: Callee::Extern { id, .. },
+                ..
+            } => Some(i.resolve(id.name).to_string()),
+            _ => None,
+        })
+        .filter(|name| name == "materialize" || name == "erase")
+        .collect();
+    casts.sort();
+    casts
+}
+
+/// The lowered module, or the move check's refusals.
+fn lowered(i: &Interner, source: &str) -> Result<acvus_mir::ir::MirModule, String> {
+    let module =
+        acvus_mir_test::lowered_script_module_with_registries(i, source, vec![member_registry()])?;
+    let refusals = acvus_mir::validate::move_check::check_moves(&module);
+    match refusals.is_empty() {
+        true => Ok(module),
+        false => Err(refusals
+            .iter()
+            .map(|e| e.display(i).to_string())
+            .collect::<Vec<_>>()
+            .join("\n")),
+    }
+}
+
 // -- R7 -----------------------------------------------------------------------
 
 #[test]
@@ -328,12 +364,13 @@ fn a_member_with_a_generic_fallback_takes_the_generic_for_a_uniform_argument_wit
 #[test]
 fn one_place_lent_twice_to_one_specialized_call_is_cast_in_place_once() {
     let i = Interner::new();
-    let c = checked(&i, "let x = vec([1.0, 2.0]); norm2(&x, &x)");
+    let source = "let x = vec([1.0, 2.0]); norm2(&x, &x)";
+    let c = checked(&i, source);
     assert_eq!(c.ret, Ty::Float);
     assert_eq!(instance_of(&c, "norm2"), 0);
     assert_eq!(
-        c.casts,
-        vec![THROUGH_REF.to_string()],
+        lowered_casts(&i, source),
+        ["erase", "materialize"],
         "one place is materialized once before the call and erased once after it"
     );
 }
@@ -383,14 +420,15 @@ fn contains_over_an_iter_of_a_uniform_int_vec_checks_as_bool_with_no_cast() {
 #[test]
 fn a_place_lent_to_a_call_and_again_inside_a_nested_argument_is_cast_in_place_once() {
     let i = Interner::new();
-    let c = checked(&i, "let x = vec([1.0, 2.0]); scale(&x, norm(&x))");
+    let source = "let x = vec([1.0, 2.0]); scale(&x, norm(&x))";
+    let c = checked(&i, source);
     assert_eq!(c.ret, Ty::Float);
     assert_eq!(instance_of(&c, "scale"), 0);
     assert_eq!(instance_of(&c, "norm"), 0);
     assert_eq!(
-        c.casts,
-        vec![THROUGH_REF.to_string()],
-        "the outer call's hold reaches the nested call's lend"
+        lowered_casts(&i, source),
+        ["erase", "materialize"],
+        "the nested call's lend lends the temporary the outer call took the place out into"
     );
 }
 

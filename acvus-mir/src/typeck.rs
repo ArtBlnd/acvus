@@ -203,8 +203,7 @@ struct SliceArg {
 /// it owes is that candidate's admission of it, asked once the solve has
 /// named its head.
 struct HeldArgument {
-    at: AstId,
-    span: Span,
+    site: ArgSite,
     index: usize,
     arg: InferTy,
     param: InferTy,
@@ -517,9 +516,9 @@ enum Uncallable {
     Arity(usize),
 }
 
-/// A call argument at its site, with the place it borrows when it is
-/// `&place` or a receiver lent as one: a conversion answered through the
-/// reference consumes that place for the call.
+/// A call argument at its site, with what it borrows when it is `&expr`
+/// or a receiver lent as one: a conversion answered through the reference
+/// takes that value out for the call (RFC-0041).
 #[derive(Debug, Clone)]
 struct ArgSite {
     id: AstId,
@@ -529,35 +528,36 @@ struct ArgSite {
     /// extern parameter, so a refusal about the parameter marks the whole
     /// expression that named it and labels the argument inside it.
     taken_by: Span,
-    place: Option<LentPlace>,
+    borrowed: Option<Borrowed>,
 }
 
 #[derive(Debug, Clone)]
-struct LentPlace {
-    id: AstId,
-    loan: Loan,
+struct Borrowed {
+    /// The name or value the borrowed place is projected from.
+    base: AstId,
+    loan: Option<Loan>,
 }
 
-impl LentPlace {
-    fn of(expr: &Expr) -> Option<Self> {
-        Loan::of(expr).map(|loan| Self {
-            id: expr.id(),
-            loan,
-        })
+impl Borrowed {
+    fn of(expr: &Expr) -> Self {
+        Self {
+            base: projected(expr).base.id(),
+            loan: Loan::of(expr),
+        }
     }
 }
 
 impl ArgSite {
     fn of(expr: &Expr, taken_by: Span) -> Self {
-        let place = match expr {
-            Expr::Borrow { place, .. } => LentPlace::of(place),
+        let borrowed = match expr {
+            Expr::Borrow { place, .. } => Some(Borrowed::of(place)),
             _ => None,
         };
         Self {
             id: expr.id(),
             span: expr.span(),
             taken_by,
-            place,
+            borrowed,
         }
     }
 
@@ -566,35 +566,19 @@ impl ArgSite {
             id: expr.id(),
             span: expr.span(),
             taken_by,
-            place: None,
+            borrowed: None,
         }
     }
 
-    /// A receiver lent to a reference parameter: the receiver is the place.
+    /// A receiver lent to a reference parameter.
     fn lent(expr: &Expr, taken_by: Span) -> Self {
         Self {
             id: expr.id(),
             span: expr.span(),
             taken_by,
-            place: LentPlace::of(expr),
+            borrowed: Some(Borrowed::of(expr)),
         }
     }
-}
-
-/// A place consumed by a call argument's conversion (RFC-0041): until the
-/// call it holds `to`, the referent type the parameter names.
-struct Hold {
-    root: HeldRoot,
-    path: Vec<Astr>,
-    to: InferTy,
-}
-
-/// The binding a held place's root resolves to.
-#[derive(Clone, PartialEq, Eq)]
-enum HeldRoot {
-    Local { name: Astr, scope: usize },
-    Param(Astr),
-    Context(QualifiedRef),
 }
 
 /// The arity a candidate declares where it is not the call's (RFC-0043). A
@@ -1067,9 +1051,6 @@ enum ConversionReport {
     Return,
     /// A pattern's source against the type the pattern names.
     Pattern,
-    /// A lend of a place a call holds (RFC-0041): the held reference
-    /// against the parameter.
-    HeldLend,
     /// An operator's operand against the operator's parameter: the operand
     /// is lent as it stands, so a conversion there is the identity or a
     /// mismatch of the operator's.
@@ -1181,8 +1162,9 @@ struct PendingConversion {
     decision: DecisionId,
     from: InferTy,
     to: InferTy,
-    /// The place the value borrows, at a call argument that is `&place`.
-    place: Option<AstId>,
+    /// The base of the place the value borrows, at a call argument that
+    /// borrows one.
+    base: Option<AstId>,
 }
 
 /// What a `$name` the body has not already bound means here.
@@ -1286,8 +1268,6 @@ pub struct TypeChecker<'a, 's, 'src> {
     slice_args: Vec<SliceArg>,
     /// RFC-0043 rule 2, drained by `settle_held_arguments`.
     held_arguments: Vec<(DecisionId, HeldArgument)>,
-    /// The places the calls being checked have consumed, innermost last.
-    holds: Vec<Hold>,
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
@@ -1355,7 +1335,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             value_reads: FxHashMap::default(),
             slice_args: Vec::new(),
             held_arguments: Vec::new(),
-            holds: Vec::new(),
             decision_sites: FxHashMap::default(),
             operator_decisions: FxHashMap::default(),
             operand_decisions: FxHashMap::default(),
@@ -1610,6 +1589,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let lambda_captures = self.frozen_lambda_captures();
         let place_bases = self.frozen_place_bases(&type_map);
         self.check_value_reads(&type_map, &place_bases);
+        self.check_conversion_places(&place_bases);
         let passing = self.frozen_passing(&type_map);
         let pattern_modes = self.frozen_pattern_modes();
         // A second gate, because freezing is itself a check: a type the
@@ -1698,6 +1678,45 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.error(through.refusal(ty.clone()), span);
             }
         }
+    }
+
+    /// RFC-0041: a conversion answered through the reference takes its
+    /// value out of the place the argument borrows and restores it after
+    /// the call, so that place is storage the body owns directly or a
+    /// temporary. Checked here, where every conversion is answered, the
+    /// held ones included, and every place's base is settled.
+    fn check_conversion_places(&mut self, place_bases: &FxHashMap<AstId, PlaceBase>) {
+        let conversions = std::mem::take(&mut self.conversions);
+        for conversion in &conversions {
+            let Some(Answer::Conversion(Conversion::ThroughRef { .. })) =
+                self.solver.answer(conversion.decision)
+            else {
+                continue;
+            };
+            let base = conversion
+                .base
+                .map(|base| place_bases.get(&base).expect("a lent place notes its base"));
+            match base {
+                Some(PlaceBase::Storage(_) | PlaceBase::Temporary) => {}
+                Some(
+                    PlaceBase::ThroughReferenceIn(_)
+                    | PlaceBase::ThroughReference
+                    | PlaceBase::Element(_),
+                )
+                | None => {
+                    let from = self.solver.resolve_ty(&conversion.from);
+                    let to = self.solver.resolve_ty(&conversion.to);
+                    self.error(
+                        MirErrorKind::ConversionNeedsPlace {
+                            from: self.type_as_written(&from),
+                            to: self.type_as_written(&to),
+                        },
+                        conversion.site.span,
+                    );
+                }
+            }
+        }
+        self.conversions = conversions;
     }
 
     fn frozen_pattern_modes(&self) -> FxHashMap<AstId, MatchMode> {
@@ -1796,12 +1815,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             decision,
             from: value_ty.clone(),
             to: expected_ty.clone(),
-            place: None,
+            base: None,
         });
     }
 
     /// `convert_at` for a call argument: a conversion answered through the
-    /// reference rewrites the place the argument borrows.
+    /// reference takes out the value the argument borrows.
     fn convert_argument_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, arg: &ArgSite) {
         let site = ConversionSite {
             id: arg.id,
@@ -1814,7 +1833,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             decision,
             from: value_ty.clone(),
             to: expected_ty.clone(),
-            place: arg.place.as_ref().map(|lent| lent.id),
+            base: arg.borrowed.as_ref().map(|borrowed| borrowed.base),
         });
     }
 
@@ -1850,11 +1869,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// An argument meets its parameter (RFC-0042 rules 1 and 4). A `&place`
-    /// argument's conversion consumes the place (RFC-0041): the place holds
-    /// the parameter's referent type until the call ends, and a later lend
-    /// of it inside the call is a conversion decision from the held
-    /// reference, resolved as a `HeldLend`.
+    /// An argument meets its parameter (RFC-0042 rules 1 and 4).
     fn meet_argument(
         &mut self,
         arg_ty: &InferTy,
@@ -1881,47 +1896,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if self.refused_projection_parameter(param_ty, arg_ty, site) {
             return;
         }
-        let Some(lent) = &site.place else {
-            if joins && self.refused_field_set(param_ty, arg_ty, site.span) {
-                return;
-            }
-            self.convert_argument_at(arg_ty, param_ty, site);
-            return;
-        };
-        let TyTerm::Ref(mutability, lent_referent) = self.solver.shallow_resolve_ty(arg_ty) else {
-            unreachable!("a lent argument is typed by check_borrow, a reference")
-        };
-        let Some(root) = self.held_root(lent.loan.root) else {
-            let TyTerm::Error(_) = self.solver.shallow_resolve_ty(&lent_referent.ty) else {
-                unreachable!("a place whose root is bound nowhere is an undefined name")
-            };
-            return;
-        };
-        let path = &lent.loan.fields;
-        if let Some(held) = self.held(&root, path) {
-            let held_lend_ty =
-                TyTerm::Ref(mutability, Box::new(TypeArg::new(lent_referent.repr, held)));
-            let site = ConversionSite {
-                id: site.id,
-                span: site.span,
-                report: ConversionReport::HeldLend,
-            };
-            self.convert_at(&held_lend_ty, param_ty, site);
-            return;
-        }
         if joins && self.refused_field_set(param_ty, arg_ty, site.span) {
             return;
         }
         self.convert_argument_at(arg_ty, param_ty, site);
-        let to = match self.solver.shallow_resolve_ty(param_ty) {
-            TyTerm::Ref(_, param_referent) => param_referent.ty,
-            _ => lent_referent.ty,
-        };
-        self.holds.push(Hold {
-            root,
-            path: path.clone(),
-            to,
-        });
     }
 
     /// RFC-0050 rule 6. This must stay ahead of every other join of the
@@ -1952,8 +1930,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         let borrows = self.object_as_written(&projection);
         let has = self.object_as_written(&argument);
-        let object = match &site.place {
-            Some(lent) => lent.loan.display(self.interner),
+        let object = match site.borrowed.as_ref().and_then(|lent| lent.loan.as_ref()) {
+            Some(loan) => loan.display(self.interner),
             None => has.clone(),
         };
         let note =
@@ -2119,15 +2097,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Every argument a signature decision held, met as the candidate it
     /// settled on admits it now that the solve has named its head (RFC-0043
     /// rule 2): a view is the checker's coercion at the argument, a reborrow
-    /// is the shared reborrow the argument reaches the parameter as, and any
-    /// other admission meets the parameter as it is.
+    /// is the shared reborrow the argument reaches the parameter as, a
+    /// conversion is the conversion decision the known path opens at the
+    /// argument (`convert_argument_at`), which the solve that follows
+    /// answers, and a direct or refused admission meets the parameter as it
+    /// is.
     fn settle_held_arguments(&mut self) {
         let held = std::mem::take(&mut self.held_arguments);
         for (
             decision,
             HeldArgument {
-                at,
-                span,
+                site,
                 index,
                 arg,
                 param,
@@ -2138,12 +2118,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let Some(candidate) = self.solver.settled_candidate(decision).cloned() else {
                 continue;
             };
-            let arg = match handed {
-                HeldHanded::AsWritten => arg,
+            let FirstArg { ty: arg, site } = match handed {
+                HeldHanded::AsWritten => FirstArg { ty: arg, site },
                 HeldHanded::Receiver { place, referent } => {
-                    self.settle_receiver(&candidate, &place, arg, &referent, span)
+                    self.settle_receiver(&candidate, &place, arg, &referent, site.taken_by)
                 }
             };
+            let (at, span) = (site.id, site.span);
             match self.solver.admits(&candidate, index, &arg) {
                 Admission::Viewed(viewed) => self.settle_view(at, span, &arg, &param, viewed),
                 Admission::Reborrowed { shared } => {
@@ -2153,7 +2134,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         cast: PendingCast::Reborrow { shared: param },
                     });
                 }
-                Admission::Direct | Admission::Converted | Admission::Refused => {
+                Admission::Converted => self.convert_argument_at(&arg, &param, &site),
+                Admission::Direct | Admission::Refused => {
                     self.meet_settled_argument(&arg, &param, span)
                 }
             }
@@ -2171,7 +2153,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         owned: InferTy,
         referent: &InferTy,
         taken_by: Span,
-    ) -> InferTy {
+    ) -> FirstArg {
         let (mode, seen) = self.solver.receiver_seen_by(candidate, &owned, referent);
         let handing = match mode {
             ReceiverMode::Lent(mutability) => Handing::Lent {
@@ -2183,7 +2165,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             },
             ReceiverMode::Value => Handing::Value,
         };
-        self.receiver_handed(place, owned, handing, taken_by).ty
+        self.receiver_handed(place, owned, handing, taken_by)
     }
 
     fn settle_view(
@@ -2210,11 +2192,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// No conversion decision is asked here, and that is a decision, not an
-    /// omission: this runs inside `solve_body` after `Solver::solve`, where
-    /// nothing would answer one. A conversion answers `Identity` exactly
-    /// where its two sides unify, so a settled argument takes that
-    /// unification directly, and a conversion that needs a cast is out of
-    /// reach on this path.
+    /// omission: no argument met here is one its candidate converts, and a
+    /// conversion answers `Identity` exactly where its two sides unify, so
+    /// the argument takes that unification directly. A held argument the
+    /// settled candidate converts opens its decision in
+    /// `settle_held_arguments`.
     fn meet_settled_argument(&mut self, arg: &InferTy, param: &InferTy, span: Span) {
         let mismatch = MirErrorKind::UnificationFailure {
             expected: self.type_as_written(&self.solver.shallow_resolve_ty(param)),
@@ -2224,29 +2206,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return;
         }
         self.error(mismatch, span);
-    }
-
-    fn held_root(&self, root: Storage) -> Option<HeldRoot> {
-        match root {
-            Storage::Context(qref) => Some(HeldRoot::Context(qref)),
-            Storage::Local(name) | Storage::Input(name) => {
-                if let Some(scope) = self.scopes.iter().rposition(|s| s.contains_key(&name)) {
-                    return Some(HeldRoot::Local { name, scope });
-                }
-                self.param_types
-                    .iter()
-                    .any(|param| param.name == name)
-                    .then_some(HeldRoot::Param(name))
-            }
-        }
-    }
-
-    fn held(&self, root: &HeldRoot, path: &[Astr]) -> Option<InferTy> {
-        self.holds
-            .iter()
-            .rev()
-            .find(|hold| hold.root == *root && hold.path == path)
-            .map(|hold| hold.to.clone())
     }
 
     /// The head of a type the body is about to read a field off, after the
@@ -2553,11 +2512,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let outer_effect = self.body_effect.clone();
         self.body_effect = self.solver.fresh_effect_var();
         let outer_return = self.return_ty.replace(self.solver.fresh_ty_var());
-        let outer_holds = std::mem::take(&mut self.holds);
         let outer_loop_depth = std::mem::take(&mut self.loop_depth);
         let body_ty = self.check_expr(body);
         self.loop_depth = outer_loop_depth;
-        self.holds = outer_holds;
         let ret = self
             .return_ty
             .take()
@@ -3592,10 +3549,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Solve the body once it is checked (RFC-0042): every decision
     /// settles or is reported at its site, casts the conversions settled on
     /// become coercions, and every bounded variable and literal is verified.
+    /// The held arguments are settled between two solves: the first names
+    /// their heads and settles their candidates, and the second answers the
+    /// conversions the settled candidates take them by.
     fn solve_body(&mut self) {
         let mut unsettled = std::mem::take(&mut self.refused_in_body);
         unsettled.extend(self.solver.solve());
-        let refused: FxHashSet<DecisionId> = unsettled.iter().map(Unsettled::decision).collect();
+        let mut refused: FxHashSet<DecisionId> =
+            unsettled.iter().map(Unsettled::decision).collect();
         self.place_begun_sources();
         self.place_opened_children();
         self.report_unsettled(unsettled);
@@ -3611,9 +3572,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
         }
         self.record_decided_call_types();
+        self.settle_held_arguments();
+        let converted = self.solver.solve();
+        refused.extend(converted.iter().map(Unsettled::decision));
+        self.report_unsettled(converted);
         self.resolve_conversions();
         self.settle_slice_args();
-        self.settle_held_arguments();
         self.settle_index_uses();
         let (settled, settled_effects) = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
@@ -3800,9 +3764,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// Every conversion the solve settled on a cast becomes a coercion
-    /// through that cast at its call type; at a `HeldLend` a cast is the
-    /// call demanding a second representation of a place it holds, a
-    /// mismatch of the two referent types.
+    /// through that cast at its call type; at an operator's operand, which
+    /// is lent as it stands, a cast is a mismatch of the two referent types.
     fn resolve_conversions(&mut self) {
         let conversions = std::mem::take(&mut self.conversions);
         for conversion in &conversions {
@@ -3811,11 +3774,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             };
             let span = conversion.site.span;
             if let (
-                ConversionReport::HeldLend | ConversionReport::Operand { .. },
+                ConversionReport::Operand { .. },
                 Conversion::Cast(_) | Conversion::ThroughRef { .. },
             ) = (conversion.site.report, answer)
             {
-                self.report_held_lend_mismatch(&conversion.from, &conversion.to, span);
+                self.report_lent_mismatch(&conversion.from, &conversion.to, span);
                 continue;
             }
             let cast = match answer {
@@ -3831,20 +3794,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     cast,
                     back,
                 } => {
-                    let owned_place = conversion.place.filter(|place| {
-                        !matches!(
-                            self.solver.resolve_ty(&self.type_map[place]),
-                            TyTerm::Ref(..)
-                        )
-                    });
-                    if owned_place.is_none() {
-                        self.report_unsettled(vec![Unsettled::ConversionNeedsPlace {
-                            decision: conversion.decision,
-                            from: conversion.from.clone(),
-                            to: conversion.to.clone(),
-                        }]);
-                        continue;
-                    }
                     let from = self.solver.shallow_resolve_ty(&conversion.from);
                     let to = self.solver.shallow_resolve_ty(&conversion.to);
                     let Some(references) = ReferencePair::of(&from, &to) else {
@@ -3867,17 +3816,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.conversions = conversions;
     }
 
-    fn report_held_lend_mismatch(
-        &mut self,
-        held_lend_ty: &InferTy,
-        param_ty: &InferTy,
-        span: Span,
-    ) {
-        let held_lend_ty = self.solver.shallow_resolve_ty(held_lend_ty);
+    fn report_lent_mismatch(&mut self, lent_ty: &InferTy, param_ty: &InferTy, span: Span) {
+        let lent_ty = self.solver.shallow_resolve_ty(lent_ty);
         let param_ty = self.solver.shallow_resolve_ty(param_ty);
-        let (expected, got) = match ReferencePair::of(&held_lend_ty, &param_ty) {
+        let (expected, got) = match ReferencePair::of(&lent_ty, &param_ty) {
             Some(references) => (&references.to.ty, &references.from.ty),
-            None => (&param_ty, &held_lend_ty),
+            None => (&param_ty, &lent_ty),
         };
         self.error(
             MirErrorKind::UnificationFailure {
@@ -4226,8 +4170,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         Some(
                             ConversionReport::Value
                             | ConversionReport::Store
-                            | ConversionReport::Return
-                            | ConversionReport::HeldLend,
+                            | ConversionReport::Return,
                         )
                         | None => MirErrorKind::UnificationFailure {
                             expected: to,
@@ -4242,12 +4185,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     to: self.type_as_written(&to),
                     rules,
                 },
-                Unsettled::ConversionNeedsPlace { from, to, .. } => {
-                    MirErrorKind::ConversionNeedsPlace {
-                        from: self.type_as_written(&from),
-                        to: self.type_as_written(&to),
-                    }
-                }
                 Unsettled::NoSignature { name, call, .. } => MirErrorKind::NoMatchingFunction {
                     name: self.interner.resolve(name).to_string(),
                     ty: self.call_type_as_written(&call),
@@ -5016,8 +4953,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Every argument, the first (piped or a receiver) first, checked left
     /// to right; each is admitted as soon as it is checked, so a lambda
     /// later in the list is checked at parameter types the earlier
-    /// arguments have already fixed, and a place an earlier argument
-    /// consumed is held through the later ones.
+    /// arguments have already fixed.
     fn admit_arguments(
         &mut self,
         parameters: &mut Parameters<'_>,
@@ -5026,7 +4962,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         call_span: Span,
     ) -> Vec<InferTy> {
         let offset = usize::from(first.is_some());
-        let outer_holds = self.holds.len();
         let mut types = Vec::with_capacity(args.len() + offset);
         if let Some(first) = first {
             if let Some(param) = self.parameter_at(parameters, 0) {
@@ -5043,7 +4978,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
             types.push(ty);
         }
-        self.holds.truncate(outer_holds);
         types
     }
 
@@ -5082,8 +5016,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Some(Narrowed::Reaches(reach)) => reach,
                 Some(Narrowed::Held(handed)) => {
                     let held = HeldArgument {
-                        at: site.id,
-                        span: site.span,
+                        site: site.clone(),
                         index,
                         arg: ty.clone(),
                         param: param.clone(),

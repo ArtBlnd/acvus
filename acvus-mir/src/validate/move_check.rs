@@ -12,6 +12,9 @@
 //!   is read -- by a `Take` of a place in it, by a `Ref` to one, by a store
 //!   into one -- only while the part read is alive. A take of a place moves
 //!   that place; a store into a place revives it and everything under it.
+//! - A place a `Take` takes out for a call (RFC-0041) is moved, a word's as
+//!   any other's, until the `Assign` that restores it: no store revives it
+//!   before then, and every store overlapping it is refused.
 
 use std::collections::VecDeque;
 
@@ -26,7 +29,7 @@ use crate::ir::{
 };
 use crate::ty::Ty;
 
-use super::type_check::{ValidationError, ValidationErrorKind};
+use super::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
 
 // ---------------------------------------------------------------------------
 // is_move_only
@@ -75,6 +78,8 @@ impl Liveness {
 enum MovedBy {
     TheProgram,
     ACall,
+    /// Taken out for a call, lent to it and not yet restored (RFC-0041).
+    LentToACall,
 }
 
 impl MovedBy {
@@ -82,6 +87,7 @@ impl MovedBy {
         match self {
             MovedBy::TheProgram => "moved here",
             MovedBy::ACall => "moved into this call",
+            MovedBy::LentToACall => "lent to the call here",
         }
     }
 }
@@ -123,6 +129,8 @@ enum StorageLiveness {
 enum Touch {
     Read,
     Store,
+    /// The store that puts back a place taken out for a call.
+    Restore,
 }
 
 /// The place a `Ref`, a `Take` or an `Assign` names: a storage and a path
@@ -140,10 +148,16 @@ fn is_prefix(outer: &[PathSeg], inner: &[PathSeg]) -> bool {
 /// A store gives the place a value again, so a moved place at the place
 /// stored into -- or under it -- does not refuse the store; only one strictly
 /// above it does, since a store cannot reach through a place that is gone.
-fn refuses(moved: &[PathSeg], touched: &[PathSeg], touch: Touch) -> bool {
-    match touch {
-        Touch::Read => is_prefix(moved, touched) || is_prefix(touched, moved),
-        Touch::Store => moved.len() < touched.len() && is_prefix(moved, touched),
+/// A place taken out for a call is the call's until its restore, so a store
+/// overlapping it is refused as a read is, and the restore stores into it
+/// as a store into a moved place does.
+fn refuses(moved: &[PathSeg], by: MovedBy, touched: &[PathSeg], touch: Touch) -> bool {
+    let overlaps = is_prefix(moved, touched) || is_prefix(touched, moved);
+    match (touch, by) {
+        (Touch::Read, _) | (Touch::Store, MovedBy::LentToACall) => overlaps,
+        (Touch::Store | Touch::Restore, _) => {
+            moved.len() < touched.len() && is_prefix(moved, touched)
+        }
     }
 }
 
@@ -159,10 +173,12 @@ impl StorageLiveness {
     fn refusal(&self, touched: &[PathSeg], touch: Touch) -> Option<MoveSite> {
         match self {
             StorageLiveness::Alive => None,
-            StorageLiveness::Moved { site } => refuses(&[], touched, touch).then_some(*site),
+            StorageLiveness::Moved { site } => {
+                refuses(&[], site.by, touched, touch).then_some(*site)
+            }
             StorageLiveness::PartlyMoved { parts } => parts
                 .iter()
-                .find(|part| refuses(&part.path, touched, touch))
+                .find(|part| refuses(&part.path, part.site.by, touched, touch))
                 .map(|part| part.site),
         }
     }
@@ -185,19 +201,22 @@ impl StorageLiveness {
         StorageLiveness::partly(parts)
     }
 
-    fn stored(self, path: &[PathSeg]) -> StorageLiveness {
-        if path.is_empty() {
-            return StorageLiveness::Alive;
+    /// A store revives the place it stores into and everything under it,
+    /// except a place taken out for a call, which only its restore revives.
+    fn stored(self, path: &[PathSeg], touch: Touch) -> StorageLiveness {
+        let revives = |site: &MoveSite| touch == Touch::Restore || site.by != MovedBy::LentToACall;
+        match self {
+            StorageLiveness::Moved { site } if path.is_empty() && revives(&site) => {
+                StorageLiveness::Alive
+            }
+            StorageLiveness::PartlyMoved { parts } => StorageLiveness::partly(
+                parts
+                    .into_iter()
+                    .filter(|part| !(is_prefix(path, &part.path) && revives(&part.site)))
+                    .collect(),
+            ),
+            StorageLiveness::Alive | StorageLiveness::Moved { .. } => self,
         }
-        let StorageLiveness::PartlyMoved { parts } = self else {
-            return self;
-        };
-        StorageLiveness::partly(
-            parts
-                .into_iter()
-                .filter(|part| !is_prefix(path, &part.path))
-                .collect(),
-        )
     }
 
     /// Conservative join: the more moved side wins, and two partly moved
@@ -710,6 +729,23 @@ fn touch_storage(
     let Some(site) = state.get_var(*slot).refusal(place.path, touch) else {
         return;
     };
+    if site.by == MovedBy::LentToACall {
+        let touch = match touch {
+            Touch::Read => ConflictTouch::Read,
+            Touch::Store | Touch::Restore => ConflictTouch::Written,
+        };
+        errors.push(ValidationError {
+            scope: scope.to_string(),
+            inst_index: inst_idx,
+            span,
+            kind: ValidationErrorKind::LentToCall {
+                storage: debug.get(*slot).cloned(),
+                touch,
+                labels: site.label(),
+            },
+        });
+        return;
+    }
     if let Some(context) = commits_to {
         errors.push(ValidationError {
             scope: scope.to_string(),
@@ -795,8 +831,14 @@ fn process_inst(
             state.set_value(*dst, Liveness::Alive);
         }
         // Take: a move-only value leaves the place it was read from; a second
-        // take of a place overlapping it is a use after move.
-        InstKind::Take { dst, target, path } => {
+        // take of a place overlapping it is a use after move. A take-out
+        // leaves its place whatever its type, a word's included.
+        InstKind::Take {
+            dst,
+            target,
+            path,
+            taken_out,
+        } => {
             let place = Place { target, path };
             touch_storage(
                 scope,
@@ -812,11 +854,14 @@ fn process_inst(
             );
             if let RefTarget::Var(slot) | RefTarget::Param(slot) = target
                 && let Some(ty) = val_types.get(dst)
-                && moves_out(ty)
+                && (moves_out(ty) || *taken_out)
             {
                 let site = MoveSite {
                     span,
-                    by: MovedBy::TheProgram,
+                    by: match taken_out {
+                        true => MovedBy::LentToACall,
+                        false => MovedBy::TheProgram,
+                    },
                 };
                 let whole: &[PathSeg] = &[];
                 let moved = match emptied_by(&inst.kind, val_types) == Some(*slot) {
@@ -834,25 +879,21 @@ fn process_inst(
             target,
             path,
             value,
+            restores,
         } => {
             try_consume_value(
                 scope, inst_idx, plain, *value, val_types, debug, state, errors,
             );
             let place = Place { target, path };
+            let touch = match restores {
+                true => Touch::Restore,
+                false => Touch::Store,
+            };
             touch_storage(
-                scope,
-                inst_idx,
-                span,
-                place,
-                Touch::Store,
-                None,
-                val_types,
-                debug,
-                state,
-                errors,
+                scope, inst_idx, span, place, touch, None, val_types, debug, state, errors,
             );
             if let RefTarget::Var(slot) | RefTarget::Param(slot) = target {
-                state.set_var(*slot, state.get_var(*slot).stored(path));
+                state.set_var(*slot, state.get_var(*slot).stored(path, touch));
                 if path.is_empty() {
                     state.set_value(*slot, Liveness::Alive);
                 }
@@ -1319,12 +1360,14 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                     value: v0,
+                    restores: false,
                 }),
                 // v1 = $a -> moves $a
                 inst(InstKind::Take {
                     dst: v1,
                     target: RefTarget::Var(a),
                     path: vec![],
+                    taken_out: false,
                 }),
                 // use v1
                 inst(InstKind::FunctionCall {
@@ -1339,12 +1382,14 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                     value: v2,
+                    restores: false,
                 }),
                 // v3 = $a -> OK (new value)
                 inst(InstKind::Take {
                     dst: v3,
                     target: RefTarget::Var(a),
                     path: vec![],
+                    taken_out: false,
                 }),
                 // use v3
                 inst(InstKind::FunctionCall {
@@ -1396,11 +1441,13 @@ mod tests {
                     target: RefTarget::Var(a),
                     path: vec![],
                     value: v0,
+                    restores: false,
                 }),
                 inst(InstKind::Take {
                     dst: v1,
                     target: RefTarget::Var(a),
                     path: vec![],
+                    taken_out: false,
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v3,
@@ -1414,6 +1461,7 @@ mod tests {
                     dst: v2,
                     target: RefTarget::Var(a),
                     path: vec![],
+                    taken_out: false,
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v4,
@@ -1459,6 +1507,7 @@ mod tests {
                         target: RefTarget::Var(slot),
                         path: vec![],
                         value: filled,
+                        restores: false,
                     },
                 },
                 Inst {
@@ -1467,6 +1516,7 @@ mod tests {
                         dst: taken,
                         target: RefTarget::Var(slot),
                         path: vec![],
+                        taken_out: false,
                     },
                 },
                 Inst {
@@ -1475,6 +1525,7 @@ mod tests {
                         dst: committed,
                         target: RefTarget::Var(slot),
                         path: vec![],
+                        taken_out: false,
                     },
                 },
                 Inst {
@@ -1547,22 +1598,42 @@ mod tests {
         }
 
         fn take(&mut self, path: &[PathSeg]) {
+            self.take_as(path, test_user_defined(), false);
+        }
+
+        /// The take-out of a place lent to a call, of a value of type `ty`.
+        fn take_out(&mut self, path: &[PathSeg], ty: Ty) {
+            self.take_as(path, ty, true);
+        }
+
+        fn take_as(&mut self, path: &[PathSeg], ty: Ty, taken_out: bool) {
             let dst = self.vf.next();
-            self.val_types.insert(dst, test_user_defined());
+            self.val_types.insert(dst, ty);
             self.push(InstKind::Take {
                 dst,
                 target: RefTarget::Var(self.slot),
                 path: path.to_vec(),
+                taken_out,
             });
         }
 
         fn assign(&mut self, path: &[PathSeg]) {
+            self.assign_as(path, false);
+        }
+
+        /// The store that restores a place taken out for a call.
+        fn restore(&mut self, path: &[PathSeg]) {
+            self.assign_as(path, true);
+        }
+
+        fn assign_as(&mut self, path: &[PathSeg], restores: bool) {
             let value = self.vf.next();
             self.val_types.insert(value, test_user_defined());
             self.push(InstKind::Assign {
                 target: RefTarget::Var(self.slot),
                 path: path.to_vec(),
                 value,
+                restores,
             });
         }
 
@@ -1652,6 +1723,68 @@ mod tests {
         assert_eq!(
             errors[0].labels(),
             [Label::at(Storage::span_at(1), "moved here")]
+        );
+    }
+
+    /// RFC-0041: a store into a place taken out for a call, or into one
+    /// overlapping it, is refused and revives nothing, so the use after it
+    /// is refused too; the restore is the store that revives it.
+    #[test]
+    fn a_place_taken_out_for_a_call_is_revived_by_its_restore_alone() {
+        let lent_here = [Label::at(Storage::span_at(1), "lent to the call here")];
+        let mut o = Storage::new();
+        o.assign(&[]);
+        let v = o.v;
+        o.take_out(&[v], test_user_defined());
+        o.assign(&[v]);
+        o.assign(&[]);
+        o.lend(&[v]);
+        o.restore(&[v]);
+        o.lend(&[v]);
+        let errors = o.errors();
+        let touched: Vec<_> = errors
+            .iter()
+            .map(|error| match &error.kind {
+                ValidationErrorKind::LentToCall { touch, labels, .. } => {
+                    assert_eq!(labels, &lent_here);
+                    (error.span, *touch)
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            touched,
+            [
+                (Storage::span_at(2), ConflictTouch::Written),
+                (Storage::span_at(3), ConflictTouch::Written),
+                (Storage::span_at(4), ConflictTouch::Read),
+            ]
+        );
+    }
+
+    /// RFC-0041: a word taken out for a call is taken out as any value is,
+    /// though its take copies.
+    #[test]
+    fn a_word_taken_out_for_a_call_is_refused_until_its_restore() {
+        let mut o = Storage::new();
+        o.assign(&[]);
+        let v = o.v;
+        o.take_out(&[v], Ty::I64);
+        o.take(&[v]);
+        o.restore(&[v]);
+        o.lend(&[v]);
+        let errors = o.errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            matches!(
+                errors[0].kind,
+                ValidationErrorKind::LentToCall {
+                    touch: ConflictTouch::Read,
+                    ..
+                }
+            ),
+            "{:?}",
+            errors[0].kind
         );
     }
 

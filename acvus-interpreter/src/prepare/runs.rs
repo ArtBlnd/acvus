@@ -437,6 +437,7 @@ impl Edges<'_> {
                     target,
                     path,
                     value,
+                    ..
                 } if path.is_empty() => {
                     if let Some(storage) = inst_info::storage(target) {
                         out.push(Join {
@@ -563,6 +564,7 @@ impl Sites<'_> {
                 target,
                 path,
                 value,
+                ..
             } => {
                 let joined = path.is_empty()
                     && self.reached(target).is_some()
@@ -577,7 +579,9 @@ impl Sites<'_> {
                     self.refuse_target(target);
                 }
             }
-            InstKind::Take { dst, target, path } => {
+            InstKind::Take {
+                dst, target, path, ..
+            } => {
                 let read = matches!(path.as_slice(), [PathSeg::Field(_) | PathSeg::Payload])
                     && self.reached(target).is_some();
                 if !read {

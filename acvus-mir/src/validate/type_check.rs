@@ -40,6 +40,7 @@ impl ValidationError {
     pub fn labels(&self) -> &[acvus_ast::report::Label] {
         match &self.kind {
             ValidationErrorKind::UseAfterMove { labels, .. }
+            | ValidationErrorKind::LentToCall { labels, .. }
             | ValidationErrorKind::BorrowConflict { labels, .. } => labels,
             _ => &[],
         }
@@ -148,6 +149,14 @@ pub enum ValidationErrorKind {
         /// The subject's `DebugInfo` origin, which names it as the source
         /// wrote it.
         origin: Option<ValOrigin>,
+        labels: Vec<acvus_ast::report::Label>,
+    },
+    /// A place taken out for a call touched before the call's restore puts
+    /// it back (RFC-0041). `labels` names the argument it was lent to the
+    /// call as.
+    LentToCall {
+        storage: Option<ValOrigin>,
+        touch: ConflictTouch,
         labels: Vec<acvus_ast::report::Label>,
     },
     /// A storage touched while a reference to it excludes that (RFC-0018).
@@ -1341,7 +1350,9 @@ impl CheckCtx {
             }
 
             // === Projection ===
-            InstKind::Take { dst, target, path } => {
+            InstKind::Take {
+                dst, target, path, ..
+            } => {
                 let dst_ty = ty!(*dst);
                 if let RefTarget::Through(r) = target {
                     let Some((_, at)) = self.through(pc, span, "Take", *r, path, vt, errors) else {
@@ -1370,6 +1381,7 @@ impl CheckCtx {
                 value,
                 target,
                 path,
+                ..
             } => {
                 let val_ty = ty!(*value);
                 if let RefTarget::Through(r) = target {

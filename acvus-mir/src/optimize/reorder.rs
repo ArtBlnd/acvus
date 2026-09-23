@@ -513,6 +513,7 @@ mod tests {
                     target: RefTarget::Var(b),
                     path: vec![],
                     value: v(2),
+                    restores: false,
                 },
                 InstKind::Const {
                     dst: v(3),
@@ -534,6 +535,7 @@ mod tests {
                     dst: v(6),
                     target: RefTarget::Var(b),
                     path: vec![],
+                    taken_out: false,
                 },
                 InstKind::Return {
                     value: v(6),

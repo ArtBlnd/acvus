@@ -726,6 +726,7 @@ mod tests {
             dst: v(dst),
             target: RefTarget::Var(slot()),
             path: vec![],
+            taken_out: false,
         }
     }
 
@@ -734,6 +735,7 @@ mod tests {
             target: RefTarget::Var(slot()),
             path: vec![],
             value: v(value),
+            restores: false,
         }
     }
 
@@ -742,6 +744,7 @@ mod tests {
             dst: v(dst),
             target: RefTarget::Through(v(src)),
             path: vec![],
+            taken_out: false,
         }
     }
 
@@ -796,6 +799,7 @@ mod tests {
                     target: RefTarget::Through(v(2)),
                     path: vec![],
                     value: v(3),
+                    restores: false,
                 },
                 take(7),
                 ret(7),
@@ -953,6 +957,7 @@ mod tests {
             target: RefTarget::Var(v(slot)),
             path: vec![],
             value: v(value),
+            restores: false,
         }
     }
 
@@ -961,6 +966,7 @@ mod tests {
             dst: v(dst),
             target: RefTarget::Var(v(slot)),
             path: vec![],
+            taken_out: false,
         }
     }
 
@@ -1052,6 +1058,7 @@ mod tests {
                     target: RefTarget::Through(param),
                     path: vec![],
                     value: v(3),
+                    restores: false,
                 },
                 load(4, 1),
                 ret(4),
@@ -1173,6 +1180,7 @@ mod tests {
                     target: RefTarget::Through(param),
                     path: vec![],
                     value: v(5),
+                    restores: false,
                 },
                 load(3, 1),
                 ret(3),

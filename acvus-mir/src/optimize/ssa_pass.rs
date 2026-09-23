@@ -376,6 +376,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     dst,
                     target: RefTarget::Var(slot),
                     path,
+                    ..
                 } if path.is_empty() && !non_promotable_vars.contains(slot) => {
                     ops.ops.push(SsaOp::VarLoad {
                         dst: *dst,
@@ -390,6 +391,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     dst,
                     target: RefTarget::Param(slot),
                     path,
+                    ..
                 } if path.is_empty() && !non_promotable_vars.contains(slot) => {
                     read_vars.insert(*slot);
                     if let Some(ty) = cfg.val_types.get(dst) {
@@ -404,6 +406,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     target: RefTarget::Var(slot),
                     path,
                     value,
+                    ..
                 } if path.is_empty() && !non_promotable_vars.contains(slot) => {
                     ops.ops.push(SsaOp::VarStore {
                         slot: *slot,

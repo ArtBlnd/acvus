@@ -298,16 +298,25 @@ representation is a conversion decision at that site (RFC-0042): a call
 argument, a store into a typed place, a return, a pattern's source, an `else`
 branch. It is answered by identity when the decision agrees and by the
 family's cast when it does not. A conversion consumes the value it converts.
-At a `&place` argument that is the place's value: taken, converted, stored
-back, and from then until the call the place holds the referent type the
-parameter names; every later lend of that place inside the call — a later
-argument, or an argument of a nested call — lends the held type, and after
-the call the place is restored to its binding's type, for `&` and `&mut`
-alike. A later lend of a held place is a conversion decision like the first,
-from the held reference to the parameter, whose only answer is identity, so a
-second representation demanded of a held place is a type mismatch; a take
-while a reference is live is a borrow error. A reference that is not a borrow
-of a place is an error naming both types.
+At a `&place` argument that is the place's value: taken out of its slot and
+cast into a temporary of the referent type the parameter names, which the
+call borrows; after the call the temporary is cast back and assigned to the
+place, for `&` and `&mut` alike, so a slot never holds a value of a type
+other than its own. The place is one the body owns directly — a local, an
+input or a context, or a field of one; a place reached through a reference
+or an element, and a reference that is not a borrow of a place, are errors
+naming both types. A borrowed value that is no place is cast into the
+temporary and not cast back, since nothing reads it after the call. The MIR
+marks the take-out's `Take` and the `Assign` that restores it, and the move
+rule (RFC-0029 rule 2) reads the marks: from the take-out to its restore
+the place is moved, a word's as any other's. A read of it is a use of a
+moved place; a store into a place overlapping it is refused at the store
+and revives nothing; the restore is the one store that gives it a value
+again. Inside the call's later arguments, and every call among them, a shared lend of the
+place through the same cast lends the same temporary, so the place is cast
+once and restored once, after the call that took it out; a lend at another
+type or through `&mut` lends the place itself and is refused as a use of
+it. A take while a reference is live is a borrow error.
 
 An extension reads and edits uniform values in place through `Erased<R, T>`:
 `repr(transparent)` over the runtime's value (held as `Owned<R>`, RFC-0048
@@ -338,9 +347,31 @@ uniform value without naming a Rust `T` for it; `FromValue` and the value's
 own tag make the one remaining reinterpretation checked. Holding an argument
 written concrete makes the Rust type of a box a fact of its acvus type, so
 a box of one instantiation never reaches a declaration of another, and the
-refusal is the checker's, where it names the two types.
+refusal is the checker's, where it names the two types. Taking a converted
+place out of its slot keeps every slot at its own type. The exclusion for
+the call is the move rule, with the take-out marked where the lowering
+emits it, so RFC-0018's rules keep one implementation, the MIR's, and it
+holds whichever path settled the conversion; a store is refused rather than
+let revive the place because the restore would overwrite it. Shared lends
+at one type share the temporary where the one cast is emitted, in the
+lowering. Storage the body owns is the one kind of place a value can be
+taken out of and put back into.
 
 **Rejected.**
+- Holding a converted place at the parameter's type for the call — the
+  cast value stored back into the place's slot, every later lend inside the
+  call lending the held type, and the place restored after it. The slot
+  held a value of another type than its own, which the MIR validator
+  refuses, and a held argument settled after the solve recorded no hold, so
+  a later argument met the place at the held type on the known path and at
+  its own on the held one.
+- An unmarked move of the converted place, excluded by the move check as
+  any move is — a store revives a moved place, so a write inside the call
+  was admitted and overwritten by the restore, and a word's copy is no
+  move, so a word place was not excluded at all.
+- A loan for the call kept by the checker over the names each argument
+  uses — a second implementation of RFC-0018 rules 7 and 8, over the AST,
+  beside the MIR's.
 - Refusing a concrete argument at the declaration, as a bound asked of the
   variable (`InPlaceElement` of a deque's element, an effect bound of a
   map's effect) — it covered a borrow only, left the by-value crossing and a

@@ -320,8 +320,9 @@ pub enum MirErrorKind {
         to: Ty,
         rules: Vec<QualifiedRef>,
     },
-    /// The conversion rewrites the place a reference names, and the
-    /// argument is a reference value with no place behind it.
+    /// The conversion takes the value out of its place for the call and
+    /// puts it back after (RFC-0041), and the argument reaches the value
+    /// through a reference or an element, not in storage the body owns.
     ConversionNeedsPlace {
         from: Ty,
         to: Ty,
@@ -1023,7 +1024,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::ConversionNeedsPlace { from, to } => {
                 write!(
                     f,
-                    "converting {} to {} rewrites the place the reference names, and this argument is a reference value, not a borrow of a place",
+                    "converting {} to {} takes the value out of its place for the call, and this argument reaches it through a reference or an element, not in storage the body owns",
                     from.shown(interner),
                     to.shown(interner)
                 )

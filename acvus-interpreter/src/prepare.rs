@@ -403,6 +403,7 @@ fn noops(body: &MirBody, plan: &runs::RunPlan) -> FxHashSet<usize> {
                 target,
                 path,
                 value,
+                ..
             } => {
                 let home = inst_info::storage(target).and_then(|storage| plan.of(storage));
                 path.is_empty()
@@ -3916,7 +3917,9 @@ impl<'a> Prepare<'a> {
             // string, and drop insertion releases the run with its storage, so
             // a move here would give one string two owners. The heap storage's
             // take below copies for the same reason.
-            InstKind::Take { dst, target, path } if self.run_field(target, path).is_some() => {
+            InstKind::Take {
+                dst, target, path, ..
+            } if self.run_field(target, path).is_some() => {
                 let src = self
                     .run_field(target, path)
                     .expect("the guard read the same register");
@@ -3935,7 +3938,9 @@ impl<'a> Prepare<'a> {
                     }
                 }
             }
-            InstKind::Take { dst, target, path } => {
+            InstKind::Take {
+                dst, target, path, ..
+            } => {
                 let clone = self.is_string(*dst);
                 let through = through_target(target);
                 let how = Reading::of(self.ty(*dst), through);
@@ -3963,6 +3968,7 @@ impl<'a> Prepare<'a> {
                 target,
                 path,
                 value,
+                ..
             } => {
                 let through = through_target(target);
                 let large = self.owns(*value);
@@ -8114,7 +8120,10 @@ impl<'a> Prepare<'a> {
     /// word through that reference, which the run holds instead of the
     /// register `take_through` would have read it from.
     fn fusable_deref(&self, at: usize, last: ValueId) -> Option<Deref> {
-        let InstKind::Take { dst, target, path } = &self.body.insts.get(at)?.kind else {
+        let InstKind::Take {
+            dst, target, path, ..
+        } = &self.body.insts.get(at)?.kind
+        else {
             return None;
         };
         let RefTarget::Through(source) = target else {

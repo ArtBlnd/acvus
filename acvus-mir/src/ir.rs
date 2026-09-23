@@ -79,8 +79,9 @@ pub enum CastKind {
     /// Coercion performed by a registered pure ExternFn.
     Extern(ExternCast),
     /// At a call argument that borrows a place: `cast` runs on the place's
-    /// value before the call and `back` on it after, each stored back into
-    /// the place; the reference itself is not cast.
+    /// value before the call, into a temporary the call borrows, and `back`
+    /// on the temporary after it, stored back into the place (RFC-0041);
+    /// the reference itself is not cast.
     ThroughRef {
         mutability: Mutability,
         cast: ExternCast,
@@ -369,6 +370,10 @@ pub enum InstKind {
         dst: ValueId,
         target: RefTarget,
         path: Vec<PathSeg>,
+        /// The take-out of a place lent to a call through a conversion
+        /// (RFC-0041): the place is taken out, a word's as any other's,
+        /// until the `Assign` that restores it after the call.
+        taken_out: bool,
     },
     /// Move `value` into a storage; the storage's old value is dropped. An
     /// assignment to a variable.
@@ -376,6 +381,8 @@ pub enum InstKind {
         target: RefTarget,
         path: Vec<PathSeg>,
         value: ValueId,
+        /// The store that puts back a place a `Take` took out for a call.
+        restores: bool,
     },
     // -- Slices (RFC-0047) ------------------------------------------
     /// Take the whole run of `container`'s elements: `dst` is a

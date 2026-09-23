@@ -158,6 +158,7 @@ fn inline_body(
                                 target: RefTarget::Var(remap_one(*param_reg, &callee_remap)),
                                 path: Vec::new(),
                                 value: *arg,
+                                restores: false,
                             },
                         });
                     } else {
@@ -498,6 +499,7 @@ impl Emit<'_> {
                 target: RefTarget::Var(slot),
                 path: Vec::new(),
                 value,
+                restores: false,
             },
         );
 
@@ -621,6 +623,7 @@ impl ClosureUses {
                         target: RefTarget::Var(slot),
                         path,
                         value,
+                        ..
                     } if path.is_empty() && names.contains(value) => {
                         growing |= slots.insert(*slot);
                         this.residue.insert(idx);
@@ -754,6 +757,7 @@ fn word_reads(closure: &MirBody, reg: ValueId) -> Option<Vec<WordRead>> {
                 dst,
                 target: RefTarget::Through(through),
                 path,
+                ..
             } if *through == reg && path.is_empty() => reads.push(WordRead { at, dst: *dst }),
             other if inst_info::uses(other).contains(&reg) => return None,
             _ => {}
@@ -844,19 +848,27 @@ fn remap_inst(
             path: path.clone(),
             mutability: *mutability,
         },
-        InstKind::Take { dst, target, path } => InstKind::Take {
+        InstKind::Take {
+            dst,
+            target,
+            path,
+            taken_out,
+        } => InstKind::Take {
             dst: r(*dst),
             target: remap_target(target, val_remap, params),
             path: path.clone(),
+            taken_out: *taken_out,
         },
         InstKind::Assign {
             target,
             path,
             value,
+            restores,
         } => InstKind::Assign {
             target: remap_target(target, val_remap, params),
             path: path.clone(),
             value: r(*value),
+            restores: *restores,
         },
         InstKind::AsSlice {
             dst,
@@ -1524,6 +1536,7 @@ mod tests {
                     target: RefTarget::Var(v(3)),
                     path: Vec::new(),
                     value: v(0),
+                    restores: false,
                 },
                 InstKind::Ref {
                     dst: v(1),

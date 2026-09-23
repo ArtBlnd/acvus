@@ -397,8 +397,9 @@ an argument empties is `NoMatchingFunction` there.
    argument is still a variable, the settle does not join it — that would
    decide the head by the candidate's shape; the argument is settled after
    the solve against the parameter the decision chose, as the view where
-   the head arrived and the parameter takes one, as unification where
-   nothing named the head.
+   the head arrived and the parameter takes one, as the conversion where the
+   settled candidate converts it, as unification where nothing named the
+   head.
 3. **Equal strength is told apart by the rest of the call.** Candidates
    that remain at the end are `AmbiguousFunction`.
 4. **A receiver is an argument.** It is admitted by the same admissions and
@@ -438,12 +439,17 @@ converted. A conversion decision one side of which is a `OneOf` variable
 answers identity only where the other side could match a shape of the
 bound. Where another remaining candidate takes the same argument by view,
 or two take it by different views, no conversion decision is opened: a
-conversion decision has no view to answer (rule 5). The argument is held
-and settled after the solve as rule 2 settles one, where no conversion is
-asked, so the decision keeps a candidate there only where it takes the
-argument directly, by reborrow or by view; one that takes it only by
-conversion leaves the set, and a call it was the last candidate of is
-`NoMatchingFunction`.
+conversion decision has no view to answer (rule 5). The argument is held,
+the decision keeps each candidate there by its own admission, and once it
+settles the argument is met as the settled candidate admits it, as rule 2
+settles one: the view is the checker's at the argument, the reborrow is
+the shared one it reaches the parameter as, and the conversion is the
+decision the call would have opened there, opened now and answered by a
+solve of its own. The conversion opened at the call stays where no
+candidate views the argument, answered within the body's solve. On either
+path a conversion through the reference takes the place out for the call
+(RFC-0041), and the move check refuses a use of it among the call's later
+arguments in the MIR both paths lower to, so in the same words on both.
 
 The call opens a signature decision (RFC-0042 rule 2), stepped as an instance
 decision is: a candidate stays while the call type would join its type on

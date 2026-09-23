@@ -5,7 +5,6 @@
 //! the uniform one.
 
 use acvus_extern::{Externs, Monomorphize, Registry, TypesOnly, extern_fn, extern_registry};
-use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -14,6 +13,7 @@ use acvus_mir::ty::{
     CastRule, Effect, Instances, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, Ty, TyTerm,
     TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl,
 };
+use acvus_mir::typeck::CallTarget;
 use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 
@@ -685,8 +685,8 @@ fn h12_a_borrow_of_a_uniform_place_is_cast_in_place_for_a_specialized_parameter(
     assert_eq!(checked.casts, vec!["&materialize/erase".to_string()]);
 }
 
-/// `r` holds a reference, not the storage: nothing here can hold the
-/// callee's representation, so the same conversion is refused at `r`.
+/// `r` holds a reference, not the storage: the conversion takes its value
+/// out of storage the body owns (RFC-0041), so it is refused at `r`.
 #[test]
 fn h13_a_reference_value_at_a_specialized_parameter_needs_a_place() {
     let i = Interner::new();
@@ -706,7 +706,9 @@ fn h13_a_reference_value_at_a_specialized_parameter_needs_a_place() {
     assert!(
         errs.iter().any(|e| e.contains("&Vec<Float>")
             && e.contains("&Vec<#Float>")
-            && e.contains("not a borrow of a place")),
+            && e.contains(
+                "reaches it through a reference or an element, not in storage the body owns"
+            )),
         "{errs:?}"
     );
 }

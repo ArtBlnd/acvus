@@ -53,9 +53,9 @@ pub struct Lowerer<'a> {
     /// `Stmt::Append` writes through (RFC-0071). `None` in a script.
     result: Option<ValueId>,
     context_slots: BTreeMap<QualifiedRef, ValueId>,
-    /// The places the calls being lowered have cast for their callees,
-    /// innermost last (RFC-0041).
-    holds: Vec<Held>,
+    /// The places the calls being lowered have taken out for their
+    /// callees, innermost call last (RFC-0041).
+    taken_out: Vec<PlaceRestore>,
     /// The loops enclosing the statement being lowered, innermost last: a
     /// `break` jumps to the last one's exit and a `continue` to its header
     /// (RFC-0057 rule 4).
@@ -94,13 +94,6 @@ enum Leave {
     Continue,
 }
 
-/// A place cast for a call: until the call restores it, it holds `ty`.
-struct Held {
-    target: RefTarget,
-    path: Vec<PathSeg>,
-    ty: Ty,
-}
-
 /// An `anyorder` block while its body is lowered (RFC-0007): every
 /// effectful call inside takes `entry`, and `acc` accumulates a merge of
 /// what they yielded. A loop inside stores to `acc` on every iteration, so
@@ -119,18 +112,35 @@ struct Place {
     ty: Ty,
 }
 
-/// The arguments of one call, and the places the call leaves to restore.
+/// The arguments of one call, and where the places it takes out begin in
+/// `Lowerer::taken_out`.
 struct CallArgs {
     values: Vec<ValueId>,
-    restores: Vec<PlaceRestore>,
+    taken_from: usize,
 }
 
-/// A place cast into the callee's representation for the call: `back`
-/// runs on the value it holds afterwards, and the result is stored back.
+/// A place taken out of its slot for the call and lent as `lent`, a
+/// temporary `cast` put in the callee's representation: `back` runs on
+/// what `lent` holds afterwards, and the result is assigned to the place.
 struct PlaceRestore {
     span: Span,
     place: Place,
+    lent: Place,
+    mutability: Mutability,
+    cast: ExternCast,
     back: ExternCast,
+}
+
+impl PlaceRestore {
+    /// Whether a shared lend of `place` through `cast` lends this
+    /// temporary: the same place, taken out for a shared lend through the
+    /// same cast.
+    fn shared_by(&self, place: &Place, cast: &ExternCast) -> bool {
+        self.mutability == Mutability::Shared
+            && self.place.target == place.target
+            && self.place.path == place.path
+            && self.cast == *cast
+    }
 }
 
 /// A place lent as the call argument at `id`.
@@ -138,7 +148,16 @@ struct Lent {
     id: AstId,
     span: Span,
     place: Place,
+    from: LentFrom,
     mutability: Mutability,
+}
+
+/// What a lent place is: a place the program names, or the temporary an
+/// argument that is no place is bound to, which nothing reads after the
+/// call.
+enum LentFrom {
+    Place,
+    Temporary,
 }
 
 /// What a pattern is applied to (RFC-0024).
@@ -398,7 +417,7 @@ impl<'a> Lowerer<'a> {
             anyorder: None,
             result: None,
             context_slots: BTreeMap::new(),
-            holds: Vec::new(),
+            taken_out: Vec::new(),
             loops: Vec::new(),
         }
     }
@@ -1709,10 +1728,10 @@ impl<'a> Lowerer<'a> {
         else {
             panic!("type checking settles an `as_slice` instance on every index expression")
         };
-        let mut restores = Vec::new();
-        let container = self.receiver(object, &mut restores);
+        let taken_from = self.taken_out.len();
+        let container = self.receiver(object);
         debug_assert!(
-            restores.is_empty(),
+            self.taken_out.len() == taken_from,
             "a container lent for a slice crosses no boundary, so it is not cast back"
         );
         let dst = self.alloc_val();
@@ -1795,6 +1814,7 @@ impl<'a> Lowerer<'a> {
                 target,
                 path,
                 value,
+                restores: false,
             },
         );
     }
@@ -1803,7 +1823,15 @@ impl<'a> Lowerer<'a> {
     fn emit_take(&mut self, span: Span, target: RefTarget, path: Vec<PathSeg>, ty: Ty) -> ValueId {
         let dst = self.alloc_val();
         self.set_val_type(dst, ty);
-        self.emit_inst(span, InstKind::Take { dst, target, path });
+        self.emit_inst(
+            span,
+            InstKind::Take {
+                dst,
+                target,
+                path,
+                taken_out: false,
+            },
+        );
         dst
     }
 
@@ -2584,6 +2612,7 @@ impl<'a> Lowerer<'a> {
                         dst,
                         target: RefTarget::Through(o),
                         path: vec![],
+                        taken_out: false,
                     },
                     UnaryOp::Neg | UnaryOp::Not => InstKind::UnaryOp {
                         dst,
@@ -2774,7 +2803,7 @@ impl<'a> Lowerer<'a> {
                 let saved_order_slot = self.order_slot;
                 let saved_anyorder = self.anyorder;
                 let saved_context_slots = std::mem::take(&mut self.context_slots);
-                let saved_holds = std::mem::take(&mut self.holds);
+                let saved_taken_out = std::mem::take(&mut self.taken_out);
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
                 self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
@@ -2823,7 +2852,7 @@ impl<'a> Lowerer<'a> {
                 self.order_slot = saved_order_slot;
                 self.anyorder = saved_anyorder;
                 self.context_slots = saved_context_slots;
-                self.holds = saved_holds;
+                self.taken_out = saved_taken_out;
 
                 closure_body_mir.captures = captured
                     .iter()
@@ -3091,7 +3120,7 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
     ) -> ValueId {
         assert!(
-            call.restores.is_empty(),
+            self.taken_out.len() == call.taken_from,
             "an intrinsic takes no argument through a conversion"
         );
         let dst = self.alloc_expr(call_id);
@@ -3114,7 +3143,7 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
     ) -> ValueId {
         assert!(
-            call.restores.is_empty(),
+            self.taken_out.len() == call.taken_from,
             "the structural instance takes no argument through a conversion"
         );
         let dst = self.alloc_expr(call_id);
@@ -3139,7 +3168,7 @@ impl<'a> Lowerer<'a> {
     {
         let mut call = CallArgs {
             values: Vec::new(),
-            restores: Vec::new(),
+            taken_from: self.taken_out.len(),
         };
         for a in args {
             let value = match a {
@@ -3154,13 +3183,8 @@ impl<'a> Lowerer<'a> {
                     } else {
                         Mutability::Shared
                     };
-                    let lent = Lent {
-                        id: *id,
-                        span: *span,
-                        place: self.place_or_temporary(place),
-                        mutability,
-                    };
-                    self.lend_place(lent, &mut call.restores)
+                    let lent = self.lent(*id, *span, place, mutability);
+                    self.lend_place(lent)
                 }
                 other => self.lower_expr(other),
             };
@@ -3169,39 +3193,97 @@ impl<'a> Lowerer<'a> {
         call
     }
 
+    fn lent(&mut self, id: AstId, span: Span, place: &Expr, mutability: Mutability) -> Lent {
+        let from = match self.place_base(projected(place).base.id()) {
+            PlaceBase::Storage(_)
+            | PlaceBase::ThroughReferenceIn(_)
+            | PlaceBase::ThroughReference
+            | PlaceBase::Element(_) => LentFrom::Place,
+            PlaceBase::Temporary => LentFrom::Temporary,
+        };
+        Lent {
+            id,
+            span,
+            place: self.place_or_temporary(place),
+            from,
+            mutability,
+        }
+    }
+
     /// The reference a lent argument passes. A conversion the checker
-    /// answered through the reference casts the place's value into the
-    /// callee's representation first, holds the place at that type, and
-    /// leaves it to restore after the call; a lend of a held place passes
-    /// a reference at the held type; a conversion of the reference itself
-    /// casts the reference.
-    fn lend_place(&mut self, lent: Lent, restores: &mut Vec<PlaceRestore>) -> ValueId {
+    /// answered through the reference takes the place's value out of its
+    /// slot, casts it into the callee's representation in a temporary, and
+    /// lends the temporary, so no slot holds a value of another type. A
+    /// place the program names is taken out, marked so, until the marked
+    /// store that restores it after the call, and the move check refuses
+    /// every other touch of it in between (RFC-0041); a shared lend of it
+    /// through the same cast inside the call lends the same temporary. A
+    /// conversion of the reference itself casts the reference.
+    fn lend_place(&mut self, lent: Lent) -> ValueId {
         let Lent {
             id,
             span,
             place,
+            from,
             mutability,
         } = lent;
-        if let Some(held) = self.held(&place) {
-            return self.emit_ref(span, place.target, place.path, mutability, held);
+        let coercion = self.coercion_lookup.get(&id).cloned();
+        if let Some(CastKind::ThroughRef {
+            mutability: Mutability::Shared,
+            cast,
+            ..
+        }) = &coercion
+            && let Some(taken) = self
+                .taken_out
+                .iter()
+                .find(|taken| taken.shared_by(&place, cast))
+        {
+            let lent = taken.lent.clone();
+            return self.emit_ref(span, lent.target, lent.path, mutability, lent.ty);
         }
-        match self.coercion_lookup.get(&id).cloned() {
-            Some(CastKind::ThroughRef { cast, back, .. }) => {
-                let held = self.cast_place(span, &place, &cast);
-                self.holds.push(Held {
-                    target: place.target,
-                    path: place.path.clone(),
-                    ty: held.clone(),
-                });
-                restores.push(PlaceRestore {
+        match coercion {
+            Some(CastKind::ThroughRef {
+                mutability: converted_as,
+                cast,
+                back,
+            }) => {
+                let value = self.alloc_val();
+                self.set_val_type(value, place.ty.clone());
+                self.emit_inst(
                     span,
-                    place: Place {
-                        ty: held.clone(),
-                        ..place.clone()
+                    InstKind::Take {
+                        dst: value,
+                        target: place.target,
+                        path: place.path.clone(),
+                        taken_out: matches!(from, LentFrom::Place),
                     },
-                    back,
-                });
-                self.emit_ref(span, place.target, place.path, mutability, held)
+                );
+                let converted = self.emit_extern_cast(span, &cast, value);
+                let ty = self.slot_type(converted);
+                let lent = Place {
+                    target: self.temporary(span, converted, ty.clone()),
+                    path: Vec::new(),
+                    ty,
+                };
+                let reference = self.emit_ref(
+                    span,
+                    lent.target,
+                    Vec::new(),
+                    mutability,
+                    lent.ty.clone(),
+                );
+                match from {
+                    LentFrom::Place => self.taken_out.push(PlaceRestore {
+                        span,
+                        place,
+                        lent,
+                        mutability: converted_as,
+                        cast,
+                        back,
+                    }),
+                    LentFrom::Temporary => {}
+                }
+                reference
             }
             Some(CastKind::Extern(cast)) => {
                 let reference = self.emit_ref(span, place.target, place.path, mutability, place.ty);
@@ -3225,24 +3307,8 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn held(&self, place: &Place) -> Option<Ty> {
-        self.holds
-            .iter()
-            .rev()
-            .find(|held| held.target == place.target && held.path == place.path)
-            .map(|held| held.ty.clone())
-    }
-
-    /// `place = cast(place)`: the type the place holds afterwards.
-    fn cast_place(&mut self, span: Span, place: &Place, cast: &ExternCast) -> Ty {
-        let value = self.emit_take(span, place.target, place.path.clone(), place.ty.clone());
-        let converted = self.emit_extern_cast(span, cast, value);
-        self.emit_assign(span, place.target, place.path.clone(), converted);
-        self.slot_type(converted)
-    }
-
-    /// A call with its arguments; every place cast for the callee is
-    /// released and restored after it.
+    /// A call with its arguments; every place taken out for the callee is
+    /// cast back from the temporary it was lent as and assigned after it.
     fn emit_call_with(
         &mut self,
         span: Span,
@@ -3252,16 +3318,25 @@ impl<'a> Lowerer<'a> {
         args: CallArgs,
     ) {
         self.emit_call(span, dst, callee, callee_ty, args.values);
-        let Some(kept) = self.holds.len().checked_sub(args.restores.len()) else {
-            panic!("a call restores more places than it holds")
-        };
-        let released = self.holds.split_off(kept);
-        for (restore, held) in args.restores.iter().zip(&released) {
-            assert!(
-                held.target == restore.place.target && held.path == restore.place.path,
-                "a call's holds are released in the order its restores were recorded"
+        for restore in self.taken_out.split_off(args.taken_from) {
+            let PlaceRestore {
+                span,
+                place,
+                lent,
+                back,
+                ..
+            } = restore;
+            let value = self.emit_take(span, lent.target, lent.path, lent.ty);
+            let restored = self.emit_extern_cast(span, &back, value);
+            self.emit_inst(
+                span,
+                InstKind::Assign {
+                    target: place.target,
+                    path: place.path,
+                    value: restored,
+                    restores: true,
+                },
             );
-            self.cast_place(restore.span, &restore.place, &restore.back);
         }
     }
 
@@ -3303,11 +3378,11 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
     ) -> ValueId {
         let callee_ty = self.type_of_id(callee_id);
-        let mut restores = Vec::new();
-        let first = self.receiver(receiver, &mut restores);
+        let taken_from = self.taken_out.len();
+        let first = self.receiver(receiver);
         let mut call = self.lower_call_args(args.iter());
         call.values.insert(0, first);
-        call.restores.splice(0..0, restores);
+        call.taken_from = taken_from;
         let target = self.resolution.calls.get(&callee_id).cloned();
         if let Some(CallTarget::Intrinsic(intrinsic)) = target {
             return self.emit_intrinsic(intrinsic, call, call_id, call_span);
@@ -3353,17 +3428,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// A receiver as the checker decided it reaches its call.
-    fn receiver(&mut self, receiver: &Expr, restores: &mut Vec<PlaceRestore>) -> ValueId {
+    fn receiver(&mut self, receiver: &Expr) -> ValueId {
         match self.passing(receiver) {
             Passing::Value | Passing::AsIs => self.lower_expr(receiver),
             Passing::Lent(mutability) => {
-                let lent = Lent {
-                    id: receiver.id(),
-                    span: receiver.span(),
-                    place: self.place_or_temporary(receiver),
-                    mutability,
-                };
-                self.lend_place(lent, restores)
+                let lent = self.lent(receiver.id(), receiver.span(), receiver, mutability);
+                self.lend_place(lent)
             }
         }
     }

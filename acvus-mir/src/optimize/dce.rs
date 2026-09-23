@@ -698,6 +698,7 @@ mod tests {
             target: RefTarget::Var(v(slot)),
             path: Vec::new(),
             value: v(value),
+            restores: false,
         }
     }
 

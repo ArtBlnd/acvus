@@ -2162,9 +2162,9 @@ pub enum Conversion {
     Identity,
     Cast(QualifiedRef),
     /// The lowering does not cast the reference value: it runs `cast` on
-    /// the place the argument borrows before the call and `back` on the
-    /// same place after it, so the callee's writes land in the caller's
-    /// storage (scratchpad/tobe/reference-cast-in-place.md).
+    /// the value the argument borrows, into a temporary the call borrows,
+    /// and `back` on the temporary after it, stored back into the place, so
+    /// the callee's writes land in the caller's storage (RFC-0041).
     ThroughRef {
         mutability: Mutability,
         cast: QualifiedRef,
@@ -2225,16 +2225,6 @@ pub enum Unsettled {
         to: InferTy,
         rule: QualifiedRef,
     },
-    /// The answer is `Conversion::ThroughRef`, but the argument at the
-    /// decision's site is a reference value and not a borrow of a place,
-    /// so there is no storage to hold the callee's representation. The
-    /// solver does not see expressions; the checker raises this at the site
-    /// when it reads the answer.
-    ConversionNeedsPlace {
-        decision: DecisionId,
-        from: InferTy,
-        to: InferTy,
-    },
     /// RFC-0043.
     NoSignature {
         decision: DecisionId,
@@ -2288,8 +2278,7 @@ impl Unsettled {
             | Unsettled::MatchMismatch { expected, got, .. } => vec![expected, got],
             Unsettled::NoConversion { from, to, .. }
             | Unsettled::AmbiguousConversion { from, to, .. }
-            | Unsettled::ConversionOpen { from, to, .. }
-            | Unsettled::ConversionNeedsPlace { from, to, .. } => vec![from, to],
+            | Unsettled::ConversionOpen { from, to, .. } => vec![from, to],
             Unsettled::TaskTooHigh { .. }
             | Unsettled::NoSignature { .. }
             | Unsettled::AmbiguousSignature { .. }
@@ -2308,7 +2297,6 @@ impl Unsettled {
             | Unsettled::NoConversion { decision, .. }
             | Unsettled::AmbiguousConversion { decision, .. }
             | Unsettled::ConversionOpen { decision, .. }
-            | Unsettled::ConversionNeedsPlace { decision, .. }
             | Unsettled::NoSignature { decision, .. }
             | Unsettled::AmbiguousSignature { decision, .. }
             | Unsettled::EffectExceeded { decision, .. }
@@ -3276,11 +3264,11 @@ impl<'src> Solver<'src> {
     /// reborrowed one joins it as the shared reborrow it reaches it as
     /// (RFC-0029 rule 3), the argument keeping its `&mut`; a viewed one is
     /// the checker's coercion at the argument and its type stays what the
-    /// caller wrote (RFC-0043 rule 5). A converted one is left to after the
-    /// solve, which asks no conversion and meets it with the parameter as it
-    /// is (`meet_settled_argument`). An argument still waiting for its head is
-    /// joined by none: rule 2 gives the head to the solve, not to the
-    /// candidate the other arguments settled on.
+    /// caller wrote (RFC-0043 rule 5). A converted one is the conversion
+    /// decision the checker opens at the argument once this solve has
+    /// settled (`settle_held_arguments`). An argument still waiting for its
+    /// head is joined by none: rule 2 gives the head to the solve, not to
+    /// the candidate the other arguments settled on.
     fn join_unjoined(
         &mut self,
         call: &CallShape,
@@ -3446,8 +3434,10 @@ impl<'src> Solver<'src> {
             match self.admits(&option.candidate, argument.index, &seen) {
                 Admission::Refused => false,
                 Admission::Viewed(_) => self.views_as(&seen, &trial.resolve_ty(param)),
-                Admission::Reborrowed { .. } => converts(&trial, self.registry, &seen, param),
-                Admission::Direct | Admission::Converted => trial
+                Admission::Reborrowed { .. } | Admission::Converted => {
+                    converts(&trial, self.registry, &seen, param)
+                }
+                Admission::Direct => trial
                     .join(
                         &seen,
                         param,

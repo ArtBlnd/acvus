@@ -157,7 +157,9 @@ fn register_part(object: ValueId, prefix: FieldPath) -> PartOf {
 
 fn part_read(kind: &InstKind) -> Option<PartRead> {
     let (dst, part) = match kind {
-        InstKind::Take { dst, target, path } => {
+        InstKind::Take {
+            dst, target, path, ..
+        } => {
             let prefix = field_path(path)?;
             let part = PartOf {
                 holder: Holder::Storage(*target),
@@ -324,6 +326,7 @@ impl<'a> InitCheck<'a> {
                 target: target @ RefTarget::Var(_),
                 path,
                 value,
+                ..
             } => {
                 if let Some(prefix) = field_path(path) {
                     self.store(state, Holder::Storage(*target), &prefix, *value);
@@ -471,7 +474,9 @@ impl<'a> InitCheck<'a> {
 
     fn step(&self, inst: &Inst, state: &mut State, errors: &mut Vec<UninitError>) {
         match &inst.kind {
-            InstKind::Take { dst, target, path } if !self.is_object(*dst) => {
+            InstKind::Take {
+                dst, target, path, ..
+            } if !self.is_object(*dst) => {
                 if let Some(prefix) = field_path(path) {
                     errors.extend(self.refuse_storage_part(state, *target, prefix, inst.span));
                 }

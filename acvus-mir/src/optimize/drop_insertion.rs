@@ -903,6 +903,7 @@ mod tests {
                     target: RefTarget::Var(v(5)),
                     path: vec![],
                     value: v(0),
+                    restores: false,
                 },
                 InstKind::Const {
                     dst: v(1),
@@ -912,6 +913,7 @@ mod tests {
                     target: RefTarget::Var(v(5)),
                     path: vec![],
                     value: v(1),
+                    restores: false,
                 },
                 InstKind::Const {
                     dst: v(2),

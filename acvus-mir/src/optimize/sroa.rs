@@ -583,6 +583,7 @@ fn action_for(
             target: RefTarget::Var(slot),
             path,
             value,
+            ..
         } if plan.shapes.contains_key(slot) => match path.as_slice() {
             [] => whole_assign(cfg, *slot, *value, plan, at),
             [PathSeg::Field(f)] if plan.shapes[slot].parts.contains_key(&Part::Field(*f)) => {
@@ -594,7 +595,9 @@ fn action_for(
             }
             _ => None,
         },
-        InstKind::Take { dst, target, path } => {
+        InstKind::Take {
+            dst, target, path, ..
+        } => {
             let slot = named(&escape::named_storage(target))?;
             let part = match path.as_slice() {
                 [PathSeg::Field(f)] => Part::Field(*f),

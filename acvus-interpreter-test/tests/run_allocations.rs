@@ -11,6 +11,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use acvus_extern::{Erased, ExternType, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, SequentialExecutor};
 use acvus_interpreter_test::{
     Context, Helper, check_graph, execute_compiled, int_context, run_script, split_context,
@@ -154,7 +155,15 @@ fn no_helpers(_: &Interner) -> Vec<Helper<'static>> {
     Vec::new()
 }
 
-async fn balance(source: &str, helpers: Helpers, n: i64, opt: Opt) -> Balance {
+type Registries = fn() -> Vec<Registry<AcvusRuntime>>;
+
+async fn balance(
+    source: &str,
+    helpers: Helpers,
+    n: i64,
+    opt: Opt,
+    registries: Registries,
+) -> Balance {
     let interner = Interner::new();
     let (context_types, snapshot) = split_context(&interner, int_context(&interner, "n", n));
     let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, source).expect("parse error"));
@@ -163,7 +172,7 @@ async fn balance(source: &str, helpers: Helpers, n: i64, opt: Opt) -> Balance {
         ast,
         &helpers(&interner),
         &context_types,
-        acvus_ext::std_registries::<AcvusRuntime>(),
+        registries(),
         Ty::U64,
         opt,
         |_| {},
@@ -181,13 +190,17 @@ async fn balance(source: &str, helpers: Helpers, n: i64, opt: Opt) -> Balance {
     }
 }
 
+fn std_registries() -> Vec<Registry<AcvusRuntime>> {
+    acvus_ext::std_registries::<AcvusRuntime>()
+}
+
 #[tokio::test]
 async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
     for opt in [Opt::None, Opt::Full] {
         let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
         let (few, many) = (1_000i64, 5_000i64);
-        let low = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, few, opt).await;
-        let high = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, many, opt).await;
+        let low = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, few, opt, std_registries).await;
+        let high = balance(PAYLOAD_READ_BY_PATTERNS, no_helpers, many, opt, std_registries).await;
         drop(measuring);
         let span = (many - few) as f64;
         let allocated = (high.allocations as f64 - low.allocations as f64) / span;
@@ -206,17 +219,27 @@ async fn a_string_payload_read_by_patterns_leaves_nothing_behind() {
 
 /// What one iteration of `source` leaves allocated, at `opt`, with the run's
 /// answer at the larger count checked against `answer`.
-async fn left_per_iteration<F>(source: &str, helpers: Helpers, opt: Opt, answer: F) -> f64
+async fn left_per_iteration<F>(
+    source: &str,
+    helpers: Helpers,
+    opt: Opt,
+    answer: F,
+    registries: Registries,
+) -> f64
 where
     F: Fn(i64) -> u64,
 {
     let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
     let (few, many) = (1_000i64, 5_000i64);
-    let low = balance(source, helpers, few, opt).await;
-    let high = balance(source, helpers, many, opt).await;
+    let low = balance(source, helpers, few, opt, registries).await;
+    let high = balance(source, helpers, many, opt, registries).await;
     drop(measuring);
     assert_eq!(low.answer, answer(few), "at {opt:?}, the answer at {few}");
-    assert_eq!(high.answer, answer(many), "at {opt:?}, the answer at {many}");
+    assert_eq!(
+        high.answer,
+        answer(many),
+        "at {opt:?}, the answer at {many}"
+    );
     ((high.allocations as f64 - high.releases as f64)
         - (low.allocations as f64 - low.releases as f64))
         / (many - few) as f64
@@ -238,7 +261,7 @@ where
     F: Fn(i64) -> u64,
 {
     for opt in [Opt::None, Opt::Full] {
-        let left = left_per_iteration(source, helpers, opt, &answer).await;
+        let left = left_per_iteration(source, helpers, opt, &answer, std_registries).await;
         println!("at {opt:?}: left behind per iteration: {left:.3}");
         assert!(
             left.abs() < 0.01,
@@ -394,4 +417,174 @@ async fn a_body_returning_its_string_releases_it_once() {
         2 * n as u64
     })
     .await;
+}
+
+// -- Conversions of an argument (RFC-0041, RFC-0043 rule 2) ---------------
+
+#[derive(ExternType)]
+#[extern_type(name = "Bag")]
+#[repr(transparent)]
+struct Bag(Vec<i64>);
+
+#[extern_fn(effect = pure)]
+#[extern_cast]
+fn bag(items: Vec<i64>) -> Bag {
+    Bag(items)
+}
+
+#[extern_fn(effect = pure)]
+#[extern_cast]
+fn unbag(b: Bag) -> Vec<i64> {
+    b.0
+}
+
+#[extern_fn(name = "weigh", effect = pure)]
+fn weigh_bag(b: Bag, n: u64) -> u64 {
+    b.0.len() as u64 * 100 + n
+}
+
+#[extern_fn(name = "peek", effect = pure)]
+fn peek_bag(b: &Bag, n: u64) -> u64 {
+    b.0.len() as u64 * 100 + n
+}
+
+#[extern_fn(name = "pair", effect = pure)]
+fn pair_bag(a: &Bag, b: &Bag, n: u64) -> u64 {
+    (a.0.len() + b.0.len()) as u64 * 100 + n
+}
+
+#[extern_fn(name = "stuff", effect = pure)]
+fn stuff_bag(b: &mut Bag, n: i64) -> u64 {
+    b.0.push(n);
+    b.0.len() as u64
+}
+
+#[extern_fn(name = "weigh", effect = pure)]
+fn weigh_slice<Rt>(s: &[Erased<Rt, i64>], wide: bool) -> u64
+where
+    Rt: Runtime,
+{
+    let n = s.len() as u64;
+    if wide { n * 10 } else { n }
+}
+
+#[extern_fn(name = "peek", effect = pure)]
+fn peek_slice<Rt>(s: &[Erased<Rt, i64>], wide: bool) -> u64
+where
+    Rt: Runtime,
+{
+    let n = s.len() as u64;
+    if wide { n * 10 } else { n }
+}
+
+#[extern_fn(name = "pair", effect = pure)]
+fn pair_slice<Rt>(a: &[Erased<Rt, i64>], b: &[Erased<Rt, i64>], wide: bool) -> u64
+where
+    Rt: Runtime,
+{
+    let n = (a.len() + b.len()) as u64;
+    if wide { n * 10 } else { n }
+}
+
+/// `t` alone: every argument `t::peek` or `t::weigh` converts meets its
+/// parameter on the known path.
+fn converting_only() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = std_registries();
+    regs.push(extern_registry! {
+        ns: "t",
+        types: [Bag],
+        fns: [bag, unbag, weigh_bag, peek_bag, pair_bag, stuff_bag],
+    });
+    regs
+}
+
+/// `t` with `u`, whose `peek` and `weigh` view the argument `t`'s convert,
+/// so that argument is held until the rest of the call settles.
+fn weighing() -> Vec<Registry<AcvusRuntime>> {
+    let mut regs = converting_only();
+    regs.push(extern_registry! {
+        ns: "u",
+        fns: [weigh_slice, peek_slice, pair_slice],
+    });
+    regs
+}
+
+/// The lambda parameter's head is open where `weigh` meets it, so the
+/// argument is held, and the settled `t::weigh` takes the `Vec` each call
+/// passes through `bag`: the `Vec` is moved into the cast and the `Bag`
+/// into the callee, and every iteration gives back what it allocated.
+const HELD_BY_VALUE: &str = "\
+let f = |x| -> weigh(x, 1); \
+let acc = 0; let i = 0; while i < @n { acc = acc + f(vec([1, 2])); i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_held_argument_converted_by_value_leaves_nothing_behind() {
+    for opt in [Opt::None, Opt::Full] {
+        let left = left_per_iteration(HELD_BY_VALUE, no_helpers, opt, |n| 201 * n as u64, weighing).await;
+        println!("at {opt:?}: left behind per iteration: {left:.3}");
+        assert!(
+            left.abs() < 0.01,
+            "at {opt:?}, an iteration leaves {left} allocations behind"
+        );
+    }
+}
+
+/// RFC-0041: `peek` takes `v` through the reference: each call takes the
+/// `Vec` out of `v`, casts it into a `Bag` in a temporary the call borrows,
+/// and casts it back into `v` after the call, and every iteration gives
+/// back what it allocated.
+const THROUGH_A_REFERENCE: &str = "\
+let v = vec([1, 2]); \
+let acc = 0; let i = 0; while i < @n { acc = acc + peek(&v, 1); i = i + 1; } acc";
+
+/// RFC-0041: a borrowed temporary is cast into the `Bag` the call borrows
+/// and is not cast back; the `Bag` is released after the call.
+const TEMPORARY_THROUGH_A_REFERENCE: &str = "\
+let acc = 0; let i = 0; while i < @n { acc = acc + peek(&vec([1, 2]), 1); i = i + 1; } acc";
+
+/// RFC-0041: the place is read at its own type after the call restores it.
+const THROUGH_A_REFERENCE_THEN_READ: &str = "\
+let v = vec([1, 2]); \
+let acc = 0; let i = 0; while i < @n { acc = acc + peek(&v, 1) + len(&v); i = i + 1; } acc";
+
+/// RFC-0041: two shared lends of `v` in one call lend one temporary, and `v`
+/// is cast back once.
+const SHARED_LENDS_IN_ONE_CALL: &str = "\
+let v = vec([1, 2]); \
+let acc = 0; let i = 0; while i < @n { acc = acc + pair(&v, &v, 1); i = i + 1; } acc";
+
+/// RFC-0041: a nested call's shared lend of `v` lends the outer call's
+/// temporary, and `v` is cast back once, after the outer call.
+const SHARED_LEND_IN_A_NESTED_CALL: &str = "\
+let v = vec([1, 2]); \
+let acc = 0; let i = 0; while i < @n { acc = acc + peek(&v, peek(&v, 1)); i = i + 1; } acc";
+
+/// RFC-0041: a `&mut` conversion writes back through the cast.
+const MUTABLE_THROUGH_A_REFERENCE: &str = "\
+let acc = 0; let i = 0; \
+while i < @n { let v = vec([1, 2]); acc = acc + stuff(&mut v, 7) + len(&v); i = i + 1; } acc";
+
+#[tokio::test]
+async fn a_conversion_through_a_reference_leaves_nothing_behind() {
+    let sets: [(&str, Registries); 2] = [("t", converting_only), ("t+u", weighing)];
+    let sources: [(&str, u64); 6] = [
+        (THROUGH_A_REFERENCE, 201),
+        (TEMPORARY_THROUGH_A_REFERENCE, 201),
+        (THROUGH_A_REFERENCE_THEN_READ, 203),
+        (SHARED_LENDS_IN_ONE_CALL, 401),
+        (SHARED_LEND_IN_A_NESTED_CALL, 401),
+        (MUTABLE_THROUGH_A_REFERENCE, 6),
+    ];
+    for (source, each) in sources {
+        for (set, registries) in sets {
+            for opt in [Opt::None, Opt::Full] {
+                let left = left_per_iteration(source, no_helpers, opt, |n| each * n as u64, registries).await;
+                println!("{set} at {opt:?}: left behind per iteration: {left:.3}");
+                assert!(
+                    left.abs() < 0.01,
+                    "{set} at {opt:?}, an iteration leaves {left} allocations behind: {source}"
+                );
+            }
+        }
+    }
 }

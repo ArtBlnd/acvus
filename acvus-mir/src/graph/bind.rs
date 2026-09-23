@@ -36,6 +36,7 @@ pub fn substitute(interner: &Interner, body: &mut MirBody, bindings: &Bindings) 
                         target: RefTarget::Var(slot),
                         path: Vec::new(),
                         value: written.value,
+                        restores: false,
                     },
                 };
                 body.insts.splice(
