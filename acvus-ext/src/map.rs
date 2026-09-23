@@ -28,7 +28,7 @@
 //! nothing below holds a runtime value.
 
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use acvus_extern::{Instance, Later, held_effect};
 use acvus_extern::{
@@ -355,6 +355,16 @@ macro_rules! stored_extern_type {
         {
         }
 
+        // SAFETY: each type argument is its own canonical form's.
+        unsafe impl<$($k,)+ E, Rt> acvus_extern::Canonical<kind::Type> for $t<$($k,)+ E, Rt>
+        where
+            $($k: Var<kind::Type>,)+
+            E: Var<kind::Effect>,
+            Rt: Runtime,
+        {
+            type Canon = $t<$(<$k as acvus_extern::Canonical<kind::Type>>::Canon,)+ E, Rt>;
+        }
+
         impl<$($k,)+ E, Rt> TyArg for $t<$($k,)+ E, Rt>
         where
             $($k: TyArg + Var<kind::Type>,)+
@@ -394,7 +404,7 @@ macro_rules! stored_extern_type {
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::stored_as_itself!();
+            acvus_extern::stored_as_canonical!();
         }
 
         impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<$($k,)+ E, Rt>
@@ -577,6 +587,7 @@ where
 /// The borrowed source over a map's keys.
 #[derive(ExternType)]
 #[extern_type(name = "Keys")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Keys<K, V, E, I, Rt>(KeysBody<K, V, E, Rt>, PhantomData<I>)
 where
@@ -619,6 +630,7 @@ where
 /// The borrowed source over a map's values.
 #[derive(ExternType)]
 #[extern_type(name = "Values")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Values<K, V, E, I, Rt>(ValuesBody<K, V, E, Rt>, PhantomData<I>)
 where
@@ -1379,7 +1391,7 @@ fn from_iter_now<It, K, E, Rt>(
     next: Instance<sig::next<It, K, E, Rt>, It, Rt, Later>,
 ) -> HashSet<K, E, Rt>
 where
-    It: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    It: Var<kind::Type> + Deref<Target = Rt::Value>,
     K: Var<kind::Type>
         + Stored<Rt>
         + Cross<Rt>
@@ -1406,7 +1418,7 @@ async fn from_iter<It, K, E, Rt>(
     next: Instance<sig::next<It, K, E, Rt>, It, Rt, Later>,
 ) -> HashSet<K, E, Rt>
 where
-    It: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    It: Var<kind::Type> + Deref<Target = Rt::Value>,
     K: Var<kind::Type>
         + Stored<Rt>
         + Cross<Rt>

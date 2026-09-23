@@ -60,7 +60,7 @@ fn peek_slice<Rt>(s: &[Erased<Rt, i64>], wide: bool) -> i64
 where
     Rt: Runtime,
 {
-    let sum: i64 = s.iter().map(|x| **x).sum();
+    let sum: i64 = s.iter().map(Erased::get).sum();
     if wide { sum * 10 } else { sum }
 }
 
@@ -69,7 +69,7 @@ fn weigh_slice<Rt>(s: &[Erased<Rt, i64>], wide: bool) -> i64
 where
     Rt: Runtime,
 {
-    let sum: i64 = s.iter().map(|x| **x).sum();
+    let sum: i64 = s.iter().map(Erased::get).sum();
     if wide { sum * 10 } else { sum }
 }
 

@@ -26,7 +26,7 @@
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use acvus_extern::{Arr, InPlaceElement, PassedByValue};
 use acvus_extern::{
@@ -75,6 +75,7 @@ pub struct ItemsBody<T> {
 /// The owned source: the elements of a container that was consumed.
 #[derive(ExternType)]
 #[extern_type(name = "Items")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Items<T, I, Rt>(ItemsBody<T>, PhantomData<(I, Rt)>)
 where
@@ -143,6 +144,7 @@ where
 /// own `Refs`.
 #[derive(ExternType)]
 #[extern_type(name = "Refs")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Refs<C, I, Rt>(pub(crate) RefsBody<C, Rt>, PhantomData<I>)
 where
@@ -274,6 +276,7 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "Map")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Map<I, T, U, E, Rt>(pub(crate) MapBody<I, T, U, E, Rt>)
 where
@@ -285,7 +288,7 @@ where
 
 fn next_map_now<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Map<I, T, U, E, Rt>) -> Option<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
@@ -301,7 +304,7 @@ pub(crate) async fn next_map<I, T, U, E, Rt>(
     it: &mut Map<I, T, U, E, Rt>,
 ) -> Option<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
@@ -338,6 +341,7 @@ where
 /// order.
 #[derive(ExternType)]
 #[extern_type(name = "Unordered")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Unordered<I, T, U, E, Rt>(pub(crate) UnorderedBody<I, T, U, E, Rt>)
 where
@@ -353,7 +357,7 @@ pub(crate) async fn next_unordered<I, T, U, E, Rt>(
     it: &mut Unordered<I, T, U, E, Rt>,
 ) -> Option<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect> + Suspends,
@@ -377,7 +381,7 @@ async fn draw_unordered<I, T, U, E, Rt>(
     body: &mut UnorderedBody<I, T, U, E, Rt>,
 ) -> VecDeque<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect> + Suspends,
@@ -411,6 +415,7 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "Filter")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Filter<I, T, E, Rt>(pub(crate) FilterBody<I, T, E, Rt>)
 where
@@ -421,7 +426,7 @@ where
 
 fn next_filter_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Filter<I, T, E, Rt>) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -440,7 +445,7 @@ pub(crate) async fn next_filter<I, T, E, Rt>(
     it: &mut Filter<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -468,6 +473,7 @@ where
 /// The first `n` elements, and fewer when the source ends first.
 #[derive(ExternType)]
 #[extern_type(name = "Take")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Take<I, T, E, Rt>(pub(crate) TakeBody<I, T, E, Rt>)
 where
@@ -478,7 +484,7 @@ where
 
 fn next_take_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Take<I, T, E, Rt>) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -493,7 +499,7 @@ pub(crate) async fn next_take<I, T, E, Rt>(
     it: &mut Take<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -518,6 +524,7 @@ where
 /// at the first step, not at construction.
 #[derive(ExternType)]
 #[extern_type(name = "Skip")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Skip<I, T, E, Rt>(pub(crate) SkipBody<I, T, E, Rt>)
 where
@@ -528,7 +535,7 @@ where
 
 fn next_skip_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Skip<I, T, E, Rt>) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -546,7 +553,7 @@ pub(crate) async fn next_skip<I, T, E, Rt>(
     it: &mut Skip<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -575,6 +582,7 @@ where
 /// constructor traps on zero before this is reached.
 #[derive(ExternType)]
 #[extern_type(name = "StepBy")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct StepBy<I, T, E, Rt>(pub(crate) StepByBody<I, T, E, Rt>)
 where
@@ -585,7 +593,7 @@ where
 
 fn next_step_by_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut StepBy<I, T, E, Rt>) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -605,7 +613,7 @@ pub(crate) async fn next_step_by<I, T, E, Rt>(
     it: &mut StepBy<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -637,6 +645,7 @@ where
 /// again.
 #[derive(ExternType)]
 #[extern_type(name = "TakeWhile")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct TakeWhile<I, T, E, Rt>(pub(crate) TakeWhileBody<I, T, E, Rt>)
 where
@@ -650,7 +659,7 @@ fn next_take_while_now<I, T, E, Rt>(
     it: &mut TakeWhile<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -672,7 +681,7 @@ pub(crate) async fn next_take_while<I, T, E, Rt>(
     it: &mut TakeWhile<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -705,6 +714,7 @@ where
 /// included; the predicate is not called again after it.
 #[derive(ExternType)]
 #[extern_type(name = "SkipWhile")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct SkipWhile<I, T, E, Rt>(pub(crate) SkipWhileBody<I, T, E, Rt>)
 where
@@ -718,7 +728,7 @@ fn next_skip_while_now<I, T, E, Rt>(
     it: &mut SkipWhile<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -739,7 +749,7 @@ pub(crate) async fn next_skip_while<I, T, E, Rt>(
     it: &mut SkipWhile<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -771,6 +781,7 @@ where
 /// before this is reached. One chunk is the only buffer.
 #[derive(ExternType)]
 #[extern_type(name = "Chunks")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Chunks<I, T, E, Rt>(pub(crate) ChunksBody<I, T, E, Rt>)
 where
@@ -784,7 +795,7 @@ fn next_chunks_now<I, T, E, Rt>(
     it: &mut Chunks<I, T, E, Rt>,
 ) -> Option<Vec<T>>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -805,7 +816,7 @@ pub(crate) async fn next_chunks<I, T, E, Rt>(
     it: &mut Chunks<I, T, E, Rt>,
 ) -> Option<Vec<T>>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -885,6 +896,7 @@ where
 /// `core::eq` deciding which are equal.
 #[derive(ExternType)]
 #[extern_type(name = "Dedup")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Dedup<I, T, E, Rt>(pub(crate) DedupBody<I, T, E, Rt>)
 where
@@ -916,7 +928,7 @@ where
 
 fn next_dedup_now<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Dedup<I, T, E, Rt>) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -938,7 +950,7 @@ pub(crate) async fn next_dedup<I, T, E, Rt>(
     it: &mut Dedup<I, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + PassedByValue<Rt> + Borrowable<Rt> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -973,6 +985,7 @@ where
 /// each stands beside its own `next`.
 #[derive(ExternType)]
 #[extern_type(name = "Chain")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Chain<A, B, T, E, Rt>(pub(crate) ChainBody<A, B, T, E, Rt>)
 where
@@ -984,8 +997,8 @@ where
 
 fn next_chain_now<A, B, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Chain<A, B, T, E, Rt>) -> Option<T>
 where
-    A: Var<kind::Type> + DerefMut<Target = Rt::Value>,
-    B: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    A: Var<kind::Type> + Deref<Target = Rt::Value>,
+    B: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1005,8 +1018,8 @@ pub(crate) async fn next_chain<A, B, T, E, Rt>(
     it: &mut Chain<A, B, T, E, Rt>,
 ) -> Option<T>
 where
-    A: Var<kind::Type> + DerefMut<Target = Rt::Value>,
-    B: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    A: Var<kind::Type> + Deref<Target = Rt::Value>,
+    B: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1038,6 +1051,7 @@ where
 /// one it last drew is the only buffer.
 #[derive(ExternType)]
 #[extern_type(name = "Flatten")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Flatten<I, C, T, E, Rt>(pub(crate) FlattenBody<I, C, T, E, Rt>)
 where
@@ -1052,7 +1066,7 @@ fn next_flatten_now<I, C, T, E, Rt>(
     it: &mut Flatten<I, C, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     C: Var<kind::Type>
         + Cross<Rt>
         + PassedByValue<Rt>
@@ -1075,7 +1089,7 @@ async fn next_flatten_at<I, C, T, E, Rt>(
     it: &mut Flatten<I, C, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     C: Var<kind::Type>
         + Cross<Rt>
         + PassedByValue<Rt>
@@ -1098,7 +1112,7 @@ fn next_flatten_vecs_now<I, T, E, Rt>(
     it: &mut Flatten<I, Vec<T>, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1112,7 +1126,7 @@ pub(crate) async fn next_flatten_vecs<I, T, E, Rt>(
     it: &mut Flatten<I, Vec<T>, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1125,7 +1139,7 @@ fn next_flatten_arrays_now<I, T, N, E, Rt>(
     it: &mut Flatten<I, Arr<T, N>, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     N: Var<kind::Length>,
     E: Var<kind::Effect>,
@@ -1140,7 +1154,7 @@ pub(crate) async fn next_flatten_arrays<I, T, N, E, Rt>(
     it: &mut Flatten<I, Arr<T, N>, T, E, Rt>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     N: Var<kind::Length>,
     E: Var<kind::Effect>,
@@ -1168,6 +1182,7 @@ where
 /// intermediate one has no name to require an instance at.
 #[derive(ExternType)]
 #[extern_type(name = "FlatMap")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct FlatMap<I, T, U, E, Rt>(pub(crate) FlatMapBody<I, T, U, E, Rt>)
 where
@@ -1182,7 +1197,7 @@ fn next_flat_map_now<I, T, U, E, Rt>(
     it: &mut FlatMap<I, T, U, E, Rt>,
 ) -> Option<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
@@ -1203,7 +1218,7 @@ pub(crate) async fn next_flat_map<I, T, U, E, Rt>(
     it: &mut FlatMap<I, T, U, E, Rt>,
 ) -> Option<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,

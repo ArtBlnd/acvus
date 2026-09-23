@@ -41,7 +41,7 @@ where
     Rt: acvus_extern::Runtime,
 {
     assert_eq!(a.len(), b.len(), "dot takes two views of one length");
-    a.iter().zip(b).map(|(x, y)| **x * **y).sum()
+    a.iter().zip(b).map(|(x, y)| x.get() * y.get()).sum()
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {

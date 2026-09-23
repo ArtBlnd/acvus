@@ -1555,8 +1555,8 @@ where
         }
         RunDest::Heap { dst, shape, width } => {
             let mut values: Box<[Owned<AcvusRuntime>]> =
-                (0..*width).map(|_| Owned::default()).collect();
-            // SAFETY: every slot is `Owned::default()`, which owns nothing, and
+                (0..*width).map(|_| Owned::vacant()).collect();
+            // SAFETY: every slot is `Owned::vacant()`, which owns nothing, and
             // the handler writes each at most once.
             let out = unsafe { acvus_extern::lend_run(&mut values) };
             call(&mut m.ctx, out);
@@ -1765,8 +1765,8 @@ where
             }
             RunDest::Heap { dst, shape, width } => {
                 let mut values: Box<[Owned<AcvusRuntime>]> =
-                    (0..*width).map(|_| Owned::default()).collect();
-                // SAFETY: every slot is `Owned::default()`, which owns nothing.
+                    (0..*width).map(|_| Owned::vacant()).collect();
+                // SAFETY: every slot is `Owned::vacant()`, which owns nothing.
                 let out = unsafe { acvus_extern::lend_run(&mut values) };
                 let Lent { run, ctx } = m.lend_and_window(self.window.at, self.window.arity);
                 // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.

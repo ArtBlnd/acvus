@@ -1,9 +1,9 @@
 //! `std::panic`: the script's own trap (RFC-0038).
 
-use acvus_extern::{Never, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Bottom, Registry, Runtime, extern_fn, extern_registry};
 
 #[extern_fn(effect = pure)]
-fn panic(message: String) -> Never {
+fn panic(message: String) -> Bottom {
     panic!("{message}")
 }
 

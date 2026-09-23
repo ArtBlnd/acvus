@@ -350,9 +350,9 @@ where
     Rt: acvus_extern::Runtime,
 {
     // The elements are the script's own (RFC-0047 rule 6, RFC-0068 rule 4), and
-    // an `Erased<Rt, i64>` is read in place through its deref, so the
+    // an `Erased<Rt, i64>` is read in place through `get`, so the
     // accessors still index the container the script lent.
-    glob_over(pat.len(), |at| *pat[at], line.len(), |at| *line[at])
+    glob_over(pat.len(), |at| pat[at].get(), line.len(), |at| line[at].get())
 }
 
 fn registries(corpus: &Arc<Corpus>) -> Vec<Registry<AcvusRuntime>> {

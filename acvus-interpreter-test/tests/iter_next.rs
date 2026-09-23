@@ -11,7 +11,7 @@
 //! designs against each other inside one binary. Rename anything here and
 //! those bench rows stop compiling.
 
-use std::ops::DerefMut;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use acvus_extern::{
@@ -81,6 +81,7 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "NMap")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct NMap<I, T, U, E, Rt>(NMapBody<I, T, U, E, Rt>)
 where
@@ -109,7 +110,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E)]
 fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, T, U, E, Rt>) -> Option<U>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
@@ -133,6 +134,7 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "NFilter")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct NFilter<I, T, E, Rt>(NFilterBody<I, T, E, Rt>)
 where
@@ -159,7 +161,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = E)]
 fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, T, E, Rt>) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -180,7 +182,7 @@ fn nsum<I, E, Rt>(
     next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
 ) -> i64
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -203,6 +205,7 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "NSlowed")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct NSlowed<I, Rt>(NSlowedBody<I, Rt>)
 where
@@ -224,7 +227,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<I, Rt>) -> Option<i64>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     tokio::task::yield_now().await;
@@ -243,7 +246,7 @@ async fn nsum_await<I, Rt>(
     next: Instance<sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
 ) -> i64
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     let mut it = it;

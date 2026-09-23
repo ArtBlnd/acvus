@@ -365,7 +365,7 @@ where
                  distinct positions"
             )
         };
-        fields.map(|owned| &mut **owned)
+        fields.map(Owned::value_mut)
     }
 }
 
@@ -505,7 +505,7 @@ macro_rules! borrowed_as_self {
         impl<$($($g)*,)? __Rt> $crate::Project<__Rt> for $t
         where
             __Rt: $crate::Runtime,
-            Self: $crate::Stored<__Rt, Payload = Self>,
+            Self: $crate::Stored<__Rt>,
         {
             type Table = ();
 
@@ -516,9 +516,11 @@ macro_rules! borrowed_as_self {
                 __value: &'__a <__Rt as $crate::Runtime>::Value,
                 _: &(),
             ) -> &'__a Self {
-                // SAFETY: the caller's contract, and a `Stored` type whose
-                // payload is itself is the type its own value was erased from.
-                unsafe { __rt.value_as_ref::<Self>(__value) }
+                // SAFETY: the caller's contract, and a `Stored` type's value
+                // was erased at its `Payload`.
+                <Self as $crate::Stored<__Rt>>::from_payload(unsafe {
+                    __rt.value_as_ref::<<Self as $crate::Stored<__Rt>>::Payload>(__value)
+                })
             }
 
             unsafe fn project_mut<'__a>(
@@ -527,7 +529,9 @@ macro_rules! borrowed_as_self {
                 _: &(),
             ) -> &'__a mut Self {
                 // SAFETY: as `project`, with the caller's exclusive loan.
-                unsafe { __rt.value_as_mut::<Self>(__value) }
+                <Self as $crate::Stored<__Rt>>::from_payload_mut(unsafe {
+                    __rt.value_as_mut::<<Self as $crate::Stored<__Rt>>::Payload>(__value)
+                })
             }
         }
     };

@@ -310,10 +310,12 @@ impl Vars {
         self.0.iter().any(|v| v.kind == VarKind::Len)
     }
 
+    /// A declaration's type is built at `TypesOnly`, where alone an
+    /// `Erased` reads its `T` for the checker.
     fn compile_time_stand_in(v: &Var) -> Type {
         let k = v.index;
         match v.kind {
-            VarKind::Runtime => syn::parse_quote! { __R },
+            VarKind::Runtime => syn::parse_quote! { ::acvus_extern::TypesOnly },
             VarKind::Ty if v.chosen => syn::parse_quote! { ::acvus_extern::ChosenNth<#k> },
             kind => {
                 let marker = kind.marker();
@@ -462,6 +464,16 @@ impl Vars {
     /// is not a shared signature and so has no instance to choose it.
     pub fn chosen(&self) -> Option<&Ident> {
         self.0.iter().find(|v| v.chosen).map(|v| &v.ident)
+    }
+
+    /// The type variables a box holds at their run-time fill, which its key
+    /// takes to their canonical form: every one not bounded by `Chosen`.
+    pub fn uniform_type_vars(&self) -> Vec<Ident> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Ty && !v.chosen)
+            .map(|v| v.ident.clone())
+            .collect()
     }
 
     /// The number of each type variable bounded by `Chosen`, as an

@@ -10,7 +10,7 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use acvus_mir::ty::{PolyTy, Task};
 use acvus_utils::Interner;
@@ -295,7 +295,7 @@ where
 
 impl<I, Rt> Receiver<Rt> for &mut I
 where
-    I: DerefMut<Target = Rt::Value>,
+    I: Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     #[inline(always)]

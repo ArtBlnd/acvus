@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{
-    Arr, Astr, Closure, Erased, FromValue, Interner, OneValue, Opaque, Owned, Ref,
-    Release, Runtime, Shared, cross_as_stored,
+    Arr, Astr, Canonical, Closure, Erased, FromValue, Interner, OneValue, Opaque, Owned, Ref,
+    Release, Runtime, Shared, Var, cross_as_stored, kind,
 };
 
 // -- A payload that counts its own drops --------------------------------
@@ -43,6 +43,13 @@ impl Drop for Tracked {
 }
 
 cross_as_stored!(Tracked);
+
+impl Var<kind::Type> for Tracked {}
+
+// SAFETY: `Tracked` holds no `Erased`.
+unsafe impl Canonical<kind::Type> for Tracked {
+    type Canon = Self;
+}
 
 // -- A runtime whose value is `Copy` ------------------------------------
 

@@ -151,6 +151,16 @@ where
 {
 }
 
+// SAFETY: the element is its own canonical form's.
+unsafe impl<T, M, Rt> crate::Canonical<kind::Type> for Slice<T, M, Rt>
+where
+    T: Var<kind::Type>,
+    M: Loan,
+    Rt: Runtime,
+{
+    type Canon = Slice<T::Canon, M, Rt>;
+}
+
 /// The acvus type: a reference to the unsized `[T]`.
 impl<T, M, Rt> TyArg for Slice<T, M, Rt>
 where

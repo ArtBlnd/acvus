@@ -253,7 +253,7 @@ struct.
   `Vec<Option<i64>>` crosses to flat elements, and a pattern through `&mut`
   binds `&T`, through which the checker refuses a store.
 
-## RFC-0041: `#τ` is the representation of a slot, and an extension holds values through `Erased`
+## RFC-0041: `#τ` is the representation of a slot
 
 Status: Accepted
 
@@ -311,9 +311,8 @@ takes the bound `Ts: Var<kind::Type> + Chosen`, a variable each instance
 fills with a Rust type of its own. Its slot is a `ρ`; `combine` binds it to
 the instance's tree at that slot, and `Ts` to the tree's type, then matches
 the rest exactly. An undeclared `ρ` still stands for uniform. The reason is a
-payload that projects through the variable: `Pipe<Ts, …>` holds
-`<Ts as TypeList>::Body`, so each instance's box is its own Rust type and no
-uniform `Pipe<Owned>` exists.
+payload that projects through the variable, whose box is its own Rust type
+per instance (RFC-0076).
 
 A signature's `ρ` is bound only by a decision — the instance choice, or
 `solve`'s default `Uniform` — never by a value flow. A flow whose only
@@ -322,42 +321,10 @@ representation is a conversion decision at that site (RFC-0042): a call
 argument, a store into a typed place, a return, a pattern's source, an `else`
 branch. It is answered by identity when the decision agrees and by the
 family's cast when it does not. A conversion consumes the value it converts.
-At a `&place` argument that is the place's value: taken out of its slot and
-cast into a temporary of the referent type the parameter names, which the
-call borrows; after the call the temporary is cast back and assigned to the
-place, for `&` and `&mut` alike, so a slot never holds a value of a type
-other than its own. The place is one the body owns directly — a local, an
-input or a context, or a field of one; a place reached through a reference
-or an element, and a reference that is not a borrow of a place, are errors
-naming both types. A borrowed value that is no place is cast into the
-temporary and not cast back, since nothing reads it after the call. The MIR
-marks the take-out's `Take` and the `Assign` that restores it, and the move
-rule (RFC-0029 rule 2) reads the marks: from the take-out to its restore
-the place is moved, a word's as any other's. A read of it is a use of a
-moved place; a store into a place overlapping it is refused at the store
-and revives nothing; the restore is the one store that gives it a value
-again. Inside the call's later arguments, and every call among them, a shared lend of the
-place through the same cast lends the same temporary, so the place is cast
-once and restored once, after the call that took it out; a lend at another
-type or through `&mut` lends the place itself and is refused as a use of
-it. A take while a reference is live is a borrow error.
+A converted `&place` argument is taken out of its slot for the call
+(RFC-0077).
 
-An extension reads and edits uniform values in place through `Erased<R, T>`:
-`repr(transparent)` over the runtime's value (held as `Owned<R>`, RFC-0048
-rule 7), made only by `Erased::new(rt, T)`, read by `as_ref(&self, rt)` /
-`as_mut`, and for an `Inline` type (one that fits the value word) by `Deref`,
-`get` and `PartialEq` with no runtime in hand. `T` is `Stored`: a type
-converted on the way in has no `T` in storage to read. An extension type is
-`Stored` at its payload. `Vec<Erased<R, T>>` is
-the runtime's `Vec<Value>` and crosses whole. A value leaves an extension type
-by identity (`T` is the runtime's value) or by a checked downcast
-(`FromValue`: the value's `TypeId`, carried by a `Large` payload's vtable and
-by an inline value's kind byte, must equal `T`'s); nothing else reinterprets a
-`Value`. A reference into storage is read only through a layout the language
-promises: the same type, `repr(transparent)`, or a slice under
-`TransparentOver`. `OneValue::materialize` and `Cross::from_run` are
-`unsafe fn` with the contract "erased from `Self`"; every caller states its
-proof, and no extension handler body contains `unsafe`.
+An extension holds a uniform value through `Erased` (RFC-0076).
 
 **Why.** Two representations of one type need one rule for where they meet.
 Putting `#` on the slot keeps it structural and lets the solver treat it as
@@ -366,39 +333,15 @@ program that asks for no native layout unchanged and confines the second box
 to fns that ask for it (`&[f64]`, `Vec<T>` by value into a Rust API). Deciding
 `ρ` by instance choice rather than by flow is what takes a `#` value to a
 generic-only fn through one erase instead of a mismatch, and a uniform value
-to a member through one materialize. `Erased` lets an extension hold a
-uniform value without naming a Rust `T` for it; `FromValue` and the value's
-own tag make the one remaining reinterpretation checked. Holding an argument
+to a member through one materialize. Holding an argument
 written concrete makes the Rust type of a box a fact of its acvus type, so
 a box of one instantiation never reaches a declaration of another, and the
-refusal is the checker's, where it names the two types. Taking a converted
-place out of its slot keeps every slot at its own type. The exclusion for
-the call is the move rule, with the take-out marked where the lowering
-emits it, so RFC-0018's rules keep one implementation, the MIR's, and it
-holds whichever path settled the conversion; a store is refused rather than
-let revive the place because the restore would overwrite it. Shared lends
-at one type share the temporary where the one cast is emitted, in the
-lowering. Storage the body owns is the one kind of place a value can be
-taken out of and put back into. The mark is per part because a box's Rust
+refusal is the checker's, where it names the two types. The mark is per part because a box's Rust
 type differs part by part and the runtime reads a held value by its parts:
 a handler taking `Bag<(i64, U)>` reads `.0` of a `Vec<(i64, Owned)>`, and
 `Vec<(i64, i64)>` handed to it panicked in debug and crashed in release.
 
 **Rejected.**
-- Holding a converted place at the parameter's type for the call — the
-  cast value stored back into the place's slot, every later lend inside the
-  call lending the held type, and the place restored after it. The slot
-  held a value of another type than its own, which the MIR validator
-  refuses, and a held argument settled after the solve recorded no hold, so
-  a later argument met the place at the held type on the known path and at
-  its own on the held one.
-- An unmarked move of the converted place, excluded by the move check as
-  any move is — a store revives a moved place, so a write inside the call
-  was admitted and overwritten by the restore, and a word's copy is no
-  move, so a word place was not excluded at all.
-- A loan for the call kept by the checker over the names each argument
-  uses — a second implementation of RFC-0018 rules 7 and 8, over the AST,
-  beside the MIR's.
 - One mark per argument, a composite taking the strongest of its parts — it
   admitted `Vec<(i64, i64)>` where `Vec<(i64, Owned)>` was declared. One
   more mark, "mixed", admits `Bag<(i64, U)>` against `Bag<(V, i64)>`.
@@ -717,3 +660,150 @@ borrows is what makes a spawn unsound when a run is dropped mid-call.
 - A scope the handler makes and owns, as a local or around an `async`
   closure: whatever a handler owns it can `mem::forget`, and its tasks then
   run past the call.
+
+## RFC-0076: A box is keyed by its payload's canonical type, and an extension holds values through `Erased`
+
+Status: Accepted
+
+An extension reads and edits uniform values in place through `Erased<R, T>`:
+`repr(transparent)` over the runtime's value, with `T` only in
+`PhantomData<fn() -> T>`. It is made by `Erased::new(rt, T)` and read by
+`as_ref(&self, rt)` / `as_mut`, and for an `Inline` type (one that fits the
+value word) by `get`, `get_ref` and `get_mut` with no runtime in hand. Each
+is an inherent method bounded on what it reads: `T` is `Stored` there, since
+a type converted on the way in has no `T` in storage to read. An extension
+type is `Stored` at its payload. `Vec<Erased<R, T>>` is the runtime's
+`Vec<Value>` and crosses whole.
+
+`Owned<R>` is `Erased<R, Never>`, where `Never` is Rust's `!`, named through
+`fn() -> !` until `never_type` stabilizes and then written `!`. Nothing
+implements a trait on it. The language's `!` and the uninhabited field of
+the compile-time stand-ins is `Bottom`. `Owned` alone is made from a bare
+value (`from_value`, `vacant`) and written through (`value_mut`), as
+inherent methods, so safe code puts no value into another `Erased` that
+breaks its `T`.
+
+1. At a runtime that makes values, `Erased<R, T>` has no trait impl whose
+   existence or items depend on `T`. What reads `T` for the checker
+   (`TyArg`) holds only at `Erased<TypesOnly, T>`, through `HoldsNoValues`,
+   a sealed trait no other crate can name; the macro builds every
+   declaration's checker-side types, its own parameters included, at
+   `TypesOnly`.
+2. A box is keyed by its payload's canonical type (`Canonical`): the payload
+   with every `Erased<R, X>` at a uniform part taken to `Owned<R>`, following
+   the per-part representation (RFC-0041). `erase`, `materialize` and every
+   read in place key on it. Each stored type states its canonical form: the
+   derive writes it for a derived type, and `Vec`, `Deque`, `HashMap`,
+   `HashSet` and `Arr` write it by hand. A `Chosen` or specialized part is
+   not canonicalized; its Rust type is its own.
+3. Every read of a box at a type other than its canonical one carries an
+   inline `const` assert that the two `Layout`s agree in size and alignment,
+   and a `SAFETY` note. An instantiation where they differ does not compile.
+4. A derived type with a type parameter not bounded by `Chosen` takes
+   `#[extern_type(unsafe(uniform_payload))]`. By it the author asserts that
+   the payload's layout reaches no such parameter through a trait, including
+   where the parameter is an argument of another type's projection (`O` in
+   `<Ts as TypeList>::Body<O, E>`). Without it the derive refuses.
+5. A payload that projects through a uniform type parameter, `<T as Tr>::A`,
+   is refused with or without the attribute. A derived type may bound a
+   parameter by `Chosen`: it is never canonicalized, and a projection through
+   it is admitted. `Pipe<Ts, …>` holds `<Ts as TypeList>::Body`, so each
+   instance's box is its own Rust type. A type whose type parameters are all
+   `Chosen`, or which has none, takes no attribute.
+
+A read at a type other than the canonical one rests on three layers.
+Release: `Drop` cannot be implemented with bounds narrower than the type's
+(E0367), so every `Erased<R, X>`, and every type built over one, releases
+the same way for every `X`. Size and alignment: checked per instantiation by
+rule 3's assert. Field order within one size and alignment: argued, not
+checked. It rests on rule 1 within acvus-extern, rule 4's obligation,
+`repr(transparent)`, `PhantomData` having size 0, alignment 1 and auto
+traits that do not follow `X`, and `Never` having no value. It does not rest
+on a promise that two instantiations of one `repr(Rust)` type share a
+layout; Rust makes none. `std::mem::TransmuteFrom` (unstable,
+`transmutability`) replaces this layer with a bound once it is stable.
+
+**Why.** The checker types a generic constructor's `Bag<Owned>` and a
+declaration's `Bag<Erased<R, i64>>` alike, `Bag<i64>` with a uniform part,
+and their Rust types differ only in `Erased`'s parameter. Keyed by the raw
+type, one read the other's box: the debug `TypeId` check panicked, and
+release read right only because the layouts happened to coincide. One
+canonical key makes them one box, and the layers are what make reading it
+at either name sound. `X` can reach a layout only through a trait, so the
+rule keeps every `T`-dependent impl off a value-making `Erased`; a derived
+payload is the one place a downstream trait can reach `X`, which rule 4
+makes its author's stated obligation and rule 5 refuses where it is
+visible. An inherent method takes part in no specialization or projection,
+so `Owned`'s construction and mutable access keep rule 1.
+
+**Cost.** Rule 1 binds acvus-extern only: the orphan rule lets another
+crate implement its own trait for `Erased<R, i64>` with a bound on `T`, and
+a payload that reads `X` through one breaks the obligation its author
+asserted. Every generic derived type carries an `unsafe` attribute. A type
+stored as itself states its canonical form, so a concrete type under
+`cross_as_stored!` writes its `Var` and `Canonical` impls.
+
+**Rejected.**
+- `Default` and `DerefMut` on every `Erased` — safe code could make an
+  `Erased<R, String>` holding the default value, or write another value
+  into one, and `as_ref` then reads a box that does not exist.
+- A trait impl on `Erased<R, Never>` alone for `Owned`'s construction and
+  mutable access — an impl whose existence depends on `T`, against rule 1.
+- The language's `!` as the `Never` alias — each trait the language's `!`
+  needs, written on the alias, conflicts (E0119) with every other crate's
+  impl of that trait.
+- Bounding the runtime's `erase` and reads on `T: Canonical<Canon = T>` —
+  a derived payload is a foreign or user type, and the orphan rule keeps
+  acvus-extern from implementing its trait for one.
+- Refusing every projection in a payload — it refuses `Pipe`, whose
+  projection is through a `Chosen` parameter.
+
+## RFC-0077: A converted `&place` argument is taken out of its slot for the call
+
+Status: Accepted
+
+A conversion decision (RFC-0041) consumes the value it converts. At a
+`&place` argument that is the place's value: taken out of its slot and cast
+into a temporary of the referent type the parameter names, which the
+call borrows; after the call the temporary is cast back and assigned to the
+place, for `&` and `&mut` alike, so a slot never holds a value of a type
+other than its own. The place is one the body owns directly — a local, an
+input or a context, or a field of one; a place reached through a reference
+or an element, and a reference that is not a borrow of a place, are errors
+naming both types. A borrowed value that is no place is cast into the
+temporary and not cast back, since nothing reads it after the call. The MIR
+marks the take-out's `Take` and the `Assign` that restores it, and the move
+rule (RFC-0029 rule 2) reads the marks: from the take-out to its restore
+the place is moved, a word's as any other's. A read of it is a use of a
+moved place; a store into a place overlapping it is refused at the store
+and revives nothing; the restore is the one store that gives it a value
+again. Inside the call's later arguments, and every call among them, a shared lend of the
+place through the same cast lends the same temporary, so the place is cast
+once and restored once, after the call that took it out; a lend at another
+type or through `&mut` lends the place itself and is refused as a use of
+it. A take while a reference is live is a borrow error.
+
+**Why.** Taking a converted place out of its slot keeps every slot at its
+own type. The exclusion for the call is the move rule, with the take-out
+marked where the lowering emits it, so RFC-0018's rules keep one
+implementation, the MIR's, and it holds whichever path settled the
+conversion; a store is refused rather than let revive the place because the
+restore would overwrite it. Shared lends at one type share the temporary
+where the one cast is emitted, in the lowering. Storage the body owns is the
+one kind of place a value can be taken out of and put back into.
+
+**Rejected.**
+- Holding a converted place at the parameter's type for the call — the
+  cast value stored back into the place's slot, every later lend inside the
+  call lending the held type, and the place restored after it. The slot
+  held a value of another type than its own, which the MIR validator
+  refuses, and a held argument settled after the solve recorded no hold, so
+  a later argument met the place at the held type on the known path and at
+  its own on the held one.
+- An unmarked move of the converted place, excluded by the move check as
+  any move is — a store revives a moved place, so a write inside the call
+  was admitted and overwritten by the restore, and a word's copy is no
+  move, so a word place was not excluded at all.
+- A loan for the call kept by the checker over the names each argument
+  uses — a second implementation of RFC-0018 rules 7 and 8, over the AST,
+  beside the MIR's.

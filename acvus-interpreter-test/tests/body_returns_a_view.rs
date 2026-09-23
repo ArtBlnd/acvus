@@ -21,7 +21,7 @@ fn total<Rt>(a: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    a.iter().map(|x| **x).sum()
+    a.iter().map(Erased::get).sum()
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {

@@ -11,12 +11,29 @@ help: the trait `TransparentOver<__R>` is not implemented for `Rendered`
    | ^^^^^^^^^^^^^^^^^^^
    = note: a slice whose elements read as `Rendered` in place is `Slice<Erased<Rt, Rendered>, Shared, Rt>` or `Slice<Erased<Rt, Rendered>, Mut, Rt>` (a Rust `&[Erased<Rt, Rendered>]` or `&mut [Erased<Rt, Rendered>]` parameter is the same): each element reads as `&Rendered` by `as_ref(rt)` and as `&mut Rendered` by `as_mut(rt)`, where `Rendered: Stored<Rt>`, as a scalar and an extension type are (RFC-0047).
    = note: a type that is not `Stored`, as a derived struct or enum is not, has no element read in place: a `Vec` of it taken by value materializes each element.
-   = help: the following other types implement trait `TransparentOver<Rt>`:
-             `ChosenNth<N>` implements `TransparentOver<Rt>`
-             `Erased<R, T>` implements `TransparentOver<R>`
-             `Nth<acvus_extern::kind::Type, N>` implements `TransparentOver<Rt>`
-             `Spec<T>` implements `TransparentOver<Rt>`
-             `acvus_extern::Owned<R>` implements `TransparentOver<R>`
+help: the following other types implement trait `TransparentOver<Rt>`
+  --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+   |
+   | / unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N> where
+   | |     Rt: crate::Runtime
+   | |______________________^ `Nth<acvus_extern::kind::Type, N>` implements `TransparentOver<Rt>`
+...
+   | / unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
+   | | where
+   | |     T: Send + Sync + 'static,
+   | |     Rt: crate::Runtime,
+   | |_______________________^ `Spec<T>` implements `TransparentOver<Rt>`
+...
+   |   unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for ChosenNth<N> where Rt: crate::Runtime {}
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ChosenNth<N>` implements `TransparentOver<Rt>`
+   |
+  ::: $WORKSPACE/acvus-extern/src/erased.rs
+   |
+   | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
+   | | where
+   | |     R: Runtime,
+   | |     T: 'static,
+   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
    = note: required for `acvus_extern::Slice<Rendered, acvus_extern::Shared, __R>` to implement `Cross<__R>`
    = note: required for `ByValue<acvus_extern::Slice<Rendered, acvus_extern::Shared, __R>>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
@@ -34,12 +51,29 @@ help: the trait `TransparentOver<__R>` is not implemented for `Rendered`
    | ^^^^^^^^^^^^^^^^^^^
    = note: a slice whose elements read as `Rendered` in place is `Slice<Erased<Rt, Rendered>, Shared, Rt>` or `Slice<Erased<Rt, Rendered>, Mut, Rt>` (a Rust `&[Erased<Rt, Rendered>]` or `&mut [Erased<Rt, Rendered>]` parameter is the same): each element reads as `&Rendered` by `as_ref(rt)` and as `&mut Rendered` by `as_mut(rt)`, where `Rendered: Stored<Rt>`, as a scalar and an extension type are (RFC-0047).
    = note: a type that is not `Stored`, as a derived struct or enum is not, has no element read in place: a `Vec` of it taken by value materializes each element.
-   = help: the following other types implement trait `TransparentOver<Rt>`:
-             `ChosenNth<N>` implements `TransparentOver<Rt>`
-             `Erased<R, T>` implements `TransparentOver<R>`
-             `Nth<acvus_extern::kind::Type, N>` implements `TransparentOver<Rt>`
-             `Spec<T>` implements `TransparentOver<Rt>`
-             `acvus_extern::Owned<R>` implements `TransparentOver<R>`
+help: the following other types implement trait `TransparentOver<Rt>`
+  --> $WORKSPACE/acvus-extern/src/ty_arg.rs
+   |
+   | / unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N> where
+   | |     Rt: crate::Runtime
+   | |______________________^ `Nth<acvus_extern::kind::Type, N>` implements `TransparentOver<Rt>`
+...
+   | / unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
+   | | where
+   | |     T: Send + Sync + 'static,
+   | |     Rt: crate::Runtime,
+   | |_______________________^ `Spec<T>` implements `TransparentOver<Rt>`
+...
+   |   unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for ChosenNth<N> where Rt: crate::Runtime {}
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ChosenNth<N>` implements `TransparentOver<Rt>`
+   |
+  ::: $WORKSPACE/acvus-extern/src/erased.rs
+   |
+   | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
+   | | where
+   | |     R: Runtime,
+   | |     T: 'static,
+   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
    = note: required for `acvus_extern::Slice<Rendered, acvus_extern::Mut, __R>` to implement `Cross<__R>`
    = note: required for `ByValue<acvus_extern::Slice<Rendered, acvus_extern::Mut, __R>>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

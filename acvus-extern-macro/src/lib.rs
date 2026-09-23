@@ -649,7 +649,7 @@ fn generate_extern_fn(
             let name = &p.name;
             let comp_ty = p.mode.acvus_ty(
                 &vars.to_compile_time_instance(&p.ty, member),
-                &quote! { __R },
+                &quote! { ::acvus_extern::TypesOnly },
             );
             quote! {
                 ::acvus_extern::ParamTerm::<::acvus_extern::Poly>::new(
@@ -1183,7 +1183,7 @@ fn generate_extern_fn(
             // the stage's own effect variable is what narrows the site that
             // runs its `sync =` twin (RFC-0046, RFC-0068 rule 5).
             let calls = quote! { <#task as ::acvus_extern::CalledAt>::TASK };
-            let marker = types_only_marker(&vars.to_compile_time_instance(&r.signature, None));
+            let marker = vars.to_compile_time_instance(&r.signature, None);
             Ok(quote! {
                 ::acvus_extern::Requirement {
                     signature: <#path as ::acvus_extern::SharedSignature>::qref(__i),
@@ -1400,6 +1400,11 @@ fn qref_expr_in(ns: Option<&str>, name: &str) -> proc_macro2::TokenStream {
 struct ExternTypeAttr {
     name: Option<String>,
     ns: Option<String>,
+    /// `unsafe(uniform_payload)`: the author asserts that the payload's
+    /// layout reaches no uniform type parameter through a trait, which is
+    /// what lets its box be read at the payload's canonical form
+    /// (`Canonical`, RFC-0076).
+    uniform_payload: bool,
 }
 
 /// Whether the struct carries `#[repr(transparent)]`.
@@ -1415,6 +1420,7 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
     let mut out = ExternTypeAttr {
         name: None,
         ns: None,
+        uniform_payload: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("extern_type") {
@@ -1427,8 +1433,16 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
             } else if meta.path.is_ident("ns") {
                 meta.input.parse::<Token![=]>()?;
                 out.ns = Some(meta.input.parse::<LitStr>()?.value());
+            } else if meta.path.is_ident("unsafe") {
+                meta.parse_nested_meta(|inner| {
+                    if !inner.path.is_ident("uniform_payload") {
+                        return Err(inner.error("expected `uniform_payload`"));
+                    }
+                    out.uniform_payload = true;
+                    Ok(())
+                })?;
             } else {
-                return Err(meta.error("expected `name` or `ns`"));
+                return Err(meta.error("expected `name`, `ns`, or `unsafe(uniform_payload)`"));
             }
             Ok(())
         })?;
@@ -1455,13 +1469,6 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             suspending.span(),
             "a type does not bound its effect variables: Suspends is written on an \
              #[extern_fn] declaration",
-        ));
-    }
-    if let Some(chosen) = vars.chosen() {
-        return Err(syn::Error::new(
-            chosen.span(),
-            "a type has no instance to choose its variables: Chosen is written on an \
-             extern_signature! parameter",
         ));
     }
     if vars.has_len_vars() {
@@ -1491,6 +1498,31 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ));
     };
     let payload_ty = &payload.ty;
+    let uniform = vars.uniform_type_vars();
+    if let Some((through, projection)) = projection_through(payload_ty, &uniform) {
+        return Err(syn::Error::new_spanned(
+            projection,
+            format!(
+                "the payload projects through the uniform type parameter `{through}`, so its \
+                 layout is whatever a trait impl for `{through}` chooses and no one box serves \
+                 every `{through}`: bound `{through}` by `Chosen`, which keys each instance's \
+                 box at its own Rust type (RFC-0076)"
+            ),
+        ));
+    }
+    if let Some(first) = uniform.first()
+        && !attr.uniform_payload
+    {
+        return Err(syn::Error::new(
+            first.span(),
+            format!(
+                "`{first}` is a uniform type parameter, so the box is keyed by the payload with \
+                 `{first}` at its canonical form and read at `{first}`'s own: write \
+                 `#[extern_type(unsafe(uniform_payload))]` to assert that the payload's layout \
+                 reaches no uniform type parameter through a trait (RFC-0076)"
+            ),
+        ));
+    }
     if !is_repr_transparent(&input.attrs) {
         return Err(syn::Error::new(
             ident.span(),
@@ -1524,15 +1556,46 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             quote! { #params, }
         }
     };
-    let where_predicates = input
-        .generics
-        .where_clause
-        .as_ref()
-        .map(|w| {
-            let preds = &w.predicates;
-            quote! { #preds }
+    // The key and the canonical form name each uniform parameter's
+    // canonical form, so every impl that names either restates the struct's
+    // predicates at it.
+    let struct_predicates = struct_predicates(&input.generics);
+    let restated: Vec<syn::WherePredicate> = struct_predicates
+        .iter()
+        .filter_map(|predicate| {
+            let mut at_canon = predicate.clone();
+            syn::visit_mut::VisitMut::visit_where_predicate_mut(
+                &mut Canonicalize { uniform: &uniform },
+                &mut at_canon,
+            );
+            (quote! { #at_canon }.to_string() != quote! { #predicate }.to_string())
+                .then_some(at_canon)
         })
-        .unwrap_or_default();
+        .collect();
+    let where_predicates = quote! { #(#struct_predicates,)* #(#restated,)* };
+    let key_ty = {
+        let mut key = payload_ty.clone();
+        syn::visit_mut::VisitMut::visit_type_mut(&mut Canonicalize { uniform: &uniform }, &mut key);
+        key
+    };
+    let canon_args = input.generics.params.iter().map(|param| match param {
+        GenericParam::Type(tp) if uniform.contains(&tp.ident) => {
+            let ident = &tp.ident;
+            quote! { <#ident as ::acvus_extern::Canonical<::acvus_extern::kind::Type>>::Canon }
+        }
+        GenericParam::Type(tp) => {
+            let ident = &tp.ident;
+            quote! { #ident }
+        }
+        GenericParam::Lifetime(lt) => {
+            let lifetime = &lt.lifetime;
+            quote! { #lifetime }
+        }
+        GenericParam::Const(c) => {
+            let ident = &c.ident;
+            quote! { #ident }
+        }
+    });
     let type_arg_exprs = vars.type_arg_exprs();
     let effect_arg_exprs = vars.effect_arg_exprs();
     let identity_arg_exprs = vars.identity_arg_exprs();
@@ -1550,13 +1613,13 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     let one_value_run = one_value_run(returned_as_one_value());
     let payload_crossing = quote! {
         fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
-            ::acvus_extern::derive::transparent::erase::<Self, #payload_ty, __R>(self, __rt)
+            ::acvus_extern::derive::transparent::erase::<Self, #key_ty, __R>(self, __rt)
         }
 
         unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
             // SAFETY: the caller's contract, and `erase` is `transparent::erase`.
             unsafe {
-                ::acvus_extern::derive::transparent::materialize::<Self, #payload_ty, __R>(__rt, __value)
+                ::acvus_extern::derive::transparent::materialize::<Self, #key_ty, __R>(__rt, __value)
             }
         }
     };
@@ -1566,7 +1629,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
         ) -> &'__a Self {
             // SAFETY: the caller's contract: a live storage of the payload.
-            unsafe { ::acvus_extern::derive::transparent::deref::<Self, #payload_ty, __R>(__rt, __reference) }
+            unsafe { ::acvus_extern::derive::transparent::deref::<Self, #key_ty, __R>(__rt, __reference) }
         }
 
         unsafe fn deref_mut<'__a>(
@@ -1575,16 +1638,34 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ) -> &'__a mut Self {
             // SAFETY: as in `deref`, exclusively.
             unsafe {
-                ::acvus_extern::derive::transparent::deref_mut::<Self, #payload_ty, __R>(__rt, __reference)
+                ::acvus_extern::derive::transparent::deref_mut::<Self, #key_ty, __R>(__rt, __reference)
             }
         }
     };
 
     Ok(quote! {
-        impl #arg_impl_generics ::acvus_extern::Var<::acvus_extern::kind::Type>
-            for #ident #ty_generics #where_clause {}
+        impl<#impl_params> ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident #ty_generics
+        where
+            #where_predicates
+        {
+        }
 
-        impl #arg_impl_generics ::acvus_extern::TyArg for #ident #ty_generics #where_clause {
+        // SAFETY: the canonical form takes each uniform parameter to its own
+        // and keeps every other, and `unsafe(uniform_payload)` is the
+        // author's assertion that the payload reaches no uniform parameter
+        // through a trait.
+        unsafe impl<#impl_params> ::acvus_extern::Canonical<::acvus_extern::kind::Type>
+            for #ident #ty_generics
+        where
+            #where_predicates
+        {
+            type Canon = #ident<#(#canon_args),*>;
+        }
+
+        impl #arg_impl_generics ::acvus_extern::TyArg for #ident #ty_generics
+        where
+            #where_predicates
+        {
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
                 __vars: &::acvus_extern::PolyVars,
@@ -1653,8 +1734,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
 
         // SAFETY: the struct is `#[repr(transparent)]`, checked above, with the
         // payload as its one non-zero-sized field: every other field is
-        // `PhantomData`, also checked above.
-        unsafe impl<#impl_params> ::acvus_extern::Transparent<#payload_ty> for #ident #ty_generics
+        // `PhantomData`, also checked above. The key is the payload with each
+        // uniform parameter at its canonical form, as the canonical form of
+        // the struct is.
+        unsafe impl<#impl_params> ::acvus_extern::Transparent<#key_ty> for #ident #ty_generics
         where
             #where_predicates
         {
@@ -1673,14 +1756,14 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             __R: ::acvus_extern::Runtime,
             #where_predicates
         {
-            type Payload = #payload_ty;
+            type Payload = #key_ty;
 
-            fn from_payload(__payload: &#payload_ty) -> &Self {
-                ::acvus_extern::derive::transparent::from_payload::<Self, #payload_ty>(__payload)
+            fn from_payload(__payload: &#key_ty) -> &Self {
+                ::acvus_extern::derive::transparent::from_payload::<Self, #key_ty>(__payload)
             }
 
-            fn from_payload_mut(__payload: &mut #payload_ty) -> &mut Self {
-                ::acvus_extern::derive::transparent::from_payload_mut::<Self, #payload_ty>(__payload)
+            fn from_payload_mut(__payload: &mut #key_ty) -> &mut Self {
+                ::acvus_extern::derive::transparent::from_payload_mut::<Self, #key_ty>(__payload)
             }
         }
 
@@ -1696,6 +1779,84 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
     })
+}
+
+/// Every predicate a struct's generics carry, written in its `where`
+/// clause or inline on a parameter.
+fn struct_predicates(generics: &syn::Generics) -> Vec<syn::WherePredicate> {
+    let inline = generics.params.iter().filter_map(|param| match param {
+        GenericParam::Type(tp) if !tp.bounds.is_empty() => {
+            let ident = &tp.ident;
+            let bounds = &tp.bounds;
+            Some(syn::parse_quote! { #ident: #bounds })
+        }
+        _ => None,
+    });
+    let written = generics
+        .where_clause
+        .iter()
+        .flat_map(|w| w.predicates.iter().cloned());
+    inline.chain(written).collect()
+}
+
+/// Takes each uniform type parameter to its canonical form.
+struct Canonicalize<'a> {
+    uniform: &'a [Ident],
+}
+
+impl syn::visit_mut::VisitMut for Canonicalize<'_> {
+    fn visit_type_mut(&mut self, ty: &mut Type) {
+        if let Type::Path(path) = ty
+            && path.qself.is_none()
+            && let Some(ident) = path.path.get_ident()
+            && self.uniform.contains(ident)
+        {
+            let ident = ident.clone();
+            *ty = syn::parse_quote! {
+                <#ident as ::acvus_extern::Canonical<::acvus_extern::kind::Type>>::Canon
+            };
+            return;
+        }
+        syn::visit_mut::visit_type_mut(self, ty);
+    }
+}
+
+/// The first projection in `ty` whose self type is one of `uniform`,
+/// written `<T as Tr>::A`, `<T>::A` or `T::A`, with that parameter.
+fn projection_through(ty: &Type, uniform: &[Ident]) -> Option<(Ident, syn::TypePath)> {
+    struct Find<'a> {
+        uniform: &'a [Ident],
+        found: Option<(Ident, syn::TypePath)>,
+    }
+
+    impl syn::visit_mut::VisitMut for Find<'_> {
+        fn visit_type_path_mut(&mut self, path: &mut syn::TypePath) {
+            let through = match &path.qself {
+                Some(qself) => match &*qself.ty {
+                    Type::Path(inner) if inner.qself.is_none() => inner.path.get_ident().cloned(),
+                    _ => None,
+                },
+                None if path.path.leading_colon.is_none() && path.path.segments.len() > 1 => {
+                    Some(path.path.segments[0].ident.clone())
+                }
+                None => None,
+            };
+            if self.found.is_none()
+                && let Some(through) = through
+                && self.uniform.contains(&through)
+            {
+                self.found = Some((through, path.clone()));
+            }
+            syn::visit_mut::visit_type_path_mut(self, path);
+        }
+    }
+
+    let mut find = Find {
+        uniform,
+        found: None,
+    };
+    syn::visit_mut::VisitMut::visit_type_mut(&mut find, &mut ty.clone());
+    find.found
 }
 
 // -- #[derive(TyArg)] ------------------------------------------------
@@ -1826,6 +1987,11 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
     let borrowable = borrowing.borrowable(ident);
     quote! {
         impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident {}
+
+        // SAFETY: a converted type is no box and names no parameter.
+        unsafe impl ::acvus_extern::Canonical<::acvus_extern::kind::Type> for #ident {
+            type Canon = Self;
+        }
 
         impl ::acvus_extern::TyArg for #ident {
             fn poly_ty(
@@ -2263,6 +2429,11 @@ impl<'a> ObjectShape<'a> {
 
             impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #shared<'static> {}
 
+            // SAFETY: a projection is no box and names no parameter.
+            unsafe impl ::acvus_extern::Canonical<::acvus_extern::kind::Type> for #shared<'static> {
+                type Canon = Self;
+            }
+
             impl ::acvus_extern::TyArg for #shared<'static> {
                 fn poly_ty(
                     __i: &::acvus_extern::Interner,
@@ -2276,6 +2447,11 @@ impl<'a> ObjectShape<'a> {
             }
 
             impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #exclusive<'static> {}
+
+            // SAFETY: as the shared projection's.
+            unsafe impl ::acvus_extern::Canonical<::acvus_extern::kind::Type> for #exclusive<'static> {
+                type Canon = Self;
+            }
 
             impl ::acvus_extern::TyArg for #exclusive<'static> {
                 fn poly_ty(
@@ -2672,7 +2848,7 @@ fn enum_projection(
                     <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
                 };
                 let __at = ::acvus_extern::derive::variant::arm_of(__tag, &__table.tags, #name);
-                let __payload = __variant.payload_mut();
+                let __payload = __variant.payload_mut().value_mut();
                 match __at {
                     #(#write_arms,)*
                 }
@@ -2793,6 +2969,11 @@ fn enum_projection(
 
         impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #shared<'static> {}
 
+        // SAFETY: a projection is no box and names no parameter.
+        unsafe impl ::acvus_extern::Canonical<::acvus_extern::kind::Type> for #shared<'static> {
+            type Canon = Self;
+        }
+
         impl ::acvus_extern::TyArg for #shared<'static> {
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
@@ -2808,6 +2989,15 @@ fn enum_projection(
         impl<__R> ::acvus_extern::Var<::acvus_extern::kind::Type> for #exclusive<'static, __R> where
             __R: ::acvus_extern::Runtime
         {
+        }
+
+        // SAFETY: as the shared projection's.
+        unsafe impl<__R> ::acvus_extern::Canonical<::acvus_extern::kind::Type>
+            for #exclusive<'static, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            type Canon = Self;
         }
 
         impl<__R> ::acvus_extern::TyArg for #exclusive<'static, __R>
@@ -3045,15 +3235,10 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     let ret = parse_return(&sig.output);
     let name = ident.to_string();
     let qref = qref_expr_in(Some(&input.ns.value()), &name);
-    let types_only = |ty: &Type| {
-        subst::substitute(ty, &|ident| {
-            (ident == "__R").then(|| syn::parse_quote! { ::acvus_extern::TypesOnly })
-        })
-    };
     let param_terms = params.iter().map(|p| {
         let pname = &p.name;
         let comp_ty = p.mode.acvus_ty(
-            &types_only(&vars.to_compile_time_instance(&p.ty, None)),
+            &vars.to_compile_time_instance(&p.ty, None),
             &quote! { ::acvus_extern::TypesOnly },
         );
         quote! {
@@ -3063,7 +3248,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
             )
         }
     });
-    let comp_ret = types_only(&vars.to_compile_time_instance(&ret, None));
+    let comp_ret = vars.to_compile_time_instance(&ret, None);
     let bounds = vars.bound_exprs();
     let chosen = vars.chosen_numbers();
     let fresh_vars = vars.fresh_vars_expr();
@@ -3643,13 +3828,6 @@ impl Received {
             },
         }
     }
-}
-
-/// A type at the compile-time fill, with the runtime named `TypesOnly`.
-fn types_only_marker(ty: &Type) -> Type {
-    subst::substitute(ty, &|ident| {
-        (ident == "__R").then(|| syn::parse_quote! { ::acvus_extern::TypesOnly })
-    })
 }
 
 /// The module `extern_signature!` writes beside a signature, as the

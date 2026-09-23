@@ -9,11 +9,17 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{HeldTy, Poly, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::canonical::Canonical;
 use crate::ty_arg::{PolyVars, SlotRepr, Term, TyArg, Var, kind};
 
 /// The runtime carries no length: a length variable is settled before the
 /// handler runs, so the runtime fills it with nothing.
 impl Var<kind::Length> for () {}
+
+// SAFETY: a length holds no `Erased`.
+unsafe impl Canonical<kind::Length> for () {
+    type Canon = Self;
+}
 
 /// `Array<T, N>` with N a length variable. Holds the elements at runtime.
 ///
@@ -54,6 +60,16 @@ where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
 {
+}
+
+// SAFETY: the element is its own canonical form's, and a length holds no
+// `Erased`.
+unsafe impl<T, N> Canonical<kind::Type> for Arr<T, N>
+where
+    T: Var<kind::Type>,
+    N: Var<kind::Length>,
+{
+    type Canon = Arr<T::Canon, N>;
 }
 
 impl<T, N> TyArg for Arr<T, N>

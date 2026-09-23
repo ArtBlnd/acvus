@@ -192,6 +192,19 @@ where
 {
 }
 
+// SAFETY: the result is its own canonical form's. `A` is kept: at a
+// runtime that makes values it holds no `Erased`, since `ArgTypes` asks
+// `TyArg` of each parameter, which an `Erased` has only at `TypesOnly`.
+unsafe impl<A, R, E, Rt> crate::Canonical<kind::Type> for Closure<A, R, E, Rt>
+where
+    A: ArgTypes,
+    R: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    type Canon = Closure<A, R::Canon, E, Rt>;
+}
+
 impl<A, R, E, Rt> TyArg for Closure<A, R, E, Rt>
 where
     A: ArgTypes,

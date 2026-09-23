@@ -1,0 +1,5 @@
+error: `T` is a uniform type parameter, so the box is keyed by the payload with `T` at its canonical form and read at `T`'s own: write `#[extern_type(unsafe(uniform_payload))]` to assert that the payload's layout reaches no uniform type parameter through a trait (RFC-0076)
+  --> tests/compile_fail/uniform_parameter_without_uniform_payload.rs:11:12
+   |
+11 | struct Bag<T>(Vec<T>)
+   |            ^

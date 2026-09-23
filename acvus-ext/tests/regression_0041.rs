@@ -399,8 +399,8 @@ macro_rules! inline_round_trip {
     ($rt:expr; $($t:ty = $v:expr),* $(,)?) => { $( {
         let value: $t = $v;
         let erased = Erased::<Counting, $t>::new(&$rt, value);
-        assert_eq!(erased.get(), value, "{} reads back by Deref", type_name::<$t>());
-        let raw = OneValue::erase(erased, &$rt);
+        assert_eq!(erased.get(), value, "{} reads back by get", type_name::<$t>());
+        let raw = OneValue::<Counting>::erase(erased, &$rt);
         assert_eq!(
             $rt.type_of(&raw),
             Some(TypeId::of::<$t>()),
@@ -408,7 +408,7 @@ macro_rules! inline_round_trip {
             type_name::<$t>()
         );
         // SAFETY: `raw` was just erased from a `$t`.
-        let back = unsafe { Erased::<Counting, $t>::from_value(&$rt, raw) };
+        let back = unsafe { Erased::<Counting, $t>::from_value_of(&$rt, raw) };
         assert_eq!(back.into_inner(&$rt), value, "{} materializes", type_name::<$t>());
     } )* };
 }
@@ -442,7 +442,7 @@ fn from_value_on_a_bool_as_an_i64_panics_naming_both() {
     let rt = Counting::default();
     let holds_a_bool = erased_from(&rt, true);
     // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<Counting, i64>::from_value(&rt, holds_a_bool) };
+    unsafe { Erased::<Counting, i64>::from_value_of(&rt, holds_a_bool) };
 }
 
 // -- R3: container downcasts ---------------------------------------------
@@ -536,7 +536,7 @@ fn a_vec_of_erased_ints_is_read_and_edited_through_deref_with_no_box() {
     assert_eq!(seen, [1, 2]);
 
     for x in &mut elements {
-        **x += 1;
+        *x.get_mut() += 1;
     }
 
     let seen: Vec<i64> = elements.iter().map(|x| x.get()).collect();

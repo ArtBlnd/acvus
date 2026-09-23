@@ -8,6 +8,7 @@ use std::mem::ManuallyDrop;
 
 use acvus_mir::ty::{Poly, Ty, TypeArg};
 
+use crate::canonical::Canonical;
 use crate::obj::{InPlaceElement, OneValue, stored_as_container_of};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
@@ -96,17 +97,25 @@ where
     }
 }
 
-crate::cross_whole!(crate::Specialized, Vec<T>, T: Send + Sync + 'static);
+crate::cross_whole!(crate::Specialized, Vec<T>, T: Var<kind::Type>);
 
 impl<T, Rt> crate::BorrowableSpecialized<Rt> for Vec<T>
 where
-    T: Send + Sync + 'static,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     crate::whole_box_in_place!(Vec<T>, Rt);
 }
 
 impl<T> Var<kind::Type> for Vec<T> where T: Var<kind::Type> {}
+
+// SAFETY: the element is its own canonical form's.
+unsafe impl<T> Canonical<kind::Type> for Vec<T>
+where
+    T: Var<kind::Type>,
+{
+    type Canon = Vec<T::Canon>;
+}
 
 impl<T> TyArg for Vec<T>
 where

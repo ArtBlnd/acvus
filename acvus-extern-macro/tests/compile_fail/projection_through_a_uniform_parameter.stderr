@@ -1,0 +1,5 @@
+error: the payload projects through the uniform type parameter `T`, so its layout is whatever a trait impl for `T` chooses and no one box serves every `T`: bound `T` by `Chosen`, which keys each instance's box at its own Rust type (RFC-0076)
+  --> tests/compile_fail/projection_through_a_uniform_parameter.rs:15:16
+   |
+15 | struct Held<T>(<T as Holds>::Held)
+   |                ^^^^^^^^^^^^^^^^^^

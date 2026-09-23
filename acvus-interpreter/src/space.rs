@@ -582,13 +582,13 @@ impl Space {
                 // SAFETY (each composite): the type is the runtime's witness
                 // of the value's shape.
                 for v in unsafe { value.as_array_mut() }.0.iter_mut() {
-                    self.commit_nested(rt, elem, v, moved)?;
+                    self.commit_nested(rt, elem, v.value_mut(), moved)?;
                 }
                 Ok(())
             }
             Ty::Tuple(elems) => {
                 for (v, t) in unsafe { value.as_tuple_mut() }.0.iter_mut().zip(elems) {
-                    self.commit_nested(rt, t, v, moved)?;
+                    self.commit_nested(rt, t, v.value_mut(), moved)?;
                 }
                 Ok(())
             }
@@ -597,7 +597,7 @@ impl Space {
                 let types: Vec<Ty> = laid.iter().map(|(_, t)| (*t).clone()).collect();
                 let values = unsafe { value.as_object_mut() };
                 for (t, v) in types.iter().zip(values.iter_mut()) {
-                    self.commit_nested(rt, t, v, moved)?;
+                    self.commit_nested(rt, t, v.value_mut(), moved)?;
                 }
                 Ok(())
             }
@@ -612,7 +612,7 @@ impl Space {
                 // SAFETY: the same witness — a variant's first register is its tag.
                 let tag = unsafe { variant.tag().as_tag() };
                 let (_, held) = layout::result_side(rt, tag, ok, err)?;
-                self.commit_nested(rt, held, variant.payload_mut(), moved)
+                self.commit_nested(rt, held, variant.payload_mut().value_mut(), moved)
             }
             Ty::Enum { variants, .. } => {
                 let variant = unsafe { value.as_variant_mut() };
@@ -620,7 +620,7 @@ impl Space {
                 let tag = unsafe { variant.tag().as_tag() };
                 if let Some(Some(t)) = variants.get(&tag) {
                     let t = t.as_ref().clone();
-                    self.commit_nested(rt, &t, variant.payload_mut(), moved)?;
+                    self.commit_nested(rt, &t, variant.payload_mut().value_mut(), moved)?;
                 }
                 Ok(())
             }
@@ -722,7 +722,7 @@ impl SpacePage {
                 .get(&id)
                 .ok_or_else(|| SpaceError::new(format!("@{id}: no type")))?;
             let mut value = held.remove(&id).expect("listed");
-            let head = self.space.commit(rt, &id, ty, &mut value)?;
+            let head = self.space.commit(rt, &id, ty, value.value_mut())?;
             out.push((id, head));
         }
         Ok(out)

@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 
 use acvus_extern::Ctx;
 use acvus_extern::{
-    ChosenNth, Closure, ClosureFn, Cross, Erased, ExternType, FromValue, Never, OneValue,
+    Bottom, Chosen, ChosenNth, Closure, ClosureFn, Cross, Erased, ExternType, OneValue,
     PassedByValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
@@ -139,18 +139,18 @@ where
 
 /// The stand-in a shared signature's own type carries: a `Ts` bounded by
 /// `Chosen` is `ChosenNth<N>` while the declaration's type is built, and
-/// `Never` says no pipeline of that type is a value.
+/// `Bottom` says no pipeline of that type is a value.
 impl<const N: usize, Rt> TypeList<Rt> for ChosenNth<N>
 where
     Rt: Runtime,
 {
     type Body<O, E>
-        = Never
+        = Bottom
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;
 
-    fn pull<O, E>(body: &mut Never, _: &mut Ctx<'_, Rt>) -> Option<O>
+    fn pull<O, E>(body: &mut Bottom, _: &mut Ctx<'_, Rt>) -> Option<O>
     where
         O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
@@ -161,10 +161,11 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "Pipe")]
+#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Pipe<Ts, O, E, I, Rt>(<Ts as TypeList<Rt>>::Body<O, E>, PhantomData<I>)
 where
-    Ts: Var<kind::Type> + TypeList<Rt>,
+    Ts: Var<kind::Type> + TypeList<Rt> + Chosen,
     O: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
@@ -318,7 +319,7 @@ macro_rules! total_instance {
                 .into_iter()
                 // SAFETY: the pipe's element type is the `i64` the checker
                 // matched at this handler's parameter.
-                .map(|x| *unsafe { Erased::<Rt, i64>::from_value(rt, x.erase(rt)) }.as_ref(rt))
+                .map(|x| *unsafe { Erased::<Rt, i64>::from_value_of(rt, x.erase(rt)) }.as_ref(rt))
                 .sum()
         }
 
@@ -339,7 +340,7 @@ macro_rules! total_instance {
                 .into_iter()
                 // SAFETY: the pipe's element type is the `i64` the checker
                 // matched at this handler's parameter.
-                .map(|x| *unsafe { Erased::<Rt, i64>::from_value(rt, x.erase(rt)) }.as_ref(rt))
+                .map(|x| *unsafe { Erased::<Rt, i64>::from_value_of(rt, x.erase(rt)) }.as_ref(rt))
                 .sum()
         }
     };

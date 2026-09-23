@@ -35,7 +35,7 @@
 //! every parameter naming the member at its specialized representation,
 //! which `Closure` does not have.
 
-use std::ops::DerefMut;
+use std::ops::Deref;
 
 use acvus_extern::PassedByValue;
 use acvus_extern::{
@@ -453,7 +453,7 @@ fn collect_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Vec<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -473,7 +473,7 @@ async fn collect<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Vec<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -493,7 +493,7 @@ fn join_now<I, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
 ) -> String
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -514,7 +514,7 @@ async fn join<I, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
 ) -> String
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -534,7 +534,7 @@ fn contains_now<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64, bool, u8, String)> + Var<kind::Type> + Stored<Rt> + PartialEq,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -557,7 +557,7 @@ async fn contains<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64, bool, u8, String)> + Var<kind::Type> + Stored<Rt> + PartialEq,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -579,7 +579,7 @@ fn find_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -601,7 +601,7 @@ async fn find<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -622,7 +622,7 @@ fn reduce_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -643,7 +643,7 @@ async fn reduce<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -664,7 +664,7 @@ fn fold_now<I, T, U, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> U
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
@@ -687,7 +687,7 @@ async fn fold<I, T, U, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> U
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
@@ -708,7 +708,7 @@ fn any_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -730,7 +730,7 @@ async fn any<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -751,7 +751,7 @@ fn all_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -773,7 +773,7 @@ async fn all<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -793,7 +793,7 @@ fn count_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> i64
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -813,7 +813,7 @@ async fn count<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> i64
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -832,7 +832,7 @@ fn last_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -852,7 +852,7 @@ async fn last<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -872,7 +872,7 @@ fn nth_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -892,7 +892,7 @@ async fn nth<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -911,7 +911,7 @@ fn position_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -935,7 +935,7 @@ async fn position<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -957,7 +957,7 @@ fn sum_now<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -978,7 +978,7 @@ async fn sum<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -998,7 +998,7 @@ fn product_now<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1019,7 +1019,7 @@ async fn product<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1039,7 +1039,7 @@ fn min_now<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1064,7 +1064,7 @@ async fn min<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1088,7 +1088,7 @@ fn max_now<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1113,7 +1113,7 @@ async fn max<I, T, E, Rt>(
     next: Instance<sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Monomorphize<(i64, f64)> + Var<kind::Type> + Stored<Rt> + Num,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1159,7 +1159,7 @@ async fn extreme_by_key<I, T, E, Rt>(
     extreme: Extreme,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1187,7 +1187,7 @@ fn extreme_by_key_now<I, T, E, Rt>(
     extreme: Extreme,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1214,7 +1214,7 @@ fn min_by_key_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1230,7 +1230,7 @@ async fn min_by_key<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1245,7 +1245,7 @@ fn max_by_key_now<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
@@ -1261,7 +1261,7 @@ async fn max_by_key<I, T, E, Rt>(
     next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,

@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{Deque, Items};
-use acvus_extern::{Astr, FromValue, Interner, Owned, Release, Runtime, cross_as_stored};
+use acvus_extern::{
+    Astr, Canonical, FromValue, Interner, Owned, Release, Runtime, Var, cross_as_stored, kind,
+};
 
 /// No registry these tests combine declares a sliceable container, so the
 /// pair a slice would occupy is never built or read.
@@ -46,6 +48,13 @@ impl Drop for Tracked {
 }
 
 cross_as_stored!(Tracked);
+
+impl Var<kind::Type> for Tracked {}
+
+// SAFETY: `Tracked` holds no `Erased`.
+unsafe impl Canonical<kind::Type> for Tracked {
+    type Canon = Self;
+}
 
 // -- A runtime whose value is `Copy` ------------------------------------
 

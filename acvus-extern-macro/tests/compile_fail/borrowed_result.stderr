@@ -16,7 +16,7 @@ error[E0277]: `std::result::Result<i64, std::string::String>` has no storage of 
             `Nth<acvus_extern::kind::Type, N>` implements `Borrowable<Rt>`
             `Spec<T>` implements `Borrowable<Rt>`
             `Vec<T>` implements `Borrowable<Rt>`
-            `acvus_extern::Owned<R>` implements `Borrowable<R>`
+            `bool` implements `Borrowable<__Rt>`
           and $N others
   = note: required for `ByRef<std::result::Result<i64, std::string::String>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
@@ -65,14 +65,14 @@ error[E0277]: `std::result::Result<std::string::String, std::string::String>` ha
    = note: required for `ByRef<std::result::Result<std::string::String, std::string::String>, acvus_extern::Shared, acvus_extern::Specialized>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: `std::result::Result<acvus_extern::Owned<__R>, std::string::String>` has no storage of its own type, so a parameter cannot borrow one
+error[E0277]: `std::result::Result<Erased<__R, !>, std::string::String>` has no storage of its own type, so a parameter cannot borrow one
   --> tests/compile_fail/borrowed_result.rs:13:1
    |
 13 | #[extern_fn(effect = pure)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
    |
-   = help: the trait `Borrowable<__R>` is not implemented for `std::result::Result<acvus_extern::Owned<__R>, std::string::String>`
-   = note: a borrowed aggregate crosses as its projection: where `std::result::Result<acvus_extern::Owned<__R>, std::string::String>` is a `#[derive(TyArg)] #[projection]` aggregate, write `std::result::Result<acvus_extern::Owned<__R>, std::string::String>Ref<'_>`, or `std::result::Result<acvus_extern::Owned<__R>, std::string::String>Mut<'_>` for a struct and `std::result::Result<acvus_extern::Owned<__R>, std::string::String>Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
+   = help: the trait `Borrowable<__R>` is not implemented for `std::result::Result<Erased<__R, !>, std::string::String>`
+   = note: a borrowed aggregate crosses as its projection: where `std::result::Result<Erased<__R, !>, std::string::String>` is a `#[derive(TyArg)] #[projection]` aggregate, write `std::result::Result<Erased<__R, !>, std::string::String>Ref<'_>`, or `std::result::Result<Erased<__R, !>, std::string::String>Mut<'_>` for a struct and `std::result::Result<Erased<__R, !>, std::string::String>Mut<'_, Rt>` for an enum (RFC-0050 rule 6).
    = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
    = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
    = help: the following other types implement trait `Borrowable<Rt>`:
@@ -83,7 +83,7 @@ error[E0277]: `std::result::Result<acvus_extern::Owned<__R>, std::string::String
              `Nth<acvus_extern::kind::Type, N>` implements `Borrowable<Rt>`
              `Spec<T>` implements `Borrowable<Rt>`
              `Vec<T>` implements `Borrowable<Rt>`
-             `acvus_extern::Owned<R>` implements `Borrowable<R>`
+             `bool` implements `Borrowable<__Rt>`
            and $N others
-   = note: required for `ByRef<std::result::Result<acvus_extern::Owned<__R>, std::string::String>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+   = note: required for `ByRef<std::result::Result<Erased<__R, !>, std::string::String>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

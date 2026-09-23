@@ -1,11 +1,11 @@
-use acvus_extern::{Never, Registry, extern_fn, extern_registry};
+use acvus_extern::{Bottom, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 #[extern_fn(effect = pure)]
-fn boom(message: String) -> Never {
+fn boom(message: String) -> Bottom {
     panic!("boom: {message}")
 }
 

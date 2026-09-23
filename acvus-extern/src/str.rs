@@ -82,6 +82,11 @@ impl StrView {
 
 impl Var<kind::Type> for StrView {}
 
+// SAFETY: a view holds no `Erased`.
+unsafe impl crate::Canonical<kind::Type> for StrView {
+    type Canon = Self;
+}
+
 impl TyArg for StrView {
     fn poly_ty(_: &Interner, _: &PolyVars) -> PolyTy {
         PolyTy::Ref(Mutability::Shared, Box::new(TypeArg::uniform(PolyTy::Str)))

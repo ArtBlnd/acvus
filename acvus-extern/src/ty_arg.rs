@@ -18,6 +18,8 @@ use acvus_mir::ty::{
 };
 use acvus_utils::Interner;
 
+use crate::canonical::Canonical;
+
 /// The variables a polymorphic ExternFn type ranges over, by kind and
 /// position. Built once per declaration from a `PolyBuilder`.
 pub struct PolyVars {
@@ -142,7 +144,7 @@ impl Kind for kind::Identity {
 /// No kind has an impl over an unbounded parameter: a type fills a variable
 /// only where this crate wrote the impl, so a type the language does not
 /// know cannot reach a declaration by satisfying `Send + Sync`.
-pub trait Var<K>: Send + Sync + 'static
+pub trait Var<K>: Canonical<K> + Send + Sync + 'static
 where
     K: Kind,
 {
@@ -163,7 +165,7 @@ where
 /// The `N`-th variable of kind `K` of a declaration, as a Rust type:
 /// the stand-in that fills the parameter while the declaration's type is
 /// built. Uninhabited: it names a variable and is never a value.
-pub struct Nth<K, const N: usize>(PhantomData<fn() -> K>, Never);
+pub struct Nth<K, const N: usize>(PhantomData<fn() -> K>, Bottom);
 
 impl<K, const N: usize> Term<K> for Nth<K, N>
 where
@@ -182,6 +184,23 @@ impl<const N: usize> Var<kind::Type> for Nth<kind::Type, N> {}
 impl<const N: usize> Var<kind::Effect> for Nth<kind::Effect, N> {}
 impl<const N: usize> Var<kind::Length> for Nth<kind::Length, N> {}
 impl<const N: usize> Var<kind::Identity> for Nth<kind::Identity, N> {}
+
+// SAFETY: a stand-in holds no `Erased`.
+unsafe impl<const N: usize> Canonical<kind::Type> for Nth<kind::Type, N> {
+    type Canon = Self;
+}
+// SAFETY: as above.
+unsafe impl<const N: usize> Canonical<kind::Effect> for Nth<kind::Effect, N> {
+    type Canon = Self;
+}
+// SAFETY: as above.
+unsafe impl<const N: usize> Canonical<kind::Length> for Nth<kind::Length, N> {
+    type Canon = Self;
+}
+// SAFETY: as above.
+unsafe impl<const N: usize> Canonical<kind::Identity> for Nth<kind::Identity, N> {
+    type Canon = Self;
+}
 
 /// What a specializing slot's argument holds (hash-types.md,
 /// Signatures), which picks the slot's form in `TyArg::slot`: a member
@@ -268,9 +287,17 @@ impl<const N: usize> TyArg for Nth<kind::Type, N> {
 /// type. Its parameter is the member and its `SLOT` is `Member`; that is
 /// the whole difference from `Nth<kind::Type, N>`, whose parameter is an
 /// index and whose `SLOT` is `Var`.
-pub struct Spec<T>(PhantomData<fn() -> T>, Never);
+pub struct Spec<T>(PhantomData<fn() -> T>, Bottom);
 
 impl<T> Var<kind::Type> for Spec<T> where T: Var<kind::Type> {}
+
+// SAFETY: a stand-in holds no `Erased`.
+unsafe impl<T> Canonical<kind::Type> for Spec<T>
+where
+    T: Var<kind::Type>,
+{
+    type Canon = Self;
+}
 
 impl<T> TyArg for Spec<T>
 where
@@ -292,9 +319,14 @@ where
 /// of its own, so the variable's slot is not uniform but a `ρ` the
 /// instance's tree binds, the form `TyArg::slot` gives a variable
 /// (RFC-0041).
-pub struct ChosenNth<const N: usize>(Never);
+pub struct ChosenNth<const N: usize>(Bottom);
 
 impl<const N: usize> Var<kind::Type> for ChosenNth<N> {}
+
+// SAFETY: a stand-in holds no `Erased`.
+unsafe impl<const N: usize> Canonical<kind::Type> for ChosenNth<N> {
+    type Canon = Self;
+}
 
 impl<const N: usize> TyArg for ChosenNth<N> {
     const SLOT: SlotRepr = SlotRepr::Var;
@@ -329,7 +361,7 @@ impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N>
 where
     Rt: crate::Runtime,
 {
-    crate::stored_as_itself!();
+    crate::stored_as_canonical!();
 }
 
 impl<const N: usize, Rt> crate::Borrowable<Rt> for Nth<kind::Type, N>
@@ -364,21 +396,21 @@ where
 
 impl<T, Rt> crate::Stored<Rt> for Spec<T>
 where
-    T: Send + Sync + 'static,
+    T: Var<kind::Type>,
     Rt: crate::Runtime,
 {
-    crate::stored_as_itself!();
+    crate::stored_as_canonical!();
 }
 
 impl<T, Rt> crate::Borrowable<Rt> for Spec<T>
 where
-    T: Send + Sync + 'static,
+    T: Var<kind::Type>,
     Rt: crate::Runtime,
 {
     crate::whole_box_in_place!(Self, Rt);
 }
 
-// SAFETY: as `Nth<kind::Type, N>`: `Spec<T>` holds a `Never` and is uninhabited.
+// SAFETY: as `Nth<kind::Type, N>`: `Spec<T>` holds a `Bottom` and is uninhabited.
 unsafe impl<T, Rt> crate::TransparentOver<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
@@ -405,7 +437,7 @@ impl<const N: usize, Rt> crate::Stored<Rt> for ChosenNth<N>
 where
     Rt: crate::Runtime,
 {
-    crate::stored_as_itself!();
+    crate::stored_as_canonical!();
 }
 
 impl<const N: usize, Rt> crate::Borrowable<Rt> for ChosenNth<N>
@@ -415,7 +447,7 @@ where
     crate::whole_box_in_place!(Self, Rt);
 }
 
-// SAFETY: as `Nth<kind::Type, N>`: `ChosenNth<N>` holds a `Never` and is uninhabited.
+// SAFETY: as `Nth<kind::Type, N>`: `ChosenNth<N>` holds a `Bottom` and is uninhabited.
 unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for ChosenNth<N> where Rt: crate::Runtime {}
 
 macro_rules! impl_scalar_ty_arg {
@@ -427,6 +459,11 @@ macro_rules! impl_scalar_ty_arg {
         }
 
         impl Var<kind::Type> for $T {}
+
+        // SAFETY: a scalar holds no `Erased`.
+        unsafe impl Canonical<kind::Type> for $T {
+            type Canon = Self;
+        }
     };
 }
 
@@ -444,15 +481,26 @@ impl_scalar_ty_arg!(String, PolyTy::String);
 impl_scalar_ty_arg!(bool, PolyTy::Bool);
 impl_scalar_ty_arg!((), PolyTy::Unit);
 
-/// The language's `!`: an extern fn returning `Never` panics instead of
+/// The language's `!`: an extern fn returning `Bottom` panics instead of
 /// returning, so its call is typed `!` and nothing runs after it
-/// (RFC-0038).
+/// (RFC-0038). It is also the uninhabited field of the compile-time
+/// stand-ins. It is not Rust's `!` (`Never`, which `Owned` alone names):
+/// a trait impl on that alias would conflict with every other crate's impl
+/// of the same trait, and this type carries the language's impls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Never {}
+pub enum Bottom {}
 
-impl_scalar_ty_arg!(Never, PolyTy::Never);
+impl_scalar_ty_arg!(Bottom, PolyTy::Never);
 
 impl<T, const N: usize> Var<kind::Type> for [T; N] where T: Var<kind::Type> {}
+
+// SAFETY: the element is its own canonical form's.
+unsafe impl<T, const N: usize> Canonical<kind::Type> for [T; N]
+where
+    T: Var<kind::Type>,
+{
+    type Canon = [T::Canon; N];
+}
 
 impl<T, const N: usize> TyArg for [T; N]
 where
@@ -470,6 +518,14 @@ where
 }
 
 impl<T> Var<kind::Type> for Option<T> where T: Var<kind::Type> {}
+
+// SAFETY: the payload is its own canonical form's.
+unsafe impl<T> Canonical<kind::Type> for Option<T>
+where
+    T: Var<kind::Type>,
+{
+    type Canon = Option<T::Canon>;
+}
 
 impl<T> TyArg for Option<T>
 where
@@ -491,6 +547,15 @@ where
     T: Var<kind::Type>,
     E: Var<kind::Type>,
 {
+}
+
+// SAFETY: each arm is its own canonical form's.
+unsafe impl<T, E> Canonical<kind::Type> for Result<T, E>
+where
+    T: Var<kind::Type>,
+    E: Var<kind::Type>,
+{
+    type Canon = Result<T::Canon, E::Canon>;
 }
 
 impl<T, E> TyArg for Result<T, E>
@@ -520,6 +585,14 @@ macro_rules! impl_tuple_ty_arg {
         {
         }
 
+        // SAFETY: each part is its own canonical form's.
+        unsafe impl<$($T),+> Canonical<kind::Type> for ($($T,)+)
+        where
+            $($T: Var<kind::Type>,)+
+        {
+            type Canon = ($($T::Canon,)+);
+        }
+
         impl<$($T),+> TyArg for ($($T,)+)
         where
             $($T: TyArg,)+
@@ -547,18 +620,16 @@ impl_tuple_ty_arg!(A, B, C, D);
 /// the handler is compiled once per member. The macro reads the set.
 pub trait Monomorphize<Types>: Var<kind::Type> {}
 
-/// The bound of a shared signature's type variable that each instance
-/// fills with a Rust type of its own: `Ts: Var<kind::Type> + Chosen`,
-/// where a derived type's payload projects through `Ts`, so no one box
-/// serves every `Ts` and the slot cannot be uniform (RFC-0041). Only
-/// `extern_signature!` reads it, and a signature's generics are never
-/// Rust generics, so nothing implements it.
+/// The bound of a type variable that each instance fills with a Rust type
+/// of its own: `Ts: Var<kind::Type> + Chosen`, where a derived type's
+/// payload projects through `Ts`, so no one box serves every `Ts`, the slot
+/// cannot be uniform, and the box key keeps `Ts` as it is (RFC-0076).
+/// `extern_signature!` and `#[derive(ExternType)]` read it by name. A
+/// derived type's generics are Rust generics, so every type that fills a
+/// type variable fills a `Chosen` one.
 pub trait Chosen: Var<kind::Type> {}
 
-/// The run-time fill. `Owned<R>: TyArg` is not written and is not missing:
-/// the carrier holds a value of whatever acvus type the caller passed, so
-/// there is no `poly_ty` for it to answer with.
-impl<R> Var<kind::Type> for crate::Owned<R> where R: crate::Runtime {}
+impl<T> Chosen for T where T: Var<kind::Type> {}
 
 /// One concrete type a `Monomorphize` parameter ranges over: the handler is
 /// compiled at it, so it fills the parameter there. This list is the reach
@@ -577,5 +648,12 @@ mono_member!(u8);
 mono_member!(String);
 
 /// A `Monomorphize` parameter carrying no bound the erased value fails also
-/// compiles one handler for the runtime's own value.
-impl<R, Types> Monomorphize<Types> for crate::Owned<R> where R: crate::Runtime {}
+/// compiles one handler for the runtime's own value, `Owned<R>`. The impl
+/// holds for every `Erased<R, T>`, since nothing on `Erased` reads `T`
+/// (`Canonical`).
+impl<R, T, Types> Monomorphize<Types> for crate::Erased<R, T>
+where
+    R: crate::Runtime,
+    T: 'static,
+{
+}

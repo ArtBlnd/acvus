@@ -1416,11 +1416,12 @@ async fn a_deque_made_and_borrowed_at_one_concrete_type_is_read_in_place() {
 
 /// A derived type whose payload names its argument: `Bag<T>` is stored as
 /// a `Vec<T>`, so a generic constructor's bag is a `Vec<Owned<Rt>>`, a bag
-/// of `(i64, U)` a `Vec<(i64, Owned<Rt>)>`, and a bag of `Erased<Rt, i64>` a
-/// `Vec<Erased<Rt, i64>>`.
+/// of `(i64, U)` a `Vec<(i64, Owned<Rt>)>`, and a bag of `Erased<Rt, i64>` is
+/// keyed at its canonical form, a `Vec<Owned<Rt>>`.
 #[derive(ExternType)]
 #[repr(transparent)]
 #[extern_type(name = "Bag")]
+#[extern_type(unsafe(uniform_payload))]
 struct Bag<T>(Vec<T>)
 where
     T: acvus_extern::Var<acvus_extern::kind::Type>;
@@ -1571,6 +1572,29 @@ async fn probe_erased_made_and_read_at_erased() {
         run_erased_held("erased_bag_head(erased_bag_of(7))").await,
         7
     );
+}
+
+/// A generic constructor's box is `Vec<Owned>`, the canonical form of the
+/// `Vec<Erased<Rt, i64>>` the declaration reads, so the two key one box.
+#[tokio::test]
+async fn probe_erased_by_value_from_a_generic_constructor() {
+    assert_eq!(run_erased_held("erased_bag_head(bag_of(7))").await, 7);
+}
+
+/// As the by-value read, through a borrow of the box.
+#[tokio::test]
+async fn probe_erased_by_reference_from_a_generic_constructor() {
+    assert_eq!(
+        run_erased_held("let b = bag_of(7); erased_bag_head_ref(&b)").await,
+        7
+    );
+}
+
+/// The reverse: a box made at `Vec<Erased<Rt, i64>>` is keyed at `Vec<Owned>`,
+/// which a generic declaration reads.
+#[tokio::test]
+async fn probe_erased_constructor_read_by_a_generic_declaration() {
+    assert_eq!(run_erased_held("bag_width(erased_bag_of(7))").await, 1);
 }
 
 /// A generic constructor's bag is a `Vec<Owned>`, and a bag of `(i64, U)`

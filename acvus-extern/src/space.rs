@@ -7,7 +7,9 @@ use std::fmt;
 
 use acvus_mir::ty::Ty;
 
+use crate::canonical::Canonical;
 use crate::runtime::Runtime;
+use crate::ty_arg::kind;
 
 /// A content address: the BLAKE3 hash of a node's canonical bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -129,9 +131,11 @@ impl<Rt> SpaceHooks<Rt>
 where
     Rt: Runtime,
 {
+    /// `J` is its own canonical form, so the box `decode_state` writes at
+    /// `J` is the one `Borrowable::deref` reads (`Canonical`).
     pub fn of<J>() -> Self
     where
-        J: Journaled<Rt> + crate::Borrowable<Rt>,
+        J: Journaled<Rt> + crate::Borrowable<Rt> + Canonical<kind::Type, Canon = J>,
     {
         // SAFETY (each hook): the value was erased from `J` — the hooks are
         // looked up by the value's declared type — and the space alone

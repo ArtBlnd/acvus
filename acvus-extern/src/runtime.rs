@@ -85,7 +85,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
         H: crate::handler::AsyncCall<Self>;
 
     /// The `T` of the `erase::<T>` that made this value, when the value
-    /// records it. `downcast` and `Erased::from_value` trust this answer
+    /// records it. `downcast` and `Erased::from_value_of` trust this answer
     /// with a `materialize::<T>`, so a runtime answers only from the record.
     fn type_of(&self, value: &Self::Value) -> Option<TypeId>;
     /// The runtime's name for the type `type_of` reports, for a panic
@@ -271,6 +271,17 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 /// nothing will ever run.
 #[derive(Clone, Copy)]
 pub struct TypesOnly;
+
+mod sealed {
+    /// Unnameable outside this crate, so `TypesOnly` is its one impl: what
+    /// reads an `Erased`'s `T` for the checker holds at no runtime that
+    /// makes values (`Canonical`).
+    pub trait HoldsNoValues: crate::Runtime {}
+}
+
+pub(crate) use sealed::HoldsNoValues;
+
+impl HoldsNoValues for TypesOnly {}
 
 impl crate::Release for () {
     fn release(self) {}

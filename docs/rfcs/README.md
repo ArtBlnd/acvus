@@ -74,10 +74,12 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0023: An ExternFn is declared once, as a Rust function under `#[extern_fn]`
 - RFC-0028: An element read out of a container is a loan on it; a reference is one carrier
 - RFC-0039: Every type that crosses the boundary says how, through one trait
-- RFC-0041: `#τ` is the representation of a slot, and an extension holds values through `Erased`
+- RFC-0041: `#τ` is the representation of a slot
 - RFC-0054: The host declares what `main` returns
 - RFC-0059: The macro emits only calls; the runtime owns the ABI
 - RFC-0075: The contract gains `sleep` alone; a handler joins its concurrency in its own future (Proposed)
+- RFC-0076: A box is keyed by its payload's canonical type, and an extension holds values through `Erased`
+- RFC-0077: A converted `&place` argument is taken out of its slot for the call
 
 ### [identity.md](identity.md)
 

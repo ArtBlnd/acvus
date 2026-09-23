@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use acvus_extern::Ctx;
-use acvus_extern::{Erased, FromValue, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Erased, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -154,14 +154,14 @@ fn type_of_reports_the_tag_of_a_small_value() {
 fn from_value_on_an_int_as_a_float_panics_naming_both_types() {
     let rt = runtime(&Interner::new());
     // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<AcvusRuntime, f64>::from_value(&rt, Value::int(2)) };
+    unsafe { Erased::<AcvusRuntime, f64>::from_value_of(&rt, Value::int(2)) };
 }
 
 #[test]
 fn from_value_on_an_int_as_an_int_is_the_value() {
     let rt = runtime(&Interner::new());
     // SAFETY: `Value::int` is the runtime's erasure of an `i64`.
-    let erased = unsafe { Erased::<AcvusRuntime, i64>::from_value(&rt, Value::int(2)) };
+    let erased = unsafe { Erased::<AcvusRuntime, i64>::from_value_of(&rt, Value::int(2)) };
     assert_eq!(erased.get(), 2);
 }
 
@@ -174,5 +174,5 @@ fn from_value_on_a_reference_panics_as_a_value_erased_from_no_type() {
     let rt = runtime(&Interner::new());
     let target = Value::int(2);
     // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<AcvusRuntime, i64>::from_value(&rt, Value::reference(&target)) };
+    unsafe { Erased::<AcvusRuntime, i64>::from_value_of(&rt, Value::reference(&target)) };
 }

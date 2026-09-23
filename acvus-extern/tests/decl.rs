@@ -6,7 +6,7 @@ use acvus_extern::Ctx;
 use std::any::Any;
 use std::future::Ready;
 use std::marker::PhantomData;
-use std::ops::DerefMut;
+use std::ops::Deref;
 
 use acvus_extern::{
     ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectArg, EffectTerm, Erased, ExternHandler, ExternType,
@@ -478,6 +478,7 @@ impl Runtime for Tiny {
 #[derive(ExternType)]
 #[repr(transparent)]
 #[extern_type(name = "Box")]
+#[extern_type(unsafe(uniform_payload))]
 struct Boxed<T, E, Rt>(Vec<T>, PhantomData<(E, Rt)>)
 where
     T: Var<kind::Type>,
@@ -594,7 +595,7 @@ fn sum_slice<Rt>(s: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    s.iter().map(|x| **x).sum()
+    s.iter().map(Erased::get).sum()
 }
 
 /// A lent result out of a lent slice: the element is in the container the
@@ -689,11 +690,11 @@ fn first_of<I, Rt>(
     front_at: Instance<front<I, Ref<Erased<Rt, i64>, Shared, Rt>, Rt>, I, Rt>,
 ) -> i64
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     let mut it = it;
-    front_at.call(ctx, &mut it, ()).map(|x| **x).unwrap_or(-1)
+    front_at.call(ctx, &mut it, ()).map(|x| x.get()).unwrap_or(-1)
 }
 
 #[extern_fn(instance_of = step, effect = pure)]
@@ -709,7 +710,7 @@ fn step_int(n: &mut i64) -> i64 {
 #[extern_fn(effect = pure)]
 fn drive<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut I, step_at: Instance<step<I, Rt>, I, Rt>) -> i64
 where
-    I: Var<kind::Type> + Borrowable<Rt> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Borrowable<Rt> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     step_at.call(ctx, it, ())
@@ -739,7 +740,7 @@ fn advance_twice<I, Rt>(
     inner: Instance<step<I, Rt>, I, Rt>,
 ) -> i64
 where
-    I: Var<kind::Type> + Borrowable<Rt> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Borrowable<Rt> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     inner.call(ctx, &mut *it, ());
@@ -958,6 +959,11 @@ struct Receiver<'a> {
 struct Place(V);
 
 impl Var<kind::Type> for Place {}
+
+// SAFETY: `Place` holds no `Erased`.
+unsafe impl acvus_extern::Canonical<kind::Type> for Place {
+    type Canon = Self;
+}
 
 impl std::ops::Deref for Place {
     type Target = V;
@@ -2540,10 +2546,10 @@ fn erased_inline_derefs_without_a_runtime() {
     use acvus_extern::Erased;
     let rt = Tiny;
     let mut n: Erased<Tiny, i64> = Erased::new(&rt, 41);
-    assert_eq!(*n, 41);
+    assert_eq!(*n.get_ref(), 41);
     assert_eq!(n.get(), 41);
-    *n += 1;
-    assert_eq!(n, Erased::new(&rt, 42));
+    *n.get_mut() += 1;
+    assert_eq!(n.get(), 42);
     assert_eq!(n.into_inner(&rt), 42);
     let s: Erased<Tiny, String> = Erased::new(&rt, "a".to_string());
     assert_eq!(s.as_ref(&rt), "a");

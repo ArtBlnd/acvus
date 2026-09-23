@@ -13,7 +13,7 @@ where
     Rt: Runtime,
 {
     assert_eq!(a.len(), b.len(), "dot takes two views of one length");
-    a.iter().zip(b).map(|(x, y)| **x * **y).sum()
+    a.iter().zip(b).map(|(x, y)| x.get() * y.get()).sum()
 }
 
 #[extern_fn(effect = opaque)]
@@ -27,7 +27,7 @@ where
         "add_into takes two views of one length"
     );
     for (d, s) in dst.iter_mut().zip(src) {
-        **d += **s;
+        *d.get_mut() += s.get();
     }
     i64::try_from(dst.len()).expect("a view's length is an i64")
 }
@@ -37,7 +37,7 @@ fn total<Rt>(a: &[Erased<Rt, i64>]) -> i64
 where
     Rt: Runtime,
 {
-    a.iter().map(|x| **x).sum()
+    a.iter().map(Erased::get).sum()
 }
 
 fn registries() -> Vec<Registry<AcvusRuntime>> {

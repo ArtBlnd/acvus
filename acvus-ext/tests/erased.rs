@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{iterator_registry, string_registry, vec_registry};
 use acvus_extern::{
-    DirectOp, Erased, ExternHandler, Externs, FromValue, Interner, Owned, PolyTy, QualifiedRef,
-    Registry, Release, Runtime, TyTerm, TypeArg, Words, extern_fn, extern_registry,
+    DirectOp, Erased, ExternHandler, Externs, Interner, Owned, PolyTy, QualifiedRef, Registry,
+    Release, Runtime, TyTerm, TypeArg, Words, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -497,7 +497,7 @@ fn from_value_on_a_value_of_another_type_panics_naming_the_expected_type() {
     // SAFETY: stored as itself.
     let holds_an_i64 = unsafe { rt.erase::<i64>(7) };
     // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<Counting, String>::from_value(&rt, holds_an_i64) };
+    unsafe { Erased::<Counting, String>::from_value_of(&rt, holds_an_i64) };
 }
 
 #[test]
@@ -506,7 +506,7 @@ fn from_value_on_a_value_of_the_type_is_the_value() {
     // SAFETY: stored as itself.
     let holds_a_string = unsafe { rt.erase::<String>("s".to_owned()) };
     // SAFETY: `holds_a_string` was just erased from a `String`.
-    let erased = unsafe { Erased::<Counting, String>::from_value(&rt, holds_a_string) };
+    let erased = unsafe { Erased::<Counting, String>::from_value_of(&rt, holds_a_string) };
     assert_eq!(erased.as_ref(&rt), "s");
 }
 

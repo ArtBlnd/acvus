@@ -143,7 +143,7 @@ where
     T: Var<kind::Type>,
     Rt: Runtime,
 {
-    acvus_extern::stored_as_itself!();
+    acvus_extern::stored_as_canonical!();
 }
 
 impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>
@@ -168,6 +168,14 @@ acvus_extern::cross_whole!(acvus_extern::Uniform, Deque<T>, T: Var<kind::Type>);
 acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Type>);
 
 impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
+
+// SAFETY: the element is its own canonical form's.
+unsafe impl<T> acvus_extern::Canonical<kind::Type> for Deque<T>
+where
+    T: Var<kind::Type>,
+{
+    type Canon = Deque<T::Canon>;
+}
 
 impl<T> TyArg for Deque<T>
 where
@@ -343,7 +351,7 @@ where
     fn children(&mut self, type_args: &[Ty], visit: &mut Visit<'_, Rt>) -> SpaceResult<()> {
         let ty = element_of(type_args)?;
         for item in self.items.iter_mut() {
-            visit(ty, item)?;
+            visit(ty, item.value_mut())?;
         }
         Ok(())
     }

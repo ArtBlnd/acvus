@@ -1,0 +1,36 @@
+error[E0080]: evaluation panicked: a box is read only between two types of one size and alignment
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `acvus_extern::derive::canonical::erase::<Wide, acvus_extern::TypesOnly>::{constant#0}` failed here
+  |
+ ::: $WORKSPACE/acvus-extern/src/derive/canonical.rs
+  |
+  |     same_layout!(T, T::Canon);
+  |     ------------------------- in this macro invocation
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `same_layout` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+ --> $WORKSPACE/acvus-extern/src/canonical.rs
+  |
+  | /         const {
+  | |             ::core::assert!(
+  | |                 ::core::alloc::Layout::new::<$a>().size() == ::core::alloc::Layout::new::<$b>().size()
+  | |                     && ::core::alloc::Layout::new::<$a>().align()
+... |
+  | |         }
+  | |_________^
+  |
+ ::: $WORKSPACE/acvus-extern/src/derive/canonical.rs
+  |
+  |       same_layout!(T, T::Canon);
+  |       ------------------------- in this macro invocation
+  |
+  = note: this note originates in the macro `same_layout` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn acvus_extern::derive::canonical::erase::<Wide, TypesOnly>`
+  --> tests/layout_fail/canonical_read_of_another_size.rs:16:46
+   |
+16 |     let _erase: fn(&TypesOnly, Wide) -> () = canonical::erase::<Wide, TypesOnly>;
+   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

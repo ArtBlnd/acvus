@@ -8,7 +8,7 @@
 //! the instance's type back out of it, so `same` reads what the script
 //! wrote rather than the stand-in's bytes.
 
-use std::ops::DerefMut;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use acvus_extern::{
@@ -63,7 +63,7 @@ fn tally_int(a: &i64, b: Option<i64>) -> i64 {
 #[extern_fn(effect = pure)]
 fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, b: T, eq: Instance<sig::eq<T, Rt>, T, Rt>) -> bool
 where
-    T: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     let mut a = a;
@@ -83,7 +83,7 @@ fn tally_of<T, Rt>(
     tally: Instance<sig::tally<T, Rt>, T, Rt>,
 ) -> i64
 where
-    T: Var<kind::Type> + DerefMut<Target = Rt::Value> + Into<Owned<Rt>>,
+    T: Var<kind::Type> + Deref<Target = Rt::Value> + Into<Owned<Rt>>,
     Rt: Runtime,
 {
     let mut a = a;

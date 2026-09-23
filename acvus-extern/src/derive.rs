@@ -6,6 +6,7 @@
 //! crossing is invited to take, and a hand-written crossing that took one
 //! would be writing half a derived type's layout by hand.
 
+pub mod canonical;
 pub mod object;
 pub mod transparent;
 pub mod variant;

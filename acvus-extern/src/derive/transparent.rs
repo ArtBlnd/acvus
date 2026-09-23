@@ -1,25 +1,24 @@
-//! An extension type is stored as its payload and read back through it
-//! (RFC-0039). These four functions are the whole crossing, and the pointer
-//! cast each of them makes is licensed by `Transparent`, which the derive
-//! implements only for a `#[repr(transparent)]` struct.
+//! An extension type is stored as its payload's canonical form and read
+//! back through it (RFC-0039, RFC-0076). These six functions are the whole
+//! crossing, and the pointer cast each of them makes is licensed by
+//! `Transparent`, which the derive implements only for a
+//! `#[repr(transparent)]` struct.
 
 use std::mem::ManuallyDrop;
 
+use crate::canonical::same_layout;
 use crate::runtime::Runtime;
 
 /// `Self` is stored as a `P`.
 ///
 /// # Safety
-/// `Self` is `#[repr(transparent)]` with `P` as its one non-zero-sized
-/// field, so a `*const Self` and a `*const P` name the same bytes.
-pub unsafe trait Transparent<P>: Sized {
-    /// Read by every function below, so a `Transparent` impl whose two types
-    /// are not one size fails to compile rather than reading past an end.
-    const SAME_SIZE: () = assert!(
-        std::mem::size_of::<Self>() == std::mem::size_of::<P>(),
-        "a transparent type is the size of its payload"
-    );
-}
+/// `Self` is `#[repr(transparent)]` over one non-zero-sized field, and `P`
+/// is that field's type with each uniform type parameter `X` replaced by
+/// `<X as Canonical<kind::Type>>::Canon`. The two differ as `Canonical`'s
+/// contract lets a type and its canonical form differ, and the read between
+/// them rests on its three layers; the derive's `unsafe(uniform_payload)`
+/// is the author's assertion of the third.
+pub unsafe trait Transparent<P>: Sized {}
 
 pub fn erase<T, P, Rt>(value: T, rt: &Rt) -> Rt::Value
 where
@@ -27,12 +26,13 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    const { T::SAME_SIZE };
+    same_layout!(T, P);
     let held = ManuallyDrop::new(value);
-    // SAFETY: `Transparent<P>` licenses the cast and `SAME_SIZE` the extent;
-    // `held` is never read again, so the payload moves out exactly once.
+    // SAFETY: `Transparent<P>` licenses the cast, with the layout checked
+    // above; `held` is never read again, so the payload moves out exactly
+    // once.
     let payload = unsafe { std::ptr::read((&raw const *held).cast::<P>()) };
-    // SAFETY: an extension type is stored as its payload.
+    // SAFETY: an extension type is stored as its payload's canonical form.
     unsafe { rt.erase::<P>(payload) }
 }
 
@@ -44,7 +44,7 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    const { T::SAME_SIZE };
+    same_layout!(T, P);
     // SAFETY: the caller's contract, and `erase` is `erase::<P>`.
     let payload = ManuallyDrop::new(unsafe { rt.materialize::<P>(value) });
     // SAFETY: as `erase`'s, read back the other way.
@@ -59,8 +59,9 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    const { T::SAME_SIZE };
-    // SAFETY: the caller's contract, and `Transparent<P>` licenses the cast.
+    same_layout!(T, P);
+    // SAFETY: the caller's contract, and `Transparent<P>` licenses the cast,
+    // with the layout checked above.
     unsafe { &*(rt.deref::<P>(reference) as *const P).cast::<T>() }
 }
 
@@ -73,7 +74,7 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    const { T::SAME_SIZE };
+    same_layout!(T, P);
     // SAFETY: as `deref`, with the caller's exclusive loan.
     unsafe { &mut *(rt.deref_mut::<P>(reference) as *mut P).cast::<T>() }
 }
@@ -84,8 +85,9 @@ pub fn from_payload<T, P>(payload: &P) -> &T
 where
     T: Transparent<P>,
 {
-    const { T::SAME_SIZE };
-    // SAFETY: `Transparent<P>` licenses the cast and `SAME_SIZE` the extent.
+    same_layout!(T, P);
+    // SAFETY: `Transparent<P>` licenses the cast, with the layout checked
+    // above.
     unsafe { &*(payload as *const P).cast::<T>() }
 }
 
@@ -94,7 +96,7 @@ pub fn from_payload_mut<T, P>(payload: &mut P) -> &mut T
 where
     T: Transparent<P>,
 {
-    const { T::SAME_SIZE };
+    same_layout!(T, P);
     // SAFETY: as `from_payload`'s; `&mut P` is the exclusive name.
     unsafe { &mut *(payload as *mut P).cast::<T>() }
 }

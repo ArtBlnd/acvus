@@ -3,12 +3,18 @@
 //! A `Term<kind::Effect>` names an effect: a known level, or the K-th
 //! effect variable of a declaration as `Nth<kind::Effect, K>`.
 
+use crate::canonical::Canonical;
 use crate::ty_arg::{PolyVars, Term, Var, kind};
 use acvus_mir::ty::{Effect, EffectTerm, Poly};
 
 /// The runtime carries no effect: an effect variable is settled before the
 /// handler runs, so the runtime fills it with nothing.
 impl Var<kind::Effect> for () {}
+
+// SAFETY: an effect holds no `Erased`.
+unsafe impl Canonical<kind::Effect> for () {
+    type Canon = Self;
+}
 
 /// The bound of an effect variable whose task is `Async` or `Heavy`
 /// (RFC-0011 rule 5). `#[extern_fn]` declares it as the variable's
@@ -28,6 +34,19 @@ pub struct Opaque;
 impl Var<kind::Effect> for Pure {}
 impl Var<kind::Effect> for Idempotent {}
 impl Var<kind::Effect> for Opaque {}
+
+// SAFETY: an effect holds no `Erased`.
+unsafe impl Canonical<kind::Effect> for Pure {
+    type Canon = Self;
+}
+// SAFETY: as above.
+unsafe impl Canonical<kind::Effect> for Idempotent {
+    type Canon = Self;
+}
+// SAFETY: as above.
+unsafe impl Canonical<kind::Effect> for Opaque {
+    type Canon = Self;
+}
 
 impl Term<kind::Effect> for Pure {
     fn poly(_: &PolyVars) -> EffectTerm<Poly> {

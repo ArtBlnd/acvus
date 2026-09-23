@@ -66,7 +66,7 @@ fn owned_cut(s: &str, from: u64, to: u64) -> String {
 /// split across two artifacts: change a signature there and change it
 /// here, or the `n ...` rows stop measuring the design the tests pin.
 mod next_design {
-    use std::ops::DerefMut;
+    use std::ops::Deref;
 
     use acvus_extern::{
         Closure, ClosureFn, Cross, Ctx, ExternType, Instance, PassedByValue, Ref, Registry,
@@ -127,6 +127,7 @@ mod next_design {
 
     #[derive(ExternType)]
     #[extern_type(name = "NMap")]
+    #[extern_type(unsafe(uniform_payload))]
     #[repr(transparent)]
     pub struct NMap<I, T, U, E, Rt>(NMapBody<I, T, U, E, Rt>)
     where
@@ -155,7 +156,7 @@ mod next_design {
     #[extern_fn(instance_of = sig::next, effect = E)]
     fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<I, T, U, E, Rt>) -> Option<U>
     where
-        I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+        I: Var<kind::Type> + Deref<Target = Rt::Value>,
         T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
         E: Var<kind::Effect>,
@@ -179,6 +180,7 @@ mod next_design {
 
     #[derive(ExternType)]
     #[extern_type(name = "NFilter")]
+    #[extern_type(unsafe(uniform_payload))]
     #[repr(transparent)]
     pub struct NFilter<I, T, E, Rt>(NFilterBody<I, T, E, Rt>)
     where
@@ -205,7 +207,7 @@ mod next_design {
     #[extern_fn(instance_of = sig::next, effect = E)]
     fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<I, T, E, Rt>) -> Option<T>
     where
-        I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+        I: Var<kind::Type> + Deref<Target = Rt::Value>,
         T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt> + TransparentOver<Rt>,
         E: Var<kind::Effect>,
         Rt: Runtime,
@@ -226,7 +228,7 @@ mod next_design {
         next: Instance<sig::next<I, i64, E, Rt>, I, Rt>,
     ) -> i64
     where
-        I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+        I: Var<kind::Type> + Deref<Target = Rt::Value>,
         E: Var<kind::Effect>,
         Rt: Runtime,
     {

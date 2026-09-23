@@ -6,6 +6,7 @@
 
 extern crate self as acvus_extern;
 
+mod canonical;
 pub mod core;
 mod ctx;
 pub mod derive;
@@ -29,6 +30,7 @@ mod str;
 mod ty_arg;
 mod vec;
 
+pub use canonical::Canonical;
 pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure, Suspends};
@@ -70,7 +72,7 @@ pub use slice::{BySlice, Slice, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
 pub use ty_arg::{
-    Chosen, ChosenNth, Kind, Monomorphize, Never, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var,
+    Bottom, Chosen, ChosenNth, Kind, Monomorphize, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var,
     held_effect, kind,
 };
 pub use vec::vec_ty;

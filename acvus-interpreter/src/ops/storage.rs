@@ -43,7 +43,7 @@ impl Segment for Field {
     #[inline]
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read `Object` from the type.
-        PlaceMut::At(&mut unsafe { value.as_object_mut() }[self.0.index()])
+        PlaceMut::At(unsafe { value.as_object_mut() }[self.0.index()].value_mut())
     }
 }
 
@@ -67,8 +67,8 @@ impl<const ARRAY: bool> Segment for Index<ARRAY> {
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY (both arms): the preparation read the shape off the type.
         PlaceMut::At(match ARRAY {
-            true => unsafe { &mut value.as_array_mut().0[self.0] },
-            false => unsafe { &mut value.as_tuple_mut().0[self.0] },
+            true => unsafe { value.as_array_mut().0[self.0].value_mut() },
+            false => unsafe { value.as_tuple_mut().0[self.0].value_mut() },
         })
     }
 }
@@ -107,7 +107,7 @@ impl Segment for VariantPayload {
     #[inline]
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read an enum from the type.
-        let held: &mut Value = unsafe { value.as_variant_mut() }.payload_mut();
+        let held: &mut Value = unsafe { value.as_variant_mut() }.payload_mut().value_mut();
         debug_assert!(
             held.kind() != Kind::Undef,
             "{PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE}"

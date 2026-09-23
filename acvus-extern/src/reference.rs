@@ -84,6 +84,16 @@ where
 {
 }
 
+// SAFETY: the referent is its own canonical form's.
+unsafe impl<T, M, Rt> crate::Canonical<kind::Type> for Ref<T, M, Rt>
+where
+    T: Var<kind::Type>,
+    M: Loan,
+    Rt: Runtime,
+{
+    type Canon = Ref<T::Canon, M, Rt>;
+}
+
 impl<T, M, Rt> TyArg for Ref<T, M, Rt>
 where
     T: TyArg + Send + Sync + 'static,

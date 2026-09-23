@@ -284,7 +284,7 @@ async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
         .find(|w| w.key == "d")
         .expect("d was written")
         .value;
-    space.commit(&rt, "d", &ty, &mut written).unwrap();
+    space.commit(&rt, "d", &ty, written.value_mut()).unwrap();
     assert_eq!(space.node_count(), 3, "the state and two ops");
     assert_eq!(
         ints(&rt, &space.load(&rt, "d", &ty).unwrap().unwrap()),
@@ -440,7 +440,7 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let mut loaded = space.load(&rt, "o", &ty).unwrap().unwrap();
     with_deque(&rt, &loaded, |outer| {
         let obj = outer.get_mut(0).unwrap();
-        let log = unsafe { obj.field_by_name_mut(i.intern("log")) }.unwrap();
+        let log = unsafe { obj.value_mut().field_by_name_mut(i.intern("log")) }.unwrap();
         with_deque(&rt, log, |inner| {
             inner.push_back(Owned::from_value(Value::int(2)))
         });

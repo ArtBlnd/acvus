@@ -155,6 +155,13 @@ struct Pixel {
 
 acvus_extern::cross_as_stored!(Pixel);
 
+impl acvus_extern::Var<acvus_extern::kind::Type> for Pixel {}
+
+// SAFETY: `Pixel` holds no `Erased`.
+unsafe impl acvus_extern::Canonical<acvus_extern::kind::Type> for Pixel {
+    type Canon = Self;
+}
+
 fn runtime(i: &Interner) -> AcvusRuntime {
     InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor))
         .runtime_over_an_empty_page()
@@ -166,7 +173,7 @@ fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_with_its_
     let pixel = Pixel { x: 1, y: 2 };
     let erased = Erased::<AcvusRuntime, Pixel>::new(&rt, pixel);
     assert_eq!(*erased.as_ref(&rt), pixel);
-    let value = OneValue::erase(erased, &rt);
+    let value = OneValue::<AcvusRuntime>::erase(erased, &rt);
     assert!(
         value.kind() == acvus_interpreter::Kind::Large,
         "a Copy type outside the Inline set is a Large box: {value:?}"

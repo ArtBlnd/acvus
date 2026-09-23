@@ -17,7 +17,7 @@ use crate::handler::Uniform;
 use crate::len::Arr;
 use crate::owned::Owned;
 use crate::runtime::Runtime;
-use crate::ty_arg::{Never, Var, kind};
+use crate::ty_arg::{Bottom, Var, kind};
 
 /// A position in an object's flat layout: which of its type's fields, in the
 /// order rule 8 fixes.
@@ -790,9 +790,11 @@ macro_rules! passed_as_one_value {
 /// has no storage of its own type (RFC-0039 rule 4).
 /// A type whose value the runtime reads back as a `Self` in place: its
 /// `erase` is `rt.erase::<Self::Payload>` of the value's own bytes, and
-/// `from_payload` names those bytes as a `Self`. A type stored as itself has
-/// `Payload = Self` (`stored_as_itself!`); an extension type has its
-/// `#[repr(transparent)]` payload (RFC-0039), which `Transparent` licenses.
+/// `from_payload` names those bytes as a `Self`. `Payload` is a canonical
+/// form (`Canonical`), so two types that differ only in an `Erased` at a
+/// uniform part key one box: a type stored as itself has its own canonical
+/// form (`stored_as_canonical!`), and an extension type has its
+/// `#[repr(transparent)]` payload's (RFC-0039), which `Transparent` licenses.
 ///
 /// This is what `OneValue` does not say. `Option<T>::erase` is `rt.some(..)`
 /// and a derived struct's is a heap object, so `Runtime::value_as_ref` at
@@ -813,16 +815,16 @@ where
 /// The body of a `Stored` impl for a type the runtime stores as itself.
 #[doc(hidden)]
 #[macro_export]
-macro_rules! stored_as_itself {
+macro_rules! stored_as_canonical {
     () => {
-        type Payload = Self;
+        type Payload = <Self as $crate::Canonical<$crate::kind::Type>>::Canon;
 
-        fn from_payload(payload: &Self) -> &Self {
-            payload
+        fn from_payload(payload: &Self::Payload) -> &Self {
+            $crate::derive::canonical::from_canon::<Self>(payload)
         }
 
-        fn from_payload_mut(payload: &mut Self) -> &mut Self {
-            payload
+        fn from_payload_mut(payload: &mut Self::Payload) -> &mut Self {
+            $crate::derive::canonical::from_canon_mut::<Self>(payload)
         }
     };
 }
@@ -962,7 +964,7 @@ macro_rules! cross_as_stored {
         where
             __Rt: $crate::Runtime,
         {
-            $crate::stored_as_itself!();
+            $crate::stored_as_canonical!();
         }
 
         impl<__Rt> $crate::Borrowable<__Rt> for $t
@@ -1008,13 +1010,12 @@ macro_rules! cross_whole {
 macro_rules! whole_box {
     ($t:ty, $rt:ident) => {
         fn erase(self, rt: &$rt) -> <$rt as $crate::Runtime>::Value {
-            // SAFETY: stored as itself (RFC-0039 rule 2).
-            unsafe { rt.erase::<$t>(self) }
+            $crate::derive::canonical::erase::<$t, $rt>(rt, self)
         }
 
         unsafe fn materialize(rt: &$rt, value: <$rt as $crate::Runtime>::Value) -> Self {
-            // SAFETY: the caller's contract, and `erase` is `rt.erase::<$t>`.
-            unsafe { rt.materialize::<$t>(value) }
+            // SAFETY: the caller's contract, and `erase` is `canonical::erase`.
+            unsafe { $crate::derive::canonical::materialize::<$t, $rt>(rt, value) }
         }
     };
 }
@@ -1027,7 +1028,7 @@ macro_rules! whole_box_in_place {
     ($t:ty, $rt:ident) => {
         unsafe fn deref<'a>(rt: &$rt, reference: &'a <$rt as $crate::Runtime>::Value) -> &'a Self {
             // SAFETY: the caller's contract.
-            unsafe { rt.deref::<$t>(reference) }
+            unsafe { $crate::derive::canonical::deref::<$t, $rt>(rt, reference) }
         }
 
         unsafe fn deref_mut<'a>(
@@ -1035,7 +1036,7 @@ macro_rules! whole_box_in_place {
             reference: &'a <$rt as $crate::Runtime>::Value,
         ) -> &'a mut Self {
             // SAFETY: the caller's contract.
-            unsafe { rt.deref_mut::<$t>(reference) }
+            unsafe { $crate::derive::canonical::deref_mut::<$t, $rt>(rt, reference) }
         }
     };
 }
@@ -1054,9 +1055,9 @@ cross_as_stored!(bool);
 cross_as_stored!(String);
 cross_as_stored!(());
 
-crate::cross_one_value!(Never);
+crate::cross_one_value!(Bottom);
 
-impl<Rep, Rt> OneValue<Rt, Rep> for Never
+impl<Rep, Rt> OneValue<Rt, Rep> for Bottom
 where
     Rt: Runtime,
 {
@@ -1081,26 +1082,20 @@ where
     T::STORED_AS_VALUE || TypeId::of::<T>() == TypeId::of::<Rt::Value>()
 }
 
-/// A type variable's run-time instantiation, `Owned<Rt>`, at which a
-/// borrowed `Vec` or array is read in place. A `Vec` or an array a script
-/// holds is the runtime's `Vec<Owned<Rt>>` whatever its element type, since
-/// a `Vec<i64>` crosses by converting each element, so `Borrowable` for each
-/// asks this of its element. `in_place` names that storage as a
-/// `Vec<Self>`: the one impl is `Owned<Rt>`'s, where it is the storage
-/// itself.
+/// An element a borrowed `Vec` or array is read in place at: an
+/// `Erased<Rt, T>`, whose canonical form `Owned<Rt>` is a type variable's
+/// run-time instantiation. A `Vec` or an array a script holds is the
+/// runtime's `Vec<Owned<Rt>>` whatever its element type, since a `Vec<i64>`
+/// crosses by converting each element, so `Borrowable` for each asks this of
+/// its element. `in_place` names that storage as a `Vec<Self>`, which is a
+/// read at a type other than the canonical one and rests on `Canonical`'s
+/// three layers.
 ///
 /// The compile-time stand-ins `Nth` and `Spec` have no impl, and that is a
 /// decision: the glue borrows a parameter at its run-time instantiation, where
 /// a type variable is `Owned<Rt>`, so no borrow is ever asked of a container
 /// of a stand-in, and an impl would admit a `Vec<Nth<..>>` whose `deref`
 /// finds no storage.
-///
-/// `Erased<Rt, T>` has no impl either, though it is `repr(transparent)` over
-/// `Owned<Rt>`: reading a `Vec<Owned<Rt>>` as a `Vec<Erased<Rt, T>>` relies
-/// on two instantiations of `Vec` sharing a layout, which Rust does not
-/// promise and which specialization could split. A slice of `repr(transparent)`
-/// elements is promised, so a borrowed container of them is taken as
-/// `Slice<Erased<Rt, T>, _, Rt>`.
 #[diagnostic::on_unimplemented(
     message = "a borrowed container of `{Self}` has no storage of its own type: the container's storage holds the runtime's values, not `{Self}`s",
     label = "this parameter borrows a container of `{Self}`",

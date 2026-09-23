@@ -2,7 +2,7 @@
 //! and Rust is what checks the pairing (RFC-0067 rule 4): a receiver
 //! of another variable does not compile, and the refusal is the type
 //! error, not a sentence the macro writes.
-use std::ops::DerefMut;
+use std::ops::Deref;
 
 use acvus_extern::{Ctx, Instance, Runtime, Var, extern_fn, extern_signature, kind};
 
@@ -16,8 +16,8 @@ fn drive<I, J, Rt>(
     step: Instance<advance<I, Rt>, I, Rt>,
 ) -> i64
 where
-    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
-    J: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    I: Var<kind::Type> + Deref<Target = Rt::Value>,
+    J: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     let mut it = it;
