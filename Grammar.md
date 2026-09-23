@@ -466,7 +466,7 @@ Converted from expression LHS via `expr_to_pattern`:
 
 ```
 Pattern      = Binding | ContextBind | Literal | List | Object
-             | Range | Tuple | Variant
+             | Tuple | Variant
 
 Binding      = IDENT                       ← variable capture
              | "$" IDENT                   ← extern parameter capture
@@ -480,10 +480,6 @@ List         = "[" Pattern* "]"            ← exact match
              | "[" Pattern* ".." Pattern* "]"  ← rest pattern
 
 Object       = "{" ObjectPatternField* "}" ← open matching
-
-Range        = Pattern ".." Pattern
-             | Pattern "..=" Pattern
-             | Pattern "=.." Pattern
 
 Tuple        = "(" TuplePatternElem ("," TuplePatternElem)* ")"
 TuplePatternElem = Pattern | "_"           ← wildcard

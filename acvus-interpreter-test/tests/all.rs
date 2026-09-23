@@ -70,6 +70,7 @@ mod pattern_through;
 mod place_forms;
 mod prepare_contract;
 mod recursive_summary;
+mod reference_coercion;
 mod regex;
 mod register_reuse_across_kinds;
 mod regression_0041;

@@ -15,10 +15,11 @@ Status: Accepted
    payload does, since it has no representation of its own (RFC-0039). A
    view (`&str`, `&[T]`) moves. Every other value moves: a binding used after
    it moved is a type error at the use.
-2. **String.** `String` is language-owned and immutable; there is no
-   `&mut String` and no in-place string operation. A use of a `String` value
-   that is not its last use copies it: the compiler inserts `StringClone`
-   before that use, and the last use moves the original. `clone(&s)` is the
+2. **String.** `String` is language-owned and immutable: there is no
+   in-place string operation, and a `&mut String` replaces the value whole.
+   A use of a `String` value that is not its last use copies it: the
+   compiler inserts `StringClone` before that use, and the last use moves
+   the original. `clone(&s)` is the
    same instruction written by hand. Its contract is one `String` with the
    same bytes; whether a host copies, shares or copies on write is
    unobservable. `StringClone` is the only copy the IR names; no other heap

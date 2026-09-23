@@ -175,10 +175,3 @@ fn an_operator_bounds_an_open_operand_and_the_bound_is_checked() {
         "",
     );
 }
-
-/// RFC-0018 rule 2: there is no `&mut String`. The checker admits the lend
-/// when nothing then uses it.
-#[test]
-fn a_mutable_reference_to_a_string_is_refused() {
-    refused_with("let s = \"a\".to_string(); let t = &mut s; 0", "");
-}

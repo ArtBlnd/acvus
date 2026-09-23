@@ -141,3 +141,54 @@ fn a_method_on_a_mutably_lent_lambda_parameter() {
         "2",
     );
 }
+
+/// RFC-0018 rule 1: an `Option` copies exactly when its payload does, so
+/// an `Option` of a word is a word to `*` (rule 4) and an index (RFC-0047
+/// rule 5).
+#[test]
+fn an_option_of_a_word_is_read_through_a_reference() {
+    runs_to("let o = Some(2); let r = &o; match *r { Some(x) => x, None => 0, }", "2");
+}
+
+/// RFC-0020: a `&word` operand is read through the reference, and an open
+/// operand's bound is on what it names.
+#[test]
+fn an_open_operand_bound_is_on_what_a_reference_names() {
+    runs_to(
+        "let x = 1; let y = 2; let f = |a, b| -> a + b; f(&x, &y)",
+        "3",
+    );
+}
+
+/// RFC-0029 rules 3-4: a pattern against a `&mut T` binding binds as it does
+/// against `&T`, each part a shared reborrow.
+#[test]
+fn a_pattern_against_a_mutable_reference_binding() {
+    runs_to(
+        "let t = (1, 2); let e = &mut t; match e { (a, _b) => *a, _ => 0, }",
+        "1",
+    );
+}
+
+/// References read out of one holder of a `&mut` loan are shared reads of
+/// it and do not exclude one another.
+#[test]
+fn parts_of_an_element_a_mutable_iterator_yields() {
+    runs_to(
+        "let v = vec([(1, 2)]); let it = as_iter(&v); let n = 0; \
+         while let Some(x) = next(&mut it) { n = match x { (a, _b) => *a, _ => 0, }; } n",
+        "1",
+    );
+}
+
+/// RFC-0047 rule 6: `&mut v` at a `&mut [T]` parameter is the container's own
+/// `as_slice_mut`, whose element is the container's; a `String` element is
+/// replaced whole through its `&mut` (RFC-0018 rule 2).
+#[test]
+fn a_mutable_loop_over_strings_replaces_each_whole() {
+    runs_to(
+        "let v = vec([\"a\".to_string(), \"b\".to_string()]); \
+         for x in &mut v { *x = x.clone() + \"!\"; } v[0u64].clone() + &v[1u64]",
+        "a!b!",
+    );
+}
