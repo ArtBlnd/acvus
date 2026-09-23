@@ -28,7 +28,7 @@ use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy,
-    Param, ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed,
+    ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed,
     lift_ty,
 };
 use crate::variant::VariantPayload;
@@ -1164,22 +1164,40 @@ pub struct Checked<R = Result<Freeze<TypeResolution>, Vec<MirError>>> {
 /// What a name written at the marked node could be, answered by the rules
 /// checking applies there. Types are as written (RFC-0043), so a refused
 /// body, which a body holding an unknown name is, still answers.
+///
+/// Where the solve fixed the type the marked position takes, `expected`
+/// is that type and each candidate's `fits` says whether the checker
+/// joins the candidate there: the flow a value makes at its use
+/// (`TypeChecker::flow`), tried on a copy of the solve. Where it did not,
+/// `expected` is `None` and nothing fits.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProbeProduct {
-    /// The marker is a name read as a value, or a `$` input.
+    /// The marker is a name read as a value, a `$` input, or a `@` context.
     Value {
+        expected: Option<Ty>,
         /// The innermost binding of each name in scope at the marker, in
         /// name order.
         scope: Vec<Visible>,
         /// The `$` inputs of the body other than the marker itself: the
         /// declared parameters and bound inputs, or where none is declared,
         /// the ones the body reads.
-        inputs: Vec<Param>,
+        inputs: Vec<ProbedInput>,
+        /// Every context the body can read, in name order; one fits if its
+        /// type flows into `expected`.
+        contexts: Vec<DeclarationFit>,
+        /// Every function a call can name, in name order; one fits if the
+        /// return type of a call to it flows into `expected`, the call
+        /// instantiated as the checker instantiates one with its arguments
+        /// still unwritten.
+        functions: Vec<DeclarationFit>,
     },
     /// The marker is the name a field access or a method call reads off a
     /// receiver.
     Member {
         receiver: Ty,
+        /// The type the field access or the method call takes where it is
+        /// written.
+        expected: Option<Ty>,
         /// The fields of the object the receiver is or references other
         /// than the marker, which reading it may have added, in name order;
         /// empty where it is no object.
@@ -1197,18 +1215,37 @@ pub struct Visible {
     pub name: Astr,
     pub binder: AstId,
     pub ty: Ty,
+    pub fits: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbedInput {
+    pub name: Astr,
+    pub ty: Ty,
+    pub fits: bool,
+}
+
+/// A declaration of the environment, which the reader looks up by `qref`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclarationFit {
+    pub qref: QualifiedRef,
+    pub fits: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbedField {
     pub name: Astr,
     pub ty: Ty,
+    pub fits: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbedMethod {
     pub name: Astr,
     pub admitted: Vec<AdmittedDeclaration>,
+    /// Whether a call of some admitted declaration on the receiver
+    /// returns a type that flows into `expected`.
+    pub fits: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1220,7 +1257,11 @@ pub struct AdmittedDeclaration {
 /// What checking recorded at the marked node, held as the solver's types
 /// until the body is solved.
 enum Probed<S> {
-    Value { marker: Astr, scope: Vec<InScope> },
+    Value {
+        marker: Astr,
+        site: CalleeSite,
+        scope: Vec<InScope>,
+    },
     Member(ProbedMember<S>),
 }
 
@@ -1229,6 +1270,20 @@ struct ProbedMember<S> {
     receiver: ProbedReceiver,
     receiver_as_written: Expr<S>,
     marker_site: CalleeSite,
+}
+
+impl<S> ProbedMember<S> {
+    /// The call of the function `name` a method call at the marker makes,
+    /// its arguments after the receiver still unwritten.
+    fn call_named(&self, name: Astr) -> NamedCall<'_, S> {
+        NamedCall {
+            callee: self.marker_site,
+            name,
+            args: &[],
+            span: self.marker_site.span,
+            refused_as: CallRefusal::NoMatchingFunction,
+        }
+    }
 }
 
 struct InScope {
@@ -1317,6 +1372,17 @@ struct ConversionSite {
     id: AstId,
     span: Span,
     report: ConversionReport,
+}
+
+impl ConversionSite {
+    /// A value written at `site`, reported as a call argument is.
+    fn value_at(site: CalleeSite) -> Self {
+        Self {
+            id: site.id,
+            span: site.span,
+            report: ConversionReport::Value,
+        }
+    }
 }
 
 /// The error a failed conversion is reported as, by the kind of site.
@@ -1603,6 +1669,9 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     body_effect: EffectTerm<Infer>,
     probe: Option<AstId>,
     probed: Option<Probed<S>>,
+    /// The type checking recorded at the marked node: a fresh variable
+    /// where the name it holds, which nothing binds, would be poison.
+    marked_ty: Option<InferTy>,
 }
 
 impl TypeChecker<'_, '_, '_, Clean> {
@@ -1724,6 +1793,7 @@ where
             body_effect,
             probe: None,
             probed: None,
+            marked_ty: None,
         }
     }
 
@@ -1732,9 +1802,11 @@ where
         self
     }
 
-    /// Mark the node whose name completion asks about: an identifier, or a
-    /// field access or method call whose name is the marker. Checking is
-    /// unchanged, and `Checked::probe` carries what it saw there.
+    /// Mark the node whose name completion asks about: an identifier, a
+    /// context, or a field access or method call whose name is the marker.
+    /// Checking is unchanged but for the marked node's type, a fresh
+    /// variable where it would be poison, and `Checked::probe` carries what
+    /// it saw there.
     pub fn with_probe(mut self, marker: AstId) -> Self {
         self.probe = Some(marker);
         self
@@ -1954,34 +2026,77 @@ where
     }
 
     fn probe_product(&self) -> Option<ProbeProduct> {
+        let expected = self.expected_at_marker();
+        let written = expected.as_ref().map(|ty| self.type_as_written(ty));
         Some(match self.probed.as_ref()? {
-            Probed::Value { marker, scope } => ProbeProduct::Value {
-                scope: scope
-                    .iter()
-                    .map(|in_scope| Visible {
-                        name: in_scope.name,
-                        binder: in_scope.binder,
-                        ty: self.type_as_written(&in_scope.ty),
-                    })
-                    .collect(),
-                inputs: self
-                    .param_types
-                    .iter()
-                    .filter(|param| param.name != *marker)
-                    .map(|param| Param::new(param.name, self.type_as_written(&param.ty)))
-                    .collect(),
-            },
+            Probed::Value {
+                marker,
+                site,
+                scope,
+            } => {
+                let fits = |ty: &InferTy| {
+                    expected
+                        .as_ref()
+                        .is_some_and(|expected| self.flows_on_trial(ty, expected, *site))
+                };
+                let mut contexts: Vec<&QualifiedRef> = self.env.contexts.keys().collect();
+                contexts.sort_by(|a, b| self.written_order(a, b));
+                let mut functions: Vec<&QualifiedRef> = self.env.functions.keys().collect();
+                functions.sort_by(|a, b| self.written_order(a, b));
+                ProbeProduct::Value {
+                    expected: written,
+                    scope: scope
+                        .iter()
+                        .map(|in_scope| Visible {
+                            name: in_scope.name,
+                            binder: in_scope.binder,
+                            ty: self.type_as_written(&in_scope.ty),
+                            fits: fits(&in_scope.ty),
+                        })
+                        .collect(),
+                    inputs: self
+                        .param_types
+                        .iter()
+                        .filter(|param| param.name != *marker)
+                        .map(|param| ProbedInput {
+                            name: param.name,
+                            ty: self.type_as_written(&param.ty),
+                            fits: fits(&param.ty),
+                        })
+                        .collect(),
+                    contexts: contexts
+                        .into_iter()
+                        .map(|qref| DeclarationFit {
+                            qref: *qref,
+                            fits: fits(&self.env.contexts[qref]),
+                        })
+                        .collect(),
+                    functions: functions
+                        .into_iter()
+                        .map(|qref| DeclarationFit {
+                            qref: *qref,
+                            fits: expected.as_ref().is_some_and(|expected| {
+                                let scheme = &self.env.functions[qref];
+                                self.call_returns_on_trial(*qref, scheme, expected, *site)
+                            }),
+                        })
+                        .collect(),
+                }
+            }
             Probed::Member(member) => {
                 let (ProbedReceiver::Place(owned) | ProbedReceiver::Value(owned)) =
                     &member.receiver;
-                let shown = self.type_as_written(owned);
-                let mut fields: Vec<ProbedField> = match behind_a_reference(&shown).as_ref() {
+                let resolved = self.solver.resolve_ty(owned);
+                let mut fields: Vec<ProbedField> = match referent_of(&resolved).as_ref() {
                     TyTerm::Object(object) => object
                         .iter()
                         .filter(|(name, _)| **name != member.marker)
                         .map(|(name, ty)| ProbedField {
                             name: *name,
-                            ty: ty.clone(),
+                            ty: self.type_as_written(ty),
+                            fits: expected.as_ref().is_some_and(|expected| {
+                                self.flows_on_trial(ty, expected, member.marker_site)
+                            }),
                         })
                         .collect(),
                     _ => Vec::new(),
@@ -1992,15 +2107,36 @@ where
                         .cmp(self.interner.resolve(b.name))
                 });
                 ProbeProduct::Member {
-                    receiver: shown,
+                    receiver: self.type_as_written(owned),
+                    expected: written,
                     fields,
-                    methods: self.methods_receiving(member),
+                    methods: self.methods_receiving(member, expected.as_ref()),
                 }
             }
         })
     }
 
-    fn methods_receiving(&self, member: &ProbedMember<S>) -> Vec<ProbedMethod> {
+    /// The type the solve gave the marked node; `None` where it left it
+    /// open, or poison, which joins with anything.
+    fn expected_at_marker(&self) -> Option<InferTy> {
+        let expected = self.solver.resolve_ty(self.marked_ty.as_ref()?);
+        (!matches!(expected, TyTerm::Var(_) | TyTerm::Error(_))).then_some(expected)
+    }
+
+    /// By name as written, then by namespace.
+    fn written_order(&self, a: &QualifiedRef, b: &QualifiedRef) -> std::cmp::Ordering {
+        let name = |qref: &QualifiedRef| self.interner.resolve(qref.name);
+        let namespace = |qref: &QualifiedRef| qref.namespace.map(|ns| self.interner.resolve(ns));
+        name(a)
+            .cmp(name(b))
+            .then_with(|| namespace(a).cmp(&namespace(b)))
+    }
+
+    fn methods_receiving(
+        &self,
+        member: &ProbedMember<S>,
+        expected: Option<&InferTy>,
+    ) -> Vec<ProbedMethod> {
         let mut names: Vec<Astr> = self
             .env
             .functions
@@ -2020,9 +2156,17 @@ where
                     };
                     by_arity.entry(arity).or_default().push(candidate);
                 }
-                let admitted: Vec<AdmittedDeclaration> = by_arity
+                let admitted: Vec<SignatureCandidate> = by_arity
                     .into_values()
                     .flat_map(|taking| self.admitted_receiving(taking, member, name))
+                    .collect();
+                let fits = expected.is_some_and(|expected| {
+                    admitted
+                        .iter()
+                        .any(|candidate| self.receives_on_trial(candidate, member, name, expected))
+                });
+                let admitted: Vec<AdmittedDeclaration> = admitted
+                    .into_iter()
                     .filter_map(|candidate| match candidate {
                         SignatureCandidate::Named { qref, scheme } => Some(AdmittedDeclaration {
                             qref,
@@ -2031,7 +2175,11 @@ where
                         SignatureCandidate::Local { .. } => None,
                     })
                     .collect();
-                (!admitted.is_empty()).then_some(ProbedMethod { name, admitted })
+                (!admitted.is_empty()).then_some(ProbedMethod {
+                    name,
+                    admitted,
+                    fits,
+                })
             })
             .collect()
     }
@@ -2067,29 +2215,13 @@ where
         member: &ProbedMember<S>,
         name: Astr,
     ) -> bool {
-        let call = NamedCall {
-            callee: member.marker_site,
-            name,
-            args: &[],
-            span: member.marker_site.span,
-            refused_as: CallRefusal::NoMatchingFunction,
-        };
-        let mode = self.solver.receiver_mode(candidate);
+        let call = member.call_named(name);
         self.solver.trial(|solver| {
             let opened = solver.decisions_opened();
             let mut trial =
                 TypeChecker::new(self.interner, self.env, solver).with_namespace(self.namespace);
             trial.type_map = self.type_map.clone();
-            let written = &member.receiver_as_written;
-            let first = match &member.receiver {
-                ProbedReceiver::Place(owned) => {
-                    trial.receiver_in(written, owned.clone(), mode, call.span)
-                }
-                ProbedReceiver::Value(ty) => {
-                    trial.value_receiver_in(written, ty.clone(), mode, call.span)
-                }
-            };
-            trial.admit_call(Signatures::One(candidate.clone()), Some(first), &call);
+            trial.call_on_receiver(candidate, member, &call);
             // `settle`, not `solve`: the arguments after the receiver are
             // absent here, and closing what they would fix by its least
             // element would refuse calls that those arguments complete.
@@ -2099,6 +2231,118 @@ where
                     .settle()
                     .iter()
                     .all(|failure| (failure.decision().0 as usize) < opened)
+        })
+    }
+
+    /// A call of `candidate` on the probed receiver with its other
+    /// arguments unwritten, admitted as a method call admits one: the
+    /// type it returns.
+    fn call_on_receiver(
+        &mut self,
+        candidate: &SignatureCandidate,
+        member: &ProbedMember<S>,
+        call: &NamedCall<'_, S>,
+    ) -> InferTy {
+        let mode = self.solver.receiver_mode(candidate);
+        let written = &member.receiver_as_written;
+        let first = match &member.receiver {
+            ProbedReceiver::Place(owned) => {
+                self.receiver_in(written, owned.clone(), mode, call.span)
+            }
+            ProbedReceiver::Value(ty) => {
+                self.value_receiver_in(written, ty.clone(), mode, call.span)
+            }
+        };
+        self.admit_call(Signatures::One(candidate.clone()), Some(first), call)
+    }
+
+    /// Whether a value of type `value` written at the marker joins the type
+    /// the position expects, as a value joins at its use.
+    fn flows_on_trial(&self, value: &InferTy, expected: &InferTy, site: CalleeSite) -> bool {
+        self.joins_on_trial(|trial| {
+            trial
+                .flow(value, expected, ConversionSite::value_at(site))
+                .is_ok()
+        })
+    }
+
+    /// Whether a call of `qref` written at the marker, its arguments still
+    /// unwritten, returns a type that joins the one the position expects.
+    fn call_returns_on_trial(
+        &self,
+        qref: QualifiedRef,
+        scheme: &crate::ty::Scheme,
+        expected: &InferTy,
+        site: CalleeSite,
+    ) -> bool {
+        let call = NamedCall {
+            callee: site,
+            name: qref.name,
+            args: &[],
+            span: site.span,
+            refused_as: CallRefusal::NoMatchingFunction,
+        };
+        let candidate = SignatureCandidate::Named {
+            qref,
+            scheme: scheme.clone(),
+        };
+        self.joins_on_trial(|trial| {
+            let returned = trial.admit_call(Signatures::One(candidate), None, &call);
+            trial
+                .flow(&returned, expected, ConversionSite::value_at(site))
+                .is_ok()
+        })
+    }
+
+    /// Whether a call of `candidate` on the probed receiver returns a type
+    /// that joins the one the member's position expects.
+    fn receives_on_trial(
+        &self,
+        candidate: &SignatureCandidate,
+        member: &ProbedMember<S>,
+        name: Astr,
+        expected: &InferTy,
+    ) -> bool {
+        let call = member.call_named(name);
+        self.joins_on_trial(|trial| {
+            let returned = trial.call_on_receiver(candidate, member, &call);
+            trial
+                .flow(
+                    &returned,
+                    expected,
+                    ConversionSite::value_at(member.marker_site),
+                )
+                .is_ok()
+        })
+    }
+
+    /// Whether what `admit` adds to a copy of the solve is refused
+    /// nowhere: `admit` answers its own join, no refusal is raised, no
+    /// decision it opens fails when the copy settles, and no variable it
+    /// bounds is out of its bound, as `solve_body` verifies one. `settle`,
+    /// not `solve`, for the reason `one_takes_receiver` gives.
+    fn joins_on_trial<F>(&self, admit: F) -> bool
+    where
+        F: for<'t, 'u, 'v> FnOnce(&mut TypeChecker<'t, 'u, 'v, S>) -> bool,
+    {
+        self.solver.trial(|solver| {
+            let opened = solver.decisions_opened();
+            let mut trial =
+                TypeChecker::new(self.interner, self.env, solver).with_namespace(self.namespace);
+            trial.type_map = self.type_map.clone();
+            admit(&mut trial)
+                && trial.errors.is_empty()
+                && trial
+                    .solver
+                    .settle()
+                    .iter()
+                    .all(|failure| (failure.decision().0 as usize) < opened)
+                && trial.bound_sites.iter().all(|site| {
+                    !matches!(
+                        trial.solver.close_ty(&TyTerm::Var(site.var)),
+                        Err(crate::ty::FreezeError::OutOfBound { .. })
+                    )
+                })
         })
     }
 
@@ -2146,7 +2390,7 @@ where
         }
     }
 
-    fn probe_scope(&mut self, id: AstId, marker: Astr) {
+    fn probe_scope(&mut self, id: AstId, span: Span, marker: Astr) {
         if self.probe != Some(id) {
             return;
         }
@@ -2167,7 +2411,11 @@ where
                 .resolve(a.name)
                 .cmp(self.interner.resolve(b.name))
         });
-        self.probed = Some(Probed::Value { marker, scope });
+        self.probed = Some(Probed::Value {
+            marker,
+            site: CalleeSite { id, span },
+            scope,
+        });
     }
 
     fn probe_receiver(
@@ -4935,7 +5183,23 @@ where
 
     /// Record the type at an AST id and return it.
     fn record_ret(&mut self, id: AstId, ty: InferTy) -> InferTy {
+        let ty = match self.probe == Some(id) {
+            true => self.marked(ty),
+            false => ty,
+        };
         self.record(id, ty.clone());
+        ty
+    }
+
+    /// The marked node's type. The name it holds is one nothing binds, so
+    /// where it would be poison it is a fresh variable instead: what the
+    /// position joins it with is then the type the position expects.
+    fn marked(&mut self, ty: InferTy) -> InferTy {
+        let ty = match Self::is_error(&ty) {
+            true => self.solver.fresh_ty_var(),
+            false => ty,
+        };
+        self.marked_ty = Some(ty.clone());
         ty
     }
 
@@ -7027,6 +7291,7 @@ where
                 name: qref,
                 span,
             } => {
+                self.probe_scope(*id, *span, qref.name);
                 let ty = self.resolve_context_type(*id, *qref, *span);
                 self.note_access(Effect::read(*qref), *span);
                 self.record_ret(*id, ty)
@@ -7038,7 +7303,7 @@ where
                 ref_kind,
                 span,
             } => {
-                self.probe_scope(*id, name.name);
+                self.probe_scope(*id, *span, name.name);
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
                         let ty = match self.param_types.iter().find(|p| p.name == name.name) {
@@ -8125,7 +8390,7 @@ where
             let resolved = self.solver.shallow_resolve_ty(&ft);
             return self.check_callable(&resolved, first.as_ref(), args, call_span);
         };
-        self.probe_scope(func.id(), name.name);
+        self.probe_scope(func.id(), func.span(), name.name);
         let candidates = self.signature_set(*name, func.id());
         if candidates.is_empty() {
             if let Some(ns) = name.namespace {

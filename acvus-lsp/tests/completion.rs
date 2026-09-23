@@ -3,7 +3,8 @@
 
 use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::{
-    CompletionItem, CompletionKind, DocId, Document, Hover, LspError, LspSession, Mode,
+    CallShape, CompletionItem, CompletionKind, DocId, Document, Hover, LspError, LspSession, Mode,
+    ParamHint,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -174,6 +175,8 @@ fn a_context_is_offered_after_at_by_its_prefix() {
             kind: CompletionKind::Context,
             detail: Ty::String.display(&i).to_string(),
             insert_text: "name".to_string(),
+            fits: false,
+            calls: vec![],
         }]
     );
 }
@@ -197,12 +200,16 @@ fn the_declared_inputs_are_offered_after_dollar() {
                 kind: CompletionKind::Param,
                 detail: Ty::I64.display(&i).to_string(),
                 insert_text: "n".to_string(),
+                fits: false,
+                calls: vec![],
             },
             CompletionItem {
                 label: "$who".to_string(),
                 kind: CompletionKind::Param,
                 detail: Ty::String.display(&i).to_string(),
                 insert_text: "who".to_string(),
+                fits: false,
+                calls: vec![],
             },
         ]
     );
@@ -353,6 +360,8 @@ fn a_keyword_is_offered_by_its_prefix() {
             kind: CompletionKind::Keyword,
             detail: "keyword".to_string(),
             insert_text: "match".to_string(),
+            fits: false,
+            calls: vec![],
         }]
     );
 }
@@ -409,6 +418,130 @@ fn a_statement_being_written_completes_from_what_parsed() {
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
     let items = session.completions(doc, source.len());
     assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["alpha"]);
+}
+
+fn item<'i>(items: &'i [CompletionItem], label: &str) -> &'i CompletionItem {
+    items
+        .iter()
+        .find(|item| item.label == label)
+        .unwrap_or_else(|| panic!("`{label}` is not offered: {items:?}"))
+}
+
+/// `range` takes `i64`: `n`, whose literal the solve closes to `i64`,
+/// joins there; a `&str` does not.
+#[test]
+fn a_local_that_fits_the_expected_type_is_offered_first() {
+    let i = Interner::new();
+    let source = "let n = 1; let s = \"s\"; range(, 3)";
+    let cursor = nth(source, ", 3", 0);
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, cursor);
+    assert!(item(&items, "n").fits, "{items:?}");
+    assert!(!item(&items, "s").fits, "{items:?}");
+    let at = |label: &str| items.iter().position(|item| item.label == label);
+    assert!(at("n") < at("s"), "{items:?}");
+    let fitting = items.iter().take_while(|item| item.fits).count();
+    assert!(
+        items[fitting..].iter().all(|item| !item.fits),
+        "fitting items come first: {items:?}"
+    );
+}
+
+/// Both declarations of `cmp` return `i64`; `upper` returns a `String`.
+#[test]
+fn a_function_fits_by_the_type_its_call_returns() {
+    let i = Interner::new();
+    let source = "range(, 3)";
+    let cursor = nth(source, ", 3", 0);
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, cursor);
+    assert!(item(&items, "cmp").fits, "{items:?}");
+    assert!(!item(&items, "upper").fits, "{items:?}");
+    assert!(
+        of_kind(&items, CompletionKind::Keyword)
+            .iter()
+            .all(|keyword| !keyword.fits)
+    );
+}
+
+#[test]
+fn a_member_fits_by_its_type_or_the_type_its_call_returns() {
+    let i = Interner::new();
+    let source = "let o = { a: 1, b: \"x\", }; range(o., 3)";
+    let cursor = nth(source, "., 3", 0) + ".".len();
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, cursor);
+    assert!(item(&items, "a").fits, "{items:?}");
+    assert!(!item(&items, "b").fits, "{items:?}");
+
+    let source = "let s = \"s\"; range(s., 3)";
+    let cursor = nth(source, "., 3", 0) + ".".len();
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, cursor);
+    assert!(item(&items, "cmp").fits, "{items:?}");
+    assert!(!item(&items, "upper").fits, "{items:?}");
+}
+
+/// The body's value flows into a return type nothing fixes, so the
+/// position expects no type.
+#[test]
+fn a_position_without_an_expected_type_fits_nothing() {
+    let i = Interner::new();
+    let source = "let n = 1; let s = \"s\"; ";
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, source.len());
+    assert!(items.iter().all(|item| !item.fits), "{items:?}");
+    let mut ordered = items.clone();
+    ordered.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.label.cmp(&b.label)));
+    assert_eq!(items, ordered);
+    assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["n", "s"]);
+}
+
+fn named(name: &str, ty: &str) -> ParamHint {
+    ParamHint {
+        name: Some(name.to_string()),
+        ty: ty.to_string(),
+    }
+}
+
+/// `get` has a declaration over arrays and one over slices, each taking
+/// the receiver and then `at: u64`.
+#[test]
+fn a_method_lists_the_arguments_after_its_receiver_per_declaration() {
+    let i = Interner::new();
+    let source = "let v = [1]; v.";
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, source.len());
+    let get = item(&items, "get");
+    assert_eq!(get.kind, CompletionKind::Method);
+    let at = CallShape {
+        params: vec![named("at", "u64")],
+    };
+    assert_eq!(get.calls, [at.clone(), at]);
+    assert!(
+        of_kind(&items, CompletionKind::Field)
+            .iter()
+            .all(|field| field.calls.is_empty())
+    );
+}
+
+#[test]
+fn a_function_lists_every_argument_of_each_declaration() {
+    let i = Interner::new();
+    let source = "rang";
+    let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
+    let items = session.completions(doc, source.len());
+    assert_eq!(
+        item(&items, "range").calls,
+        [CallShape {
+            params: vec![named("start", "i64"), named("end", "i64")],
+        }]
+    );
+    assert!(
+        of_kind(&items, CompletionKind::Keyword)
+            .iter()
+            .all(|keyword| keyword.calls.is_empty())
+    );
 }
 
 #[test]

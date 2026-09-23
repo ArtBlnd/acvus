@@ -24,10 +24,10 @@ use acvus_mir::error::Refusal;
 use acvus_mir::graph::ContextInfo;
 use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
-use acvus_mir::ty::PolyTy;
-use acvus_mir::typeck::{BodyView, ProbeProduct};
+use acvus_mir::ty::{PolyTy, TyTerm};
+use acvus_mir::typeck::{BodyView, DeclarationFit, ProbeProduct};
 use acvus_utils::{Astr, Freeze, Interner};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 // -- Public types ----------------------------------------------------
 
@@ -94,9 +94,32 @@ pub struct CompletionItem {
     /// What replaces the identifier the cursor is in, which never holds the
     /// `$`, `@`, `ns::` or `.` before it.
     pub insert_text: String,
+    /// Whether the checker joins the item, or for a function or a method a
+    /// call of it, with the type the solve gave the cursor's position.
+    /// `false` where the solve gave that position none.
+    pub fits: bool,
+    /// One per declaration a `Function` or `Method` item names, in the
+    /// order `detail` shows them; empty for every other kind.
+    pub calls: Vec<CallShape>,
 }
 
-/// `completions` lists items in this order, then by label.
+/// The arguments a call of one declaration writes: for a method, those
+/// after the receiver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallShape {
+    pub params: Vec<ParamHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamHint {
+    /// `None` where the declaration names the parameter `_`, the name a
+    /// parameter without one is given.
+    pub name: Option<String>,
+    pub ty: String,
+}
+
+/// `completions` lists fitting items first, then items in this order, then
+/// by label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CompletionKind {
     Local,
@@ -400,20 +423,28 @@ impl LspSession {
         };
         let interner = self.graph.interner();
         let mut items = match site.after {
-            Sigil::None => {
-                let mut items = self.function_items(None);
-                items.extend(keyword_items());
-                if let Some(ProbeProduct::Value { scope, .. }) = self.probe(document, source, &site)
-                {
+            Sigil::None => match self.probe(document, source, &site) {
+                Some(ProbeProduct::Value {
+                    scope, functions, ..
+                }) => {
+                    let mut items = self.function_items(None, &fitting(&functions));
+                    items.extend(keyword_items());
                     items.extend(scope.iter().map(|visible| CompletionItem {
                         label: interner.resolve(visible.name).to_string(),
                         kind: CompletionKind::Local,
                         detail: visible.ty.display(interner).to_string(),
                         insert_text: interner.resolve(visible.name).to_string(),
+                        fits: visible.fits,
+                        calls: vec![],
                     }));
+                    items
                 }
-                items
-            }
+                Some(ProbeProduct::Member { .. }) | None => {
+                    let mut items = self.function_items(None, &FxHashSet::default());
+                    items.extend(keyword_items());
+                    items
+                }
+            },
             Sigil::Input => match self.probe(document, source, &site) {
                 Some(ProbeProduct::Value { inputs, .. }) => inputs
                     .iter()
@@ -422,21 +453,36 @@ impl LspSession {
                         kind: CompletionKind::Param,
                         detail: input.ty.display(interner).to_string(),
                         insert_text: interner.resolve(input.name).to_string(),
+                        fits: input.fits,
+                        calls: vec![],
                     })
                     .collect(),
                 Some(ProbeProduct::Member { .. }) | None => vec![],
             },
-            Sigil::Context => self
-                .graph
-                .visible_contexts()
-                .map(|context| CompletionItem {
-                    label: format!("@{}", interner.resolve(context.qref.name)),
-                    kind: CompletionKind::Context,
-                    detail: context.ty.display(interner).to_string(),
-                    insert_text: interner.resolve(context.qref.name).to_string(),
-                })
-                .collect(),
-            Sigil::Qualifier(namespace) => self.function_items(Some(namespace)),
+            Sigil::Context => {
+                let fitting = match self.probe(document, source, &site) {
+                    Some(ProbeProduct::Value { contexts, .. }) => fitting(&contexts),
+                    Some(ProbeProduct::Member { .. }) | None => FxHashSet::default(),
+                };
+                self.graph
+                    .visible_contexts()
+                    .map(|context| CompletionItem {
+                        label: format!("@{}", interner.resolve(context.qref.name)),
+                        kind: CompletionKind::Context,
+                        detail: context.ty.display(interner).to_string(),
+                        insert_text: interner.resolve(context.qref.name).to_string(),
+                        fits: fitting.contains(&context.qref),
+                        calls: vec![],
+                    })
+                    .collect()
+            }
+            Sigil::Qualifier(namespace) => {
+                let fitting = match self.probe(document, source, &site) {
+                    Some(ProbeProduct::Value { functions, .. }) => fitting(&functions),
+                    Some(ProbeProduct::Member { .. }) | None => FxHashSet::default(),
+                };
+                self.function_items(Some(namespace), &fitting)
+            }
             Sigil::Member => match self.probe(document, source, &site) {
                 Some(ProbeProduct::Member {
                     fields, methods, ..
@@ -446,6 +492,8 @@ impl LspSession {
                         kind: CompletionKind::Field,
                         detail: field.ty.display(interner).to_string(),
                         insert_text: interner.resolve(field.name).to_string(),
+                        fits: field.fits,
+                        calls: vec![],
                     });
                     let methods = methods.iter().map(|method| {
                         let types: Vec<&PolyTy> = method
@@ -458,6 +506,11 @@ impl LspSession {
                             kind: CompletionKind::Method,
                             detail: shown_types(&types, interner),
                             insert_text: interner.resolve(method.name).to_string(),
+                            fits: method.fits,
+                            calls: types
+                                .iter()
+                                .map(|ty| call_shape(ty, Arguments::AfterReceiver, interner))
+                                .collect(),
                         }
                     });
                     fields.chain(methods).collect()
@@ -466,15 +519,25 @@ impl LspSession {
             },
         };
         items.retain(|item| item.insert_text.starts_with(site.typed));
-        items.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.label.cmp(&b.label)));
+        items.sort_by(|a, b| {
+            b.fits
+                .cmp(&a.fits)
+                .then_with(|| a.kind.cmp(&b.kind))
+                .then_with(|| a.label.cmp(&b.label))
+        });
         items
     }
 
     /// The functions a bare name reaches, one item per name, or the ones
-    /// `namespace::` qualifies.
-    fn function_items(&self, namespace: Option<&str>) -> Vec<CompletionItem> {
+    /// `namespace::` qualifies. An item fits where a function it names is
+    /// in `fitting`.
+    fn function_items(
+        &self,
+        namespace: Option<&str>,
+        fitting: &FxHashSet<QualifiedRef>,
+    ) -> Vec<CompletionItem> {
         let interner = self.graph.interner();
-        let mut by_name: BTreeMap<&str, Vec<&PolyTy>> = BTreeMap::new();
+        let mut by_name: BTreeMap<&str, Vec<&Function>> = BTreeMap::new();
         for function in self.graph.functions() {
             let qualified_as = function.qref.namespace.map(|ns| interner.resolve(ns));
             if namespace.is_some() && qualified_as != namespace {
@@ -483,15 +546,25 @@ impl LspSession {
             by_name
                 .entry(interner.resolve(function.qref.name))
                 .or_default()
-                .push(&function.ty);
+                .push(function);
         }
         by_name
             .into_iter()
-            .map(|(name, types)| CompletionItem {
-                label: name.to_string(),
-                kind: CompletionKind::Function,
-                detail: shown_types(&types, interner),
-                insert_text: name.to_string(),
+            .map(|(name, functions)| {
+                let types: Vec<&PolyTy> = functions.iter().map(|function| &function.ty).collect();
+                CompletionItem {
+                    label: name.to_string(),
+                    kind: CompletionKind::Function,
+                    detail: shown_types(&types, interner),
+                    insert_text: name.to_string(),
+                    fits: functions
+                        .iter()
+                        .any(|function| fitting.contains(&function.qref)),
+                    calls: types
+                        .iter()
+                        .map(|ty| call_shape(ty, Arguments::All, interner))
+                        .collect(),
+                }
             })
             .collect()
     }
@@ -894,13 +967,60 @@ fn unwritten_name(source: &str) -> String {
         .expect("a source holds finitely many names")
 }
 
+/// A keyword is no value, so it fits no type.
 fn keyword_items() -> impl Iterator<Item = CompletionItem> {
     KEYWORDS.iter().map(|keyword| CompletionItem {
         label: keyword.to_string(),
         kind: CompletionKind::Keyword,
         detail: "keyword".to_string(),
         insert_text: keyword.to_string(),
+        fits: false,
+        calls: vec![],
     })
+}
+
+fn fitting(declarations: &[DeclarationFit]) -> FxHashSet<QualifiedRef> {
+    declarations
+        .iter()
+        .filter(|declaration| declaration.fits)
+        .map(|declaration| declaration.qref)
+        .collect()
+}
+
+/// Which parameters of a declaration a call written at the cursor still
+/// writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Arguments {
+    All,
+    /// A method call's receiver is written before the `.`.
+    AfterReceiver,
+}
+
+fn call_shape(ty: &PolyTy, arguments: Arguments, interner: &Interner) -> CallShape {
+    let TyTerm::Fn { params, .. } = ty else {
+        panic!("a declared signature is a function type");
+    };
+    let written = match arguments {
+        Arguments::All => params.as_slice(),
+        Arguments::AfterReceiver => {
+            let (_receiver, after) = params
+                .split_first()
+                .expect("a method's declaration takes the receiver first");
+            after
+        }
+    };
+    CallShape {
+        params: written
+            .iter()
+            .map(|param| {
+                let name = interner.resolve(param.name);
+                ParamHint {
+                    name: (name != "_").then(|| name.to_string()),
+                    ty: param.ty.display(interner).to_string(),
+                }
+            })
+            .collect(),
+    }
 }
 
 /// The types of the declarations one name reaches.
