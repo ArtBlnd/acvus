@@ -37,6 +37,7 @@ fn extern_fn(i: &Interner, name: &str, param: Option<TyTerm<Poly>>, ret: TyTerm<
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },

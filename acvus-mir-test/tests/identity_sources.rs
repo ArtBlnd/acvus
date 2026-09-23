@@ -85,6 +85,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         qref: QualifiedRef::root(i.intern("mk")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -101,6 +102,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         qref: QualifiedRef::root(i.intern("same")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },

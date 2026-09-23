@@ -2640,6 +2640,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                         effect: EffectTerm::Known(Effect::PURE),
                     },
                     bounds: Vec::new(),
+                    effect_bounds: vec![],
                     coercion: None,
                     instance_of: None,
                     requires: Vec::new(),

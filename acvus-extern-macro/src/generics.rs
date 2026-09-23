@@ -74,13 +74,15 @@ fn kind_of(bound: &TypeParamBound) -> Option<syn::Result<VarKind>> {
 /// variable bounded by `Monomorphize<(..)>` also carries the member types
 /// its handler is compiled for, and whether the runtime's value can stand in
 /// for it: it can unless the parameter carries a trait bound the erased
-/// value cannot satisfy.
+/// value cannot satisfy. An effect variable bounded by `Suspends` carries
+/// that bound (RFC-0011 rule 5).
 pub struct Var {
     pub ident: Ident,
     pub kind: VarKind,
     pub index: usize,
     pub mono: Option<Vec<Type>>,
     pub mono_fallback: bool,
+    pub suspends: bool,
 }
 
 pub struct Vars(Vec<Var>);
@@ -202,6 +204,14 @@ impl Vars {
                     "Monomorphize is a type-variable bound",
                 ));
             }
+            let suspends =
+                bounds_of(generics, tp).any(|b| bound_ident(b).is_some_and(|i| i == "Suspends"));
+            if suspends && kind != VarKind::Effect {
+                return Err(syn::Error::new(
+                    tp.ident.span(),
+                    "Suspends is an effect-variable bound: it needs Var<kind::Effect>",
+                ));
+            }
             let slot = kind as usize;
             let mono_fallback = mono.is_some() && !has_extra_bounds;
             vars.push(Var {
@@ -210,6 +220,7 @@ impl Vars {
                 index: counts[slot],
                 mono,
                 mono_fallback,
+                suspends,
             });
             counts[slot] += 1;
         }
@@ -414,6 +425,31 @@ impl Vars {
                 },
             })
             .collect()
+    }
+
+    /// `EffectVarBound` of every effect variable, by position.
+    pub fn effect_bound_exprs(&self) -> Vec<TokenStream> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Effect)
+            .map(|v| match v.suspends {
+                false => quote! { ::acvus_extern::EffectVarBound::Any },
+                true => quote! { ::acvus_extern::EffectVarBound::Suspends },
+            })
+            .collect()
+    }
+
+    /// The first effect variable bounded by `Suspends`, for a declaration
+    /// that has no place to carry the bound.
+    pub fn suspending(&self) -> Option<&Ident> {
+        self.0.iter().find(|v| v.suspends).map(|v| &v.ident)
+    }
+
+    /// Whether effect variable `ident` is bounded by `Suspends`.
+    pub fn suspends(&self, ident: &Ident) -> bool {
+        self.0
+            .iter()
+            .any(|v| v.kind == VarKind::Effect && v.suspends && &v.ident == ident)
     }
 
     /// `::<<__R as Runtime>::Value, (), (), __R>` in declaration order, with the

@@ -342,6 +342,11 @@ pub enum MirErrorKind {
         required: crate::ty::Task,
         found: crate::ty::Task,
     },
+    /// A function value whose effect froze at a task below the declared
+    /// `E: Suspends` it was passed at (RFC-0011 rule 5).
+    TaskBelowBound {
+        found: crate::ty::Task,
+    },
     ArrayLengthMismatch {
         pattern_min: usize,
         exact: bool,
@@ -728,6 +733,10 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "a function whose task is {found} where {required} is required"
                 )
             }
+            MirErrorKind::TaskBelowBound { found } => write!(
+                f,
+                "a function whose task is {found} was given where one that suspends is required"
+            ),
             MirErrorKind::ArrayLengthMismatch {
                 pattern_min,
                 exact,

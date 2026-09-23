@@ -29,6 +29,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },
@@ -149,6 +150,22 @@ fn hof(i: &Interner, name: &str, param_task: Task) -> Function {
     )
 }
 
+fn relay(i: &Interner) -> Function {
+    let mut pb = PolyBuilder::new();
+    let e = pb.fresh_effect_var();
+    let callback = fn_ty(
+        i,
+        &[("x", lift_to_poly(&Ty::I64))],
+        lift_to_poly(&Ty::I64),
+        e,
+    );
+    extern_fn(
+        i,
+        "relay",
+        fn_ty(i, &[("f", callback.clone())], callback, Effect::PURE.into()),
+    )
+}
+
 fn sync_or_async(i: &Interner) -> Function {
     let mut pb = PolyBuilder::new();
     let e = pb.fresh_effect_var();
@@ -163,6 +180,7 @@ fn sync_or_async(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("sync_or_async")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances {
                 concrete: vec![
                     InstanceSig {
@@ -170,12 +188,14 @@ fn sync_or_async(i: &Interner) -> Function {
                         admits: Task::Sync,
                         task: Task::Sync,
                         requires: vec![],
+                        effect_bounds: vec![],
                     },
                     InstanceSig {
                         ty: ty.clone(),
                         admits: Task::Heavy,
                         task: Task::Async,
                         requires: vec![],
+                        effect_bounds: vec![],
                     },
                 ],
                 generic: false,
@@ -258,6 +278,30 @@ fn a_task_above_what_the_position_fixes_is_refused() {
             hof(&i, "needs_sync", Task::Sync),
             nullary(&i, "fetch", Effect::PURE.at_task(Task::Async)),
             local_fn(&i, "passes_async", "needs_sync(|_x| -> fetch())"),
+        ],
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("a function whose task is Async where Sync is required")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_task_settled_after_the_callback_is_passed_is_refused() {
+    let i = Interner::new();
+    let errors = refusals(
+        &i,
+        vec![
+            hof(&i, "needs_sync", Task::Sync),
+            relay(&i),
+            nullary(&i, "fetch", Effect::PURE.at_task(Task::Async)),
+            local_fn(
+                &i,
+                "passes_async_later",
+                "let outer = |g| -> { g(1); needs_sync(relay(g)) }; outer(|_y| -> fetch())",
+            ),
         ],
     );
     assert!(

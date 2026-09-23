@@ -32,6 +32,7 @@ fn shaped_like_the_str_view(i: &Interner, ns: &str, name: &str) -> Function {
         qref: QualifiedRef::qualified(i.intern(ns), i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },

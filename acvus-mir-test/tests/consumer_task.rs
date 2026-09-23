@@ -38,6 +38,7 @@ fn extern_at(i: &Interner, qref: QualifiedRef, param: Ty, effect: Effect) -> Fun
         qref,
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },
@@ -454,6 +455,7 @@ fn nullary(i: &Interner, name: &str, effect: Effect) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },

@@ -107,6 +107,7 @@ mod tests {
                 qref,
                 kind: FnKind::Extern {
                     bounds: vec![],
+                    effect_bounds: vec![],
                     instances: crate::ty::Instances::default(),
                     requires: vec![],
                 },

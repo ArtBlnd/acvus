@@ -9,7 +9,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_mir::ty::{PolyTy, RequirementSig, Task, Ty};
+use acvus_mir::ty::{EffectVarBound, PolyTy, RequirementSig, Task, Ty};
 use acvus_utils::{Interner, QualifiedRef};
 use futures::future::BoxFuture;
 
@@ -1476,6 +1476,11 @@ pub struct DeclaredInstance<R: Runtime> {
     /// through `FnKind::Extern::requires` instead, and its instances carry
     /// none.
     pub requires: Vec<RequirementSig>,
+    /// The bound of each effect variable of `signature`, by position, carried
+    /// as `requires` is: a signature's instance states its own (RFC-0011
+    /// rule 5), and any other declaration states them on
+    /// `FnDecl::effect_bounds`, so its instances carry none.
+    pub effect_bounds: Vec<EffectVarBound>,
 }
 
 /// The number a call carries in `Callee::Extern` is an index into
@@ -1519,6 +1524,7 @@ impl<R: Runtime> Instances<R> {
                     admits: i.admits,
                     task: i.handler.task(),
                     requires: i.requires.clone(),
+                    effect_bounds: i.effect_bounds.clone(),
                 })
                 .collect(),
             generic: self.generic.is_some(),

@@ -121,6 +121,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy, instances: Instances) -> Func
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances,
             requires: vec![],
         },

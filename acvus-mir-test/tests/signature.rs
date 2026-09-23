@@ -40,6 +40,7 @@ fn pick_fn(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("pick")),
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::one_of(vec![array, option])],
+            effect_bounds: vec![],
             instances: acvus_mir::ty::Instances {
                 concrete: instances
                     .into_iter()
@@ -59,6 +60,7 @@ fn text_fn(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("text")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: acvus_mir::ty::Instances::default(),
             requires: vec![],
         },

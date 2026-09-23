@@ -15,6 +15,7 @@ fn extern_taking(i: &Interner, name: &str, param: TyTerm<Poly>) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },

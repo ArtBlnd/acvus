@@ -19,6 +19,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
         qref: QualifiedRef::root(i.intern("bump")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -99,6 +100,7 @@ fn peek(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("peek")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },

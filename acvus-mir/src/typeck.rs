@@ -89,6 +89,13 @@ struct BoundSite {
     span: Span,
 }
 
+/// A bounded effect variable and where a violation of its bound is
+/// reported (RFC-0011 rule 5).
+struct EffectBoundSite {
+    var: crate::ty::EffectVarId,
+    span: Span,
+}
+
 /// An integer literal awaiting its width, checked against its value once
 /// the width is known (RFC-0037).
 /// How a pattern source is read: known where it was checked, or the answer
@@ -1132,6 +1139,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Bounded variables instantiated so far, each at the span that will
     /// report a violation.
     bound_sites: Vec<BoundSite>,
+    /// Bounded effect variables instantiated so far, as `bound_sites`.
+    effect_bound_sites: Vec<EffectBoundSite>,
     /// Each `if` whose two branches did not join, held until `solve_body`
     /// has solved: the branch types name variables the instance decisions
     /// bind, and a type frozen before they settle prints `!` where the
@@ -1209,6 +1218,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             reads_under_open_head: Vec::new(),
             demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
+            effect_bound_sites: Vec::new(),
             branch_mismatches: Vec::new(),
             return_ty: None,
             try_sites: FxHashMap::default(),
@@ -2044,6 +2054,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    fn place_instance_bounds(&mut self) {
+        for crate::solver::InstanceBound { decision, var } in self.solver.take_instance_bounds() {
+            let span = self.decision_span(decision);
+            self.effect_bound_sites.push(EffectBoundSite { var, span });
+        }
+    }
+
     fn place_begun_sources(&mut self) {
         for crate::solver::BegunSource { decision, source } in self.solver.take_begun_sources() {
             if let Some(begins) = self.source_begins_by_decision.get(&decision) {
@@ -2778,6 +2795,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .into_iter()
                 .map(|var| BoundSite { var, span: site.at }),
         );
+        self.effect_bound_sites.extend(
+            inst.bounded_effects
+                .into_iter()
+                .map(|var| EffectBoundSite { var, span: site.at }),
+        );
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
             self.decision_sites.insert(decision, site.at);
             self.decision_callees.insert(decision, qref);
@@ -3000,24 +3022,36 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// Verified by `solve_body` as an instantiation's bounded variables are.
-    fn settled_signature_bounds(&self) -> Vec<BoundSite> {
-        self.calls
-            .values()
-            .filter_map(|choice| {
-                let CallChoice::Decided(decision) = choice else {
-                    return None;
-                };
-                let Answer::Signature { settled, .. } = self.solver.answer(*decision)? else {
-                    unreachable!("a signature decision answers with a signature")
-                };
-                let SettledSignature::Named { bounded, .. } = settled else {
-                    return None;
-                };
-                let span = self.decision_sites[decision];
-                Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
-            })
-            .flatten()
-            .collect()
+    fn settled_signature_bounds(&self) -> (Vec<BoundSite>, Vec<EffectBoundSite>) {
+        let mut types = Vec::new();
+        let mut effects = Vec::new();
+        for choice in self.calls.values() {
+            let CallChoice::Decided(decision) = choice else {
+                continue;
+            };
+            let Some(answer) = self.solver.answer(*decision) else {
+                continue;
+            };
+            let Answer::Signature { settled, .. } = answer else {
+                unreachable!("a signature decision answers with a signature")
+            };
+            let SettledSignature::Named {
+                bounded,
+                bounded_effects,
+                ..
+            } = settled
+            else {
+                continue;
+            };
+            let span = self.decision_sites[decision];
+            types.extend(bounded.into_iter().map(|var| BoundSite { var, span }));
+            effects.extend(
+                bounded_effects
+                    .into_iter()
+                    .map(|var| EffectBoundSite { var, span }),
+            );
+        }
+        (types, effects)
     }
 
     /// An operator's `core` signature as `acvus_extern::core` declares it,
@@ -3058,6 +3092,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 effect: Effect::PURE.into(),
             },
             bounds,
+            effect_bounds: vec![],
             instances: Some(crate::ty::Instances {
                 concrete: Vec::new(),
                 generic: false,
@@ -3153,6 +3188,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         effect: Effect::PURE.into(),
                     },
                     admits: Task::Heavy,
+                    effect_bounds: Vec::new(),
                 }
             })
             .collect()
@@ -3205,6 +3241,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ty: sig.ty.clone(),
                 admits: sig.admits,
                 requires: sig.requires.clone(),
+                effect_bounds: sig.effect_bounds.clone(),
             });
         ComponentOffer {
             signature,
@@ -3239,6 +3276,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     effect: Effect::PURE.into(),
                 },
                 admits: Task::Heavy,
+                effect_bounds: Vec::new(),
             })
             .collect()
     }
@@ -3254,6 +3292,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         vec![Candidate {
             instance: InstanceKind::Intrinsic(Intrinsic::StringClone),
             requires: Vec::new(),
+            effect_bounds: Vec::new(),
             ty: TyTerm::Fn {
                 params: vec![ParamTerm::new(
                     self.interner.intern("a"),
@@ -3345,8 +3384,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.resolve_conversions();
         self.settle_slice_args();
         self.settle_index_uses();
-        let settled = self.settled_signature_bounds();
+        let (settled, settled_effects) = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
+        self.effect_bound_sites.extend(settled_effects);
+        self.place_instance_bounds();
+        let effect_sites = std::mem::take(&mut self.effect_bound_sites);
+        // As a type variable's bound below: a violation where a decision
+        // was refused is that refusal's consequence (RFC-0011 rule 5).
+        if refused.is_empty() {
+            for EffectBoundSite { var, span } in effect_sites {
+                if let Err(out) = self.solver.close_effect_var(var) {
+                    self.error(
+                        MirErrorKind::TaskBelowBound {
+                            found: out.effect.task,
+                        },
+                        span,
+                    );
+                }
+            }
+        }
         let sites = std::mem::take(&mut self.bound_sites);
         let mut never_settled: Vec<BoundSite> = Vec::new();
         for site in sites {

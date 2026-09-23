@@ -379,6 +379,11 @@ pub struct InstanceSig {
     pub admits: Task,
     pub task: Task,
     pub requires: Vec<RequirementSig>,
+    /// The bound of each effect variable of `ty`, by position, as the
+    /// `instance_of` declaration states it (RFC-0011 rule 5). A declaration
+    /// that is no signature's instance states its bounds on its scheme, so
+    /// its instances carry none.
+    pub effect_bounds: Vec<EffectVarBound>,
 }
 
 impl InstanceSig {
@@ -388,8 +393,16 @@ impl InstanceSig {
             admits: Task::Heavy,
             task: Task::Sync,
             requires: Vec::new(),
+            effect_bounds: Vec::new(),
         }
     }
+}
+
+pub fn effect_bound_at(bounds: &[EffectVarBound], var: u32) -> EffectVarBound {
+    bounds
+        .get(var as usize)
+        .copied()
+        .unwrap_or(EffectVarBound::Any)
 }
 
 /// What a declaration requires of its type variables: an instance of
@@ -403,13 +416,42 @@ pub struct RequirementSig {
     pub calls: Task,
 }
 
+/// What a declaration says about one of its effect variables: a floor on
+/// its task. The solver carries it on the variable and verifies it when the
+/// variable freezes (RFC-0011 rule 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectVarBound {
+    Any,
+    /// The variable's task is `Async` or `Heavy`.
+    Suspends,
+}
+
+impl EffectVarBound {
+    /// The bound both sides satisfy: two unified variables share a floor.
+    pub fn meet(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Any, Self::Any) => Self::Any,
+            (Self::Suspends, _) | (_, Self::Suspends) => Self::Suspends,
+        }
+    }
+
+    pub fn admits(self, task: Task) -> bool {
+        match (self, task) {
+            (Self::Any, _) | (Self::Suspends, Task::Async | Task::Heavy) => true,
+            (Self::Suspends, Task::Sync) => false,
+        }
+    }
+}
+
 /// A polymorphic type with the bounds its variables were declared with.
-/// Variable `i` of `ty` has bound `bounds[i]`; a missing entry is `Any`.
-/// `instances` is `Some` for an Extern function.
+/// Type variable `i` of `ty` has bound `bounds[i]`, effect variable `i`
+/// has `effect_bounds[i]`; a missing entry is `Any`. `instances` is `Some`
+/// for an Extern function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: PolyTy,
     pub bounds: Vec<TyVarBound>,
+    pub effect_bounds: Vec<EffectVarBound>,
     pub instances: Option<Instances>,
     pub requires: Vec<Requirement>,
 }
@@ -429,6 +471,7 @@ impl Scheme {
         Self {
             ty,
             bounds: Vec::new(),
+            effect_bounds: Vec::new(),
             instances: None,
             requires: Vec::new(),
         }
@@ -439,6 +482,10 @@ impl Scheme {
             .get(var as usize)
             .cloned()
             .unwrap_or(TyVarBound::Any)
+    }
+
+    pub fn effect_bound_of(&self, var: u32) -> EffectVarBound {
+        effect_bound_at(&self.effect_bounds, var)
     }
 
     pub fn params(&self) -> &[ParamTerm<Poly>] {

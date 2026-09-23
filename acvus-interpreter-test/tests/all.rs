@@ -107,6 +107,7 @@ mod temporary_borrow;
 mod try_op;
 mod typed_stage_list;
 mod undeclared_context;
+mod unordered;
 mod unread_store_drop;
 mod while_let_call;
 

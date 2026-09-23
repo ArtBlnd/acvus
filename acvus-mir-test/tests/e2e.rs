@@ -363,6 +363,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -386,6 +387,7 @@ fn extern_async_call() {
         qref: QualifiedRef::root(i.intern("fetch_user")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -718,24 +720,6 @@ fn to_int_conversion() {
         "% let x = @f as i64\n\
          {{ x.to_string() }}",
         &context,
-    )
-    .unwrap();
-    insta::assert_snapshot!(ir);
-}
-
-// -- Edge case: pmap builtin -------------------------------------
-
-#[test]
-fn pmap_builtin() {
-    let i = Interner::new();
-    let ir = compile_to_ir(
-        &i,
-        "% let items = @items\n\
-         % @items = vec([])\n\
-         % let x = items | into_iter | pmap(|i| -> i + 1) | collect\n\
-         % let out = len(&x)\n\
-         {{ out.to_string() }}",
-        &items_list_context(&i),
     )
     .unwrap();
     insta::assert_snapshot!(ir);

@@ -6,7 +6,7 @@ use std::fmt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
     CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
-    RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed,
+    EffectVarBound, RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed,
     matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
@@ -27,6 +27,8 @@ pub struct FnDecl {
     pub ty: PolyTy,
     /// The declared bound of each type variable of `ty`, by position.
     pub bounds: Vec<TyVarBound>,
+    /// The declared bound of each effect variable of `ty`, by position.
+    pub effect_bounds: Vec<EffectVarBound>,
     pub coercion: Option<Coercion>,
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
@@ -166,6 +168,7 @@ where
             qref: QualifiedRef::qualified(i.intern(&family), i.intern(name)),
             ty: generic,
             bounds: vec![TyVarBound::Any; ty_vars],
+            effect_bounds: vec![],
             coercion: Some(Coercion::Cast),
             instance_of: None,
             requires: Vec::new(),
@@ -176,6 +179,7 @@ where
                 handler,
                 admits: Task::Heavy,
                 requires: Vec::new(),
+                effect_bounds: Vec::new(),
             }],
             generic: None,
         },
@@ -275,6 +279,7 @@ where
                 effect: written.effect,
             },
             bounds: vec![TyVarBound::Any; written.patterns.ty_vars],
+            effect_bounds: vec![],
             coercion: Some(Coercion::Cast),
             instance_of: None,
             requires: Vec::new(),
@@ -285,6 +290,7 @@ where
                 handler,
                 admits: Task::Heavy,
                 requires: Vec::new(),
+                effect_bounds: Vec::new(),
             }],
             generic: None,
         },
@@ -752,6 +758,7 @@ impl<R: Runtime> Externs<R> {
                 qref: decl.qref,
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
+                    effect_bounds: decl.effect_bounds,
                     instances: instances.signatures(),
                     requires: decl
                         .requires
@@ -802,6 +809,7 @@ impl<R: Runtime> Externs<R> {
                 qref: c.decl.qref,
                 kind: FnKind::Extern {
                     bounds,
+                    effect_bounds: Vec::new(),
                     instances: instances.signatures(),
                     requires: Vec::new(),
                 },
@@ -891,7 +899,8 @@ fn add_instance<R: Runtime>(
     {
         return Err(CombineError::DuplicateInstance { signature: sig, ty });
     }
-    let admitted = at_declared_type(&decl.ty, instances, &requires).ok_or_else(mismatch)?;
+    let admitted = at_declared_type(&decl.ty, instances, &requires, &decl.effect_bounds)
+        .ok_or_else(mismatch)?;
     for instance in &admitted {
         ceiling_admits(i, decl.qref, &instance.signature, &instance.handler)?;
     }
@@ -916,12 +925,13 @@ fn add_instance<R: Runtime>(
 
 /// The instances one declaration contributes to the signature it names.
 /// A declaration whose handler is generic has none of its own, and the one
-/// built here is where its requirements are written; `#[extern_fn]` writes
-/// them on the instances it builds itself.
+/// built here is where its requirements and effect bounds are written;
+/// `#[extern_fn]` writes them on the instances it builds itself.
 fn at_declared_type<R>(
     declared: &PolyTy,
     instances: Instances<R>,
     requires: &[RequirementSig],
+    effect_bounds: &[EffectVarBound],
 ) -> Option<Vec<DeclaredInstance<R>>>
 where
     R: Runtime,
@@ -935,6 +945,7 @@ where
             handler,
             admits: Task::Heavy,
             requires: requires.to_vec(),
+            effect_bounds: effect_bounds.to_vec(),
         }]),
         Instances {
             concrete,

@@ -8,10 +8,10 @@ error: no instance of iter::next required by iter::map has the call type Fn(&mut
          Fn(&mut Refs<#Array<T, N>>) -> Option<&T>
          Fn(&mut Range) -> Option<i64>
          Fn(&mut Map<T, U, V, E>) -> Option<V> with E
+         Fn(&mut Unordered<T, U, V, E>) -> Option<V> with E
          Fn(&mut Filter<T, U, E>) -> Option<U> with E
          Fn(&mut Take<T, U, E>) -> Option<U> with E
-         Fn(&mut Skip<T, U, E>) -> Option<U> with E
-         and 9 others
+         and 10 others
   --> 43-a-container-piped-into-a-stage.acvus:2:5
   |
 2 | v | map(|x| -> x + 1) | collect()

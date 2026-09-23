@@ -10,7 +10,7 @@
 //!   `iter::as_iter` (over a borrowed container, yielding references), with
 //!   instances for `Vec` and `Array` here and for `Deque`, `Map` and `Set`
 //!   in their own modules; `rev_iter`, `range`, `range_step`.
-//! - Adaptors: `map`, `pmap`, `filter`, `take`, `skip`, `step_by`,
+//! - Adaptors: `map`, `unordered`, `filter`, `take`, `skip`, `step_by`,
 //!   `take_while`, `skip_while`, `chunks`, `dedup`, `chain`, `flatten`,
 //!   `flatten_arrays`, `flat_map`.
 //!
@@ -40,7 +40,7 @@ use std::ops::DerefMut;
 use acvus_extern::PassedByValue;
 use acvus_extern::{
     Arr, Closure, ClosureFn, Cross, Ctx, Erased, Monomorphize, Ref, Registry, Runtime, Shared,
-    Stored, TransparentOver, Var, core, extern_fn, extern_registry, kind,
+    Stored, Suspends, TransparentOver, Var, core, extern_fn, extern_registry, kind,
 };
 use acvus_extern::{Instance, Later};
 
@@ -195,22 +195,26 @@ where
     Map(MapBody { inner: it, next, f })
 }
 
-/// The same stage as `map`: parallelism is a property of the site that runs
-/// the pipeline, not of the stage, so `pmap` builds a `Map`.
+/// The `map` it is given, with the calls joined: the first pull draws the
+/// whole input and runs every call at once, and the results come out in
+/// input order (RFC-0075 rule 2). `E: Suspends` refuses a pipeline that
+/// cannot suspend (RFC-0011 rule 5).
 #[extern_fn(effect = pure)]
-fn pmap<I, T, U, E, Rt>(
-    it: I,
-    f: Closure<(T,), U, E, Rt>,
-    next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
-) -> Map<I, T, U, E, Rt>
+fn unordered<I, T, U, E, Rt>(it: Map<I, T, U, E, Rt>) -> Unordered<I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
-    E: Var<kind::Effect>,
+    E: Var<kind::Effect> + Suspends,
     Rt: Runtime,
 {
-    Map(MapBody { inner: it, next, f })
+    let Map(MapBody { inner, next, f }) = it;
+    Unordered(UnorderedBody {
+        inner,
+        next,
+        f,
+        draw: UnorderedDraw::Undrawn,
+    })
 }
 
 #[extern_fn(effect = pure)]
@@ -1273,7 +1277,7 @@ where
         ns: "iter",
         types: [
             Items<_, _, Rt>, Refs<_, _, Rt>, Range<_, Rt>,
-            Map<_, _, _, _, Rt>, Filter<_, _, _, Rt>,
+            Map<_, _, _, _, Rt>, Unordered<_, _, _, _, Rt>, Filter<_, _, _, Rt>,
             Take<_, _, _, Rt>, Skip<_, _, _, Rt>, StepBy<_, _, _, Rt>,
             TakeWhile<_, _, _, Rt>, SkipWhile<_, _, _, Rt>,
             Chunks<_, _, _, Rt>, Dedup<_, _, _, Rt>,
@@ -1285,7 +1289,7 @@ where
             into_iter_vec, next_items, into_iter_array,
             as_iter_vec, next_refs_vec, as_iter_array, next_refs_array,
             rev_iter, range, range_step, next_range,
-            map, next_map, pmap, filter, next_filter,
+            map, next_map, unordered, next_unordered, filter, next_filter,
             take, next_take, skip, next_skip, step_by, next_step_by,
             take_while, next_take_while, skip_while, next_skip_while,
             chunks, next_chunks, dedup, next_dedup,

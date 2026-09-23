@@ -20,11 +20,11 @@ use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
 use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
-    CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarId, ErrorToken, FieldSet,
-    Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances, IntTy, LenTerm,
-    LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy, Repr, ReprVarId,
-    RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId, TypeRegistry, View,
-    Viewed, could_match_pattern, matches_pattern,
+    CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
+    ErrorToken, FieldSet, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy, Instances,
+    IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly, PolyTy,
+    Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeBoundId,
+    TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
 };
 
 // -- Variable states --------------------------------------------------
@@ -51,24 +51,22 @@ pub enum Growth {
     Fixed,
 }
 
+/// State of an effect variable. The declared bound travels with the
+/// variable and is verified when it freezes (RFC-0011 rule 5); nothing
+/// about the interval reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectBound {
     /// `lower <= var <= upper` on the reissue chain (RFC-0013 rule 1).
     Range {
         lower: Effect,
         upper: Effect,
+        bound: EffectVarBound,
     },
-    Bound(Effect),
+    Bound {
+        effect: Effect,
+        bound: EffectVarBound,
+    },
     Forward(EffectVarId),
-}
-
-impl EffectBound {
-    fn free() -> Self {
-        EffectBound::Range {
-            lower: Effect::PURE,
-            upper: Effect::TOP,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -545,7 +543,7 @@ impl Terms {
     // -- Effect variables --------------------------------------------
 
     fn alloc_effect_var(&mut self) -> EffectVarId {
-        alloc_effect_var(&mut self.effect_vars)
+        alloc_effect_var(&mut self.effect_vars, EffectVarBound::Any)
     }
 
     fn find_effect_root(&self, id: EffectVarId) -> EffectVarId {
@@ -561,7 +559,7 @@ impl Terms {
             EffectTerm::Var(id) => {
                 let root = self.find_effect_root(*id);
                 match &self.effect_vars[root.0 as usize] {
-                    EffectBound::Bound(e) => EffectTerm::Known(e.clone()),
+                    EffectBound::Bound { effect, .. } => EffectTerm::Known(effect.clone()),
                     EffectBound::Range { .. } => EffectTerm::Var(root),
                     EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
                 }
@@ -570,42 +568,66 @@ impl Terms {
     }
 
     /// The interval of a root: its own, with the lower raised by every
-    /// variable placed below it.
+    /// variable placed below it and the upper met with every variable
+    /// placed above it, so a join at any variable of the relation is
+    /// checked against an upper anywhere above it (RFC-0046 rule 7).
     fn range_of(&self, root: EffectVarId) -> Interval {
-        let Interval {
-            lower: own_lower,
-            upper,
-        } = self.own_range(root);
-        let mut lower = own_lower;
+        let own = self.own_range(root);
+        let lower = self
+            .reachable(root, Toward::Below)
+            .into_iter()
+            .fold(own.lower, |lower, b| lower.join(&self.own_range(b).lower));
+        let upper = self
+            .reachable(root, Toward::Above)
+            .into_iter()
+            .fold(own.upper, |upper, a| upper.meet(&self.own_range(a).upper));
+        Interval { lower, upper }
+    }
+
+    /// Every root related to `root` through `effect_below` in one
+    /// direction, transitively, without `root` itself.
+    fn reachable(&self, root: EffectVarId, toward: Toward) -> Vec<EffectVarId> {
         let mut seen: Vec<EffectVarId> = vec![root];
         let mut stack: Vec<EffectVarId> = vec![root];
-        while let Some(above) = stack.pop() {
+        while let Some(at) = stack.pop() {
             for (b, a) in &self.effect_below {
-                if self.find_effect_root(*a) != above {
+                let (from, to) = match toward {
+                    Toward::Below => (a, b),
+                    Toward::Above => (b, a),
+                };
+                if self.find_effect_root(*from) != at {
                     continue;
                 }
-                let b = self.find_effect_root(*b);
-                if seen.contains(&b) {
+                let to = self.find_effect_root(*to);
+                if seen.contains(&to) {
                     continue;
                 }
-                seen.push(b);
-                stack.push(b);
-                lower = lower.join(&self.own_range(b).lower);
+                seen.push(to);
+                stack.push(to);
             }
         }
-        Interval { lower, upper }
+        seen.split_off(1)
     }
 
     fn own_range(&self, root: EffectVarId) -> Interval {
         match &self.effect_vars[root.0 as usize] {
-            EffectBound::Range { lower, upper } => Interval {
+            EffectBound::Range { lower, upper, .. } => Interval {
                 lower: lower.clone(),
                 upper: upper.clone(),
             },
-            EffectBound::Bound(e) => Interval {
-                lower: e.clone(),
-                upper: e.clone(),
+            EffectBound::Bound { effect, .. } => Interval {
+                lower: effect.clone(),
+                upper: effect.clone(),
             },
+            EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
+        }
+    }
+
+    /// The declared bound a root carries: the meet of every variable
+    /// forwarded to it.
+    fn effect_var_bound(&self, root: EffectVarId) -> EffectVarBound {
+        match &self.effect_vars[root.0 as usize] {
+            EffectBound::Range { bound, .. } | EffectBound::Bound { bound, .. } => *bound,
             EffectBound::Forward(_) => unreachable!("find_effect_root resolves forwards"),
         }
     }
@@ -634,7 +656,8 @@ impl Terms {
                 allowed: upper,
             });
         }
-        self.effect_vars[root.0 as usize] = EffectBound::Bound(effect);
+        let bound = self.effect_var_bound(root);
+        self.effect_vars[root.0 as usize] = EffectBound::Bound { effect, bound };
         Ok(())
     }
 
@@ -648,7 +671,12 @@ impl Terms {
                 allowed: upper,
             });
         }
-        self.effect_vars[root.0 as usize] = EffectBound::Range { lower, upper };
+        let bound = self.effect_var_bound(root);
+        self.effect_vars[root.0 as usize] = EffectBound::Range {
+            lower,
+            upper,
+            bound,
+        };
         Ok(())
     }
 
@@ -662,7 +690,12 @@ impl Terms {
                 allowed: upper,
             });
         }
-        self.effect_vars[root.0 as usize] = EffectBound::Range { lower, upper };
+        let bound = self.effect_var_bound(root);
+        self.effect_vars[root.0 as usize] = EffectBound::Range {
+            lower,
+            upper,
+            bound,
+        };
         Ok(())
     }
 
@@ -682,7 +715,14 @@ impl Terms {
                 allowed: upper,
             });
         }
-        self.effect_vars[to_root.0 as usize] = EffectBound::Range { lower, upper };
+        let bound = self
+            .effect_var_bound(from_root)
+            .meet(self.effect_var_bound(to_root));
+        self.effect_vars[to_root.0 as usize] = EffectBound::Range {
+            lower,
+            upper,
+            bound,
+        };
         self.effect_vars[from_root.0 as usize] = EffectBound::Forward(to_root);
         Ok(())
     }
@@ -1304,6 +1344,13 @@ impl Terms {
     }
 }
 
+/// A direction along `Terms::effect_below`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Toward {
+    Below,
+    Above,
+}
+
 /// `lower <= var <= upper` on the reissue chain (RFC-0013 rule 1).
 #[derive(Debug, Clone, PartialEq)]
 struct Interval {
@@ -1318,7 +1365,7 @@ impl Terms {
     /// names its representations, and a variable is a generic body's
     /// (hash-types.md R3).
     fn instantiate_open(&mut self, ty: &PolyTy, registry: &TypeRegistry) -> InferTy {
-        self.instantiate_open_beside(ty, &[], registry).0
+        self.instantiate_open_beside(ty, &[], &[], registry).ty
     }
 
     /// `ty` and `beside` at one set of fresh variables: a placeholder `ty`
@@ -1327,9 +1374,11 @@ impl Terms {
         &mut self,
         ty: &PolyTy,
         beside: &[&PolyTy],
+        effect_bounds: &[EffectVarBound],
         registry: &TypeRegistry,
-    ) -> (InferTy, Vec<InferTy>) {
+    ) -> OpenInstance {
         let mut maps = PolyMaps::default();
+        let mut bounded_effects: Vec<EffectVarId> = Vec::new();
         let Terms {
             ty_bounds,
             effect_vars,
@@ -1354,12 +1403,14 @@ impl Terms {
                         .or_insert_with(|| IdentityTerm::Var(alloc_identity_var(identity_vars)))
                 },
                 &mut |id: u32| {
-                    EffectTerm::Var(
-                        *maps
-                            .effect
-                            .entry(id)
-                            .or_insert_with(|| alloc_effect_var(effect_vars)),
-                    )
+                    EffectTerm::Var(*maps.effect.entry(id).or_insert_with(|| {
+                        let bound = effect_bound_at(effect_bounds, id);
+                        let fresh = alloc_effect_var(effect_vars, bound);
+                        if bound != EffectVarBound::Any {
+                            bounded_effects.push(fresh);
+                        }
+                        fresh
+                    }))
                 },
                 &mut |id: u32| {
                     LenTerm::Var(
@@ -1374,13 +1425,14 @@ impl Terms {
         };
         let instance = instantiate(ty);
         let beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
-        (
-            uniform_slots(instance, registry),
-            beside
+        OpenInstance {
+            ty: uniform_slots(instance, registry),
+            beside: beside
                 .into_iter()
                 .map(|poly| uniform_slots(poly, registry))
                 .collect(),
-        )
+            bounded_effects,
+        }
     }
 
     /// Whether the call type would join an instance's signature, on a copy
@@ -1502,9 +1554,16 @@ fn alloc_len_var(len_vars: &mut Vec<LenBound>) -> LenVarId {
     id
 }
 
-fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>) -> EffectVarId {
+/// A fresh effect variable spans the whole chain whatever its bound: a
+/// floor asserted here would lift a `Sync` effect rather than refuse it
+/// (RFC-0011 rule 5).
+fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>, bound: EffectVarBound) -> EffectVarId {
     let id = EffectVarId(effect_vars.len() as u32);
-    effect_vars.push(EffectBound::free());
+    effect_vars.push(EffectBound::Range {
+        lower: Effect::PURE,
+        upper: Effect::TOP,
+        bound,
+    });
     id
 }
 
@@ -1640,6 +1699,7 @@ pub struct Candidate {
     pub admits: Task,
     /// Written at this candidate's own variables, as `ty` is (RFC-0070 rule 3).
     pub requires: Vec<RequirementSig>,
+    pub effect_bounds: Vec<EffectVarBound>,
 }
 
 /// Which side of an instance's join holds the effect the other stays
@@ -2056,14 +2116,15 @@ pub enum Answer {
     Match(MatchMode),
 }
 
-/// `bounded` is verified by the checker when the body freezes, as an
-/// `Instantiated`'s is.
+/// `bounded` and `bounded_effects` are verified by the checker when the
+/// body freezes, as an `Instantiated`'s are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettledSignature {
     Named {
         qref: QualifiedRef,
         instance: Option<InstanceChoice>,
         bounded: Vec<TypeBoundId>,
+        bounded_effects: Vec<EffectVarId>,
         requirements: Vec<RequiredDecision>,
     },
     Local,
@@ -2281,6 +2342,22 @@ struct RequiredCall {
     pattern: InferTy,
 }
 
+/// A bounded effect variable of the instance a decision settled on. The
+/// solver only records it: the checker takes these and verifies each at
+/// the decision's call when the variable freezes, as it verifies a named
+/// call's (RFC-0011 rule 5), and a bound nobody takes is never checked.
+#[derive(Debug, Clone, Copy)]
+pub struct InstanceBound {
+    pub decision: DecisionId,
+    pub var: EffectVarId,
+}
+
+struct CandidateAt {
+    ty: InferTy,
+    required: Vec<RequiredCall>,
+    bounded_effects: Vec<EffectVarId>,
+}
+
 pub struct Solver<'src> {
     terms: Terms,
     decisions: Vec<DecisionSlot>,
@@ -2288,6 +2365,7 @@ pub struct Solver<'src> {
     children: FxHashMap<DecisionId, Vec<RequiredDecision>>,
     structural: FxHashMap<DecisionId, SettledStructural>,
     opened_children: Vec<OpenedChild>,
+    instance_bounds: Vec<InstanceBound>,
     /// Mints a new source for every identity a declaration introduces;
     /// lent by the compilation for this solver's lifetime.
     sources: &'src mut Sources,
@@ -2314,6 +2392,7 @@ impl<'src> Solver<'src> {
             children: FxHashMap::default(),
             structural: FxHashMap::default(),
             opened_children: Vec::new(),
+            instance_bounds: Vec::new(),
             sources,
             registry,
             signatures,
@@ -3073,6 +3152,7 @@ impl<'src> Solver<'src> {
                         let Instantiated {
                             ty,
                             bounded,
+                            bounded_effects,
                             instance,
                             requirements,
                         } = self.instantiate_scheme(scheme);
@@ -3082,6 +3162,7 @@ impl<'src> Solver<'src> {
                                 qref: *qref,
                                 instance,
                                 bounded,
+                                bounded_effects,
                                 requirements,
                             },
                         )
@@ -3651,7 +3732,11 @@ impl<'src> Solver<'src> {
                 }
             }
             ([only], generic) if generic.is_none() || matches_pattern(&ty, &only.ty) => {
-                let (instance, required) = self.instantiate_candidate(only);
+                let CandidateAt {
+                    ty: instance,
+                    required,
+                    bounded_effects,
+                } = self.instantiate_candidate(only);
                 match self.settle_instance(
                     id,
                     CallOfInstance {
@@ -3661,6 +3746,11 @@ impl<'src> Solver<'src> {
                     bound,
                 ) {
                     Ok(()) => {
+                        self.instance_bounds.extend(
+                            bounded_effects
+                                .into_iter()
+                                .map(|var| InstanceBound { decision: id, var }),
+                        );
                         self.begin_unbound_sources(id, &instance);
                         self.require_instances(id, required);
                         Progress::Settled(Answer::Instance(only.instance))
@@ -4033,6 +4123,22 @@ impl<'src> Solver<'src> {
         self.terms.freeze_effect(term)
     }
 
+    /// An effect variable after `solve`, verified against the bound its
+    /// root carries (RFC-0011 rule 5).
+    pub fn close_effect_var(&self, var: EffectVarId) -> Result<Effect, EffectOutOfBound> {
+        let root = self.terms.find_effect_root(var);
+        let effect = self.terms.freeze_effect(&EffectTerm::Var(root));
+        let bound = self.terms.effect_var_bound(root);
+        match bound.admits(effect.task) {
+            true => Ok(effect),
+            false => Err(EffectOutOfBound {
+                var: root,
+                effect,
+                bound,
+            }),
+        }
+    }
+
     pub fn freeze_identity(&self, term: &IdentityTerm<Infer>) -> Result<IdentityId, FreezeError> {
         match self.terms.resolve_identity(term) {
             IdentityTerm::Known(id) => Ok(id),
@@ -4105,22 +4211,37 @@ impl<'src> Solver<'src> {
         std::mem::take(&mut self.opened_children)
     }
 
-    fn instantiate_candidate(&mut self, candidate: &Candidate) -> (InferTy, Vec<RequiredCall>) {
+    pub fn take_instance_bounds(&mut self) -> Vec<InstanceBound> {
+        std::mem::take(&mut self.instance_bounds)
+    }
+
+    fn instantiate_candidate(&mut self, candidate: &Candidate) -> CandidateAt {
         let patterns: Vec<&PolyTy> = candidate.requires.iter().map(|r| &r.pattern).collect();
-        let (ty, patterns) =
-            self.terms
-                .instantiate_open_beside(&candidate.ty, &patterns, self.registry);
+        let OpenInstance {
+            ty,
+            beside,
+            bounded_effects,
+        } = self.terms.instantiate_open_beside(
+            &candidate.ty,
+            &patterns,
+            &candidate.effect_bounds,
+            self.registry,
+        );
         let required = candidate
             .requires
             .iter()
             .cloned()
-            .zip(patterns)
+            .zip(beside)
             .map(|(requirement, pattern)| RequiredCall {
                 requirement,
                 pattern,
             })
             .collect();
-        (ty, required)
+        CandidateAt {
+            ty,
+            required,
+            bounded_effects,
+        }
     }
 
     fn require_instances(&mut self, parent: DecisionId, required: Vec<RequiredCall>) {
@@ -4150,6 +4271,7 @@ impl<'src> Solver<'src> {
                         ty: sig.ty.clone(),
                         admits: sig.admits,
                         requires: sig.requires.clone(),
+                        effect_bounds: sig.effect_bounds.clone(),
                     })
                     .collect(),
                 generic: None,
@@ -4188,6 +4310,7 @@ impl<'src> Solver<'src> {
             structural,
         } = compiler;
         let mut bounded: Vec<TypeBoundId> = Vec::new();
+        let mut bounded_effects: Vec<EffectVarId> = Vec::new();
         let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
             instances.concrete.is_empty()
                 && !instances.generic
@@ -4207,6 +4330,13 @@ impl<'src> Solver<'src> {
                 let bound = scheme.bound_of(var);
                 if bound != TyVarBound::Any {
                     bounded.push(fresh);
+                }
+                bound
+            },
+            |var, fresh| {
+                let bound = scheme.effect_bound_of(var);
+                if bound != EffectVarBound::Any {
+                    bounded_effects.push(fresh);
                 }
                 bound
             },
@@ -4231,6 +4361,7 @@ impl<'src> Solver<'src> {
                             ty: sig.ty.clone(),
                             admits: sig.admits,
                             requires: sig.requires.clone(),
+                            effect_bounds: sig.effect_bounds.clone(),
                         })
                         .collect(),
                     generic: None,
@@ -4267,6 +4398,7 @@ impl<'src> Solver<'src> {
                         ty: sig.ty,
                         admits: sig.admits,
                         requires: sig.requires,
+                        effect_bounds: sig.effect_bounds,
                     })
                     .chain(compiler_instances)
                     .collect(),
@@ -4283,6 +4415,7 @@ impl<'src> Solver<'src> {
         Instantiated {
             ty,
             bounded,
+            bounded_effects,
             instance,
             requirements,
         }
@@ -4295,6 +4428,7 @@ impl<'src> Solver<'src> {
         ty: &PolyTy,
         beside: &[&PolyTy],
         mut bound_for: impl FnMut(u32, TypeBoundId) -> TyVarBound,
+        mut effect_bound_for: impl FnMut(u32, EffectVarId) -> EffectVarBound,
         reprs: Reprs,
     ) -> (InferTy, Vec<InferTy>) {
         let mut maps = PolyMaps::default();
@@ -4329,12 +4463,16 @@ impl<'src> Solver<'src> {
                     })
                 },
                 &mut |id: u32| {
-                    EffectTerm::Var(
-                        *maps
-                            .effect
-                            .entry(id)
-                            .or_insert_with(|| alloc_effect_var(effect_vars)),
-                    )
+                    EffectTerm::Var(*maps.effect.entry(id).or_insert_with(|| {
+                        let fresh = alloc_effect_var(effect_vars, EffectVarBound::Any);
+                        let bound = effect_bound_for(id, fresh);
+                        effect_vars[fresh.0 as usize] = EffectBound::Range {
+                            lower: Effect::PURE,
+                            upper: Effect::TOP,
+                            bound,
+                        };
+                        fresh
+                    }))
                 },
                 &mut |id: u32| {
                     LenTerm::Var(
@@ -4394,7 +4532,7 @@ impl<'src> Solver<'src> {
                 *maps
                     .effect
                     .entry(id)
-                    .or_insert_with(|| alloc_effect_var(effect_vars)),
+                    .or_insert_with(|| alloc_effect_var(effect_vars, EffectVarBound::Any)),
             )
         };
         let mut on_len = |id: u32| {
@@ -4486,7 +4624,7 @@ impl<'src> Solver<'src> {
                     *maps
                         .effect
                         .entry(root)
-                        .or_insert_with(|| alloc_effect_var(effect_vars)),
+                        .or_insert_with(|| alloc_effect_var(effect_vars, EffectVarBound::Any)),
                 )
             },
             &mut |root: LenVarId| {
@@ -4516,6 +4654,12 @@ impl<'src> Solver<'src> {
 }
 
 /// The placeholders one instantiation of a `PolyTy` has renamed so far.
+struct OpenInstance {
+    ty: InferTy,
+    beside: Vec<InferTy>,
+    bounded_effects: Vec<EffectVarId>,
+}
+
 #[derive(Default)]
 struct PolyMaps {
     ty: FxHashMap<u32, TypeBoundId>,
@@ -4807,11 +4951,22 @@ pub enum FreezeError {
     },
 }
 
+/// An effect variable froze at an effect whose task its declared bound
+/// does not admit (RFC-0011 rule 5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectOutOfBound {
+    pub var: EffectVarId,
+    pub effect: Effect,
+    pub bound: EffectVarBound,
+}
+
 /// A scheme instantiated into the solver; the caller verifies the bounded
 /// variables where it chose to.
 pub struct Instantiated {
     pub ty: InferTy,
     pub bounded: Vec<TypeBoundId>,
+    /// The effect variables a declared bound floors (RFC-0011 rule 5).
+    pub bounded_effects: Vec<EffectVarId>,
     /// `Some` for an Extern function.
     pub instance: Option<InstanceChoice>,
     /// One instance decision per requirement the scheme states, in the
@@ -4867,6 +5022,7 @@ mod requirement_tests {
                     admits: Task::Heavy,
                     task: Task::Sync,
                     requires: Vec::new(),
+                    effect_bounds: Vec::new(),
                 })
                 .collect(),
             generic: false,
@@ -4885,6 +5041,7 @@ mod requirement_tests {
                 pattern: own,
                 calls: Task::Sync,
             }],
+            effect_bounds: Vec::new(),
         }
     }
 

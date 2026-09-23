@@ -10,6 +10,14 @@ use acvus_mir::ty::{Effect, EffectTerm, Poly};
 /// handler runs, so the runtime fills it with nothing.
 impl Var<kind::Effect> for () {}
 
+/// The bound of an effect variable whose task is `Async` or `Heavy`
+/// (RFC-0011 rule 5). `#[extern_fn]` declares it as the variable's
+/// `EffectVarBound::Suspends`; the checker verifies it when the variable
+/// freezes, and the Rust type filling the variable carries nothing to check.
+pub trait Suspends: Var<kind::Effect> {}
+
+impl Suspends for () {}
+
 pub struct Pure;
 pub struct Idempotent;
 pub struct Opaque;

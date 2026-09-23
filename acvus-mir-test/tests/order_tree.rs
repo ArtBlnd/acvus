@@ -11,6 +11,7 @@ fn commutative_io(i: &Interner, name: &str) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -52,6 +53,7 @@ fn a_chain_of_calls_is_one_line() {
         qref: QualifiedRef::root(i.intern("io")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -84,6 +86,7 @@ fn anyorder_in_a_script_merges_its_calls() {
         qref: QualifiedRef::root(i.intern("io")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },

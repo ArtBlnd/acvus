@@ -32,6 +32,7 @@ fn takes_slice(i: &Interner, name: &str, mutability: Mutability) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },
@@ -59,6 +60,7 @@ fn two_slices(i: &Interner, name: &str) -> Function {
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
         },

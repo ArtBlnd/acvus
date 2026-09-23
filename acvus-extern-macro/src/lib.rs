@@ -573,15 +573,27 @@ fn generate_extern_fn(
                         "`heavy` cannot be declared on an effect variable: the task is the variable's",
                     ));
                 }
-                if is_async && attr.sync.is_none() {
-                    return Err(syn::Error::new(
-                        e.span(),
-                        "an `async fn` generic in its effect takes its task from the variable, \
-                         so it needs the plain `fn` that runs it at `Task::Sync`: declare \
-                         `sync = <fn>`. Without one the glue awaits for every effect the \
-                         variable takes, and the declared task is a claim nothing keeps \
-                         (RFC-0046).",
-                    ));
+                // A `Suspends` variable's task is never `Sync`, so no site
+                // takes a twin (RFC-0046 rule 5, RFC-0011 rule 5).
+                match (vars.suspends(e), &attr.sync) {
+                    (false, None) if is_async => {
+                        return Err(syn::Error::new(
+                            e.span(),
+                            "an `async fn` generic in its effect takes its task from the variable, \
+                             so it needs the plain `fn` that runs it at `Task::Sync`: declare \
+                             `sync = <fn>`, or bound the variable by `Suspends`. Without one the \
+                             glue awaits for every effect the variable takes, and the declared \
+                             task is a claim nothing keeps (RFC-0046).",
+                        ));
+                    }
+                    (true, Some(sync)) => {
+                        return Err(syn::Error::new(
+                            sync.span(),
+                            "a `Suspends` effect variable's task is never `Sync`, so the \
+                             `sync =` twin could never run: drop it (RFC-0046 rule 5)",
+                        ));
+                    }
+                    (false, _) | (true, None) => {}
                 }
                 quote! { __vars.effects[#k].clone() }
             }
@@ -1067,6 +1079,13 @@ fn generate_extern_fn(
         Some(_) => quote! { __instance_requires.clone() },
         None => quote! { ::std::vec::Vec::new() },
     };
+    let instance_effect_bounds = match attr.instance_of {
+        Some(_) => {
+            let bounds = vars.effect_bound_exprs();
+            quote! { vec![#(#bounds),*] }
+        }
+        None => quote! { ::std::vec::Vec::new() },
+    };
     // The instances one member of the declaration contributes, in the
     // order `Instances::into_handlers` indexes them.
     let at_member = |member: Option<&Type>| -> Vec<proc_macro2::TokenStream> {
@@ -1078,6 +1097,7 @@ fn generate_extern_fn(
                 handler: #declared_handler,
                 admits: ::acvus_extern::Task::Heavy,
                 requires: #instance_requires,
+                effect_bounds: #instance_effect_bounds,
             }
         };
         let Some(sync_fn) = &attr.sync else {
@@ -1092,6 +1112,7 @@ fn generate_extern_fn(
                     handler: #sync_handler,
                     admits: ::acvus_extern::Task::Sync,
                     requires: #instance_requires,
+                    effect_bounds: #instance_effect_bounds,
                 }
             },
             declared,
@@ -1137,6 +1158,7 @@ fn generate_extern_fn(
         }
     };
     let bounds = vars.bound_exprs();
+    let effect_bounds = vars.effect_bound_exprs();
     let requires: Vec<proc_macro2::TokenStream> = required
         .iter()
         .map(|r| {
@@ -1206,6 +1228,7 @@ fn generate_extern_fn(
                     qref: #qref,
                     ty: #declared_ty,
                     bounds: vec![#(#bounds),*],
+                    effect_bounds: vec![#(#effect_bounds),*],
                     coercion: #coercion,
                     instance_of: #instance_of,
                     requires: __requires,
@@ -1420,6 +1443,13 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     let attr = parse_extern_type_attr(&input.attrs)?;
     let name = attr.name.clone().unwrap_or_else(|| ident.to_string());
     let vars = Vars::from_generics(&input.generics)?;
+    if let Some(suspending) = vars.suspending() {
+        return Err(syn::Error::new(
+            suspending.span(),
+            "a type does not bound its effect variables: Suspends is written on an \
+             #[extern_fn] declaration",
+        ));
+    }
     if vars.has_len_vars() {
         return Err(syn::Error::new(
             ident.span(),
@@ -2943,6 +2973,13 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
     let mut sig = input.sig;
     let ident = sig.ident.clone();
     let vars = Vars::from_generics(&sig.generics)?;
+    if let Some(suspending) = vars.suspending() {
+        return Err(syn::Error::new(
+            suspending.span(),
+            "a signature does not bound its effect variables: Suspends is written on an \
+             #[extern_fn] declaration",
+        ));
+    }
     let Signature {
         params: rust_params,
         ..

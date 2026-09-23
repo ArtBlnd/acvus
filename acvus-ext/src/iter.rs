@@ -24,13 +24,14 @@
 //! instance for it. An element never leaves the type it was declared at:
 //! what an instance returns is a `T`, not a runtime value read back.
 
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 use acvus_extern::{Arr, InPlaceElement, PassedByValue};
 use acvus_extern::{
     Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared,
-    Stored, TransparentOver, Var, core, extern_fn, kind,
+    Stored, Suspends, TransparentOver, Var, core, extern_fn, kind,
 };
 
 /// The shared signatures of the iterator surface.
@@ -308,6 +309,92 @@ where
 {
     let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
     Some(it.0.f.call(ctx, (x,)).await)
+}
+
+pub enum UnorderedDraw<U> {
+    Undrawn,
+    Drawn(VecDeque<U>),
+}
+
+pub struct UnorderedBody<I, T, U, E, Rt>
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub(crate) inner: I,
+    pub(crate) next: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) f: Closure<(T,), U, E, Rt>,
+    pub(crate) draw: UnorderedDraw<U>,
+}
+
+/// A `map` whose calls are joined (RFC-0075 rule 2). The script author
+/// states that the order of the map's calls, and of the draws below it, is
+/// irrelevant; the closure is not asked to commute. The first pull draws the
+/// whole input in order, calls the closure on every element with the calls
+/// joined, and keeps the results; each pull hands out the next one in input
+/// order.
+#[derive(ExternType)]
+#[extern_type(name = "Unordered")]
+#[repr(transparent)]
+pub struct Unordered<I, T, U, E, Rt>(pub(crate) UnorderedBody<I, T, U, E, Rt>)
+where
+    I: Var<kind::Type>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime;
+
+#[extern_fn(instance_of = sig::next, effect = E)]
+pub(crate) async fn next_unordered<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Unordered<I, T, U, E, Rt>,
+) -> Option<U>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect> + Suspends,
+    Rt: Runtime,
+{
+    match &mut it.0.draw {
+        UnorderedDraw::Drawn(results) => results.pop_front(),
+        UnorderedDraw::Undrawn => {
+            let mut results = draw_unordered(ctx, &mut it.0).await;
+            let first = results.pop_front();
+            it.0.draw = UnorderedDraw::Drawn(results);
+            first
+        }
+    }
+}
+
+/// Draws the whole input in order, then calls the closure on every element
+/// with the calls joined, one rooted frame per call (RFC-0075 rule 2).
+async fn draw_unordered<I, T, U, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    body: &mut UnorderedBody<I, T, U, E, Rt>,
+) -> VecDeque<U>
+where
+    I: Var<kind::Type> + DerefMut<Target = Rt::Value>,
+    T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    U: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
+    E: Var<kind::Effect> + Suspends,
+    Rt: Runtime,
+{
+    let mut xs = Vec::new();
+    while let Some(x) = body.next.call_await(ctx, &mut body.inner, ()).await {
+        xs.push(x);
+    }
+    let rt = ctx.rt;
+    let f = &body.f;
+    let mut rooted: Vec<Rt::Rooted<'_>> = xs.iter().map(|_| rt.rooted()).collect();
+    let calls = rooted
+        .iter_mut()
+        .zip(xs)
+        .map(|(frame, x)| f.call(Rt::ctx_of(frame), (x,)));
+    futures::future::join_all(calls).await.into()
 }
 
 pub struct FilterBody<I, T, E, Rt>

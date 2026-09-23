@@ -18,6 +18,7 @@ fn add_fn(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("add")),
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::one_of(vec![TyTerm::I64, TyTerm::Float])],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },
@@ -76,6 +77,7 @@ fn advance_fn(i: &Interner) -> Function {
         admits: Task::Sync,
         task: Task::Sync,
         requires: vec![],
+        effect_bounds: vec![],
     };
     let mut inner = PolyBuilder::new();
     Function {
@@ -85,6 +87,7 @@ fn advance_fn(i: &Interner) -> Function {
                 user(i, "Counter", vec![]),
                 user(i, "Doubled", vec![inner.fresh_ty_var()]),
             ])],
+            effect_bounds: vec![],
             instances: Instances {
                 concrete: vec![
                     at(user(i, "Counter", vec![])),
@@ -118,6 +121,7 @@ fn drain_fn(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("drain")),
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::Any],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![RequirementSig {
                 signature: advance_ref(i),
@@ -138,6 +142,7 @@ fn wrap_fn(i: &Interner) -> Function {
         qref: QualifiedRef::root(i.intern("wrap")),
         kind: FnKind::Extern {
             bounds: vec![TyVarBound::Any],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },

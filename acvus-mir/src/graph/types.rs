@@ -26,9 +26,11 @@ pub enum FnKind {
     /// Has a parsed AST. MIR typechecks and compiles.
     Local(ParsedAst),
     /// Black box. Runtime provides the value. `bounds[i]` is the declared
-    /// bound of variable `i` of the function's type.
+    /// bound of type variable `i` of the function's type, `effect_bounds[i]`
+    /// of effect variable `i`.
     Extern {
         bounds: Vec<crate::ty::TyVarBound>,
+        effect_bounds: Vec<crate::ty::EffectVarBound>,
         instances: crate::ty::Instances,
         requires: Vec<crate::ty::RequirementSig>,
     },

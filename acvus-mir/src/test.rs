@@ -68,6 +68,7 @@ fn to_string(interner: &Interner) -> Function {
         qref: QualifiedRef::root(interner.intern("to_string")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: crate::ty::Instances::default(),
             requires: vec![],
         },

@@ -70,6 +70,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy, instances: Instances) -> Func
         qref: QualifiedRef::root(i.intern(name)),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances,
             requires: vec![],
         },
@@ -302,6 +303,7 @@ fn s3_dependent_decisions_settle_in_one_call() {
     let instantiated = solver.instantiate_scheme(&Scheme {
         ty: vec_array.ty,
         bounds: vec![],
+        effect_bounds: vec![],
         instances: Some(instances),
         requires: vec![],
     });

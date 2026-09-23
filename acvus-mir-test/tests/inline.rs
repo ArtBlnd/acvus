@@ -446,6 +446,7 @@ fn inline_io_extern_inside() {
         qref: QualifiedRef::root(i.intern("fetch")),
         kind: FnKind::Extern {
             bounds: vec![],
+            effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
         },

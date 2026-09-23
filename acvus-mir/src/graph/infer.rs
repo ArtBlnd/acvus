@@ -501,12 +501,14 @@ pub fn declared_bounds<'a>(
         .filter_map(|f| match &f.kind {
             FnKind::Extern {
                 bounds,
+                effect_bounds,
                 instances,
                 requires,
             } => Some((
                 f.qref,
                 Declared {
                     bounds: bounds.clone(),
+                    effect_bounds: effect_bounds.clone(),
                     instances: instances.clone(),
                     requires: requires.clone(),
                 },
@@ -518,6 +520,7 @@ pub fn declared_bounds<'a>(
 
 pub struct Declared {
     pub bounds: Vec<TyVarBound>,
+    pub effect_bounds: Vec<crate::ty::EffectVarBound>,
     pub instances: crate::ty::Instances,
     pub requires: Vec<crate::ty::RequirementSig>,
 }
@@ -576,6 +579,7 @@ fn declared_scheme(
     Scheme {
         ty,
         bounds: own.bounds.clone(),
+        effect_bounds: own.effect_bounds.clone(),
         instances: Some(own.instances.clone()),
         requires,
     }
@@ -1399,6 +1403,7 @@ mod tests {
             qref: QualifiedRef::root(interner.intern(name)),
             kind: FnKind::Extern {
                 bounds: vec![],
+                effect_bounds: vec![],
                 instances: crate::ty::Instances::default(),
                 requires: vec![],
             },
