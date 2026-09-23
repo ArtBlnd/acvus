@@ -993,7 +993,10 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-fn next_chain_now<A, B, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut Chain<A, B, T, E, Rt>) -> Option<T>
+fn next_chain_now<A, B, T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    it: &mut Chain<A, B, T, E, Rt>,
+) -> Option<T>
 where
     A: Var<kind::Type> + Deref<Target = Rt::Value>,
     B: Var<kind::Type> + Deref<Target = Rt::Value>,

@@ -154,12 +154,7 @@ where
     /// The result at the requirer's own types: a value as itself, a
     /// borrow at the lifetime of the receiver it was lent from.
     #[inline(always)]
-    pub fn call<'r>(
-        self,
-        ctx: &mut Ctx<'_, Rt>,
-        recv: S::Recv<'r>,
-        rest: S::Rest<'r>,
-    ) -> S::Ret<'r>
+    pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
     where
         S::Recv<'r>: Receiver<Rt>,
     {
@@ -180,12 +175,7 @@ where
     /// runs, and at such a site the checker settled on an instance that
     /// returns.
     #[inline(always)]
-    pub fn call<'r>(
-        self,
-        ctx: &mut Ctx<'_, Rt>,
-        recv: S::Recv<'r>,
-        rest: S::Rest<'r>,
-    ) -> S::Ret<'r>
+    pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
     where
         S::Recv<'r>: Receiver<Rt>,
     {

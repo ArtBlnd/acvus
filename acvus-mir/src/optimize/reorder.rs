@@ -545,7 +545,8 @@ mod tests {
             10,
         );
         for handle in [v(1), v(4)] {
-            cfg.val_types.insert(handle, Ty::Handle(Box::new(Ty::String)));
+            cfg.val_types
+                .insert(handle, Ty::Handle(Box::new(Ty::String)));
         }
         for text in [v(2), v(5), v(6), b] {
             cfg.val_types.insert(text, Ty::String);

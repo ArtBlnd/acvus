@@ -8795,9 +8795,9 @@ fn structural_shape_of(
                     .into_iter()
                     .map(|(component, part_ty)| (component, part(component, part_ty)));
                 match ty {
-                    Ty::Array(..) => Shape::Array(Box::new(
-                        shapes.next().expect("an array has its element").1,
-                    )),
+                    Ty::Array(..) => {
+                        Shape::Array(Box::new(shapes.next().expect("an array has its element").1))
+                    }
                     Ty::Option(_) => Shape::Option(Box::new(
                         shapes.next().expect("an option has its payload").1,
                     )),

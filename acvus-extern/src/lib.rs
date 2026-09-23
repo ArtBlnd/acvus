@@ -42,9 +42,9 @@ pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
     Borrowable, BorrowableSpecialized, ByRef, ByValue, CallForms, CallSite, DeclaredInstance,
     DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries,
-    Instances, IntoRun, LentBack, Lends, NoInstance, NoInstances, Parameters, REGISTER_FORM, Required,
-    RequiredInstance, Ret, RetLent, Sited, SitesNoParameterReads, Specialized, Uniform, Unsited,
-    Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
+    Instances, IntoRun, Lends, LentBack, NoInstance, NoInstances, Parameters, REGISTER_FORM,
+    Required, RequiredInstance, Ret, RetLent, Sited, SitesNoParameterReads, Specialized, Uniform,
+    Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
     glue_at_instance,
 };
 pub use instance::{
@@ -88,9 +88,9 @@ pub use acvus_extern_macro::{
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::laws::{BinaryLaws, FoldLaw, Identity, Laws};
 pub use acvus_mir::ty::{
-    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm, LenTerm, Mutability, ObjectTy, ParamTerm, Poly,
-    HeldTy, Home, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
-    UserDefinedDecl, lift_to_poly, try_freeze_poly,
+    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, HeldTy, Home, IdentityTerm, LenTerm,
+    Mutability, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty,
+    TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };
 pub use acvus_ast::Literal;
 pub use acvus_utils::{Astr, Interner, QualifiedRef};

@@ -16,7 +16,9 @@ pub enum Shape {
     /// A word: its bits, which is `f64` bit equality (RFC-0020).
     Word,
     Text,
-    Leaf { instance_entry: Value },
+    Leaf {
+        instance_entry: Value,
+    },
     Never,
     Array(Box<Shape>),
     Tuple(Box<[Shape]>),
@@ -42,7 +44,9 @@ impl Shape {
     fn arm<'a>(arms: &'a [VariantArm], tag: &Value) -> Option<&'a Shape> {
         // SAFETY: a variant's tag register holds a tag word.
         let tag = unsafe { tag.as_tag() };
-        arms.iter().find(|arm| arm.tag == tag).map(|arm| &arm.payload)
+        arms.iter()
+            .find(|arm| arm.tag == tag)
+            .map(|arm| &arm.payload)
     }
 
     /// # Safety
@@ -64,7 +68,10 @@ impl Shape {
                     let left = a.as_array();
                     let right = b.as_array();
                     left.len() == right.len()
-                        && left.iter().zip(right).all(|(x, y)| element.equal(ctx, x, y))
+                        && left
+                            .iter()
+                            .zip(right)
+                            .all(|(x, y)| element.equal(ctx, x, y))
                 }
                 Shape::Tuple(parts) => parts
                     .iter()

@@ -1196,7 +1196,10 @@ where
     let eq_types: &[PolyTy] = of(<crate::core::eq as SharedSignature>::qref(interner))
         .map_or(&[], |eq| eq.instance_types.as_slice());
     for at in &hash.entries {
-        if !eq_types.iter().any(|eq| unify_patterns(eq, &at.ty).is_some()) {
+        if !eq_types
+            .iter()
+            .any(|eq| unify_patterns(eq, &at.ty).is_some())
+        {
             return Err(CombineError::HashWithoutEq {
                 instance: written(interner, at.qref),
                 ty: at.ty.clone(),

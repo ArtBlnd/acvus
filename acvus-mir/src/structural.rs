@@ -61,10 +61,7 @@ where
 /// Obligation across artifacts: fields sort by their spelled names, which is
 /// `acvus_interpreter::layout::sorted_fields`'s order and so the position of
 /// each field in a heap object (RFC-0050 rule 8). Variants sort the same way.
-pub fn ordered_components<'t>(
-    ty: &'t Ty,
-    interner: &Interner,
-) -> Option<Vec<(Component, &'t Ty)>> {
+pub fn ordered_components<'t>(ty: &'t Ty, interner: &Interner) -> Option<Vec<(Component, &'t Ty)>> {
     let mut out = components(ty)?;
     out.sort_by(|(a, _), (b, _)| match (a, b) {
         (Component::Field(a), Component::Field(b))

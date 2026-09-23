@@ -163,7 +163,9 @@ where
         // for `'a`, which the caller took from the receiver it lent, and it
         // holds a `T`, which `TransparentOver` lays out as the runtime's
         // value. The word itself is a copy and does not bound `'a`.
-        unsafe { &*(<Rt::Value as Borrowable<Rt>>::deref(rt, &word) as *const Rt::Value).cast::<T>() }
+        unsafe {
+            &*(<Rt::Value as Borrowable<Rt>>::deref(rt, &word) as *const Rt::Value).cast::<T>()
+        }
     }
 }
 
@@ -183,7 +185,8 @@ where
         // SAFETY: as the shared form's, and the receiver was lent
         // exclusively for `'a`.
         unsafe {
-            &mut *(<Rt::Value as Borrowable<Rt>>::deref_mut(rt, &word) as *mut Rt::Value).cast::<T>()
+            &mut *(<Rt::Value as Borrowable<Rt>>::deref_mut(rt, &word) as *mut Rt::Value)
+                .cast::<T>()
         }
     }
 }

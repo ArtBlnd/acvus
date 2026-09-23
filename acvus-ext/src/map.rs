@@ -30,14 +30,13 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use acvus_extern::{Instance, Later, held_effect};
 use acvus_extern::{
     Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
     FxHashMap, Interner, One, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
-    Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg,
-    TyVarBound, UniformPayload, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry,
-    kind,
+    Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg, TyVarBound,
+    UniformPayload, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry, kind,
 };
+use acvus_extern::{Instance, Later, held_effect};
 
 use crate::iter::{Items, Refs, sig};
 
@@ -260,7 +259,10 @@ where
     fn seek_now(&self, ctx: &mut Ctx<'_, Rt>, probe: &K) -> Probe {
         let hash = self.keying.digest_now(ctx, probe);
         for at in self.candidates(hash) {
-            if self.keying.same_now(ctx, probe, &self.entries[at].binding.key) {
+            if self
+                .keying
+                .same_now(ctx, probe, &self.entries[at].binding.key)
+            {
                 return Probe { hash, at: Some(at) };
             }
         }
@@ -270,7 +272,11 @@ where
     async fn seek(&self, ctx: &mut Ctx<'_, Rt>, probe: &K) -> Probe {
         let hash = self.keying.digest(ctx, probe).await;
         for at in self.candidates(hash) {
-            if self.keying.same(ctx, probe, &self.entries[at].binding.key).await {
+            if self
+                .keying
+                .same(ctx, probe, &self.entries[at].binding.key)
+                .await
+            {
                 return Probe { hash, at: Some(at) };
             }
         }

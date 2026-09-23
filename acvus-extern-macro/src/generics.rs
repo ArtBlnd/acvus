@@ -342,7 +342,11 @@ impl Vars {
     pub fn mentions_ty_var(&self, ty: &Type) -> bool {
         let found = std::cell::Cell::new(false);
         subst::substitute(ty, &|ident| {
-            if self.0.iter().any(|v| v.kind == VarKind::Ty && v.ident == *ident) {
+            if self
+                .0
+                .iter()
+                .any(|v| v.kind == VarKind::Ty && v.ident == *ident)
+            {
                 found.set(true);
             }
             None

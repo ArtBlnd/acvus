@@ -100,13 +100,17 @@ pub struct CarriedParam {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dependence {
     Recurrence(ValueId),
-    OrderedEffect { block: BlockIdx },
+    OrderedEffect {
+        block: BlockIdx,
+    },
     StorageWrite(ValueId),
     ContextWrite(QualifiedRef),
     /// A `break` or `return` leaves from `block`, not from the header: the
     /// iterations after the one that leaves never run, so which runs first
     /// decides what the loop does.
-    EarlyExit { block: BlockIdx },
+    EarlyExit {
+        block: BlockIdx,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
