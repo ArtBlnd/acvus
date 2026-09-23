@@ -1,3 +1,3 @@
-// expect false
+// refuse
 // lambda params inequality, two &Array
 let v = [1, 2]; let w = [1, 3]; let f = |r, q| -> r == q; f(&v, &w)

@@ -1,2 +1,2 @@
-// expect refuse (for over a reference-typed local)
+// refuse
 let v = vec([1, 2, 3]); let r = &v; let t = 0; for x in r { t = t + *x; } t

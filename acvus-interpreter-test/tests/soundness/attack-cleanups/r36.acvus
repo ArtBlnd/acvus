@@ -1,2 +1,2 @@
-// expect 3
+// refuse
 let v = vec([1, 2, 3]); let r = &mut v; r.push(r.len()); v[3u64]

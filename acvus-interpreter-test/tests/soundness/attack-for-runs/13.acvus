@@ -1,2 +1,2 @@
-// expect 44
+// refuse
 let a = [{ c: A::X(1), }, { c: A::X(2), }]; for r in &mut a { r.c = A::X(22); } match a[1].c { A::X(s) => s * 2, }

@@ -1,2 +1,2 @@
-// expect refuse (a reference stored in an aggregate)
+// refuse
 let v = vec([1, 2, 3]); let t = (&v, 1); match t { (r, n) => r.len(), _ => 0, }

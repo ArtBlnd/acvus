@@ -1,2 +1,2 @@
-// expect refuse (* of object)
+// refuse
 let o = { a: 1, }; let r = { a: 0, }; let x = &o; r = *x; r.a

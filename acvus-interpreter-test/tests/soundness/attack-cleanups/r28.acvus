@@ -1,2 +1,2 @@
-// expect refuse (for over a reference-typed local)
+// refuse
 let v = vec([1, 2, 3]); let r = &mut v; for x in r { *x = *x * 2; } v[0u64] + v[1u64] + v[2u64]

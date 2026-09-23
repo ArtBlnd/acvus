@@ -12,6 +12,7 @@ mod captured_word;
 mod cast;
 mod checker_contract;
 mod classify;
+mod completeness;
 mod closure_nesting;
 mod container;
 mod container_contains;

@@ -1,2 +1,2 @@
-// expect refuse (* of object)
+// refuse
 let xs = [{ a: 1, b: 2, }]; let r = { a: 0, b: 0, }; for x in &xs { r = *x; } r.b

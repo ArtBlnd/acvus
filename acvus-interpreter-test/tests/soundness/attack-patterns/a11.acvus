@@ -1,2 +1,2 @@
-// expect refused-or-5? list with literal head through &mut local, read binding
+// refuse
 let a = [1, 2, 3]; match &mut a { [1, x, ..] => *x + 3, _ => 0, }

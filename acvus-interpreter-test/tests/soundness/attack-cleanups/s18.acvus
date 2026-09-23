@@ -1,2 +1,2 @@
-// expect refuse or 4 (deref copy of object through &)
+// refuse
 let o = { a: 1, b: 4, }; let r = &o; let p = *r; p.b

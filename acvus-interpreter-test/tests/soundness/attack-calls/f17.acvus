@@ -1,3 +1,3 @@
-// expect 2
+// refuse
 // effectful closure captured into a returned closure and called later
 let w = |x| -> { @n = @n + x; 0 }; let mk = |k| -> |u| -> w(k); let g = mk(2); g(0); @n
