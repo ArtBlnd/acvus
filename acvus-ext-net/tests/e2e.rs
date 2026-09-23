@@ -192,7 +192,7 @@ async fn a_response_reads_its_status_url_and_headers() {
 async fn text_consumes_the_response_and_bytes_reads_the_same_body() {
     let server = loopback::start().await;
     let source = format!(
-        r#"{} + " " +
+        r#"({}) + " " +
            match get("{}".to_string()) {{
              Ok(r) => {{ let raw = bytes(r); let count = len(&raw); count.to_string() }},
              Err(e) => "err".to_string(),
