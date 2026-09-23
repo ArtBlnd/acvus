@@ -1,4 +1,4 @@
-error[E0277]: a borrowed `Vec<Rendered>` or `Arr<Rendered, N>` has no storage of its own type: the container's storage holds the runtime's values, not `Rendered`s
+error[E0277]: a borrowed container of `Rendered` has no storage of its own type: the container's storage holds the runtime's values, not `Rendered`s
   --> tests/compile_fail/borrowed_vec_of_converted.rs:14:1
    |
 14 | #[extern_fn(effect = pure)]
@@ -11,16 +11,19 @@ help: the trait `InPlaceElement<__R>` is not implemented for `Rendered`
    | ^^^^^^^^^^^^^^^^^^^
    = note: borrow the elements as a slice: the language's `&[Rendered]` and `&mut [Rendered]` are taken as `Slice<Erased<Rt, Rendered>, Shared, Rt>` and `Slice<Erased<Rt, Rendered>, Mut, Rt>`, whose elements read in place as `Rendered` by `as_ref(rt)` and `as_mut(rt)` where `Rendered: Stored<Rt>`; a `Rendered` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<Rendered, Shared, Rt>` and `Slice<Rendered, Mut, Rt>` (RFC-0047).
    = note: a `Vec<Rendered>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
 help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
   --> $WORKSPACE/acvus-extern/src/owned.rs
    |
-   | impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
    = note: required for `Vec<Rendered>` to implement `Borrowable<__R>`
    = note: required for `ByRef<Vec<Rendered>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: a borrowed `Vec<i64>` or `Arr<i64, N>` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
   --> tests/compile_fail/borrowed_vec_of_converted.rs:19:1
    |
 19 | #[extern_fn(effect = pure)]
@@ -29,16 +32,19 @@ error[E0277]: a borrowed `Vec<i64>` or `Arr<i64, N>` has no storage of its own t
    = help: the trait `InPlaceElement<__R>` is not implemented for `i64`
    = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
    = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
 help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
   --> $WORKSPACE/acvus-extern/src/owned.rs
    |
-   | impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
    = note: required for `Vec<i64>` to implement `Borrowable<__R>`
    = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: a borrowed `Vec<i64>` or `Arr<i64, N>` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
   --> tests/compile_fail/borrowed_vec_of_converted.rs:24:1
    |
 24 | #[extern_fn(effect = pure)]
@@ -47,16 +53,19 @@ error[E0277]: a borrowed `Vec<i64>` or `Arr<i64, N>` has no storage of its own t
    = help: the trait `InPlaceElement<__R>` is not implemented for `i64`
    = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
    = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
 help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
   --> $WORKSPACE/acvus-extern/src/owned.rs
    |
-   | impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
    = note: required for `Vec<i64>` to implement `Borrowable<__R>`
    = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: a borrowed `Vec<i64>` or `Arr<i64, N>` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
   --> tests/compile_fail/borrowed_vec_of_converted.rs:29:1
    |
 29 | #[extern_fn(effect = pure)]
@@ -65,16 +74,19 @@ error[E0277]: a borrowed `Vec<i64>` or `Arr<i64, N>` has no storage of its own t
    = help: the trait `InPlaceElement<__R>` is not implemented for `i64`
    = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
    = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
 help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
   --> $WORKSPACE/acvus-extern/src/owned.rs
    |
-   | impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
    = note: required for `Arr<i64, ()>` to implement `Borrowable<__R>`
    = note: required for `ByRef<Arr<i64, ()>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: a borrowed `Vec<Erased<__R, Rendered>>` or `Arr<Erased<__R, Rendered>, N>` has no storage of its own type: the container's storage holds the runtime's values, not `Erased<__R, Rendered>`s
+error[E0277]: a borrowed container of `Erased<__R, Rendered>` has no storage of its own type: the container's storage holds the runtime's values, not `Erased<__R, Rendered>`s
   --> tests/compile_fail/borrowed_vec_of_converted.rs:37:1
    |
 37 | #[extern_fn(effect = pure)]
@@ -83,11 +95,14 @@ error[E0277]: a borrowed `Vec<Erased<__R, Rendered>>` or `Arr<Erased<__R, Render
    = help: the trait `InPlaceElement<__R>` is not implemented for `Erased<__R, Rendered>`
    = note: borrow the elements as a slice: the language's `&[Erased<__R, Rendered>]` and `&mut [Erased<__R, Rendered>]` are taken as `Slice<Erased<Rt, Erased<__R, Rendered>>, Shared, Rt>` and `Slice<Erased<Rt, Erased<__R, Rendered>>, Mut, Rt>`, whose elements read in place as `Erased<__R, Rendered>` by `as_ref(rt)` and `as_mut(rt)` where `Erased<__R, Rendered>: Stored<Rt>`; a `Erased<__R, Rendered>` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<Erased<__R, Rendered>, Shared, Rt>` and `Slice<Erased<__R, Rendered>, Mut, Rt>` (RFC-0047).
    = note: a `Vec<Erased<__R, Rendered>>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
 help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
   --> $WORKSPACE/acvus-extern/src/owned.rs
    |
-   | impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
    = note: required for `Vec<Erased<__R, Rendered>>` to implement `Borrowable<__R>`
    = note: required for `ByRef<Vec<Erased<__R, Rendered>>, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

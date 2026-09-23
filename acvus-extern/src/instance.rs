@@ -16,7 +16,7 @@ use acvus_mir::ty::{PolyTy, Task};
 use acvus_utils::Interner;
 
 use crate::ctx::Ctx;
-use crate::handler::{ByRef, ByValue};
+use crate::handler::{ByRef, ByValue, Lends};
 use crate::loan::{Loan, Mut, Shared};
 use crate::obj::OneValue;
 use crate::owned::Owned;
@@ -377,7 +377,8 @@ where
 
 impl<T, C, Rt> RestoreShared<Rt> for ByRef<T, Shared, C>
 where
-    T: OneValue<Rt, C>,
+    T: Send + Sync + 'static,
+    C: Lends<T, Rt>,
     Rt: Runtime,
 {
     type Out<'b>
@@ -420,7 +421,8 @@ where
 
 impl<T, C, Rt> RestoreExclusive<Rt> for ByRef<T, Mut, C>
 where
-    T: OneValue<Rt, C>,
+    T: Send + Sync + 'static,
+    C: Lends<T, Rt>,
     Rt: Runtime,
 {
     type Out<'b>

@@ -126,22 +126,6 @@ where
     unsafe fn materialize(_: &R, value: R::Value) -> Self {
         Self(Owned::from_value(value), PhantomData)
     }
-
-    unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
-        // SAFETY: the caller's contract, and `repr(transparent)` over
-        // `R::Value`.
-        unsafe {
-            &*(<R::Value as OneValue<R>>::deref(rt, reference) as *const R::Value as *const Self)
-        }
-    }
-
-    unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
-        // SAFETY: as in `deref`, exclusively.
-        unsafe {
-            &mut *(<R::Value as OneValue<R>>::deref_mut(rt, reference) as *mut R::Value
-                as *mut Self)
-        }
-    }
 }
 
 impl<R, T> crate::Borrowable<R> for Erased<R, T>
@@ -149,6 +133,21 @@ where
     R: Runtime,
     T: Stored<R>,
 {
+    unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
+        // SAFETY: the caller's contract, and `repr(transparent)` over
+        // `R::Value`.
+        unsafe {
+            &*(<R::Value as crate::Borrowable<R>>::deref(rt, reference) as *const R::Value as *const Self)
+        }
+    }
+
+    unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
+        // SAFETY: as in `deref`, exclusively.
+        unsafe {
+            &mut *(<R::Value as crate::Borrowable<R>>::deref_mut(rt, reference) as *mut R::Value
+                as *mut Self)
+        }
+    }
 }
 
 // SAFETY: `#[repr(transparent)]` above, over `Owned<R>`, itself

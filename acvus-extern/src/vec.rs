@@ -8,9 +8,7 @@ use std::mem::ManuallyDrop;
 
 use acvus_mir::ty::{Ty, TypeArg};
 
-use crate::obj::{
-    InPlaceElement, NOT_IN_PLACE, OneValue, storage_as, storage_as_mut, stored_as_container_of,
-};
+use crate::obj::{InPlaceElement, OneValue, stored_as_container_of};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
 use crate::runtime::Runtime;
@@ -79,25 +77,6 @@ where
                 .collect()
         }
     }
-
-    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
-        let values = unsafe { rt.deref::<Vec<Owned<Rt>>>(reference) };
-        let Some(same) = storage_as::<_, Self>(values) else {
-            panic!("{NOT_IN_PLACE}")
-        };
-        same
-    }
-
-    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
-        // SAFETY: the caller's contract, exclusively, and `erase` boxes a
-        // `Vec<Owned<Rt>>`.
-        let values = unsafe { rt.deref_mut::<Vec<Owned<Rt>>>(reference) };
-        let Some(same) = storage_as_mut::<_, Self>(values) else {
-            panic!("{NOT_IN_PLACE}")
-        };
-        same
-    }
 }
 
 impl<T, Rt> crate::Borrowable<Rt> for Vec<T>
@@ -105,6 +84,16 @@ where
     T: InPlaceElement<Rt>,
     Rt: Runtime,
 {
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
+        // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
+        T::in_place(unsafe { rt.deref::<Vec<Owned<Rt>>>(reference) })
+    }
+
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
+        // SAFETY: the caller's contract, exclusively, and `erase` boxes a
+        // `Vec<Owned<Rt>>`.
+        T::in_place_mut(unsafe { rt.deref_mut::<Vec<Owned<Rt>>>(reference) })
+    }
 }
 
 crate::cross_whole!(crate::Specialized, Vec<T>, T: Send + Sync + 'static);
@@ -114,6 +103,7 @@ where
     T: Send + Sync + 'static,
     Rt: Runtime,
 {
+    crate::whole_box_in_place!(Vec<T>, Rt);
 }
 
 impl<T> Var<kind::Type> for Vec<T> where T: Var<kind::Type> {}

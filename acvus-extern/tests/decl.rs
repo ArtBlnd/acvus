@@ -253,7 +253,9 @@ impl acvus_extern::OneValue<Tiny> for V {
     unsafe fn materialize(_: &Tiny, value: V) -> Self {
         value
     }
+}
 
+impl acvus_extern::Borrowable<Tiny> for V {
     unsafe fn deref<'a>(_: &Tiny, reference: &'a V) -> &'a V {
         target(reference)
     }
@@ -640,7 +642,7 @@ fn eq_int(a: &i64, b: &i64) -> bool {
 }
 
 #[extern_fn(instance_of = eq, effect = pure)]
-fn eq_point(a: &Point, b: &Point) -> bool {
+fn eq_string(a: &String, b: &String) -> bool {
     a == b
 }
 
@@ -761,7 +763,7 @@ where
         types: [Boxed<_, _, R>, Token<_>, Held<R>],
         signatures: [eq, step, front, advance],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
-              sum_slice, slice_first, at, count_where, eq_int, eq_point, step_int, drive,
+              sum_slice, slice_first, at, count_where, eq_int, eq_string, step_int, drive,
               held, front_held, first_of, same, advance_twice,
               greet(Greeting("hello".to_string()))],
     }
@@ -1223,56 +1225,6 @@ fn an_instance_carries_its_own_requirements_and_keeps_its_mono_glue() {
     );
 }
 
-/// The declared type of `Point` at this test's registry.
-fn point_ty(i: &Interner) -> acvus_extern::Ty {
-    acvus_extern::Ty::Object(acvus_extern::ObjectTy::declared(
-        i.intern("Point"),
-        [
-            (i.intern("x"), acvus_extern::Ty::I64),
-            (i.intern("label"), acvus_extern::Ty::String),
-        ]
-        .into_iter()
-        .collect(),
-    ))
-}
-
-fn a_point(x: i64) -> V {
-    erased(acvus_extern::Obj::new(
-        acvus_extern::ObjectShape::of(&SYMBOLS, [Tiny.symbol("label"), Tiny.symbol("x")]),
-        Box::new([
-            Owned::<Tiny>::from_value(erased("p".to_owned())),
-            Owned::from_value(erased(x)),
-        ]),
-    ))
-}
-
-/// `t::eq` at `Point` is declared and has a mono glue, and no caller can
-/// reach it: an object converts at the boundary, so a `&Point` argument
-/// names no storage shaped like a `Point` (RFC-0039 rule 4). This holds of the
-/// mono glue too, so a handler requiring `t::eq` meets it for the same
-/// reason a call site does, and the requirement adds nothing to it.
-#[test]
-#[should_panic(expected = "has no storage of its own type to read through")]
-fn an_instance_whose_parameter_converts_is_unreachable_through_the_values_abi() {
-    let (i, reg) = combined::<Tiny>();
-    let on_point = call_type(
-        vec![
-            acvus_extern::Ty::Ref(
-                acvus_extern::Mutability::Shared,
-                Box::new(TypeArg::uniform(point_ty(&i))),
-            );
-            2
-        ],
-        acvus_extern::Ty::Bool,
-        &i,
-    );
-    instance_for(&reg, &i, "eq", &on_point).expect("the Point instance of t::eq");
-    let left = Place(a_point(1));
-    let right = a_point(1);
-    let at = receiver_at(&reg, &i, "eq", &on_point, 1);
-    let _ = call_instance::<eq<Place, Tiny>, _>(&at, &left, (&right,), |same| same);
-}
-
 /// The marker `extern_signature!` writes names the signature's own
 /// variables, so a handler writes the requirement at its own: `eq<T, Rt>`.
 /// Every parameter is defaulted, so the bare `eq` an `instance_of`
@@ -1687,15 +1639,6 @@ fn wrong_argument_type_panics_trusting_typeck() {
 #[test]
 fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     let (i, reg) = combined::<TypesOnly>();
-    let point = acvus_extern::Ty::Object(acvus_extern::ObjectTy::declared(
-        i.intern("Point"),
-        [
-            (i.intern("x"), acvus_extern::Ty::I64),
-            (i.intern("label"), acvus_extern::Ty::String),
-        ]
-        .into_iter()
-        .collect(),
-    ));
     let eq_fn = reg
         .functions
         .iter()
@@ -1709,10 +1652,7 @@ fn a_shared_signature_collects_its_instances_and_bounds_what_requires_it() {
     };
     assert_eq!(
         shapes,
-        &vec![
-            acvus_extern::PolyTy::I64,
-            acvus_extern::lift_to_poly(&point)
-        ]
+        &vec![acvus_extern::PolyTy::I64, acvus_extern::PolyTy::String]
     );
     assert_eq!(reg.handlers[&qref(&i, "eq")].len(), 2);
 }

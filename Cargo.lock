@@ -86,6 +86,7 @@ dependencies = [
 name = "acvus-extern-macro"
 version = "0.1.0"
 dependencies = [
+ "acvus-ext",
  "acvus-extern",
  "proc-macro2",
  "quote",

@@ -330,6 +330,11 @@ where
 /// A type a parameter may take by reference: one whose values are places the
 /// language names. An `Option` is not — `None` is one value and `Some(v)` is
 /// `v`'s own value (RFC-0039) — and the missing impl is the refusal.
+///
+/// The in-place read is this trait's and not `OneValue`'s: a type whose
+/// storage holds no `Self`, such as a derived struct kept as an object or a
+/// `Vec<i64>` kept as a `Vec<Owned<Rt>>`, has no impl, so no reader reaches
+/// its storage as a `Self`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no storage of its own type, so a parameter cannot borrow one",
     label = "this parameter is taken by reference",
@@ -341,11 +346,19 @@ pub trait Borrowable<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
 {
+    /// # Safety
+    /// `reference` names a live storage of `Self`.
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self;
+
+    /// # Safety
+    /// As `deref`, and the reference is the only live name of the storage.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self;
 }
 
 /// A type a parameter of a `Monomorphize` member may take by reference: one
 /// whose specialized crossing writes a `Self` into the storage the caller
-/// lends, which is what `OneValue<_, Specialized>::deref` reads back.
+/// lends, which is what `deref` reads back.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no storage of its own type at a monomorphized member, so a parameter cannot borrow one",
     label = "this parameter of a monomorphized member is taken by reference",
@@ -356,6 +369,65 @@ pub trait BorrowableSpecialized<Rt>: OneValue<Rt, Specialized>
 where
     Rt: Runtime,
 {
+    /// # Safety
+    /// As `Borrowable::deref`, at the specialized representation.
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self;
+
+    /// # Safety
+    /// As `Borrowable::deref_mut`, at the specialized representation.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self;
+}
+
+/// A representation that lends a `T` in place: `Uniform` where `T` is
+/// `Borrowable`, `Specialized` where it is `BorrowableSpecialized`. A reader
+/// written once over the representation, as `Loan::borrow` and the
+/// `Restore*` impls are, asks this and so asks each representation's own
+/// bound.
+pub trait Lends<T, Rt>
+where
+    Rt: Runtime,
+{
+    /// # Safety
+    /// As `Borrowable::deref`.
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a T;
+
+    /// # Safety
+    /// As `Borrowable::deref_mut`.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T;
+}
+
+impl<T, Rt> Lends<T, Rt> for Uniform
+where
+    T: Borrowable<Rt>,
+    Rt: Runtime,
+{
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a T {
+        // SAFETY: the caller's contract.
+        unsafe { <T as Borrowable<Rt>>::deref(rt, reference) }
+    }
+
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T {
+        // SAFETY: the caller's contract.
+        unsafe { <T as Borrowable<Rt>>::deref_mut(rt, reference) }
+    }
+}
+
+impl<T, Rt> Lends<T, Rt> for Specialized
+where
+    T: BorrowableSpecialized<Rt>,
+    Rt: Runtime,
+{
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a T {
+        // SAFETY: the caller's contract.
+        unsafe { <T as BorrowableSpecialized<Rt>>::deref(rt, reference) }
+    }
+
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T {
+        // SAFETY: the caller's contract.
+        unsafe { <T as BorrowableSpecialized<Rt>>::deref_mut(rt, reference) }
+    }
 }
 
 /// The destination run a call's result is written into, lent for the call's

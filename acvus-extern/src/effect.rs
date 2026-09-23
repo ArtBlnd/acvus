@@ -18,6 +18,24 @@ pub trait Suspends: Var<kind::Effect> {}
 
 impl Suspends for () {}
 
+/// An effect variable's run-time instantiation, `()`, at which a borrowed
+/// container naming it is read in place. The glue instantiates every effect
+/// variable at `()`, so a map or a set a script holds is a box of the Rust
+/// type at `()`, and a borrow at a known level reads a box of another type.
+/// This is `InPlaceElement`'s counterpart for the effect kind; a length and
+/// an identity need none, because the stand-ins `Nth` and `()` are the only
+/// Rust types of either kind, so a declaration names them only as variables.
+#[diagnostic::on_unimplemented(
+    message = "a borrowed container at the effect `{Self}` has no storage of that type: the runtime keeps it at its effect variable's run-time instantiation",
+    label = "this parameter borrows a container at a known effect",
+    note = "borrow it at the declaration's own effect variable, as `&HashMap<K, V, E, Rt>` with `E: Var<kind::Effect>`: every effect variable is `()` when the handler runs."
+)]
+pub trait InPlaceEffect: Var<kind::Effect> + crate::obj::sealed::Sealed {}
+
+impl crate::obj::sealed::Sealed for () {}
+
+impl InPlaceEffect for () {}
+
 pub struct Pure;
 pub struct Idempotent;
 pub struct Opaque;

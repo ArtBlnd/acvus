@@ -463,6 +463,10 @@ where
 /// aggregate, so a `&S` in a handler's signature fails to compile with this
 /// message and no other.
 ///
+/// It carries `Borrowable`'s two reads, and the derive's impl reads through
+/// them: an aggregate's storage is an object, which holds no `S` to read, and
+/// a trait with no impl is a body that is never called by type.
+///
 /// Obligation across artifacts: the message below is read back by
 /// `acvus-extern-macro/tests/compile_fail/borrowed_aggregate.stderr`, so a
 /// change to the wording moves that golden.
@@ -476,6 +480,14 @@ pub trait BorrowedWhole<Rt>
 where
     Rt: Runtime,
 {
+    /// # Safety
+    /// As `Borrowable::deref`.
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self;
+
+    /// # Safety
+    /// As `Borrowable::deref_mut`.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self;
 }
 
 /// `Borrowed` and `Project` for a type the runtime stores as itself, whose

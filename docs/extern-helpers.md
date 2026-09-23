@@ -92,7 +92,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | name | the acvus concept it stands for | atom, or derived from |
 |---|---|---|
 | `Cross` | what a type occupies at the boundary: a run of the runtime's values | atom — the storage is `Rt::Value`, never a Rust `T`, and the width is the run's |
-| `OneValue` | a crossing that is exactly one of the runtime's values | atom — `erase`/`materialize` are one value's, and `deref` reads a `Self` through a reference, which only a type stored as itself can answer |
+| `OneValue` | a crossing that is exactly one of the runtime's values | atom — `erase`/`materialize` are one value's; reading a `Self` through a reference is `Borrowable`'s |
 | `Uniform` | the representation every slot takes unless a member says otherwise (RFC-0041) | atom — the tag that picks the crossing |
 | `Specialized` | the representation of a `Monomorphize` member's slot | atom — the other representation; the run is the value at every impl |
 | `Stored` | a type the runtime reads back as itself in place | atom — the runtime's box holds `Payload`, the Rust value itself or an extension type's `repr(transparent)` payload, which is what makes `value_as_ref::<T::Payload>` and `from_payload` sound |
@@ -126,8 +126,11 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Words` | a run as the machine holds it: a pointer and a length in two registers | atom — the spelling only the runtime writes into a value |
 | `Elements` | a run of the runtime's values in a storage | derived from `Words` — the same pair at the value type, constructible only from a Rust slice, so a stray pointer and length cannot be named |
 | `StrView` | the language's `&str`: a view of a `String`'s UTF-8 bytes | derived from `Words` — the same pair over bytes rather than values; the encoding is the checker's obligation, which is why it has its own name |
-| `Borrowable` | a type whose values are places the language names | atom — the missing impl is the refusal, and its message is the whole of it |
+| `Borrowable` | a type whose values are places the language names | atom — it carries `deref`/`deref_mut`, the in-place read, so the missing impl is the refusal and no reader reaches a storage without it |
 | `BorrowableSpecialized` | the same at a `Monomorphize` member | derived from `Borrowable` — a second trait because a member's storage holds a `Self` only where its specialized crossing wrote one |
+| `Lends` | a representation that lends a `T` in place | derived from `Borrowable` and `BorrowableSpecialized` — `Uniform` under the one, `Specialized` under the other, so `Loan::borrow` and `Restore*` are written once and ask each |
+| `InPlaceElement` | a type variable at its run-time instantiation, `Owned<Rt>` | atom — sealed; a borrowed `Vec`, array, map, set or deque asks it of its type variables, and `in_place` names a `Vec`'s storage as a `Vec<Self>` |
+| `InPlaceEffect` | an effect variable at its run-time instantiation, `()` | atom — sealed; a borrowed map or set asks it of its effect variable |
 | `BorrowedWhole` | the refusal of `&S` on an aggregate | atom — a trait with no impl anywhere; the diagnostic text is what it does |
 | `Borrowed` | the two projection types an aggregate has | atom — named without a runtime, because a projection struct has a lifetime and no runtime parameter |
 | `Project` | a field's borrow, built over the one value a field occupies | atom — the obligation that a field is one value is the interpreter's |
@@ -370,10 +373,13 @@ repository root at `0d308c5e`.
    type with a lifetime argument. `acvus-extern/src/str.rs:117`,
    `acvus-extern/src/projection.rs:419`.
 5. **`BorrowedWhole` is a trait that exists to be unimplemented.** Its
-   absence is the refusal of `&S` on an aggregate, and its
+   absence is the refusal of `&S` on a projected aggregate, and its
    `on_unimplemented` text is the whole of what it does; the derive names
-   it in the `where` clause of the `Borrowable` impl it emits.
-   `acvus-extern/src/projection.rs:453` (why), `:468` (the trait).
+   it in the `where` clause of the `Borrowable` impl it emits, whose reads
+   call the two `BorrowedWhole` carries, so the impl needs no body for a
+   storage an object does not have. An aggregate without a projection has
+   no `Borrowable` at all.
+   `acvus-extern/src/projection.rs:460` (why), `:479` (the trait).
 6. **`Stored` and `FromValue` each carry a fact `OneValue` lacks.**
    `Stored` says the runtime's box holds `T::Payload` — the Rust value
    itself, or an extension type's `repr(transparent)` payload — which is

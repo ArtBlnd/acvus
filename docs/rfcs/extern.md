@@ -411,9 +411,8 @@ crossing, never read from tokens.
    components as a result: its `ReturnForm` is `Run<W>`, with `W` the field
    count the derive writes as a literal.
 2. **Two crossings, and no blanket.** `OneValue<Rt, Rep>` is the crossing
-   that is one of the runtime's values — `erase`, `materialize`, `deref`,
-   `deref_mut`, `STORED_AS_VALUE` — at `Rep = Uniform` or `Specialized`
-   (RFC-0041). Every bound that needs a value says `OneValue`: an object's
+   that is one of the runtime's values — `erase`, `materialize`,
+   `STORED_AS_VALUE` — at `Rep = Uniform` or `Specialized` (RFC-0041). Every bound that needs a value says `OneValue`: an object's
    field, a container's element, a closure's argument and result, a
    parameter taken by reference. A slice and a view implement `Cross` alone,
    so a slice in any of those positions is a compile error. A parameter by value is built by
@@ -435,8 +434,18 @@ crossing, never read from tokens.
    = `Uniform` | `Specialized`, `ByStr`, `BySlice<T, M>`, `ByProjection<P>`,
    `Required<S, I, Task, N>`. The borrow modes require `Borrowable<Rt>` (or
    `BorrowableSpecialized<Rt>`), whose `on_unimplemented` text is the
-   refusal of `&Option<T>` and of a whole borrowed `#[projection]` aggregate:
-   a trait error, not a name check. A result is `Ret<Rt>` — `Val<T, C>`,
+   refusal of `&Option<T>` and of a whole borrowed aggregate: a trait
+   error, not a name check. The in-place read, `deref` and `deref_mut`, is
+   a method of those two traits, so no reader reaches a storage as a `Self`
+   without the bound; `Loan::borrow` and the `Restore*` positions, written
+   once over the representation, ask it through `Lends<T, Rt>`, which
+   `Uniform` and `Specialized` implement under each one's bound. A `Vec`
+   or an array is borrowable only at an `InPlaceElement` element, which only
+   `Owned<Rt>` is; a map, a set and a deque are each one box of the Rust
+   type at the variables' run-time instantiation, which every declaration
+   that makes one is generic in, so each is borrowable only where each type
+   variable is `InPlaceElement` and each effect variable `InPlaceEffect`
+   (`()`). A result is `Ret<Rt>` — `Val<T, C>`,
    `RetStr`, `RetLent<L>` for a returned borrow — and `Ret::Of<'a>` is a
    generic associated type, so a result may borrow what the arguments lent.
 4. **A handler is the operation's type parameter.** The registry holds

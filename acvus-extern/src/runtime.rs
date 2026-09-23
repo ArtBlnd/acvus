@@ -12,7 +12,7 @@ use std::future::{Future, Ready};
 /// run a value that is a closure. A host owns its `Value` representation.
 pub trait Runtime: Sized + Send + Sync + 'static {
     type Value: crate::Cross<Self, Form = crate::One>
-        + crate::OneValue<Self>
+        + crate::Borrowable<Self>
         + crate::FromValue<Self>
         + crate::Release
         + Copy

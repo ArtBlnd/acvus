@@ -6,7 +6,7 @@
 //! holds. `Obj<V>` and `Variant<V>` are the runtime's own object and
 //! variant shapes.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
@@ -643,11 +643,11 @@ where
 
 /// The crossing of a type that is one of the runtime's values, at one of the
 /// two representations a slot can take (`Uniform`, `Specialized` — RFC-0041):
-/// `erase` hands the runtime that value, `materialize` takes it back, and
-/// `deref` reads a `Self` through a reference the runtime holds, which only a
-/// type stored as itself can do. Every bound that needs a value — a
-/// parameter, an object's field, a container's element — says this and not
-/// `Cross`.
+/// `erase` hands the runtime that value and `materialize` takes it back.
+/// Reading a `Self` through a reference the runtime holds is `Borrowable`'s,
+/// because only a type whose storage holds a `Self` can. Every bound that
+/// needs a value — a parameter, an object's field, a container's element —
+/// says this and not `Cross`.
 ///
 /// A member of a `Monomorphize` family is one of the runtime's values, so the
 /// specialized representation needs no split into a run and a value the way
@@ -686,20 +686,6 @@ where
     /// As `Cross::into_run`.
     fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
         out[0] = self.erase(rt);
-    }
-
-    /// # Safety
-    /// `reference` names a live storage of `Self`, exclusively for the
-    /// duration when `deref_mut`.
-    unsafe fn deref<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a Self {
-        panic!("{}", NO_STORAGE)
-    }
-
-    /// # Safety
-    /// As `deref`.
-    #[allow(clippy::mut_from_ref)]
-    unsafe fn deref_mut<'a>(_rt: &Rt, _reference: &'a Rt::Value) -> &'a mut Self {
-        panic!("{}", NO_STORAGE)
     }
 }
 
@@ -802,11 +788,6 @@ macro_rules! passed_as_one_value {
 
 /// The message a converted type gives when read through a reference: it
 /// has no storage of its own type (RFC-0039 rule 4).
-const NO_STORAGE: &str =
-    "a value converted at the boundary has no storage of its own type to read through";
-
-pub(crate) const NOT_IN_PLACE: &str = "a Vec or an array was read through a reference at an element that is not `InPlaceElement`: its storage is a `Vec<Owned<Rt>>`, and the reader did not ask for `Borrowable`";
-
 /// A type whose value the runtime reads back as a `Self` in place: its
 /// `erase` is `rt.erase::<Self::Payload>` of the value's own bytes, and
 /// `from_payload` names those bytes as a `Self`. A type stored as itself has
@@ -968,32 +949,40 @@ crate::for_each_inline!(inline);
 
 /// A type stored as itself: the runtime keeps the Rust value and hands it
 /// back untouched (RFC-0039 rule 2).
+///
+/// It takes no generic parameters, and that is a decision: it lends the type
+/// in place at every instantiation, and a generic type stored as itself is
+/// kept at its variables' run-time instantiation, so a borrow of any other
+/// reads a box of another type. Such a type states its `Borrowable` with the
+/// bound on its variables (`Deque<T>`, `HashMap<K, V, E, Rt>`).
 #[macro_export]
 macro_rules! cross_as_stored {
-    ($t:ty $(, $($g:tt)*)?) => {
-        impl<$($($g)*,)? __Rt> $crate::Stored<__Rt> for $t
+    ($t:ty) => {
+        impl<__Rt> $crate::Stored<__Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
             $crate::stored_as_itself!();
         }
 
-        impl<$($($g)*,)? __Rt> $crate::Borrowable<__Rt> for $t
+        impl<__Rt> $crate::Borrowable<__Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
+            $crate::whole_box_in_place!($t, __Rt);
         }
 
-        impl<$($($g)*,)? __Rt> $crate::BorrowableSpecialized<__Rt> for $t
+        impl<__Rt> $crate::BorrowableSpecialized<__Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
+            $crate::whole_box_in_place!($t, __Rt);
         }
 
-        $crate::cross_one_value!($t $(, $($g)*)?);
-        $crate::borrowed_as_self!($t $(, $($g)*)?);
-        $crate::cross_whole!($crate::Uniform, $t $(, $($g)*)?);
-        $crate::cross_whole!($crate::Specialized, $t $(, $($g)*)?);
+        $crate::cross_one_value!($t);
+        $crate::borrowed_as_self!($t);
+        $crate::cross_whole!($crate::Uniform, $t);
+        $crate::cross_whole!($crate::Specialized, $t);
     };
 }
 
@@ -1012,7 +1001,7 @@ macro_rules! cross_whole {
     };
 }
 
-/// The four methods of a crossing whose runtime box holds the whole Rust
+/// The two methods of a crossing whose runtime box holds the whole Rust
 /// value.
 #[doc(hidden)]
 #[macro_export]
@@ -1027,7 +1016,15 @@ macro_rules! whole_box {
             // SAFETY: the caller's contract, and `erase` is `rt.erase::<$t>`.
             unsafe { rt.materialize::<$t>(value) }
         }
+    };
+}
 
+/// The in-place reads of a type whose runtime box holds the whole Rust
+/// value: the body of its `Borrowable` or `BorrowableSpecialized`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! whole_box_in_place {
+    ($t:ty, $rt:ident) => {
         unsafe fn deref<'a>(rt: &$rt, reference: &'a <$rt as $crate::Runtime>::Value) -> &'a Self {
             // SAFETY: the caller's contract.
             unsafe { rt.deref::<$t>(reference) }
@@ -1084,28 +1081,15 @@ where
     T::STORED_AS_VALUE || TypeId::of::<T>() == TypeId::of::<Rt::Value>()
 }
 
-/// There is no cast arm beside this downcast: two instantiations of a
-/// `repr(Rust)` type, such as `Option<Value>` and `Option<Erased<..>>`,
-/// have no layout the language promises to be the same.
-pub(crate) fn storage_as<S, T>(stored: &S) -> Option<&T>
-where
-    S: 'static,
-    T: 'static,
-{
-    (stored as &dyn Any).downcast_ref::<T>()
-}
-
-pub(crate) fn storage_as_mut<S, T>(stored: &mut S) -> Option<&mut T>
-where
-    S: 'static,
-    T: 'static,
-{
-    (stored as &mut dyn Any).downcast_mut::<T>()
-}
-
-/// An element whose borrowed `Vec<Self>` or `Arr<Self, N>` is read in place:
-/// the `Vec<Owned<Rt>>` the runtime keeps for either container is a
-/// `Vec<Self>`, which `storage_as` confirms by type.
+/// A type variable's run-time instantiation, `Owned<Rt>`, at which a
+/// borrowed container over it is read in place. The glue instantiates every
+/// type variable at `Owned<Rt>`, so a `Vec` or an array a script holds is the
+/// runtime's `Vec<Owned<Rt>>`, and a map, a set or a deque is a box of the
+/// Rust type at that instantiation. A borrow at any other element reads a
+/// box of another type, so `Borrowable` for each of these asks this of its
+/// type variables. `in_place` names a `Vec` or an array's storage as a
+/// `Vec<Self>`: the one impl is `Owned<Rt>`'s, where it is the storage
+/// itself.
 ///
 /// The compile-time stand-ins `Nth` and `Spec` have no impl, and that is a
 /// decision: the glue borrows a parameter at its run-time instantiation, where
@@ -1120,15 +1104,22 @@ where
 /// elements is promised, so a borrowed container of them is taken as
 /// `Slice<Erased<Rt, T>, _, Rt>`.
 #[diagnostic::on_unimplemented(
-    message = "a borrowed `Vec<{Self}>` or `Arr<{Self}, N>` has no storage of its own type: the container's storage holds the runtime's values, not `{Self}`s",
+    message = "a borrowed container of `{Self}` has no storage of its own type: the container's storage holds the runtime's values, not `{Self}`s",
     label = "this parameter borrows a container of `{Self}`",
     note = "borrow the elements as a slice: the language's `&[{Self}]` and `&mut [{Self}]` are taken as `Slice<Erased<Rt, {Self}>, Shared, Rt>` and `Slice<Erased<Rt, {Self}>, Mut, Rt>`, whose elements read in place as `{Self}` by `as_ref(rt)` and `as_mut(rt)` where `{Self}: Stored<Rt>`; a `{Self}` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<{Self}, Shared, Rt>` and `Slice<{Self}, Mut, Rt>` (RFC-0047).",
-    note = "a `Vec<{Self}>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice."
+    note = "a `Vec<{Self}>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.",
+    note = "a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`."
 )]
 pub trait InPlaceElement<Rt>: OneValue<Rt> + sealed::Sealed
 where
     Rt: Runtime,
 {
+    /// The runtime's storage of a `Vec` or an array, as a `Vec<Self>`.
+    #[allow(clippy::ptr_arg)]
+    fn in_place(values: &Vec<Owned<Rt>>) -> &Vec<Self>;
+
+    /// As `in_place`, exclusively.
+    fn in_place_mut(values: &mut Vec<Owned<Rt>>) -> &mut Vec<Self>;
 }
 
 pub(crate) mod sealed {
@@ -1304,28 +1295,6 @@ where
                 .collect(),
         )
     }
-
-    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
-        // SAFETY: the caller's contract, and `erase` boxes an
-        // `Arr<Owned<Rt>, ()>`.
-        let stored = unsafe { rt.deref::<Arr<Owned<Rt>, ()>>(reference) };
-        let Some(items) = storage_as::<_, Vec<T>>(&stored.0) else {
-            panic!("{NOT_IN_PLACE}")
-        };
-        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
-        unsafe { &*(items as *const Vec<T> as *const Self) }
-    }
-
-    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
-        // SAFETY: the caller's contract, exclusively, and `erase` boxes an
-        // `Arr<Owned<Rt>, ()>`.
-        let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
-        let Some(items) = storage_as_mut::<_, Vec<T>>(&mut stored.0) else {
-            panic!("{NOT_IN_PLACE}")
-        };
-        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
-        unsafe { &mut *(items as *mut Vec<T> as *mut Self) }
-    }
 }
 
 impl<T, N, Rt> crate::Borrowable<Rt> for Arr<T, N>
@@ -1334,6 +1303,23 @@ where
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
+        // SAFETY: the caller's contract, and `erase` boxes an
+        // `Arr<Owned<Rt>, ()>`.
+        let stored = unsafe { rt.deref::<Arr<Owned<Rt>, ()>>(reference) };
+        let items = T::in_place(&stored.0);
+        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
+        unsafe { &*(items as *const Vec<T> as *const Self) }
+    }
+
+    unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
+        // SAFETY: the caller's contract, exclusively, and `erase` boxes an
+        // `Arr<Owned<Rt>, ()>`.
+        let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
+        let items = T::in_place_mut(&mut stored.0);
+        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
+        unsafe { &mut *(items as *mut Vec<T> as *mut Self) }
+    }
 }
 
 /// The elements of a container box, each taken by its own `FromValue`; the

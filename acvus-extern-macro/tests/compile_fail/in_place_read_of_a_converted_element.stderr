@@ -1,0 +1,103 @@
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:14:15
+   |
+14 |     unsafe { <Vec<i64> as Borrowable<Rt>>::deref(rt, reference) }.len()
+   |               ^^^^^^^^ this parameter borrows a container of `i64`
+   |
+   = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
+   = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
+   = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
+help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
+   = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
+
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:21:51
+   |
+21 |     unsafe { <Shared as Loan>::borrow::<Vec<i64>, Uniform, Rt>(rt, reference) }.len()
+   |                                                   ^^^^^^^ this parameter borrows a container of `i64`
+   |
+   = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
+   = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
+   = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
+help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
+   = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
+   = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
+note: required by a bound in `acvus_extern::Loan::borrow`
+  --> $WORKSPACE/acvus-extern/src/loan.rs
+   |
+   |     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> Self::Of<'a, T>
+   |               ------ required by a bound in this associated function
+...
+   |         Rep: Lends<T, Rt>,
+   |              ^^^^^^^^^^^^ required by this bound in `Loan::borrow`
+
+error[E0599]: the method `with` exists for reference `&acvus_extern::Ref<Vec<i64>, acvus_extern::Shared, Rt>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:28:7
+   |
+28 |     r.with(rt, |xs| xs.len())
+   |       ^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $RUST/alloc/src/vec/mod.rs
+   |
+   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+   | ------------------------------------------------------------------------------------------------ doesn't satisfy `Vec<i64>: Borrowable<Rt>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `i64: InPlaceElement<Rt>`
+           which is required by `Vec<i64>: Borrowable<Rt>`
+
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:36:9
+   |
+36 |         <ByRef<Vec<i64>, Shared, Uniform> as RestoreShared<Rt>>::restore_shared(rt, at, crossed)
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter borrows a container of `i64`
+   |
+   = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
+   = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
+   = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
+help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
+   = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
+   = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
+   = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `RestoreShared<Rt>`
+
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:46:9
+   |
+46 |         <ByRef<Vec<i64>, Mut, Uniform> as RestoreExclusive<Rt>>::restore_exclusive(rt, at, crossed)
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter borrows a container of `i64`
+   |
+   = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
+   = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
+   = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+   = note: a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`.
+help: the trait `InPlaceElement<R>` is implemented for `acvus_extern::Owned<R>`
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   | / impl<R> crate::InPlaceElement<R> for Owned<R>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
+   = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
+   = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
+   = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `RestoreExclusive<Rt>`

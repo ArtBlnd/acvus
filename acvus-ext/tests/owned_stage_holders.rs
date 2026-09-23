@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{Deque, Items};
-use acvus_extern::{Astr, FromValue, Interner, OneValue, Owned, Release, Runtime, cross_as_stored};
+use acvus_extern::{Astr, FromValue, Interner, Owned, Release, Runtime, cross_as_stored};
 
 /// No registry these tests combine declares a sliceable container, so the
 /// pair a slice would occupy is never built or read.
@@ -129,7 +129,9 @@ impl acvus_extern::OneValue<Counted> for V {
     unsafe fn materialize(_: &Counted, value: V) -> Self {
         value
     }
+}
 
+impl acvus_extern::Borrowable<Counted> for V {
     unsafe fn deref<'a>(_: &Counted, reference: &'a V) -> &'a V {
         let V::Reference(target) = reference else {
             panic!("not a reference: {reference:?}")
@@ -254,7 +256,7 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        let target = unsafe { <V as OneValue<Counted>>::deref(self, reference) };
+        let target = unsafe { <V as acvus_extern::Borrowable<Counted>>::deref(self, reference) };
         open_ref::<T>(target)
     }
 
@@ -263,7 +265,7 @@ impl Runtime for Counted {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract, exclusively.
-        let target = unsafe { <V as OneValue<Counted>>::deref_mut(self, reference) };
+        let target = unsafe { <V as acvus_extern::Borrowable<Counted>>::deref_mut(self, reference) };
         open_mut::<T>(target)
     }
 

@@ -1,0 +1,26 @@
+error[E0277]: `Point` has no storage of its own type, so a parameter cannot borrow one
+  --> tests/compile_fail/borrowed_whole_struct.rs:13:1
+   |
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
+   |
+help: the trait `Borrowable<__R>` is not implemented for `Point`
+  --> tests/compile_fail/borrowed_whole_struct.rs:8:1
+   |
+ 8 | pub struct Point {
+   | ^^^^^^^^^^^^^^^^
+   = note: a borrowed aggregate crosses as its projection: where `Point` is a `#[derive(TyArg)] #[projection]` aggregate, write `PointRef<'_>`, or `PointMut<'_>` for a struct and `PointMut<'_, Rt>` for an enum (RFC-0050 rule 6).
+   = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
+   = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
+   = help: the following other types implement trait `Borrowable<Rt>`:
+             `()` implements `Borrowable<__Rt>`
+             `Arr<T, N>` implements `Borrowable<Rt>`
+             `Erased<R, T>` implements `Borrowable<R>`
+             `Nth<acvus_extern::kind::Type, N>` implements `Borrowable<Rt>`
+             `Spec<T>` implements `Borrowable<Rt>`
+             `Vec<T>` implements `Borrowable<Rt>`
+             `acvus_extern::Owned<R>` implements `Borrowable<R>`
+             `bool` implements `Borrowable<__Rt>`
+           and $N others
+   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `for<'a> Arg<'a, __R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

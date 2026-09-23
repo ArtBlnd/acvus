@@ -31,14 +31,14 @@ mod vec;
 
 pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
-pub use effect::{Idempotent, Opaque, Pure, Suspends};
+pub use effect::{Idempotent, InPlaceEffect, Opaque, Pure, Suspends};
 pub use erased::Erased;
 pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByValue};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
     Borrowable, BorrowableSpecialized, ByRef, ByValue, CallForms, CallSite, DeclaredInstance,
     DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries,
-    Instances, IntoRun, LentBack, NoInstance, NoInstances, Parameters, REGISTER_FORM, Required,
+    Instances, IntoRun, LentBack, Lends, NoInstance, NoInstances, Parameters, REGISTER_FORM, Required,
     RequiredInstance, Ret, RetLent, Sited, SitesNoParameterReads, Specialized, Uniform, Unsited,
     Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
     glue_at_instance,

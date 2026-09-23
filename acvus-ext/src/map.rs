@@ -30,7 +30,7 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use acvus_extern::{Instance, Later};
+use acvus_extern::{InPlaceEffect, InPlaceElement, Instance, Later};
 use acvus_extern::{
     Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
     FxHashMap, Interner, One, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
@@ -339,11 +339,11 @@ fn uniform_slot<T>() -> bool {
 /// the reader behind `get`, `keys` and `values` — reads a reference's
 /// storage as the declared Rust type, so a `Ref` into a derived map derefs
 /// at the payload's type and trips the runtime's type check. `Deque` is
-/// stored as itself and has no such gap; `cross_as_stored!` writes that for
-/// a Rust type naming no runtime, and a map names one, so the impls are
-/// here. The second runtime parameter `cross_as_stored!` would add is what
-/// this does not have: it would let a value of one runtime erase into
-/// another.
+/// stored as itself and has no such gap. `cross_as_stored!` writes that for
+/// a type with no parameters, and a map has type, effect and runtime ones, so
+/// the impls are here. The second runtime parameter `cross_as_stored!`
+/// would add is what this does not have: it would let a value of one runtime
+/// erase into another.
 macro_rules! stored_extern_type {
     ($t:ident<$($k:ident),+>, name: $name:literal) => {
         impl<$($k,)+ E, Rt> Var<kind::Type> for $t<$($k,)+ E, Rt>
@@ -396,12 +396,16 @@ macro_rules! stored_extern_type {
             acvus_extern::stored_as_itself!();
         }
 
+        /// The box holds the Rust type at the variables' run-time
+        /// instantiation, `Owned<Rt>` and `()`, which is the only one a
+        /// borrow reads in place.
         impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<$($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type>,)+
-            E: Var<kind::Effect>,
+            $($k: Var<kind::Type> + InPlaceElement<Rt>,)+
+            E: Var<kind::Effect> + InPlaceEffect,
             Rt: Runtime,
         {
+            acvus_extern::whole_box_in_place!($t<$($k,)+ E, Rt>, Rt);
         }
 
         impl<$($k,)+ E, Rt> BorrowableSpecialized<Rt> for $t<$($k,)+ E, Rt>
@@ -410,6 +414,7 @@ macro_rules! stored_extern_type {
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
+            acvus_extern::whole_box_in_place!($t<$($k,)+ E, Rt>, Rt);
         }
 
         impl<$($k,)+ E, Rt> Cross<Rt> for $t<$($k,)+ E, Rt>
@@ -592,7 +597,10 @@ where
     Rt: Runtime,
 {
     /// The key at this step's position, and the step.
-    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a K> {
+    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a K>
+    where
+        HashMap<K, V, E, Rt>: Borrowable<Rt>,
+    {
         let index = self.0.at;
         self.0.at += 1;
         self.0
@@ -634,7 +642,10 @@ where
     Rt: Runtime,
 {
     /// The value at this step's position, and the step.
-    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a V> {
+    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a V>
+    where
+        HashMap<K, V, E, Rt>: Borrowable<Rt>,
+    {
         let index = self.0.at;
         self.0.at += 1;
         self.0
@@ -661,9 +672,9 @@ fn next_keys<'a, K, V, E, I, Rt>(
     it: &'a mut Keys<K, V, E, I, Rt>,
 ) -> Option<&'a K>
 where
-    K: Var<kind::Type> + TransparentOver<Rt>,
-    V: Var<kind::Type>,
-    E: Var<kind::Effect>,
+    K: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
+    V: Var<kind::Type> + InPlaceElement<Rt>,
+    E: Var<kind::Effect> + InPlaceEffect,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
@@ -688,9 +699,9 @@ fn next_values<'a, K, V, E, I, Rt>(
     it: &'a mut Values<K, V, E, I, Rt>,
 ) -> Option<&'a V>
 where
-    K: Var<kind::Type>,
-    V: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
+    K: Var<kind::Type> + InPlaceElement<Rt>,
+    V: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
+    E: Var<kind::Effect> + InPlaceEffect,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
@@ -1064,8 +1075,8 @@ fn next_refs_set<'a, K, E, I, Rt>(
     it: &'a mut Refs<HashSet<K, E, Rt>, I, Rt>,
 ) -> Option<&'a K>
 where
-    K: Var<kind::Type> + TransparentOver<Rt>,
-    E: Var<kind::Effect>,
+    K: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
+    E: Var<kind::Effect> + InPlaceEffect,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {

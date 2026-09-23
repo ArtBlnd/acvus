@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
+    Decode, InPlaceElement, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
     QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
     TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn, extern_registry,
     kind,
@@ -138,7 +138,36 @@ where
     }
 }
 
-acvus_extern::cross_as_stored!(Deque<T>, T: Var<kind::Type>);
+impl<T, Rt> acvus_extern::Stored<Rt> for Deque<T>
+where
+    T: Var<kind::Type>,
+    Rt: Runtime,
+{
+    acvus_extern::stored_as_itself!();
+}
+
+/// The box holds the Rust type at the element's run-time instantiation,
+/// `Owned<Rt>`, which is the only one a borrow reads in place.
+impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>
+where
+    T: Var<kind::Type> + InPlaceElement<Rt>,
+    Rt: Runtime,
+{
+    acvus_extern::whole_box_in_place!(Deque<T>, Rt);
+}
+
+impl<T, Rt> acvus_extern::BorrowableSpecialized<Rt> for Deque<T>
+where
+    T: Var<kind::Type>,
+    Rt: Runtime,
+{
+    acvus_extern::whole_box_in_place!(Deque<T>, Rt);
+}
+
+acvus_extern::cross_one_value!(Deque<T>, T: Var<kind::Type>);
+acvus_extern::borrowed_as_self!(Deque<T>, T: Var<kind::Type>);
+acvus_extern::cross_whole!(acvus_extern::Uniform, Deque<T>, T: Var<kind::Type>);
+acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Type>);
 
 impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
 
@@ -406,7 +435,7 @@ fn next_refs_deque<'a, T, I, Rt>(
     it: &'a mut Refs<Deque<T>, I, Rt>,
 ) -> Option<&'a T>
 where
-    T: Var<kind::Type> + TransparentOver<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {

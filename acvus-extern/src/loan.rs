@@ -8,7 +8,7 @@
 
 use acvus_mir::ty::Mutability;
 
-use crate::obj::OneValue;
+use crate::handler::Lends;
 use crate::runtime::Runtime;
 
 /// The strength of a borrow: what separated every `X`/`XMut` pair. A
@@ -31,10 +31,11 @@ pub trait Loan: Send + Sync + 'static {
         Rt: Runtime;
 
     /// # Safety
-    /// As `OneValue::deref`, exclusively for `Mut`.
+    /// As `Borrowable::deref`, exclusively for `Mut`.
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> Self::Of<'a, T>
     where
-        T: OneValue<Rt, Rep>,
+        T: Send + Sync + 'static,
+        Rep: Lends<T, Rt>,
         Rt: Runtime;
 
     /// # Safety
@@ -67,11 +68,12 @@ impl Loan for Shared {
 
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a T
     where
-        T: OneValue<Rt, Rep>,
+        T: Send + Sync + 'static,
+        Rep: Lends<T, Rt>,
         Rt: Runtime,
     {
         // SAFETY: the caller's contract.
-        unsafe { <T as OneValue<Rt, Rep>>::deref(rt, reference) }
+        unsafe { Rep::deref(rt, reference) }
     }
 
     unsafe fn value_as<'a, T, Rt>(rt: &'a Rt, value: &'a Rt::Value) -> &'a T
@@ -103,11 +105,12 @@ impl Loan for Mut {
 
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T
     where
-        T: OneValue<Rt, Rep>,
+        T: Send + Sync + 'static,
+        Rep: Lends<T, Rt>,
         Rt: Runtime,
     {
         // SAFETY: the caller's contract, exclusive for this loan.
-        unsafe { <T as OneValue<Rt, Rep>>::deref_mut(rt, reference) }
+        unsafe { Rep::deref_mut(rt, reference) }
     }
 
     unsafe fn value_as<'a, T, Rt>(rt: &'a Rt, value: &'a mut Rt::Value) -> &'a mut T

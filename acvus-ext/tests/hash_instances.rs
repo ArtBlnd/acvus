@@ -132,7 +132,9 @@ impl acvus_extern::OneValue<Counting> for V {
     unsafe fn materialize(_: &Counting, value: V) -> Self {
         value
     }
+}
 
+impl acvus_extern::Borrowable<Counting> for V {
     unsafe fn deref<'a>(_: &Counting, reference: &'a V) -> &'a V {
         let V::Reference(p) = reference else {
             panic!("deref: not a reference: {reference:?}")
@@ -278,7 +280,7 @@ impl Runtime for Counting {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        open_ref(unsafe { <V as acvus_extern::OneValue<Counting>>::deref(self, reference) })
+        open_ref(unsafe { <V as acvus_extern::Borrowable<Counting>>::deref(self, reference) })
     }
 
     unsafe fn deref_mut<'a, T>(&self, reference: &'a V) -> &'a mut T
@@ -286,7 +288,7 @@ impl Runtime for Counting {
         T: Send + Sync + 'static,
     {
         // SAFETY: the caller's contract.
-        open_mut(unsafe { <V as acvus_extern::OneValue<Counting>>::deref_mut(self, reference) })
+        open_mut(unsafe { <V as acvus_extern::Borrowable<Counting>>::deref_mut(self, reference) })
     }
 
     unsafe fn reference(&self, target: &V) -> V {

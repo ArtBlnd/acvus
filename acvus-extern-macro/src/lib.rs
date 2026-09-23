@@ -1545,7 +1545,8 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 ::acvus_extern::derive::transparent::materialize::<Self, #payload_ty, __R>(__rt, __value)
             }
         }
-
+    };
+    let payload_in_place = quote! {
         unsafe fn deref<'__a>(
             __rt: &__R,
             __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
@@ -1633,6 +1634,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             __R: ::acvus_extern::Runtime,
             #where_predicates
         {
+            #payload_in_place
         }
 
         // SAFETY: the struct is `#[repr(transparent)]`, checked above, with the
@@ -1649,6 +1651,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             __R: ::acvus_extern::Runtime,
             #where_predicates
         {
+            #payload_in_place
         }
 
         impl<#impl_params __R> ::acvus_extern::Stored<__R> for #ident #ty_generics
@@ -1748,12 +1751,40 @@ enum Borrowing {
 }
 
 impl Borrowing {
-    fn bound(self) -> proc_macro2::TokenStream {
+    /// The `Borrowable` impl of an aggregate. Its storage is an object, which
+    /// holds no `Self`, so a type without a projection has none; a type with
+    /// one has an impl under `BorrowedWhole`, which has no impl, so that
+    /// `&S` is refused with the message naming the projection.
+    fn borrowable(self, ident: &Ident) -> proc_macro2::TokenStream {
         match self {
             Borrowing::Whole => quote! {},
-            Borrowing::AsProjection => {
-                quote! { Self: ::acvus_extern::BorrowedWhole<__R>, }
-            }
+            Borrowing::AsProjection => quote! {
+                impl<__R> ::acvus_extern::Borrowable<__R> for #ident
+                where
+                    __R: ::acvus_extern::Runtime,
+                    Self: ::acvus_extern::BorrowedWhole<__R>,
+                {
+                    unsafe fn deref<'__a>(
+                        __rt: &__R,
+                        __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                    ) -> &'__a Self {
+                        // SAFETY: the caller's contract, forwarded.
+                        unsafe {
+                            <Self as ::acvus_extern::BorrowedWhole<__R>>::deref(__rt, __reference)
+                        }
+                    }
+
+                    unsafe fn deref_mut<'__a>(
+                        __rt: &__R,
+                        __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                    ) -> &'__a mut Self {
+                        // SAFETY: the caller's contract, forwarded.
+                        unsafe {
+                            <Self as ::acvus_extern::BorrowedWhole<__R>>::deref_mut(__rt, __reference)
+                        }
+                    }
+                }
+            },
         }
     }
 }
@@ -1778,7 +1809,7 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
         returned,
     } = crossing;
     let one_value_run = one_value_run(returned);
-    let borrowable_bound = borrowing.bound();
+    let borrowable = borrowing.borrowable(ident);
     quote! {
         impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident {}
 
@@ -1791,12 +1822,7 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
             }
         }
 
-        impl<__R> ::acvus_extern::Borrowable<__R> for #ident
-        where
-            __R: ::acvus_extern::Runtime,
-            #borrowable_bound
-        {
-        }
+        #borrowable
 
         impl<__R> ::acvus_extern::Cross<__R> for #ident
         where

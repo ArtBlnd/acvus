@@ -126,23 +126,6 @@ where
     unsafe fn materialize(_: &R, value: R::Value) -> Self {
         Self::from_value(value)
     }
-
-    unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
-        // SAFETY: the caller's contract. The storage a reference names is
-        // read by the host's own `R::Value` reading of it and not by
-        // `Runtime::deref::<R::Value>`, whose contract is a storage erased
-        // *from* a `R::Value`; `Self` is `repr(transparent)` over it.
-        let slot = unsafe { <R::Value as crate::OneValue<R>>::deref(rt, reference) };
-        // SAFETY: as above.
-        unsafe { &*(slot as *const R::Value).cast::<Self>() }
-    }
-
-    unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
-        // SAFETY: as `deref`, with the caller's exclusive loan.
-        let slot = unsafe { <R::Value as crate::OneValue<R>>::deref_mut(rt, reference) };
-        // SAFETY: as above.
-        unsafe { &mut *(slot as *mut R::Value).cast::<Self>() }
-    }
 }
 
 #[doc(hidden)]
@@ -170,11 +153,42 @@ where
     crate::stored_as_itself!();
 }
 
-impl<R> crate::Borrowable<R> for Owned<R> where R: Runtime {}
+impl<R> crate::Borrowable<R> for Owned<R>
+where
+    R: Runtime,
+{
+    unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
+        // SAFETY: the caller's contract. The storage a reference names is
+        // read by the host's own `R::Value` reading of it and not by
+        // `Runtime::deref::<R::Value>`, whose contract is a storage erased
+        // *from* a `R::Value`; `Self` is `repr(transparent)` over it.
+        let slot = unsafe { <R::Value as crate::Borrowable<R>>::deref(rt, reference) };
+        // SAFETY: as above.
+        unsafe { &*(slot as *const R::Value).cast::<Self>() }
+    }
+
+    unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
+        // SAFETY: as `deref`, with the caller's exclusive loan.
+        let slot = unsafe { <R::Value as crate::Borrowable<R>>::deref_mut(rt, reference) };
+        // SAFETY: as above.
+        unsafe { &mut *(slot as *mut R::Value).cast::<Self>() }
+    }
+}
 
 impl<R> crate::obj::sealed::Sealed for Owned<R> where R: Runtime {}
 
-impl<R> crate::InPlaceElement<R> for Owned<R> where R: Runtime {}
+impl<R> crate::InPlaceElement<R> for Owned<R>
+where
+    R: Runtime,
+{
+    fn in_place(values: &Vec<Owned<R>>) -> &Vec<Self> {
+        values
+    }
+
+    fn in_place_mut(values: &mut Vec<Owned<R>>) -> &mut Vec<Self> {
+        values
+    }
+}
 
 // SAFETY: `Owned<R>` is `#[repr(transparent)]` with `ManuallyDrop<R::Value>`
 // — itself `repr(transparent)` over `R::Value` — as its one field.

@@ -248,7 +248,12 @@ where
     crate::stored_as_itself!();
 }
 
-impl<const N: usize, Rt> crate::Borrowable<Rt> for Nth<kind::Type, N> where Rt: crate::Runtime {}
+impl<const N: usize, Rt> crate::Borrowable<Rt> for Nth<kind::Type, N>
+where
+    Rt: crate::Runtime,
+{
+    crate::whole_box_in_place!(Self, Rt);
+}
 
 // SAFETY: `Nth<kind::Type, N>` is uninhabited, so no `&Nth<kind::Type, N>` exists and the
 // layout claim is never read.
@@ -286,6 +291,7 @@ where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,
 {
+    crate::whole_box_in_place!(Self, Rt);
 }
 
 // SAFETY: as `Nth<kind::Type, N>`: `Spec<T>` holds a `Never` and is uninhabited.

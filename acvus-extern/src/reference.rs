@@ -141,8 +141,9 @@ where
     unsafe fn restore<'a>(rt: &Rt, word: Rt::Value) -> &'a T {
         // SAFETY: the caller's contract: the storage the word names is live
         // for `'a`, which the caller took from the receiver it lent, and it
-        // holds a `T`. The word itself is a copy and does not bound `'a`.
-        unsafe { &*(<Shared as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &word) as *const T) }
+        // holds a `T`, which `TransparentOver` lays out as the runtime's
+        // value. The word itself is a copy and does not bound `'a`.
+        unsafe { &*(<Rt::Value as Borrowable<Rt>>::deref(rt, &word) as *const Rt::Value).cast::<T>() }
     }
 }
 
@@ -161,7 +162,9 @@ where
     unsafe fn restore<'a>(rt: &Rt, word: Rt::Value) -> &'a mut T {
         // SAFETY: as the shared form's, and the receiver was lent
         // exclusively for `'a`.
-        unsafe { &mut *(<Mut as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &word) as *mut T) }
+        unsafe {
+            &mut *(<Rt::Value as Borrowable<Rt>>::deref_mut(rt, &word) as *mut Rt::Value).cast::<T>()
+        }
     }
 }
 

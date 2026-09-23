@@ -408,7 +408,9 @@ impl acvus_extern::OneValue<AcvusRuntime> for Value {
     unsafe fn materialize(_: &AcvusRuntime, value: Value) -> Self {
         value
     }
+}
 
+impl acvus_extern::Borrowable<AcvusRuntime> for Value {
     unsafe fn deref<'a>(_: &AcvusRuntime, reference: &'a Value) -> &'a Value {
         // SAFETY: the caller's contract: a live reference.
         unsafe { reference.target() }
@@ -419,5 +421,3 @@ impl acvus_extern::OneValue<AcvusRuntime> for Value {
         unsafe { reference.target_mut() }
     }
 }
-
-impl acvus_extern::Borrowable<AcvusRuntime> for Value {}
