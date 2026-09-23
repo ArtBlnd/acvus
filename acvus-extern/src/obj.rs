@@ -921,10 +921,21 @@ where
 
 /// A `Stored` type that lives in the runtime's value word itself, so
 /// `Erased<R, T>` derefs to it with no runtime in hand.
-pub trait Inline: Copy + Send + Sync + 'static {}
+///
+/// `Runtime::inline_ref` reads the word as `T` on the strength of this
+/// bound, so the bound is sealed: `Listed` is unnameable outside this
+/// crate, and `for_each_inline!`'s list is its only impl.
+pub trait Inline: inline_sealed::Listed + Copy + Send + Sync + 'static {}
+
+mod inline_sealed {
+    /// A type `for_each_inline!` names, each checked there to fit the
+    /// runtime's value word.
+    pub trait Listed {}
+}
 
 /// Calls `$m! { Name: type, ... }` with every `Inline` type and a name for
-/// it. `Inline` is implemented from this list, and a runtime that tags its
+/// it. `Inline` is implemented from this list and from nothing else, since
+/// its supertrait `Listed` is private to this crate; a runtime that tags its
 /// value word per type builds the tag from the same list.
 #[macro_export]
 macro_rules! for_each_inline {
@@ -945,6 +956,7 @@ macro_rules! inline {
                 && !std::mem::needs_drop::<$t>(),
             "an Inline type fits the runtime's value word"
         );
+        impl inline_sealed::Listed for $t {}
         impl Inline for $t {}
     )* };
 }

@@ -363,9 +363,10 @@ impl Runtime for Tiny {
     type CallFuture<'a> = Ready<V>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx::new(self, ())
+        // SAFETY: the frame is `()`, which names no cells.
+        unsafe { acvus_extern::Ctx::new(self, ()) }
     }
-    fn ctx_of<'a, 'r>(
+    unsafe fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
     ) -> &'r mut acvus_extern::Ctx<'a, Self>
     where
@@ -924,6 +925,12 @@ fn call_sync(handler: &ExternHandler<Tiny>, args: Vec<V>) -> V {
     }
 }
 
+/// A `Ctx` over `Tiny`, whose frame is `()`.
+fn tiny_ctx() -> Ctx<'static, Tiny> {
+    // SAFETY: the frame is `()`, which names no cells.
+    unsafe { Ctx::new(&Tiny, ()) }
+}
+
 /// One resolved instance, reached the way a site reaches it: the site
 /// holds the word of the entry `prepare` built for the requirement, and
 /// the receiver is passed at the mode the signature declared.
@@ -938,12 +945,14 @@ where
     S::Recv<'r>: acvus_extern::Receiver<Tiny>,
 {
     type Site<S> = acvus_extern::Required<S, Place, acvus_extern::Now, 0>;
-    let site = acvus_extern::CallSite {
-        args: &[receiver.at],
-        requires: &[Tiny::instance_value(&receiver.entry)],
-    };
+    let requires = [Tiny::instance_value(&receiver.entry)];
+    let args = [receiver.at];
+    // SAFETY: the word is `instance_value` of `receiver.entry`, which
+    // outlives this call and is the entry `entry_of` built for `S`'s one
+    // requirement at the receiver's type.
+    let site = unsafe { acvus_extern::CallSite::new(&args, &requires) };
     let instance = <Site<S> as acvus_extern::Sited<Tiny>>::site(&site, 0);
-    read(instance.call(&mut Ctx::new(&Tiny, ()), recv, rest))
+    read(instance.call(&mut tiny_ctx(), recv, rest))
 }
 
 /// The site a requirement over one receiver is resolved at: the receiver's
@@ -1085,10 +1094,12 @@ fn call_requiring(reg: &Externs<Tiny>, i: &Interner, site: RequiringSite<'_>, ru
         .iter()
         .map(|ty| acvus_extern::ArgAt { interner: i, ty })
         .collect();
-    let f = f.clone().at_site(&acvus_extern::CallSite {
-        args: &at,
-        requires: site.requires,
-    });
+    // SAFETY: every caller fills `site.requires` with `instance_value` of
+    // the `entry_of` each requirement of `site.name` is resolved to, and
+    // keeps those entries alive across this call.
+    let f = f
+        .clone()
+        .at_site(&unsafe { acvus_extern::CallSite::new(&at, site.requires) });
     // SAFETY: the run is the declaration's own arguments at the types the
     // site table was filled from.
     unsafe { f.into_op(()).call_run(&Tiny, &run) }
@@ -1145,7 +1156,8 @@ fn a_shared_receiver_reaches_the_instance_it_requires() {
         acvus_extern::Mutability::Shared,
         Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
     );
-    let eq_at = [Tiny::instance_value(&entry_of(&reg, &i, "eq", 0))];
+    let eq_entry = entry_of(&reg, &i, "eq", 0);
+    let eq_at = [Tiny::instance_value(&eq_entry)];
     let same = |run: Vec<V>| {
         open::<bool>(call_requiring(
             &reg,
@@ -1201,6 +1213,7 @@ fn an_instance_carries_its_own_requirements_and_keeps_its_mono_glue() {
     );
 
     let mut recv = Place(erased(7i64));
+    let step_entry = entry_of(&reg, &i, "step", 0);
     let on_int = call_type(
         vec![acvus_extern::Ty::Ref(
             acvus_extern::Mutability::Mut,
@@ -1220,7 +1233,7 @@ fn an_instance_carries_its_own_requirements_and_keeps_its_mono_glue() {
                 qref(&i, "advance"),
                 acvus_extern::RequiredInstance(0),
             ),
-            requires: Box::new([Tiny::instance_value(&entry_of(&reg, &i, "step", 0))]),
+            requires: Box::new([Tiny::instance_value(&step_entry)]),
         },
     };
     assert_eq!(
@@ -1545,7 +1558,8 @@ fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
         effect_args: vec![],
         identity_args: vec![],
     };
-    let front_at = [Tiny::instance_value(&entry_of(&reg, &i, "front", 0))];
+    let front_entry = entry_of(&reg, &i, "front", 0);
+    let front_at = [Tiny::instance_value(&front_entry)];
     fn first_of<'a>(args: &'a [acvus_extern::Ty], front_at: &'a [V]) -> RequiringSite<'a> {
         RequiringSite {
             name: "first_of",
@@ -2619,7 +2633,7 @@ fn an_absent_result_lands_as_the_operation_wraps_it_and_keeps_its_nesting() {
         assert_eq!(H::WIDTH.ret, 1);
         assert_eq!(H::WIDTH.result, acvus_extern::FormKind::Value);
         // SAFETY: the caller's contract.
-        unsafe { one_of(handler, &mut Ctx::new(&Tiny, ()), &[arg]) }
+        unsafe { one_of(handler, &mut tiny_ctx(), &[arg]) }
     }
 
     // SAFETY: the width says one argument in and one value out.
@@ -2770,7 +2784,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     {
         assert_eq!(H::WIDTH, expected);
         // SAFETY: the arguments are the declaration's own, at its width.
-        open::<i64>(unsafe { one_of(&handler, &mut Ctx::new(&Tiny, ()), &args) })
+        open::<i64>(unsafe { one_of(&handler, &mut tiny_ctx(), &args) })
     }
 
     assert_eq!(
@@ -2871,7 +2885,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     let by_register = unsafe {
         one_of(
             &two_wide,
-            &mut Ctx::new(&Tiny, ()),
+            &mut tiny_ctx(),
             &[erased(1i64), erased(2i64)],
         )
     };
@@ -2918,7 +2932,7 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     // the three names of this one handler.
     let answers = unsafe {
         [
-            one_of(&glue, &mut Ctx::new(&Tiny, ()), &[erased(7i64)]),
+            one_of(&glue, &mut tiny_ctx(), &[erased(7i64)]),
             boxed
                 .at_site(&acvus_extern::CallSite::of_args(&site.args(1)))
                 .into_op(())

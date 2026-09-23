@@ -59,12 +59,16 @@ pub struct ArgAt<'a> {
 /// One call site as `prepare` hands it to a handler: the settled type of
 /// each argument, and the word of the entry `prepare` chose for each
 /// requirement the callee states, in the declaration's order (RFC-0070 rule 2).
+///
+/// The fields are private because `Required::site` makes a callable
+/// `Instance` out of a `requires` word: only `new`, which is `unsafe`,
+/// puts a word there, and `of_args` puts none.
 pub struct CallSite<'a, Rt>
 where
     Rt: Runtime,
 {
-    pub args: &'a [ArgAt<'a>],
-    pub requires: &'a [Rt::Value],
+    pub(crate) args: &'a [ArgAt<'a>],
+    pub(crate) requires: &'a [Rt::Value],
 }
 
 impl<'a, Rt> CallSite<'a, Rt>
@@ -77,6 +81,19 @@ where
             args,
             requires: &[],
         }
+    }
+
+    /// A site whose callee states requirements, with the checker's answer
+    /// for each.
+    ///
+    /// # Safety
+    /// The site is handed only to the declaration whose requirements
+    /// `requires` answers: `requires[n]` was made by
+    /// `Runtime::instance_value` from an entry that outlives every handler
+    /// sited here, and that entry is an instance of the `n`th requirement's
+    /// signature at the type its variable is filled with at this site.
+    pub unsafe fn new(args: &'a [ArgAt<'a>], requires: &'a [Rt::Value]) -> Self {
+        CallSite { args, requires }
     }
 }
 
@@ -242,9 +259,10 @@ where
     const ARGUMENTS: usize = 0;
 
     fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<S, I, Rt, T> {
-        // SAFETY: the word is the entry `prepare` chose for this site's
-        // `NTH` requirement, whose signature is `S` and whose type is what
-        // the requirement's variable is filled with here.
+        // SAFETY: `CallSite::new`'s contract, the one way a word reaches
+        // `requires`: the word is the entry chosen for this site's `NTH`
+        // requirement, whose signature is `S` and whose type is what the
+        // requirement's variable is filled with here.
         unsafe { Instance::at(site.requires[NTH]) }
     }
 }
@@ -1381,7 +1399,10 @@ where
         let sites = self.sites.clone();
         Box::pin(async move {
             let mut rooted = rt.rooted();
-            let ctx = Rt::ctx_of(&mut rooted);
+            // SAFETY: the `Ctx` is lent to the handler's body alone, and
+            // safe code reaches no second `Ctx` to exchange it with:
+            // `ctx_of`, `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
+            let ctx = unsafe { Rt::ctx_of(&mut rooted) };
             // SAFETY: as the synchronous impl's, over the run the future owns.
             let args = unsafe { <A as Parameters<Rt>>::take(ctx.rt, &held, &sites) };
             f(ctx, args).await
@@ -1634,7 +1655,10 @@ where
     {
         DirectOp::Call(Box::new(move |rt, run, out| {
             let mut rooted = rt.rooted();
-            let ctx = Rt::ctx_of(&mut rooted);
+            // SAFETY: the `Ctx` is lent to the handler's body alone, and
+            // safe code reaches no second `Ctx` to exchange it with:
+            // `ctx_of`, `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
+            let ctx = unsafe { Rt::ctx_of(&mut rooted) };
             // SAFETY: the contract of `DirectOp::call`, which is this
             // closure's only caller: the two runs are the declaration's own
             // widths, which is what each form's `from_slice` asks.

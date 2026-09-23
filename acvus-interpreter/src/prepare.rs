@@ -3140,10 +3140,11 @@ impl<'a> Prepare<'a> {
         };
         let f = {
             let sites = self.arg_sites(&[head.reference]);
-            f.at_site(&acvus_extern::CallSite {
-                args: &sites,
-                requires: requires.as_slice(),
-            })
+            // SAFETY: `requires` is `chosen`'s answer for this call's handler: one
+            // word per requirement it states, each `Value::instance` of an entry
+            // the module's `InstanceEntryStore` keeps boxed for as long as the
+            // prepared code runs, built for the instance the checker settled on.
+            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires.as_slice()) })
         };
         let CallHead {
             it, x, large, word, ..
@@ -4126,10 +4127,11 @@ impl<'a> Prepare<'a> {
                             self.chosen(id, *instance, required);
                         let window = self.window(at, args, ops);
                         let sites = self.arg_sites(args);
-                        let site = acvus_extern::CallSite {
-                            args: &sites,
-                            requires: &requires,
-                        };
+                        // SAFETY: `requires` is `chosen`'s answer for this call's handler: one
+                        // word per requirement it states, each `Value::instance` of an entry
+                        // the module's `InstanceEntryStore` keeps boxed for as long as the
+                        // prepared code runs, built for the instance the checker settled on.
+                        let site = unsafe { acvus_extern::CallSite::new(&sites, &requires) };
                         assert_eq!(
                             handler.width().ret,
                             1,
@@ -4542,10 +4544,11 @@ impl<'a> Prepare<'a> {
                     ExternHandler::Heavy(f) => {
                         let f = {
                             let sites = self.arg_sites(args);
-                            f.at_site(&acvus_extern::CallSite {
-                                args: &sites,
-                                requires,
-                            })
+                            // SAFETY: `requires` is `chosen`'s answer for this call's handler: one
+                            // word per requirement it states, each `Value::instance` of an entry
+                            // the module's `InstanceEntryStore` keeps boxed for as long as the
+                            // prepared code runs, built for the instance the checker settled on.
+                            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires) })
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -4559,10 +4562,11 @@ impl<'a> Prepare<'a> {
                     ExternHandler::Async(f) => {
                         let f = {
                             let sites = self.arg_sites(args);
-                            f.at_site(&acvus_extern::CallSite {
-                                args: &sites,
-                                requires,
-                            })
+                            // SAFETY: `requires` is `chosen`'s answer for this call's handler: one
+                            // word per requirement it states, each `Value::instance` of an entry
+                            // the module's `InstanceEntryStore` keeps boxed for as long as the
+                            // prepared code runs, built for the instance the checker settled on.
+                            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires) })
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -4594,10 +4598,12 @@ impl<'a> Prepare<'a> {
         let width = f.width();
         let f = {
             let sites = self.arg_sites(args);
-            f.at_site(&acvus_extern::CallSite {
-                args: &sites,
-                requires,
-            })
+            // SAFETY: `requires` is the `chosen` answer this function's one
+            // caller took `f` from: one word per requirement `f` states, each
+            // `Value::instance` of an entry the module's `InstanceEntryStore`
+            // keeps boxed for as long as the prepared code runs, built for the
+            // instance the checker settled on.
+            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires) })
         };
         let takes = self.take_mask(args);
         let slots = self.argument_words(args);
@@ -8257,10 +8263,11 @@ impl<'a> Prepare<'a> {
                      shape for"
                 ),
             };
-            let site = acvus_extern::CallSite {
-                args: &sites,
-                requires: &found.requires,
-            };
+            // SAFETY: `requires` is `chosen`'s answer for this call's handler: one
+            // word per requirement it states, each `Value::instance` of an entry
+            // the module's `InstanceEntryStore` keeps boxed for as long as the
+            // prepared code runs, built for the instance the checker settled on.
+            let site = unsafe { acvus_extern::CallSite::new(&sites, &found.requires) };
             calls.push(f.at_site(&site).into_fused(shape));
         }
         let last = previous.expect("a recognized run holds at least one call");

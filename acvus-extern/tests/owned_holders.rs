@@ -191,9 +191,10 @@ impl Runtime for Counted {
     type CallFuture<'a> = Ready<V>;
 
     fn rooted(&self) -> acvus_extern::Ctx<'_, Self> {
-        acvus_extern::Ctx::new(self, ())
+        // SAFETY: the frame is `()`, which names no cells.
+        unsafe { acvus_extern::Ctx::new(self, ()) }
     }
-    fn ctx_of<'a, 'r>(
+    unsafe fn ctx_of<'a, 'r>(
         rooted: &'r mut acvus_extern::Ctx<'a, Self>,
     ) -> &'r mut acvus_extern::Ctx<'a, Self>
     where

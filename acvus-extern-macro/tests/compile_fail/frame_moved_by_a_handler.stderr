@@ -1,0 +1,19 @@
+error[E0616]: field `frame` of struct `Ctx` is private
+  --> tests/compile_fail/frame_moved_by_a_handler.rs:14:29
+   |
+14 |     std::mem::swap(&mut ctx.frame, &mut other.frame);
+   |                             ^^^^^ private field
+
+error[E0616]: field `frame` of struct `Ctx` is private
+  --> tests/compile_fail/frame_moved_by_a_handler.rs:14:47
+   |
+14 |     std::mem::swap(&mut ctx.frame, &mut other.frame);
+   |                                               ^^^^^ private field
+
+error[E0133]: call to unsafe function `ctx_of` is unsafe and requires unsafe block
+  --> tests/compile_fail/frame_moved_by_a_handler.rs:24:25
+   |
+24 |     std::mem::swap(ctx, Rt::ctx_of(&mut rooted));
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

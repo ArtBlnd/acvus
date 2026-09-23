@@ -161,6 +161,40 @@ where
     }
 }
 
+impl<A, R, E, Rt> Closure<A, R, E, Rt>
+where
+    A: CallArgs<Rt>,
+    R: OneValue<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    /// `ClosureFn::call` on cells of the call's own (`Runtime::rooted`),
+    /// for a handler that runs calls side by side, each needing a frame.
+    /// The rooted `Ctx` is made and used inside the future and never lent
+    /// to the handler, so the handler holds no second `Ctx` to exchange
+    /// its own with.
+    pub fn call_rooted<'a>(
+        &'a self,
+        rt: &'a Rt,
+        args: A::Passed<'a>,
+    ) -> impl Future<Output = R> + Send + 'a {
+        async move {
+            if self.1 {
+                let mut rooted = rt.rooted();
+                // SAFETY: the `Ctx` is lent to `call_now` alone and never
+                // leaves this block.
+                let ctx = unsafe { Rt::ctx_of(&mut rooted) };
+                // SAFETY: as `ClosureFn::call_now`'s.
+                return returned(rt, unsafe {
+                    rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
+                });
+            }
+            // SAFETY: as `ClosureFn::call_now`'s.
+            returned(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
+        }
+    }
+}
+
 crate::cross_one_value!(
     Closure<A, R, E, __Rt>,
     A: Send + Sync + 'static, R: Send + Sync + 'static, E: Var<kind::Effect>

@@ -2060,6 +2060,9 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
         // closure the pool runs.
         let handle = executor.spawn_blocking(Box::new(move || {
             let mut rooted = rt.rooted();
+            // SAFETY: the `Ctx` is lent to the handler alone, and safe code
+            // reaches no second `Ctx` to exchange it with: `ctx_of`,
+            // `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
             unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
         }));
         m.suspend::<LARGE>(
@@ -2292,6 +2295,9 @@ impl Op for SpawnExternSync {
         // SAFETY: as `CallHeavy`'s.
         let handle = m.shared().executor.spawn_blocking(Box::new(move || {
             let mut rooted = rt.rooted();
+            // SAFETY: the `Ctx` is lent to the handler alone, and safe code
+            // reaches no second `Ctx` to exchange it with: `ctx_of`,
+            // `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
             unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
         }));
         m.regs().define::<true>(self.dst, Value::handle(handle));

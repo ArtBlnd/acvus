@@ -394,11 +394,7 @@ where
     }
     let rt = ctx.rt;
     let f = &body.f;
-    let mut rooted: Vec<Rt::Rooted<'_>> = xs.iter().map(|_| rt.rooted()).collect();
-    let calls = rooted
-        .iter_mut()
-        .zip(xs)
-        .map(|(frame, x)| f.call(Rt::ctx_of(frame), (x,)));
+    let calls = xs.into_iter().map(|x| f.call_rooted(rt, (x,)));
     futures::future::join_all(calls).await.into()
 }
 

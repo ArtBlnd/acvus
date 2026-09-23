@@ -621,7 +621,15 @@ impl_tuple_ty_arg!(A, B, C, D);
 /// The bound of a type variable that ranges over a finite set of concrete
 /// types: `A: Monomorphize<(i64, f64)>`. The declaration carries the set;
 /// the handler is compiled once per member. The macro reads the set.
-pub trait Monomorphize<Types>: Var<kind::Type> {}
+///
+/// Sealed: `Member` is unnameable outside this crate, so the impls below
+/// are the whole of it.
+pub trait Monomorphize<Types>: mono_sealed::Member + Var<kind::Type> {}
+
+mod mono_sealed {
+    /// A type `mono_member!` names, or `Erased<R, T>`.
+    pub trait Member {}
+}
 
 /// The bound of a type variable that each instance fills with a Rust type
 /// of its own: `Ts: Var<kind::Type> + Chosen`, where a derived type's
@@ -635,11 +643,13 @@ pub trait Chosen: Var<kind::Type> {}
 impl<T> Chosen for T where T: Var<kind::Type> {}
 
 /// One concrete type a `Monomorphize` parameter ranges over: the handler is
-/// compiled at it, so it fills the parameter there. This list is the reach
-/// of `Monomorphize` without a blanket — a member type not named here
-/// cannot be one, and the build says so at the declaration.
+/// compiled at it, so it fills the parameter there. This list and the
+/// `Erased` impl below are the reach of `Monomorphize`, and `Member` is
+/// sealed — a member type not named here cannot be one, and the build says
+/// so at the declaration.
 macro_rules! mono_member {
     ($T:ty) => {
+        impl mono_sealed::Member for $T {}
         impl<Types> Monomorphize<Types> for $T {}
     };
 }
@@ -654,6 +664,13 @@ mono_member!(String);
 /// compiles one handler for the runtime's own value, `Owned<R>`. The impl
 /// holds for every `Erased<R, T>`, since nothing on `Erased` reads `T`
 /// (`Canonical`).
+impl<R, T> mono_sealed::Member for crate::Erased<R, T>
+where
+    R: crate::Runtime,
+    T: 'static,
+{
+}
+
 impl<R, T, Types> Monomorphize<Types> for crate::Erased<R, T>
 where
     R: crate::Runtime,

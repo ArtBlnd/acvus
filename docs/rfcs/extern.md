@@ -846,3 +846,34 @@ one kind of place a value can be taken out of and put back into.
 - A loan for the call kept by the checker over the names each argument
   uses — a second implementation of RFC-0018 rules 7 and 8, over the AST,
   beside the MIR's.
+
+## RFC-0080: A fact unsafe code relies on is held by a type or asserted with `unsafe`
+
+Status: Accepted
+
+1. **One form of guarantee.** A fact that unsafe code relies on is a bound,
+   a sealed trait, a private field or a private constructor, or else an
+   `unsafe` token where it is asserted. A debug assert or a doc sentence is
+   neither.
+2. **The surfaces it seals.** `Inline` and `Monomorphize` are sealed to
+   their lists. `CallSite`'s fields are private, and its one constructor of
+   requirement words is `unsafe`, `prepare` being its caller. `Ctx`'s frame
+   is private, and `Ctx::new`, `Ctx::frame_mut` and `Runtime::ctx_of` are
+   `unsafe`, since two `Ctx`s in safe hands swap frames. A handler that
+   needs cells of its own calls `Closure::call_rooted`.
+3. **Effect declarations are outside it.** `pure`, `idempotent` and
+   `commutative` are the extern author's own promise, which the checker
+   trusts (RFC-0013). An extension library is written for the users of its
+   own language, and its author answers for its soundness.
+
+**Why.** A safe trait or a public field that unsafe code trusts lets safe
+code break the trust: an `Inline` impl outside the list, a `Ctx` frame
+swapped, an `Instance` forged from a word each reached undefined behaviour
+with no `unsafe` in the author's code. One form of guarantee makes each
+such fact visible where it is made.
+**Cost.** A runtime writes `unsafe` where it builds a `Ctx` or a call site.
+**Rejected.**
+- `ctx_of` on a runtime-only trait — the glue calls it with `Rt: Runtime`
+  alone, so the trait is `Runtime`'s supertrait and a handler reaches it
+  through the same bound; `unsafe` is what keeps it from a handler.
+- Debug asserts on the trusted facts — they vanish in the build that runs.

@@ -20,9 +20,12 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// The frame a handler calls a closure on: the cells above the calling
     /// frame (RFC-0052 rule 7). This is the state **itself**, not a borrow of
     /// it: a `Ctx` owns one, and every crossing hands out `&mut Ctx` from the
-    /// owner of that `Ctx`. Nothing returns a frame by value, so the state
-    /// never moves out of the frame below and `Regs::take_window`'s "one
-    /// handle to these cells" holds unchanged.
+    /// owner of that `Ctx`. `Ctx`'s frame field is private and its one
+    /// accessor, `Ctx::frame_mut`, is `unsafe`; the one other `&mut Ctx` a
+    /// caller can hold beside it, `ctx_of`'s, is `unsafe` too, as is
+    /// `Ctx::new`, so no safe code swaps two frames or two `Ctx`s. The state
+    /// therefore never moves out of the frame below and
+    /// `Regs::take_window`'s "one handle to these cells" holds unchanged.
     ///
     /// The lifetime is here for hosts whose window borrows something; a host
     /// whose state borrows nothing ignores it.
@@ -59,8 +62,16 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     unsafe fn instance_entry<'a>(value: &'a Self::Value) -> &'a crate::InstanceEntry<Self>;
 
     fn rooted(&self) -> Self::Rooted<'_>;
-    /// The `Ctx` the rooted cells carry, lent from its owner.
-    fn ctx_of<'a, 'r>(rooted: &'r mut Self::Rooted<'a>) -> &'r mut crate::Ctx<'a, Self>
+    /// The `Ctx` the rooted cells carry, lent from its owner. A handler
+    /// that calls a closure on cells of its own does so through
+    /// `Closure::call_rooted`, which never lends this `Ctx` out.
+    ///
+    /// # Safety
+    /// The `Ctx` is not exchanged with another: the caller moves no `Ctx`
+    /// or frame out through the reference and writes no other into it, so
+    /// the `Ctx` a handler was called with keeps the frame its owner built
+    /// it over.
+    unsafe fn ctx_of<'a, 'r>(rooted: &'r mut Self::Rooted<'a>) -> &'r mut crate::Ctx<'a, Self>
     where
         'a: 'r;
 
@@ -319,9 +330,10 @@ impl Runtime for TypesOnly {
     }
 
     fn rooted(&self) -> crate::Ctx<'_, TypesOnly> {
-        crate::Ctx::new(self, ())
+        // SAFETY: the frame is `()`, which names no cells.
+        unsafe { crate::Ctx::new(self, ()) }
     }
-    fn ctx_of<'a, 'r>(
+    unsafe fn ctx_of<'a, 'r>(
         rooted: &'r mut crate::Ctx<'a, TypesOnly>,
     ) -> &'r mut crate::Ctx<'a, TypesOnly>
     where

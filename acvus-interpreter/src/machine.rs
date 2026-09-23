@@ -87,7 +87,9 @@ impl<'c> Machine<'c> {
         Machine {
             body,
             regs,
-            ctx: Ctx::new(rt, frame),
+            // SAFETY: `take_window` handed this machine the one handle to
+            // the window's cells, which `regs` keeps live beside the `Ctx`.
+            ctx: unsafe { Ctx::new(rt, frame) },
             exit: [Value::unit(); 2],
             at: body.entry,
             pending: None,
@@ -176,7 +178,9 @@ impl<'c> Machine<'c> {
     /// the body this frame's window is bound to (RFC-0050 rule 6).
     #[inline(always)]
     pub fn window(&mut self) -> &mut FrameState {
-        &mut self.ctx.frame
+        // SAFETY: `window`'s callers are this interpreter's call ops, which
+        // lay and bind the frame in place; no handler is handed a `Machine`.
+        unsafe { self.ctx.frame_mut() }
     }
 
     /// The argument window, the destination run and the window above, for an
@@ -242,7 +246,8 @@ impl<'c> Machine<'c> {
         R: Returned,
     {
         let rt = self.ctx.rt;
-        let window = &mut self.ctx.frame;
+        // SAFETY: the frame is bound in place, never moved out or replaced.
+        let window = unsafe { self.ctx.frame_mut() };
         if window.fits(callee) {
             let (regs, opened) = window.bind(callee);
             return run_frame(callee, named, regs, rt, opened, fill);

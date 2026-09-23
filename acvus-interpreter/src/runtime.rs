@@ -84,7 +84,10 @@ impl<'a> RootedCtx<'a> {
     fn new(rt: &'a AcvusRuntime) -> RootedCtx<'a> {
         let RootFrame { state, cells } = RootFrame::new();
         RootedCtx {
-            ctx: Ctx::new(rt, state),
+            // SAFETY: `state` names `cells`, which this `RootedCtx` keeps
+            // beside the `Ctx` for as long as the `Ctx` lives, and nothing
+            // else holds `state`.
+            ctx: unsafe { Ctx::new(rt, state) },
             _cells: cells,
         }
     }
@@ -114,7 +117,7 @@ impl Runtime for AcvusRuntime {
         RootedCtx::new(self)
     }
 
-    fn ctx_of<'a, 'r>(rooted: &'r mut RootedCtx<'a>) -> &'r mut Ctx<'a, AcvusRuntime>
+    unsafe fn ctx_of<'a, 'r>(rooted: &'r mut RootedCtx<'a>) -> &'r mut Ctx<'a, AcvusRuntime>
     where
         'a: 'r,
     {
@@ -312,15 +315,15 @@ impl Runtime for AcvusRuntime {
                 "a closure takes at most one cell of arguments"
             )
         };
-        args.into_run(self, ctx.frame.run_mut(A::WIDTH));
+        let rt = ctx.rt;
+        // SAFETY: the frame is read and written in place, never moved out
+        // or replaced.
+        let frame = unsafe { ctx.frame_mut() };
+        args.into_run(self, frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here, so its
         // code word names the `Code` this enters and the captures the entry
         // reads.
-        unsafe {
-            f.code_of()
-                .code()
-                .call(*f, ctx.rt, &mut ctx.frame, A::WIDTH as u16)
-        }
+        unsafe { f.code_of().code().call(*f, rt, frame, A::WIDTH as u16) }
     }
 
     unsafe fn call_n<'a>(&'a self, f: &'a Value, args: &mut [Value]) -> Self::CallFuture<'a> {
