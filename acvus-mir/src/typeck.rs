@@ -891,7 +891,11 @@ fn view_in_arg<'t>(
         TypeArg::Specialized(held) => match held {
             HeldTy::Leaf(leaf) => view_argument(leaf.ty(), argument_of),
             HeldTy::Held(_) => None,
-            HeldTy::Tuple(_) | HeldTy::Option(_) | HeldTy::Result(..) | HeldTy::Array(..) => held
+            HeldTy::Tuple(_)
+            | HeldTy::Option(_)
+            | HeldTy::Result(..)
+            | HeldTy::Array(..)
+            | HeldTy::RustArray(..) => held
                 .parts()
                 .into_iter()
                 .find_map(|part| view_in_arg(part, argument_of)),
