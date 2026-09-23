@@ -5,6 +5,7 @@ mod attention_loop_shape;
 mod attention_shape;
 mod attention_shape_overflow;
 mod block_splitting;
+mod block_statement;
 mod body_owned_argument;
 mod body_result_reference;
 mod body_returns_a_view;

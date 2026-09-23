@@ -66,6 +66,13 @@ Assignments to places — `@x = e;`, `a.b = e;`, `a[i] = e;`, `*r = e;` — are
 statements of the same rule. There is one parser entry for scripts; what a
 file is (script, template, expression) chooses the pipeline, not the grammar.
 
+A statement ends in `;` or at the `}` of a block. `while`, `for` and
+`anyorder` end at their `}`, and a `;` after it is refused. An `if` or a
+`match` that begins a statement is the whole statement, as in Rust: it ends
+at its `}`, and no operator continues it. Without a `;`, it is the body's
+tail when the body's `}` or the script's end follows it, and a statement
+whose value is dropped otherwise; with a `;` it is a statement.
+
 **Why.** `let` is the only way to introduce a name, so a reader knows every
 name a body introduces by reading its `let`s, and the writer of `x = e;` knows
 the store lands where the visible `x` was bound.
@@ -74,6 +81,12 @@ the store lands where the visible `x` was bound.
 - Bare `x = e;` binds where no `x` is in scope and assigns where one is — it
   is implicit: a typo becomes a new binding, and a `let` moved or removed
   silently turns a store into a shadow.
+- A `;` required after an `if` or `match` statement — a statement that ends in
+  a block read as an unfinished expression, as a Rust reader does not expect.
+- A `;` refused after an `if` or `match`, as after a loop — a body could no
+  longer end in one whose value it drops.
+- A block as such a statement — a statement that begins with `{` reads on,
+  and `{ [5, 6] }[1]` would become `[1]`.
 
 ## RFC-0038: `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error
 

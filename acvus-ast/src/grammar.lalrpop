@@ -5,7 +5,7 @@ use crate::span::Span;
 use crate::token::Token;
 use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
-use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern, block_closed};
+use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern, block_closed, stated};
 use crate::literal::{self, IntWidth, SuffixedInt};
 
 grammar(interner: &Interner);
@@ -88,8 +88,68 @@ extern {
 // One statement grammar for every block: `let` binds, `x = e;` assigns.
 
 pub Script: Script = {
-    <l:@L> <stmts:Stmt*> <tail:Expr?> <r:@R> =>
-        Script { id: AstId::alloc(), stmts, tail: tail.map(Box::new), span: Span::new(l, r) }
+    <l:@L> <body:Body> <r:@R> =>
+        Script { id: AstId::alloc(), stmts: body.0, tail: body.1.map(Box::new), span: Span::new(l, r) }
+};
+
+// ── Bodies ─────────────────────────────────────────────────────────────
+//
+// An `if` or a `match` that begins a statement is the whole statement, as
+// in Rust: it ends at its `}`, with or without a `;`, and no operator
+// continues it. Without the `;`, the token after the `}` decides what it
+// is: the `}` closing the body, or the end of the script, makes it the
+// body's tail; anything else makes it a statement. With the `;` it is a
+// statement, the way a body that ends in one discards its value.
+//
+// The body rules are inlined into the rules that hold them, so a script's
+// end and a block's `}` stay apart: a stray `}` in a script is refused where
+// a statement was expected, not as input after the end.
+
+// Statements and an optional tail: a script, an `if` or `else` block.
+#[inline]
+Body: (Vec<Stmt>, Option<Expr>) = {
+    => (vec![], None),
+    <stmts:Stmts> => (stmts, None),
+    <body:TailedBody> => (body.0, Some(body.1)),
+};
+
+// Statements and a tail: a block expression.
+#[inline]
+TailedBody: (Vec<Stmt>, Expr) = {
+    <tail:StmtExpr> => (vec![], tail),
+    <stmts:Stmts> <tail:StmtExpr> => (stmts, tail),
+    <open:Open> <tail:StmtExpr> => (stated(open), tail),
+    Open,
+};
+
+// Statements and no tail: a `while`, `for` or `anyorder` block.
+#[inline]
+LoopBody: Vec<Stmt> = {
+    => vec![],
+    Stmts,
+    <open:Open> => stated(open),
+};
+
+// Statements that end in a `;` or in a `while`, `for` or `anyorder` block.
+Stmts: Vec<Stmt> = {
+    <stmt:Stmt> => vec![stmt],
+    <mut stmts:Stmts> <stmt:Stmt> => { stmts.push(stmt); stmts },
+    <open:Open> <stmt:Stmt> => { let mut stmts = stated(open); stmts.push(stmt); stmts },
+};
+
+// Statements that end in an `if` or a `match` with no `;` after it, whose
+// place the next token decides.
+Open: (Vec<Stmt>, Expr) = {
+    <last:BranchExpr> => (vec![], last),
+    <stmts:Stmts> <last:BranchExpr> => (stmts, last),
+    <open:Open> <last:BranchExpr> => (stated(open), last),
+};
+
+// The expressions that stand as a statement without `;`. A block is not
+// one: a statement that begins with `{` reads on, so `{ [5, 6] }[1]` is `6`.
+BranchExpr: Expr = {
+    MatchExpr,
+    IfExpr,
 };
 
 // ── match ──────────────────────────────────────────────────────────────
@@ -110,7 +170,7 @@ MatchExpr: Expr = {
 
 MatchArmRule: MatchExprArm = {
     // `P => { stmts; }` — an arm run for its effect; its type is Unit.
-    <l:@L> <pattern:ArmPattern> "=>" "{" <body:Stmt+> "}" <r:@R> =>
+    <l:@L> <pattern:ArmPattern> "=>" "{" <body:Stmts> "}" <r:@R> =>
         MatchExprArm { id: AstId::alloc(), pattern, body, tail: None, span: Span::new(l, r) },
     // `P => e` — including `P => { stmts; tail }`, which is a block expression.
     <l:@L> <pattern:ArmPattern> "=>" <e:Expr> <r:@R> =>
@@ -126,25 +186,25 @@ ArmPattern: Pattern = {
 // If expression (recursive via else-if chain).
 IfExpr: Expr = {
     // if cond { body; tail } else ...
-    <l:@L> "if" <cond:Expr> "{" <body:Stmt*> <tail:Expr?> "}"
+    <l:@L> "if" <cond:Expr> "{" <body:Body> "}"
         <eb:ElseBranch?> <r:@R> =>
         Expr::If {
             id: AstId::alloc(),
             cond: Box::new(cond),
-            then_body: body,
-            then_tail: tail.map(Box::new),
+            then_body: body.0,
+            then_tail: body.1.map(Box::new),
             else_branch: eb.map(Box::new),
             span: Span::new(l, r),
         },
     // if let pattern = source { body; tail } else ...
-    <l:@L> "if" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> <tail:Expr?> "}"
+    <l:@L> "if" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Body> "}"
         <eb:ElseBranch?> <r:@R> =>?
         Ok(Expr::IfLet {
             id: AstId::alloc(),
             pattern: expr_to_pattern(&lhs)?,
             source: Box::new(rhs),
-            then_body: body,
-            then_tail: tail.map(Box::new),
+            then_body: body.0,
+            then_tail: body.1.map(Box::new),
             else_branch: eb.map(Box::new),
             span: Span::new(l, r),
         }),
@@ -152,10 +212,10 @@ IfExpr: Expr = {
 
 ElseBranch: ElseBranch = {
     "else" <e:IfExpr> => ElseBranch::ElseIf(e),
-    <l:@L> "else" "{" <body:Stmt*> <tail:Expr?> "}" <r:@R> =>
+    <l:@L> "else" "{" <body:Body> "}" <r:@R> =>
         ElseBranch::Else {
-            body,
-            tail: tail.map(Box::new),
+            body: body.0,
+            tail: body.1.map(Box::new),
             span: Span::new(l, r),
         },
 };
@@ -168,12 +228,12 @@ Stmt: Stmt = {
     <l:@L> "let" <name:"ident"> ";" <r:@R> =>
         Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
     // while cond { body }
-    <l:@L> "while" <cond:Expr> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+    <l:@L> "while" <cond:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed(BlockStatement::While, semicolon)?;
         Ok(Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) })
     },
     // while let pattern = source { body }
-    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed(BlockStatement::While, semicolon)?;
         Ok(Stmt::WhileLet {
             id: AstId::alloc(),
@@ -184,7 +244,7 @@ Stmt: Stmt = {
         })
     },
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
-    <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+    <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed(BlockStatement::For, semicolon)?;
         Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) })
     },
@@ -194,15 +254,16 @@ Stmt: Stmt = {
     <l:@L> "continue" ";" <r:@R> =>
         Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
     // anyorder { body }
-    <l:@L> "anyorder" "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+    <l:@L> "anyorder" "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed(BlockStatement::Anyorder, semicolon)?;
         Ok(Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) })
     },
     // `place = e;` — a place is a name, an `@context` or a `$parameter`
     // under any path of `.field` and `[index]` steps (RFC-0047).
-    <l:@L> <lhs:Expr> "=" <rhs:Expr> ";" <r:@R> =>? build_assign(lhs, rhs, Span::new(l, r)),
+    <l:@L> <lhs:StmtExpr> "=" <rhs:Expr> ";" <r:@R> =>? build_assign(lhs, rhs, Span::new(l, r)),
     // expression statement
-    <e:Expr> ";" => Stmt::Expr(e),
+    <e:StmtExpr> ";" => Stmt::Expr(e),
+    <e:BranchExpr> ";" => Stmt::Expr(e),
 };
 
 // A `;` after the `}` closing a block statement, which its rule reads so that it
@@ -255,8 +316,22 @@ pub ArmLine: Pattern = {
 };
 
 // ── Expressions (precedence climbing) ──────────────────────────────────
+//
+// Each level is written once over `Lead`, the primary its leftmost operand
+// may be. An operand anywhere else is the full level.
 
 pub Expr: Expr = {
+    ExprFrom<PrimaryExpr>,
+};
+
+// The expression a statement or a tail begins with: its leftmost operand is
+// no `if` or `match`, since such an expression is a statement of its own
+// (`Open` above).
+StmtExpr: Expr = {
+    ExprFrom<PlainPrimary>,
+};
+
+ExprFrom<Lead>: Expr = {
     // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
     <l:@L> "|" <params:CommaSep<LambdaParamRule>> "|" "->" <body:Expr> <r:@R> =>
         Expr::Lambda {
@@ -270,19 +345,19 @@ pub Expr: Expr = {
     // `return;`: every body returns a value (RFC-0054).
     <l:@L> "return" <e:Expr> <r:@R> =>
         Expr::Return { id: AstId::alloc(), value: Box::new(e), span: Span::new(l, r) },
-    PipeExpr,
+    PipeExpr<Lead>,
 };
 
 // Pipe: left-associative (lowest precedence among non-lambda)
-PipeExpr: Expr = {
-    <l:@L> <left:PipeExpr> "|" <right:OrExpr> <r:@R> =>
+PipeExpr<Lead>: Expr = {
+    <l:@L> <left:PipeExpr<Lead>> "|" <right:OrExpr<PrimaryExpr>> <r:@R> =>
         Expr::Pipe {
             id: AstId::alloc(),
             left: Box::new(left),
             right: Box::new(right),
             span: Span::new(l, r),
         },
-    OrExpr,
+    OrExpr<Lead>,
 };
 
 LambdaParamRule: LambdaParam = {
@@ -290,60 +365,60 @@ LambdaParamRule: LambdaParam = {
 };
 
 // Logical Or: left-associative
-OrExpr: Expr = {
-    <l:@L> <left:OrExpr> "||" <right:AndExpr> <r:@R> =>
+OrExpr<Lead>: Expr = {
+    <l:@L> <left:OrExpr<Lead>> "||" <right:AndExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: Span::new(l, r) },
-    AndExpr,
+    AndExpr<Lead>,
 };
 
 // Logical And: left-associative
-AndExpr: Expr = {
-    <l:@L> <left:AndExpr> "&&" <right:CompExpr> <r:@R> =>
+AndExpr<Lead>: Expr = {
+    <l:@L> <left:AndExpr<Lead>> "&&" <right:CompExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::And, right: Box::new(right), span: Span::new(l, r) },
-    CompExpr,
+    CompExpr<Lead>,
 };
 
 // Comparison: ==, !=, <, >, <=, >=
-CompExpr: Expr = {
-    <l:@L> <left:CompExpr> "==" <right:AddExpr> <r:@R> =>
+CompExpr<Lead>: Expr = {
+    <l:@L> <left:CompExpr<Lead>> "==" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> "!=" <right:AddExpr> <r:@R> =>
+    <l:@L> <left:CompExpr<Lead>> "!=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Neq, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> "<" <right:AddExpr> <r:@R> =>
+    <l:@L> <left:CompExpr<Lead>> "<" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lt, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> ">" <right:AddExpr> <r:@R> =>
+    <l:@L> <left:CompExpr<Lead>> ">" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gt, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> "<=" <right:AddExpr> <r:@R> =>
+    <l:@L> <left:CompExpr<Lead>> "<=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lte, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr> ">=" <right:AddExpr> <r:@R> =>
+    <l:@L> <left:CompExpr<Lead>> ">=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gte, right: Box::new(right), span: Span::new(l, r) },
-    AddExpr,
+    AddExpr<Lead>,
 };
 
 // Add/Sub: left-associative
-AddExpr: Expr = {
-    <l:@L> <left:AddExpr> "+" <right:MulExpr> <r:@R> =>
+AddExpr<Lead>: Expr = {
+    <l:@L> <left:AddExpr<Lead>> "+" <right:MulExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Add, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:AddExpr> "-" <right:MulExpr> <r:@R> =>
+    <l:@L> <left:AddExpr<Lead>> "-" <right:MulExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Sub, right: Box::new(right), span: Span::new(l, r) },
-    MulExpr,
+    MulExpr<Lead>,
 };
 
 // Mul/Div: left-associative
-MulExpr: Expr = {
-    <l:@L> <left:MulExpr> "*" <right:CastExpr> <r:@R> =>
+MulExpr<Lead>: Expr = {
+    <l:@L> <left:MulExpr<Lead>> "*" <right:CastExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:MulExpr> "/" <right:CastExpr> <r:@R> =>
+    <l:@L> <left:MulExpr<Lead>> "/" <right:CastExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:MulExpr> "%" <right:CastExpr> <r:@R> =>
+    <l:@L> <left:MulExpr<Lead>> "%" <right:CastExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mod, right: Box::new(right), span: Span::new(l, r) },
-    CastExpr,
+    CastExpr<Lead>,
 };
 
 // Cast: `e as T`, left-associative, between the unary operators and `*`,
 // exactly where Rust binds it (RFC-0049).
-CastExpr: Expr = {
-    <l:@L> <e:CastExpr> "as" <tl:@L> <target:"ident"> <r:@R> =>
+CastExpr<Lead>: Expr = {
+    <l:@L> <e:CastExpr<Lead>> "as" <tl:@L> <target:"ident"> <r:@R> =>
         Expr::Cast {
             id: AstId::alloc(),
             expr: Box::new(e),
@@ -351,37 +426,37 @@ CastExpr: Expr = {
             target_span: Span::new(tl, r),
             span: Span::new(l, r),
         },
-    UnaryExpr,
+    UnaryExpr<Lead>,
 };
 
 // Unary: -x, !x, *r, &place, &mut place (RFC-0018)
-UnaryExpr: Expr = {
-    <l:@L> "-" <e:UnaryExpr> <r:@R> =>
+UnaryExpr<Lead>: Expr = {
+    <l:@L> "-" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
         Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
-    <l:@L> "!" <e:UnaryExpr> <r:@R> =>
+    <l:@L> "!" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
         Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
-    <l:@L> "*" <e:UnaryExpr> <r:@R> =>
+    <l:@L> "*" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
         Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Deref, operand: Box::new(e), span: Span::new(l, r) },
-    <l:@L> "&" "mut" <place:UnaryExpr> <r:@R> =>
+    <l:@L> "&" "mut" <place:UnaryExpr<PrimaryExpr>> <r:@R> =>
         Expr::Borrow { id: AstId::alloc(), mutable: true, place: Box::new(place), span: Span::new(l, r) },
-    <l:@L> "&" <place:UnaryExpr> <r:@R> =>
+    <l:@L> "&" <place:UnaryExpr<PrimaryExpr>> <r:@R> =>
         Expr::Borrow { id: AstId::alloc(), mutable: false, place: Box::new(place), span: Span::new(l, r) },
-    PostfixExpr,
+    PostfixExpr<Lead>,
 };
 
 // Postfix: field access `.field` and function call `f(args)`
 // A field is never a callee: `recv.f(args)` is a method call, and a
 // closure held in a field is called as `(recv.f)(args)` (RFC-0030).
-PostfixExpr: Expr = {
-    <l:@L> <obj:PostfixExpr> "." <f:"ident"> <r:@R> =>
+PostfixExpr<Lead>: Expr = {
+    <l:@L> <obj:PostfixExpr<Lead>> "." <f:"ident"> <r:@R> =>
         Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
     // `e?`: the Ok or Some payload, or an early return of the Err or None (RFC-0038).
-    <l:@L> <inner:PostfixExpr> "?" <r:@R> =>
+    <l:@L> <inner:PostfixExpr<Lead>> "?" <r:@R> =>
         Expr::Try { id: AstId::alloc(), inner: Box::new(inner), span: Span::new(l, r) },
     // `a[i]`: a place, binding like `.field` (RFC-0047). A statement that
     // begins with `[` is an array literal; every statement ends in `;` or
     // in a block, so the two never meet.
-    <l:@L> <obj:PostfixExpr> "[" <index:Expr> "]" <r:@R> =>
+    <l:@L> <obj:PostfixExpr<Lead>> "[" <index:Expr> "]" <r:@R> =>
         Expr::Index {
             id: AstId::alloc(),
             callee_id: AstId::alloc(),
@@ -389,15 +464,15 @@ PostfixExpr: Expr = {
             index: Box::new(index),
             span: Span::new(l, r),
         },
-    CalleeExpr,
+    CalleeExpr<Lead>,
 };
 
-CalleeExpr: Expr = {
-    <l:@L> <recv:PostfixExpr> "." <name:"ident"> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+CalleeExpr<Lead>: Expr = {
+    <l:@L> <recv:PostfixExpr<Lead>> "." <name:"ident"> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
         Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver: Box::new(recv), name, args, span: Span::new(l, r) },
-    <l:@L> <func:CalleeExpr> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+    <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
         build_call(func, args, Span::new(l, r)),
-    PrimaryExpr,
+    Lead,
 };
 
 CallArg: Expr = {
@@ -406,6 +481,15 @@ CallArg: Expr = {
 
 // Primary expressions
 PrimaryExpr: Expr = {
+    PlainPrimary,
+    // `match` and `if` are operands: an operator's side, a call argument, a
+    // list element, a field value, a pipe stage — wherever an expression
+    // stands, with the braces as the delimiter (RFC-0051).
+    BranchExpr,
+};
+
+// Every primary but an `if` or a `match`.
+PlainPrimary: Expr = {
     // `Enum::Tag`, and the callee of `ns::f(args)`: the checker tells a
     // namespace from an enum name (RFC-0030). It is a primary, so every
     // postfix — `?` included — follows a qualified call.
@@ -468,22 +552,13 @@ PrimaryExpr: Expr = {
     <l:@L> "[" <items:CommaSep<ListElem>> "]" <r:@R> =>?
         build_list(items, Span::new(l, r)),
 
-    // Block expression with statements: { stmt; stmt; expr }
-    <l:@L> "{" <stmts:Stmt+> <tail:Expr> "}" <r:@R> =>
-        Expr::Block { id: AstId::alloc(), stmts, tail: Box::new(tail), span: Span::new(l, r) },
-    // Block expression with single expression: { expr }
-    <l:@L> "{" <tail:Expr> "}" <r:@R> =>
-        Expr::Block { id: AstId::alloc(), stmts: vec![], tail: Box::new(tail), span: Span::new(l, r) },
+    // Block expression: { stmt; stmt; expr } or { expr }
+    <l:@L> "{" <body:TailedBody> "}" <r:@R> =>
+        Expr::Block { id: AstId::alloc(), stmts: body.0, tail: Box::new(body.1), span: Span::new(l, r) },
 
     // Object literal: { field1, $field2, } — trailing comma required (empty {} allowed)
     <l:@L> "{" <fields:(<ObjectField> ",")*> "}" <r:@R> =>
         Expr::Object { id: AstId::alloc(), fields, span: Span::new(l, r) },
-
-    // `match` and `if` are operands: an operator's side, a call argument, a
-    // list element, a field value, a pipe stage — wherever an expression
-    // stands, with the braces as the delimiter (RFC-0051).
-    MatchExpr,
-    IfExpr,
 
     // Format string: "hello {{ name }}, age {{ age | to_string }}"
     // Desugars to BinOp::Add chain: "hello " + name + ", age " + (age | to_string)

@@ -700,6 +700,13 @@ pub(crate) fn block_closed(
     }
 }
 
+/// Statements whose last `if` or `match` a following statement or tail
+/// made a statement of its own.
+pub(crate) fn stated((mut stmts, last): (Vec<Stmt>, Expr)) -> Vec<Stmt> {
+    stmts.push(Stmt::Expr(last));
+    stmts
+}
+
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
@@ -1365,10 +1372,70 @@ mod tests {
                 Expr::Match { .. }
             ));
         }
-        // The statement forms are unchanged: each ends in `;`.
+        // A statement that begins with one ends in `;` or at its `}`.
         let s = parse_script(&interner, "if c { f(); }; match 1 { _ => { f(); }, };").unwrap();
         assert!(matches!(&s.stmts[0], Stmt::Expr(Expr::If { .. })));
         assert!(matches!(&s.stmts[1], Stmt::Expr(Expr::Match { .. })));
+    }
+
+    /// An `if` or a `match` that begins a statement ends at its `}`:
+    /// followed by more of the body it is a statement, and at the end of the
+    /// body it is the tail. A block reads on.
+    #[test]
+    fn a_block_ended_expression_is_a_statement_without_a_semicolon() {
+        let interner = Interner::new();
+        for src in [
+            "if c { f(); } x",
+            "if c { f(); } else { g(); } x",
+            "if let Some(y) = o { f(); } x",
+            "match n { 1 => { f(); }, _ => {} } x",
+        ] {
+            let s = parse_script(&interner, src).unwrap();
+            assert_eq!(s.stmts.len(), 1, "{src}");
+            assert!(
+                matches!(
+                    &s.stmts[0],
+                    Stmt::Expr(Expr::If { .. } | Expr::IfLet { .. } | Expr::Match { .. })
+                ),
+                "{src}"
+            );
+            assert!(matches!(s.tail.as_deref(), Some(Expr::Ident { .. })), "{src}");
+        }
+
+        // Last in a body, it is the tail, and a `;` makes it a statement.
+        let s = parse_script(&interner, "f(); if c { 1 } else { 2 }").unwrap();
+        assert_eq!(s.stmts.len(), 1);
+        assert!(matches!(s.tail.as_deref(), Some(Expr::If { .. })));
+        let s = parse_script(&interner, "f(); if c { 1 } else { 2 };").unwrap();
+        assert_eq!(s.stmts.len(), 2);
+        assert!(s.tail.is_none());
+
+        // In a loop body, which has no tail, it is a statement.
+        let s = parse_script(&interner, "for x in &mut v { if x.a == 1 { x.a = 2; } } v.len()").unwrap();
+        let Stmt::For { body, .. } = &s.stmts[0] else {
+            panic!("expected a for");
+        };
+        assert!(matches!(body.as_slice(), [Stmt::Expr(Expr::If { .. })]));
+
+        // No operator continues it: what follows begins the next statement.
+        let s = parse_script(&interner, "if c { f(); } -x").unwrap();
+        assert!(matches!(s.tail.as_deref(), Some(Expr::UnaryOp { op: UnaryOp::Neg, .. })));
+        let s = parse_script(&interner, "if c { f(); } *r = 1;").unwrap();
+        assert!(matches!(&s.stmts[1], Stmt::DerefStore { .. }));
+        let src = "if c { 1 } else { 2 } + 1";
+        let error = parse_script(&interner, src).unwrap_err();
+        let at = src.find('+').unwrap();
+        assert_eq!(error.span, Span::new(at, at + 1));
+        assert!(matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }));
+        // A block that begins a statement is an operand.
+        let s = parse_script(&interner, "{ [5, 6] }[1]").unwrap();
+        assert!(s.stmts.is_empty());
+        assert!(matches!(s.tail.as_deref(), Some(Expr::Index { .. })));
+        // Anywhere else an `if` is an operand.
+        assert!(matches!(
+            parse_script(&interner, "(if c { 1 } else { 2 }) + 1").unwrap().tail.as_deref(),
+            Some(Expr::BinaryOp { .. })
+        ));
     }
 
     /// Every postfix follows a qualified call, `?` included: the qualified

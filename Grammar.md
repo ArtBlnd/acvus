@@ -112,8 +112,7 @@ cost is the text it writes.
 
 ## Scripts
 
-A script is a sequence of semicolon-terminated statements with an optional
-tail expression. There is one statement rule, and it is the rule of every
+A script is a sequence of statements with an optional tail expression. There is one statement rule, and it is the rule of every
 block: a script's top level, a lambda's block body, a `while`/`for`/
 `anyorder` body, a `match` arm's block, an `if`/`else` block, and a
 template's `%` lines.
@@ -127,7 +126,7 @@ Script       = Stmt* Expr?
 ```
 Stmt         = LetBind | LetUninit | Assign | Store | DerefStore
              | While | WhileLet | For | Break | Continue
-             | Anyorder | ExprStmt
+             | Anyorder | ExprStmt | BlockStmt
 
 LetBind      = "let" IDENT "=" Expr ";"                 ← let x = 0;
 LetUninit    = "let" IDENT ";"                          ← let x;
@@ -143,17 +142,27 @@ ForHead      = Expr | Expr ".." Expr
 Break        = "break" ";"
 Continue     = "continue" ";"
 Anyorder     = "anyorder" "{" Stmt* "}"
-ExprStmt     = Expr ";"
+ExprStmt     = Expr ";"                                 ← Expr: no BranchExpr first
+BlockStmt    = BranchExpr ";"?
+BranchExpr   = IfExpr | MatchExpr
 ```
 
 `while`, `for` and `anyorder` are statements, not expressions: each ends at
-the `}` closing its block, and a `;` after that `}` is refused. Every other
-statement ends in `;`, an `if` and a `match` statement included, so a
-statement that begins with one is the expression statement
-rule and the grammar has no decision to make -- there is no
-"a block-like expression at statement start is a statement" rule, as Rust
-has. `if c { … };` and `match e { … };` are `Expr ";"`, and the same
-expression without the `;` is the block's tail.
+the `}` closing its block, and a `;` after that `}` is refused.
+
+An `if`, an `if let` or a `match` that begins a statement is the whole
+statement, as in Rust: it ends at its `}`, and no operator or postfix
+continues it. `if c { … } -x` is the statement and then `-x`, and
+`if c { 1 } else { 2 } + 1` is refused at the `+`; `(if c { 1 } else { 2 }) + 1`
+is the sum. Without a `;`, the token after the `}` decides what it is: the
+`}` closing the body, or the end of the script, makes it the body's tail,
+and anything else makes it a statement whose value is dropped. A `;` after
+it makes it a statement wherever it stands, so `f(); if c { 1 } else { 2 };`
+has no tail. The `;` is admitted, unlike a loop's: it is how a body that
+ends in one drops its value. A `while`, `for` or `anyorder` body has no
+tail, so there each one is a statement. A block is not one of them: a
+statement that begins with `{` reads on, so `{ [5, 6] }[1]` is `6`. Every
+other statement ends in `;`.
 
 ### `for`
 
@@ -239,7 +248,8 @@ ArmPattern   = "_" | Pattern
 
 `match` is an expression (RFC-0051): the scrutinee is evaluated once, every
 arm has the type of the whole (`!` admitted), and an arm with no tail is
-`Unit`. An arm naming a variant the scrutinee cannot hold is refused --
+`Unit`. An arm's block that ends in an `if` or a `match` with no `;` has
+that one as its tail, as any body does. An arm naming a variant the scrutinee cannot hold is refused --
 the arms contribute no variant:
 
 ```
