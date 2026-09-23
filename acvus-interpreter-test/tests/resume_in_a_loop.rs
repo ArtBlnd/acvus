@@ -87,15 +87,21 @@ async fn the_block_after_the_call_is_where_the_resume_lands() {
     );
     assert_eq!(
         blocks[2].ops,
-        ["Mov<false, false>", "SpawnExternSync", "Merge"],
-        "the call's own block puts the argument in the run it is lent, spawns \
-         and merges, then leaves at the suspend"
+        [
+            "Mov<false, false>",
+            "SpawnExternSync",
+            "Add<i64, Slot, Slot, Slot>",
+            "Merge"
+        ],
+        "the call's own block puts the argument in the run it is lent, spawns, \
+         runs `n + 1`, which does not wait for the call's value, and merges, \
+         then leaves at the suspend"
     );
     assert_eq!(
         blocks[3].ops,
-        ["Add<i64, Slot, Slot, Slot>", "Add<i64, Slot, Slot, Slot>"],
-        "`s + <the call's value>` and `n + 1` run after the resume, in the \
-         block the suspend named"
+        ["Add<i64, Slot, Slot, Slot>"],
+        "`s + <the call's value>` runs after the resume, in the block the \
+         suspend named"
     );
 }
 

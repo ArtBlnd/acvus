@@ -16,59 +16,59 @@ expression: opt
      5 |   r4 = fetch @threshold
      6 |   r5 = fetch @user_id
      7 |   r6 = spawn #0(r5) [r7 ->]
-     8 |   r8 = eval r6 [-> r9]
-     9 |   r10 = spawn #1(r5) [r9 ->]
-    10 |   r11 = eval r10 [-> r12]
-    11 |   r13 = r8 + r11
-    12 |   r14 = r13 * r1
-    14 |   r15 = r14 / 100 (r16)
-    15 |   r17 = const_str T0
-    16 |   r18 = ref &$fetch_profile(...)
-    17 |   r19 = call #2(r18)
-    18 |   assign b = r19
-    19 |   r20 = const_str T1
-    20 |   r21 = ref &$v86
-    21 |   r22 = call #2(r21)
-    22 |   assign d = r22
-    23 |   r23 = const_str T2
-    24 |   r24 = ref &b
-    25 |   r25 = as_slice &r24
-    26 |   r26 = call #3(r17, r25)
-    27 |   drop r27
-    28 |   assign ab = r26
-    29 |   r28 = ref &ab
-    30 |   r29 = as_slice &r28
-    31 |   r30 = call #3(r29, r20)
-    32 |   drop r31
-    33 |   assign abc = r30
-    34 |   r32 = ref &abc
-    35 |   r33 = as_slice &r32
-    36 |   r34 = ref &d
-    37 |   r35 = as_slice &r34
-    38 |   r36 = call #3(r33, r35)
-    39 |   drop r37
-    40 |   drop r38
-    41 |   assign abcd = r36
-    42 |   r39 = ref &abcd
-    43 |   r40 = as_slice &r39
-    44 |   r41 = call #3(r40, r23)
-    45 |   drop r42
-    46 |   r43 = r15 > r4
+     9 |   r8 = const_str T0
+    10 |   r9 = ref &$fetch_profile(...)
+    11 |   r10 = call #1(r9)
+    12 |   assign b = r10
+    13 |   r11 = const_str T1
+    14 |   r12 = ref &$v86
+    15 |   r13 = call #1(r12)
+    16 |   assign d = r13
+    17 |   r14 = const_str T2
+    18 |   r15 = ref &b
+    19 |   r16 = as_slice &r15
+    20 |   r17 = call #2(r8, r16)
+    21 |   drop r18
+    22 |   assign ab = r17
+    23 |   r19 = ref &ab
+    24 |   r20 = as_slice &r19
+    25 |   r21 = call #2(r20, r11)
+    26 |   drop r22
+    27 |   assign abc = r21
+    28 |   r23 = ref &abc
+    29 |   r24 = as_slice &r23
+    30 |   r25 = ref &d
+    31 |   r26 = as_slice &r25
+    32 |   r27 = call #2(r24, r26)
+    33 |   drop r28
+    34 |   drop r29
+    35 |   assign abcd = r27
+    36 |   r30 = ref &abcd
+    37 |   r31 = as_slice &r30
+    38 |   r32 = call #2(r31, r14)
+    39 |   drop r33
+    40 |   r34 = eval r6 [-> r35]
+    41 |   r36 = spawn #3(r5) [r35 ->]
+    42 |   r37 = eval r36 [-> r38]
+    43 |   r39 = r34 + r37
+    44 |   r40 = r39 * r1
+    45 |   r41 = r40 / 100 (r42)
+    46 |   r43 = r41 > r4
     47 |   r44 = test r43 == true
-    48 |   if r44 -> L0 else L1(r12, r2) join L1
+    48 |   if r44 -> L0 else L1(r38, r2) join L1
     49 | L0:
-    50 |   r45 = spawn #4(r5, r15) [r12 ->]
+    50 |   r45 = spawn #4(r5, r41) [r38 ->]
     52 |   r46 = r2 + 1 (r47)
     53 |   r48 = eval r45 [-> r49]
     54 |   jump L1(r49, r46)
     55 | L1(r50: Order, r51: i64):
-    56 |   commit @result_label = r41
+    56 |   commit @result_label = r32
     57 |   commit @weight = r1
     58 |   commit @alert_count = r51
-    59 |   commit @result_score = r15
+    59 |   commit @result_score = r41
     60 |   commit @threshold = r4
     61 |   commit @user_id = r5
-    62 |   return r15 [r50]
+    62 |   return r41 [r50]
 
     ; orders: what the body's yielded Order waits for
     ;   r50(entry)
@@ -81,41 +81,41 @@ expression: opt
     ; r5 (@user_id) : i64
     ; r6 (v127) : Handle<i64>
     ; r7 (v1) : Order
-    ; r8 (fetch_profile(...)) : i64
-    ; r9 (v18) : Order
-    ; r10 (v128) : Handle<i64>
-    ; r11 (fetch_history(...)) : i64
-    ; r12 (v23) : Order
-    ; r13 (v82) : i64
-    ; r14 (v84) : i64
-    ; r15 (v86) : i64
-    ; r16 (v85) : i64
-    ; r17 (v89) : &str
-    ; r18 ($param_1.) : &i64
-    ; r19 (to_string(...)) : String
-    ; r20 (v94) : &str
-    ; r21 ($param_2.) : &i64
-    ; r22 (to_string(...)) : String
-    ; r23 (v99) : &str
-    ; r24 (@alert_count.) : &String
-    ; r25 (v104) : &str
-    ; r26 (concat(...)) : String
-    ; r27 (b) : String
-    ; r28 (@user_id.) : &String
-    ; r29 (v108) : &str
-    ; r30 (concat(...)) : String
-    ; r31 (ab) : String
-    ; r32 (history.) : &String
-    ; r33 (v114) : &str
-    ; r34 (@threshold.) : &String
-    ; r35 (v116) : &str
-    ; r36 (concat(...)) : String
-    ; r37 (abc) : String
-    ; r38 (d) : String
-    ; r39 (var_32.) : &String
-    ; r40 (v120) : &str
-    ; r41 (concat(...)) : String
-    ; r42 (abcd) : String
+    ; r8 (v89) : &str
+    ; r9 ($param_1.) : &i64
+    ; r10 (to_string(...)) : String
+    ; r11 (v94) : &str
+    ; r12 ($param_2.) : &i64
+    ; r13 (to_string(...)) : String
+    ; r14 (v99) : &str
+    ; r15 (@alert_count.) : &String
+    ; r16 (v104) : &str
+    ; r17 (concat(...)) : String
+    ; r18 (b) : String
+    ; r19 (@user_id.) : &String
+    ; r20 (v108) : &str
+    ; r21 (concat(...)) : String
+    ; r22 (ab) : String
+    ; r23 (history.) : &String
+    ; r24 (v114) : &str
+    ; r25 (@threshold.) : &String
+    ; r26 (v116) : &str
+    ; r27 (concat(...)) : String
+    ; r28 (abc) : String
+    ; r29 (d) : String
+    ; r30 (var_32.) : &String
+    ; r31 (v120) : &str
+    ; r32 (concat(...)) : String
+    ; r33 (abcd) : String
+    ; r34 (fetch_profile(...)) : i64
+    ; r35 (v18) : Order
+    ; r36 (v128) : Handle<i64>
+    ; r37 (fetch_history(...)) : i64
+    ; r38 (v23) : Order
+    ; r39 (v82) : i64
+    ; r40 (v84) : i64
+    ; r41 (v86) : i64
+    ; r42 (v85) : i64
     ; r43 (v36) : Bool
     ; r44 (v37) : Bool
     ; r45 (v129) : Handle<i64>

@@ -11,27 +11,27 @@ expression: opt
      5 |   r5 = spawn #0(r4) [r6 ->]
      6 |   r7 = fetch @stage1
      7 |   r8 = fetch @precision
-     8 |   r9 = eval r5 [-> r10]
-     9 |   r11 = r9 * r2
-    11 |   r12 = r11 / 1000 (r13)
-    12 |   r14 = r12 + r0
-    14 |   r15 = r12 / 10 (r16)
-    15 |   r17 = r14 + r15
-    16 |   r18 = r17 / r8
-    17 |   r19 = r18 * r8
-    18 |   r20 = spawn #1(r12, r17, r19) [r10 ->]
-    19 |   commit @offset = r0
-    20 |   commit @stage2 = r17
-    21 |   commit @scale = r2
-    22 |   commit @stage3 = r19
-    23 |   commit @source_id = r4
-    24 |   commit @stage1 = r12
-    25 |   commit @precision = r8
-    26 |   r21 = eval r20 [-> r22]
+    10 |   commit @offset = r0
+    11 |   commit @scale = r2
+    12 |   commit @source_id = r4
+    13 |   commit @precision = r8
+    14 |   r9 = eval r5 [-> r10]
+    15 |   r11 = r9 * r2
+    16 |   r12 = r11 / 1000 (r13)
+    17 |   r14 = r12 + r0
+    18 |   r15 = r12 / 10 (r16)
+    19 |   r17 = r14 + r15
+    20 |   r18 = r17 / r8
+    21 |   r19 = r18 * r8
+    22 |   r20 = spawn #1(r12, r17, r19) [r10 ->]
+    23 |   r21 = eval r20 [-> r22]
+    24 |   commit @stage2 = r17
+    25 |   commit @stage3 = r19
+    26 |   commit @stage1 = r12
     27 |   return r19 [r22]
 
     ; orders: what the body's yielded Order waits for
-    ;   eval@26 <- spawn@18 #1 <- eval@8 <- spawn@5 #0 <- r6(entry)
+    ;   eval@23 <- spawn@22 #1 <- eval@14 <- spawn@5 #0 <- r6(entry)
 
     ; r0 (@offset) : i64
     ; r1 (@stage2) : i64

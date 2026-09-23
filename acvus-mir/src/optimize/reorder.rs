@@ -69,7 +69,7 @@ fn reorder_block(insts: &mut Vec<Inst>, val_types: &FxHashMap<ValueId, Ty>, loan
     }
 
     let deps = build_dependency_graph(insts, val_types, loans);
-    let priorities = compute_priorities(insts);
+    let priorities = compute_priorities(insts, &deps);
 
     *insts = priority_topo_sort(insts, &deps, &priorities);
 }
@@ -223,13 +223,31 @@ fn build_dependency_graph(
 // -- Priority assignment --------------------------------------------
 
 /// Assign scheduling priority to each instruction.
-fn compute_priorities(insts: &[Inst]) -> Vec<Priority> {
-    // For each value, the earliest instruction that uses it.
-    let mut first_use_of: FxHashMap<ValueId, usize> = FxHashMap::default();
-    for (i, inst) in insts.iter().enumerate() {
-        for u in inst_info::uses(&inst.kind) {
-            first_use_of.entry(u).or_insert(i);
+///
+/// An Eval, and every instruction its result reaches through the dependency
+/// graph, runs as late as what depends on it allows: it cannot run before the
+/// Eval anyway, so running it later delays nothing, and the Spawns and the
+/// instructions they wait for are free to run first.
+fn compute_priorities(insts: &[Inst], deps: &[SmallVec<[usize; 4]>]) -> Vec<Priority> {
+    let n = insts.len();
+    let mut after_an_eval = vec![false; n];
+    for i in 0..n {
+        after_an_eval[i] = matches!(insts[i].kind, InstKind::Eval { .. })
+            || deps[i].iter().any(|&d| after_an_eval[d]);
+    }
+    let mut successors: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
+    for (i, d) in deps.iter().enumerate() {
+        for &dep in d {
+            successors[dep].push(i);
         }
+    }
+    let mut latest = vec![usize::MAX; n];
+    for i in (0..n).rev() {
+        latest[i] = successors[i]
+            .iter()
+            .map(|&s| if after_an_eval[s] { latest[s] } else { s })
+            .min()
+            .unwrap_or(usize::MAX);
     }
 
     insts
@@ -237,11 +255,8 @@ fn compute_priorities(insts: &[Inst]) -> Vec<Priority> {
         .enumerate()
         .map(|(i, inst)| match &inst.kind {
             InstKind::Spawn { .. } => Priority::Spawn,
-            InstKind::Eval { dst, .. } => {
-                let pos = first_use_of.get(dst).copied().unwrap_or(usize::MAX);
-                Priority::Scheduled(pos, 0) // just before consumer
-            }
-            _ => Priority::Scheduled(i, 1), // original position
+            _ if after_an_eval[i] => Priority::Scheduled(latest[i], 0),
+            _ => Priority::Scheduled(i, 1),
         })
         .collect()
 }
@@ -462,6 +477,90 @@ mod tests {
         assert!(
             spawn < commit,
             "the unrelated spawn moves first (spawn {spawn}, commit {commit})"
+        );
+    }
+
+    /// `spawn f; eval; b = it; y = 1; spawn g(y); eval; read b`: the store of
+    /// the first result cannot run before its Eval, so it waits with the Eval
+    /// for `b`'s read, and the second Spawn is issued before the first Eval
+    /// blocks.
+    #[test]
+    fn a_store_of_an_eval_result_waits_with_it_for_its_reader() {
+        let i = Interner::new();
+        let f = QualifiedRef::root(i.intern("f"));
+        let f_ty = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::String),
+            captures: vec![],
+            effect: crate::ty::Effect::PURE.into(),
+        };
+        let b = v(9);
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::Spawn {
+                    dst: v(1),
+                    callee: Callee::Direct(f),
+                    callee_ty: f_ty.clone(),
+                    args: vec![],
+                    order: None,
+                },
+                InstKind::Eval {
+                    dst: v(2),
+                    src: v(1),
+                    order: None,
+                },
+                InstKind::Assign {
+                    target: RefTarget::Var(b),
+                    path: vec![],
+                    value: v(2),
+                },
+                InstKind::Const {
+                    dst: v(3),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Spawn {
+                    dst: v(4),
+                    callee: Callee::Direct(f),
+                    callee_ty: f_ty,
+                    args: vec![v(3)],
+                    order: None,
+                },
+                InstKind::Eval {
+                    dst: v(5),
+                    src: v(4),
+                    order: None,
+                },
+                InstKind::Take {
+                    dst: v(6),
+                    target: RefTarget::Var(b),
+                    path: vec![],
+                },
+                InstKind::Return {
+                    value: v(6),
+                    order: None,
+                },
+            ],
+            10,
+        );
+        for handle in [v(1), v(4)] {
+            cfg.val_types.insert(handle, Ty::Handle(Box::new(Ty::String)));
+        }
+        for text in [v(2), v(5), v(6), b] {
+            cfg.val_types.insert(text, Ty::String);
+        }
+        run(&mut cfg);
+
+        let spawns: Vec<usize> = cfg.blocks[0]
+            .insts
+            .iter()
+            .enumerate()
+            .filter(|(_, inst)| matches!(inst.kind, InstKind::Spawn { .. }))
+            .map(|(at, _)| at)
+            .collect();
+        let first_eval = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
+        assert!(
+            spawns.iter().all(|&spawn| spawn < first_eval),
+            "both spawns precede the first eval (spawns {spawns:?}, eval {first_eval})"
         );
     }
 
