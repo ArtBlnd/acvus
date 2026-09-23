@@ -1,0 +1,3 @@
+// expect "xyxy"
+// a lambda lends a string parameter to two string reads
+let f = |p| -> { let a = &p; a.to_string() + p }; f("x" + "y")

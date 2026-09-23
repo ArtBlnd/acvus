@@ -1,0 +1,3 @@
+// refuse
+// an array at a &mut Vec parameter has no cast back, so no conversion through the reference
+let a = [1, 2]; push(&mut a, 3); 0

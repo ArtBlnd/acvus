@@ -1,0 +1,3 @@
+// expect 3
+// a &mut reborrowed shared into a lambda taking a reference, then written through
+let v = vec([1]); let r = &mut v; let f = |x| -> x.len(); let n = f(r); r.push(2); n + v.len()

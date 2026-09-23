@@ -1,0 +1,3 @@
+// refuse
+// a lambda capturing a &mut reference is called while the owner is read
+let v = vec([1]); let r = &mut v; let f = |k| -> { r.push(k); 0 }; let n = v.len(); f(1); n

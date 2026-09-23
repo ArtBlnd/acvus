@@ -1,0 +1,3 @@
+// refuse
+// an array context at a &mut Vec parameter: no cast back, and a context reached through no reference is still an array
+push(&mut @xs, 1); 0

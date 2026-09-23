@@ -1,0 +1,3 @@
+// expect 2
+// an async lambda capturing a &mut is called; the owner is read after its last call
+let v = vec([1]); let r = &mut v; let f = |k| -> { r.push(opaque_async(k)); 0 }; f(5); v.len() as i64

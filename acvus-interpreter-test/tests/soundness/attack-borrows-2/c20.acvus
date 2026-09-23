@@ -1,0 +1,3 @@
+// refuse
+// a lambda capturing &mut is stored into a loop-carried binding and v read after each iteration
+let v = vec([1]); let r = &mut v; let f = |k| -> { r.push(k); 0 }; let i = 0; while i < 2 { f(i); let n = v.len(); i = i + 1; } f(9)

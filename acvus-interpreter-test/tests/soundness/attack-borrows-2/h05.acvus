@@ -1,0 +1,3 @@
+// expect 4
+// an inlined lambda's &mut parameter lend and field store; the argument is a fresh object
+let f = |p| -> { let r = &mut p; r.a = 4; p.a }; f({ a: 1, b: "s" + "", })

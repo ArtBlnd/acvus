@@ -1,0 +1,3 @@
+// expect 3
+// a word written through a &mut chosen at an if join of two locals
+let a = 1; let b = 2; let r = if a < b { &mut a } else { &mut b }; *r = 3; a

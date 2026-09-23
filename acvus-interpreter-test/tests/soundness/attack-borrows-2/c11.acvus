@@ -1,0 +1,3 @@
+// refuse
+// anyorder: a & made inside the region is live past a push in it
+let v = vec([1]); let n = 0u64; anyorder { let s = &v; v.push(1); n = s.len(); } n

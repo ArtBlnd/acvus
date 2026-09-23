@@ -1,0 +1,3 @@
+// expect "st"
+// an inlined lambda reads the string field after a word field is written through a &mut
+let f = |p| -> { let r = &mut p.a; *r = 4; p.b }; f({ a: 1, b: "s" + "t", })

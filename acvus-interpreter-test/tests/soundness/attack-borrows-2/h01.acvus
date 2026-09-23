@@ -1,0 +1,3 @@
+// expect "b!"
+// an inlined parameter named as storage, the argument a phi of two strings from an if
+let c = false; let f = |p| -> { let r = &p; r.to_string() + "!" }; f(if c { "a" + "" } else { "b" + "" })

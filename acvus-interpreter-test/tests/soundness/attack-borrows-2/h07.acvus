@@ -1,0 +1,3 @@
+// expect 5
+// anyorder: two lambdas each lending their own parameter, results summed after
+let a = 0; let b = 0; let f = |p| -> len(&p) as i64; anyorder { a = f(vec([1, 2])); b = f(vec([1, 2, 3])); } a + b

@@ -1,0 +1,3 @@
+// expect "aa"
+// a lambda's string parameter lent to a nested lambda by reference and read after
+let f = |p| -> { let g = |q| -> q.len(); let n = g(&p); if n == 1 { p + p } else { p } }; f("a" + "")

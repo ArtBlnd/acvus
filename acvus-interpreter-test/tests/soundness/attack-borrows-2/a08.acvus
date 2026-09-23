@@ -1,0 +1,3 @@
+// refuse
+// the vec is lent &mut to extend while its second argument reads it
+let v = vec([1]); extend(&mut v, [v.len() as i64]); v.len()

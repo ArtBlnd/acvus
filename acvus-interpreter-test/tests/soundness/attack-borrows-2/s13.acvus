@@ -1,0 +1,3 @@
+// refuse
+// push's second argument, a spawn, reads v while v is lent &mut to push
+let v = vec([1]); push(&mut v, opaque_async(v.len() as i64)); 0

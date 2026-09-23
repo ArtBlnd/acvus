@@ -1,0 +1,3 @@
+// expect 4
+// a lambda lends its parameter twice to one call
+let f = |p| -> { let a = &p; let b = &p; a.len() + b.len() }; f(vec([7, 8]))

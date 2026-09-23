@@ -1,0 +1,3 @@
+// expect 7
+// a parameter's word field lent, the whole parameter's other field read
+let f = |p| -> { let r = &p.a; *r + p.b }; f({ a: 3, b: 4, })

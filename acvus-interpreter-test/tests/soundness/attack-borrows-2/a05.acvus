@@ -1,0 +1,3 @@
+// expect 2
+// a deque converts by value into a Vec argument of extend
+let d = deque(); d.push_back(1); d.push_back(2); let v = vec([]); extend(&mut v, d); v.len()

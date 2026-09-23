@@ -1,0 +1,3 @@
+// refuse
+// the carried &mut to an element is written after the vec is pushed
+let v = vec([1, 2, 3]); let z = 0; let q = &mut z; for x in &mut v { q = x; } v.push(4); *q = 9; v[2u64]

@@ -1,0 +1,3 @@
+// refuse
+// a break carries a & out of the loop past a push
+let v = vec([1]); let s = &v; while true { s = &v; break; } v.push(2); s.len()

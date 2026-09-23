@@ -1,0 +1,3 @@
+// refuse
+// a lambda capturing v is called after a &mut to v is made and before it dies
+let v = vec([1]); let f = |k| -> v.len() + k; let r = &mut v; r.push(1); f(0u64)

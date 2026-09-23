@@ -1,0 +1,3 @@
+// expect 3
+// a lambda given a word from a sync opaque call lends the parameter
+let f = |p| -> { let r = &p; *r + 1 }; f(opaque(2))

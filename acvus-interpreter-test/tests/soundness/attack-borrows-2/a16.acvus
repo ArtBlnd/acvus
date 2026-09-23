@@ -1,0 +1,3 @@
+// expect 0
+// an array temporary lent &mut to a Vec parameter: a borrowed value that is no place is cast and not cast back (RFC-0041), so no back cast is needed
+push(&mut [1, 2], 3); 0

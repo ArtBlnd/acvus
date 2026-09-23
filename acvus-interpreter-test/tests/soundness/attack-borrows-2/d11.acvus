@@ -1,0 +1,3 @@
+// expect "zz"
+// a lambda called twice with arguments that differ, each a concatenation
+let f = |p| -> p.s; f({ s: "a" + "b", }) + ""; f({ s: "z" + "z", })

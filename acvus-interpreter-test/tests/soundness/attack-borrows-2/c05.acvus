@@ -1,0 +1,3 @@
+// expect 9
+// a & re-made before each read, the push precedes it
+let v = vec([1]); let n = 0u64; for i in 0..3 { v.push(i); let s = &v; n = n + s.len(); } n

@@ -1,0 +1,3 @@
+// expect 6
+// a lambda's parameter is lent &mut to push, then read
+let f = |p| -> { push(&mut p, 3); p[0u64] + p[1u64] + p[2u64] }; f(vec([1, 2]))

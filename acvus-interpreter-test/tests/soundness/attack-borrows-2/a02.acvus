@@ -1,0 +1,3 @@
+// refuse
+// the array converted by value is read after it moved into the call
+let v = vec([1]); let a = [2, 3]; extend(&mut v, a); a.len()

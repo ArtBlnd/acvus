@@ -1,0 +1,3 @@
+// expect 21
+// an inlined object parameter's field written; the caller keeps its own object by clone
+let o = { a: 1, }; let f = |p| -> { p.a = 20; p.a }; f(clone(&o)) + o.a

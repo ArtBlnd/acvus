@@ -1,0 +1,3 @@
+// refuse
+// an array element at a &mut Vec parameter: a place through an element
+let a = [[1], [2]]; push(&mut a[0], 3); 0

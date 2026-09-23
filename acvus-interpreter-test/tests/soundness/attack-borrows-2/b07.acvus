@@ -1,0 +1,3 @@
+// refuse
+// a match joins a &mut and a &; writing the owner of the &mut arm while the join is live
+let v = vec([1]); let w = vec([2]); let k = 0; let r = &mut v; let s = match k { 0 => r, _ => &w }; v.push(3); s.len()

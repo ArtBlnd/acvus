@@ -1,0 +1,3 @@
+// expect 3
+// an opaque (sync) call inside the &mut lend of push's argument list does not touch v
+let v = vec([1]); push(&mut v, opaque(2)); v[1u64] + 1

@@ -1,0 +1,3 @@
+// refuse
+// anyorder: a &mut taken before the region is written through while the owner is read inside
+let v = vec([1]); let r = &mut v; let n = 0u64; anyorder { r.push(1); n = v.len(); } r.len() + n

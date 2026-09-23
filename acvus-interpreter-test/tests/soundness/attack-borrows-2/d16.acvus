@@ -1,0 +1,3 @@
+// expect "abc"
+// a lambda clones a string element of its parameter
+let f = |p| -> clone(&p[1u64]); f(vec(["x" + "", "a" + "bc"]))

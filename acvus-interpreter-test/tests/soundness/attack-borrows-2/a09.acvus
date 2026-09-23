@@ -1,0 +1,3 @@
+// refuse
+// the array argument converted by value captures the lent vec in a lambda
+let v = vec([1]); extend(&mut v, [(|k| -> v.len() as i64 + k)(0)]); v.len()

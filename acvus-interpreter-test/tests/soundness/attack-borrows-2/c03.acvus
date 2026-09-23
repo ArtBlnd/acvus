@@ -1,0 +1,3 @@
+// refuse
+// a & taken before the loop is live across an iteration's push
+let v = vec([1]); let s = &v; for i in 0..2 { v.push(i); } s.len()

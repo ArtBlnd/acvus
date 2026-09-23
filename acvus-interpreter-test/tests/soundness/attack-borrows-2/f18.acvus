@@ -1,0 +1,3 @@
+// refuse
+// two &mut to one word made at the two arms of a match and a third taken directly
+let a = 1; let k = 0; let r = match k { 0 => &mut a, _ => &mut a }; let q = &mut a; *q = 2; *r = 3; a

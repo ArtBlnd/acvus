@@ -1,0 +1,3 @@
+// expect "ba"
+// an inlined String parameter replaced through &mut does not reach the caller's string, which copies
+let s = "a" + ""; let f = |p| -> { let r = &mut p; *r = "b" + ""; p }; f(s) + s

@@ -1,0 +1,3 @@
+// refuse
+// a write through the &mut while its shared reborrow is live
+let v = vec([1]); let r = &mut v; let s = &r; r.push(2); s.len()

@@ -1,0 +1,3 @@
+// refuse
+// a &mut stored into an object while its owner is read
+let v = vec([1]); let o = { r: &mut v, }; let n = v.len(); o.r.push(1); n

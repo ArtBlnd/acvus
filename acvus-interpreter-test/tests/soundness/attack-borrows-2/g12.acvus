@@ -1,0 +1,3 @@
+// refuse
+// a lambda's parameter lent &mut to a nested lambda while also passed by reference
+let f = |p| -> { let g = |a, b| -> { push(a, 1); b.len() }; g(&mut p, &p) }; f(vec([1]))

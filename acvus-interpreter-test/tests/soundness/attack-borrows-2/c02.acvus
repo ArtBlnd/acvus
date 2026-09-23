@@ -1,0 +1,3 @@
+// expect 3
+// a &mut is re-made each iteration and dies before the owner is read
+let v = vec([1]); let i = 0; while i < 2 { let r = &mut v; r.push(1); let n = v.len(); i = i + 1 + n as i64 - n as i64; } v.len()

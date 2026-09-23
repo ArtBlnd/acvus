@@ -1,0 +1,3 @@
+// refuse
+// a &mut reaches a & receiver by reborrow and the view is live across a push through it
+let v = vec([1, 2]); let r = &mut v; let s = r.as_slice(); r.push(3); s.len()

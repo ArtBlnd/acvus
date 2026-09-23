@@ -1,0 +1,3 @@
+// refuse
+// a &mut reaches a & argument by reborrow and the owner is read in a later argument
+let v = vec([1]); let r = &mut v; let f = |a, b| -> a.len() + b; f(&r, v.len()); r.push(1); 0

@@ -1,0 +1,3 @@
+// refuse
+// a view of the vec is live across a conversion that writes it
+let v = vec([2]); let s = v.as_slice(); extend(&mut v, [1]); s.len()

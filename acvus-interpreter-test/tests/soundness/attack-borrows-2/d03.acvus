@@ -1,0 +1,3 @@
+// expect 3
+// a lambda pushes into its owned parameter and answers its length
+let f = |p| -> { p.push(3); p.len() }; f(vec([1, 2]))

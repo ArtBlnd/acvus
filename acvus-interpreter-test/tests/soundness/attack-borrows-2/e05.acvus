@@ -1,0 +1,3 @@
+// expect true
+// a &mut String reaches a &str position by the shared reborrow
+let s = "abc" + ""; let r = &mut s; r.contains("b")

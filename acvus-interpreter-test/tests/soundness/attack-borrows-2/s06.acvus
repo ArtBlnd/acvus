@@ -1,0 +1,3 @@
+// expect 6
+// anyorder: two spawns fan out and both results are pushed after the region
+let v = vec([1]); let a = 0; let b = 0; anyorder { a = opaque_async(2); b = opaque_async(3); } v.push(a); v.push(b); v[1u64] + v[2u64] + 1

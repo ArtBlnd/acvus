@@ -1,0 +1,3 @@
+// expect 6
+// a &mut to a word is written in a loop with continue
+let a = 0; let r = &mut a; let i = 0; while i < 4 { i = i + 1; if i == 2 { continue; } *r = *r + i; } a - 2

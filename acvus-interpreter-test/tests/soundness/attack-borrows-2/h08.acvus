@@ -1,0 +1,3 @@
+// refuse
+// anyorder: a lambda capturing v by reference and a push into v in one region
+let v = vec([1]); let s = &v; let f = |k| -> s.len() + k; let n = 0u64; anyorder { v.push(1); n = f(0u64); } n

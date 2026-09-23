@@ -1,0 +1,3 @@
+// expect "xy"
+// a string parameter lent &mut and replaced whole
+let f = |p| -> { let r = &mut p; *r = "x" + "y"; p }; f("a" + "b")

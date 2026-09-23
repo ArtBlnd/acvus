@@ -1,0 +1,3 @@
+// expect 4
+// a lambda given a word from a spawned call lends the parameter
+let f = |p| -> { let r = &p; *r + 1 }; f(opaque_async(3))

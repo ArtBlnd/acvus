@@ -1,0 +1,3 @@
+// refuse
+// a &mut reborrowed into two & arguments of one call and pushed through in a third argument
+let v = vec([1]); let r = &mut v; let f = |a, b, c| -> a.len() + b.len() + c; f(&r, &r, { r.push(1); 0 })

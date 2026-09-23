@@ -1,0 +1,3 @@
+// refuse
+// anyorder: a spawn's argument reads v while a &mut to v made before the region is written inside it
+let v = vec([1]); let r = &mut v; let a = 0; anyorder { a = opaque_async(v.len() as i64); r.push(1); } a

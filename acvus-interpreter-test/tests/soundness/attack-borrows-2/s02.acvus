@@ -1,0 +1,3 @@
+// expect 3
+// a spawned call's result is pushed through a &mut made after the spawn
+let v = vec([1]); let a = opaque_async(v.len() as i64); let r = &mut v; r.push(a); r.push(a); v.len() as i64

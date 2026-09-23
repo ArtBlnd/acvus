@@ -1,0 +1,3 @@
+// expect 6
+// an inlined parameter written through &mut does not reach the caller's word argument
+let x = 1; let f = |p| -> { let r = &mut p; *r = 5; p }; f(x) + x

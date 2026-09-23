@@ -1,0 +1,3 @@
+// expect 3
+// a reborrow of a reborrow pushes, then the owner reads
+let v = vec([1]); let r = &mut v; let q = &mut r; q.push(1); q.push(2); v.len()

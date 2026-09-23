@@ -1,0 +1,3 @@
+// expect 3
+// a lambda capturing a &mut is called twice, then the owner is read
+let v = vec([1]); let r = &mut v; let f = |k| -> { r.push(k); 0 }; f(1); f(2); v.len()

@@ -1,0 +1,3 @@
+// refuse
+// a spawned call's argument reads v while a &mut to v is live across the spawn
+let v = vec([1]); let r = &mut v; let a = opaque_async(v.len() as i64); r.push(a); a

@@ -1,0 +1,3 @@
+// refuse
+// a match join is live while the other arm's owner is moved
+let v = vec([1]); let w = vec([2]); let k = 1; let r = &mut v; let s = match k { 0 => r, _ => &w }; let z = w; s.len() + z.len()

@@ -1,0 +1,3 @@
+// refuse
+// a & never reaches a &mut: a join of & and &mut used to write
+let v = vec([1]); let w = vec([2]); let c = true; let s = if c { &w } else { &mut v }; s.push(3); 0

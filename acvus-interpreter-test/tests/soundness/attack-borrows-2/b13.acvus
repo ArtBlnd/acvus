@@ -1,0 +1,3 @@
+// refuse
+// a lambda holding the shared reborrow of a &mut is called after the &mut writes
+let v = vec([1]); let r = &mut v; let s = &r; let f = |k| -> s.len() + k; r.push(2); f(0)

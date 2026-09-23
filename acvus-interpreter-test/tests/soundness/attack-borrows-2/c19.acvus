@@ -1,0 +1,3 @@
+// refuse
+// a lambda holding a & to v is passed to a call whose other argument writes v
+let v = vec([1]); let s = &v; let g = |f, k| -> f(k); g(|k| -> s.len() + k, { v.push(1); 0u64 })

@@ -1,0 +1,3 @@
+// refuse
+// a deque at a &mut Vec parameter: no cast back, and no deque overload
+let d = deque(); d.push_back(1); swap(&mut d, 0, 0); 0

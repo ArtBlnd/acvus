@@ -1,0 +1,3 @@
+// expect 3
+// a lambda's by-value parameter shadowed by a let of its own lend
+let f = |p| -> { let p = len(&p); p + 1 }; f(vec([1, 2]))

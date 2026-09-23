@@ -1,0 +1,3 @@
+// expect 3
+// a string's view is lent to contains in one argument and its length read in a word-producing later argument
+let s = "abc" + ""; let f = |a, n| -> if a.contains("c") { n } else { 0u64 }; f(s.as_str(), s.len())

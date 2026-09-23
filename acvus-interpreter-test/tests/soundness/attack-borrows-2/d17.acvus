@@ -1,0 +1,3 @@
+// refuse
+// a lambda lends its parameter &mut and reads it in the same call
+let f = |p| -> { push(&mut p, len(&p) as i64); 0 }; f(vec([1]))

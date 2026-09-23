@@ -1,0 +1,3 @@
+// expect "bee!"
+// a lambda reads a context string placed in its argument object
+let f = |p| -> p.b + "!"; f({ b: @o.b, })

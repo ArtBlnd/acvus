@@ -1,0 +1,3 @@
+// refuse
+// an object moves into the lambda (not a word), so the caller reads a moved object
+let o = { a: 1, }; let f = |p| -> { p.a = 20; p.a }; f(o) + o.a

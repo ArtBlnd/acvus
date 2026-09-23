@@ -1,0 +1,3 @@
+// expect 2
+// a nested lambda lends the outer lambda's parameter
+let f = |p| -> (|q| -> len(&q))(p); f(vec([1, 2]))

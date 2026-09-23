@@ -1,0 +1,3 @@
+// expect "q!"
+// a lambda given a string field whose producer is an opaque-derived concatenation
+let f = |p| -> p.s + "!"; f({ s: "q" + "", n: opaque(1), })

@@ -1,0 +1,3 @@
+// refuse
+// a read through a &mut while a shared reborrow of it is live (RFC-0029 rejects what Rust admits)
+let v = vec([1]); let r = &mut v; let s = &r; let n = r.len(); s.len() + n

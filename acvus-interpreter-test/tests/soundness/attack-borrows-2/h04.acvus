@@ -1,0 +1,3 @@
+// expect "cc"
+// an inlined lambda in a loop lends its parameter each iteration
+let out = "" + ""; for i in 0..2 { let f = |p| -> { let r = &p; r.to_string() }; out = out + f("c" + ""); } out

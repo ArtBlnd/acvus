@@ -1,0 +1,3 @@
+// refuse
+// an async lambda holding a & is called while the owner is pushed in the argument
+let v = vec([1]); let s = &v; let f = |k| -> opaque_async(s.len() as i64 + k); f({ v.push(1); 0 })

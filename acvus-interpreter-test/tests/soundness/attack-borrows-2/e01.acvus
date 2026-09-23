@@ -1,0 +1,3 @@
+// expect true
+// a String lent twice shared to one call, as the receiver view and the needle
+let s = "ab" + ""; s.contains(&s)

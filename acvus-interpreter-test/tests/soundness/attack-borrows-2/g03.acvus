@@ -1,0 +1,3 @@
+// refuse
+// a Vec argument moved into a lambda is read after the call
+let v = vec([1]); let f = |p| -> { push(&mut p, 2); p.len() }; f(v) + v.len()

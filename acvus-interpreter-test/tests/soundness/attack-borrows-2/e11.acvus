@@ -1,0 +1,3 @@
+// refuse
+// a join of views of two vecs is live while one of them is pushed
+let v = vec([1]); let w = vec([2, 3]); let s = if false { v.as_slice() } else { w.as_slice() }; w.push(4); s.len()

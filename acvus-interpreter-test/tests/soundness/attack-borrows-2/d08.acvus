@@ -1,0 +1,3 @@
+// expect "hi"
+// a lambda's parameter field is a string whose producer is an opaque-free literal chain
+let f = |p| -> p.a.b; f({ a: { b: "h" + "i", }, })

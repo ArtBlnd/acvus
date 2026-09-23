@@ -1,0 +1,3 @@
+// refuse
+// a parameter's field lent &mut and the same field read while it lives
+let f = |p| -> { let r = &mut p.a; let n = p.a; *r = 1; n }; f({ a: 3, })

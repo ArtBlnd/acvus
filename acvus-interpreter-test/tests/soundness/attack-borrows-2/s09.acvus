@@ -1,0 +1,3 @@
+// refuse
+// a & carried across a loop whose body pushes a spawned value
+let v = vec([1]); let s = &v; let i = 0; while i < 2 { v.push(opaque_async(i)); i = i + 1; } s.len() as i64

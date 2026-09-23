@@ -1,0 +1,3 @@
+// expect 4
+// two conversions by value in one call's argument and a nested call
+let v = vec([1]); extend(&mut v, reverse([2, 3, 4])); v.len()

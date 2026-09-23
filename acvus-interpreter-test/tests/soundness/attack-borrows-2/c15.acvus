@@ -1,0 +1,3 @@
+// refuse
+// a lambda capturing v (moved in) is live while v is written
+let v = vec([1]); let f = |k| -> v.len() + k; v.push(1); f(0u64)

@@ -1,0 +1,3 @@
+// refuse
+// a deque converted by value is read after the call
+let d = deque(); d.push_back(1); let v = vec([0]); extend(&mut v, d); d.len()
