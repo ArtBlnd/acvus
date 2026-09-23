@@ -276,20 +276,25 @@ async fn base64_roundtrip() {
 async fn base64_that_does_not_decode_names_which_decoding_failed() {
     let i = Interner::new();
     let src = |input: &str| {
-        [
-            &format!(r#"{{{{ r = base64_decode("{input}".to_string()) }}}}"#),
-            "{{ Ok(s) = r }}{{ s }}",
-            "{{ Err(Base64Error::InvalidBase64(e)) = }}not base64: {{ e.input }}",
-            "{{ Err(Base64Error::InvalidUtf8(e)) = }}not utf8: {{ e.input }}{{/}}",
-        ]
-        .concat()
+        format!(
+            "% let r = base64_decode(\"{input}\".to_string())\n\
+             % match r\n\
+             % Ok(s) =>\n\
+             {{{{ s }}}}\n\
+             % Err(Base64Error::InvalidBase64(e)) =>\n\
+             not base64: {{{{ e.input }}}}\n\
+             % Err(Base64Error::InvalidUtf8(e)) =>\n\
+             not utf8: {{{{ e.input }}}}\n\
+             % _ =>\n\
+             % end"
+        )
     };
     let regs = || vec![encoding_registry::<AcvusRuntime>()];
     let v = run_ext_template(&i, &src("!!!!"), TypedContext::default(), regs()).await;
-    assert_str(&v, "not base64: !!!!");
+    assert_str(&v, "not base64: !!!!\n");
     let not_utf8 = base64::engine::general_purpose::STANDARD.encode([0xFF]);
     let v = run_ext_template(&i, &src(&not_utf8), TypedContext::default(), regs()).await;
-    assert_str(&v, &format!("not utf8: {not_utf8}"));
+    assert_str(&v, &format!("not utf8: {not_utf8}\n"));
 }
 
 #[tokio::test]
@@ -595,20 +600,26 @@ async fn an_enum_returned_by_an_extern_fn_is_matched_by_the_script() {
     let i = Interner::new();
     let regs = || vec![enum_registry()];
     let src = |kind: i64| {
-        [
-            &format!("{{{{ s = shape({kind}) }}}}"),
-            "{{ Shape::Circle(r) = s }}{{ r.to_string() }}",
-            "{{ Shape::Rect(d) = }}{{ d.w.to_string() }}x{{ d.h.to_string() }}",
-            "{{ Shape::Dot = }}dot{{_}}?{{/}}",
-        ]
-        .concat()
+        format!(
+            "% let s = shape({kind})\n\
+             % match s\n\
+             % Shape::Circle(r) =>\n\
+             {{{{ r.to_string() }}}}\n\
+             % Shape::Rect(d) =>\n\
+             {{{{ d.w.to_string() }}}}x{{{{ d.h.to_string() }}}}\n\
+             % Shape::Dot =>\n\
+             dot\n\
+             % _ =>\n\
+             ?\n\
+             % end"
+        )
     };
     let v = run_ext_template(&i, &src(0), TypedContext::default(), regs()).await;
-    assert_str(&v, "dot");
+    assert_str(&v, "dot\n");
     let v = run_ext_template(&i, &src(1), TypedContext::default(), regs()).await;
-    assert_str(&v, "5");
+    assert_str(&v, "5\n");
     let v = run_ext_template(&i, &src(2), TypedContext::default(), regs()).await;
-    assert_str(&v, "2x3");
+    assert_str(&v, "2x3\n");
 }
 
 #[tokio::test]
@@ -617,20 +628,22 @@ async fn an_enum_built_by_the_script_crosses_into_the_extern_fn() {
     let regs = || vec![enum_registry()];
     let v = run_ext_template(
         &i,
-        "{{ a = area(Shape::Circle(3)) }}{{ a.to_string() }}",
+        "% let a = area(Shape::Circle(3))\n\
+         {{ a.to_string() }}\n",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "9");
+    assert_str(&v, "9\n");
     let v = run_ext_template(
         &i,
-        "{{ a = area(shape(2)) }}{{ a.to_string() }}",
+        "% let a = area(shape(2))\n\
+         {{ a.to_string() }}\n",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "6");
+    assert_str(&v, "6\n");
 }
 
 #[derive(acvus_extern::TyArg)]
@@ -667,28 +680,46 @@ async fn a_decimal_is_exact_text_in_and_out() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(d) = decimal("1.50".to_string()) }}{{ d.to_string() }}{{/}}"#,
+        "% match decimal(\"1.50\".to_string())\n\
+         % Ok(d) =>\n\
+         {{ d.to_string() }}\n\
+         % _ =>\n\
+         % end",
         TypedContext::default(),
         vec![],
     )
     .await;
-    assert_str(&v, "1.50");
+    assert_str(&v, "1.50\n");
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(a) = decimal("1.5".to_string()) }}{{ Ok(b) = decimal("1.50".to_string()) }}{{ same = a == b }}{{ same.to_string() }}{{/}}{{/}}"#,
+        "% match decimal(\"1.5\".to_string())\n\
+         % Ok(a) =>\n\
+         % match decimal(\"1.50\".to_string())\n\
+         % Ok(b) =>\n\
+         % let same = a == b\n\
+         {{ same.to_string() }}\n\
+         % _ =>\n\
+         % end\n\
+         % _ =>\n\
+         % end",
         TypedContext::default(),
         vec![],
     )
     .await;
-    assert_str(&v, "true");
+    assert_str(&v, "true\n");
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(d) = decimal("0.5".to_string()) }}{{ f = decimal_to_float(&d) }}{{ f.to_string() }}{{/}}"#,
+        "% match decimal(\"0.5\".to_string())\n\
+         % Ok(d) =>\n\
+         % let f = decimal_to_float(&d)\n\
+         {{ f.to_string() }}\n\
+         % _ =>\n\
+         % end",
         TypedContext::default(),
         vec![],
     )
     .await;
-    assert_str(&v, "0.5");
+    assert_str(&v, "0.5\n");
 }
 
 #[tokio::test]
@@ -697,20 +728,26 @@ async fn an_extension_type_is_a_field_of_a_derived_object() {
     let regs = || vec![price_registry()];
     let v = run_ext_template(
         &i,
-        "{{ p = price() }}{{ p.amount.to_string() }} {{ p.currency }}",
+        "% let p = price()\n\
+         {{ p.amount.to_string() }} {{ p.currency }}\n",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "9.99 USD");
+    assert_str(&v, "9.99 USD\n");
     let v = run_ext_template(
         &i,
-        r#"{{ Ok(d) = decimal("0.05".to_string()) }}{{ p = double_price({ amount: d, currency: "KRW".to_string(), }) }}{{ p.amount.to_string() }}{{/}}"#,
+        "% match decimal(\"0.05\".to_string())\n\
+         % Ok(d) =>\n\
+         % let p = double_price({ amount: d, currency: \"KRW\".to_string(), })\n\
+         {{ p.amount.to_string() }}\n\
+         % _ =>\n\
+         % end",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "0.10");
+    assert_str(&v, "0.10\n");
 }
 
 #[extern_fn(effect = pure)]
@@ -739,20 +776,21 @@ async fn a_result_built_by_the_script_crosses_into_the_extern_fn() {
     let regs = || vec![result_registry()];
     let v = run_ext_template(
         &i,
-        "{{ n = or_zero(Ok(41)) }}{{ n.to_string() }}",
+        "% let n = or_zero(Ok(41))\n\
+         {{ n.to_string() }}\n",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "41");
+    assert_str(&v, "41\n");
     let v = run_ext_template(
         &i,
-        r#"{{ describe(Err("nope".to_string())) }}"#,
+        "{{ describe(Err(\"nope\".to_string())) }}\n",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "err nope");
+    assert_str(&v, "err nope\n");
 }
 
 #[derive(acvus_extern::TyArg)]
@@ -787,20 +825,26 @@ async fn an_extern_fn_s_result_is_the_script_s_result() {
     let i = Interner::new();
     let regs = || vec![fallible_registry()];
     let src = |text: &str| {
-        [
-            &format!(r#"{{{{ r = parse_int("{text}".to_string()) }}}}"#),
-            "{{ Ok(n) = r }}{{ n.to_string() }}",
-            "{{ Err(ParseFail::NotANumber(t)) = }}not a number: {{ t }}",
-            "{{ Err(ParseFail::Empty) = }}empty{{_}}?{{/}}",
-        ]
-        .concat()
+        format!(
+            "% let r = parse_int(\"{text}\".to_string())\n\
+             % match r\n\
+             % Ok(n) =>\n\
+             {{{{ n.to_string() }}}}\n\
+             % Err(ParseFail::NotANumber(t)) =>\n\
+             not a number: {{{{ t }}}}\n\
+             % Err(ParseFail::Empty) =>\n\
+             empty\n\
+             % _ =>\n\
+             ?\n\
+             % end"
+        )
     };
     let v = run_ext_template(&i, &src("42"), TypedContext::default(), regs()).await;
-    assert_str(&v, "42");
+    assert_str(&v, "42\n");
     let v = run_ext_template(&i, &src("4x"), TypedContext::default(), regs()).await;
-    assert_str(&v, "not a number: 4x");
+    assert_str(&v, "not a number: 4x\n");
     let v = run_ext_template(&i, &src(""), TypedContext::default(), regs()).await;
-    assert_str(&v, "empty");
+    assert_str(&v, "empty\n");
 }
 
 #[tokio::test]
@@ -809,12 +853,13 @@ async fn an_extern_that_can_panic_returns_its_value_when_it_does_not() {
     let regs = || vec![fallible_registry()];
     let v = run_ext_template(
         &i,
-        "{{ n = must_be_even(4) }}{{ n.to_string() }}",
+        "% let n = must_be_even(4)\n\
+         {{ n.to_string() }}\n",
         TypedContext::default(),
         regs(),
     )
     .await;
-    assert_str(&v, "4");
+    assert_str(&v, "4\n");
 }
 
 #[tokio::test]
@@ -823,7 +868,8 @@ async fn an_extern_s_panic_carries_its_message() {
     let i = Interner::new();
     run_ext_template(
         &i,
-        "{{ n = must_be_even(3) }}{{ n.to_string() }}",
+        "% let n = must_be_even(3)\n\
+         {{ n.to_string() }}",
         TypedContext::default(),
         vec![fallible_registry()],
     )
@@ -868,12 +914,14 @@ async fn a_derived_object_s_fields_cross_by_their_own_types() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        "{{ l = line() }}{{ n = len(&l.pts) }}{{ n.to_string() }} {{ l.origin.label }}",
+        "% let l = line()\n\
+         % let n = len(&l.pts)\n\
+         {{ n.to_string() }} {{ l.origin.label }}\n",
         TypedContext::default(),
         vec![line_registry()],
     )
     .await;
-    assert_str(&v, "2 o");
+    assert_str(&v, "2 o\n");
 }
 
 #[tokio::test]
@@ -881,36 +929,60 @@ async fn a_refused_input_names_why_in_its_own_enum() {
     let i = Interner::new();
     let v = run_ext_template(
         &i,
-        r#"{{ r = regex("(") }}{{ Err(RegexError::Invalid(e)) = r }}{{ e.pattern }}{{_}}?{{/}}"#,
+        "% let r = regex(\"(\")\n\
+         % match r\n\
+         % Err(RegexError::Invalid(e)) =>\n\
+         {{ e.pattern }}\n\
+         % _ =>\n\
+         ?\n\
+         % end",
         TypedContext::default(),
         vec![regex_registry()],
     )
     .await;
-    assert_str(&v, "(");
+    assert_str(&v, "(\n");
     let v = run_ext_template(
         &i,
-        r#"{{ r = parse_date("yesterday", "%Y") }}{{ Err(DateError::Unparsable(e)) = r }}{{ e.input }} {{ e.format }}{{_}}?{{/}}"#,
+        "% let r = parse_date(\"yesterday\", \"%Y\")\n\
+         % match r\n\
+         % Err(DateError::Unparsable(e)) =>\n\
+         {{ e.input }} {{ e.format }}\n\
+         % _ =>\n\
+         ?\n\
+         % end",
         TypedContext::default(),
         vec![datetime_registry()],
     )
     .await;
-    assert_str(&v, "yesterday %Y");
+    assert_str(&v, "yesterday %Y\n");
     let v = run_ext_template(
         &i,
-        r#"{{ r = from_timestamp(9223372036854775807) }}{{ Err(DateError::OutOfRange(n)) = r }}{{ n.to_string() }}{{_}}?{{/}}"#,
+        "% let r = from_timestamp(9223372036854775807)\n\
+         % match r\n\
+         % Err(DateError::OutOfRange(n)) =>\n\
+         {{ n.to_string() }}\n\
+         % _ =>\n\
+         ?\n\
+         % end",
         TypedContext::default(),
         vec![datetime_registry()],
     )
     .await;
-    assert_str(&v, "9223372036854775807");
+    assert_str(&v, "9223372036854775807\n");
     let v = run_ext_template(
         &i,
-        r#"{{ r = decimal("1.2.3".to_string()) }}{{ Err(DecimalError::Unparsable(t)) = r }}{{ t }}{{_}}?{{/}}"#,
+        "% let r = decimal(\"1.2.3\".to_string())\n\
+         % match r\n\
+         % Err(DecimalError::Unparsable(t)) =>\n\
+         {{ t }}\n\
+         % _ =>\n\
+         ?\n\
+         % end",
         TypedContext::default(),
         vec![],
     )
     .await;
-    assert_str(&v, "1.2.3");
+    assert_str(&v, "1.2.3\n");
 }
 
 #[tokio::test]
