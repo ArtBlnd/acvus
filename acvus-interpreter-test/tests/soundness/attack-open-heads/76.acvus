@@ -1,0 +1,2 @@
+// expect 9
+let o = (1, 2); let m = &mut o; let s = match m { (a, b) => *a + *b, _ => 0, }; *m = (3, 4); s + 6

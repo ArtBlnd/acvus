@@ -1,0 +1,2 @@
+// expect 7
+let o = { a: { b: 3, }, }; let f = |r| -> { r.a.b = 7; 0 }; f(&mut o); o.a.b

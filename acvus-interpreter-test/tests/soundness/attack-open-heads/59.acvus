@@ -1,0 +1,2 @@
+// expect 7
+let xs = [1, 2]; xs[0] = 7; xs[0]

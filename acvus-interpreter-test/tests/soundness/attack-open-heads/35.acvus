@@ -1,0 +1,2 @@
+// expect 5
+let t = (1, "z".to_string()); let f = |r| -> match r { (1, "z") => 5, _ => 0, }; f(&t)

@@ -1,0 +1,2 @@
+// expect 9
+let o = { a: 1, }; let g = |r| -> { r.a = 9; 0 }; let f = |r| -> g(r); f(&mut o); o.a

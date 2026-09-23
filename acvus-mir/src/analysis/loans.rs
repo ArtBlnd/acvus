@@ -434,7 +434,17 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                         via: vec![],
                     },
                 ),
-                RefTarget::Through(r) => state.set(*dst, state.get(*r).through(*r)),
+                // A shared reborrow holds what it reborrows as shared
+                // (RFC-0029 rule 3).
+                RefTarget::Through(r) => {
+                    let mut region = state.get(*r).through(*r);
+                    if *mutability == Mutability::Shared {
+                        for loan in &mut region.loans {
+                            loan.mutability = Mutability::Shared;
+                        }
+                    }
+                    state.set(*dst, region);
+                }
             },
             // A reference read out of a storage is the storage's own
             // reference, not a second holder (RFC-0029), and one stored into
@@ -629,9 +639,18 @@ impl Loans {
                 }
                 self.touch(&mut effect, target, Mutability::Mut);
             }
-            InstKind::FunctionCall { args, .. } | InstKind::Spawn { args, .. } => {
+            InstKind::FunctionCall { args, callee, .. } | InstKind::Spawn { args, callee, .. } => {
                 for a in args {
                     self.add_loans(&mut effect, *a);
+                }
+                // A lambda called uses what it captured at the captures'
+                // own mutability, as an argument would: the callee is the
+                // lambda, or a reference to the storage holding it.
+                if let Callee::Indirect(f) = callee {
+                    self.add_loans(&mut effect, *f);
+                    for loan in &self.region(*f).loans {
+                        self.add_loans(&mut effect, loan.storage.value());
+                    }
                 }
             }
             InstKind::Eval { src, .. } => self.add_loans(&mut effect, *src),

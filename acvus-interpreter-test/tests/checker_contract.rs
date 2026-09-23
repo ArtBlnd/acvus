@@ -175,3 +175,19 @@ fn an_operator_bounds_an_open_operand_and_the_bound_is_checked() {
         "",
     );
 }
+
+/// A field reached through a lambda parameter whose type the call settles
+/// is refused as it is under a head known at the read: a store needs a
+/// `&mut`, a value read of a non-word needs no reference (RFC-0018 rules 4
+/// and 8).
+#[test]
+fn a_field_under_a_head_the_call_settles_is_checked_as_under_a_known_one() {
+    refused_with(
+        "let o = { a: 1, }; let f = |r| -> { r.a = 2; 0 }; f(&o); o.a",
+        "cannot store through",
+    );
+    refused_with(
+        "let o = { v: vec([1]), }; let f = |r| -> r.v; f(&o).len()",
+        "reads only a primitive",
+    );
+}

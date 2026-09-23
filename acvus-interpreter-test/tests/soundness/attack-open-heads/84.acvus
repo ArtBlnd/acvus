@@ -1,0 +1,2 @@
+// expect 0
+let o = { k: Some("y".to_string()), }; let f = |r| -> match r { { k: Some("x"), } => 1, _ => 0, }; f(&o)

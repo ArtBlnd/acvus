@@ -1,0 +1,2 @@
+// refuse
+let o = (vec([1]), vec([2])); let m = &mut o; match m { (a, b) => { *m = (vec([]), vec([])); a.len() + b.len() }, _ => 0, }

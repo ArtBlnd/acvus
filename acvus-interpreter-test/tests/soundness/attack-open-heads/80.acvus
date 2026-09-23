@@ -1,0 +1,2 @@
+// expect 4
+let o = { v: vec([1]), n: 2, }; let m = &mut o; let k = match m { { v, n, } => v.len() + *n, _ => 0, }; m.v.push(4); k + 1

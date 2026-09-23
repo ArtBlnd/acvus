@@ -1,2 +1,2 @@
-// refuse
+// expect 5
 let a = [1, 2, 3]; match &mut a { [1, x, ..] => *x + 3, _ => 0, }

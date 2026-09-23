@@ -1,0 +1,2 @@
+// expect 2
+let o = { k: "a".to_string(), n: 1, }; let f = |r| -> { let hit = match r { { k: "a", } => true, _ => false, }; if hit { r.n = 2; }; 0 }; f(&mut o); o.n

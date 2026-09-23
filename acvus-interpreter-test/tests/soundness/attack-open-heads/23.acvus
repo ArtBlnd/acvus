@@ -1,0 +1,2 @@
+// expect 2
+let o = { a: { b: 1, }, }; let g = |r| -> r.a.b; let f = |r| -> g(r) + 1; f(&o)

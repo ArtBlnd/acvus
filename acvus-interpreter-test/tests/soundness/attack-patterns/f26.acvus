@@ -1,3 +1,3 @@
-// expect refused-or-2
+// expect 2
 // control for f21 with the literal Err arm on a local list
 let l = [Ok(1), Err(2.to_string())]; match l { [Ok(1), Err("x")] => 0, [_a, Err(b)] => 2, _ => 9, }

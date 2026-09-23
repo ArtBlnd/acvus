@@ -1,0 +1,2 @@
+// expect 2
+let o = Err("e".to_string()); let f = |r| -> match r { Ok(x) => 1, Err("e") => 2, _ => 0, }; f(&o)

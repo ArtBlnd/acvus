@@ -1,0 +1,2 @@
+// expect 1
+let f = |r| -> match r { "hi" => 1, _ => 0, }; f("hi")

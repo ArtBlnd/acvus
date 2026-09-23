@@ -1,0 +1,2 @@
+// refuse
+let x = 0; let f = |r| -> { *r = 1; 0 }; f(&x); x

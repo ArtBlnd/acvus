@@ -1,0 +1,2 @@
+// expect 3
+let o = { a: 1, }; let f = |r| -> { r.a = r.a + 1; 0 }; f(&mut o); f(&mut o); o.a

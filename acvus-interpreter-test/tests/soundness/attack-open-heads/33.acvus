@@ -1,0 +1,2 @@
+// expect 4
+let o = { k: "a".to_string(), n: 4, }; let f = |r| -> match r { { k: "a", n, } => *n, _ => 0, }; f(&o)

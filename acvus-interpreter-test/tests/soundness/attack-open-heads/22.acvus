@@ -1,0 +1,2 @@
+// expect "b"
+let s = "a".to_string(); let f = |r| -> { *r = "b".to_string(); 0 }; f(&mut s); s

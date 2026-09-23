@@ -22,47 +22,6 @@ struct Known {
 }
 
 const KNOWN: &[Known] = &[
-    // A write through a `&mut` a lambda captured is lost: a wrong value.
-    Known {
-        program: "attack-cleanups/h03.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-cleanups/r46.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-cleanups/r68.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-cleanups/r69.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-reborrow/25.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-places/c01.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-places/c02.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-places/c03.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-places/c06.acvus",
-        shows: "a wrong value",
-    },
-    Known {
-        program: "attack-places/l25.acvus",
-        shows: "a wrong value",
-    },
     // A field of an element read through the element's reference: the checker admits it.
     Known {
         program: "attack-places/e01.acvus",

@@ -1,0 +1,2 @@
+// refuse
+let o = (1, 2); let m = &mut o; match m { (a, b) => { *m = (3, 4); *a + *b }, _ => 0, }

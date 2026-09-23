@@ -1,0 +1,2 @@
+// expect "ab"
+let o = { s: "ab".to_string(), }; let f = |r| -> r.s; f(&o)

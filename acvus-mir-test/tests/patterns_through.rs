@@ -295,7 +295,7 @@ fn a_binding_read_through_a_reference_before_the_mode_settles_refuses_the_value(
     let source = format!("{VARIANT_ON_A_PARAMETER}f(Some(1.5))");
     let errors = recorded_types(&i, &source).expect_err("`*v` asked for a reference `v` is not");
     assert!(
-        errors.iter().any(|e| e.contains("type mismatch")),
+        errors.iter().any(|e| e.contains("`*` needs a reference")),
         "{errors:?}"
     );
 }

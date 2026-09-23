@@ -1,0 +1,2 @@
+// expect 5
+let v = vec([1, 2]); let r = &mut v; let c = |i| -> { r[i] = 5; 0 }; c(1u64); v[1u64]

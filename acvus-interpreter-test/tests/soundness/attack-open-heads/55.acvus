@@ -1,0 +1,2 @@
+// expect 8
+let x = 1; let r = &mut x; let c = | | -> { *r = 8; 0 }; c(); x

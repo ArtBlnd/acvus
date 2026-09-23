@@ -1,0 +1,2 @@
+// expect 10
+let x = 5; let f = |r| -> { *r = 10; *r }; f(&mut x)

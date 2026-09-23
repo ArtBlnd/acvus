@@ -51,7 +51,8 @@
 //! including one that reaches the storage only through a reference, which
 //! `Loans::touch` resolves to the loans that reference's region holds. A
 //! `Ref &mut` is not one of them: it writes nothing, and `storage_effect`
-//! reads it as a read.
+//! reads it as a read. A value live in such a block that holds a `&mut`
+//! loan on the storage bars the move as a write does.
 //!
 //! `Ref &mut`, a `Ref` through a reference and a `Ref` with a path stay
 //! where they are: the first takes a loan that conflicts with every other,
@@ -499,7 +500,9 @@ impl ReachingBlocks {
     }
 }
 
-/// The storages each block writes (`Loans::storage_effect`).
+/// The storages each block writes (`Loans::storage_effect`), and the ones a
+/// value live in it holds a `&mut` loan on: a shared borrow does not live
+/// across either (RFC-0018 rule 8).
 struct StorageWrites {
     per_block: Vec<SmallVec<[ValueId; 4]>>,
 }
@@ -507,15 +510,33 @@ struct StorageWrites {
 impl StorageWrites {
     fn of(cfg: &CfgBody) -> Self {
         let loans = Loans::build(cfg, Summaries::NONE);
+        let live = crate::analysis::liveness::analyze(cfg);
+        let held_mutably = |value: ValueId| {
+            loans
+                .region(value)
+                .loans
+                .iter()
+                .filter(|loan| loan.mutability == Mutability::Mut)
+                .map(|loan| loan.storage.value())
+                .collect::<SmallVec<[ValueId; 2]>>()
+        };
         Self {
             per_block: cfg
                 .blocks
                 .iter()
-                .map(|block| {
+                .enumerate()
+                .map(|(at, block)| {
+                    let live = live.live_in[at].iter().copied().chain(
+                        block
+                            .insts
+                            .iter()
+                            .flat_map(|inst| inst_info::uses(&inst.kind)),
+                    );
                     block
                         .insts
                         .iter()
                         .flat_map(|inst| loans.storage_effect(&inst.kind).writes)
+                        .chain(live.flat_map(held_mutably))
                         .collect()
                 })
                 .collect(),

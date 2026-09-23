@@ -1017,6 +1017,27 @@ struct DeferredContextBind {
     span: Span,
 }
 
+/// A read under a head that was still open — a field, or `*` — whose
+/// `Match` decision says whether it went through a reference; the demand
+/// says what such a read may do (RFC-0018 rules 4 and 8).
+struct ReadUnderOpenHead {
+    decision: DecisionId,
+    head: InferTy,
+    read: InferTy,
+    demand: PlaceDemand,
+    through: ReadThrough,
+    subject: ShownValue,
+    span: Span,
+}
+
+/// What an open head was read by: a field reads a value or through a
+/// reference, and `*` only through one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadThrough {
+    Field,
+    Deref,
+}
+
 /// A branch of an `if`: its type and the expression whose value it is.
 struct Branch {
     ty: InferTy,
@@ -1086,6 +1107,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// a refusal only once the mode is known.
     deferred_context_binds: Vec<Span>,
     context_binds_under_open_head: Vec<DeferredContextBind>,
+    reads_under_open_head: Vec<ReadUnderOpenHead>,
     /// Accumulated errors.
     errors: Vec<MirError>,
     /// What the expression under check is read for. One field, so
@@ -1172,6 +1194,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             deferred_bindings: Vec::new(),
             deferred_context_binds: Vec::new(),
             context_binds_under_open_head: Vec::new(),
+            reads_under_open_head: Vec::new(),
             demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
             branch_mismatches: Vec::new(),
@@ -2510,6 +2533,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         );
                         Self::infer_error()
                     }
+                    TyTerm::Var(_) => {
+                        let referent = self.solver.fresh_ty_var();
+                        let decision = self.solver.decide(Decision::Match {
+                            scrutinee: var_ty.clone(),
+                            referent: referent.clone(),
+                            bindings: Vec::new(),
+                        });
+                        self.decision_sites.insert(decision, span);
+                        self.reads_under_open_head.push(ReadUnderOpenHead {
+                            decision,
+                            head: var_ty,
+                            read: referent.clone(),
+                            demand: PlaceDemand::Borrow(Mutability::Mut),
+                            through: ReadThrough::Field,
+                            subject: ShownValue::Named(self.interner.resolve(*name).to_string()),
+                            span,
+                        });
+                        referent
+                    }
                     _ => var_ty,
                 }
             }
@@ -2991,6 +3033,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.place_begun_sources();
         self.place_opened_children();
         self.report_unsettled(unsettled);
+        self.check_reads_under_open_head();
         for BranchMismatch { then, else_, span } in std::mem::take(&mut self.branch_mismatches) {
             self.error(
                 MirErrorKind::UnificationFailure {
@@ -5100,6 +5143,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let inner = match self.solver.resolve_ty(&tt) {
                     TyTerm::Ref(Mutability::Mut, inner) => inner.ty,
                     TyTerm::Error(_) => Self::infer_error(),
+                    // A store through `*r` writes through a `&mut`, so a head
+                    // still open is one (RFC-0018 rule 4).
+                    TyTerm::Var(_) => {
+                        let inner = self.solver.fresh_ty_var();
+                        let written =
+                            TyTerm::Ref(Mutability::Mut, Box::new(TypeArg::uniform(inner.clone())));
+                        match self.solver.unify(&tt, &written) {
+                            Ok(()) => inner,
+                            Err(_) => Self::infer_error(),
+                        }
+                    }
                     other => {
                         let shown = self.type_as_written(&other);
                         let subject = written_place(self.interner, target);
@@ -5812,17 +5866,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Deref => match &ot {
                         TyTerm::Var(_) => {
                             let inner = self.solver.fresh_ty_var();
-                            let reference = TyTerm::Ref(
-                                Mutability::Shared,
-                                Box::new(TypeArg::new(self.solver.fresh_repr_var(), inner.clone())),
-                            );
-                            if self.solver.unify(&ot, &reference).is_ok() {
-                                inner
-                            } else {
-                                let shown = self.type_as_written(&ot);
-                                self.error(MirErrorKind::DerefOfNonReference(shown), *span);
-                                Self::infer_error()
-                            }
+                            let decision = self.solver.decide(Decision::Match {
+                                scrutinee: ot.clone(),
+                                referent: inner.clone(),
+                                bindings: Vec::new(),
+                            });
+                            self.decision_sites.insert(decision, *span);
+                            self.reads_under_open_head.push(ReadUnderOpenHead {
+                                decision,
+                                head: ot.clone(),
+                                read: inner.clone(),
+                                demand: PlaceDemand::Value,
+                                through: ReadThrough::Deref,
+                                subject: written_place(self.interner, operand),
+                                span: *span,
+                            });
+                            inner
                         }
                         TyTerm::Ref(_, inner) => {
                             let inner = self.solver.resolve_ty(&inner.ty);
@@ -5969,7 +6028,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     TyTerm::Object(fields) if fields.contains_key(&field_key) => {
                         fields[&field_key].clone()
                     }
-                    TyTerm::Object(_) | TyTerm::Var(_) => {
+                    TyTerm::Var(_) => {
+                        let fresh = self.solver.fresh_ty_var();
+                        let partial_obj = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter(
+                            [(field_key, fresh.clone())],
+                        )));
+                        let decision = self.solver.decide(Decision::Match {
+                            scrutinee: ot_raw.clone(),
+                            referent: partial_obj,
+                            bindings: Vec::new(),
+                        });
+                        self.decision_sites.insert(decision, *span);
+                        self.reads_under_open_head.push(ReadUnderOpenHead {
+                            decision,
+                            head: ot_raw.clone(),
+                            read: fresh.clone(),
+                            demand: outer,
+                            through: ReadThrough::Field,
+                            subject: written_place(self.interner, object),
+                            span: *span,
+                        });
+                        fresh
+                    }
+                    TyTerm::Object(_) => {
                         let fresh = self.solver.fresh_ty_var();
                         let partial_obj = TyTerm::Object(ObjectTy::at_least(FxHashMap::from_iter(
                             [(field_key, fresh.clone())],
@@ -6687,6 +6768,48 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         decision
     }
 
+    /// A field read through a reference its head settled to reads what that
+    /// reference allows: a store or a `&mut` needs a `&mut`, and a value
+    /// read needs a word (RFC-0018 rules 4 and 8), as for a head known at
+    /// the read.
+    fn check_reads_under_open_head(&mut self) {
+        let reads = std::mem::take(&mut self.reads_under_open_head);
+        for read in reads {
+            let head = self.solver.resolve_ty(&read.head);
+            // A head nothing settled is the ambiguity's refusal, not this one.
+            if matches!(head, TyTerm::Var(_)) {
+                continue;
+            }
+            match self.solver.answer(read.decision) {
+                Some(Answer::Match(MatchMode::Through)) => {}
+                Some(Answer::Match(MatchMode::Value)) if read.through == ReadThrough::Deref => {
+                    let shown = self.type_as_written(&head);
+                    self.error(MirErrorKind::DerefOfNonReference(shown), read.span);
+                    continue;
+                }
+                _ => continue,
+            }
+            match read.demand {
+                PlaceDemand::Borrow(Mutability::Mut)
+                    if matches!(head, TyTerm::Ref(Mutability::Shared, _)) =>
+                {
+                    let shown = self.type_as_written(&head);
+                    self.error(
+                        MirErrorKind::StoreThroughSharedReference {
+                            subject: read.subject,
+                            ty: shown,
+                        },
+                        read.span,
+                    );
+                }
+                PlaceDemand::Value => {
+                    self.refuse_deref_of_non_primitive(&read.read, read.span);
+                }
+                PlaceDemand::Borrow(_) => {}
+            }
+        }
+    }
+
     /// A context holds data, and data holds no reference (RFC-0014): a
     /// context bound by a pattern that read through a reference is
     /// refused, whether the head said so at once or only once it settled.
@@ -6787,6 +6910,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 value: Literal::String(_),
                 ..
             } if holds_text(&source_resolved) => {}
+            Pattern::Literal {
+                value: Literal::String(_),
+                ..
+            } if matches!(source_resolved, TyTerm::Var(_)) => {
+                if !self.bound_to_text(source_ty, span) {
+                    self.error(
+                        MirErrorKind::PatternTypeMismatch {
+                            pattern_ty: Ty::String,
+                            source_ty: self.type_as_written(&source_resolved),
+                        },
+                        span,
+                    );
+                }
+            }
 
             Pattern::Literal { value, .. } => {
                 let pat_ty = self.literal_ty(value, span);

@@ -1,0 +1,2 @@
+// expect 7
+let x = 1; let r = &mut x; let c = | | -> { *r = 7; 0 }; let d = | | -> { c(); 0 }; d(); x

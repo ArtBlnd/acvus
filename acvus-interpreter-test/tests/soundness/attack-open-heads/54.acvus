@@ -1,0 +1,2 @@
+// expect 5
+let o = { a: 1, }; let r = &mut o; let c = | | -> { r.a = 5; 0 }; c(); o.a

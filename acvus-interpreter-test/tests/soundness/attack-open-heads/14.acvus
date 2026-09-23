@@ -1,0 +1,2 @@
+// refuse
+let o = { a: 1, }; let m = &mut o; let f = |r| -> { r.a = 4; 0 }; f(m); let n = o.a; m.a = 5; n

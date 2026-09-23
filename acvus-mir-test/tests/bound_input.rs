@@ -88,7 +88,7 @@ fn an_unbound_dispatch_requires_the_tag_and_both_arms() {
         inputs_at(BY_MATCH, &[], Opt::Full),
         vec![
             shown("examples", "String"),
-            shown("mode", "&str"),
+            shown("mode", "String"),
             shown("rules", "String"),
         ]
     );

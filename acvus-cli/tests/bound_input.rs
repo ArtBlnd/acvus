@@ -67,7 +67,7 @@ fn check_reports_the_inputs_a_run_would_still_need() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(written(dir.path()), &["check", "prompt.acvt"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    assert_eq!(text(&out.stderr), "input $mode: &str\n");
+    assert_eq!(text(&out.stderr), "input $mode: String\n");
 
     let out = acvus(
         written(dir.path()),
@@ -84,7 +84,7 @@ fn check_json_lists_the_inputs_after_the_diagnostics() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(
         text(&out.stdout),
-        "[]\n{\"inputs\":[{\"name\":\"mode\",\"type\":\"&str\"}]}\n"
+        "[]\n{\"inputs\":[{\"name\":\"mode\",\"type\":\"String\"}]}\n"
     );
 }
 

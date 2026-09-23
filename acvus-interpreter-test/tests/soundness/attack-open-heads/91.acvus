@@ -1,0 +1,2 @@
+// expect 2
+let v = vec([0]); let r = &mut v; let c = | | -> { r.push(1); 0 }; let k = 1; match k { 1 => { c(); 0 }, _ => 0, }; v.len()

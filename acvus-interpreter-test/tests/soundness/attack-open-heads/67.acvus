@@ -1,0 +1,2 @@
+// expect 1
+let l = ["a".to_string(), "b".to_string()]; match &l { ["a", "b"] => 1, _ => 0, }

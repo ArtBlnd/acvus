@@ -1,0 +1,2 @@
+// refuse
+let x = 3; let f = |r| -> match r { "a" => 1, _ => 0, }; f(&x)

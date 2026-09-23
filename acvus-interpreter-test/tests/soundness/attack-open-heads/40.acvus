@@ -1,0 +1,2 @@
+// refuse
+let o = { x: 1, y: 2, }; let m = &mut o; match m { { x, y, } => { let s = *x + *y; m.x = 9; s + *x }, _ => 0, }

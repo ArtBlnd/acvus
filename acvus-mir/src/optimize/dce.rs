@@ -283,16 +283,35 @@ fn storage_reached(loans: &Loans, values: impl IntoIterator<Item = ValueId>) -> 
 ///
 /// A store `Stores::conditional` holds is asked of its readers instead, and
 /// this answer does not apply to it.
-fn is_root(kind: &InstKind, loans: &Loans) -> bool {
+fn is_root(kind: &InstKind, loans: &Loans, val_types: &FxHashMap<ValueId, Ty>) -> bool {
     if !loans.storage_effect(kind).writes.is_empty() {
+        return true;
+    }
+    // A call handed a `&mut` may write what it names, wherever that storage
+    // is: a capture's word, a parameter's referent, a local. A lambda called
+    // may write through what it captured, which a body calling a lambda it
+    // was handed cannot see.
+    if let InstKind::FunctionCall { args, callee, .. } | InstKind::Spawn { args, callee, .. } = kind
+        && (matches!(callee, crate::ir::Callee::Indirect(_))
+            || args.iter().any(|arg| {
+                matches!(
+                    val_types.get(arg),
+                    Some(Ty::Ref(crate::ty::Mutability::Mut, _))
+                )
+            }))
+    {
         return true;
     }
     match kind {
         // A write to storage is observable; a take leaves its storage empty.
+        // An element store and an append write through the `&mut` their
+        // type demands, wherever the storage it names is.
         InstKind::Assign { .. }
         | InstKind::Take { .. }
         | InstKind::Fetch { .. }
-        | InstKind::Commit { .. } => true,
+        | InstKind::Commit { .. }
+        | InstKind::IndexSet { .. }
+        | InstKind::StringAppend { .. } => true,
 
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
@@ -391,7 +410,7 @@ pub fn run(cfg: &mut CfgBody) {
                 block: bi,
                 inst: ii,
             };
-            if !stores.conditional.contains(&at) && is_root(&inst.kind, &loans) {
+            if !stores.conditional.contains(&at) && is_root(&inst.kind, &loans, &cfg.val_types) {
                 live_insts.insert(at);
                 worklist.extend(inst_info::uses(&inst.kind));
             }

@@ -1119,4 +1119,73 @@ mod tests {
         // reference is used; the use through the first is the second.
         assert_eq!(conflict_count(&errors(main)), 2);
     }
+
+    fn param_mut_word() -> (ValueId, Ty) {
+        (
+            v(9),
+            Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::I64))),
+        )
+    }
+
+    fn shared_through(dst: usize, through: usize) -> InstKind {
+        InstKind::Ref {
+            dst: v(dst),
+            target: RefTarget::Through(v(through)),
+            path: vec![],
+            mutability: Mutability::Shared,
+        }
+    }
+
+    #[test]
+    fn two_shared_reborrows_of_one_mutable_reference_read_side_by_side() {
+        let (param, ty) = param_mut_word();
+        let mut main = body(
+            vec![
+                shared_through(1, 9),
+                shared_through(2, 9),
+                load(3, 1),
+                load(4, 2),
+                ret(3),
+            ],
+            vec![(v(3), Ty::I64), (v(4), Ty::I64)],
+        );
+        main.params
+            .push((acvus_utils::Interner::new().intern("p"), param));
+        main.val_types.insert(param, ty.clone());
+        main.val_types.insert(
+            v(1),
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
+        );
+        main.val_types.insert(
+            v(2),
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
+        );
+        assert_eq!(conflict_count(&errors(main)), 0);
+    }
+
+    #[test]
+    fn a_write_through_the_mutable_reference_while_its_shared_reborrow_lives_is_rejected() {
+        let (param, ty) = param_mut_word();
+        let mut main = body(
+            vec![
+                shared_through(1, 9),
+                InstKind::Assign {
+                    target: RefTarget::Through(param),
+                    path: vec![],
+                    value: v(5),
+                },
+                load(3, 1),
+                ret(3),
+            ],
+            vec![(v(3), Ty::I64), (v(5), Ty::I64)],
+        );
+        main.params
+            .push((acvus_utils::Interner::new().intern("p"), param));
+        main.val_types.insert(param, ty);
+        main.val_types.insert(
+            v(1),
+            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
+        );
+        assert_eq!(conflict_count(&errors(main)), 1);
+    }
 }

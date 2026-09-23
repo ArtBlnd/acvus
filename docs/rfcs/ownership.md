@@ -102,9 +102,11 @@ Status: Accepted
 5. A source whose type is still a variable has no dimension yet: the pattern
    is checked against a referent of its own, joined when the head resolves.
    A head that stays open reads the value — the least element (RFC-0042).
-6. `&` is written on the source only: no `&` in a pattern, no `&mut` match
-   source, and no context bind through a reference, since a context holds
-   no reference (RFC-0014).
+6. `&` is written on the source only: no `&` in a pattern, and no context
+   bind through a reference, since a context holds no reference (RFC-0014).
+   A `&mut` source, written or held, is matched as a `&` source is: each
+   name binds a shared reborrow of its part (RFC-0029 rule 3), and the
+   names read side by side.
 7. A reference names a field, an index, or a variant's payload of its
    storage.
 

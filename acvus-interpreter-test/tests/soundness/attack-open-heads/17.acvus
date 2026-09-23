@@ -1,0 +1,2 @@
+// refuse
+let o = { a: { b: 1, }, }; let f = |r| -> r.a; f(&o).b
