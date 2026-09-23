@@ -1,0 +1,2 @@
+// expect "abc3"
+let r = if opaque(1) == 1 { Ok("abc".to_string()) } else { Err("e".to_string()) }; let a = match r { Ok(s) => len(&s), Err(e) => 0, }; let b = match r { Ok(s) => s, Err(e) => e, }; b + &a.to_string()

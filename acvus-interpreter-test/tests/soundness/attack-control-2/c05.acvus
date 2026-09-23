@@ -1,0 +1,2 @@
+// expect "tt3"
+let p = ("t".to_string(), 3); let u = match p { (s, n) => s, _ => "".to_string(), }; let v = match p { (s, n) => s + &n.to_string(), _ => "".to_string(), }; u + &v

@@ -1,0 +1,2 @@
+// expect 4
+let o = Some(4); if let Some(v) = o { v } else { 0 }

@@ -1,0 +1,2 @@
+// expect 8
+let f = |r| -> *r; let o = Some(8); f(&o).unwrap_or(0)

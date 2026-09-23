@@ -1,0 +1,2 @@
+// expect "abab"
+let e = A::X("ab".to_string()); let n = match &mut e { A::X(s) => len(s), }; let a = match e { A::X(s) => s, }; let b = match e { A::X(s) => s, }; if n == 2u64 { a + &b } else { "".to_string() }

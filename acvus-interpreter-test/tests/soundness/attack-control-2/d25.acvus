@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([Some(1), Some(2)]); let t = 0; for x in &mut v { t = t + (*x).unwrap_or(0); } t

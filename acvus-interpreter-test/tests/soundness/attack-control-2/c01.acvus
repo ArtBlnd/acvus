@@ -1,0 +1,2 @@
+// expect 4
+let e = A::X("ab".to_string()); let n = match e { A::X(s) => len(&s), }; let m = match e { A::X(s) => len(&s), }; n + m

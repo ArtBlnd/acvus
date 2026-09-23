@@ -24,7 +24,27 @@ struct Known {
     shows: &'static str,
 }
 
-const KNOWN: &[Known] = &[];
+const KNOWN: &[Known] = &[
+    // An `Option<&T>` copied out through `*r` keeps no loan on what its
+    // payload names: the lender is dropped after the copy, and the payload
+    // is read after its release (RFC-0018 rules 1 and 9).
+    Known { program: "attack-control-2/d29.acvus", shows: "the run lapsed: Crashed" },
+    Known { program: "attack-control-2/d34.acvus", shows: "the run lapsed: Crashed" },
+    Known { program: "attack-control-2/d35.acvus", shows: "the run lapsed: Crashed" },
+    Known { program: "attack-control-2/d36.acvus", shows: "the run lapsed: Crashed" },
+    // The same copy through an inlined lambda: `Opt::None` runs to 5, and
+    // `Opt::Full` reads a released payload, as a crash or an assertion.
+    Known { program: "attack-control-2/d37.acvus", shows: "run failed: " },
+    // A pattern on `&Option<&T>` binds its payload at the wrong depth
+    // (RFC-0024 rule 3, RFC-0029 rule 3): the validator refuses it at a
+    // word payload, the machine asserts at a `String` one.
+    Known { program: "attack-control-2/d33.acvus", shows: "Take takes dst as &i64, and it is i64" },
+    Known { program: "attack-control-2/d38.acvus", shows: "is not large" },
+    // A `for` over an owned array of `Option<&T>`: the array's loans are
+    // not the elements', the lender is dropped before the loop, and each
+    // payload is read after its release, as a crash or an assertion.
+    Known { program: "attack-control-2/d39.acvus", shows: "run failed: " },
+];
 
 const LIMIT: Duration = Duration::from_secs(30);
 

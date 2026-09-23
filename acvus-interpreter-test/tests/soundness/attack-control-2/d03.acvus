@@ -1,0 +1,2 @@
+// expect 3
+let o = Some(Some(3)); let r = &o; let v = *r; match v { Some(Some(x)) => x, _ => 0, }

@@ -1,0 +1,2 @@
+// expect "xyxy"
+let o = Some("xy".to_string()); let a = if let Some(s) = o { s } else { "".to_string() }; let b = match o { Some(s) => s, None => "".to_string(), }; a + &b

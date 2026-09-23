@@ -1,0 +1,2 @@
+// expect "ss"
+let o = Some(A::X("s".to_string())); let a = match o { Some(A::X(s)) => s, _ => "".to_string(), }; let b = match o { Some(A::X(s)) => s, _ => "".to_string(), }; a + &b

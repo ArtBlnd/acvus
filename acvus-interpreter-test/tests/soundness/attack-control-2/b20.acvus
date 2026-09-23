@@ -1,0 +1,2 @@
+// expect 2
+let acc = 0; for o in [Some("a".to_string()), Some("bb".to_string()), None] { if let Some(s) = o { if len(&s) == 2 { break; } acc = acc + 2; } } acc

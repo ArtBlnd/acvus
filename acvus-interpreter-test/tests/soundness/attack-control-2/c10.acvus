@@ -1,0 +1,2 @@
+// expect "ababab"
+let e = A::X("ab".to_string()); let acc = "".to_string(); let i = 0; while i < 3 { let s2 = match e { A::X(s) => s, }; acc = acc + &s2; i = i + 1; } acc

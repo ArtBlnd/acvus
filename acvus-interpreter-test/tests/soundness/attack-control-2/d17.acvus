@@ -1,0 +1,2 @@
+// expect 7
+let p = { q: { a: Some(7), }, }; let r = &p; r.q.a.unwrap_or(0)

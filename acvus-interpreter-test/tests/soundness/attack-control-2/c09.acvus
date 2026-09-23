@@ -1,0 +1,2 @@
+// expect "abab"
+let e = A::X("ab".to_string()); let c = if opaque(1) == 1 { match e { A::X(s) => s, } } else { "no".to_string() }; let d = match e { A::X(s) => s, }; c + &d

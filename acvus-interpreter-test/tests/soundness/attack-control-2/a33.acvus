@@ -1,0 +1,2 @@
+// expect 3
+let f = |s| -> { if len(&s) > 2 { s } else { "x".to_string() } len(&s) }; f("abc".to_string())

@@ -1,0 +1,2 @@
+// expect 4
+let acc = 0; for s in ["ab".to_string(), "c".to_string(), "d".to_string()] { for t in ["x".to_string(), "yz".to_string(), "w".to_string()] { if len(&t) == 2 { break; } acc = acc + len(&t); } if len(&s) == 1 { break; } acc = acc + len(&s); } acc

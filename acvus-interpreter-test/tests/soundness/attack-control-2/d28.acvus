@@ -1,0 +1,2 @@
+// refuse
+let f = |r| -> r.a; let p = { a: Some("a".to_string()), }; let v = f(&p); 1

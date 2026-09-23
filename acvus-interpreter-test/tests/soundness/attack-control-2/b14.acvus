@@ -1,0 +1,2 @@
+// expect 10
+let f = |k| -> { for s in ["ab".to_string(), "c".to_string()] { for t in ["x".to_string(), "yz".to_string()] { if len(&t) == k { return len(&s) * 5; } } } 0 }; f(2)

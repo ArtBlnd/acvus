@@ -1,0 +1,2 @@
+// refuse
+let f = |x| -> { if x > 0 { return 1; } else { 2 } 9 }; f(1) + f(0)

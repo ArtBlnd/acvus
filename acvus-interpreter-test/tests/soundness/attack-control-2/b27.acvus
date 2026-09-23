@@ -1,0 +1,2 @@
+// expect 3
+let o = { items: ["a".to_string(), "bb".to_string(), "c".to_string()], n: 2, }; let t = 0u64; for s in o.items { if len(&s) == 2 { break; } t = t + len(&s); } t + o.n as u64

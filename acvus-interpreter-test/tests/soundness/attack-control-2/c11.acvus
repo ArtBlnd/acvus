@@ -1,0 +1,2 @@
+// expect 6
+let t = 0; for o in [A::X("a".to_string()), A::X("bb".to_string())] { let n = match o { A::X(s) => len(&s), }; let m = match o { A::X(s) => len(&s), }; t = t + n + m; } t

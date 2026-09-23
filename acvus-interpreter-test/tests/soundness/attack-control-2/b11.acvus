@@ -1,0 +1,2 @@
+// expect 0
+let acc = 0; for o in [{ a: A::X("x".to_string()), b: "yy".to_string(), }, { a: A::X("z".to_string()), b: "w".to_string(), }] { let t = o.a; match t { A::X(s) => { if len(&s) == 1 { break; } }, } acc = acc + 1; } acc

@@ -1,0 +1,2 @@
+// expect 3
+let f = |r| -> match r { [a, b] => len(a) + len(b), _ => 0, }; let x = ["a".to_string(), "bb".to_string()]; f(&x)

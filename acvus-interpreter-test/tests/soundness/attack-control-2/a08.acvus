@@ -1,0 +1,2 @@
+// expect 50
+let t = 0; for i in 0..3 { if i == 1 { t = t + 10; } else { t = t + 1; } t = t * 2; } t

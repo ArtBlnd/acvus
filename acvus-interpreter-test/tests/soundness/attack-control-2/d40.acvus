@@ -1,0 +1,2 @@
+// expect 7
+let a = ["hello".to_string(), "xy".to_string()]; let v = [get(&a, 0u64), get(&a, 1u64)]; let t = 0u64; for x in &v { t = t + match *x { Some(p) => len(p), None => 0u64, }; } t

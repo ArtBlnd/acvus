@@ -1,0 +1,2 @@
+// expect 1
+let acc = 0; for o in [Some("a".to_string()), None, Some("ccc".to_string())] { match o { Some(s) => { acc = acc + len(&s); }, None => { break; }, } } acc

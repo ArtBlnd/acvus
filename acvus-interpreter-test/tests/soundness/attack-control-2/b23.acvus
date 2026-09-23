@@ -1,0 +1,2 @@
+// expect 1
+let f = |x, y| -> { for e in [x, y] { return 1; } 0 }; f(Some("a".to_string()), None)

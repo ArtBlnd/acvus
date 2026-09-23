@@ -1,0 +1,2 @@
+// expect 9
+let f = |r| -> match r { [.., y] => y, _ => 0, }; f([9])

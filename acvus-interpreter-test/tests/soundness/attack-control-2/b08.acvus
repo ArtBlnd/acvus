@@ -1,0 +1,2 @@
+// expect "a"
+let f = |x, z, d| -> { for y in [x, z] { return y; } d }; f("a".to_string(), "b".to_string(), "c".to_string())

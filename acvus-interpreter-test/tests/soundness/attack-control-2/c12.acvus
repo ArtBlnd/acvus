@@ -1,0 +1,2 @@
+// expect "qq"
+let e = A::X("q".to_string()); let a = match &e { A::X(s) => len(s), }; let b = match e { A::X(s) => s, }; let c = match e { A::X(s) => s, }; if a == 1 { b + &c } else { "".to_string() }

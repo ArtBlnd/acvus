@@ -1,0 +1,2 @@
+// expect 2
+let t = 0; let f = |x| -> { match x { 0 => { return 0; }, _ => { x; }, } x * 2 }; f(1)

@@ -1,0 +1,2 @@
+// expect 2
+let p = { a: Some(2), b: "x".to_string(), }; let r = &p; let v = r.a; v.unwrap_or(0)

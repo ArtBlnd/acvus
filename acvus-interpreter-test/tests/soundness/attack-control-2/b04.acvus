@@ -1,0 +1,2 @@
+// expect "bb"
+let keep = "".to_string(); for s in ["a".to_string(), "bb".to_string(), "ccc".to_string()] { if len(&s) == 2 { keep = s; break; } } keep

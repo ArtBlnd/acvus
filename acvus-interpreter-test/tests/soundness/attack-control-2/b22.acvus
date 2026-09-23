@@ -1,0 +1,2 @@
+// expect 2
+let f = |x, y| -> { let k = 0; for e in [x, y] { k = k + 1; if k == 2 { break; } } k }; f({ s: "a".to_string(), }, { s: "b".to_string(), })

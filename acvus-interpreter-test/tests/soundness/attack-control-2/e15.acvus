@@ -1,0 +1,2 @@
+// expect 7
+let f = |r| -> if let [a, ..] = r { a } else { 0 }; f([7])

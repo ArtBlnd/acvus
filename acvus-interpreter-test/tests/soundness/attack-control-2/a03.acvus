@@ -1,0 +1,2 @@
+// expect 2
+let x = 3; match x { 3 => "a".to_string(), _ => "b".to_string(), } len(&"zz".to_string())

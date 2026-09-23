@@ -1,0 +1,2 @@
+// expect 3
+let acc = 0; for row in [["a".to_string(), "bb".to_string()], ["c".to_string(), "dd".to_string()]] { for s in row { if len(&s) == 2 { break; } acc = acc + len(&s); } if acc > 1 { break; } acc = acc + 1; } acc

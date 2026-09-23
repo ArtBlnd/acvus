@@ -1,0 +1,2 @@
+// expect "c"
+let f = |k| -> { let acc = 0; for s in ["ab".to_string(), "c".to_string(), "d".to_string()] { let r = if len(&s) == k { Err(s) } else { Ok(len(&s)) }; acc = acc + r?; } Ok(acc) }; match f(1) { Ok(v) => v.to_string(), Err(e) => e, }

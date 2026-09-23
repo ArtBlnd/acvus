@@ -1,0 +1,2 @@
+// expect 1
+let a = ["x".to_string()]; if true { a } else { ["y".to_string()] } 1

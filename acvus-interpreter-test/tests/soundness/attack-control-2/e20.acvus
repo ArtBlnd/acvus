@@ -1,0 +1,2 @@
+// refuse
+let f = |r| -> match r { [a, b, c, ..] => a, _ => 0, }; f([1, 2])

@@ -1,0 +1,2 @@
+// refuse
+let e = A::X("w".to_string()); let f = | | -> match e { A::X(s) => len(s), }; let a = match e { A::X(s) => s, }; let n = f(); let b = match e { A::X(s) => s, }; if n == 1 { a + &b } else { "".to_string() }

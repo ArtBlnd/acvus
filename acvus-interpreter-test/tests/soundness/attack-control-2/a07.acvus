@@ -1,0 +1,2 @@
+// expect -4
+let f = |x| -> { if x > 0 { x } else { 0 } -x }; f(4)

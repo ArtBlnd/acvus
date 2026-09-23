@@ -1,0 +1,2 @@
+// expect 8
+let e = A::X("ab".to_string()); let t = 0; let i = 0; while i < 3 { match e { A::X(s) => { t = t + len(&s); }, } i = i + 1; } let last = match e { A::X(s) => s, }; t + len(&last)

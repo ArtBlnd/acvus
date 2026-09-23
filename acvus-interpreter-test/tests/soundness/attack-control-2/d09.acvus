@@ -1,0 +1,2 @@
+// expect 6
+let v = [Some(1), None, Some(5)]; let t = 0; for x in &v { t = t + (*x).unwrap_or(0); } t

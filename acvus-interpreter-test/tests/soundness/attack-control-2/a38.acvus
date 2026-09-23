@@ -1,0 +1,2 @@
+// refuse
+let a = ["x".to_string()]; if true { a } else { ["y".to_string()] } len(&a)

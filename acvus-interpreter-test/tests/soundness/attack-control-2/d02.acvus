@@ -1,0 +1,2 @@
+// refuse
+let o = Some("a".to_string()); let r = &o; let v = *r; 1

@@ -1,0 +1,2 @@
+// expect 9
+let f = |x| -> { let t = x; if t > 0 { t = t + 1; } t * 3 }; f(2)

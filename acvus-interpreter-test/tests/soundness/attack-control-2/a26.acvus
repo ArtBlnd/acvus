@@ -1,0 +1,2 @@
+// expect 3
+let g = |o| -> match o { Some(v) => { if v > 1 { v } else { 1 } }, None => 0, }; g(Some(3))

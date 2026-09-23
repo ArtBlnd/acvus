@@ -1,0 +1,2 @@
+// expect 1
+let acc = 0; for o in [{ n: 1, s: "a".to_string(), }, { n: 2, s: "bb".to_string(), }, { n: 3, s: "ccc".to_string(), }] { if o.n == 2 { break; } acc = acc + len(&o.s); } acc

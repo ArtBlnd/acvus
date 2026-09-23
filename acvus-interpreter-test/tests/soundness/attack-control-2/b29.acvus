@@ -1,0 +1,2 @@
+// expect 2
+let f = |k| -> { let t = 0u64; for p in [["a".to_string(), "bb".to_string()], ["c".to_string(), "dd".to_string()]] { match k { 0 => { for s in p { if len(&s) == 2 { return t; } t = t + len(&s) + 1u64; } }, _ => { break; }, } } t }; f(0) + f(1)

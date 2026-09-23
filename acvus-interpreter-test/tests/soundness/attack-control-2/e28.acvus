@@ -1,0 +1,2 @@
+// expect 2
+let f = |r| -> match r { [a, b] => { if a > b { a } else { b } }, _ => 0, }; f([1, 2])

@@ -1,0 +1,2 @@
+// expect 25
+let t = 0; for i in 0..10 { match i % 2 { 0 => { continue; }, _ => { t = t; }, } t = t + i; if i == 7 { break; } t = t + i; } t

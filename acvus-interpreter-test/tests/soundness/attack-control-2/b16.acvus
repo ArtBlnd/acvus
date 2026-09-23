@@ -1,0 +1,2 @@
+// refuse
+let a = ["a".to_string(), "b".to_string()]; for s in a { break; } len(&a)

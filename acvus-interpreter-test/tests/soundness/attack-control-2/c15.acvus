@@ -1,0 +1,2 @@
+// expect "a|a"
+let t = (A::X("a".to_string()), "|".to_string()); let x = match t { (A::X(s), sep) => s + &sep, _ => "".to_string(), }; let y = match t { (A::X(s), sep) => s, _ => "".to_string(), }; x + &y

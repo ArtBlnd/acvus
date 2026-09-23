@@ -1,0 +1,2 @@
+// expect "zz"
+let o = Some(Some("z".to_string())); let a = match o { Some(Some(s)) => s, _ => "".to_string(), }; let b = match o { Some(Some(s)) => s, _ => "".to_string(), }; a + &b

@@ -1,0 +1,2 @@
+// expect 3
+let t = 0; for i in 0..3 { t = t + i; if i == 1 { "five".to_string() } else { "six".to_string() } } t

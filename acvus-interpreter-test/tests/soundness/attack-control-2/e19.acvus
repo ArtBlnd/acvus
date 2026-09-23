@@ -1,0 +1,2 @@
+// expect "c"
+let f = |r| -> match r { [.., z] => z, _ => "".to_string(), }; f(["a".to_string(), "b".to_string(), "c".to_string()])

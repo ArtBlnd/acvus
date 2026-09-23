@@ -1,0 +1,2 @@
+// expect "mm"
+let e = A::X("m".to_string()); let f = |z| -> z + 1; let a = match e { A::X(s) => s, }; let n = f(1); let b = match e { A::X(s) => s, }; if n == 2 { a + &b } else { "".to_string() }

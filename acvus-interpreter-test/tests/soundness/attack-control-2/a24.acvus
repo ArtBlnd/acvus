@@ -1,0 +1,2 @@
+// expect "b"
+let x = 0; match x { 1 => "a".to_string(), _ => "b".to_string(), }

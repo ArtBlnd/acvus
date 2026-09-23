@@ -1,0 +1,2 @@
+// expect 11
+let a = [5, 6]; let v = [get(&a, 0u64), get(&a, 1u64)]; let t = 0; for x in &v { t = t + match *x { Some(p) => *p, None => 0, }; } t

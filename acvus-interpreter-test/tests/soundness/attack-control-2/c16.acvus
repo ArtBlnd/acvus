@@ -1,0 +1,2 @@
+// expect 4
+let e = A::X("ab".to_string()); let t = 0; for i in 0..2 { if let A::X(s) = e { t = t + len(&s); } } t

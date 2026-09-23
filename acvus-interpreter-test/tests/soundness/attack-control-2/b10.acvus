@@ -1,0 +1,2 @@
+// expect 1
+let acc = 0; for o in [A::X("a".to_string()), A::Y(2), A::X("ccc".to_string())] { match o { A::X(s) => { acc = acc + len(&s); }, A::Y(n) => { break; }, } } acc

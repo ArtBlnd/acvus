@@ -1,0 +1,2 @@
+// refuse
+let p = { a: Some({ x: 1, }), }; let r = &p; let v = r.a; 1

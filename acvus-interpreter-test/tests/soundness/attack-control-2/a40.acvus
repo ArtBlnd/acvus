@@ -1,0 +1,2 @@
+// expect 3
+let f = |x| -> { match x { 0 => return 5, _ => 1, } x + 2 }; f(1)

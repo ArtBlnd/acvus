@@ -1,0 +1,2 @@
+// expect 6
+let a = [5, 6]; let o = Some(get(&a, 1u64)); let f = |u| -> match o { Some(Some(p)) => *p, _ => 0, }; f(0)

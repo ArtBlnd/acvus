@@ -1,0 +1,2 @@
+// expect 10
+let t = 0; for i in 0..10 { match i { 5 => { break; }, _ => { t = t + i; }, } } t

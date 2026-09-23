@@ -1,0 +1,2 @@
+// expect 30
+let x = 2; match x { 2 => { let y = 3; if y > 2 { y * 10 } else { 0 } }, _ => 1, }

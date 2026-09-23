@@ -1,0 +1,2 @@
+// expect 1
+let acc = 0; let i = 0; while i < 3 { for s in ["a".to_string(), "b".to_string()] { acc = acc + len(&s); break; } i = i + 1; if acc == 1 { break; } } acc

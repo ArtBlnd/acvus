@@ -1,0 +1,2 @@
+// expect "kkk"
+let r = if opaque(1) == 1 { Ok({ k: "k".to_string(), }) } else { Err(0) }; let a = match r { Ok({ k, }) => k, Err(e) => "".to_string(), }; let b = match r { Ok({ k, }) => k, Err(e) => "".to_string(), }; let c = match r { Ok({ k, }) => k, Err(e) => "".to_string(), }; a + &b + &c

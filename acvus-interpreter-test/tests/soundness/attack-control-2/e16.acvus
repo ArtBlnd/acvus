@@ -1,0 +1,2 @@
+// expect 10
+let f = |r| -> match r { [a, b] => a * b, _ => 0, }; let t = 0; for p in [[1, 2], [2, 4]] { t = t + f(p); } t

@@ -1,0 +1,2 @@
+// expect 2
+let o = Some(Some(Some(2))); let f = | | -> match o { Some(Some(Some(x))) => x, _ => 0, }; f()

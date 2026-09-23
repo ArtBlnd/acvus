@@ -1,0 +1,2 @@
+// expect 3
+let a = ["a".to_string(), "b".to_string()]; for s in a { break; } a = ["ccc".to_string(), "d".to_string()]; len(&a[0])

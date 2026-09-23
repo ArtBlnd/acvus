@@ -1,0 +1,2 @@
+// expect 1
+let f = |r| -> match r { [a, b, ..] => len(a), _ => 0, }; let x = ["a".to_string(), "b".to_string()]; let n = f(&x); n + len(&x[1]) - 1

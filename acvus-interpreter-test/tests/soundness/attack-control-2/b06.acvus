@@ -1,0 +1,2 @@
+// expect "bb"
+let f = |k| -> { for s in ["a".to_string(), "bb".to_string(), "ccc".to_string()] { if len(&s) == k { return s; } } "none".to_string() }; f(2)

@@ -1,0 +1,2 @@
+// expect "x"
+let f = |k| -> { for o in [{ a: "x".to_string(), b: A::P("y".to_string()), }, { a: "z".to_string(), b: A::P("w".to_string()), }] { if k == 0 { return o.a; } } "none".to_string() }; f(0)

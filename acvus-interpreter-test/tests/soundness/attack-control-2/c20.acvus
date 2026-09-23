@@ -1,0 +1,2 @@
+// expect "0112"
+let e = A::X("0".to_string()); let acc = "".to_string(); for i in 0..2 { if let A::X(s) = e { acc = acc + &s; } e = A::X((i + 1).to_string()); if let A::X(s) = e { acc = acc + &s; } } acc

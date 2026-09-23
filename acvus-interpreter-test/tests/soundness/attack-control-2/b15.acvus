@@ -1,0 +1,2 @@
+// expect 1
+let acc = 0; for v in [vec(["a".to_string()]), vec(["b".to_string(), "c".to_string()])] { if len(&v) == 2 { break; } acc = acc + len(&v); } acc

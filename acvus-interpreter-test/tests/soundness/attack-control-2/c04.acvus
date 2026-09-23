@@ -1,0 +1,2 @@
+// expect "xx"
+let p = { a: "x".to_string(), b: 1, }; let u = match p { { a, } => a, _ => "".to_string(), }; let v = match p { { a, } => a, _ => "".to_string(), }; u + &v

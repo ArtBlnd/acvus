@@ -1,0 +1,2 @@
+// expect 3
+let a = false; let b = false; if a { 1 } else { if b { 2 } else { 3 } }

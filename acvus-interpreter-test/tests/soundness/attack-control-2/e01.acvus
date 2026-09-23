@@ -1,0 +1,2 @@
+// expect 3
+let f = |r| -> match r { [a, b] => a + b, _ => 0, }; f([1, 2])

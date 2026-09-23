@@ -1,0 +1,2 @@
+// expect 9
+let t = (Some(9), 1); let r = &t; match r { (Some(x), _) => *x, _ => 0, }

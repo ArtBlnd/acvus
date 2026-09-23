@@ -1,0 +1,2 @@
+// expect 2
+let t = 0u64; let q = Some(1); while let Some(k) = q { for s in ["a".to_string(), "bb".to_string(), "c".to_string()] { if len(&s) == 2 { break; } t = t + len(&s); } q = if k < 2 { Some(k + 1) } else { None }; } t

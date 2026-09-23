@@ -1,0 +1,2 @@
+// expect 1
+let v = [{ a: Some(1), }, { a: None, }]; let t = 0; for x in &v { t = t + x.a.unwrap_or(0); } t

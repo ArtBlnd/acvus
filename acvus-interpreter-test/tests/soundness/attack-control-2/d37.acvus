@@ -1,0 +1,2 @@
+// expect 5
+let f = |q| -> *q; let a = ["hello".to_string()]; let o = get(&a, 0u64); let v = f(&o); match v { Some(p) => len(p), None => 0u64, }

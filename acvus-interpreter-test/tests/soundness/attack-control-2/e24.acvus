@@ -1,0 +1,2 @@
+// expect 5
+let f = |r| -> match r { [a, ..] => a, _ => 0, }; let g = |x| -> f(x); g([5, 6])

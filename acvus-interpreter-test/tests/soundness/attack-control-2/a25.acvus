@@ -1,0 +1,2 @@
+// expect 6
+let t = 0; let i = 0; while i < 3 { i = i + 1; match i { 2 => { t = t + 2; }, _ => { t = t + i; }, } } t

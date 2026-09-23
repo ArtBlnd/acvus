@@ -1,0 +1,2 @@
+// refuse
+let a = [Some("a".to_string())]; let r = &a; let v = r[0]; 1

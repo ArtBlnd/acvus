@@ -1,0 +1,2 @@
+// expect 9
+let acc = 0; for p in [("a".to_string(), 1), ("bb".to_string(), 2), ("c".to_string(), 3)] { match p { (s, n) => { acc = acc + len(&s) + n * 2; if n == 2 { break; } }, _ => { acc = acc; }, } } acc

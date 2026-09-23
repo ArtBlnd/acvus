@@ -1,0 +1,2 @@
+// expect 3
+if false { 1 } else { if true { 100 } else { 200 } 3 }

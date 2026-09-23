@@ -1,0 +1,2 @@
+// refuse
+let f = |r| -> match r { [a, ..] => *a, _ => 0, }; let v = vec([1, 2]); f(&v)

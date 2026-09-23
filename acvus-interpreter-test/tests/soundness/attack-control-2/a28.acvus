@@ -1,0 +1,2 @@
+// expect 5
+let o = Some(1); if let Some(v) = o { v + 1 } else { 0 } if let None = o { 1 } else { 5 }
