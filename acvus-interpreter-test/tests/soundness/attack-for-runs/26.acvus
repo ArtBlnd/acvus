@@ -1,0 +1,2 @@
+// expect 6
+let t = 0; for o in [vec([1, 2]), vec([3])] { for x in &o { t = t + *x; } } t

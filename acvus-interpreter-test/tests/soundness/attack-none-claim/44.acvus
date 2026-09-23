@@ -1,0 +1,2 @@
+// expect 3
+let c = 0; for k in [1, 2, 3] { let o = if k == 2 { None } else { Some("a".to_string()) }; let v = [o]; c = c + 1; } c

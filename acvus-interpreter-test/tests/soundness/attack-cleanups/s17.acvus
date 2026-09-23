@@ -1,0 +1,2 @@
+// expect 13
+let xs = [{ a: 1, b: 2, }, { a: 3, b: 4, }]; let best = { a: 0, b: 0, }; for x in &xs { if x.a > best.a { best = { a: x.a, b: x.b, }; }; } best.a * 3 + best.b

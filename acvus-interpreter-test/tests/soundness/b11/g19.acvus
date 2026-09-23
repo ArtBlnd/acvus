@@ -1,0 +1,1 @@
+let o = { a: 1, }; let f = |p| -> { p.b = "q".to_string(); p }; let o2 = f(o); o2.b

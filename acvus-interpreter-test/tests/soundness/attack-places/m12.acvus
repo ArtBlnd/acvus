@@ -1,0 +1,3 @@
+// expect 5
+// && of local ints
+let x = 2; let y = 3; let r = &x; let q = &y; let rr = &r; *r + *q

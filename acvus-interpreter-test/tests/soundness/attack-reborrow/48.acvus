@@ -1,0 +1,2 @@
+// refuse
+let v = vec([1, 2, 3]); let r = &mut v; rotate_left(r, 1u64); let x = v[0u64]; r.push(4); x

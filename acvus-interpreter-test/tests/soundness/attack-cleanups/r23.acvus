@@ -1,0 +1,2 @@
+// expect 2
+let o = { v: vec([1, 2, 3]), }; let r = &o; r.v[1u64]

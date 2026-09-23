@@ -1,0 +1,3 @@
+// expect 1
+// while let on a local that binds the payload, then breaks
+let o = Some("the quick brown fox jumps over it".to_string()); let n = 0; while let Some(s) = o { n = n + 1; break; } n

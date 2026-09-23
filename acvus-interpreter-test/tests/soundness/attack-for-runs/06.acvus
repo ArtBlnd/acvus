@@ -1,0 +1,2 @@
+// expect "y"
+let last = { a: 0, b: "".to_string(), }; for o in [{ a: 1, b: "x".to_string(), }, { a: 12, b: "y".to_string(), }] { last = o; } last.b

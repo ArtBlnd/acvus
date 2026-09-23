@@ -1,0 +1,1 @@
+let s = 0; for o in &@objs { s = s + o.v; } s

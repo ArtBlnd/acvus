@@ -1,0 +1,2 @@
+// expect 42
+let e = if true { Some({ a: 40, b: 2, }) } else { None }; match e { Some(o) => o.a + o.b, None => 0, }

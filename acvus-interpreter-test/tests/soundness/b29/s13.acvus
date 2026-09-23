@@ -1,0 +1,1 @@
+let a = [Some(1)]; let c = 0; for o in a { c = 1; } c

@@ -1,0 +1,2 @@
+// expect 6
+let s = "abc".to_string(); let r = &s; let rr = &r; rr.len() + r.len()

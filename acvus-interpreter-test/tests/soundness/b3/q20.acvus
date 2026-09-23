@@ -1,0 +1,1 @@
+let o = Some((1, "x".to_string())); match o { Some((n, s)) => s + n.to_string(), None => "".to_string(), }

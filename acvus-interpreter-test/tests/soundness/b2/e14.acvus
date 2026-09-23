@@ -1,0 +1,1 @@
+let e = A::X(1); let e2 = e; match e2 { A::X(n) => n, }

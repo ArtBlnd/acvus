@@ -1,0 +1,2 @@
+// expect 3
+let t = 0; for o in [{ a: 1, b: "s".to_string(), }, { a: 2, b: "tt".to_string(), }] { t = t + o.a; } t

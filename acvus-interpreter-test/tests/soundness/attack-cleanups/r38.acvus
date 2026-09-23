@@ -1,0 +1,2 @@
+// expect 3
+let f = |x| -> x; f(vec([1, 2, 3])).len()

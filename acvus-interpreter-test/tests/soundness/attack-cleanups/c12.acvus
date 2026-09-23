@@ -1,0 +1,2 @@
+// expect "xxx"
+let s = "x".to_string(); let acc = "".to_string(); for i in 0..3 { let t = &s | clone; acc = acc + &t; } acc

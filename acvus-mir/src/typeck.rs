@@ -11,6 +11,9 @@ use crate::error::{
 };
 use crate::graph::QualifiedRef;
 use crate::ir::{Callee, CastKind, Chosen, ExternCast, ForKind, IndexAccess, IndexMode};
+use crate::place::{
+    Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
+};
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
     Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice,
@@ -31,11 +34,6 @@ pub type TypeMap = FxHashMap<AstId, Ty>;
 /// Maps expression AST ids to the coercion needed at that point.
 /// Produced by the type checker, consumed by the lowerer.
 pub type CoercionMap = Vec<(AstId, CastKind)>;
-
-/// Maps callee expression AstId -> QualifiedRef for direct calls.
-/// Present only when typeck resolved the callee to a named function.
-/// Absent = indirect call (local variable, closure, etc.).
-pub type DirectCallMap = FxHashMap<AstId, Callee>;
 
 // -- TypeResolution: boundary between TypeChecker and Lowerer ----------
 
@@ -87,14 +85,64 @@ struct ShownSource {
 struct BoundSite {
     var: crate::ty::TypeBoundId,
     span: Span,
-    /// The instance decision that chooses among the shapes the bound is the
-    /// union of (RFC-0011 rule 2). Its refusal already names the type outside, so a
-    /// violation of the bound is not reported after it.
-    instance: Option<DecisionId>,
 }
 
 /// An integer literal awaiting its width, checked against its value once
 /// the width is known (RFC-0037).
+/// How a pattern source is read: known where it was checked, or the answer
+/// of the match decision its open head opened.
+#[derive(Clone, Copy)]
+enum SourceMode {
+    Read(MatchMode),
+    Decided(DecisionId),
+}
+
+/// Every name a pattern binds, once per binding.
+fn bound_names(pattern: &Pattern, on_name: &mut impl FnMut(Astr)) {
+    match pattern {
+        Pattern::Binding { name, .. } => on_name(*name),
+        Pattern::ContextBind { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
+        Pattern::List { head, tail, .. } => {
+            for part in head.iter().chain(tail) {
+                bound_names(part, on_name);
+            }
+        }
+        Pattern::Object { fields, .. } => {
+            for field in fields {
+                bound_names(&field.pattern, on_name);
+            }
+        }
+        Pattern::Tuple { elements, .. } => {
+            for element in elements {
+                if let TuplePatternElem::Pattern(part) = element {
+                    bound_names(part, on_name);
+                }
+            }
+        }
+        Pattern::Variant { payload, .. } => {
+            if let Some(part) = payload {
+                bound_names(part, on_name);
+            }
+        }
+    }
+}
+
+struct OpenOperand {
+    operand: InferTy,
+    op: &'static str,
+    span: Span,
+}
+
+struct LentWhole {
+    place: AstId,
+    mutability: Mutability,
+}
+
+struct OpenDecision {
+    open: InferTy,
+    span: Span,
+}
+
 struct IntLiteral {
     ty: InferTy,
     value: i128,
@@ -296,37 +344,109 @@ struct CandidateReceiver {
 }
 
 /// RFC-0043.
-struct AdmittedReceiver {
-    candidates: Vec<SignatureCandidate>,
-    first: FirstArg,
+enum Signatures {
+    One(SignatureCandidate),
+    Several(Vec<SignatureCandidate>),
 }
 
-impl AdmittedReceiver {
-    fn taking_every_candidate(kept: Vec<CandidateReceiver>, first: FirstArg) -> Self {
-        Self {
-            candidates: kept.into_iter().map(|seen| seen.candidate).collect(),
-            first,
+impl Signatures {
+    fn of(candidates: Vec<SignatureCandidate>) -> Option<Self> {
+        match <[SignatureCandidate; 1]>::try_from(candidates) {
+            Ok([one]) => Some(Self::One(one)),
+            Err(several) if several.is_empty() => None,
+            Err(several) => Some(Self::Several(several)),
+        }
+    }
+
+    fn candidates(&self) -> &[SignatureCandidate] {
+        match self {
+            Self::One(one) => std::slice::from_ref(one),
+            Self::Several(several) => several,
         }
     }
 }
 
-/// What an overloaded call's arguments left of its candidate set
-/// (RFC-0043).
-/// The candidate set as the arguments narrow it, left to right (RFC-0043).
+struct NamedCall<'e> {
+    callee: CalleeSite,
+    name: Astr,
+    args: &'e [Expr],
+    span: Span,
+    refused_as: CallRefusal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallRefusal {
+    NoMatchingFunction,
+    CannotIndex,
+}
+
+enum FirstOperand<'e> {
+    Absent,
+    Checked(FirstArg),
+    Receiver(&'e Expr),
+}
+
+/// RFC-0030, RFC-0043.
+enum Received {
+    Taken(Signatures, FirstArg),
+    Refused(FirstArg),
+    AmbiguityReported,
+}
+
+/// RFC-0043.
 struct Narrowing {
     options: Vec<SignatureOption>,
     awaiting_head: Vec<UnjoinedArgument>,
-}
-
-struct Admitted {
-    narrowing: Narrowing,
     params: Vec<ParamTerm<Infer>>,
 }
 
-/// The set an argument emptied, with the argument types the call was written
-/// with, which is what the report names (RFC-0043).
-struct ArgumentsRefused {
-    types: Vec<InferTy>,
+enum Parameters<'p> {
+    Instantiated(&'p [InferTy]),
+    Narrowing(&'p mut Narrowing),
+}
+
+enum Reach {
+    Joined,
+    /// Not joined with the call's parameter: the signature decision joins
+    /// that parameter with the settled candidate's own, and a join here
+    /// would give it the argument's type, which that candidate takes only
+    /// through the conversion (RFC-0043).
+    Converted,
+    /// RFC-0043 rule 2, RFC-0062 rule 3.
+    Viewed(DeferredView),
+}
+
+struct CallType {
+    ty: InferTy,
+    params: Vec<InferTy>,
+    ret: InferTy,
+    effect: EffectTerm<Infer>,
+}
+
+impl CallType {
+    fn of(ty: InferTy) -> Option<Self> {
+        let TyTerm::Fn {
+            params,
+            ret,
+            effect,
+            ..
+        } = &ty
+        else {
+            return None;
+        };
+        Some(Self {
+            params: params.iter().map(|param| param.ty.clone()).collect(),
+            ret: (**ret).clone(),
+            effect: effect.clone(),
+            ty,
+        })
+    }
+}
+
+enum Uncallable {
+    Poisoned,
+    NotCallable(Ty),
+    Arity(usize),
 }
 
 /// A call argument at its site, with the place it borrows when it is
@@ -347,14 +467,14 @@ struct ArgSite {
 #[derive(Debug, Clone)]
 struct LentPlace {
     id: AstId,
-    place: Place,
+    loan: Loan,
 }
 
 impl LentPlace {
     fn of(expr: &Expr) -> Option<Self> {
-        place_of(expr).map(|place| Self {
+        Loan::of(expr).map(|loan| Self {
             id: expr.id(),
-            place,
+            loan,
         })
     }
 }
@@ -409,21 +529,22 @@ enum HeldRoot {
     Context(QualifiedRef),
 }
 
-/// RFC-0043: a candidate whose arity is not yet known is one the call's
-/// own arity fixes, so the filter keeps it.
-fn takes_arity(candidate: &SignatureCandidate, arity: usize) -> bool {
-    candidate.arity().is_none_or(|declared| declared == arity)
+/// The arity a candidate declares where it is not the call's (RFC-0043). A
+/// candidate whose arity is not yet known is one the call's own arity
+/// fixes, so it is never refused here.
+fn arity_refusal(candidate: &SignatureCandidate, arity: usize) -> Option<usize> {
+    candidate.arity().filter(|declared| *declared != arity)
 }
 
-/// RFC-0030.
-fn declared_receiver_mode(ty: &crate::ty::PolyTy) -> ReceiverMode {
-    let TyTerm::Fn { params, .. } = ty else {
-        return ReceiverMode::Value;
-    };
-    match params.first().map(|p| &p.ty) {
-        Some(TyTerm::Ref(mutability, _)) => ReceiverMode::Lent(*mutability),
-        _ => ReceiverMode::Value,
-    }
+/// How a receiver reaches the call that takes it (RFC-0030).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Passing {
+    Value,
+    /// Lent from its place, or from a temporary holding it where it names
+    /// no place.
+    Lent(Mutability),
+    /// Already a reference, passed as it is.
+    AsIs,
 }
 
 /// RFC-0020: `StringEq` and `StringConcat` lend their operand places
@@ -482,10 +603,21 @@ fn agreed_receiver_mode(mut modes: impl Iterator<Item = ReceiverMode>) -> Option
 }
 
 /// RFC-0030.
-fn lent_only_if_agreed(per_candidate: &[CandidateReceiver]) -> ReceiverMode {
-    match agreed_receiver_mode(per_candidate.iter().map(|seen| seen.mode)) {
+fn lent_only_if_agreed(agreed: Option<ReceiverMode>) -> ReceiverMode {
+    match agreed {
         Some(lent @ ReceiverMode::Lent(_)) => lent,
         Some(ReceiverMode::Value) | None => ReceiverMode::Value,
+    }
+}
+
+/// Where the candidates disagree, the mode is fixed only after the place is
+/// checked, and a shared borrow is what every mode can be read off
+/// (RFC-0043).
+fn receiver_demand(agreed: Option<ReceiverMode>) -> PlaceDemand {
+    match agreed {
+        Some(ReceiverMode::Lent(mutability)) => PlaceDemand::Borrow(mutability),
+        Some(ReceiverMode::Value) => PlaceDemand::Value,
+        None => PlaceDemand::Borrow(Mutability::Shared),
     }
 }
 
@@ -499,6 +631,24 @@ pub struct OperatorCall<C, T> {
     pub ty: T,
     pub at: Span,
 }
+
+/// Keyed by the id `lower.rs` reads each call at: a named call's name, the
+/// `as_slice` id of an index or of a `for` over a borrow, and an operator's
+/// own expression. A call of an expression's value has no entry, and the
+/// lowering calls that value.
+#[derive(Debug, Clone)]
+pub enum CallTarget {
+    Declared(Callee),
+    /// RFC-0020.
+    Intrinsic(Intrinsic),
+    Binding,
+    /// RFC-0030.
+    StructuralVariant,
+    /// RFC-0020.
+    Operator(OperatorCall<Callee, Ty>),
+}
+
+pub type CallMap = FxHashMap<AstId, CallTarget>;
 
 /// The reference a body's result names, itself or inside the data it holds.
 ///
@@ -664,9 +814,12 @@ struct SchemeAt {
 
 /// RFC-0043.
 #[derive(Debug, Clone)]
-enum CalleeChoice {
+enum CallChoice {
     Resolved(ResolvedCallee),
     Decided(DecisionId),
+    Binding,
+    StructuralVariant,
+    Operator(OperatorCall<ResolvedCallee, InferTy>),
 }
 
 /// A coercion recorded at the value it converts.
@@ -702,11 +855,7 @@ struct PendingExternCast {
 pub struct TypeResolution {
     pub type_map: TypeMap,
     pub coercion_map: CoercionMap,
-    /// Direct call resolution: callee AstId -> the function and instance.
-    /// Only contains entries for calls resolved to named functions.
-    pub direct_calls: DirectCallMap,
-    pub operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
-    pub intrinsic_calls: FxHashMap<AstId, Intrinsic>,
+    pub calls: CallMap,
     /// How each `a[i]` reaches its element (RFC-0047). The checker decided
     /// it from the container's evidence and the element type; the lowering
     /// reads it and decides nothing.
@@ -714,8 +863,16 @@ pub struct TypeResolution {
     /// Which of the four heads each `for` was written with (RFC-0057),
     /// keyed by the statement's own id.
     pub for_kinds: FxHashMap<AstId, ForKind>,
-    /// Calls `ns::tag(payload)` that are structural variants (RFC-0030).
-    pub structural_variant_calls: FxHashSet<AstId>,
+    /// How each receiver and each operator operand, keyed by its own
+    /// expression, reaches what takes it.
+    pub passing: FxHashMap<AstId, Passing>,
+    /// How each `match` / `if let` / `while let` source, keyed by its own
+    /// expression, is read by its patterns (RFC-0024).
+    pub pattern_modes: FxHashMap<AstId, MatchMode>,
+    /// Where the base of each expression the lowering reads as a place
+    /// lives, keyed by the base's own id. The checker settled it from the
+    /// base's form and type; the lowering reads it and decides nothing.
+    pub place_bases: FxHashMap<AstId, PlaceBase>,
     /// The return type of the function each `?` leaves early from (RFC-0038).
     pub try_returns: FxHashMap<AstId, Ty>,
     pub tail_ty: Ty,
@@ -730,42 +887,6 @@ pub struct TypeResolution {
     /// Join of the effects of every call in the body.
     pub effect: Effect,
     pub context_types: FxHashMap<QualifiedRef, Ty>,
-}
-
-impl TypeResolution {
-    fn new(
-        type_map: TypeMap,
-        coercion_map: CoercionMap,
-        direct_calls: DirectCallMap,
-        operator_calls: FxHashMap<AstId, OperatorCall<Callee, Ty>>,
-        intrinsic_calls: FxHashMap<AstId, Intrinsic>,
-        index_access: FxHashMap<AstId, IndexAccess>,
-        for_kinds: FxHashMap<AstId, ForKind>,
-        structural_variant_calls: FxHashSet<AstId>,
-        try_returns: FxHashMap<AstId, Ty>,
-        tail_ty: Ty,
-        extern_params: Vec<(Astr, Ty)>,
-        lambda_captures: FxHashMap<AstId, Vec<CapturedName>>,
-        effect: Effect,
-        context_types: FxHashMap<QualifiedRef, Ty>,
-    ) -> Self {
-        Self {
-            type_map,
-            coercion_map,
-            direct_calls,
-            operator_calls,
-            intrinsic_calls,
-            index_access,
-            for_kinds,
-            structural_variant_calls,
-            try_returns,
-            tail_ty,
-            extern_params,
-            lambda_captures,
-            effect,
-            context_types,
-        }
-    }
 }
 
 /// A name a closure captures and the reading its body was checked at, so
@@ -940,9 +1061,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Accumulated coercions, each through the cast function at its
     /// call type.
     coercions: Vec<PendingCoercion>,
-    /// Direct call resolutions (callee AstId -> the function and instance).
-    direct_calls: FxHashMap<AstId, CalleeChoice>,
-    operator_calls: FxHashMap<AstId, OperatorCall<ResolvedCallee, InferTy>>,
+    calls: FxHashMap<AstId, CallChoice>,
     /// How each `a[i]` reaches its element (RFC-0047), keyed by the index
     /// expression's own id.
     index_access: FxHashMap<AstId, IndexAccess>,
@@ -988,10 +1107,17 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Each `?` with the return type it leaves through (RFC-0038).
     try_sites: FxHashMap<AstId, InferTy>,
     int_literals: Vec<IntLiteral>,
+    open_decisions: Vec<OpenDecision>,
+    refused_open: FxHashSet<crate::ty::TypeBoundId>,
     casts: Vec<CastSite>,
-    /// Calls `ns::tag(payload)` that resolved to a structural variant
-    /// (RFC-0030), for the lowering.
-    structural_variant_calls: FxHashSet<AstId>,
+    passing: FxHashMap<AstId, Passing>,
+    source_modes: FxHashMap<AstId, SourceMode>,
+    /// Places lent whole, whose passing is read off their settled types.
+    lent_places: Vec<LentWhole>,
+    /// Operators whose operand was still open where they were checked,
+    /// and so were taken as operators on words.
+    open_operands: Vec<OpenOperand>,
+    place_bases: FxHashMap<AstId, WrittenBase>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
     /// What a settle inside the body refused, reported with the solve's own:
@@ -1000,9 +1126,6 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Every `a[i]`, kept for the refusals that can only name their type
     /// once the body is solved (RFC-0047 rules 3 and 5).
     index_uses: Vec<IndexUse>,
-    /// The `as_slice` calls that are an index: a refusal of one is the
-    /// index's, `CannotIndex`, and not a refusal of `as_slice`.
-    index_callees: FxHashSet<AstId>,
     /// RFC-0047 rule 6, drained by `settle_slice_args`.
     slice_args: Vec<SliceArg>,
     /// The places the calls being checked have consumed, innermost last.
@@ -1038,8 +1161,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             solver,
             type_map: FxHashMap::default(),
             coercions: Vec::new(),
-            direct_calls: FxHashMap::default(),
-            operator_calls: FxHashMap::default(),
+            calls: FxHashMap::default(),
             index_access: FxHashMap::default(),
             for_kinds: FxHashMap::default(),
             loops: Vec::new(),
@@ -1053,12 +1175,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return_ty: None,
             try_sites: FxHashMap::default(),
             int_literals: Vec::new(),
+            open_decisions: Vec::new(),
+            refused_open: FxHashSet::default(),
             casts: Vec::new(),
-            structural_variant_calls: FxHashSet::default(),
+            passing: FxHashMap::default(),
+            source_modes: FxHashMap::default(),
+            lent_places: Vec::new(),
+            open_operands: Vec::new(),
+            place_bases: FxHashMap::default(),
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
             index_uses: Vec::new(),
-            index_callees: FxHashSet::default(),
             slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
@@ -1165,16 +1292,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn freeze_type_map(&self) -> TypeMap {
         self.type_map
             .iter()
-            .map(|(id, ty)| {
-                let resolved = self.solver.resolve_ty(ty);
-                (
-                    *id,
-                    self.solver
-                        .close_ty(&resolved)
-                        .unwrap_or_else(|_| Ty::error()),
-                )
-            })
+            .map(|(id, ty)| (*id, self.closed(ty)))
             .collect()
+    }
+
+    /// A type the solve closed. Freezing runs once no refusal was raised,
+    /// and every variable left open is a decision `report_unsettled`
+    /// refused, so a type that does not close is a checker defect.
+    fn closed(&self, ty: &InferTy) -> Ty {
+        let resolved = self.solver.resolve_ty(ty);
+        match self.solver.close_ty(&resolved) {
+            Ok(closed) => closed,
+            Err(open) => panic!("an admitted body left {resolved:?} open: {open:?}"),
+        }
     }
 
     /// Construct an InferTy error token.
@@ -1203,36 +1333,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        let resolved: TypeMap = self.freeze_type_map();
-        let extern_params = self.frozen_extern_params(template.span);
-        let effect = self.close_body_effect();
-        let context_types = self.named_context_types();
-        let operator_calls = self.frozen_operator_calls();
-        let coercion_map = self.frozen_coercions();
-        let direct_calls = self.frozen_direct_calls();
-        let lambda_captures = self.frozen_lambda_captures();
-        // A second gate, because freezing is itself a check: a type the
-        // solve left open is found only where it is closed, and every such
-        // type is closed above.
-        if !self.errors.is_empty() {
-            return Err(self.reported());
-        }
-        Ok(Freeze::new(TypeResolution::new(
-            resolved,
-            coercion_map,
-            direct_calls,
-            operator_calls,
-            self.frozen_intrinsic_calls(),
-            self.index_access.clone(),
-            self.for_kinds.clone(),
-            self.structural_variant_calls,
-            FxHashMap::default(),
-            Ty::String,
-            extern_params,
-            lambda_captures,
-            effect,
-            context_types,
-        )))
+        self.into_resolution(template.span, Ty::String)
     }
 
     /// Type check a script. Consumes self, returns TypeResolution.
@@ -1310,39 +1411,162 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        let resolved: TypeMap = self.freeze_type_map();
-        let extern_params = self.frozen_extern_params(script.span);
         let tail_at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
         let frozen_tail = self.closed_or_refused(&self.solver.resolve_ty(&tail_ty), tail_at);
+        self.into_resolution(script.span, frozen_tail)
+    }
+
+    /// What the lowering reads of a checked body.
+    fn into_resolution(
+        mut self,
+        body: Span,
+        tail_ty: Ty,
+    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
+        // A `$` input nothing typed is refused here, in its own words, so it
+        // is refused before the freezes below take every type as closed.
+        let extern_params = self.frozen_extern_params(body);
+        if !self.errors.is_empty() {
+            return Err(self.reported());
+        }
+        self.refuse_operands_that_settled_late();
+        if !self.errors.is_empty() {
+            return Err(self.reported());
+        }
+        let type_map = self.freeze_type_map();
         let try_returns = self.frozen_try_returns();
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
-        let operator_calls = self.frozen_operator_calls();
+        let calls = self.frozen_calls();
         let coercion_map = self.frozen_coercions();
-        let direct_calls = self.frozen_direct_calls();
         let lambda_captures = self.frozen_lambda_captures();
+        let place_bases = self.frozen_place_bases(&type_map);
+        let passing = self.frozen_passing(&type_map);
+        let pattern_modes = self.frozen_pattern_modes();
         // A second gate, because freezing is itself a check: a type the
         // solve left open is found only where it is closed, and every such
         // type is closed above.
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        Ok(Freeze::new(TypeResolution::new(
-            resolved,
+        Ok(Freeze::new(TypeResolution {
+            type_map,
             coercion_map,
-            direct_calls,
-            operator_calls,
-            self.frozen_intrinsic_calls(),
-            self.index_access.clone(),
-            self.for_kinds.clone(),
-            self.structural_variant_calls,
+            calls,
+            index_access: self.index_access,
+            for_kinds: self.for_kinds,
+            passing,
+            pattern_modes,
+            place_bases,
             try_returns,
-            frozen_tail,
+            tail_ty,
             extern_params,
             lambda_captures,
             effect,
             context_types,
-        )))
+        }))
+    }
+
+    fn frozen_place_bases(&self, type_map: &TypeMap) -> FxHashMap<AstId, PlaceBase> {
+        self.place_bases
+            .iter()
+            .map(|(&id, &written)| {
+                let is_a_reference = || {
+                    let ty = type_map
+                        .get(&id)
+                        .expect("a place's base is checked before it is noted");
+                    matches!(ty, Ty::Ref(..))
+                };
+                let base = match written {
+                    WrittenBase::Storage(storage) if is_a_reference() => {
+                        PlaceBase::ThroughReferenceIn(storage)
+                    }
+                    WrittenBase::Storage(storage) => PlaceBase::Storage(storage),
+                    WrittenBase::Element => {
+                        let access = self
+                            .index_access
+                            .get(&id)
+                            .expect("type checking settles every index expression");
+                        PlaceBase::Element(IndexAccess {
+                            mode: IndexMode::Ref,
+                            ..*access
+                        })
+                    }
+                    WrittenBase::Value if is_a_reference() => PlaceBase::ThroughReference,
+                    WrittenBase::Value => PlaceBase::Temporary,
+                };
+                (id, base)
+            })
+            .collect()
+    }
+
+    /// An operator is decided where it is written. One whose operand was
+    /// open there was taken as the operator on a word; an operand that then
+    /// settled to anything but a word or text is refused, not compared as a
+    /// word.
+    fn refuse_operands_that_settled_late(&mut self) {
+        for OpenOperand { operand, op, span } in std::mem::take(&mut self.open_operands) {
+            let resolved = self.solver.resolve_ty(&operand);
+            let Ok(settled) = self.solver.close_ty(&resolved) else {
+                // An operand that never settles is its bound site's refusal.
+                continue;
+            };
+            if settled.is_primitive() || matches!(settled, Ty::String) {
+                continue;
+            }
+            self.error(
+                MirErrorKind::OperatorDecidedBeforeItsOperand {
+                    op: op.to_string(),
+                    ty: settled,
+                },
+                span,
+            );
+        }
+    }
+
+    fn frozen_pattern_modes(&self) -> FxHashMap<AstId, MatchMode> {
+        self.source_modes
+            .iter()
+            .map(|(&source, &mode)| {
+                let mode = match mode {
+                    SourceMode::Read(mode) => mode,
+                    SourceMode::Decided(decision) => match self.solver.answer(decision) {
+                        Some(Answer::Match(mode)) => mode,
+                        other => panic!("a match decision settles before freezing, not {other:?}"),
+                    },
+                };
+                (source, mode)
+            })
+            .collect()
+    }
+
+    fn frozen_passing(&mut self, type_map: &TypeMap) -> FxHashMap<AstId, Passing> {
+        let mut passing = std::mem::take(&mut self.passing);
+        for LentWhole { place, mutability } in &self.lent_places {
+            let ty = type_map
+                .get(place)
+                .expect("a lent place is checked before it is noted");
+            // A place that holds a shared reference is lent as that
+            // reference: the lend reborrows nothing. A `&mut` is reborrowed,
+            // so exclusion sees the lend (RFC-0029).
+            let lent = match ty {
+                Ty::Ref(Mutability::Shared, _) => Passing::AsIs,
+                _ => Passing::Lent(*mutability),
+            };
+            passing.insert(*place, lent);
+        }
+        passing
+    }
+
+    fn note_place(&mut self, expr: &Expr) {
+        let base = projected(expr).base;
+        self.place_bases.insert(base.id(), WrittenBase::of(base));
+    }
+
+    fn pass_receiver(&mut self, receiver: &Expr, passing: Passing) {
+        if let Passing::Lent(_) = passing {
+            self.note_place(receiver);
+        }
+        self.passing.insert(receiver.id(), passing);
     }
 
     /// A value flows into a position that must have its type (RFC-0042
@@ -1425,8 +1649,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 fields,
                 most: ObjectTy::<Infer>::MAX_FIELDS,
             }),
+            MismatchReason::FixedLacks { member } => Some(MirErrorKind::FixedLacks {
+                member: shown(member),
+            }),
             MismatchReason::NoJoin
-            | MismatchReason::UnionWithoutHome
             | MismatchReason::ReprOpen(_)
             | MismatchReason::TaskTooHigh { .. } => None,
         }
@@ -1437,7 +1663,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// the parameter's referent type until the call ends, and a later lend
     /// of it inside the call is a conversion decision from the held
     /// reference, resolved as a `HeldLend`.
-    fn meet_argument(&mut self, arg_ty: &InferTy, param_ty: &InferTy, site: &ArgSite) {
+    fn meet_argument(
+        &mut self,
+        arg_ty: &InferTy,
+        param_ty: &InferTy,
+        site: &ArgSite,
+        reach: Reach,
+    ) {
+        let joins = match reach {
+            Reach::Viewed(view) => {
+                self.slice_args.push(SliceArg {
+                    at: site.id,
+                    span: site.span,
+                    arg: arg_ty.clone(),
+                    param: param_ty.clone(),
+                    view,
+                });
+                return;
+            }
+            Reach::Joined => true,
+            Reach::Converted => false,
+        };
         if self.meet_slice_parameter(arg_ty, param_ty, site) {
             return;
         }
@@ -1445,7 +1691,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return;
         }
         let Some(lent) = &site.place else {
-            if self.refused_field_set(param_ty, arg_ty, site.span) {
+            if joins && self.refused_field_set(param_ty, arg_ty, site.span) {
                 return;
             }
             self.convert_argument_at(arg_ty, param_ty, site);
@@ -1454,13 +1700,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let TyTerm::Ref(mutability, lent_referent) = self.solver.shallow_resolve_ty(arg_ty) else {
             unreachable!("a lent argument is typed by check_borrow, a reference")
         };
-        let Some(root) = self.held_root(&lent.place.root) else {
+        let Some(root) = self.held_root(lent.loan.root) else {
             let TyTerm::Error(_) = self.solver.shallow_resolve_ty(&lent_referent.ty) else {
                 unreachable!("a place whose root is bound nowhere is an undefined name")
             };
             return;
         };
-        let path = &lent.place.path;
+        let path = &lent.loan.fields;
         if let Some(held) = self.held(&root, path) {
             let held_lend_ty =
                 TyTerm::Ref(mutability, Box::new(TypeArg::new(lent_referent.repr, held)));
@@ -1472,7 +1718,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.convert_at(&held_lend_ty, param_ty, site);
             return;
         }
-        if self.refused_field_set(param_ty, arg_ty, site.span) {
+        if joins && self.refused_field_set(param_ty, arg_ty, site.span) {
             return;
         }
         self.convert_argument_at(arg_ty, param_ty, site);
@@ -1516,7 +1762,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let borrows = self.object_as_written(&projection);
         let has = self.object_as_written(&argument);
         let object = match &site.place {
-            Some(lent) => lent.place.display(self.interner),
+            Some(lent) => lent.loan.display(self.interner),
             None => has.clone(),
         };
         let note =
@@ -1711,17 +1957,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.error(mismatch, span);
     }
 
-    fn held_root(&self, root: &PlaceRoot) -> Option<HeldRoot> {
+    fn held_root(&self, root: Storage) -> Option<HeldRoot> {
         match root {
-            PlaceRoot::Context(qref) => Some(HeldRoot::Context(*qref)),
-            PlaceRoot::Local(name) => {
-                if let Some(scope) = self.scopes.iter().rposition(|s| s.contains_key(name)) {
-                    return Some(HeldRoot::Local { name: *name, scope });
+            Storage::Context(qref) => Some(HeldRoot::Context(qref)),
+            Storage::Local(name) | Storage::Input(name) => {
+                if let Some(scope) = self.scopes.iter().rposition(|s| s.contains_key(&name)) {
+                    return Some(HeldRoot::Local { name, scope });
                 }
                 self.param_types
                     .iter()
-                    .any(|param| param.name == *name)
-                    .then_some(HeldRoot::Param(*name))
+                    .any(|param| param.name == name)
+                    .then_some(HeldRoot::Param(name))
             }
         }
     }
@@ -1980,21 +2226,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             })
     }
 
-    /// A call of the binding itself: no signature is named, so no
-    /// `direct_calls` entry is frozen and the lowering takes its indirect
-    /// path off the variable.
-    fn check_local_call(
-        &mut self,
-        callee_id: AstId,
-        callable: &InferTy,
-        first: Option<&FirstArg>,
-        args: &[Expr],
-        call_span: Span,
-    ) -> InferTy {
-        self.record(callee_id, callable.clone());
-        self.check_callable(callable, args, first, call_span)
-    }
-
     /// A lambda's parameter types come from the parameter that receives it
     /// (RFC-0018) when that is known; otherwise they are inference variables.
     /// A lambda, at the function type the position expects where there is
@@ -2122,51 +2353,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             self.settle_in_body();
             return self.check_lambda(arg, Some(expected));
         }
-        self.check_expr(arg)
-    }
-
-    /// Every argument, the first (piped or a receiver) first, checked left
-    /// to right; each meets its parameter as soon as it is checked, so a
-    /// lambda later in the list is checked at parameter types the earlier
-    /// arguments have already fixed, and a place an earlier argument
-    /// consumed is held through the later ones.
-    fn check_args_in_order(
-        &mut self,
-        fn_ty: &InferTy,
-        first: Option<&FirstArg>,
-        args: &[Expr],
-        call_span: Span,
-    ) -> Vec<InferTy> {
-        let params: Vec<InferTy> = match fn_ty {
-            TyTerm::Fn { params, .. } => params.iter().map(|p| p.ty.clone()).collect(),
-            _ => Vec::new(),
-        };
-        let offset = usize::from(first.is_some());
-        let arity_holds = params.len() == args.len() + offset;
-        let meet = |this: &mut Self, param: Option<&InferTy>, arg: &InferTy, site: &ArgSite| {
-            let Some(param) = param else {
-                return;
-            };
-            if !arity_holds {
-                let _ = this.solver.unify(param, arg);
-                return;
-            }
-            this.meet_argument(arg, param, site);
-        };
-        let outer_holds = self.holds.len();
-        let mut types = Vec::with_capacity(args.len() + offset);
-        if let Some(first) = first {
-            meet(self, params.first(), &first.ty, &first.site);
-            types.push(first.ty.clone());
-        }
-        for (i, arg) in args.iter().enumerate() {
-            let expected = params.get(i + offset);
-            let ty = self.check_arg(arg, expected);
-            meet(self, expected, &ty, &ArgSite::of(arg, call_span));
-            types.push(ty);
-        }
-        self.holds.truncate(outer_holds);
-        types
+        let outer = std::mem::replace(&mut self.demand, PlaceDemand::Value);
+        let ty = self.check_expr(arg);
+        self.demand = outer;
+        ty
     }
 
     /// A reference is never data (RFC-0018), and neither is a lambda that
@@ -2255,14 +2445,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             }) => {
                 let qref = QualifiedRef::root(*name);
-                self.note_context_use(qref, span);
                 self.note_access(Effect::write(qref), span);
-                let ty = self
-                    .env
-                    .contexts
-                    .get(&qref)
-                    .cloned()
-                    .unwrap_or_else(|| self.solver.fresh_ty_var());
+                let ty = self.resolve_context_type(qref, span);
                 self.record_ret(*id, ty)
             }
             acvus_ast::Place::Base(acvus_ast::PlaceBase::Root {
@@ -2429,7 +2613,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         enum_name: Option<Astr>,
         wanted: Astr,
     ) -> DidYouMean {
-        let TyTerm::Enum { name, variants } = behind_a_reference(scrutinee_ty) else {
+        let TyTerm::Enum { name, variants, .. } = behind_a_reference(scrutinee_ty) else {
             return DidYouMean::default();
         };
         let qualified = |tag: &Astr| match enum_name {
@@ -2510,16 +2694,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let inst = self
             .solver
             .instantiate_scheme_with(&scheme, compiler_instances);
-        let instance = match inst.instance {
-            Some(InstanceChoice::Decided(decision)) => Some(decision),
-            Some(InstanceChoice::Fixed(_)) | None => None,
-        };
-        self.bound_sites
-            .extend(inst.bounded.into_iter().map(|var| BoundSite {
-                var,
-                span: site.at,
-                instance,
-            }));
+        self.bound_sites.extend(
+            inst.bounded
+                .into_iter()
+                .map(|var| BoundSite { var, span: site.at }),
+        );
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
             self.decision_sites.insert(decision, site.at);
             self.decision_callees.insert(decision, qref);
@@ -2540,6 +2719,26 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             instance: inst.instance,
             requirements: inst.requirements,
         }
+    }
+
+    fn instantiate_call(
+        &mut self,
+        qref: QualifiedRef,
+        scheme: &crate::ty::Scheme,
+        site: SchemeUse,
+    ) -> (CallType, ResolvedCallee) {
+        let SchemeAt {
+            ty,
+            instance,
+            requirements,
+        } = self.instantiate_at(qref, scheme, site);
+        let call_type = CallType::of(ty).expect("a declared signature is a function type");
+        let callee = ResolvedCallee {
+            qref,
+            instance,
+            requirements,
+        };
+        (call_type, callee)
     }
 
     /// The callee a resolved call lowers to; `None` while the call's type
@@ -2594,11 +2793,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         })
     }
 
-    /// RFC-0043.
-    fn resolved_of(&self, choice: &CalleeChoice) -> Option<ResolvedCallee> {
+    fn frozen_call(&mut self, choice: &CallChoice) -> Option<CallTarget> {
         match choice {
-            CalleeChoice::Resolved(resolved) => Some(resolved.clone()),
-            CalleeChoice::Decided(decision) => match self.solver.answer(*decision)? {
+            CallChoice::Resolved(resolved) => self.declared_or_intrinsic(resolved),
+            CallChoice::Decided(decision) => match self.solver.answer(*decision)? {
                 Answer::Signature {
                     settled:
                         SettledSignature::Named {
@@ -2608,7 +2806,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             ..
                         },
                     ..
-                } => Some(ResolvedCallee {
+                } => self.declared_or_intrinsic(&ResolvedCallee {
                     qref,
                     instance,
                     requirements,
@@ -2616,7 +2814,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Answer::Signature {
                     settled: SettledSignature::Local,
                     ..
-                } => None,
+                } => Some(CallTarget::Binding),
                 Answer::Instance(_)
                 | Answer::Conversion(_)
                 | Answer::Lend(_)
@@ -2625,61 +2823,63 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     unreachable!("a signature decision answers with a signature")
                 }
             },
+            CallChoice::Binding => Some(CallTarget::Binding),
+            CallChoice::StructuralVariant => Some(CallTarget::StructuralVariant),
+            CallChoice::Operator(call) => {
+                let callee = self.callee_of(&call.callee)?;
+                let resolved = self.solver.resolve_ty(&call.ty);
+                let ty = self.closed_or_refused(&resolved, call.at);
+                Some(CallTarget::Operator(OperatorCall {
+                    callee,
+                    signature: call.signature,
+                    ty,
+                    at: call.at,
+                }))
+            }
         }
+    }
+
+    /// RFC-0020.
+    fn declared_or_intrinsic(&self, resolved: &ResolvedCallee) -> Option<CallTarget> {
+        if let Some(InstanceChoice::Decided(decision)) = resolved.instance
+            && let Some(Answer::Instance(InstanceKind::Intrinsic(intrinsic))) =
+                self.solver.answer(decision)
+        {
+            return Some(CallTarget::Intrinsic(intrinsic));
+        }
+        self.callee_of(resolved).map(CallTarget::Declared)
+    }
+
+    fn frozen_calls(&mut self) -> CallMap {
+        let calls: Vec<(AstId, CallChoice)> = self
+            .calls
+            .iter()
+            .map(|(id, choice)| (*id, choice.clone()))
+            .collect();
+        calls
+            .into_iter()
+            .filter_map(|(id, choice)| Some((id, self.frozen_call(&choice)?)))
+            .collect()
     }
 
     /// Verified by `solve_body` as an instantiation's bounded variables are.
     fn settled_signature_bounds(&self) -> Vec<BoundSite> {
-        self.direct_calls
+        self.calls
             .values()
             .filter_map(|choice| {
-                let CalleeChoice::Decided(decision) = choice else {
+                let CallChoice::Decided(decision) = choice else {
                     return None;
                 };
                 let Answer::Signature { settled, .. } = self.solver.answer(*decision)? else {
                     unreachable!("a signature decision answers with a signature")
                 };
-                let SettledSignature::Named {
-                    bounded, instance, ..
-                } = settled
-                else {
+                let SettledSignature::Named { bounded, .. } = settled else {
                     return None;
-                };
-                let instance = match instance {
-                    Some(InstanceChoice::Decided(decision)) => Some(decision),
-                    Some(InstanceChoice::Fixed(_)) | None => None,
                 };
                 let span = self.decision_sites[decision];
-                Some(bounded.into_iter().map(move |var| BoundSite {
-                    var,
-                    span,
-                    instance,
-                }))
+                Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
             })
             .flatten()
-            .collect()
-    }
-
-    /// The calls whose instance decision settled on an instruction of the
-    /// language (RFC-0020).
-    fn frozen_intrinsic_calls(&self) -> FxHashMap<AstId, Intrinsic> {
-        self.direct_calls
-            .iter()
-            .filter_map(|(id, choice)| {
-                let Some(InstanceChoice::Decided(decision)) = self.resolved_of(choice)?.instance
-                else {
-                    return None;
-                };
-                match self.solver.answer(decision)? {
-                    Answer::Instance(InstanceKind::Intrinsic(intrinsic)) => Some((*id, intrinsic)),
-                    Answer::Instance(InstanceKind::Extern(_))
-                    | Answer::Conversion(_)
-                    | Answer::Signature { .. }
-                    | Answer::Lend(_)
-                    | Answer::Capture(_)
-                    | Answer::Match(_) => None,
-                }
-            })
             .collect()
     }
 
@@ -2708,13 +2908,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             },
             admits: Task::Heavy,
         }]
-    }
-
-    fn frozen_direct_calls(&self) -> DirectCallMap {
-        self.direct_calls
-            .iter()
-            .filter_map(|(id, choice)| Some((*id, self.callee_of(&self.resolved_of(choice)?)?)))
-            .collect()
     }
 
     fn frozen_coercions(&self) -> CoercionMap {
@@ -2791,17 +2984,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let settled = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
         let sites = std::mem::take(&mut self.bound_sites);
+        let mut never_settled: Vec<BoundSite> = Vec::new();
         for site in sites {
-            if site
-                .instance
-                .is_some_and(|instance| refused.contains(&instance))
-            {
+            // A bound that fails where a decision was refused is that
+            // refusal's consequence: the refused call's types are the ones
+            // that reach the bounded variable.
+            if !refused.is_empty() {
                 continue;
             }
-            if let Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) =
-                self.solver.freeze_ty(&TyTerm::Var(site.var))
-            {
-                self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
+            match self.solver.close_ty(&TyTerm::Var(site.var)) {
+                Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) => {
+                    self.error(MirErrorKind::TypeOutOfBound { ty, bound }, site.span);
+                }
+                Err(_)
+                    if !self
+                        .solver
+                        .resolve_ty(&TyTerm::Var(site.var))
+                        .mentions_error() =>
+                {
+                    never_settled.push(site);
+                }
+                Err(_) | Ok(_) => {}
             }
         }
         let casts = std::mem::take(&mut self.casts);
@@ -2832,6 +3035,34 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             }
         }
         self.settle_int_literals();
+        self.refuse_open_decisions();
+        // An operand no use ever settled is refused only in a body nothing
+        // else was refused in: a refused call leaves its arguments' types
+        // open, and that is the refusal the reader was already told.
+        if self.errors.is_empty() {
+            for site in never_settled {
+                let resolved_ty = self.type_as_written(&TyTerm::Var(site.var));
+                self.error(MirErrorKind::AmbiguousType { resolved_ty }, site.span);
+            }
+        }
+    }
+
+    /// Poison rule 3 and one refusal per open variable: a decision whose
+    /// type holds poison, or whose every open variable was already refused
+    /// by its own rule, is not refused again.
+    fn refuse_open_decisions(&mut self) {
+        for OpenDecision { open, span } in std::mem::take(&mut self.open_decisions) {
+            if self.solver.resolve_ty(&open).mentions_error() {
+                continue;
+            }
+            let vars = self.solver.open_vars(&open);
+            if !vars.is_empty() && vars.iter().all(|var| self.refused_open.contains(var)) {
+                continue;
+            }
+            self.refused_open.extend(vars);
+            let resolved_ty = self.type_as_written(&open);
+            self.error(MirErrorKind::AmbiguousType { resolved_ty }, span);
+        }
     }
 
     /// A literal takes a width here or is refused here (RFC-0042 rule 3).
@@ -2844,7 +3075,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// poison instruction.
     fn settle_int_literals(&mut self) {
         let literals = std::mem::take(&mut self.int_literals);
-        let mut reported: FxHashSet<crate::ty::TypeBoundId> = FxHashSet::default();
         for IntLiteral { ty, value, span } in literals {
             let Ok(Ty::Int(k)) = self.solver.freeze_ty(&ty) else {
                 let TyTerm::Var(var) = self.solver.shallow_resolve_ty(&ty) else {
@@ -2853,7 +3083,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let TyVarBound::Integer { among, .. } = self.solver.bound_of_var(var) else {
                     continue;
                 };
-                if reported.insert(self.solver.find_ty_root(var)) {
+                if self.refused_open.insert(self.solver.find_ty_root(var)) {
                     self.error(MirErrorKind::IntegerLiteralWidthUnsettled { among }, span);
                 }
                 continue;
@@ -2904,10 +3134,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// before the solve.
     fn record_decided_call_types(&mut self) {
         let settled: Vec<(AstId, InferTy)> = self
-            .direct_calls
+            .calls
             .iter()
             .filter_map(|(id, choice)| {
-                let CalleeChoice::Decided(decision) = choice else {
+                let CallChoice::Decided(decision) = choice else {
                     return None;
                 };
                 Some((*id, self.solver.settled_callee_ty(*decision)?))
@@ -3082,8 +3312,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// The settled signature decision that opened `decision`, with the
     /// declaration it settled on (RFC-0043).
     fn opening_signature(&self, decision: DecisionId) -> Option<(DecisionId, QualifiedRef)> {
-        self.direct_calls.values().find_map(|choice| {
-            let CalleeChoice::Decided(parent) = choice else {
+        self.calls.values().find_map(|choice| {
+            let CallChoice::Decided(parent) = choice else {
                 return None;
             };
             let Answer::Signature { settled, .. } = self.solver.answer(*parent)? else {
@@ -3142,10 +3372,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// Whether the call at `callee` was decided and refused.
     fn call_refused(&self, callee: AstId) -> bool {
-        match self.direct_calls.get(&callee) {
-            Some(CalleeChoice::Decided(decision)) => self.solver.answer(*decision).is_none(),
-            Some(CalleeChoice::Resolved(_)) | None => false,
-        }
+        let Some(CallChoice::Decided(decision)) = self.calls.get(&callee) else {
+            return false;
+        };
+        self.solver.answer(*decision).is_none()
     }
 
     /// The decisions of the `as_slice` calls an index is lowered to: their
@@ -3153,9 +3383,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn index_decisions(&self) -> FxHashSet<DecisionId> {
         self.index_uses
             .iter()
-            .filter_map(|index| match self.direct_calls.get(&index.callee_id) {
-                Some(CalleeChoice::Decided(decision)) => Some(*decision),
-                Some(CalleeChoice::Resolved(_)) | None => None,
+            .filter_map(|index| {
+                let Some(CallChoice::Decided(decision)) = self.calls.get(&index.callee_id) else {
+                    return None;
+                };
+                Some(*decision)
             })
             .collect()
     }
@@ -3225,10 +3457,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn report_unsettled(&mut self, unsettled: Vec<Unsettled>) {
         let index_decisions = self.index_decisions();
+        let mut refused: Vec<InferTy> = Vec::new();
         for failure in unsettled {
             let decision = failure.decision();
             if index_decisions.contains(&decision) {
                 continue;
+            }
+            if !matches!(
+                failure,
+                Unsettled::AmbiguousInstance { .. } | Unsettled::ConversionOpen { .. }
+            ) {
+                refused.extend(failure.types().into_iter().cloned());
             }
             let mut labels: Vec<Label> = Vec::new();
             let span = self.decision_span(decision);
@@ -3276,10 +3515,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         got: self.type_as_written(&got),
                     }
                 }
-                Unsettled::AmbiguousInstance { .. } | Unsettled::ConversionOpen { .. } => {
-                    // The call's type stayed open: the lowering treats the
-                    // call as unresolved, and the open type is reported
-                    // where it is frozen.
+                Unsettled::AmbiguousInstance { call: open, .. }
+                | Unsettled::ConversionOpen { to: open, .. } => {
+                    self.open_decisions.push(OpenDecision { open, span });
                     continue;
                 }
                 Unsettled::TaskTooHigh {
@@ -3368,6 +3606,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 false => self.labeled_error(kind, span, labels),
             }
         }
+        for ty in refused {
+            self.solver.poison(&ty);
+        }
     }
 
     /// An integer literal's type: a variable any integer width may fill,
@@ -3446,27 +3687,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.context_uses.entry(qref).or_insert(span);
     }
 
-    fn frozen_operator_calls(&mut self) -> FxHashMap<AstId, OperatorCall<Callee, Ty>> {
-        let calls = std::mem::take(&mut self.operator_calls);
-        calls
-            .iter()
-            .filter_map(|(id, call)| {
-                let callee = self.callee_of(&call.callee)?;
-                let resolved = self.solver.resolve_ty(&call.ty);
-                let ty = self.closed_or_refused(&resolved, call.at);
-                Some((
-                    *id,
-                    OperatorCall {
-                        callee,
-                        signature: call.signature,
-                        ty,
-                        at: call.at,
-                    },
-                ))
-            })
-            .collect()
-    }
-
     /// Every `$name` this body reads, at the type the solve closed it to.
     /// A parameter a Signature declared has no place of its own, so a type
     /// that does not close is refused at the body.
@@ -3477,7 +3697,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .map(|param| {
                 let resolved = self.solver.resolve_ty(&param.ty);
                 let at = param.first_read.unwrap_or(body);
-                (param.name, self.closed_or_refused(&resolved, at))
+                let closed = self.closed_or_refused(&resolved, at);
+                if matches!(closed, Ty::Never) {
+                    let name = self.interner.resolve(param.name).to_string();
+                    self.error(MirErrorKind::InputTypeUndecided(name), at);
+                }
+                (param.name, closed)
             })
             .collect()
     }
@@ -3485,16 +3710,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn named_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
         self.context_uses
             .keys()
-            .map(|qref| (*qref, self.context_type(*qref).unwrap_or_else(Ty::error)))
+            .map(|qref| {
+                let declared = self
+                    .env
+                    .contexts
+                    .get(qref)
+                    .expect("an undeclared context was refused before freezing");
+                (*qref, self.closed(declared))
+            })
             .collect()
     }
 
     /// The type a context resolved to, once every use has been checked.
     /// `None` while it is still open, or when the context is unknown.
-    fn context_type(&self, qref: QualifiedRef) -> Option<Ty> {
+    fn context_type(&self, qref: QualifiedRef) -> Option<Result<Ty, crate::ty::FreezeError>> {
         let ty = self.env.contexts.get(&qref)?;
         let resolved = self.solver.resolve_ty(ty);
-        self.solver.freeze_ty(&resolved).ok()
+        Some(self.solver.close_ty(&resolved))
     }
 
     /// A name a lambda took out of the enclosing closure's capture
@@ -3535,8 +3767,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let uses: Vec<(QualifiedRef, Span)> =
             self.context_uses.iter().map(|(q, s)| (*q, *s)).collect();
         for (qref, span) in uses {
-            let Some(ty) = self.context_type(qref) else {
-                continue;
+            let ty = match self.context_type(qref) {
+                None => continue,
+                Some(Ok(ty)) => ty,
+                Some(Err(_)) => {
+                    let declared = &self.env.contexts[&qref];
+                    let resolved_ty = self.type_as_written(declared);
+                    self.error(MirErrorKind::AmbiguousType { resolved_ty }, span);
+                    continue;
+                }
             };
             if ty.is_error() || ty.is_data() {
                 continue;
@@ -3564,6 +3803,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let outer = std::mem::replace(&mut self.demand, PlaceDemand::Borrow(mutability));
         let ty = self.check_expr(place);
         self.demand = outer;
+        self.note_place(place);
         self.lend_place(&ty, place, mutability, span)
     }
 
@@ -3585,16 +3825,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             view: View::Slice,
             mutability,
         };
-        let name = self.interner.intern(viewed.spelling());
-        let candidates: Vec<SignatureCandidate> = self
-            .env
-            .machine_views(viewed)
-            .into_iter()
-            .map(|(qref, scheme)| SignatureCandidate::Named {
-                qref,
-                scheme: scheme.clone(),
-            })
-            .collect();
+        let candidates = self.as_slice_candidates(viewed);
 
         let first = self.receiver_arg(object, ReceiverMode::Lent(mutability), span);
         // The index is a `u64` and nothing else (RFC-0047 rule 4), so it is the
@@ -3629,25 +3860,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             });
             return self.record_ret(id, Self::infer_error());
         }
-        self.index_callees.insert(callee_id);
-        let slice = self.check_overloaded_call(
-            candidates,
-            CalleeSite {
-                id: callee_id,
-                span,
-            },
-            name,
-            Some(first),
-            &[],
+        let call = CalleeSite {
+            id: callee_id,
             span,
-        );
-        let element = match self.solver.shallow_resolve_ty(&slice) {
-            TyTerm::Ref(_, inner) => match self.solver.shallow_resolve_ty(&inner.ty) {
-                TyTerm::Slice(element) => *element,
-                _ => Self::infer_error(),
-            },
-            _ => Self::infer_error(),
         };
+        let element =
+            self.check_as_slice(candidates, viewed, call, first, CallRefusal::CannotIndex);
         self.index_uses.push(IndexUse {
             id,
             callee_id,
@@ -3657,6 +3875,43 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             demand,
         });
         self.record_ret(id, element)
+    }
+
+    fn as_slice_candidates(&self, viewed: Viewed) -> Vec<SignatureCandidate> {
+        let views = self.env.machine_views(viewed).into_iter();
+        views
+            .map(|(qref, scheme)| SignatureCandidate::Named {
+                qref,
+                scheme: scheme.clone(),
+            })
+            .collect()
+    }
+
+    /// The element of the run the container's own `as_slice` lends
+    /// (RFC-0047), or poison where that call is refused.
+    fn check_as_slice(
+        &mut self,
+        candidates: Vec<SignatureCandidate>,
+        viewed: Viewed,
+        callee: CalleeSite,
+        container: FirstArg,
+        refused_as: CallRefusal,
+    ) -> InferTy {
+        let call = NamedCall {
+            callee,
+            name: self.interner.intern(viewed.spelling()),
+            args: &[],
+            span: callee.span,
+            refused_as,
+        };
+        let slice = self.check_named_call(candidates, &call, FirstOperand::Checked(container));
+        let TyTerm::Ref(_, run) = self.solver.shallow_resolve_ty(&slice) else {
+            return Self::infer_error();
+        };
+        match self.solver.shallow_resolve_ty(&run.ty) {
+            TyTerm::Slice(element) => *element,
+            _ => Self::infer_error(),
+        }
     }
 
     /// How every `a[i]` yields its element, and the refusals that name a
@@ -3716,10 +3971,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> InferTy {
         if mutability == Mutability::Mut
-            && let Some(Place {
-                root: PlaceRoot::Context(qref),
+            && let Some(Loan {
+                root: Storage::Context(qref),
                 ..
-            }) = place_of(place)
+            }) = Loan::of(place)
         {
             self.note_access(Effect::write(qref), span);
         }
@@ -3761,113 +4016,500 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         args: &[Expr],
         call_span: Span,
     ) -> InferTy {
-        let name_str = self.interner.resolve(name).to_string();
         let candidates = self.signature_set(QualifiedRef::root(name));
-        match candidates.as_slice() {
-            [] => {}
-            [SignatureCandidate::Named { qref, scheme }] => {
-                let (qref, scheme) = (*qref, scheme.clone());
-                let first =
-                    self.receiver_arg(receiver, declared_receiver_mode(&scheme.ty), call_span);
-                return self.check_resolved_call(
-                    qref,
-                    &scheme,
-                    CalleeSite {
-                        id: callee_id,
-                        span: call_span,
-                    },
-                    &name_str,
-                    Some(first),
-                    args,
-                    call_span,
-                );
-            }
-            [SignatureCandidate::Local { ty }] => {
-                let ty = ty.clone();
-                let first = FirstArg {
-                    ty: self.check_expr(receiver),
-                    site: ArgSite::value(receiver, call_span),
-                };
-                return self.check_local_call(callee_id, &ty, Some(&first), args, call_span);
-            }
-            _ => {
-                let candidates: Vec<SignatureCandidate> = candidates
-                    .into_iter()
-                    .filter(|candidate| takes_arity(candidate, args.len() + 1))
-                    .collect();
-                let Some(AdmittedReceiver { candidates, first }) =
-                    self.admit_receiver(candidates, receiver, name, call_span)
-                else {
-                    self.check_args_in_order(&Self::infer_error(), None, args, call_span);
-                    return Self::infer_error();
-                };
-                return self.check_overloaded_call(
-                    candidates,
-                    CalleeSite {
-                        id: callee_id,
-                        span: call_span,
-                    },
-                    name,
-                    Some(first),
-                    args,
-                    call_span,
-                );
-            }
+        if candidates.is_empty() {
+            return self.undefined_function(QualifiedRef::root(name), call_span);
         }
-        let near = self.near_functions(QualifiedRef::root(name));
-        self.error(
-            MirErrorKind::UndefinedFunction {
-                name: name_str,
-                near,
+        let call = NamedCall {
+            callee: CalleeSite {
+                id: callee_id,
+                span: call_span,
             },
-            call_span,
+            name,
+            args,
+            span: call_span,
+            refused_as: CallRefusal::NoMatchingFunction,
+        };
+        self.check_named_call(candidates, &call, FirstOperand::Receiver(receiver))
+    }
+
+    fn undefined_function(&mut self, name: QualifiedRef, call_span: Span) -> InferTy {
+        let near = self.near_functions(name);
+        let name = self.interner.resolve(name.name).to_string();
+        self.error(MirErrorKind::UndefinedFunction { name, near }, call_span);
+        Self::infer_error()
+    }
+
+    /// RFC-0043.
+    fn check_named_call(
+        &mut self,
+        candidates: Vec<SignatureCandidate>,
+        call: &NamedCall<'_>,
+        first: FirstOperand<'_>,
+    ) -> InferTy {
+        let arity = call.args.len() + usize::from(!matches!(first, FirstOperand::Absent));
+        let mut refused = Vec::new();
+        let taking: Vec<SignatureCandidate> = candidates
+            .into_iter()
+            .filter_map(|candidate| match arity_refusal(&candidate, arity) {
+                None => Some(candidate),
+                Some(declared) => {
+                    refused.push((candidate, declared));
+                    None
+                }
+            })
+            .collect();
+        let Some(signatures) = Signatures::of(taking) else {
+            return self.refuse_arity(refused, call, first, arity);
+        };
+        let (signatures, first) = match first {
+            FirstOperand::Absent => (signatures, None),
+            FirstOperand::Checked(first) => (signatures, Some(first)),
+            FirstOperand::Receiver(receiver) => match self.receive(signatures, receiver, call) {
+                Received::Taken(signatures, first) => (signatures, Some(first)),
+                Received::Refused(first) => {
+                    let types = self.check_unadmitted_args(Some(&first), call.args);
+                    return self.refuse_call(call, types, 1);
+                }
+                Received::AmbiguityReported => {
+                    self.check_unadmitted_args(None, call.args);
+                    return Self::infer_error();
+                }
+            },
+        };
+        self.admit_call(signatures, first, call)
+    }
+
+    fn refuse_arity(
+        &mut self,
+        refused: Vec<(SignatureCandidate, usize)>,
+        call: &NamedCall<'_>,
+        first: FirstOperand<'_>,
+        arity: usize,
+    ) -> InferTy {
+        let one = <[(SignatureCandidate, usize); 1]>::try_from(refused).ok();
+        let first = match first {
+            FirstOperand::Absent => None,
+            FirstOperand::Checked(first) => Some(first),
+            FirstOperand::Receiver(receiver) => {
+                let mode = match &one {
+                    Some([(candidate, _)]) => self.solver.receiver_mode(candidate),
+                    None => ReceiverMode::Value,
+                };
+                Some(self.receiver_arg(receiver, mode, call.span))
+            }
+        };
+        let types = self.check_unadmitted_args(first.as_ref(), call.args);
+        let Some([(candidate, declared)]) = one else {
+            return self.refuse_call(call, types, usize::from(first.is_some()));
+        };
+        let func = match candidate {
+            SignatureCandidate::Named { .. } => {
+                ShownValue::Named(self.interner.resolve(call.name).to_string())
+            }
+            SignatureCandidate::Local { .. } => ShownValue::Anonymous,
+        };
+        self.error(
+            MirErrorKind::ArityMismatch {
+                func,
+                expected: declared,
+                got: arity,
+            },
+            call.span,
         );
         Self::infer_error()
     }
 
-    /// A receiver that is a place is lent as the parameter asks; a receiver
-    /// that is already a reference value is passed as it is (RFC-0030); a
-    /// receiver that is a value is bound to a temporary storage and that
-    /// temporary is lent.
-    fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
-        match mode {
-            ReceiverMode::Lent(mutability) if place_of(receiver).is_some() => FirstArg {
-                ty: self.check_borrow(receiver, mutability == Mutability::Mut, receiver.span()),
-                site: ArgSite::lent(receiver, taken_by),
-            },
-            ReceiverMode::Lent(mutability) => {
-                let ty = self.check_expr(receiver);
-                if matches!(
-                    self.solver.resolve_ty(&ty),
-                    TyTerm::Ref(..) | TyTerm::Error(_)
-                ) {
-                    return FirstArg {
-                        ty,
-                        site: ArgSite::value(receiver, taken_by),
-                    };
-                }
-                FirstArg {
-                    ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
-                    site: ArgSite::lent(receiver, taken_by),
-                }
+    fn check_unadmitted_args(&mut self, first: Option<&FirstArg>, args: &[Expr]) -> Vec<InferTy> {
+        first
+            .map(|first| first.ty.clone())
+            .into_iter()
+            .chain(args.iter().map(|arg| self.check_arg(arg, None)))
+            .collect()
+    }
+
+    fn refuse_call(&mut self, call: &NamedCall<'_>, types: Vec<InferTy>, offset: usize) -> InferTy {
+        match call.refused_as {
+            CallRefusal::CannotIndex => Self::infer_error(),
+            CallRefusal::NoMatchingFunction => self.no_matching_function(
+                self.interner.resolve(call.name),
+                types,
+                CallAsWritten {
+                    args: call.args,
+                    offset,
+                },
+                call.span,
+            ),
+        }
+    }
+
+    fn admit_call(
+        &mut self,
+        signatures: Signatures,
+        first: Option<FirstArg>,
+        call: &NamedCall<'_>,
+    ) -> InferTy {
+        match signatures {
+            Signatures::One(SignatureCandidate::Named { qref, scheme }) => {
+                let site = SchemeUse {
+                    at: call.span,
+                    source_begins: call.callee.span,
+                };
+                let (call_type, callee) = self.instantiate_call(qref, &scheme, site);
+                let ret = self.call_one(&call_type, first.as_ref(), call.args, call.span);
+                self.record(call.callee.id, call_type.ty);
+                self.calls
+                    .insert(call.callee.id, CallChoice::Resolved(callee));
+                ret
             }
-            ReceiverMode::Value => FirstArg {
-                ty: self.check_expr(receiver),
-                site: ArgSite::value(receiver, taken_by),
+            Signatures::One(SignatureCandidate::Local { ty }) => {
+                self.record(call.callee.id, ty.clone());
+                self.calls.insert(call.callee.id, CallChoice::Binding);
+                self.check_callable(&ty, first.as_ref(), call.args, call.span)
+            }
+            Signatures::Several(candidates) => self.admit_several(candidates, first, call),
+        }
+    }
+
+    /// A binding's or an expression's value called; the lowering calls the
+    /// value.
+    fn check_callable(
+        &mut self,
+        ty: &InferTy,
+        first: Option<&FirstArg>,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        let arity = args.len() + usize::from(first.is_some());
+        let uncallable = match self.callable_type(ty, arity) {
+            Ok(call_type) => return self.call_one(&call_type, first, args, call_span),
+            Err(uncallable) => uncallable,
+        };
+        self.check_unadmitted_args(first, args);
+        let refusal = match uncallable {
+            Uncallable::Poisoned => return Self::infer_error(),
+            Uncallable::NotCallable(shown) => MirErrorKind::NotCallable(shown),
+            Uncallable::Arity(declared) => MirErrorKind::ArityMismatch {
+                func: ShownValue::Anonymous,
+                expected: declared,
+                got: arity,
+            },
+        };
+        self.error(refusal, call_span);
+        Self::infer_error()
+    }
+
+    /// Its function type, or the one an open variable takes at the call's
+    /// arity.
+    fn callable_type(&mut self, ty: &InferTy, arity: usize) -> Result<CallType, Uncallable> {
+        let lent = self.lent_fn(ty);
+        let callable = SignatureCandidate::Local { ty: lent.clone() };
+        if let Some(declared) = arity_refusal(&callable, arity) {
+            return Err(Uncallable::Arity(declared));
+        }
+        match &lent {
+            TyTerm::Var(_) => {
+                let params: Vec<InferTy> = (0..arity).map(|_| self.solver.fresh_ty_var()).collect();
+                let ret = self.solver.fresh_ty_var();
+                let effect = self.solver.fresh_effect_var();
+                let unnamed = self.interner.intern("_");
+                let fn_ty = TyTerm::Fn {
+                    params: params
+                        .iter()
+                        .map(|param| ParamTerm::new(unnamed, param.clone()))
+                        .collect(),
+                    ret: Box::new(ret.clone()),
+                    captures: vec![],
+                    effect: effect.clone(),
+                };
+                if self.solver.unify(&lent, &fn_ty).is_err() {
+                    return Err(Uncallable::NotCallable(self.type_as_written(&lent)));
+                }
+                Ok(CallType {
+                    ty: fn_ty,
+                    params,
+                    ret,
+                    effect,
+                })
+            }
+            TyTerm::Error(_) => Err(Uncallable::Poisoned),
+            _ => match CallType::of(lent.clone()) {
+                Some(call_type) => Ok(call_type),
+                None => Err(Uncallable::NotCallable(self.type_as_written(&lent))),
             },
         }
     }
 
-    /// The receiver of a method call whose name is still a set: one more
-    /// argument, admitted per candidate in that candidate's own mode
-    /// before the mode the call takes is fixed (RFC-0043).
+    fn call_one(
+        &mut self,
+        call_type: &CallType,
+        first: Option<&FirstArg>,
+        args: &[Expr],
+        call_span: Span,
+    ) -> InferTy {
+        let mut parameters = Parameters::Instantiated(&call_type.params);
+        self.admit_arguments(&mut parameters, first, args, call_span);
+        self.note_call_effect(&call_type.effect, call_span);
+        call_type.ret.clone()
+    }
+
+    /// The effect is the settled instance's, which the decision raises the
+    /// body by (`UndecidedCall`).
+    fn admit_several(
+        &mut self,
+        candidates: Vec<SignatureCandidate>,
+        first: Option<FirstArg>,
+        call: &NamedCall<'_>,
+    ) -> InferTy {
+        let mut narrowing = Narrowing {
+            options: candidates
+                .into_iter()
+                .map(SignatureOption::taking_every_argument_directly)
+                .collect(),
+            awaiting_head: Vec::new(),
+            params: Vec::new(),
+        };
+        let types = self.admit_arguments(
+            &mut Parameters::Narrowing(&mut narrowing),
+            first.as_ref(),
+            call.args,
+            call.span,
+        );
+        if narrowing.options.is_empty() {
+            return self.refuse_call(call, types, usize::from(first.is_some()));
+        }
+        let declared_returns: Option<Vec<&crate::ty::PolyTy>> = narrowing
+            .options
+            .iter()
+            .map(|option| match &option.candidate {
+                SignatureCandidate::Named { scheme, .. } => Some(scheme.ret()),
+                SignatureCandidate::Local { .. } => None,
+            })
+            .collect();
+        let ret = match declared_returns.as_deref() {
+            Some([first, rest @ ..]) => {
+                let shape = rest.iter().fold((*first).clone(), |shape, ret| {
+                    generalize_patterns(&shape, ret)
+                });
+                self.solver.fresh_shape(&shape)
+            }
+            Some([]) | None => self.solver.fresh_ty_var(),
+        };
+        let decision = self.solver.decide_signature(UndecidedCall {
+            name: call.name,
+            call: CallShape {
+                params: narrowing.params,
+                ret: ret.clone(),
+            },
+            options: narrowing.options,
+            awaiting_head: narrowing.awaiting_head,
+            body_effect: self.body_effect.clone(),
+        });
+        self.decision_sites.insert(decision, call.span);
+        self.calls
+            .insert(call.callee.id, CallChoice::Decided(decision));
+        ret
+    }
+
+    /// Every argument, the first (piped or a receiver) first, checked left
+    /// to right; each is admitted as soon as it is checked, so a lambda
+    /// later in the list is checked at parameter types the earlier
+    /// arguments have already fixed, and a place an earlier argument
+    /// consumed is held through the later ones.
+    fn admit_arguments(
+        &mut self,
+        parameters: &mut Parameters<'_>,
+        first: Option<&FirstArg>,
+        args: &[Expr],
+        call_span: Span,
+    ) -> Vec<InferTy> {
+        let offset = usize::from(first.is_some());
+        let outer_holds = self.holds.len();
+        let mut types = Vec::with_capacity(args.len() + offset);
+        if let Some(first) = first {
+            if let Some(param) = self.parameter_at(parameters, 0) {
+                self.admit_argument(parameters, 0, &param, &first.ty, &first.site);
+            }
+            types.push(first.ty.clone());
+        }
+        for (i, arg) in args.iter().enumerate() {
+            let index = i + offset;
+            let param = self.parameter_at(parameters, index);
+            let ty = self.check_arg(arg, param.as_ref());
+            if let Some(param) = param {
+                self.admit_argument(parameters, index, &param, &ty, &ArgSite::of(arg, call_span));
+            }
+            types.push(ty);
+        }
+        self.holds.truncate(outer_holds);
+        types
+    }
+
+    fn parameter_at(&mut self, parameters: &mut Parameters<'_>, index: usize) -> Option<InferTy> {
+        match parameters {
+            Parameters::Instantiated(params) => Some(
+                params
+                    .get(index)
+                    .expect("the arity step keeps a signature only at the call's arity")
+                    .clone(),
+            ),
+            Parameters::Narrowing(narrowing) => {
+                if narrowing.options.is_empty() {
+                    return None;
+                }
+                let param = self.call_param(&narrowing.options, index);
+                let ty = param.ty.clone();
+                narrowing.params.push(param);
+                Some(ty)
+            }
+        }
+    }
+
+    fn admit_argument(
+        &mut self,
+        parameters: &mut Parameters<'_>,
+        index: usize,
+        param: &InferTy,
+        ty: &InferTy,
+        site: &ArgSite,
+    ) {
+        let reach = match parameters {
+            Parameters::Instantiated(_) => Reach::Joined,
+            Parameters::Narrowing(narrowing) => {
+                let Some(reach) = self.narrow(narrowing, index, ty) else {
+                    return;
+                };
+                reach
+            }
+        };
+        self.meet_argument(ty, param, site, reach);
+    }
+
+    /// RFC-0043: a candidate that takes the argument directly drives out one
+    /// that takes it only through a conversion or a view, and an argument
+    /// whose head the solve has not named is held for the decision to ask
+    /// again. `None` where the argument empties the set.
+    fn narrow(&mut self, narrowing: &mut Narrowing, index: usize, ty: &InferTy) -> Option<Reach> {
+        let options = &mut narrowing.options;
+        if options
+            .iter()
+            .any(|option| self.solver.admission_waits(&option.candidate, index, ty))
+        {
+            options.retain(|option| {
+                !matches!(
+                    self.solver.admits(&option.candidate, index, ty),
+                    Admission::Refused
+                )
+            });
+            if options.is_empty() {
+                return None;
+            }
+            narrowing.awaiting_head.push(UnjoinedArgument {
+                index,
+                ty: ty.clone(),
+            });
+            return Some(Reach::Viewed(DeferredView::OfSettledParam));
+        }
+        let admissions: Vec<Admission> = options
+            .iter()
+            .map(|option| self.solver.admits(&option.candidate, index, ty))
+            .collect();
+        let direct = admissions.contains(&Admission::Direct);
+        let mut converts = false;
+        let mut views = false;
+        *options = std::mem::take(options)
+            .into_iter()
+            .zip(admissions)
+            .filter_map(|(mut option, admission)| match admission {
+                Admission::Direct => Some(option),
+                Admission::Converted | Admission::Viewed if direct => None,
+                Admission::Converted => {
+                    option.converted.push(ConvertedArgument {
+                        index,
+                        ty: ty.clone(),
+                    });
+                    converts = true;
+                    Some(option)
+                }
+                Admission::Viewed => {
+                    option.viewed.push(ConvertedArgument {
+                        index,
+                        ty: ty.clone(),
+                    });
+                    views = true;
+                    Some(option)
+                }
+                Admission::Refused => None,
+            })
+            .collect();
+        if options.is_empty() {
+            return None;
+        }
+        if views {
+            return Some(Reach::Viewed(DeferredView::Asked(Viewed {
+                view: View::Str,
+                mutability: Mutability::Shared,
+            })));
+        }
+        Some(match converts {
+            true => Reach::Converted,
+            false => Reach::Joined,
+        })
+    }
+
+    /// RFC-0030, RFC-0043.
+    fn receive(
+        &mut self,
+        signatures: Signatures,
+        receiver: &Expr,
+        call: &NamedCall<'_>,
+    ) -> Received {
+        let agreed = agreed_receiver_mode(
+            signatures
+                .candidates()
+                .iter()
+                .map(|candidate| self.solver.receiver_mode(candidate)),
+        );
+        if !names_a_place(receiver) {
+            let first = self.receiver_arg(receiver, lent_only_if_agreed(agreed), call.span);
+            return Received::Taken(signatures, first);
+        }
+        let owned = self.check_receiver_place(receiver, agreed);
+        let (kept, mode) = match signatures {
+            Signatures::One(candidate) => {
+                let mode = self.solver.receiver_mode(&candidate);
+                (vec![candidate], mode)
+            }
+            Signatures::Several(candidates) => {
+                let Some(admitted) = self.admit_receiver(candidates, &owned, agreed, call) else {
+                    return Received::AmbiguityReported;
+                };
+                admitted
+            }
+        };
+        let first = self.receiver_in(receiver, owned, mode, call.span);
+        match Signatures::of(kept) {
+            Some(signatures) => Received::Taken(signatures, first),
+            None => Received::Refused(first),
+        }
+    }
+
+    fn check_receiver_place(&mut self, receiver: &Expr, agreed: Option<ReceiverMode>) -> InferTy {
+        let outer = std::mem::replace(&mut self.demand, receiver_demand(agreed));
+        let owned = self.check_expr(receiver);
+        self.demand = outer;
+        owned
+    }
+
+    /// Each candidate admitted at the receiver in its own mode (RFC-0043).
+    /// `None` where the ones kept see it as different types, reported here.
     fn admit_receiver(
         &mut self,
         candidates: Vec<SignatureCandidate>,
-        receiver: &Expr,
-        name: Astr,
-        call_span: Span,
-    ) -> Option<AdmittedReceiver> {
+        owned: &InferTy,
+        agreed: Option<ReceiverMode>,
+        call: &NamedCall<'_>,
+    ) -> Option<(Vec<SignatureCandidate>, ReceiverMode)> {
         let per_candidate: Vec<CandidateReceiver> = candidates
             .into_iter()
             .map(|candidate| CandidateReceiver {
@@ -3875,33 +4517,16 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 candidate,
             })
             .collect();
-        if place_of(receiver).is_none() {
-            let first = self.receiver_arg(receiver, lent_only_if_agreed(&per_candidate), call_span);
-            return Some(AdmittedReceiver::taking_every_candidate(
-                per_candidate,
-                first,
-            ));
-        }
-        let outer = std::mem::replace(
-            &mut self.demand,
-            match lent_only_if_agreed(&per_candidate) {
-                ReceiverMode::Lent(mutability) => PlaceDemand::Borrow(mutability),
-                ReceiverMode::Value => PlaceDemand::Borrow(Mutability::Shared),
-            },
-        );
-        let owned = self.check_expr(receiver);
-        self.demand = outer;
         let trials: Option<Vec<InferTy>> = per_candidate
             .iter()
-            .map(|seen| self.receiver_as(&owned, seen.mode))
+            .map(|seen| self.receiver_as(owned, seen.mode))
             .collect();
         let Some(trials) = trials else {
-            let mode = lent_only_if_agreed(&per_candidate);
-            let first = self.receiver_in(receiver, owned, mode, call_span);
-            return Some(AdmittedReceiver::taking_every_candidate(
-                per_candidate,
-                first,
-            ));
+            let every = per_candidate
+                .into_iter()
+                .map(|seen| seen.candidate)
+                .collect();
+            return Some((every, lent_only_if_agreed(agreed)));
         };
         let admitted: Vec<ReceiverAdmission> = per_candidate
             .into_iter()
@@ -3925,19 +4550,62 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .map(|one| (one.seen, one.seen_as))
             .collect();
         let Some(mode) = self.one_receiver_mode(&kept) else {
-            let shown = self.shown_candidates(name, kept.iter().map(|(s, _)| s.candidate.name()));
+            let shown =
+                self.shown_candidates(call.name, kept.iter().map(|(s, _)| s.candidate.name()));
             self.error(
                 MirErrorKind::AmbiguousFunction {
-                    name: self.interner.resolve(name).to_string(),
+                    name: self.interner.resolve(call.name).to_string(),
                     candidates: shown,
                 },
-                call_span,
+                call.span,
             );
             return None;
         };
-        let first = self.receiver_in(receiver, owned, mode, call_span);
-        let kept = kept.into_iter().map(|(seen, _)| seen).collect();
-        Some(AdmittedReceiver::taking_every_candidate(kept, first))
+        Some((
+            kept.into_iter().map(|(seen, _)| seen.candidate).collect(),
+            mode,
+        ))
+    }
+
+    /// A receiver that is a place is lent as the parameter asks; a receiver
+    /// that is already a reference value is passed as it is (RFC-0030); a
+    /// receiver that is a value is bound to a temporary storage and that
+    /// temporary is lent.
+    fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
+        if names_a_place(receiver) {
+            let owned = self.check_receiver_place(receiver, Some(mode));
+            return self.receiver_in(receiver, owned, mode, taken_by);
+        }
+        let (first, passing) = match mode {
+            ReceiverMode::Lent(mutability) => {
+                let ty = self.check_expr(receiver);
+                if matches!(
+                    self.solver.resolve_ty(&ty),
+                    TyTerm::Ref(..) | TyTerm::Error(_)
+                ) {
+                    let first = FirstArg {
+                        ty,
+                        site: ArgSite::value(receiver, taken_by),
+                    };
+                    (first, Passing::AsIs)
+                } else {
+                    let first = FirstArg {
+                        ty: self.lend_place(&ty, receiver, mutability, receiver.span()),
+                        site: ArgSite::lent(receiver, taken_by),
+                    };
+                    (first, Passing::Lent(mutability))
+                }
+            }
+            ReceiverMode::Value => {
+                let first = FirstArg {
+                    ty: self.check_expr(receiver),
+                    site: ArgSite::value(receiver, taken_by),
+                };
+                (first, Passing::Value)
+            }
+        };
+        self.pass_receiver(receiver, passing);
+        first
     }
 
     /// The one mode survivors that see the receiver as one type take it
@@ -3991,20 +4659,30 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         mode: ReceiverMode,
         taken_by: Span,
     ) -> FirstArg {
-        match mode {
-            ReceiverMode::Lent(mutability) => FirstArg {
-                ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
-                site: ArgSite::lent(receiver, taken_by),
-            },
+        let (first, passing) = match mode {
+            ReceiverMode::Lent(mutability) => {
+                let first = FirstArg {
+                    ty: self.lend_place(&owned, receiver, mutability, receiver.span()),
+                    site: ArgSite::lent(receiver, taken_by),
+                };
+                self.lent_places.push(LentWhole {
+                    place: receiver.id(),
+                    mutability,
+                });
+                (first, Passing::Lent(mutability))
+            }
             ReceiverMode::Value => {
                 let refused = self.reads_through_reference(receiver)
                     && self.refuse_deref_of_non_primitive(&owned, receiver.span());
-                FirstArg {
+                let first = FirstArg {
                     ty: if refused { Self::infer_error() } else { owned },
                     site: ArgSite::value(receiver, taken_by),
-                }
+                };
+                (first, Passing::Value)
             }
-        }
+        };
+        self.pass_receiver(receiver, passing);
+        first
     }
 
     /// RFC-0018: a read that takes a non-primitive out of a place named
@@ -4032,107 +4710,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .get(&object.id())
             .expect("the receiver place was checked before its mode was fixed");
         matches!(self.solver.shallow_resolve_ty(object_ty), TyTerm::Ref(..))
-    }
-
-    /// RFC-0043.
-    fn check_overloaded_call(
-        &mut self,
-        candidates: Vec<SignatureCandidate>,
-        callee: CalleeSite,
-        name: Astr,
-        first: Option<FirstArg>,
-        args: &[Expr],
-        call_span: Span,
-    ) -> InferTy {
-        let name_str = self.interner.resolve(name).to_string();
-        let arity = args.len() + usize::from(first.is_some());
-        let candidates: Vec<SignatureCandidate> = candidates
-            .into_iter()
-            .filter(|candidate| takes_arity(candidate, arity))
-            .collect();
-        match candidates.as_slice() {
-            [] => {
-                let types =
-                    self.check_args_in_order(&Self::infer_error(), first.as_ref(), args, call_span);
-                if self.index_callees.contains(&callee.id) {
-                    return Self::infer_error();
-                }
-                return self.no_matching_function(
-                    &name_str,
-                    types,
-                    CallAsWritten {
-                        args,
-                        offset: usize::from(first.is_some()),
-                    },
-                    call_span,
-                );
-            }
-            [SignatureCandidate::Named { qref, scheme }] => {
-                let (qref, scheme) = (*qref, scheme.clone());
-                return self
-                    .check_resolved_call(qref, &scheme, callee, &name_str, first, args, call_span);
-            }
-            [SignatureCandidate::Local { ty }] => {
-                let ty = ty.clone();
-                return self.check_local_call(callee.id, &ty, first.as_ref(), args, call_span);
-            }
-            _ => {}
-        }
-        let admitted = match self.admit_args(candidates, first.as_ref(), args, call_span) {
-            Ok(admitted) => admitted,
-            Err(ArgumentsRefused { types }) => {
-                if self.index_callees.contains(&callee.id) {
-                    return Self::infer_error();
-                }
-                return self.no_matching_function(
-                    &name_str,
-                    types,
-                    CallAsWritten {
-                        args,
-                        offset: usize::from(first.is_some()),
-                    },
-                    call_span,
-                );
-            }
-        };
-        let Admitted {
-            narrowing:
-                Narrowing {
-                    options,
-                    awaiting_head,
-                },
-            params,
-        } = admitted;
-        let declared_returns: Option<Vec<&crate::ty::PolyTy>> = options
-            .iter()
-            .map(|option| match &option.candidate {
-                SignatureCandidate::Named { scheme, .. } => Some(scheme.ret()),
-                SignatureCandidate::Local { .. } => None,
-            })
-            .collect();
-        let ret = match declared_returns.as_deref() {
-            Some([first, rest @ ..]) => {
-                let shape = rest.iter().fold((*first).clone(), |shape, ret| {
-                    generalize_patterns(&shape, ret)
-                });
-                self.solver.fresh_shape(&shape)
-            }
-            Some([]) | None => self.solver.fresh_ty_var(),
-        };
-        let decision = self.solver.decide_signature(UndecidedCall {
-            name,
-            call: CallShape {
-                params,
-                ret: ret.clone(),
-            },
-            options,
-            awaiting_head,
-            body_effect: self.body_effect.clone(),
-        });
-        self.decision_sites.insert(decision, call_span);
-        self.direct_calls
-            .insert(callee.id, CalleeChoice::Decided(decision));
-        ret
     }
 
     /// No signature of the name takes the call (RFC-0043), reported at the
@@ -4254,58 +4831,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// Every argument of an overloaded call, checked left to right against
-    /// the set that still takes it (RFC-0043), so that a candidate an
-    /// earlier argument refused bounds no later parameter.
-    fn admit_args(
-        &mut self,
-        candidates: Vec<SignatureCandidate>,
-        first: Option<&FirstArg>,
-        args: &[Expr],
-        call_span: Span,
-    ) -> Result<Admitted, ArgumentsRefused> {
-        let mut narrowing = Narrowing {
-            options: candidates
-                .into_iter()
-                .map(SignatureOption::taking_every_argument_directly)
-                .collect(),
-            awaiting_head: Vec::new(),
-        };
-        let offset = usize::from(first.is_some());
-        let mut params: Vec<ParamTerm<Infer>> = Vec::with_capacity(args.len() + offset);
-        let mut types = Vec::with_capacity(args.len() + offset);
-        let outer_holds = self.holds.len();
-        if let Some(first) = first {
-            let param = self.call_param(&narrowing.options, 0);
-            self.admit_arg(&mut narrowing, 0, &param, &first.ty, &first.site);
-            params.push(param);
-            types.push(first.ty.clone());
-        }
-        for (i, arg) in args.iter().enumerate() {
-            if narrowing.options.is_empty() {
-                types.push(self.check_arg(arg, None));
-                continue;
-            }
-            let index = i + offset;
-            let param = self.call_param(&narrowing.options, index);
-            let ty = self.check_arg(arg, Some(&param.ty));
-            self.admit_arg(
-                &mut narrowing,
-                index,
-                &param,
-                &ty,
-                &ArgSite::of(arg, call_span),
-            );
-            params.push(param);
-            types.push(ty);
-        }
-        self.holds.truncate(outer_holds);
-        if narrowing.options.is_empty() {
-            return Err(ArgumentsRefused { types });
-        }
-        Ok(Admitted { narrowing, params })
-    }
-
     /// The call's parameter at `index` (RFC-0043). Its bound is the
     /// parameter's own range; nothing reads it to decide how an argument
     /// is admitted.
@@ -4321,174 +4846,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ParamTerm::new(name, self.solver.fresh_var_with(bound))
     }
 
-    /// One argument against the set (RFC-0043): Direct first, then a weaker
-    /// admission from a resolved head, and an argument whose head the solve
-    /// has not named held for the decision to ask again.
-    fn admit_arg(
-        &mut self,
-        narrowing: &mut Narrowing,
-        index: usize,
-        param: &ParamTerm<Infer>,
-        ty: &InferTy,
-        site: &ArgSite,
-    ) {
-        let options = &mut narrowing.options;
-        if options
-            .iter()
-            .any(|option| self.solver.admission_waits(&option.candidate, index, ty))
-        {
-            options.retain(|option| {
-                !matches!(
-                    self.solver.admits(&option.candidate, index, ty),
-                    Admission::Refused
-                )
-            });
-            if options.is_empty() {
-                return;
-            }
-            narrowing.awaiting_head.push(UnjoinedArgument {
-                index,
-                ty: ty.clone(),
-            });
-            self.slice_args.push(SliceArg {
-                at: site.id,
-                span: site.span,
-                arg: ty.clone(),
-                param: param.ty.clone(),
-                view: DeferredView::OfSettledParam,
-            });
-            return;
-        }
-        let admissions: Vec<Admission> = options
-            .iter()
-            .map(|option| self.solver.admits(&option.candidate, index, ty))
-            .collect();
-        let direct = admissions.contains(&Admission::Direct);
-        let mut converts = false;
-        let mut views = false;
-        *options = std::mem::take(options)
-            .into_iter()
-            .zip(admissions)
-            .filter_map(|(mut option, admission)| match admission {
-                Admission::Direct => Some(option),
-                Admission::Converted | Admission::Viewed if direct => None,
-                Admission::Converted => {
-                    option.converted.push(ConvertedArgument {
-                        index,
-                        ty: ty.clone(),
-                    });
-                    converts = true;
-                    Some(option)
-                }
-                Admission::Viewed => {
-                    option.viewed.push(ConvertedArgument {
-                        index,
-                        ty: ty.clone(),
-                    });
-                    views = true;
-                    Some(option)
-                }
-                Admission::Refused => None,
-            })
-            .collect();
-        if options.is_empty() {
-            return;
-        }
-        if views {
-            self.slice_args.push(SliceArg {
-                at: site.id,
-                span: site.span,
-                arg: ty.clone(),
-                param: param.ty.clone(),
-                view: DeferredView::Asked(Viewed {
-                    view: View::Str,
-                    mutability: Mutability::Shared,
-                }),
-            });
-            return;
-        }
-        if converts {
-            self.convert_argument_at(ty, &param.ty, site);
-        } else {
-            self.meet_argument(ty, &param.ty, site);
-        }
-    }
-
-    /// A resolved named call, once its first argument (piped or a method
-    /// receiver) has been checked.
-    #[allow(clippy::too_many_arguments)]
-    fn check_resolved_call(
-        &mut self,
-        resolved_qref: QualifiedRef,
-        fn_sig: &crate::ty::Scheme,
-        callee: CalleeSite,
-        name_str: &str,
-        first: Option<FirstArg>,
-        args: &[Expr],
-        call_span: Span,
-    ) -> InferTy {
-        let site = SchemeUse {
-            at: call_span,
-            source_begins: callee.span,
-        };
-        let SchemeAt {
-            ty: fn_ty,
-            instance,
-            requirements,
-        } = self.instantiate_at(resolved_qref, fn_sig, site);
-        let arg_types = self.check_args_in_order(&fn_ty, first.as_ref(), args, call_span);
-        match &fn_ty {
-            TyTerm::Fn {
-                params: param_tys,
-                ret,
-                effect,
-                ..
-            } => {
-                if !self.check_arity(
-                    ShownValue::Named(name_str.to_string()),
-                    arg_types.len(),
-                    param_tys.len(),
-                    call_span,
-                ) {
-                    return Self::infer_error();
-                }
-                let effect = effect.clone();
-                self.note_call_effect(&effect, call_span);
-                self.record(callee.id, fn_ty.clone());
-                self.direct_calls.insert(
-                    callee.id,
-                    CalleeChoice::Resolved(ResolvedCallee {
-                        qref: resolved_qref,
-                        instance,
-                        requirements,
-                    }),
-                );
-                (**ret).clone()
-            }
-            _ => {
-                self.error(
-                    MirErrorKind::UndefinedFunction {
-                        name: name_str.to_string(),
-                        near: DidYouMean::default(),
-                    },
-                    call_span,
-                );
-                Self::infer_error()
-            }
-        }
-    }
-
     /// `ns::tag(payload)` where `ns` names no function: the structural
     /// variant it was before namespaces (RFC-0030).
     fn check_structural_variant(
         &mut self,
-        id: AstId,
+        callee_id: AstId,
         enum_name: Astr,
         tag: Astr,
+        first: Option<&FirstArg>,
         args: &[Expr],
         span: Span,
     ) -> InferTy {
-        let [payload] = args else {
+        let payload_ty = match (first, args) {
+            (None, [payload]) => Some(self.check_arg(payload, None)),
+            (Some(first), []) => Some(first.ty.clone()),
+            _ => None,
+        };
+        let Some(payload_ty) = payload_ty else {
             let near = self.near_namespaces(enum_name, tag);
             self.error(
                 MirErrorKind::UndefinedFunction {
@@ -4503,14 +4877,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return Self::infer_error();
         };
-        let payload_ty = self.check_expr(payload);
         let mut variants = FxHashMap::default();
         variants.insert(tag, Some(Box::new(payload_ty)));
-        self.structural_variant_calls.insert(id);
-        TyTerm::Enum {
+        self.calls.insert(callee_id, CallChoice::StructuralVariant);
+        self.solver.construct(TyTerm::Enum {
             name: enum_name,
             variants,
-        }
+            home: crate::ty::Home::NONE,
+        })
     }
 
     /// An operator on a non-primitive is a call of its shared signature
@@ -4542,16 +4916,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             at: span,
             source_begins: span,
         };
-        let SchemeAt {
-            ty: fn_ty,
-            instance,
-            requirements,
-        } = self.instantiate_at(qref, &scheme, site);
-        let TyTerm::Fn { params, effect, .. } = &fn_ty else {
-            unreachable!("a shared signature is a function type");
-        };
-        let params: Vec<InferTy> = params.iter().map(|p| p.ty.clone()).collect();
-        for (given, param) in operands.iter().zip(params.iter()) {
+        let (call_type, callee) = self.instantiate_call(qref, &scheme, site);
+        for (given, param) in operands.iter().zip(&call_type.params) {
             let borrowed = match given {
                 TyTerm::Ref(..) => given.clone(),
                 other => TyTerm::Ref(
@@ -4572,20 +4938,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 return;
             }
         }
-        let effect = effect.clone();
-        self.note_call_effect(&effect, span);
-        self.operator_calls.insert(
+        self.note_call_effect(&call_type.effect, span);
+        self.calls.insert(
             id,
-            OperatorCall {
-                callee: ResolvedCallee {
-                    qref,
-                    instance,
-                    requirements,
-                },
+            CallChoice::Operator(OperatorCall {
+                callee,
                 signature,
-                ty: fn_ty,
+                ty: call_type.ty,
                 at: span,
-            },
+            }),
         );
     }
 
@@ -4618,21 +4979,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Some(bound) = operand_bound(op) else {
             return true;
         };
-        if !matches!(self.solver.resolve_ty(lt), TyTerm::Var(_)) {
+        self.bound_operand(lt, bound, span)
+    }
+
+    /// An operand still open is bounded by the types its operator takes, and
+    /// the bound is checked where the operand settles (`bound_sites`).
+    fn bound_operand(&mut self, operand: &InferTy, bound: TyVarBound, span: Span) -> bool {
+        if !matches!(self.solver.resolve_ty(operand), TyTerm::Var(_)) {
             return true;
         }
         let bounded = self.solver.fresh_var_with(bound);
-        if self.solver.unify(lt, &bounded).is_err() {
+        if self.solver.unify(operand, &bounded).is_err() {
             return false;
         }
-        let TyTerm::Var(var) = self.solver.resolve_ty(lt) else {
+        let TyTerm::Var(var) = self.solver.resolve_ty(operand) else {
             unreachable!("two open variables unify into an open variable");
         };
-        self.bound_sites.push(BoundSite {
-            var,
-            span,
-            instance: None,
-        });
+        self.bound_sites.push(BoundSite { var, span });
         true
     }
 
@@ -4643,11 +5006,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             return false;
         }
         if let TyTerm::Var(var) = self.solver.resolve_ty(open) {
-            self.bound_sites.push(BoundSite {
-                var,
-                span,
-                instance: None,
-            });
+            self.bound_sites.push(BoundSite { var, span });
         }
         true
     }
@@ -4673,27 +5032,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         );
     }
 
-    fn check_arity(
-        &mut self,
-        func: ShownValue,
-        got: usize,
-        expected: usize,
-        call_span: Span,
-    ) -> bool {
-        if got == expected {
-            return true;
-        }
-        self.error(
-            MirErrorKind::ArityMismatch {
-                func,
-                expected,
-                got,
-            },
-            call_span,
-        );
-        false
-    }
-
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt) {
         match stmt {
@@ -4706,6 +5044,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => {
                 let ty = self.check_expr(expr);
                 let target_ty = self.store_place(place, *span);
+                let (base, _) = projected_store(place);
+                self.place_bases
+                    .insert(base.id(), WrittenBase::of_store(base));
                 let site = ConversionSite {
                     id: expr.id(),
                     span: *span,
@@ -4862,10 +5203,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             } => {
                 let source_ty = self.check_expr(source);
-                let resolved = self.solver.resolve_ty(&source_ty);
+                self.note_place(source);
                 self.push_scope();
                 self.loops.push(None);
-                self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
+                self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
                 for s in body {
                     self.check_stmt(s);
                 }
@@ -4984,16 +5325,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             view: View::Slice,
             mutability,
         };
-        let name = self.interner.intern(viewed.spelling());
-        let candidates: Vec<SignatureCandidate> = self
-            .env
-            .machine_views(viewed)
-            .into_iter()
-            .map(|(qref, scheme)| SignatureCandidate::Named {
-                qref,
-                scheme: scheme.clone(),
-            })
-            .collect();
+        let candidates = self.as_slice_candidates(viewed);
         let first = self.receiver_arg(place, ReceiverMode::Lent(mutability), span);
         let container = self.solver.resolve_ty(&first.ty);
         if !takes_container(
@@ -5008,24 +5340,17 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return Self::infer_error();
         }
-        let slice = self.check_overloaded_call(
-            candidates,
-            CalleeSite {
-                id: callee_id,
-                span,
-            },
-            name,
-            Some(first),
-            &[],
+        let call = CalleeSite {
+            id: callee_id,
             span,
-        );
-        match self.solver.shallow_resolve_ty(&slice) {
-            TyTerm::Ref(_, inner) => match self.solver.shallow_resolve_ty(&inner.ty) {
-                TyTerm::Slice(element) => *element,
-                _ => Self::infer_error(),
-            },
-            _ => Self::infer_error(),
-        }
+        };
+        self.check_as_slice(
+            candidates,
+            viewed,
+            call,
+            first,
+            CallRefusal::NoMatchingFunction,
+        )
     }
 
     /// An array by value: the loop takes its elements out, and the element
@@ -5117,7 +5442,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
+    /// A demand reaches a place and the places it projects from; any other
+    /// expression, and every operand inside it, is read as a value.
     fn check_expr(&mut self, expr: &Expr) -> InferTy {
+        if names_a_place(expr) {
+            return self.check_expr_at_demand(expr);
+        }
+        let outer = std::mem::replace(&mut self.demand, PlaceDemand::Value);
+        let ty = self.check_expr_at_demand(expr);
+        self.demand = outer;
+        ty
+    }
+
+    fn check_expr_at_demand(&mut self, expr: &Expr) -> InferTy {
         match expr {
             // `&place` / `&mut place`: a reference to the place's storage.
             Expr::Borrow {
@@ -5250,6 +5587,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let lt = self.check_expr(left);
                 let rt = self.check_expr(right);
                 self.demand = outer;
+                for operand in [left, right] {
+                    self.note_place(operand);
+                    self.lent_places.push(LentWhole {
+                        place: operand.id(),
+                        mutability: Mutability::Shared,
+                    });
+                }
                 let lt = self.read_operand_through(&lt, *op);
                 let rt = self.read_operand_through(&rt, *op);
 
@@ -5323,9 +5667,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             return self.record_ret(*id, TyTerm::Bool);
                         }
                         let operand = self.solver.resolve_ty(&lt);
-                        if !operand.is_primitive()
-                            && !matches!(operand, TyTerm::Var(_) | TyTerm::String)
-                        {
+                        if let TyTerm::Var(_) = operand {
+                            self.open_operands.push(OpenOperand {
+                                operand: lt.clone(),
+                                op: op_str(*op),
+                                span: *span,
+                            });
+                        } else if !operand.is_primitive() && !matches!(operand, TyTerm::String) {
                             self.check_operator_call(
                                 *id,
                                 op_str(*op),
@@ -5392,7 +5740,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                         let operand = self.solver.resolve_ty(&lt);
                         match &operand {
-                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Char | TyTerm::Var(_) => {}
+                            TyTerm::Var(_) => self.open_operands.push(OpenOperand {
+                                operand: lt.clone(),
+                                op: op_str(*op),
+                                span: *span,
+                            }),
+                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Char => {}
                             word if word.is_primitive() => {
                                 self.no_ordering(op_str(*op), operand.clone(), *span)
                             }
@@ -5437,8 +5790,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 Mutability::Shared,
                                 Box::new(TypeArg::new(self.solver.fresh_repr_var(), inner.clone())),
                             );
-                            let _ = self.solver.unify(&ot, &reference);
-                            inner
+                            if self.solver.unify(&ot, &reference).is_ok() {
+                                inner
+                            } else {
+                                let shown = self.type_as_written(&ot);
+                                self.error(MirErrorKind::DerefOfNonReference(shown), *span);
+                                Self::infer_error()
+                            }
                         }
                         TyTerm::Ref(_, inner) => {
                             let inner = self.solver.resolve_ty(&inner.ty);
@@ -5461,8 +5819,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Neg => match &ot {
                         TyTerm::Int(k) if k.signed() => ot.clone(),
                         TyTerm::Float => TyTerm::Float,
-                        TyTerm::Var(v) => {
-                            self.solver.require_signed(*v);
+                        TyTerm::Var(_) => {
+                            let signed = crate::ty::IntTy::ALL
+                                .iter()
+                                .copied()
+                                .filter(|width| width.signed())
+                                .map(TyTerm::Int)
+                                .chain([TyTerm::Float])
+                                .collect();
+                            if !self.bound_operand(&ot, TyVarBound::one_of(signed), *span) {
+                                self.binop_error("-", ot.clone(), Self::infer_error(), *span);
+                                return self.record_ret(*id, Self::infer_error());
+                            }
                             ot.clone()
                         }
                         _ => {
@@ -5473,9 +5841,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     acvus_ast::UnaryOp::Not => {
                         match &ot {
                             TyTerm::Bool => {}
-                            TyTerm::Var(_) => {
-                                let _ = self.solver.unify(&ot, &TyTerm::Bool);
-                            }
+                            TyTerm::Var(_) if self.solver.unify(&ot, &TyTerm::Bool).is_ok() => {}
                             _ => self.binop_error("!", ot, Self::infer_error(), *span),
                         }
                         TyTerm::Bool
@@ -5512,6 +5878,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let outer = std::mem::replace(&mut self.demand, through);
                 let ot_raw = self.check_expr(object);
                 self.demand = outer;
+                self.note_place(expr);
                 let ot = self.head_once_decided(&ot_raw);
                 if outer == PlaceDemand::Borrow(Mutability::Mut)
                     && let TyTerm::Ref(Mutability::Shared, _) = &ot
@@ -5615,7 +5982,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 args,
                 span,
             } => {
-                let ty = self.check_func_call(*id, func, args, None, *span);
+                let ty = self.check_func_call(func, args, None, *span);
                 self.record_ret(*id, ty)
             }
 
@@ -5645,19 +6012,19 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let stage = right.span();
                 let ty = match right.as_ref() {
                     Expr::FuncCall { func, args, .. } => {
-                        self.check_func_call(*id, func, args, pipe_left, stage)
+                        self.check_func_call(func, args, pipe_left, stage)
                     }
                     Expr::Ident {
                         ref_kind: RefKind::Value,
                         ..
-                    } => self.check_func_call(*id, right, &[], pipe_left, stage),
+                    } => self.check_func_call(right, &[], pipe_left, stage),
                     _ => {
                         let first = FirstArg {
                             ty: self.check_expr(left),
                             site: ArgSite::of(left, stage),
                         };
                         let rt = self.check_expr(right);
-                        self.check_callable(&rt, &[], Some(&first), stage)
+                        self.check_callable(&rt, Some(&first), &[], stage)
                     }
                 };
                 self.record_ret(*id, ty)
@@ -5785,7 +6152,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                     return self.record_ret(*id, Self::infer_error());
                 }
-                let ty = TyTerm::Object(ObjectTy::written(field_types));
+                let ty = self
+                    .solver
+                    .construct(TyTerm::Object(ObjectTy::written(field_types)));
                 self.record_ret(*id, ty)
             }
 
@@ -5891,10 +6260,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
                 let mut variants = FxHashMap::default();
                 variants.insert(*tag, payload_ty);
-                let ty = TyTerm::Enum {
+                let ty = self.solver.construct(TyTerm::Enum {
                     name: *enum_name,
                     variants,
-                };
+                    home: crate::ty::Home::NONE,
+                });
                 self.record_ret(*id, ty)
             }
 
@@ -5951,7 +6321,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let else_ = self.check_else_branch(eb);
                         self.join_branches(&then, &else_, *span)
                     }
-                    None => then.ty,
+                    None => TyTerm::Unit,
                 };
                 self.record_ret(*id, result_ty)
             }
@@ -5976,9 +6346,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             } => {
                 let source_ty = self.check_expr(source);
-                let resolved = self.solver.resolve_ty(&source_ty);
+                self.note_place(source);
                 self.push_scope();
-                self.check_pattern(pattern, &resolved, PatternSource::Expr(source.id()), *span);
+                self.check_pattern(pattern, &source_ty, PatternSource::Expr(source.id()), *span);
                 for s in then_body {
                     self.check_stmt(s);
                 }
@@ -5998,7 +6368,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         let else_ = self.check_else_branch(eb);
                         self.join_branches(&then, &else_, *span)
                     }
-                    None => then.ty,
+                    None => TyTerm::Unit,
                 };
                 self.record_ret(*id, result_ty)
             }
@@ -6017,10 +6387,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         span: Span,
     ) -> InferTy {
         let source_ty = self.check_expr(scrutinee);
-        let resolved = self.solver.resolve_ty(&source_ty);
+        self.note_place(scrutinee);
         let mut joined: Option<Branch> = None;
         for arm in arms {
-            let arm_source = self.reachable_arm_source(&arm.pattern, &resolved, arm.span);
+            let arm_source = self.reachable_arm_source(&arm.pattern, &source_ty, arm.span);
             self.push_scope();
             self.check_pattern(
                 &arm.pattern,
@@ -6077,7 +6447,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Pattern::Variant { tag, payload, .. } = pattern else {
             return source_ty.clone();
         };
-        let TyTerm::Enum { name, variants } = self.solver.shallow_resolve_ty(source_ty) else {
+        let TyTerm::Enum { name, variants, .. } = self.solver.shallow_resolve_ty(source_ty) else {
             return source_ty.clone();
         };
         if variants.contains_key(tag) {
@@ -6137,80 +6507,54 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn check_func_call(
         &mut self,
-        call_id: AstId,
         func: &Expr,
         args: &[Expr],
         pipe_left: Option<&Expr>,
         call_span: Span,
     ) -> InferTy {
-        // Collect argument types, prepending pipe_left if present.
         let first = pipe_left.map(|e| FirstArg {
             ty: self.check_expr(e),
             site: ArgSite::of(e, call_span),
         });
-
-        // Try to resolve as a named function (builtin or extern).
         let Expr::Ident {
             name,
             ref_kind: RefKind::Value,
             ..
         } = func
         else {
-            // Not a simple name - evaluate the function expression.
             let ft = self.check_expr(func);
             let resolved = self.solver.shallow_resolve_ty(&ft);
-            return self.check_callable(&resolved, args, first.as_ref(), call_span);
+            return self.check_callable(&resolved, first.as_ref(), args, call_span);
         };
-
-        let name_str = self.interner.resolve(name.name);
         let candidates = self.signature_set(*name);
-        match candidates.as_slice() {
-            [] => {}
-            [SignatureCandidate::Named { qref, scheme }] => {
-                let scheme = scheme.clone();
-                return self.check_resolved_call(
-                    *qref,
-                    &scheme,
-                    CalleeSite {
-                        id: func.id(),
-                        span: func.span(),
-                    },
-                    name_str,
-                    first,
-                    args,
-                    call_span,
-                );
-            }
-            [SignatureCandidate::Local { ty }] => {
-                let ty = ty.clone();
-                return self.check_local_call(func.id(), &ty, first.as_ref(), args, call_span);
-            }
-            _ => {
-                return self.check_overloaded_call(
-                    candidates,
-                    CalleeSite {
-                        id: func.id(),
-                        span: func.span(),
-                    },
+        if candidates.is_empty() {
+            if let Some(ns) = name.namespace {
+                return self.check_structural_variant(
+                    func.id(),
+                    ns,
                     name.name,
-                    first,
+                    first.as_ref(),
                     args,
                     call_span,
                 );
             }
+            return self.undefined_function(*name, call_span);
         }
-        if let Some(ns) = name.namespace {
-            return self.check_structural_variant(call_id, ns, name.name, args, call_span);
-        }
-        let near = self.near_functions(*name);
-        self.error(
-            MirErrorKind::UndefinedFunction {
-                name: name_str.to_string(),
-                near,
+        let call = NamedCall {
+            callee: CalleeSite {
+                id: func.id(),
+                span: func.span(),
             },
-            call_span,
-        );
-        Self::infer_error()
+            name: name.name,
+            args,
+            span: call_span,
+            refused_as: CallRefusal::NoMatchingFunction,
+        };
+        let first = match first {
+            Some(first) => FirstOperand::Checked(first),
+            None => FirstOperand::Absent,
+        };
+        self.check_named_call(candidates, &call, first)
     }
 
     /// A call lends the closure a `&Fn` names instead of moving it
@@ -6227,80 +6571,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    fn check_callable(
-        &mut self,
-        func_ty: &InferTy,
-        args: &[Expr],
-        first: Option<&FirstArg>,
-        call_span: Span,
-    ) -> InferTy {
-        let func_ty = &self.lent_fn(func_ty);
-        match func_ty {
-            TyTerm::Fn { .. } | TyTerm::Var(_) => {}
-            TyTerm::Error(_) => {
-                for a in args {
-                    self.check_expr(a);
-                }
-                return Self::infer_error();
-            }
-            _ => {
-                let ty = self.type_as_written(func_ty);
-                self.error(MirErrorKind::NotCallable(ty), call_span);
-                return Self::infer_error();
-            }
-        }
-
-        let arg_types = self.check_args_in_order(func_ty, first, args, call_span);
-
-        match func_ty {
-            TyTerm::Fn {
-                params,
-                ret,
-                effect,
-                ..
-            } => {
-                if !self.check_arity(
-                    ShownValue::Anonymous,
-                    arg_types.len(),
-                    params.len(),
-                    call_span,
-                ) {
-                    return Self::infer_error();
-                }
-                let effect = effect.clone();
-                self.note_call_effect(&effect, call_span);
-                (**ret).clone()
-            }
-            TyTerm::Var(_) => {
-                let ret = self.solver.fresh_ty_var();
-                let effect = self.solver.fresh_effect_var();
-                let dummy = self.interner.intern("_");
-                let fn_ty = TyTerm::Fn {
-                    params: arg_types
-                        .into_iter()
-                        .map(|ty| ParamTerm::new(dummy, ty))
-                        .collect(),
-                    ret: Box::new(ret.clone()),
-                    captures: vec![],
-                    effect: effect.clone(),
-                };
-                self.note_call_effect(&effect, call_span);
-                if self.solver.unify(func_ty, &fn_ty).is_err() {
-                    let ty = self.type_as_written(func_ty);
-                    self.error(MirErrorKind::NotCallable(ty), call_span);
-                    return Self::infer_error();
-                }
-                ret
-            }
-            _ => unreachable!(),
-        }
-    }
-
     /// RFC-0024. A reference scrutinee is read through: the pattern is
     /// checked against what it names, and every name under it binds a
     /// reference. A scrutinee whose head is still a variable settles the
     /// same question later, through a decision; a part of a pattern is
     /// read in the mode its whole was.
+    fn refuse_names_bound_twice(&mut self, pattern: &Pattern, span: Span) {
+        let mut bound = FxHashSet::default();
+        let mut twice = Vec::new();
+        bound_names(pattern, &mut |name| {
+            if !bound.insert(name) {
+                twice.push(name);
+            }
+        });
+        for name in twice {
+            let name = self.interner.resolve(name).to_string();
+            self.error(MirErrorKind::NameBoundTwice(name), span);
+        }
+    }
+
     fn check_pattern(
         &mut self,
         pattern: &Pattern,
@@ -6308,19 +6597,32 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         source: PatternSource,
         span: Span,
     ) {
-        match self.solver.match_mode(source_ty) {
+        if let PatternSource::Expr(_) = source {
+            self.refuse_names_bound_twice(pattern, span);
+        }
+        let mode = match self.solver.match_mode(source_ty) {
             MatchOutcome::Reads(reads) if reads.mode == MatchMode::Through => {
                 let outer = std::mem::replace(&mut self.pattern_mode, PatternMode::Through);
                 self.check_pattern_inner(pattern, &reads.names, source, span);
                 self.pattern_mode = outer;
+                SourceMode::Read(MatchMode::Through)
             }
-            MatchOutcome::Reads(_) => self.check_pattern_inner(pattern, source_ty, source, span),
+            MatchOutcome::Reads(_) => {
+                self.check_pattern_inner(pattern, source_ty, source, span);
+                SourceMode::Read(MatchMode::Value)
+            }
             MatchOutcome::HeadOpen => match source {
-                PatternSource::Expr(_) => {
-                    self.check_pattern_deferred(pattern, source_ty, source, span)
+                PatternSource::Expr(_) => SourceMode::Decided(
+                    self.check_pattern_deferred(pattern, source_ty, source, span),
+                ),
+                PatternSource::Member => {
+                    self.check_pattern_inner(pattern, source_ty, source, span);
+                    SourceMode::Read(MatchMode::Value)
                 }
-                PatternSource::Member => self.check_pattern_inner(pattern, source_ty, source, span),
             },
+        };
+        if let PatternSource::Expr(id) = source {
+            self.source_modes.insert(id, mode);
         }
     }
 
@@ -6336,7 +6638,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         source_ty: &InferTy,
         source: PatternSource,
         span: Span,
-    ) {
+    ) -> DecisionId {
         let referent = self.solver.fresh_ty_var();
         let outer_mode = std::mem::replace(&mut self.pattern_mode, PatternMode::Deferred);
         let outer_bindings = std::mem::take(&mut self.deferred_bindings);
@@ -6357,6 +6659,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 .into_iter()
                 .map(|span| DeferredContextBind { decision, span }),
         );
+        decision
     }
 
     /// A context holds data, and data holds no reference (RFC-0014): a
@@ -6369,6 +6672,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.error(MirErrorKind::ReferenceInData(DataShape::Aggregate), span);
             }
         }
+    }
+
+    /// A pattern refused against its source still binds its names, as
+    /// poison, so a use of one is not refused a second time (docs/solver.md,
+    /// Poison).
+    fn bind_as_poison(&mut self, pattern: &Pattern, span: Span) {
+        self.check_pattern_inner(pattern, &Self::infer_error(), PatternSource::Member, span);
     }
 
     fn check_pattern_inner(
@@ -6389,14 +6699,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     PatternMode::Deferred => self.deferred_context_binds.push(span),
                     PatternMode::Value => {}
                 }
-                self.note_context_use(*qref, span);
                 self.note_access(Effect::write(*qref), span);
-                let ctx_ty = self
-                    .env
-                    .contexts
-                    .get(qref)
-                    .cloned()
-                    .unwrap_or_else(|| self.solver.fresh_ty_var());
+                let ctx_ty = self.resolve_context_type(*qref, span);
                 let joined = match source {
                     PatternSource::Expr(id) => {
                         let site = ConversionSite {
@@ -6490,7 +6794,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 },
                                 span,
                             );
-                            return;
+                            return self.bind_as_poison(pattern, span);
                         }
                         (var, len)
                     }
@@ -6525,26 +6829,27 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Pattern::Object { fields, .. } => {
                 // If source is already a concrete Object, match fields directly (open/subset).
                 // Otherwise, build an Object from pattern fields and unify to infer the type.
-                let obj_fields = if let TyTerm::Object(object) = &source_resolved {
-                    object.iter().map(|(k, v)| (*k, v.clone())).collect()
-                } else {
-                    let field_vars: FxHashMap<Astr, InferTy> = fields
-                        .iter()
-                        .map(|f| (f.key, self.solver.fresh_ty_var()))
-                        .collect();
-                    let obj_ty = TyTerm::Object(ObjectTy::at_least(field_vars.clone()));
-                    if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
-                        self.error(
-                            MirErrorKind::PatternTypeMismatch {
-                                pattern_ty: self.type_as_written(&obj_ty),
-                                source_ty: self.type_as_written(&source_resolved),
-                            },
-                            span,
-                        );
-                        return;
-                    }
-                    field_vars
-                };
+                let obj_fields =
+                    if let TyTerm::Object(object) = self.solver.shallow_resolve_ty(source_ty) {
+                        object.iter().map(|(k, v)| (*k, v.clone())).collect()
+                    } else {
+                        let field_vars: FxHashMap<Astr, InferTy> = fields
+                            .iter()
+                            .map(|f| (f.key, self.solver.fresh_ty_var()))
+                            .collect();
+                        let obj_ty = TyTerm::Object(ObjectTy::at_least(field_vars.clone()));
+                        if self.solver.unify_pattern(source_ty, &obj_ty).is_err() {
+                            self.error(
+                                MirErrorKind::PatternTypeMismatch {
+                                    pattern_ty: self.type_as_written(&obj_ty),
+                                    source_ty: self.type_as_written(&source_resolved),
+                                },
+                                span,
+                            );
+                            return self.bind_as_poison(pattern, span);
+                        }
+                        field_vars
+                    };
                 for ObjectPatternField { key, pattern, .. } in fields {
                     let Some(field_ty) = obj_fields.get(key) else {
                         self.error(
@@ -6560,8 +6865,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         );
                         continue;
                     };
-                    let resolved = self.solver.resolve_ty(field_ty);
-                    self.check_pattern(pattern, &resolved, PatternSource::Member, span);
+                    let field_ty = field_ty.clone();
+                    self.check_pattern(pattern, &field_ty, PatternSource::Member, span);
                 }
             }
 
@@ -6589,7 +6894,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 },
                                 span,
                             );
-                            return;
+                            return self.bind_as_poison(pattern, span);
                         }
                         vars
                     }
@@ -6621,19 +6926,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             },
                             span,
                         );
-                        return;
+                        return self.bind_as_poison(pattern, span);
                     }
 
-                    if let VariantPayload::TypeParam(idx) = &variant_payload {
-                        let resolved_inner = self.solver.resolve_ty(&type_params[*idx]);
-                        if let Some(inner_pat) = payload {
-                            self.check_pattern(
-                                inner_pat,
-                                &resolved_inner,
-                                PatternSource::Member,
-                                span,
-                            );
-                        }
+                    if let (VariantPayload::TypeParam(idx), Some(inner_pat)) =
+                        (&variant_payload, payload)
+                    {
+                        self.check_pattern(
+                            inner_pat,
+                            &type_params[*idx],
+                            PatternSource::Member,
+                            span,
+                        );
                     }
                     return;
                 }
@@ -6661,6 +6965,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let enum_ty = TyTerm::Enum {
                     name: *enum_name,
                     variants,
+                    home: crate::ty::Home::NONE,
                 };
                 // Unify against the original (unresolved) source_ty so that
                 // find_leaf_var can trace the Var chain and rebind the merged type.
@@ -6672,14 +6977,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         },
                         span,
                     );
-                    return;
+                    return self.bind_as_poison(pattern, span);
                 }
 
                 // Bind payload pattern if present.
                 if let Some(inner_pat) = payload {
-                    let inner_ty = payload_ty
-                        .map(|ty| self.solver.resolve_ty(&ty))
-                        .unwrap_or_else(Self::infer_error);
+                    let inner_ty = payload_ty.map_or_else(Self::infer_error, |ty| *ty);
                     self.check_pattern(inner_pat, &inner_ty, PatternSource::Member, span);
                 }
             }
@@ -6737,7 +7040,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 span,
             });
         }
-        self.solver.resolve_ty(&joined)
+        joined
     }
 
     /// `inner?` (RFC-0038): the payload of an `Ok` or a `Some`, while the
@@ -6801,15 +7104,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn frozen_try_returns(&self) -> FxHashMap<AstId, Ty> {
         self.try_sites
             .iter()
-            .map(|(id, ty)| {
-                let resolved = self.solver.resolve_ty(ty);
-                (
-                    *id,
-                    self.solver
-                        .close_ty(&resolved)
-                        .unwrap_or_else(|_| Ty::error()),
-                )
-            })
+            .map(|(id, ty)| (*id, self.closed(ty)))
             .collect()
     }
 
@@ -7048,10 +7343,7 @@ mod tests {
     }
 
     #[test]
-    /// A field the object did not have grows the object (RFC-0042 rule 1);
-    /// whether it is initialized where it is read is the
-    /// definite-assignment check's question, not the type checker's.
-    fn field_access_grows_the_object() {
+    fn a_field_the_context_type_lacks_is_refused() {
         let i = Interner::new();
         let context = FxHashMap::from_iter([(
             i.intern("user"),
@@ -7062,7 +7354,8 @@ mod tests {
         )]);
         let src = "{{ @user.unknown }}";
         let result = check_with_interner(src, &context, &i);
-        assert!(result.is_ok(), "{result:?}");
+        let err = result.expect_err("a host's type does not grow");
+        assert!(err.contains("no field `unknown`"), "{err}");
     }
 
     #[test]
@@ -7328,68 +7621,5 @@ mod tests {
         let ctx = FxHashMap::from_iter([(i.intern("msg"), Ty::String)]);
         let src = "% let x = @msg";
         check_with_interner(src, &ctx, &i).unwrap();
-    }
-}
-
-/// Where a lent argument points: a local, a context, or an extern
-/// parameter, and the field path below it (RFC-0018 rule 7).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Place {
-    root: PlaceRoot,
-    path: Vec<Astr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PlaceRoot {
-    Local(Astr),
-    Context(QualifiedRef),
-}
-
-impl Place {
-    fn display(&self, interner: &Interner) -> String {
-        let mut out = match &self.root {
-            PlaceRoot::Local(name) => interner.resolve(*name).to_string(),
-            PlaceRoot::Context(qref) => format!("@{}", interner.resolve(qref.name)),
-        };
-        for f in &self.path {
-            out.push('.');
-            out.push_str(interner.resolve(*f));
-        }
-        out
-    }
-}
-
-/// The place an expression denotes, if it denotes one. An extern
-/// parameter is a value, not a place.
-/// Whether an expression denotes a place.
-pub(crate) fn is_place(expr: &Expr) -> bool {
-    place_of(expr).is_some()
-}
-
-fn place_of(expr: &Expr) -> Option<Place> {
-    match expr {
-        Expr::Ident {
-            name,
-            ref_kind: RefKind::Value | RefKind::ExternParam,
-            ..
-        } => Some(Place {
-            root: PlaceRoot::Local(name.name),
-            path: Vec::new(),
-        }),
-        Expr::ContextRef { name, .. } => Some(Place {
-            root: PlaceRoot::Context(*name),
-            path: Vec::new(),
-        }),
-        Expr::FieldAccess { object, field, .. } => {
-            let mut place = place_of(object)?;
-            place.path.push(*field);
-            Some(place)
-        }
-        // `a[i]` is the place `a` with the index left off: two elements of
-        // one container are one loan, which is what the slice holds
-        // (RFC-0047 rule 2).
-        Expr::Index { object, .. } => place_of(object),
-        Expr::Paren { inner, .. } => place_of(inner),
-        _ => None,
     }
 }

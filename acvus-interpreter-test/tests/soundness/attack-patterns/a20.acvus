@@ -1,0 +1,3 @@
+// expect 5
+// nested Option in Result in tuple, if let on a call
+let f = |u| -> (Ok(Some(u)), 1); if let (Ok(Some(x)), 1) = f(5) { x } else { 0 }

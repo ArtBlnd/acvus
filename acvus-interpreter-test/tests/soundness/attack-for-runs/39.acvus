@@ -1,0 +1,2 @@
+// expect 1
+let c = 0; for i in 0..3 { for o in [A::X(i)] { match o { A::X(s) => { if s == 1 { c = c + 1; }; }, }; } } c

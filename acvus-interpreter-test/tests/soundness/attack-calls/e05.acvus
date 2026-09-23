@@ -1,0 +1,3 @@
+// expect 3
+// context write in a returned closure
+let mk = |k| -> |x| -> { @n = @n + k; x }; let g = mk(1); g(0); g(0); g(0); @n

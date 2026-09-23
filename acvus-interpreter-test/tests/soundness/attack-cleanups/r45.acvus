@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([1, 2, 3]); let r = &v; let c = | | -> r.len(); c()

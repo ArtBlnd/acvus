@@ -1,0 +1,1 @@
+let a = [A::X(1)]; for o in a { match o { A::X(s) => { let x = 1; }, }; } 0

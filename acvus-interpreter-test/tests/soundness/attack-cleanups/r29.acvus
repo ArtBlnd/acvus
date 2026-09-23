@@ -1,0 +1,2 @@
+// expect 3
+let s = "abc".to_string(); let r = &s; r.len()

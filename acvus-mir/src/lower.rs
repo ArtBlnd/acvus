@@ -14,9 +14,10 @@ use crate::ir::{
     InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey, ValOrigin,
     ValueId, reaches,
 };
-use crate::solver::CaptureRead;
+use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
+use crate::solver::{CaptureRead, MatchMode};
 use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
-use crate::typeck::{CapturedName, TypeResolution};
+use crate::typeck::{CallTarget, CapturedName, Passing, TypeResolution};
 
 /// The name of a template's accumulator. A source name cannot collide with
 /// it: the lexer admits no `<` in an identifier.
@@ -30,7 +31,7 @@ pub struct Lowerer<'a> {
     /// while a name is already bound shadows it: a fresh slot, and the outer
     /// binding is untouched and visible again when the scope ends.
     scopes: Vec<FxHashMap<Astr, Local>>,
-    /// Frozen type resolution from typeck. Contains type_map, coercion_map, direct_calls.
+    /// Frozen type resolution from typeck.
     resolution: Freeze<TypeResolution>,
     /// The `ret` of the graph `Function` whose body this is (RFC-0054).
     ret: Ty,
@@ -139,26 +140,46 @@ struct Lent {
     mutability: Mutability,
 }
 
-struct PlacePart {
-    path: Vec<PathSeg>,
-    ty: Ty,
-    pattern: Pattern,
-}
-
-struct RefPart {
-    reference: ValueId,
-    pattern: Pattern,
-}
-
 /// What a pattern is applied to (RFC-0024).
-#[derive(Clone)]
 enum PatSrc {
-    Value(ValueId),
+    Placed(Placed),
+    Value { value: ValueId, ty: Ty },
+}
+
+impl PatSrc {
+    fn ty(&self) -> &Ty {
+        match self {
+            PatSrc::Placed(placed) => placed.ty(),
+            PatSrc::Value { ty, .. } => ty,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Placed {
     Place {
         target: RefTarget,
         path: Vec<PathSeg>,
         ty: Ty,
     },
+    Through {
+        reference: ValueId,
+        ty: Ty,
+    },
+}
+
+impl Placed {
+    fn ty(&self) -> &Ty {
+        match self {
+            Placed::Place { ty, .. } | Placed::Through { ty, .. } => ty,
+        }
+    }
+}
+
+struct PatternPart<'p> {
+    seg: PathSeg,
+    ty: Ty,
+    pattern: &'p Pattern,
 }
 
 fn fields(path: &[Astr]) -> Vec<PathSeg> {
@@ -428,8 +449,7 @@ impl<'a> Lowerer<'a> {
         let order_param = self.alloc_val();
         self.set_val_type(order_param, Ty::Order);
         self.body.order_param = Some(order_param);
-        let slot = self.alloc_val();
-        self.set_origin(slot, ValOrigin::Named(self.interner.intern("$order")));
+        let slot = self.alloc_slot(Ty::Order, ValOrigin::Named(self.interner.intern("$order")));
         self.emit_assign(span, RefTarget::Var(slot), vec![], order_param);
         self.order_slot = Some(slot);
     }
@@ -443,9 +463,7 @@ impl<'a> Lowerer<'a> {
                 .get(&qref)
                 .cloned()
                 .unwrap_or_else(|| panic!("context {qref:?} is named but was not typed"));
-            let slot = self.alloc_val();
-            self.set_val_type(slot, ty.clone());
-            self.set_origin(slot, ValOrigin::Context(qref.name));
+            let slot = self.alloc_slot(ty.clone(), ValOrigin::Context(qref.name));
             self.fetch_into(span, qref, slot, ty);
             self.context_slots.insert(qref, slot);
         }
@@ -698,8 +716,10 @@ impl<'a> Lowerer<'a> {
         let outer = self.anyorder;
         if outer.is_none() {
             let entry = self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order);
-            let acc = self.alloc_val();
-            self.set_origin(acc, ValOrigin::Named(self.interner.intern("$anyorder")));
+            let acc = self.alloc_slot(
+                Ty::Order,
+                ValOrigin::Named(self.interner.intern("$anyorder")),
+            );
             self.emit_assign(span, RefTarget::Var(acc), vec![], entry);
             self.anyorder = Some(AnyorderScope { entry, acc });
         }
@@ -856,7 +876,7 @@ impl<'a> Lowerer<'a> {
         self.emit_label(span, first_arm_label);
 
         for arm in tested {
-            let matched = self.lower_pattern_test(&arm.pattern, src.clone(), arm.span);
+            let matched = self.lower_pattern_test(&arm.pattern, &src, arm.span);
             let body_label = self.alloc_label();
             let next_label = self.alloc_label();
             self.emit_inst(
@@ -870,7 +890,7 @@ impl<'a> Lowerer<'a> {
                 },
             );
             self.emit_label(arm.span, body_label);
-            let value = self.lower_arm_body(arm, src.clone());
+            let value = self.lower_arm_body(arm, &src);
             self.emit_inst(
                 arm.span,
                 InstKind::Jump {
@@ -881,7 +901,7 @@ impl<'a> Lowerer<'a> {
             self.emit_label(arm.span, next_label);
         }
 
-        let value = self.lower_arm_body(last, src);
+        let value = self.lower_arm_body(last, &src);
         self.emit_inst(
             last.span,
             InstKind::Jump {
@@ -939,7 +959,7 @@ impl<'a> Lowerer<'a> {
 
         for (arm, label) in arms.iter().zip(&arm_labels) {
             self.emit_label(arm.span, *label);
-            let value = self.lower_arm_body(arm, src.clone());
+            let value = self.lower_arm_body(arm, &src);
             self.emit_inst(
                 arm.span,
                 InstKind::Jump {
@@ -961,33 +981,19 @@ impl<'a> Lowerer<'a> {
         result
     }
 
-    /// The one value a dispatch reads, read as the key it is compared
-    /// against needs it. A tag is read through a reference to the variant,
-    /// as `TestVariant` takes it. A literal key is compared against the
-    /// value itself, so the read is the one `lower_pattern_test` writes for
-    /// `Pattern::Literal`: a place is taken, a reference to a word is read
-    /// through, and anything else is already the value.
     fn dispatch_source(&mut self, key: SwitchKey, src: &PatSrc, span: Span) -> ValueId {
-        match (key, src) {
-            (SwitchKey::Tag(_), PatSrc::Value(reg)) => *reg,
-            (SwitchKey::Tag(_), PatSrc::Place { target, path, ty }) => self.emit_ref(
-                span,
-                target.clone(),
-                path.clone(),
-                Mutability::Shared,
-                ty.clone(),
-            ),
-            (_, PatSrc::Place { target, path, ty }) => {
-                self.emit_take(span, target.clone(), path.to_vec(), ty.clone())
+        match key {
+            SwitchKey::Tag(_) => self.tag_reference(src, span),
+            SwitchKey::Int(_) | SwitchKey::Bool(_) | SwitchKey::Char(_) | SwitchKey::Str(_) => {
+                self.read_leaf(src, span)
             }
-            (_, PatSrc::Value(reg)) => self.read_word_through(span, *reg),
         }
     }
 
     /// One arm's bindings, statements and tail, in a scope of their own.
     /// An arm with no tail has the value `Unit`, as an `if` branch with no
     /// tail has.
-    fn lower_arm_body(&mut self, arm: &MatchExprArm, src: PatSrc) -> ValueId {
+    fn lower_arm_body(&mut self, arm: &MatchExprArm, src: &PatSrc) -> ValueId {
         self.push_scope();
         self.lower_pattern_bind(&arm.pattern, src, arm.span);
         for s in &arm.body {
@@ -1007,7 +1013,7 @@ impl<'a> Lowerer<'a> {
     fn lower_match_bind_arm(
         &mut self,
         pattern: &Pattern,
-        src: PatSrc,
+        src: &PatSrc,
         body: &[Stmt],
         tail: Option<&Expr>,
         span: Span,
@@ -1017,7 +1023,7 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        let matched = self.lower_pattern_test(pattern, src.clone(), span);
+        let matched = self.lower_pattern_test(pattern, src, span);
         let body_label = self.alloc_label();
         let end_label = self.alloc_label();
         let pending = self.open_diamond(
@@ -1049,7 +1055,7 @@ impl<'a> Lowerer<'a> {
     fn lower_match_bind_body(
         &mut self,
         pattern: &Pattern,
-        src: PatSrc,
+        src: &PatSrc,
         body: &[Stmt],
         tail: Option<&Expr>,
         span: Span,
@@ -1289,7 +1295,7 @@ impl<'a> Lowerer<'a> {
         self.emit_label(span, loop_label);
 
         let src = self.pattern_source(source, [pattern]);
-        let matched = self.lower_pattern_test(pattern, src.clone(), span);
+        let matched = self.lower_pattern_test(pattern, &src, span);
         self.emit_inst(
             span,
             InstKind::JumpIf {
@@ -1307,7 +1313,7 @@ impl<'a> Lowerer<'a> {
             header: loop_label,
             exit: end_label,
         });
-        self.lower_pattern_bind(pattern, src.clone(), span);
+        self.lower_pattern_bind(pattern, &src, span);
         for s in body {
             self.lower_stmt(s);
         }
@@ -1449,7 +1455,7 @@ impl<'a> Lowerer<'a> {
 
         match else_branch {
             Some(eb) => {
-                let matched = self.lower_pattern_test(pattern, src.clone(), span);
+                let matched = self.lower_pattern_test(pattern, &src, span);
                 let then_label = self.alloc_label();
                 let merge_label = self.alloc_label();
                 let else_label = self.alloc_label();
@@ -1466,7 +1472,7 @@ impl<'a> Lowerer<'a> {
                 // Then branch.
                 self.emit_label(span, then_label);
                 self.push_scope();
-                self.lower_pattern_bind(pattern, src.clone(), span);
+                self.lower_pattern_bind(pattern, &src, span);
                 for s in then_body {
                     self.lower_stmt(s);
                 }
@@ -1510,7 +1516,7 @@ impl<'a> Lowerer<'a> {
             None => {
                 // The same match the tag form `pattern = source { body };`
                 // writes: one arm, run for its effect.
-                self.lower_match_bind_arm(pattern, src, then_body, then_tail.as_deref(), span);
+                self.lower_match_bind_arm(pattern, &src, then_body, then_tail.as_deref(), span);
                 self.emit_unit(span)
             }
         }
@@ -1544,123 +1550,69 @@ impl<'a> Lowerer<'a> {
     }
 
     fn place_or_temporary(&mut self, place: &Expr) -> Place {
-        let ty = self.type_of_id(place.id());
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut root = place;
-        loop {
-            match root {
-                Expr::FieldAccess { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    root = object;
-                }
-                Expr::Paren { inner, .. } => root = inner,
-                _ => break,
-            }
-        }
-        path.reverse();
-        let target = match self.storage_through(root) {
+        let Projected { base, fields } = projected(place);
+        let target = match self.base_target(base) {
             Some(target) => target,
             None => {
-                let value = self.lower_before_coercion(root);
-                self.temporary(root.span(), value, self.type_of_id(root.id()))
+                let value = self.lower_before_coercion(base);
+                self.temporary(base.span(), value, self.type_of_id(base.id()))
             }
         };
-        // A place that is a reference names what the reference names
-        // (RFC-0029).
-        let ty = match ty {
-            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
-                inner.ty
+        let ty = self.place_ty(place.id(), base.id(), &fields);
+        Place {
+            target,
+            path: self::fields(&fields),
+            ty,
+        }
+    }
+
+    fn place_ty(&self, place: AstId, base: AstId, fields: &[Astr]) -> Ty {
+        let ty = self.type_of_id(place);
+        match (self.place_base(base), fields) {
+            (PlaceBase::ThroughReferenceIn(_) | PlaceBase::ThroughReference, []) => {
+                let Ty::Ref(_, referent) = ty else {
+                    panic!("the checker reads a base through a reference only where it is one")
+                };
+                referent.ty
             }
-            ty => ty,
-        };
-        Place { target, path, ty }
+            _ => ty,
+        }
     }
 
     fn store_target(&mut self, place: &acvus_ast::Place) -> Place {
-        let ty = self.type_of_id(place.id());
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut node = place;
-        let base = loop {
-            match node {
-                acvus_ast::Place::Field { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    node = object;
-                }
-                acvus_ast::Place::Base(base) => break base,
+        let (base, fields) = projected_store(place);
+        let target = match self.place_base(base.id()) {
+            PlaceBase::Storage(storage) => self.storage(storage),
+            PlaceBase::ThroughReferenceIn(storage) => {
+                self.through_stored_reference(storage, base.id(), base.span())
+            }
+            PlaceBase::Element(access) => {
+                let element = Element::of_store(base)
+                    .expect("the checker records an element base only on an element store");
+                self.element_reference(access, element)
+            }
+            other @ (PlaceBase::ThroughReference | PlaceBase::Temporary) => {
+                panic!("a store target's base is a storage or an element, not {other:?}")
             }
         };
-        path.reverse();
-        let target = self.store_base(base);
-        // A place that is a reference names what the reference names
-        // (RFC-0029).
-        let ty = match ty {
-            Ty::Ref(_, inner) if path.is_empty() && matches!(target, RefTarget::Through(_)) => {
-                inner.ty
-            }
-            ty => ty,
-        };
-        Place { target, path, ty }
-    }
-
-    fn store_base(&mut self, base: &acvus_ast::PlaceBase) -> RefTarget {
-        let (id, span) = (base.id(), base.span());
-        let storage = match base {
-            acvus_ast::PlaceBase::Root { root, .. } => match root {
-                acvus_ast::Root::Context(name) => {
-                    RefTarget::Var(self.context_slot(QualifiedRef::root(*name)))
-                }
-                acvus_ast::Root::ExternParam(name) => match self.try_param_slot(*name) {
-                    Some(param_reg) => RefTarget::Param(param_reg),
-                    None => RefTarget::Var(self.var_slot(*name)),
-                },
-                acvus_ast::Root::Local(name) => RefTarget::Var(self.var_slot(*name)),
-            },
-            acvus_ast::PlaceBase::Element {
-                callee_id,
-                container,
-                index,
-                ..
-            } => {
-                let access = IndexAccess {
-                    mode: IndexMode::Ref,
-                    ..self.index_access(id)
-                };
-                let reference =
-                    self.lower_index_as(access, id, *callee_id, container.expr(), index, span);
-                return RefTarget::Through(reference);
-            }
-        };
-        match self.type_of_id(id) {
-            ty @ Ty::Ref(..) => {
-                let reference = self.emit_take(span, storage, vec![], ty);
-                RefTarget::Through(reference)
-            }
-            _ => storage,
+        let ty = self.place_ty(place.id(), base.id(), &fields);
+        Place {
+            target,
+            path: self::fields(&fields),
+            ty,
         }
     }
 
     /// An operator operand borrowed for the expression (RFC-0020).
     fn lend_operand(&mut self, operand: &Expr) -> ValueId {
-        let ty = self.type_of_id(operand.id());
-        if matches!(ty, Ty::Ref(..)) {
+        if let Passing::AsIs = self.passing(operand) {
             return self.lower_expr(operand);
         }
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut root = operand;
-        loop {
-            match root {
-                Expr::FieldAccess { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    root = object;
-                }
-                Expr::Paren { inner, .. } => root = inner,
-                _ => break,
-            }
-        }
-        path.reverse();
+        let ty = self.type_of_id(operand.id());
         let span = operand.span();
-        if let Some(target) = self.storage_through(root) {
-            return self.emit_ref(span, target, path, Mutability::Shared, ty);
+        let Projected { base, fields } = projected(operand);
+        if let Some(target) = self.base_target(base) {
+            return self.emit_ref(span, target, self::fields(&fields), Mutability::Shared, ty);
         }
         let value = self.lower_expr(operand);
         let owned = self.temporary(span, value, ty.clone());
@@ -1746,35 +1698,18 @@ impl<'a> Lowerer<'a> {
         mutability: Mutability,
         span: Span,
     ) -> ValueId {
-        let Some(Callee::Extern {
+        let Some(CallTarget::Declared(Callee::Extern {
             id: qref, instance, ..
-        }) = self.resolution.direct_calls.get(&callee_id).cloned()
+        })) = self.resolution.calls.get(&callee_id).cloned()
         else {
             panic!("type checking settles an `as_slice` instance on every index expression")
         };
-        // A container that is already a reference is passed as it is
-        // (RFC-0030): reborrowing it would put a `Ref` of its own in every
-        // iteration, which the `AsSlice` could then never rise above.
-        let container = match crate::typeck::is_place(object)
-            && !matches!(self.type_of_id(object.id()), Ty::Ref(..))
-        {
-            true => {
-                let mut restores = Vec::new();
-                let lent = Lent {
-                    id: object.id(),
-                    span: object.span(),
-                    place: self.place_or_temporary(object),
-                    mutability,
-                };
-                let container = self.lend_place(lent, &mut restores);
-                debug_assert!(
-                    restores.is_empty(),
-                    "a container lent for a slice crosses no boundary, so it is not cast back"
-                );
-                container
-            }
-            false => self.lower_expr(object),
-        };
+        let mut restores = Vec::new();
+        let container = self.receiver(object, &mut restores);
+        debug_assert!(
+            restores.is_empty(),
+            "a container lent for a slice crosses no boundary, so it is not cast back"
+        );
         let dst = self.alloc_val();
         self.set_val_type(
             dst,
@@ -1795,63 +1730,55 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    /// The storage a root expression names, through the reference it holds
-    /// when it holds one.
-    /// The place a root names: its storage, or, when the root is a
-    /// reference (a storage holding one, or any expression of `&T`), the
-    /// storage through that reference (RFC-0024).
-    fn storage_through(&mut self, root: &Expr) -> Option<RefTarget> {
-        // `a[i]` names the element the `Index` leaves a reference into
-        // (RFC-0047 rule 5): the place is that reference, as `*r`'s is.
-        if let Expr::Index {
-            id,
-            callee_id,
-            object,
-            index,
-            span,
-        } = root
-        {
-            let access = IndexAccess {
-                mode: IndexMode::Ref,
-                ..self.index_access(*id)
-            };
-            let reference = self.lower_index_as(access, *id, *callee_id, object, index, *span);
-            return Some(RefTarget::Through(reference));
-        }
-        let ty = self.type_of_id(root.id());
-        match (self.storage_of(root), matches!(ty, Ty::Ref(..))) {
-            (Some(target), false) => Some(target),
-            (Some(target), true) => {
-                let reference = self.emit_take(root.span(), target, vec![], ty);
-                Some(RefTarget::Through(reference))
+    fn place_base(&self, base: AstId) -> PlaceBase {
+        *self
+            .resolution
+            .place_bases
+            .get(&base)
+            .expect("the checker settles the base of every place the lowering reads")
+    }
+
+    fn base_target(&mut self, base: &Expr) -> Option<RefTarget> {
+        match self.place_base(base.id()) {
+            PlaceBase::Storage(storage) => Some(self.storage(storage)),
+            PlaceBase::ThroughReferenceIn(storage) => {
+                Some(self.through_stored_reference(storage, base.id(), base.span()))
             }
-            (None, true) => Some(RefTarget::Through(self.lower_expr(root))),
-            (None, false) => None,
+            PlaceBase::ThroughReference => Some(RefTarget::Through(self.lower_expr(base))),
+            PlaceBase::Element(access) => {
+                let element = Element::of(base)
+                    .expect("the checker records an element base only on an index into a place");
+                Some(self.element_reference(access, element))
+            }
+            PlaceBase::Temporary => None,
         }
     }
 
-    /// The storage a root expression names, if it is a local, a parameter,
-    /// or a context.
-    fn storage_of(&mut self, root: &Expr) -> Option<RefTarget> {
-        match root {
-            Expr::ContextRef { name, .. } => Some(RefTarget::Var(self.context_slot(*name))),
-            Expr::Ident {
-                name,
-                ref_kind: RefKind::ExternParam,
-                ..
-            } => match self.try_param_slot(name.name) {
-                Some(param_reg) => Some(RefTarget::Param(param_reg)),
-                None if self.is_defined(name.name) => {
-                    Some(RefTarget::Var(self.var_slot(name.name)))
-                }
-                None => None,
+    fn element_reference(&mut self, access: IndexAccess, element: Element<'_>) -> RefTarget {
+        let Element {
+            id,
+            callee_id,
+            container,
+            index,
+            span,
+        } = element;
+        RefTarget::Through(self.lower_index_as(access, id, callee_id, container, index, span))
+    }
+
+    fn through_stored_reference(&mut self, storage: Storage, base: AstId, span: Span) -> RefTarget {
+        let target = self.storage(storage);
+        let reference = self.emit_take(span, target, vec![], self.type_of_id(base));
+        RefTarget::Through(reference)
+    }
+
+    fn storage(&mut self, storage: Storage) -> RefTarget {
+        match storage {
+            Storage::Local(name) => RefTarget::Var(self.var_slot(name)),
+            Storage::Input(name) => match self.try_param_slot(name) {
+                Some(param) => RefTarget::Param(param),
+                None => RefTarget::Var(self.var_slot(name)),
             },
-            Expr::Ident {
-                name,
-                ref_kind: RefKind::Value,
-                ..
-            } if self.is_defined(name.name) => Some(RefTarget::Var(self.var_slot(name.name))),
-            _ => None,
+            Storage::Context(qref) => RefTarget::Var(self.context_slot(qref)),
         }
     }
 
@@ -1951,10 +1878,15 @@ impl<'a> Lowerer<'a> {
 
     /// Introduce a binding in the current scope with a fresh slot. A name
     /// already bound, here or outside, is shadowed.
+    fn alloc_slot(&mut self, ty: Ty, origin: ValOrigin) -> ValueId {
+        let slot = self.alloc_val();
+        self.set_val_type(slot, ty);
+        self.set_origin(slot, origin);
+        slot
+    }
+
     fn define_var(&mut self, name: Astr, ty: Ty) -> ValueId {
-        let slot = self.body.val_factory.next();
-        self.set_origin(slot, ValOrigin::Named(name));
-        self.set_val_type(slot, ty.clone());
+        let slot = self.alloc_slot(ty.clone(), ValOrigin::Named(name));
         let scope = self.scopes.last_mut().expect("a scope to define in");
         scope.insert(name, Local { ty, slot });
         slot
@@ -2003,44 +1935,6 @@ impl<'a> Lowerer<'a> {
         self.body.val_types.insert(val, ty);
     }
 
-    fn tuple_elem_type(&self, tuple_val: ValueId, index: usize) -> Ty {
-        if let Some(Ty::Tuple(elems)) = self.body.val_types.get(&tuple_val) {
-            elems.get(index).cloned().unwrap_or(Ty::error())
-        } else {
-            Ty::error()
-        }
-    }
-
-    fn array_elem_type(&self, array_val: ValueId) -> Ty {
-        if let Some(Ty::Array(elem, _)) = self.body.val_types.get(&array_val) {
-            elem.as_ref().clone()
-        } else {
-            Ty::error()
-        }
-    }
-
-    fn array_len(&self, array_val: ValueId) -> Option<usize> {
-        match self.body.val_types.get(&array_val) {
-            Some(Ty::Array(_, len)) => Some(len.get()),
-            _ => None,
-        }
-    }
-
-    fn object_field_type(&self, object_val: ValueId, key: Astr) -> Ty {
-        if let Some(Ty::Object(fields)) = self.body.val_types.get(&object_val) {
-            fields.get(&key).cloned().unwrap_or(Ty::error())
-        } else {
-            Ty::error()
-        }
-    }
-
-    fn variant_inner_type(&self, variant_val: ValueId, tag: Astr) -> Ty {
-        match self.body.val_types.get(&variant_val) {
-            Some(ty) => self.payload_type(ty, tag),
-            None => Ty::error(),
-        }
-    }
-
     fn set_origin(&mut self, val: ValueId, origin: ValOrigin) {
         self.body.debug.set(val, origin);
     }
@@ -2066,19 +1960,6 @@ impl<'a> Lowerer<'a> {
     fn alloc_expr(&mut self, id: AstId) -> ValueId {
         let dst = self.alloc_typed(id);
         self.set_origin(dst, ValOrigin::Expr);
-        dst
-    }
-
-    fn emit_array_index(
-        &mut self,
-        span: Span,
-        array: ValueId,
-        index: usize,
-        elem_ty: Ty,
-    ) -> ValueId {
-        let dst = self.alloc_val();
-        self.set_val_type(dst, elem_ty);
-        self.emit_inst(span, InstKind::ArrayIndex { dst, array, index });
         dst
     }
 
@@ -2537,7 +2418,7 @@ impl<'a> Lowerer<'a> {
                     }
                     return dst;
                 }
-                if let Some(call) = self.resolution.operator_calls.get(id).cloned() {
+                if let Some(CallTarget::Operator(call)) = self.resolution.calls.get(id).cloned() {
                     let (callee, fn_ty) = (call.callee, call.ty);
                     let l = self.lend_operand(left);
                     let r = self.lend_operand(right);
@@ -2650,44 +2531,31 @@ impl<'a> Lowerer<'a> {
                 field,
                 span,
             } => {
-                /// Walk a FieldAccess chain, collecting field names.
-                /// Returns (root_expr, accumulated_path).
-                fn collect_field_chain(expr: &Expr) -> (&Expr, Vec<Astr>) {
-                    match expr {
-                        Expr::FieldAccess { object, field, .. } => {
-                            let (root, mut path) = collect_field_chain(object);
-                            path.push(*field);
-                            (root, path)
-                        }
-                        Expr::Paren { inner, .. } => collect_field_chain(inner),
-                        other => (other, vec![]),
-                    }
-                }
-
                 let field_ty = self.type_of_id(*id);
-                let (root, mut path) = collect_field_chain(object);
-                path.push(*field);
-                let path = fields(&path);
-
-                if let Some(target) = self.storage_through(root) {
-                    let dst = self.emit_take(*span, target.clone(), path.clone(), field_ty);
-                    self.set_origin(dst, ValOrigin::RefField(target, path));
-                    dst
-                } else {
-                    let obj = self.lower_expr(object);
-                    let dst = self.alloc_val();
-                    self.set_val_type(dst, field_ty);
-                    self.set_origin(dst, ValOrigin::Field(obj, *field));
-                    self.emit_inst(
-                        *span,
-                        InstKind::FieldGet {
-                            dst,
-                            object: obj,
-                            field: *field,
-                            rest: vec![],
-                        },
-                    );
-                    dst
+                let Projected { base, fields } = projected(expr);
+                match self.base_target(base) {
+                    Some(target) => {
+                        let path = self::fields(&fields);
+                        let dst = self.emit_take(*span, target, path.clone(), field_ty);
+                        self.set_origin(dst, ValOrigin::RefField(target, path));
+                        dst
+                    }
+                    None => {
+                        let obj = self.lower_expr(object);
+                        let dst = self.alloc_val();
+                        self.set_val_type(dst, field_ty);
+                        self.set_origin(dst, ValOrigin::Field(obj, *field));
+                        self.emit_inst(
+                            *span,
+                            InstKind::FieldGet {
+                                dst,
+                                object: obj,
+                                field: *field,
+                                rest: vec![],
+                            },
+                        );
+                        dst
+                    }
                 }
             }
 
@@ -3136,21 +3004,28 @@ impl<'a> Lowerer<'a> {
         self.emit_assign(span, RefTarget::Through(reference), vec![], val);
     }
 
-    fn lower_intrinsic_call(
+    /// An intrinsic call over its arguments as every call lowers them.
+    fn emit_intrinsic(
         &mut self,
         intrinsic: crate::typeck::Intrinsic,
-        args: &[Expr],
+        call: CallArgs,
         call_id: AstId,
         call_span: Span,
     ) -> ValueId {
-        match intrinsic {
-            crate::typeck::Intrinsic::StringClone => {
-                let src = self.lower_expr(&args[0]);
-                let dst = self.alloc_expr(call_id);
-                self.emit_inst(call_span, InstKind::StringClone { dst, src });
-                dst
-            }
-        }
+        assert!(
+            call.restores.is_empty(),
+            "an intrinsic takes no argument through a conversion"
+        );
+        let dst = self.alloc_expr(call_id);
+        let kind = match (intrinsic, call.values.as_slice()) {
+            (crate::typeck::Intrinsic::StringClone, &[src]) => InstKind::StringClone { dst, src },
+            (crate::typeck::Intrinsic::StringClone, values) => panic!(
+                "`clone` is checked at its signature's one parameter, and got {} arguments",
+                values.len()
+            ),
+        };
+        self.emit_inst(call_span, kind);
+        dst
     }
 
     /// The arguments of a call: a `&place` argument is lent, any other is
@@ -3322,53 +3197,22 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
     ) -> ValueId {
         let callee_ty = self.type_of_id(callee_id);
-        let lent = match &callee_ty {
-            Ty::Fn { params, .. } => match params.first().map(|p| &p.ty) {
-                Some(Ty::Ref(mutability, _)) => Some(*mutability),
-                _ => None,
-            },
-            _ => None,
-        };
         let mut restores = Vec::new();
-        let first = match lent {
-            // A receiver that is already a reference value is passed as it
-            // is (RFC-0030).
-            Some(_)
-                if !crate::typeck::is_place(receiver)
-                    && matches!(self.type_of_id(receiver.id()), Ty::Ref(..)) =>
-            {
-                self.lower_expr(receiver)
-            }
-            Some(mutability) => {
-                let lent = Lent {
-                    id: receiver.id(),
-                    span: receiver.span(),
-                    place: self.place_or_temporary(receiver),
-                    mutability,
-                };
-                self.lend_place(lent, &mut restores)
-            }
-            None => self.lower_expr(receiver),
-        };
-        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&callee_id).copied() {
-            return match intrinsic {
-                crate::typeck::Intrinsic::StringClone => {
-                    let dst = self.alloc_expr(call_id);
-                    self.emit_inst(call_span, InstKind::StringClone { dst, src: first });
-                    dst
-                }
-            };
-        }
+        let first = self.receiver(receiver, &mut restores);
         let mut call = self.lower_call_args(args.iter());
         call.values.insert(0, first);
         call.restores.splice(0..0, restores);
+        let target = self.resolution.calls.get(&callee_id).cloned();
+        if let Some(CallTarget::Intrinsic(intrinsic)) = target {
+            return self.emit_intrinsic(intrinsic, call, call_id, call_span);
+        }
         let dst = self.alloc_typed(call_id);
-        match self.resolution.direct_calls.get(&callee_id).cloned() {
-            Some(callee) => {
+        match target {
+            Some(CallTarget::Declared(callee)) => {
                 self.set_origin(dst, ValOrigin::Call(callee.id().name));
                 self.emit_call_with(call_span, dst, callee, callee_ty, call);
             }
-            None if self.is_defined(name) => {
+            Some(CallTarget::Binding) => {
                 let (closure_reg, closure_ty) = self.lent_closure(name, call_span);
                 self.emit_call_with(
                     call_span,
@@ -3378,11 +3222,40 @@ impl<'a> Lowerer<'a> {
                     call,
                 );
             }
+            Some(
+                other @ (CallTarget::Intrinsic(_)
+                | CallTarget::StructuralVariant
+                | CallTarget::Operator(_)),
+            ) => panic!("a method call is checked as a named call, never {other:?}"),
             None => {
                 self.emit_inst(call_span, InstKind::Poison { dst });
             }
         }
         dst
+    }
+
+    fn passing(&self, lent: &Expr) -> Passing {
+        *self
+            .resolution
+            .passing
+            .get(&lent.id())
+            .expect("the checker records how every receiver and operand is passed")
+    }
+
+    /// A receiver as the checker decided it reaches its call.
+    fn receiver(&mut self, receiver: &Expr, restores: &mut Vec<PlaceRestore>) -> ValueId {
+        match self.passing(receiver) {
+            Passing::Value | Passing::AsIs => self.lower_expr(receiver),
+            Passing::Lent(mutability) => {
+                let lent = Lent {
+                    id: receiver.id(),
+                    span: receiver.span(),
+                    place: self.place_or_temporary(receiver),
+                    mutability,
+                };
+                self.lend_place(lent, restores)
+            }
+        }
     }
 
     fn lower_func_call(
@@ -3393,11 +3266,18 @@ impl<'a> Lowerer<'a> {
         call_id: AstId,
         call_span: Span,
     ) -> ValueId {
-        if let Some(intrinsic) = self.resolution.intrinsic_calls.get(&func.id()).copied() {
-            return self.lower_intrinsic_call(intrinsic, args, call_id, call_span);
+        let written: Vec<&Expr> = pipe_left
+            .map(|left| &**left)
+            .into_iter()
+            .chain(args)
+            .collect();
+        let target = self.resolution.calls.get(&func.id()).cloned();
+        if let Some(CallTarget::Intrinsic(intrinsic)) = target {
+            let call = self.lower_call_args(written.iter().copied());
+            return self.emit_intrinsic(intrinsic, call, call_id, call_span);
         }
-        if self.resolution.structural_variant_calls.contains(&call_id)
-            && let [payload] = args
+        if let Some(CallTarget::StructuralVariant) = target
+            && let [payload] = written.as_slice()
         {
             let Expr::Ident { name, .. } = func else {
                 unreachable!("a structural variant call is a qualified name");
@@ -3414,7 +3294,7 @@ impl<'a> Lowerer<'a> {
             );
             return dst;
         }
-        let call = self.lower_call_args(pipe_left.map(|left| &**left).into_iter().chain(args));
+        let call = self.lower_call_args(written.iter().copied());
         let dst = self.alloc_typed(call_id);
 
         // Named function call (Ident).
@@ -3430,26 +3310,31 @@ impl<'a> Lowerer<'a> {
                 RefKind::Value => {
                     self.set_origin(dst, ValOrigin::Call(name.name));
 
-                    if let Some(callee) = self.resolution.direct_calls.get(&func.id()).cloned() {
-                        let callee_ty = self.type_of_id(func.id());
-                        self.emit_call_with(call_span, dst, callee, callee_ty, call);
-                        return dst;
+                    match target {
+                        Some(CallTarget::Declared(callee)) => {
+                            let callee_ty = self.type_of_id(func.id());
+                            self.emit_call_with(call_span, dst, callee, callee_ty, call);
+                        }
+                        Some(CallTarget::Binding) => {
+                            let (closure_reg, closure_ty) =
+                                self.lent_closure(name.name, *ident_span);
+                            self.emit_call_with(
+                                call_span,
+                                dst,
+                                Callee::Indirect(closure_reg),
+                                closure_ty,
+                                call,
+                            );
+                        }
+                        Some(
+                            other @ (CallTarget::Intrinsic(_)
+                            | CallTarget::StructuralVariant
+                            | CallTarget::Operator(_)),
+                        ) => panic!("a call of a name lowers as its target above, never {other:?}"),
+                        None => {
+                            self.emit_inst(call_span, InstKind::Poison { dst });
+                        }
                     }
-
-                    if self.is_defined(name.name) {
-                        let (closure_reg, closure_ty) = self.lent_closure(name.name, *ident_span);
-                        self.emit_call_with(
-                            call_span,
-                            dst,
-                            Callee::Indirect(closure_reg),
-                            closure_ty,
-                            call,
-                        );
-                        return dst;
-                    }
-
-                    // Typechecker already reported UndefinedFunction; emit poison.
-                    self.emit_inst(call_span, InstKind::Poison { dst });
                     return dst;
                 }
                 _ => {}
@@ -3469,26 +3354,7 @@ impl<'a> Lowerer<'a> {
         dst
     }
 
-    // --- Pattern test lowering ---
-
-    /// Emit instructions that test whether `src_reg` matches `pattern`.
-    /// Returns a register holding a Bool (true = match).
-    fn reference_inner(&self, reg: ValueId) -> Option<Ty> {
-        match self.body.val_types.get(&reg) {
-            Some(Ty::Ref(_, inner)) => Some(inner.ty.clone()),
-            _ => None,
-        }
-    }
-
-    fn emit_part_ref(&mut self, span: Span, reference: ValueId, seg: PathSeg, ty: Ty) -> ValueId {
-        self.emit_ref(
-            span,
-            RefTarget::Through(reference),
-            vec![seg],
-            Mutability::Shared,
-            ty,
-        )
-    }
+    // --- Patterns (RFC-0024) ---
 
     fn payload_type(&self, inner: &Ty, tag: Astr) -> Ty {
         match inner {
@@ -3510,301 +3376,253 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// RFC-0024.
-    fn pattern_parts_through(
-        &mut self,
-        pattern: &Pattern,
-        reference: ValueId,
-        inner: &Ty,
-        span: Span,
-    ) -> Vec<RefPart> {
-        self.pattern_parts_place(pattern, &[], inner)
-            .into_iter()
-            .map(|part| {
-                let seg = part
-                    .path
-                    .into_iter()
-                    .next()
-                    .expect("a part is one segment under the reference");
-                RefPart {
-                    reference: self.emit_part_ref(span, reference, seg, part.ty),
-                    pattern: part.pattern,
-                }
-            })
-            .collect()
-    }
-
-    fn lower_pattern_test_through(
-        &mut self,
-        pattern: &Pattern,
-        reference: ValueId,
-        inner: &Ty,
-        span: Span,
-    ) -> ValueId {
-        match pattern {
-            Pattern::ContextBind { .. } | Pattern::Binding { .. } | Pattern::Wildcard { .. } => {
-                self.emit_const_bool(span, true)
-            }
-            Pattern::Literal { value, .. } => {
-                let src = self.read_word_through(span, reference);
-                let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::Bool);
-                self.emit_inst(
-                    span,
-                    InstKind::TestLiteral {
-                        dst,
-                        src,
-                        value: value.desugared(),
-                    },
-                );
-                dst
-            }
-            Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
-                let mut all_ok = self.emit_const_bool(span, true);
-                for part in self.pattern_parts_through(pattern, reference, inner, span) {
-                    all_ok = self.emit_and(span, all_ok, |s| {
-                        s.lower_pattern_test_value(&part.pattern, part.reference, span)
-                    });
-                }
-                all_ok
-            }
-            Pattern::Variant { tag, payload, .. } => {
-                let tag_ok = self.alloc_val();
-                self.set_val_type(tag_ok, Ty::Bool);
-                self.emit_inst(
-                    span,
-                    InstKind::TestVariant {
-                        dst: tag_ok,
-                        src: reference,
-                        tag: *tag,
-                    },
-                );
-                let Some(inner_pat) = payload else {
-                    return tag_ok;
-                };
-                if pattern_is_irrefutable(inner_pat) {
-                    return tag_ok;
-                }
-                let labels = DiamondLabels {
-                    then_label: self.alloc_label(),
-                    else_label: self.alloc_label(),
-                    join: self.alloc_label(),
-                };
-                let pending = self.open_diamond(span, tag_ok, labels);
-                self.emit_label(span, labels.then_label);
-                let part = self
-                    .pattern_parts_through(pattern, reference, inner, span)
-                    .into_iter()
-                    .next()
-                    .expect("a payload pattern names one part");
-                let inner_ok = self.lower_pattern_test_value(&part.pattern, part.reference, span);
-                let result = self.emit_fail_merge(span, inner_ok, labels);
-                self.close_diamond(pending);
-                result
-            }
-        }
-    }
-
-    fn lower_pattern_bind_through(
-        &mut self,
-        pattern: &Pattern,
-        reference: ValueId,
-        inner: &Ty,
-        span: Span,
-    ) {
-        match pattern {
-            // `_` reads nothing and binds nothing.
-            Pattern::Wildcard { .. } => {}
-            Pattern::Binding {
-                name,
-                ref_kind: RefKind::Value,
-                ..
-            } => {
-                self.set_origin(reference, ValOrigin::Named(*name));
-                let ty = Ty::Ref(
-                    Mutability::Shared,
-                    Box::new(TypeArg::uniform(inner.clone())),
-                );
-                let slot = self.define_var(*name, ty);
-                self.emit_assign(span, RefTarget::Var(slot), vec![], reference);
-            }
-            Pattern::Binding {
-                ref_kind: RefKind::ExternParam,
-                ..
-            }
-            | Pattern::ContextBind { .. } => {
-                let dst = self.alloc_val();
-                self.emit_inst(span, InstKind::Poison { dst });
-            }
-            Pattern::Literal { .. } => {}
-            Pattern::List { .. }
-            | Pattern::Object { .. }
-            | Pattern::Tuple { .. }
-            | Pattern::Variant { .. } => {
-                for part in self.pattern_parts_through(pattern, reference, inner, span) {
-                    self.lower_pattern_bind_value(&part.pattern, part.reference, span);
-                }
-            }
-        }
-    }
-
-    /// RFC-0024.
     fn pattern_source<'p, P>(&mut self, source: &Expr, patterns: P) -> PatSrc
     where
         P: IntoIterator<Item = &'p Pattern>,
     {
-        let mut path: Vec<PathSeg> = Vec::new();
-        let mut root = source;
-        loop {
-            match root {
-                Expr::FieldAccess { object, field, .. } => {
-                    path.push(PathSeg::Field(*field));
-                    root = object;
-                }
-                Expr::Paren { inner, .. } => root = inner,
-                _ => break,
-            }
-        }
-        path.reverse();
-        let root_ty = self.type_of_id(root.id());
-        if matches!(root_ty, Ty::Ref(..)) {
-            return PatSrc::Value(self.lower_expr(source));
-        }
-        match self.storage_of(root) {
-            Some(target) => PatSrc::Place {
-                target,
-                path,
+        let Projected { base, fields } = projected(source);
+        if let PlaceBase::Storage(storage) = self.place_base(base.id()) {
+            return PatSrc::Placed(Placed::Place {
+                target: self.storage(storage),
+                path: self::fields(&fields),
                 ty: self.type_of_id(source.id()),
-            },
-            None if patterns.into_iter().any(test_reads_a_part) => {
-                self.spill_pattern_source(source)
-            }
-            None => PatSrc::Value(self.lower_expr(source)),
+            });
         }
+        let value = self.lower_expr(source);
+        let ty = self
+            .body
+            .val_types
+            .get(&value)
+            .cloned()
+            .expect("a lowered expression has a type");
+        let mode = *self
+            .resolution
+            .pattern_modes
+            .get(&source.id())
+            .expect("the checker records how every pattern source is read");
+        if mode == MatchMode::Through {
+            let Ty::Ref(_, referent) = ty else {
+                panic!("the checker reads a source through a reference only where it is one")
+            };
+            return PatSrc::Placed(Placed::Through {
+                reference: value,
+                ty: referent.ty,
+            });
+        }
+        if patterns.into_iter().any(test_reads_a_part) {
+            let ty = self.type_of_id(source.id());
+            return PatSrc::Placed(self.spill_pattern_source(source.span(), value, ty));
+        }
+        PatSrc::Value { value, ty }
     }
 
-    /// A source with no storage of its own is given one where the pattern's
-    /// test reads a part out of it: the test reads through a reference and
-    /// the bind takes from the slot, and a temporary can be taken only once.
-    fn spill_pattern_source(&mut self, source: &Expr) -> PatSrc {
-        let value = self.lower_expr(source);
-        let ty = self.type_of_id(source.id());
+    fn spill_pattern_source(&mut self, span: Span, value: ValueId, ty: Ty) -> Placed {
         let slot = self.body.val_factory.next();
         self.set_origin(slot, ValOrigin::Named(self.interner.intern("$source")));
         self.set_val_type(slot, ty.clone());
-        self.emit_assign(source.span(), RefTarget::Var(slot), vec![], value);
-        PatSrc::Place {
+        self.emit_assign(span, RefTarget::Var(slot), vec![], value);
+        Placed::Place {
             target: RefTarget::Var(slot),
             path: vec![],
             ty,
         }
     }
 
-    fn lower_pattern_test(&mut self, pattern: &Pattern, src: PatSrc, span: Span) -> ValueId {
+    fn placed(&mut self, src: &PatSrc, span: Span) -> Placed {
         match src {
-            PatSrc::Value(reg) => self.lower_pattern_test_value(pattern, reg, span),
-            PatSrc::Place { target, path, ty } => {
-                self.lower_pattern_test_place(pattern, &target, &path, &ty, span)
-            }
+            PatSrc::Placed(placed) => placed.clone(),
+            PatSrc::Value { value, ty } => self.spill_pattern_source(span, *value, ty.clone()),
         }
     }
 
-    fn lower_pattern_bind(&mut self, pattern: &Pattern, src: PatSrc, span: Span) {
-        match src {
-            PatSrc::Value(reg) => self.lower_pattern_bind_value(pattern, reg, span),
-            PatSrc::Place { target, path, ty } => {
-                self.lower_pattern_bind_place(pattern, &target, &path, &ty, span)
-            }
-        }
-    }
-
-    fn pattern_parts_place(&self, pattern: &Pattern, path: &[PathSeg], ty: &Ty) -> Vec<PlacePart> {
-        let part = |seg: PathSeg, ty: Ty, pattern: &Pattern| {
-            let mut p = path.to_vec();
-            p.push(seg);
-            PlacePart {
-                path: p,
-                ty,
-                pattern: pattern.clone(),
-            }
-        };
+    fn pattern_parts<'p>(&self, pattern: &'p Pattern, ty: &Ty) -> Vec<PatternPart<'p>> {
         match pattern {
-            Pattern::Wildcard { .. } => Vec::new(),
             Pattern::List { head, tail, .. } => {
-                let (elem, len) = match ty {
-                    Ty::Array(elem, len) => (elem.as_ref().clone(), Some(len.get())),
-                    _ => (Ty::error(), None),
+                let Ty::Array(elem, len) = ty else {
+                    panic!("type checking gives a list pattern an array of known length")
                 };
-                let head_parts = head
-                    .iter()
+                let tail_start = len.get() - tail.len();
+                head.iter()
                     .enumerate()
-                    .map(|(i, p)| part(PathSeg::Index(i), elem.clone(), p));
-                let tail_parts = len.into_iter().flat_map(|len| {
-                    tail.iter()
-                        .enumerate()
-                        .map(move |(i, p)| (len - tail.len() + i, p))
-                        .collect::<Vec<_>>()
-                });
-                head_parts
-                    .chain(tail_parts.map(|(i, p)| part(PathSeg::Index(i), elem.clone(), p)))
+                    .chain(
+                        tail.iter()
+                            .enumerate()
+                            .map(|(i, pattern)| (tail_start + i, pattern)),
+                    )
+                    .map(|(index, pattern)| PatternPart {
+                        seg: PathSeg::Index(index),
+                        ty: elem.as_ref().clone(),
+                        pattern,
+                    })
                     .collect()
             }
-            Pattern::Object { fields: pats, .. } => pats
-                .iter()
-                .map(|ObjectPatternField { key, pattern, .. }| {
-                    let fty = match ty {
-                        Ty::Object(field_tys) => field_tys.get(key).cloned().unwrap_or(Ty::error()),
-                        _ => Ty::error(),
-                    };
-                    part(PathSeg::Field(*key), fty, pattern)
-                })
-                .collect(),
-            Pattern::Tuple { elements, .. } => elements
-                .iter()
-                .enumerate()
-                .filter_map(|(i, elem)| match elem {
-                    TuplePatternElem::Pattern(pat) => Some((i, pat)),
-                    _ => None,
-                })
-                .map(|(i, pat)| {
-                    let ety = match ty {
-                        Ty::Tuple(elem_tys) => elem_tys.get(i).cloned().unwrap_or(Ty::error()),
-                        _ => Ty::error(),
-                    };
-                    part(PathSeg::Index(i), ety, pat)
-                })
-                .collect(),
-            Pattern::Variant { tag, payload, .. } => match payload {
-                Some(inner) => vec![part(PathSeg::Payload, self.payload_type(ty, *tag), inner)],
-                None => Vec::new(),
+            Pattern::Object { fields, .. } => {
+                let Ty::Object(field_tys) = ty else {
+                    panic!("type checking gives an object pattern an object source")
+                };
+                fields
+                    .iter()
+                    .map(|ObjectPatternField { key, pattern, .. }| PatternPart {
+                        seg: PathSeg::Field(*key),
+                        ty: field_tys.get(key).cloned().unwrap_or_else(|| {
+                            panic!("type checking settles every key an object pattern names")
+                        }),
+                        pattern,
+                    })
+                    .collect()
+            }
+            Pattern::Tuple { elements, .. } => {
+                let Ty::Tuple(elem_tys) = ty else {
+                    panic!("type checking gives a tuple pattern a tuple source")
+                };
+                elements
+                    .iter()
+                    .zip(elem_tys)
+                    .enumerate()
+                    .filter_map(|(index, (elem, ty))| match elem {
+                        TuplePatternElem::Pattern(pattern) => Some(PatternPart {
+                            seg: PathSeg::Index(index),
+                            ty: ty.clone(),
+                            pattern,
+                        }),
+                        TuplePatternElem::Wildcard(_) => None,
+                    })
+                    .collect()
+            }
+            Pattern::Variant { .. }
+            | Pattern::Binding { .. }
+            | Pattern::ContextBind { .. }
+            | Pattern::Literal { .. }
+            | Pattern::Wildcard { .. } => Vec::new(),
+        }
+    }
+
+    fn project(&mut self, src: &Placed, seg: PathSeg, ty: Ty, span: Span) -> Placed {
+        match src {
+            Placed::Place { target, path, .. } => Placed::Place {
+                target: *target,
+                path: path.iter().copied().chain([seg]).collect(),
+                ty,
             },
-            Pattern::Binding { .. } | Pattern::ContextBind { .. } | Pattern::Literal { .. } => {
-                Vec::new()
+            Placed::Through { reference, .. } => Placed::Through {
+                reference: self.emit_ref(
+                    span,
+                    RefTarget::Through(*reference),
+                    vec![seg],
+                    Mutability::Shared,
+                    ty.clone(),
+                ),
+                ty,
+            },
+        }
+    }
+
+    fn project_parts<'p>(
+        &mut self,
+        pattern: &'p Pattern,
+        src: &PatSrc,
+        span: Span,
+    ) -> Vec<(PatSrc, &'p Pattern)> {
+        let placed = self.placed(src, span);
+        self.pattern_parts(pattern, placed.ty())
+            .into_iter()
+            .map(|part| {
+                let projected = self.project(&placed, part.seg, part.ty, span);
+                (PatSrc::Placed(projected), part.pattern)
+            })
+            .collect()
+    }
+
+    fn project_payload(&mut self, src: &PatSrc, tag: Astr, span: Span) -> PatSrc {
+        let ty = self.payload_type(src.ty(), tag);
+        match src {
+            PatSrc::Placed(placed) => {
+                PatSrc::Placed(self.project(placed, PathSeg::Payload, ty, span))
+            }
+            PatSrc::Value { value, .. } => {
+                let payload = self.alloc_val();
+                self.set_val_type(payload, ty.clone());
+                self.emit_inst(
+                    span,
+                    InstKind::UnwrapVariant {
+                        dst: payload,
+                        src: *value,
+                    },
+                );
+                PatSrc::Value { value: payload, ty }
             }
         }
     }
 
-    fn lower_pattern_test_place(
-        &mut self,
-        pattern: &Pattern,
-        target: &RefTarget,
-        path: &[PathSeg],
-        ty: &Ty,
-        span: Span,
-    ) -> ValueId {
+    fn read_leaf(&mut self, src: &PatSrc, span: Span) -> ValueId {
+        match src {
+            PatSrc::Placed(Placed::Place { target, path, ty }) => {
+                self.emit_take(span, *target, path.clone(), ty.clone())
+            }
+            PatSrc::Placed(Placed::Through { reference, .. }) => {
+                self.read_word_through(span, *reference)
+            }
+            PatSrc::Value { value, .. } => *value,
+        }
+    }
+
+    fn tag_reference(&mut self, src: &PatSrc, span: Span) -> ValueId {
+        match src {
+            PatSrc::Placed(Placed::Place { target, path, ty }) => {
+                self.emit_ref(span, *target, path.clone(), Mutability::Shared, ty.clone())
+            }
+            PatSrc::Placed(Placed::Through { reference, .. }) => *reference,
+            PatSrc::Value { value, .. } => *value,
+        }
+    }
+
+    fn bind_part(&mut self, src: &PatSrc, name: Astr, span: Span) {
+        let (value, ty) = match src {
+            PatSrc::Placed(Placed::Through { reference, ty }) => (
+                *reference,
+                Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty.clone()))),
+            ),
+            PatSrc::Placed(Placed::Place { ty, .. }) | PatSrc::Value { ty, .. } => {
+                (self.read_leaf(src, span), ty.clone())
+            }
+        };
+        self.set_origin(value, ValOrigin::Named(name));
+        let slot = self.define_var(name, ty);
+        self.emit_assign(span, RefTarget::Var(slot), vec![], value);
+    }
+
+    /// The checker refuses a context bound through a reference
+    /// (`ReferenceInData`), so that source lowers to poison.
+    fn bind_context(&mut self, src: &PatSrc, context: QualifiedRef, span: Span) {
+        match src {
+            PatSrc::Placed(Placed::Through { .. }) => self.emit_poison(span),
+            PatSrc::Placed(Placed::Place { .. }) | PatSrc::Value { .. } => {
+                let value = self.read_leaf(src, span);
+                let slot = self.context_slot(context);
+                self.emit_assign(span, RefTarget::Var(slot), vec![], value);
+            }
+        }
+    }
+
+    fn emit_poison(&mut self, span: Span) {
+        let dst = self.alloc_val();
+        self.emit_inst(span, InstKind::Poison { dst });
+    }
+
+    fn lower_pattern_test(&mut self, pattern: &Pattern, src: &PatSrc, span: Span) -> ValueId {
         match pattern {
             Pattern::ContextBind { .. } | Pattern::Binding { .. } | Pattern::Wildcard { .. } => {
                 self.emit_const_bool(span, true)
             }
             Pattern::Literal { value, .. } => {
-                let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
+                let leaf = self.read_leaf(src, span);
                 let dst = self.alloc_val();
                 self.set_val_type(dst, Ty::Bool);
                 self.emit_inst(
                     span,
                     InstKind::TestLiteral {
                         dst,
-                        src: read,
+                        src: leaf,
                         value: value.desugared(),
                     },
                 );
@@ -3812,27 +3630,15 @@ impl<'a> Lowerer<'a> {
             }
             Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
                 let mut all_ok = self.emit_const_bool(span, true);
-                for part in self.pattern_parts_place(pattern, path, ty) {
+                for (part, part_pattern) in self.project_parts(pattern, src, span) {
                     all_ok = self.emit_and(span, all_ok, |s| {
-                        s.lower_pattern_test_place(
-                            &part.pattern,
-                            target,
-                            &part.path,
-                            &part.ty,
-                            span,
-                        )
+                        s.lower_pattern_test(part_pattern, &part, span)
                     });
                 }
                 all_ok
             }
             Pattern::Variant { tag, payload, .. } => {
-                let reference = self.emit_ref(
-                    span,
-                    target.clone(),
-                    path.to_vec(),
-                    Mutability::Shared,
-                    ty.clone(),
-                );
+                let reference = self.tag_reference(src, span);
                 let tag_ok = self.alloc_val();
                 self.set_val_type(tag_ok, Ty::Bool);
                 self.emit_inst(
@@ -3843,10 +3649,10 @@ impl<'a> Lowerer<'a> {
                         tag: *tag,
                     },
                 );
-                let Some(inner_pat) = payload else {
+                let Some(payload) = payload.as_deref() else {
                     return tag_ok;
                 };
-                if pattern_is_irrefutable(inner_pat) {
+                if pattern_is_irrefutable(payload) {
                     return tag_ok;
                 }
                 let labels = DiamondLabels {
@@ -3856,355 +3662,41 @@ impl<'a> Lowerer<'a> {
                 };
                 let pending = self.open_diamond(span, tag_ok, labels);
                 self.emit_label(span, labels.then_label);
-                let part = self
-                    .pattern_parts_place(pattern, path, ty)
-                    .into_iter()
-                    .next()
-                    .expect("a payload pattern names one part");
-                let inner_ok = self.lower_pattern_test_place(
-                    &part.pattern,
-                    target,
-                    &part.path,
-                    &part.ty,
-                    span,
-                );
-                let result = self.emit_fail_merge(span, inner_ok, labels);
+                let payload_src = self.project_payload(src, *tag, span);
+                let payload_ok = self.lower_pattern_test(payload, &payload_src, span);
+                let result = self.emit_fail_merge(span, payload_ok, labels);
                 self.close_diamond(pending);
                 result
             }
         }
     }
 
-    fn lower_pattern_bind_place(
-        &mut self,
-        pattern: &Pattern,
-        target: &RefTarget,
-        path: &[PathSeg],
-        ty: &Ty,
-        span: Span,
-    ) {
+    fn lower_pattern_bind(&mut self, pattern: &Pattern, src: &PatSrc, span: Span) {
         match pattern {
-            // `_` reads nothing and binds nothing.
-            Pattern::Wildcard { .. } => {}
+            Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
             Pattern::Binding {
                 name,
                 ref_kind: RefKind::Value,
                 ..
-            } => {
-                let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
-                self.set_origin(read, ValOrigin::Named(*name));
-                let slot = self.define_var(*name, ty.clone());
-                self.emit_assign(span, RefTarget::Var(slot), vec![], read);
-            }
+            } => self.bind_part(src, *name, span),
+            // The checker refuses an assignment to an extern parameter
+            // (`ExternParamAssign`).
             Pattern::Binding {
                 ref_kind: RefKind::ExternParam,
                 ..
-            } => {
-                let dst = self.alloc_val();
-                self.emit_inst(span, InstKind::Poison { dst });
-            }
-            Pattern::ContextBind { name: qref, .. } => {
-                let read = self.emit_take(span, target.clone(), path.to_vec(), ty.clone());
-                let slot = self.context_slot(*qref);
-                self.emit_assign(span, RefTarget::Var(slot), vec![], read);
-            }
-            Pattern::Literal { .. } => {}
-            Pattern::List { .. }
-            | Pattern::Object { .. }
-            | Pattern::Tuple { .. }
-            | Pattern::Variant { .. } => {
-                for part in self.pattern_parts_place(pattern, path, ty) {
-                    self.lower_pattern_bind_place(
-                        &part.pattern,
-                        target,
-                        &part.path,
-                        &part.ty,
-                        span,
-                    );
+            } => self.emit_poison(span),
+            Pattern::ContextBind { name, .. } => self.bind_context(src, *name, span),
+            Pattern::List { .. } | Pattern::Object { .. } | Pattern::Tuple { .. } => {
+                for (part, part_pattern) in self.project_parts(pattern, src, span) {
+                    self.lower_pattern_bind(part_pattern, &part, span);
                 }
             }
-        }
-    }
-
-    fn lower_pattern_test_value(
-        &mut self,
-        pattern: &Pattern,
-        src_reg: ValueId,
-        span: Span,
-    ) -> ValueId {
-        if let Some(inner) = self.reference_inner(src_reg) {
-            return self.lower_pattern_test_through(pattern, src_reg, &inner, span);
-        }
-        match pattern {
-            // A context bind and `_` are always irrefutable.
-            Pattern::ContextBind { .. } | Pattern::Wildcard { .. } => {
-                self.emit_const_bool(span, true)
-            }
-
-            Pattern::Binding { ref_kind, .. } => {
-                if *ref_kind == RefKind::ExternParam {
-                    // Typeck already reported ExternParamAssign.
-                    let dst = self.alloc_val();
-                    self.emit_inst(span, InstKind::Poison { dst });
-                }
-                self.emit_const_bool(span, true)
-            }
-
-            Pattern::Literal { value, .. } => {
-                let dst = self.alloc_val();
-                self.set_val_type(dst, Ty::Bool);
-                self.emit_inst(
-                    span,
-                    InstKind::TestLiteral {
-                        dst,
-                        src: src_reg,
-                        value: value.desugared(),
-                    },
-                );
-                dst
-            }
-
-            Pattern::List { head, tail, .. } => {
-                let Some(len) = self.array_len(src_reg) else {
-                    let dst = self.alloc_val();
-                    self.emit_inst(span, InstKind::Poison { dst });
-                    return dst;
-                };
-                let elem_ty = self.array_elem_type(src_reg);
-                let mut all_ok = self.emit_const_bool(span, true);
-                for (i, p) in head.iter().enumerate() {
-                    all_ok = self.emit_and(span, all_ok, |s| {
-                        let elem = s.emit_array_index(span, src_reg, i, elem_ty.clone());
-                        s.lower_pattern_test_value(p, elem, span)
-                    });
-                }
-                for (i, p) in tail.iter().enumerate() {
-                    all_ok = self.emit_and(span, all_ok, |s| {
-                        let index = len - tail.len() + i;
-                        let elem = s.emit_array_index(span, src_reg, index, elem_ty.clone());
-                        s.lower_pattern_test_value(p, elem, span)
-                    });
-                }
-                all_ok
-            }
-
-            Pattern::Object { fields, .. } => {
-                // Test that all keys exist.
-                let mut all_ok = self.emit_const_bool(span, true);
-
-                for ObjectPatternField { key, pattern, .. } in fields {
-                    all_ok = self.emit_and(span, all_ok, |s| {
-                        let key_ok = s.alloc_val();
-                        s.set_val_type(key_ok, Ty::Bool);
-                        s.emit_inst(
-                            span,
-                            InstKind::TestObjectKey {
-                                dst: key_ok,
-                                src: src_reg,
-                                key: *key,
-                            },
-                        );
-
-                        let field_val = s.alloc_val();
-                        s.set_val_type(field_val, s.object_field_type(src_reg, *key));
-                        s.emit_inst(
-                            span,
-                            InstKind::ObjectGet {
-                                dst: field_val,
-                                object: src_reg,
-                                key: *key,
-                            },
-                        );
-
-                        s.lower_pattern_test_value(pattern, field_val, span)
-                    });
-                }
-
-                all_ok
-            }
-
-            Pattern::Tuple { elements, .. } => {
-                // Tuple length is guaranteed by the type system - always matches.
-                // Test each sub-pattern element.
-                let mut all_ok = self.emit_const_bool(span, true);
-
-                for (i, elem) in elements.iter().enumerate() {
-                    let TuplePatternElem::Pattern(pat) = elem else {
-                        continue;
-                    };
-                    all_ok = self.emit_and(span, all_ok, |s| {
-                        let field_val = s.alloc_val();
-                        s.set_val_type(field_val, s.tuple_elem_type(src_reg, i));
-                        s.emit_inst(
-                            span,
-                            InstKind::TupleIndex {
-                                dst: field_val,
-                                tuple: src_reg,
-                                index: i,
-                            },
-                        );
-                        s.lower_pattern_test_value(pat, field_val, span)
-                    });
-                }
-
-                all_ok
-            }
-
             Pattern::Variant { tag, payload, .. } => {
-                // Test if the variant tag matches.
-                let tag_ok = self.alloc_val();
-                self.set_val_type(tag_ok, Ty::Bool);
-                self.emit_inst(
-                    span,
-                    InstKind::TestVariant {
-                        dst: tag_ok,
-                        src: src_reg,
-                        tag: *tag,
-                    },
-                );
-
-                let Some(inner_pat) = payload else {
-                    // No payload (e.g. None) - tag test is the final result.
-                    return tag_ok;
-                };
-                // An inner pattern that cannot fail adds no test, and unwrapping
-                // here would move the payload out before the bind path does.
-                if pattern_is_irrefutable(inner_pat) {
-                    return tag_ok;
-                }
-
-                // Has payload - short-circuit: if tag fails, skip inner test.
-                let labels = DiamondLabels {
-                    then_label: self.alloc_label(),
-                    else_label: self.alloc_label(),
-                    join: self.alloc_label(),
-                };
-                let pending = self.open_diamond(span, tag_ok, labels);
-
-                // Success path: unwrap and test inner pattern.
-                self.emit_label(span, labels.then_label);
-                let inner_val = self.alloc_val();
-                self.set_val_type(inner_val, self.variant_inner_type(src_reg, *tag));
-                self.emit_inst(
-                    span,
-                    InstKind::UnwrapVariant {
-                        dst: inner_val,
-                        src: src_reg,
-                    },
-                );
-                let inner_ok = self.lower_pattern_test_value(inner_pat, inner_val, span);
-
-                let result = self.emit_fail_merge(span, inner_ok, labels);
-                self.close_diamond(pending);
-                result
-            }
-        }
-    }
-
-    /// Emit instructions that bind pattern variables from a matched value.
-    fn lower_pattern_bind_value(&mut self, pattern: &Pattern, src_reg: ValueId, span: Span) {
-        if let Some(inner) = self.reference_inner(src_reg) {
-            self.lower_pattern_bind_through(pattern, src_reg, &inner, span);
-            return;
-        }
-        match pattern {
-            // `_` reads nothing and binds nothing.
-            Pattern::Wildcard { .. } => {}
-            Pattern::ContextBind { name: qref, .. } => {
-                let slot = self.context_slot(*qref);
-                self.emit_assign(span, RefTarget::Var(slot), vec![], src_reg);
-            }
-            Pattern::Binding {
-                name,
-                ref_kind: RefKind::Value,
-                ..
-            } => {
-                self.set_origin(src_reg, ValOrigin::Named(*name));
-                let ty = self
-                    .body
-                    .val_types
-                    .get(&src_reg)
-                    .cloned()
-                    .unwrap_or(Ty::error());
-                let slot = self.define_var(*name, ty);
-                self.emit_assign(span, RefTarget::Var(slot), vec![], src_reg);
-            }
-            Pattern::Binding {
-                name: _,
-                ref_kind: RefKind::ExternParam,
-                ..
-            } => {
-                // Typeck already reported ExternParamAssign.
-                let dst = self.alloc_val();
-                self.emit_inst(span, InstKind::Poison { dst });
-            }
-            Pattern::Literal { .. } => {}
-
-            Pattern::List { head, tail, .. } => {
-                let Some(len) = self.array_len(src_reg) else {
+                let Some(payload) = payload.as_deref() else {
                     return;
                 };
-                let elem_ty = self.array_elem_type(src_reg);
-                for (i, p) in head.iter().enumerate() {
-                    let elem = self.emit_array_index(span, src_reg, i, elem_ty.clone());
-                    self.lower_pattern_bind_value(p, elem, span);
-                }
-                for (i, p) in tail.iter().enumerate() {
-                    let elem =
-                        self.emit_array_index(span, src_reg, len - tail.len() + i, elem_ty.clone());
-                    self.lower_pattern_bind_value(p, elem, span);
-                }
-            }
-
-            Pattern::Object { fields, .. } => {
-                for ObjectPatternField { key, pattern, .. } in fields {
-                    let field_val = self.alloc_val();
-                    self.set_val_type(field_val, self.object_field_type(src_reg, *key));
-                    self.emit_inst(
-                        span,
-                        InstKind::ObjectGet {
-                            dst: field_val,
-                            object: src_reg,
-                            key: *key,
-                        },
-                    );
-                    self.lower_pattern_bind_value(pattern, field_val, span);
-                }
-            }
-
-            Pattern::Tuple { elements, .. } => {
-                for (i, elem) in elements.iter().enumerate() {
-                    let TuplePatternElem::Pattern(pat) = elem else {
-                        continue;
-                    };
-                    let field_val = self.alloc_val();
-                    self.set_val_type(field_val, self.tuple_elem_type(src_reg, i));
-                    self.emit_inst(
-                        span,
-                        InstKind::TupleIndex {
-                            dst: field_val,
-                            tuple: src_reg,
-                            index: i,
-                        },
-                    );
-                    self.lower_pattern_bind_value(pat, field_val, span);
-                }
-            }
-
-            Pattern::Variant { tag, payload, .. } => {
-                let Some(inner_pat) = payload else {
-                    return;
-                };
-                let inner_val = self.alloc_val();
-                self.set_val_type(inner_val, self.variant_inner_type(src_reg, *tag));
-                self.emit_inst(
-                    span,
-                    InstKind::UnwrapVariant {
-                        dst: inner_val,
-                        src: src_reg,
-                    },
-                );
-                self.lower_pattern_bind_value(inner_pat, inner_val, span);
+                let payload_src = self.project_payload(src, *tag, span);
+                self.lower_pattern_bind(payload, &payload_src, span);
             }
         }
     }

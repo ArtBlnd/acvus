@@ -1,0 +1,2 @@
+// expect "abc"
+let s = "abc".to_string(); let r = &s; let rr = &r; rr.to_string()

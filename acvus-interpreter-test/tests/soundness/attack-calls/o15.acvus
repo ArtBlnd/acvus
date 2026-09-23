@@ -1,0 +1,3 @@
+// expect ab
+// String clone via method, function, and pipe; then use original
+let s = "a".to_string(); let t = s.clone() + &clone(&s); let u = &s | clone; t.len().to_string() + &"" + &u.len().to_string() == "21"; "a".to_string() + "b"

@@ -1,0 +1,3 @@
+// expect 0
+// while let Some(_) with a wildcard payload over an owning iterator counts nothing
+let it = into_iter(vec(["a".to_string(), "b".to_string()])); let n = 0; while let Some(_s) = next(&mut it) { n = n + 1; } n - 2

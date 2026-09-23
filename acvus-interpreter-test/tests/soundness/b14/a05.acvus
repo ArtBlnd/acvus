@@ -1,0 +1,1 @@
+let o = { s: "abc".to_string(), }; let r = &o.s; o = { s: "q".to_string(), }; r.to_string()

@@ -1,0 +1,1 @@
+let s = "abc".to_string(); s.to_bytes().len()

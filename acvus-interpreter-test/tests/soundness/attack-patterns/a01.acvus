@@ -1,0 +1,3 @@
+// expect 20
+// int literal on a call result
+let f = |x| -> x * 2; match f(5) { 1 => 1, 10 => 20, _ => 0, }

@@ -1,31 +1,20 @@
-//! Definite-assignment analysis - field-level uninit check.
-//!
-//! Runs on CfgBody (pre-SSA). Tracks which fields of each named storage
-//! (Var, Context, Param) are definitely initialized at each program point.
-//! A storage is written by `Assign` and read by `Take` and `Ref`.
-//!
-//! At function call sites, checks that arguments have all fields required
-//! by the callee's parameter type. Required fields come from the instruction's
-//! `callee_ty`, NOT from val_types (which may have been widened by unification).
+//! Definite initialization of object fields (RFC-0042 rule 1, RFC-0050
+//! rule 8).
 
 use acvus_utils::{Astr, Interner};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysis};
 use crate::analysis::domain::SemiLattice;
-use crate::cfg::CfgBody;
+use crate::analysis::inst_info;
+use crate::cfg::{CfgBody, Terminator};
 use crate::error::{DidYouMean, MirError, MirErrorKind, ShownValue};
-use crate::ir::{Callee, Inst, InstKind, PathSeg, RefTarget, ValOrigin, ValueId};
+use crate::ir::{Inst, InstKind, PathSeg, RefTarget, ValOrigin, ValueId};
 use crate::ty::Ty;
 use acvus_ast::Span;
 
 // -- Domain ----------------------------------------------------------
 
-/// Per-field init domain.
-///
-/// Lattice: Init (bottom) -> Uninit (top).
-/// join(Init, Uninit) = Uninit - if ANY path leaves a field uninit,
-/// it is possibly uninit at the merge point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldInit {
     Init,
@@ -48,15 +37,88 @@ impl SemiLattice for FieldInit {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Holder {
+    Storage(RefTarget),
+    Register(ValueId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct LeafId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Leaf {
+    holder: Holder,
+    path: LeafId,
+}
+
+type State = DataflowState<Leaf, FieldInit>;
+
+pub type FieldPath = Vec<Astr>;
+
+#[derive(Default)]
+struct LeafPaths {
+    ids: FxHashMap<FieldPath, LeafId>,
+    paths: Vec<FieldPath>,
+}
+
+impl LeafPaths {
+    fn intern(&mut self, path: FieldPath) -> LeafId {
+        if let Some(id) = self.ids.get(&path) {
+            return *id;
+        }
+        let id =
+            LeafId(u32::try_from(self.paths.len()).expect("a body has fewer than 2^32 leaf paths"));
+        self.paths.push(path.clone());
+        self.ids.insert(path, id);
+        id
+    }
+
+    fn id(&self, path: &[Astr]) -> LeafId {
+        *self
+            .ids
+            .get(path)
+            .expect("a field path below a holder is a leaf of the holder's type")
+    }
+
+    fn path(&self, id: LeafId) -> &[Astr] {
+        &self.paths[id.0 as usize]
+    }
+}
+
+fn leaf_paths(ty: &Ty) -> Vec<FieldPath> {
+    let Ty::Object(object) = ty else {
+        return vec![Vec::new()];
+    };
+    let mut out = Vec::new();
+    for (name, field) in object.iter() {
+        for mut rest in leaf_paths(field) {
+            rest.insert(0, *name);
+            out.push(rest);
+        }
+    }
+    out
+}
+
+/// The field names of `path`, or `None` where it steps into an element or a
+/// payload. An element or a payload is whole: `whole_uses` refuses an
+/// incomplete value where a container or a variant takes it.
+fn field_path(path: &[PathSeg]) -> Option<FieldPath> {
+    path.iter()
+        .map(|seg| match seg {
+            PathSeg::Field(name) => Some(*name),
+            PathSeg::Index(_) | PathSeg::Payload => None,
+        })
+        .collect()
+}
+
 // -- Errors ----------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct UninitError {
     pub span: Span,
     pub subject: UninitSubject,
-    pub uninit_fields: Vec<Astr>,
-    /// The field names the subject does carry, so a refusal over a
-    /// misspelling can offer the one that was meant.
+    pub missing: Vec<FieldPath>,
     pub stored_fields: Vec<Astr>,
 }
 
@@ -68,171 +130,424 @@ pub enum UninitSubject {
     Value(ValueId),
 }
 
-// -- Pre-pass data ---------------------------------------------------
-
-/// Maps ValueId -> set of field names that the value definitely contains.
-type ValueFields = FxHashMap<ValueId, FxHashSet<Astr>>;
-
-fn build_value_fields(cfg: &CfgBody) -> ValueFields {
-    let mut value_fields = ValueFields::default();
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            match &inst.kind {
-                InstKind::MakeObject { dst, fields } => {
-                    let names: FxHashSet<Astr> = fields.iter().map(|(k, _)| *k).collect();
-                    value_fields.insert(*dst, names);
-                }
-                InstKind::FieldSet {
-                    dst, object, field, ..
-                } => {
-                    if let Some(obj_fields) = value_fields.get(object) {
-                        let mut fields = obj_fields.clone();
-                        fields.insert(*field);
-                        value_fields.insert(*dst, fields);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    value_fields
-}
-
-/// Every (storage, field) the body names: a whole-storage `Take`/`Assign`
-/// contributes the fields of its object type, a field path proves its first
-/// field exists, and a call contributes the fields its callee requires of a
-/// storage passed whole, so a field the body never wrote is tracked where
-/// the callee reads it.
-fn collect_var_fields(cfg: &CfgBody) -> FxHashMap<RefTarget, FxHashSet<Astr>> {
-    let mut target_fields: FxHashMap<RefTarget, FxHashSet<Astr>> = FxHashMap::default();
-    let mut note = |target: &RefTarget, path: &[PathSeg], whole: Option<&Ty>| match path.first() {
-        Some(PathSeg::Field(field)) => {
-            target_fields.entry(*target).or_default().insert(*field);
-        }
-        _ => {
-            if let Some(Ty::Object(fields)) = whole {
-                target_fields
-                    .entry(*target)
-                    .or_default()
-                    .extend(fields.keys().copied());
-            }
-        }
-    };
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            match &inst.kind {
-                InstKind::Take { dst, target, path } => {
-                    note(target, path, cfg.val_types.get(dst));
-                }
-                InstKind::Assign {
-                    target,
-                    path,
-                    value,
-                } => {
-                    note(target, path, cfg.val_types.get(value));
-                }
-                InstKind::Ref {
-                    dst, target, path, ..
-                } => {
-                    let inner = match cfg.val_types.get(dst) {
-                        Some(Ty::Ref(_, inner)) => Some(&inner.ty),
-                        _ => None,
-                    };
-                    note(target, path, inner);
-                }
-                _ => {}
-            }
-        }
-    }
-    for block in &cfg.blocks {
-        for inst in &block.insts {
-            let (InstKind::FunctionCall {
-                callee_ty, args, ..
-            }
-            | InstKind::Spawn {
-                callee_ty, args, ..
-            }) = &inst.kind
-            else {
-                continue;
-            };
-            let Ty::Fn { params, .. } = callee_ty else {
-                continue;
-            };
-            for (arg, param) in args.iter().zip(params.iter()) {
-                let Ty::Object(required) = &param.ty else {
-                    continue;
-                };
-                let Some(target) = find_arg_source(arg, cfg) else {
-                    continue;
-                };
-                target_fields
-                    .entry(target)
-                    .or_default()
-                    .extend(required.keys().copied());
-            }
-        }
-    }
-    target_fields
+struct Named {
+    subject: UninitSubject,
+    prefix: FieldPath,
 }
 
 // -- Analysis --------------------------------------------------------
 
-struct InitCheckAnalysis {
-    value_fields: ValueFields,
-    /// val_types from CfgBody - for fallback field lookup.
-    val_types: FxHashMap<ValueId, Ty>,
+#[derive(Debug, Clone)]
+struct PartOf {
+    holder: Holder,
+    prefix: FieldPath,
 }
 
-impl DataflowAnalysis for InitCheckAnalysis {
-    type Key = (RefTarget, Astr);
-    type Domain = FieldInit;
+struct PartRead {
+    dst: ValueId,
+    part: PartOf,
+}
 
-    fn transfer_inst(&self, inst: &Inst, state: &mut DataflowState<(RefTarget, Astr), FieldInit>) {
-        let InstKind::Assign {
-            target,
+fn register_part(object: ValueId, prefix: FieldPath) -> PartOf {
+    PartOf {
+        holder: Holder::Register(object),
+        prefix,
+    }
+}
+
+fn part_read(kind: &InstKind) -> Option<PartRead> {
+    let (dst, part) = match kind {
+        InstKind::Take { dst, target, path } => {
+            let prefix = field_path(path)?;
+            let part = PartOf {
+                holder: Holder::Storage(*target),
+                prefix,
+            };
+            (dst, part)
+        }
+        InstKind::FieldGet {
+            dst,
+            object,
+            field,
+            rest,
+        } => {
+            let prefix = std::iter::once(*field)
+                .chain(rest.iter().copied())
+                .collect();
+            (dst, register_part(*object, prefix))
+        }
+        InstKind::ObjectGet { dst, object, key } => (dst, register_part(*object, vec![*key])),
+        _ => return None,
+    };
+    Some(PartRead { dst: *dst, part })
+}
+
+fn whole_uses(kind: &InstKind) -> Vec<ValueId> {
+    match kind {
+        InstKind::Assign {
+            target: RefTarget::Var(_),
             path,
-            value,
-        } = &inst.kind
-        else {
-            return;
-        };
-        if let Some(PathSeg::Field(field)) = path.first() {
-            state.set((*target, *field), FieldInit::Init);
+            ..
+        } if field_path(path).is_some() => Vec::new(),
+        InstKind::MakeObject { .. }
+        | InstKind::FieldSet { .. }
+        | InstKind::FieldGet { .. }
+        | InstKind::ObjectGet { .. } => Vec::new(),
+        other => inst_info::uses(other).into_iter().collect(),
+    }
+}
+
+struct InitCheck<'a> {
+    cfg: &'a CfgBody,
+    paths: LeafPaths,
+    leaves: FxHashMap<ValueId, Vec<LeafId>>,
+    parts: FxHashMap<ValueId, PartOf>,
+}
+
+impl<'a> InitCheck<'a> {
+    fn new(cfg: &'a CfgBody) -> Self {
+        let mut paths = LeafPaths::default();
+        let mut leaves = FxHashMap::default();
+        for (value, ty) in &cfg.val_types {
+            let ids = leaf_paths(ty)
+                .into_iter()
+                .map(|p| paths.intern(p))
+                .collect();
+            leaves.insert(*value, ids);
+        }
+        let parts = cfg
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| part_read(&inst.kind))
+            .map(|read| (read.dst, read.part))
+            .collect();
+        Self {
+            cfg,
+            paths,
+            leaves,
+            parts,
+        }
+    }
+
+    fn ty_of(&self, value: ValueId) -> &Ty {
+        self.cfg
+            .val_types
+            .get(&value)
+            .expect("every register of a lowered body has a type")
+    }
+
+    fn leaves_of(&self, value: ValueId) -> &[LeafId] {
+        self.leaves
+            .get(&value)
+            .expect("every register of a lowered body has a type")
+    }
+
+    fn is_object(&self, value: ValueId) -> bool {
+        matches!(self.ty_of(value), Ty::Object(_))
+    }
+
+    fn leaf_below(&self, prefix: &[Astr], leaf: LeafId) -> LeafId {
+        let mut path = prefix.to_vec();
+        path.extend_from_slice(self.paths.path(leaf));
+        self.paths.id(&path)
+    }
+
+    fn read_part(&self, state: &mut State, dst: ValueId, part: &PartOf) {
+        for &leaf in self.leaves_of(dst) {
+            let from = Leaf {
+                holder: part.holder,
+                path: self.leaf_below(&part.prefix, leaf),
+            };
+            let to = Leaf {
+                holder: Holder::Register(dst),
+                path: leaf,
+            };
+            state.set(to, state.get(from));
+        }
+    }
+
+    fn store(&self, state: &mut State, holder: Holder, prefix: &[Astr], value: ValueId) {
+        if !self.is_object(value) {
+            let path = self.paths.id(prefix);
+            state.set(Leaf { holder, path }, FieldInit::Init);
             return;
         }
-        let fields: Option<Vec<Astr>> = if let Some(known) = self.value_fields.get(value) {
-            Some(known.iter().copied().collect())
-        } else if let Some(ty) = self.val_types.get(value) {
-            extract_object_fields(ty)
-        } else {
-            None
-        };
-        if let Some(fields) = fields {
-            for f in fields {
-                state.set((*target, f), FieldInit::Init);
+        for &leaf in self.leaves_of(value) {
+            let from = Leaf {
+                holder: Holder::Register(value),
+                path: leaf,
+            };
+            let to = Leaf {
+                holder,
+                path: self.leaf_below(prefix, leaf),
+            };
+            state.set(to, state.get(from));
+        }
+    }
+
+    fn transfer(&self, kind: &InstKind, state: &mut State) {
+        match kind {
+            InstKind::MakeObject { dst, fields } => {
+                let built = Holder::Register(*dst);
+                for &path in self.leaves_of(*dst) {
+                    state.set(
+                        Leaf {
+                            holder: built,
+                            path,
+                        },
+                        FieldInit::Uninit,
+                    );
+                }
+                for (name, value) in fields {
+                    self.store(state, built, &[*name], *value);
+                }
+            }
+            InstKind::FieldSet {
+                dst,
+                object,
+                field,
+                rest,
+                value,
+            } => {
+                let whole = PartOf {
+                    holder: Holder::Register(*object),
+                    prefix: Vec::new(),
+                };
+                self.read_part(state, *dst, &whole);
+                let prefix: FieldPath = std::iter::once(*field)
+                    .chain(rest.iter().copied())
+                    .collect();
+                self.store(state, Holder::Register(*dst), &prefix, *value);
+            }
+            InstKind::Assign {
+                target: target @ RefTarget::Var(_),
+                path,
+                value,
+            } => {
+                if let Some(prefix) = field_path(path) {
+                    self.store(state, Holder::Storage(*target), &prefix, *value);
+                }
+            }
+            other => {
+                if let Some(read) = part_read(other)
+                    && self.is_object(read.dst)
+                {
+                    self.read_part(state, read.dst, &read.part);
+                }
             }
         }
     }
 
+    fn missing_below(&self, state: &State, part: &PartOf, of: ValueId) -> Vec<FieldPath> {
+        self.leaves_of(of)
+            .iter()
+            .filter(|leaf| self.paths.path(**leaf).starts_with(&part.prefix))
+            .filter(|leaf| {
+                let at = Leaf {
+                    holder: part.holder,
+                    path: **leaf,
+                };
+                state.get(at) == FieldInit::Uninit
+            })
+            .map(|leaf| self.paths.path(*leaf).to_vec())
+            .collect()
+    }
+
+    fn stored_fields(&self, state: &State, holder: Holder, of: ValueId) -> Vec<Astr> {
+        let mut names: Vec<Astr> = self
+            .leaves_of(of)
+            .iter()
+            .filter(|leaf| {
+                state.get(Leaf {
+                    holder,
+                    path: **leaf,
+                }) == FieldInit::Init
+            })
+            .filter_map(|leaf| self.paths.path(*leaf).first().copied())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    fn named(&self, value: ValueId) -> Named {
+        match self.parts.get(&value) {
+            Some(PartOf {
+                holder: Holder::Storage(target),
+                prefix,
+            }) => Named {
+                subject: UninitSubject::Storage(*target),
+                prefix: prefix.clone(),
+            },
+            Some(PartOf {
+                holder: Holder::Register(object),
+                prefix,
+            }) => {
+                let mut outer = self.named(*object);
+                outer.prefix.extend_from_slice(prefix);
+                outer
+            }
+            None => Named {
+                subject: UninitSubject::Value(value),
+                prefix: Vec::new(),
+            },
+        }
+    }
+
+    fn refuse_incomplete(&self, state: &State, value: ValueId, span: Span) -> Option<UninitError> {
+        if !self.is_object(value) {
+            return None;
+        }
+        let whole = PartOf {
+            holder: Holder::Register(value),
+            prefix: Vec::new(),
+        };
+        let missing = self.missing_below(state, &whole, value);
+        if missing.is_empty() {
+            return None;
+        }
+        let Named { subject, prefix } = self.named(value);
+        Some(UninitError {
+            span,
+            subject,
+            missing: missing
+                .into_iter()
+                .map(|leaf| prefix.iter().copied().chain(leaf).collect())
+                .collect(),
+            stored_fields: self.stored_fields(state, whole.holder, value),
+        })
+    }
+
+    fn refuse_storage_part(
+        &self,
+        state: &State,
+        target: RefTarget,
+        prefix: FieldPath,
+        span: Span,
+    ) -> Option<UninitError> {
+        let RefTarget::Var(slot) = target else {
+            return None;
+        };
+        let part = PartOf {
+            holder: Holder::Storage(target),
+            prefix,
+        };
+        let missing = self.missing_below(state, &part, slot);
+        if missing.is_empty() {
+            return None;
+        }
+        Some(UninitError {
+            span,
+            subject: UninitSubject::Storage(target),
+            missing,
+            stored_fields: self.stored_fields(state, part.holder, slot),
+        })
+    }
+
+    fn refuse_register_part(
+        &self,
+        state: &State,
+        object: ValueId,
+        prefix: FieldPath,
+        span: Span,
+    ) -> Option<UninitError> {
+        let part = register_part(object, prefix);
+        let missing = self.missing_below(state, &part, object);
+        if missing.is_empty() {
+            return None;
+        }
+        let Named { subject, prefix } = self.named(object);
+        Some(UninitError {
+            span,
+            subject,
+            missing: missing
+                .into_iter()
+                .map(|leaf| prefix.iter().copied().chain(leaf).collect())
+                .collect(),
+            stored_fields: self.stored_fields(state, part.holder, object),
+        })
+    }
+
+    fn step(&self, inst: &Inst, state: &mut State, errors: &mut Vec<UninitError>) {
+        match &inst.kind {
+            InstKind::Take { dst, target, path } if !self.is_object(*dst) => {
+                if let Some(prefix) = field_path(path) {
+                    errors.extend(self.refuse_storage_part(state, *target, prefix, inst.span));
+                }
+            }
+            InstKind::Ref { target, path, .. } => {
+                if let Some(prefix) = field_path(path) {
+                    errors.extend(self.refuse_storage_part(state, *target, prefix, inst.span));
+                }
+            }
+            InstKind::FieldGet {
+                dst,
+                object,
+                field,
+                rest,
+            } if !self.is_object(*dst) => {
+                let prefix = std::iter::once(*field)
+                    .chain(rest.iter().copied())
+                    .collect();
+                errors.extend(self.refuse_register_part(state, *object, prefix, inst.span));
+            }
+            InstKind::ObjectGet { dst, object, key } if !self.is_object(*dst) => {
+                errors.extend(self.refuse_register_part(state, *object, vec![*key], inst.span));
+            }
+            _ => {}
+        }
+        for value in whole_uses(&inst.kind) {
+            errors.extend(self.refuse_incomplete(state, value, inst.span));
+        }
+        self.transfer(&inst.kind, state);
+    }
+}
+
+impl DataflowAnalysis for InitCheck<'_> {
+    type Key = Leaf;
+    type Domain = FieldInit;
+
+    fn transfer_inst(&self, inst: &Inst, state: &mut State) {
+        self.transfer(&inst.kind, state);
+    }
+
     fn propagate_forward(
         &self,
-        source_exit: &DataflowState<(RefTarget, Astr), FieldInit>,
-        _params: &[ValueId],
-        _first: usize,
-        _args: &[ValueId],
-        target_entry: &mut DataflowState<(RefTarget, Astr), FieldInit>,
+        source_exit: &State,
+        params: &[ValueId],
+        first: usize,
+        args: &[ValueId],
+        target_entry: &mut State,
     ) -> bool {
-        // Storage init state is not SSA - no param/arg mapping. Pure join.
-        target_entry.join_from(source_exit)
+        let mut changed = target_entry.join_from(source_exit);
+        for (param, arg) in params[first..].iter().zip(args) {
+            for &path in self.leaves_of(*param) {
+                let incoming = source_exit.get(Leaf {
+                    holder: Holder::Register(*arg),
+                    path,
+                });
+                let at = Leaf {
+                    holder: Holder::Register(*param),
+                    path,
+                };
+                let mut entry = target_entry.get(at);
+                if entry.join_mut(&incoming) {
+                    target_entry.set(at, entry);
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     fn propagate_backward(
         &self,
-        _succ_entry: &DataflowState<(RefTarget, Astr), FieldInit>,
+        _succ_entry: &State,
         _succ_params: &[ValueId],
         _first: usize,
         _term_args: &[ValueId],
-        _exit_state: &mut DataflowState<(RefTarget, Astr), FieldInit>,
+        _exit_state: &mut State,
     ) {
         unreachable!("init check is forward-only")
     }
@@ -240,217 +555,40 @@ impl DataflowAnalysis for InitCheckAnalysis {
 
 // -- Public API ------------------------------------------------------
 
-fn stored_of(var_fields: &FxHashMap<RefTarget, FxHashSet<Astr>>, target: &RefTarget) -> Vec<Astr> {
-    var_fields
-        .get(target)
-        .map(|fields| sorted(fields.iter().copied()))
-        .unwrap_or_default()
-}
-
-fn sorted<I>(names: I) -> Vec<Astr>
-where
-    I: Iterator<Item = Astr>,
-{
-    let mut names: Vec<Astr> = names.collect();
-    names.sort();
-    names
-}
-
-/// Run field-level definite-assignment check on a CfgBody.
 pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
-    let value_fields = build_value_fields(cfg);
-    let var_fields = collect_var_fields(cfg);
+    let analysis = InitCheck::new(cfg);
 
-    let mut initial = DataflowState::new();
-    for (target, fields) in &var_fields {
-        let is_external = match target {
-            RefTarget::Var(_) => false,
-            RefTarget::Param(_) | RefTarget::Through(_) => true,
-        };
-        for f in fields {
-            initial.set(
-                (*target, *f),
-                if is_external {
-                    FieldInit::Init
-                } else {
-                    FieldInit::Uninit
-                },
-            );
+    let mut initial = State::new();
+    for (value, ty) in &cfg.val_types {
+        if !matches!(ty, Ty::Object(_)) {
+            continue;
+        }
+        let holder = Holder::Storage(RefTarget::Var(*value));
+        for &path in analysis.leaves_of(*value) {
+            initial.set(Leaf { holder, path }, FieldInit::Uninit);
         }
     }
 
-    let analysis = InitCheckAnalysis {
-        value_fields,
-        val_types: cfg.val_types.clone(),
-    };
     let result = forward_analysis(cfg, &analysis, initial);
 
-    // Post-pass: replay transfer per block and check at reads and call sites.
     let mut errors = Vec::new();
-
     for (bi, block) in cfg.blocks.iter().enumerate() {
         let mut state = result.block_entry[bi].clone();
-
         for inst in &block.insts {
-            match &inst.kind {
-                InstKind::Take { target, path, .. } | InstKind::Ref { target, path, .. } => {
-                    if let Some(PathSeg::Field(field)) = path.first()
-                        && state.get((*target, *field)) == FieldInit::Uninit
-                    {
-                        errors.push(UninitError {
-                            span: inst.span,
-                            subject: UninitSubject::Storage(*target),
-                            uninit_fields: vec![*field],
-                            stored_fields: stored_of(&var_fields, target),
-                        });
-                    }
-                }
-                InstKind::FunctionCall {
-                    callee,
-                    callee_ty,
-                    args,
-                    ..
-                }
-                | InstKind::Spawn {
-                    callee,
-                    callee_ty,
-                    args,
-                    ..
-                } => {
-                    check_call_args(
-                        &state,
-                        cfg,
-                        &analysis.value_fields,
-                        &var_fields,
-                        callee,
-                        callee_ty,
-                        args,
-                        inst.span,
-                        &mut errors,
-                    );
-                }
-                _ => {}
-            }
-            analysis.transfer_inst(inst, &mut state);
+            analysis.step(inst, &mut state, &mut errors);
+        }
+        if let Terminator::Return { value, span, .. } = &block.terminator {
+            errors.extend(analysis.refuse_incomplete(&state, *value, *span));
         }
     }
-
     errors
 }
 
-/// Check that all fields required by the callee's parameter types are
-/// initialized for each argument: in the storage it was taken from, or in
-/// the value it was built as.
-#[allow(clippy::too_many_arguments)]
-fn check_call_args(
-    state: &DataflowState<(RefTarget, Astr), FieldInit>,
-    cfg: &CfgBody,
-    value_fields: &ValueFields,
-    var_fields: &FxHashMap<RefTarget, FxHashSet<Astr>>,
-    callee: &Callee,
-    callee_ty: &Ty,
-    args: &[ValueId],
-    span: Span,
-    errors: &mut Vec<UninitError>,
-) {
-    // Can't statically check indirect calls.
-    if matches!(callee, Callee::Indirect(_)) {
-        return;
-    }
-    let param_types = match callee_ty {
-        Ty::Fn { params, .. } => params,
-        _ => return,
-    };
-
-    for (arg, param) in args.iter().zip(param_types.iter()) {
-        let required_fields = match &param.ty {
-            Ty::Object(fields) => fields.keys().copied().collect::<Vec<_>>(),
-            _ => continue,
-        };
-        if required_fields.is_empty() {
-            continue;
-        }
-        let (subject, uninit_fields, stored_fields): (UninitSubject, Vec<Astr>, Vec<Astr>) =
-            match (find_arg_source(arg, cfg), value_fields.get(arg)) {
-                (Some(target), _) => (
-                    UninitSubject::Storage(target),
-                    required_fields
-                        .into_iter()
-                        .filter(|f| state.get((target, *f)) == FieldInit::Uninit)
-                        .collect(),
-                    stored_of(var_fields, &target),
-                ),
-                (None, Some(built)) => (
-                    UninitSubject::Value(*arg),
-                    required_fields
-                        .into_iter()
-                        .filter(|f| !built.contains(f))
-                        .collect(),
-                    sorted(built.iter().copied()),
-                ),
-                (None, None) => continue,
-            };
-        if !uninit_fields.is_empty() {
-            errors.push(UninitError {
-                span,
-                subject,
-                uninit_fields,
-                stored_fields,
-            });
-        }
-    }
-}
-
-/// Extract field names from an Object type. Returns None for non-Object types.
-fn extract_object_fields(ty: &Ty) -> Option<Vec<Astr>> {
-    match ty {
-        Ty::Object(fields) => Some(fields.keys().copied().collect()),
-        _ => None,
-    }
-}
-
-/// The storage `arg` was taken whole from, if it was.
-fn find_arg_source(arg: &ValueId, cfg: &CfgBody) -> Option<RefTarget> {
-    cfg.blocks
-        .iter()
-        .flat_map(|b| &b.insts)
-        .find_map(|inst| match &inst.kind {
-            InstKind::Take { dst, target, path } if dst == arg && path.is_empty() => Some(*target),
-            _ => None,
-        })
-}
-
-// -- Tests -----------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn field_init_lattice_laws() {
-        // bottom is identity
-        let mut x = FieldInit::Init;
-        assert!(!x.join_mut(&FieldInit::Init));
-        assert_eq!(x, FieldInit::Init);
-
-        // join(Init, Uninit) = Uninit
-        let mut x = FieldInit::Init;
-        assert!(x.join_mut(&FieldInit::Uninit));
-        assert_eq!(x, FieldInit::Uninit);
-
-        // join(Uninit, Init) = Uninit (already top)
-        let mut x = FieldInit::Uninit;
-        assert!(!x.join_mut(&FieldInit::Init));
-        assert_eq!(x, FieldInit::Uninit);
-
-        // idempotent
-        let mut x = FieldInit::Uninit;
-        assert!(!x.join_mut(&FieldInit::Uninit));
-    }
-}
-
 fn near_stored(interner: &Interner, error: &UninitError) -> DidYouMean {
-    let [wanted] = error.uninit_fields.as_slice() else {
+    let [wanted] = error.missing.as_slice() else {
+        return DidYouMean::default();
+    };
+    let [wanted] = wanted.as_slice() else {
         return DidYouMean::default();
     };
     DidYouMean::of(
@@ -473,9 +611,14 @@ pub fn refusals(interner: &Interner, cfg: &CfgBody) -> Vec<MirError> {
                 subject: subject_of(interner, cfg, &error.subject),
                 near: near_stored(interner, &error),
                 fields: error
-                    .uninit_fields
+                    .missing
                     .iter()
-                    .map(|field| interner.resolve(*field).to_string())
+                    .map(|path| {
+                        path.iter()
+                            .map(|field| interner.resolve(*field).to_string())
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    })
                     .collect(),
             },
             span: error.span,
@@ -499,5 +642,28 @@ fn subject_of(interner: &Interner, cfg: &CfgBody, subject: &UninitSubject) -> Sh
             ShownValue::Named(format!("${}", interner.resolve(*name)))
         }
         _ => ShownValue::Anonymous,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_init_lattice_laws() {
+        let mut x = FieldInit::Init;
+        assert!(!x.join_mut(&FieldInit::Init));
+        assert_eq!(x, FieldInit::Init);
+
+        let mut x = FieldInit::Init;
+        assert!(x.join_mut(&FieldInit::Uninit));
+        assert_eq!(x, FieldInit::Uninit);
+
+        let mut x = FieldInit::Uninit;
+        assert!(!x.join_mut(&FieldInit::Init));
+        assert_eq!(x, FieldInit::Uninit);
+
+        let mut x = FieldInit::Uninit;
+        assert!(!x.join_mut(&FieldInit::Uninit));
     }
 }

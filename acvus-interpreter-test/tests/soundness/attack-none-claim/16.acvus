@@ -1,0 +1,2 @@
+// expect "n"
+let o = None; let ob = { f: o, g: Some("b".to_string()), }; match ob.f { Some(s) => s, None => "n".to_string(), }

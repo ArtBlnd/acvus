@@ -1,0 +1,2 @@
+// refuse
+let a = vec([1]); let b = vec([1]); let o = Some(1); let r = &mut a; let q = &mut b; match o { Some(x) => { r = q; 0 }, None => 0, }; q.push(1); r.push(2); b.len()

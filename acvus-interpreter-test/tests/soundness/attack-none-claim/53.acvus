@@ -1,0 +1,2 @@
+// expect 1
+let arr = [None, None, Some("a".to_string())]; let c = 0; for e in arr { if let Some(s) = e { c = c + 1; }; } c

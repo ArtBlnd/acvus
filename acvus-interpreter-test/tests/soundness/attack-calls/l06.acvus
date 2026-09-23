@@ -1,0 +1,3 @@
+// expect 6
+// nested for over &v and &a with overloaded max
+let v = vec([1, 2]); let a = [3, 4]; let t = 0; for x in &v { for y in &a { t = max(t, *x + *y); } } t

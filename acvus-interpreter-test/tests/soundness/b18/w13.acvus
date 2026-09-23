@@ -1,0 +1,1 @@
+let v = vec([Some("a".to_string())]); match &v[0u64] { Some(s) => s.to_string(), None => "n".to_string(), }

@@ -1,0 +1,2 @@
+// expect 7
+let f = |xs| -> { let o = { a: 0, b: 0, }; for x in &xs { o = { a: x.a, b: o.b + 1, }; } o }; let r = f(vec([{ a: 5, }, { a: 5, }])); r.a + r.b

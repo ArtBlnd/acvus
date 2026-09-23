@@ -1,0 +1,2 @@
+// expect 3
+let t = 0; let v = vec([A::X(1), A::X(2)]); for i in 0u64..2u64 { match &v[i] { A::X(s) => { t = t + *s; }, }; } t

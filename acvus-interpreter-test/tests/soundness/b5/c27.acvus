@@ -1,0 +1,1 @@
+let s = "-".to_string(); let ws = vec(["a".to_string(), "b".to_string()]); ws.as_iter() | map(|x| -> x.to_string() + &s) | fold("".to_string(), |a, x| -> a + x)

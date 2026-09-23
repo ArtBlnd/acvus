@@ -1,0 +1,3 @@
+// refuse
+// duplicate across a Some inside an object
+match { p: Some(1), q: 2, } { { p: Some(z), q: z, } => z, _ => 0, }

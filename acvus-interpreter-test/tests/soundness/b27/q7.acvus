@@ -1,0 +1,1 @@
+let a = [1, 2]; for o in a { let x = 1; } 0

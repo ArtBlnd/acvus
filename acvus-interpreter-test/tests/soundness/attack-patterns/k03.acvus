@@ -1,0 +1,3 @@
+// expect 4
+// bound payload survives the source being overwritten through &mut in the arm
+let o = Some(4); match o { Some(x) => { let r = &mut o; *r = None; x }, None => 0, }

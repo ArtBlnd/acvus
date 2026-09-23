@@ -1,0 +1,2 @@
+// expect 7
+let f = |x| -> { x.push(1); x.push(2); x.len() }; let v = vec([0]); let r = &mut v; let n = f(r); r.push(3); n + v.len()

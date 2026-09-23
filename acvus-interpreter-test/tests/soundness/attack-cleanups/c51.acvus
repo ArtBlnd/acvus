@@ -1,0 +1,2 @@
+// expect "ab"
+let v = vec(["a".to_string(), "b".to_string()]); let acc = "".to_string(); for i in 0..2 { acc = acc + &(&v[i as u64] | clone); } acc

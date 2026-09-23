@@ -1,0 +1,3 @@
+// expect "b|b"
+// 3-deep variant over a call with a Large-ish literal and compare two bound Strings
+let f = |x| -> Some(Ok(Some((x, "b".to_string())))); match f("b".to_string()) { Some(Ok(Some((a, "c")))) => "no".to_string(), Some(Ok(Some((a, b)))) => if a == b { a + "|" + &b } else { "ne".to_string() }, _ => "none".to_string(), }

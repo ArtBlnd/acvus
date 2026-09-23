@@ -1,0 +1,3 @@
+// expect 3
+// structural variants on a call result, payloadless
+let f = |x| -> if x { A::P } else { A::Q(3) }; match f(false) { A::P => 0, A::Q(n) => n, _ => 9, }

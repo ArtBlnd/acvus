@@ -1,0 +1,2 @@
+// expect 1
+let x = Some({ a: 1, }); match x { Some(o) => o.a, None => 0, }

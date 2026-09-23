@@ -1,0 +1,2 @@
+// expect 5
+let v = vec([1, 2, 3]); let r = &v; let w = r.clone(); w.push(4); w.push(5); w.len()

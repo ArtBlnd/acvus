@@ -1,0 +1,1 @@
+let o = { a: 1, }; let f = || -> 0; o.b = "late".to_string(); o.b

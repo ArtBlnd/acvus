@@ -244,10 +244,21 @@ Status: Accepted
 1. Unification is the join of the type lattice, taken where it is
    asked. `!` is the bottom at a value position only; inside a constructor
    every argument is invariant. Two `Object`s join to the union of their
-   fields and two `Enum`s to the union of their variants; a side that must
-   grow and has no variable (an extern's declared type) cannot grow — for an
-   `Object` that is the definite-assignment check's report, for an `Enum` the
-   checker's mismatch. A pattern may name fewer members than its source. An
+   fields and two `Enum`s to the union of their variants. A value the body
+   constructs — an object literal, a structural variant — has a type
+   variable of its own, and a flow or a decision that joins two such
+   variables makes them one: a member one gains, the other has, and a
+   construction is laid at the union with the members it did not write
+   undefined (RFC-0050 rule 8). A type no variable of the body names — a
+   context's, an extern's parameter or result, a declared struct — has a
+   layout the body did not choose: a variable joined to one takes it as it
+   is, and a join that would have it gain a member is refused by that member.
+   A read's object and a pattern are lower bounds and are not refused for
+   lacking one; a pattern may name fewer members than its source. A value may
+   lack a field only while it moves between the body's storages and
+   registers: a read of a field takes that field, and every other use takes
+   the value whole, so an element, a payload, an argument, a return and a
+   commit are whole (the definite-assignment check). An
    object type carries which field set it has: the fields a struct declares,
    under the struct's name; the fields an object literal wrote; or at least
    the fields a read or a pattern named. Two undeclared field sets join to

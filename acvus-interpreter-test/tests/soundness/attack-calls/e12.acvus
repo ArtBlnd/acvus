@@ -1,0 +1,3 @@
+// expect 2
+// effect in closure called inside a while loop
+let f = |u| -> { @n = @n + 1; @n }; while f(0) < 2 { } @n

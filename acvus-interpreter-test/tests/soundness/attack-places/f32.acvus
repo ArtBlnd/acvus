@@ -1,0 +1,3 @@
+// refuse
+// element of temporary through paren, then field
+let mk = |n| -> [{ f: n, }]; (mk(3))[0].f

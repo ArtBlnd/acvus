@@ -1,0 +1,1 @@
+let last = ""; let v = vec(["p".to_string(), "q".to_string()]); for s in &v { last = s; } last.to_string()

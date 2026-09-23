@@ -1,0 +1,2 @@
+// refuse
+let f = |xs| -> { let t = 0; for o in xs { match o { A::X(s) => { t = t + s; }, }; } t }; f([A::X(4), A::X(5)])

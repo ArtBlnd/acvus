@@ -1,0 +1,3 @@
+// expect 10
+// while let over pop of structural variants, stop at a mismatch
+let v = vec([E::S(100), E::T(5), E::T(5)]); let s = 0; while let Some(E::T(n)) = v.pop() { s = s + n; } s

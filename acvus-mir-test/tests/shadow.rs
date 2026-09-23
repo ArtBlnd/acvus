@@ -7,6 +7,7 @@
 //! `vec`, `deque` and `string`, and `count` by `iter`.
 
 use acvus_extern::{Externs, TypesOnly};
+use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -67,8 +68,12 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     };
     let resolution = outcome.resolution().expect("complete");
     let mut callees: Vec<String> = resolution
-        .direct_calls
+        .calls
         .values()
+        .filter_map(|target| match target {
+            CallTarget::Declared(callee) => Some(callee),
+            _ => None,
+        })
         .map(|callee| {
             let id = match callee {
                 Callee::Extern { id, .. } | Callee::Direct(id) => id,

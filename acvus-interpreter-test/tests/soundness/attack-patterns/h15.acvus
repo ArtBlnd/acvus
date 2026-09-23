@@ -1,0 +1,3 @@
+// expect "hi-hi"
+// context String bound into a local and the context
+match @s { t => t + "-" + &@s, _ => "".to_string(), }

@@ -1,0 +1,1 @@
+let s = "abc".to_string(); let t = s; let u = s; let w = s; t + &u + &w

@@ -1,0 +1,1 @@
+let a = [("a".to_string(), 1)]; for o in a { let q = 1; } 0

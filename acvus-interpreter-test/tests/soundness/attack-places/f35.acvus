@@ -1,0 +1,3 @@
+// expect true
+// compare element places
+let a = [{ s: "x".to_string(), }]; let b = [{ s: "x".to_string(), }]; a[0].s == b[0].s

@@ -1,0 +1,1 @@
+let s = "hello"; s.substring(1u64, 3u64).to_string()

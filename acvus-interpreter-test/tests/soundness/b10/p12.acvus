@@ -1,0 +1,1 @@
+let s = "keep".to_string(); let f = |b| -> { if b { return 1; }; 2 }; f(true) + s.len() as i64

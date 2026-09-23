@@ -1,0 +1,2 @@
+// expect 2
+let v = vec([1, 2]); let f = |r| -> { let n = r.len(); n }; f(&v) + 0

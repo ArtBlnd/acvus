@@ -1,0 +1,1 @@
+let t = 0; for o in [{ n: { m: 4, }, }] { t = o.n.m; } t

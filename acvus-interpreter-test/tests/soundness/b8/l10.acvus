@@ -1,0 +1,1 @@
+let o = { n: 0, s: "".to_string(), }; for i in 0..3 { o.n = o.n + i; o.s = o.s + i.to_string(); } o.s + o.n.to_string()

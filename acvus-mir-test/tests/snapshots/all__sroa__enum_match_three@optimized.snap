@@ -60,7 +60,7 @@ expression: listing
     ; r28 (v31) : Unit
     ; r29 (v75) : i64
     ; r30 (v37) : Unit
-    ; r31 (v18) : E{B(i64)}
+    ; r31 (v18) : E{A(i64), B(i64), C(i64)}
     ; r32 (v62) : i64
     ; r33 (v43) : Unit
     ; r34 (e) : E{A(i64), B(i64), C(i64)}
@@ -79,7 +79,7 @@ expression: listing
     ; r47 (v54) : i64
     ; r48 (v) : i64
     ; r49 (v60) : i64
-    ; r50 (v22) : E{C(i64)}
+    ; r50 (v22) : E{A(i64), B(i64), C(i64)}
     ; r51 (v66) : i64
     ; r52 (v53) : i64
     ; r53 (acc) : i64
@@ -93,7 +93,7 @@ expression: listing
     ; r61 (v52) : i64
     ; r62 (v) : i64
     ; r63 (v77) : i64
-    ; r64 (v14) : E{A(i64)}
+    ; r64 (v14) : E{A(i64), B(i64), C(i64)}
     ; r65 (v58) : i64
     ; r66 (v) : i64
     ; r67 (@n) : i64

@@ -1,0 +1,2 @@
+// expect "ab"
+let s = "ab".to_string(); let m = &mut s; let t = m.clone(); t

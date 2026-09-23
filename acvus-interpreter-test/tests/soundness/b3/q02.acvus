@@ -1,0 +1,1 @@
+let f = |x| -> { let y = x?; Some(y + 1) }; f(None).unwrap_or(-5)

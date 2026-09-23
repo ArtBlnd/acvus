@@ -1,0 +1,1 @@
+let s = A::X(1); let t = A::X(1u8); match s { A::X(n) => n, }

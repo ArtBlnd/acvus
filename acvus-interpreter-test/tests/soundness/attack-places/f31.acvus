@@ -1,0 +1,3 @@
+// refuse
+// field of element of temporary call result
+let mk = |n| -> [{ f: n, }, { f: n + 1, }]; mk(6)[1].f

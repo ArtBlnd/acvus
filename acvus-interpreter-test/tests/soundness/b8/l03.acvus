@@ -1,0 +1,1 @@
+let a = ["a".to_string(), "b".to_string()]; let s = "".to_string(); for x in a { s = s + &x; } s

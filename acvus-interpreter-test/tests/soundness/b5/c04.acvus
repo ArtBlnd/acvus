@@ -1,0 +1,1 @@
+let mk = |s| -> |t| -> s.to_string() + t; let g = mk("p".to_string()); g("q") + g("r")

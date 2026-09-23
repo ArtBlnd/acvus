@@ -1,0 +1,2 @@
+// expect refuse (by design) — would be "ab"
+let f = |x| -> x + "b"; f("a".to_string()).clone()

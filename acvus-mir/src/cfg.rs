@@ -87,6 +87,7 @@ pub enum Terminator {
     Return {
         value: ValueId,
         order: Option<ValueId>,
+        span: acvus_ast::Span,
     },
     /// The block does not continue: it ended in a `!` (RFC-0038).
     Diverge,
@@ -425,6 +426,7 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 let term = Terminator::Return {
                     value: *value,
                     order: *order,
+                    span: last.span,
                 };
                 insts.pop();
                 return term;
@@ -536,9 +538,9 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     },
                 });
             }
-            Terminator::Return { value, order } => {
+            Terminator::Return { value, order, span } => {
                 insts.push(Inst {
-                    span: acvus_ast::Span::ZERO,
+                    span,
                     kind: InstKind::Return { value, order },
                 });
             }

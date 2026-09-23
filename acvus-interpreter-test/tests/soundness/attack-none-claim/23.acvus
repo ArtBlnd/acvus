@@ -1,0 +1,2 @@
+// expect "n"
+let acc = Some("a".to_string()); let i = 0; while i < 3 { acc = None; i = i + 1; } match acc { Some(s) => s, None => "n".to_string(), }

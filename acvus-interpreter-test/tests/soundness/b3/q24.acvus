@@ -1,0 +1,1 @@
+let f = |a, b| -> { let x = a?; let y = b?; Some(x + y) }; f(Some(1), Some(2)).unwrap_or(0) + f(Some(1), None).unwrap_or(0)

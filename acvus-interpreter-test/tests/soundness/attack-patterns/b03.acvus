@@ -1,0 +1,3 @@
+// expect "hi!"
+// string literal test on a context String, then use context
+let k = match @s { "hi" => "!".to_string(), _ => "?".to_string(), }; @s + &k

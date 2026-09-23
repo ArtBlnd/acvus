@@ -1,0 +1,3 @@
+// expect 10
+// lambda writes a context object field
+let f = |x| -> { @o.k = @o.k + x; 0 }; f(9); @o.k

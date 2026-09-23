@@ -1,0 +1,1 @@
+let s = Some("abc".to_string()); let f = |o| -> { let t = o?; Some(t.len()) }; f(s).unwrap_or(0u64)

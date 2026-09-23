@@ -1,0 +1,1 @@
+let a = [vec([1]), vec([2, 3])]; let n = 0u64; for v in a { n = n + v.len(); } n

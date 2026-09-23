@@ -1,0 +1,2 @@
+// expect 3
+let o = None; let v = [o, None, Some(1)]; let w = [None, Some(2)]; let s = 0; for e in v { if let Some(x) = e { s = s + x; }; } for e in w { if let Some(x) = e { s = s + x; }; } s

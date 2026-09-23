@@ -1,0 +1,1 @@
+let o = { a: 1, }; let s = match o { { a: 1, } => "one", _ => "other", }; s

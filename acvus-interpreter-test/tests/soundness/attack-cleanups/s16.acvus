@@ -1,0 +1,2 @@
+// expect 6
+let xs = [{ a: 1, b: 2, }, { a: 3, b: 4, }]; let v = vec([]); for x in xs { v.push(x); } v[1u64].a + v[0u64].b + 1

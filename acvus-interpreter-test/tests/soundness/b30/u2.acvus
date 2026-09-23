@@ -1,0 +1,1 @@
+let t = 0; let v = vec([{ n: 1, }]); for o in &v { t = t + o.n; } t

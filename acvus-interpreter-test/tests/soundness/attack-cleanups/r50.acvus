@@ -1,0 +1,2 @@
+// expect refuse (by design) — would be 5
+let v = vec([1, 2, 3]); let r = &mut v; let a = &mut *r; a.push(2); r.push(1); v.len()

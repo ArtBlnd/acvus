@@ -1,0 +1,1 @@
+let o = None; let o2 = if true { Some(3) } else { o }; o2.unwrap()

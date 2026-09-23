@@ -1,0 +1,2 @@
+// expect 1
+let v = vec([]); v.push(None); v.push(Some("x".to_string())); let c = 0; for e in &v { if let Some(s) = e { c = c + 1; }; } c

@@ -1,0 +1,3 @@
+// refuse
+// compare two temporaries' fields
+let mk = |n| -> { a: { b: n, }, }; mk(1).a == mk(1).a

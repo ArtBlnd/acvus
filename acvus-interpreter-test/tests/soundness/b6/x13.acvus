@@ -1,0 +1,1 @@
+let t = @s.to_string(); @s = "bye".to_string(); t + @s

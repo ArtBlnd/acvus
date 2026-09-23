@@ -1,0 +1,2 @@
+// expect refuse (by design) — would be 1
+let xs = [Some({ a: 1, }), Some({ a: 2, })]; match xs[0u64] { Some(o) => o.a, None => 0, }

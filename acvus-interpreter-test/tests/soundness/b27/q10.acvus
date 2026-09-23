@@ -1,0 +1,1 @@
+let a = [A::X("a".to_string())]; let r = "".to_string(); for o in a { match o { A::X(s) => { r = s; }, }; } r

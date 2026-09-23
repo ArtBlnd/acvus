@@ -327,20 +327,21 @@ expression: raw
     ; r60 (v79) : String
     ; r61 (v80) : i64
     ; r62 (v81) : Order
-    ; r63 (@item_count) : i64
-    ; r64 (discount) : i64
-    ; r65 (final_total) : i64
-    ; r66 (subtotal) : i64
-    ; r67 (@total_out) : i64
-    ; r68 (@default_ship) : i64
-    ; r69 (@customer) : String
+    ; r63 (discount) : i64
+    ; r64 (final_total) : i64
+    ; r65 (subtotal) : i64
+    ; r66 (@total_out) : i64
+    ; r67 (@default_ship) : i64
+    ; r68 (@customer) : String
+    ; r69 (@item_count) : i64
     ; r70 (@tax_rate) : i64
     ; r71 (tax) : i64
     ; r72 (@discount_rate) : i64
     ; r73 (total) : i64
-    ; r74 (v46) : Unit
-    ; r75 (v52) : Unit
-    ; r76 (receipt) : String
-    ; r77 (@shipping) : i64
-    ; r78 (@receipt_out) : String
-    ; r79 (@free_ship_min) : i64
+    ; r74 ($order) : Order
+    ; r75 (v46) : Unit
+    ; r76 (v52) : Unit
+    ; r77 (receipt) : String
+    ; r78 (@shipping) : i64
+    ; r79 (@receipt_out) : String
+    ; r80 (@free_ship_min) : i64

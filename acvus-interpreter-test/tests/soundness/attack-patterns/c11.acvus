@@ -1,0 +1,3 @@
+// expect "jumps over the lazy dog, again and again0"
+// value of s after while let over pops (one iteration)
+let v = vec([("the quick brown fox jumps over it".to_string(), 1), ("jumps over the lazy dog, again and again".to_string(), 2)]); let s = "".to_string(); while let Some((t, 2)) = v.pop() { s = t; } s + &v.len().to_string()

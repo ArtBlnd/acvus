@@ -1,0 +1,3 @@
+// expect true
+// == in a lambda whose params settle to i64
+let eq = |a, b| -> a == b; eq(1, 1)

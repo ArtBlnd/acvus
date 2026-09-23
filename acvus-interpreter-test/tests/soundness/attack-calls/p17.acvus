@@ -1,0 +1,3 @@
+// expect true
+// == between a returned closure's param and a captured String
+let mk = |k| -> |x| -> x == k; let g = mk("q".to_string()); g("q".to_string())

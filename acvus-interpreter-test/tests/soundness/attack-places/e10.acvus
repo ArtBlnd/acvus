@@ -1,0 +1,3 @@
+// expect true
+// compare field of temporary with local's field
+let mk = |n| -> { s: n.to_string(), }; let o = { s: "1".to_string(), }; mk(1).s == o.s

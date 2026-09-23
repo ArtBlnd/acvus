@@ -1,0 +1,2 @@
+// expect 5
+let e = Some({ a: 1, b: 2, }); for i in 0..3 { e = match e { Some(o) => Some({ a: o.b, b: o.a + o.b, }), None => None, }; } match e { Some(o) => o.a, None => 0, }

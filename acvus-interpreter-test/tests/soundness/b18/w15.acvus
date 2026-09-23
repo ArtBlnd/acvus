@@ -1,0 +1,1 @@
+let o = { e: A::X("z".to_string()), }; match o.e { A::X(s) => s, }

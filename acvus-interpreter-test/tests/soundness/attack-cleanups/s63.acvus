@@ -1,0 +1,2 @@
+// expect 21
+let xs = [(1, { a: 2, }), (3, { a: 4, })]; let acc = (0, { a: 0, }); for x in xs { acc = match x { (i, o) => match acc { (j, p) => (i + j, { a: o.a + p.a, }), _ => acc, }, _ => acc, }; } match acc { (i, o) => i * 10 + o.a - 25, _ => 0, }

@@ -1,0 +1,2 @@
+// expect refuse (a reference stored in an aggregate)
+let v = vec([1, 2, 3]); let o = { r: &v, }; o.r.len()

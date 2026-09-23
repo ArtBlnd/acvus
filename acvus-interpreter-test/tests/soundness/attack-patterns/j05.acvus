@@ -1,0 +1,3 @@
+// expect 5
+// while let Some((a, b)) over an owning iterator of tuples
+let it = into_iter(vec([(1, 1), (1, 2)])); let acc = 0; while let Some((a, b)) = next(&mut it) { acc = acc + a + b; } acc

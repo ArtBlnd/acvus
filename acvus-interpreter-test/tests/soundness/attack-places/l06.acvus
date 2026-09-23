@@ -1,0 +1,3 @@
+// expect 3
+// lambda param index read of an element field
+let xs = [{ a: 1, }, { a: 3, }]; let f = |r| -> r[1u64].a; f(&xs)

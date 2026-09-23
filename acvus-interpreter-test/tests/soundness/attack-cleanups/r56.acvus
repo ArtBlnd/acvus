@@ -1,0 +1,2 @@
+// expect 6
+let v = vec([1, 2, 3]); let f = |r| -> { let t = 0; for i in 0..r.len() { t = t + r[i]; } t }; f(&v)

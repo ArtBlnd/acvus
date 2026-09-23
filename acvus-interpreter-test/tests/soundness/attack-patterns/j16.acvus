@@ -1,0 +1,3 @@
+// refuse
+// duplicate names through a reference
+let o = (1, 2.5); match &o { (x, x) => *x, _ => 0.0, }

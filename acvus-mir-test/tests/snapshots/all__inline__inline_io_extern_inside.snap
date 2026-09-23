@@ -27,5 +27,7 @@ expression: ir
     ; r6 (v15) : Order
     ; r7 (v7) : Order
     ; r8 (v3) : i64
-    ; r9 (v6) : Order
-    ; r10 (wrapper(...)) : String
+    ; r9 ($order) : Order
+    ; r10 (v6) : Order
+    ; r11 ($order) : Order
+    ; r12 (wrapper(...)) : String

@@ -1,0 +1,2 @@
+// expect true
+let o = None; let v = [Some("a".to_string()), o]; let w = &v; match &w[1u64] { Some(s) => false, None => true, }

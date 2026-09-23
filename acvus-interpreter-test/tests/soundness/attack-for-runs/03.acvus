@@ -1,0 +1,2 @@
+// expect "stt"
+let acc = "".to_string(); for o in [{ a: 1, b: "s".to_string(), }, { a: 2, b: "tt".to_string(), }] { acc = acc + &o.b; } acc

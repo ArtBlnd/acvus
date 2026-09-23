@@ -1,0 +1,3 @@
+// expect 30
+// effectful sort_by comparator
+let v = vec([3, 1, 2]); v.sort_by(|a, b| -> { @n = @n + 1; *a - *b }); v[0u64] * 10 + v[2u64] * 10 - 10

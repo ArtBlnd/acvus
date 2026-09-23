@@ -4,7 +4,7 @@ use acvus_ast::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{inst_info, liveness};
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, ValueId};
 use crate::optimize::drop_insertion::ends_ownership;
 use crate::optimize::ssa_pass::map_uses;
@@ -36,30 +36,26 @@ pub fn run(cfg: &mut CfgBody) {
         let mut terminator =
             std::mem::replace(&mut cfg.blocks[bi].terminator, Terminator::Fallthrough);
         let span = new.last().map(|i| i.span).unwrap_or(Span::ZERO);
-        let live_by_own_name: FxHashSet<ValueId> = cfg
-            .successors(BlockIdx(bi))
-            .into_iter()
-            .flat_map(|succ| {
-                let params: FxHashSet<ValueId> =
-                    cfg.blocks[succ.0].params.iter().copied().collect();
-                live.live_in[succ.0]
-                    .iter()
-                    .copied()
-                    .filter(move |v| !params.contains(v))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        let copies = copies_for(
-            cfg,
-            &live_by_own_name,
-            terminator_args(&terminator).into_iter(),
-        );
-        for (src, dst) in &copies.clones {
-            new.push(clone_inst(span, *src, *dst));
-        }
-        let mut remaining = copies;
-        for arg in terminator_args_mut(&mut terminator) {
-            remaining.redirect(arg);
+        // One edge is taken, so an argument is copied only where the edge it
+        // leaves by still needs the value: its target reads it by its own
+        // name, or the edge passes it twice. Another edge's reads are on a
+        // path this one does not take.
+        for (label, args) in edges_mut(&mut terminator) {
+            let target = cfg.label_to_block[&label];
+            let params: FxHashSet<ValueId> = cfg.blocks[target.0].params.iter().copied().collect();
+            let live_by_own_name: FxHashSet<ValueId> = live.live_in[target.0]
+                .iter()
+                .copied()
+                .filter(|v| !params.contains(v))
+                .collect();
+            let copies = copies_for(cfg, &live_by_own_name, args.iter().copied());
+            for (src, dst) in &copies.clones {
+                new.push(clone_inst(span, *src, *dst));
+            }
+            let mut remaining = copies;
+            for arg in args.iter_mut() {
+                remaining.redirect(arg);
+            }
         }
         cfg.blocks[bi].terminator = terminator;
         cfg.blocks[bi].insts = new;
@@ -174,28 +170,35 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
     }
 }
 
-fn terminator_args_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
+/// Each edge a terminator leaves by, with the arguments it passes.
+fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, &mut Vec<ValueId>)> {
     match t {
-        Terminator::Jump { args, .. } => args.iter_mut().collect(),
+        Terminator::Jump { label, args } => vec![(*label, args)],
         Terminator::JumpIf {
+            then_label,
             then_args,
+            else_label,
             else_args,
             ..
         }
         | Terminator::Diamond {
+            then_label,
             then_args,
+            else_label,
             else_args,
             ..
-        } => then_args.iter_mut().chain(else_args.iter_mut()).collect(),
+        } => vec![(*then_label, then_args), (*else_label, else_args)],
         Terminator::For {
+            body,
             body_args,
+            exit,
             exit_args,
             ..
-        } => body_args.iter_mut().chain(exit_args.iter_mut()).collect(),
+        } => vec![(*body, body_args), (*exit, exit_args)],
         Terminator::Switch { arms, default, .. } => arms
             .iter_mut()
-            .flat_map(|(_, _, args)| args.iter_mut())
-            .chain(default.iter_mut().flat_map(|(_, args)| args.iter_mut()))
+            .map(|(_, label, args)| (*label, args))
+            .chain(default.iter_mut().map(|(label, args)| (*label, args)))
             .collect(),
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => Vec::new(),
     }
@@ -323,6 +326,50 @@ mod tests {
                 },
             ],
             vec![(v(1), Ty::String), (v(2), Ty::String)],
+        );
+        run(&mut cfg);
+        assert_eq!(clones(&cfg), 0);
+    }
+
+    /// `then` passes the string on and `else` reads it by its own name: one
+    /// edge is taken, so no path uses it twice.
+    #[test]
+    fn an_argument_read_by_name_only_past_another_edge_is_not_copied() {
+        let mut cfg = body(
+            vec![
+                InstKind::Const {
+                    dst: v(1),
+                    value: Literal::String("a".into()),
+                },
+                InstKind::Const {
+                    dst: v(3),
+                    value: Literal::Bool(true),
+                },
+                InstKind::JumpIf {
+                    cond: v(3),
+                    then_label: Label(0),
+                    then_args: vec![v(1)],
+                    else_label: Label(1),
+                    else_args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![v(2)],
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+                InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![],
+                },
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
+            ],
+            vec![(v(1), Ty::String), (v(2), Ty::String), (v(3), Ty::Bool)],
         );
         run(&mut cfg);
         assert_eq!(clones(&cfg), 0);

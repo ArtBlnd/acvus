@@ -1,0 +1,1 @@
+let r = &mut @o; r.a = 7; @o.a

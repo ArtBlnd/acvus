@@ -1,0 +1,1 @@
+let o = Some(A::X("q".to_string())); let r = &o; match r { Some(A::X(s)) => s.to_string(), _ => "n".to_string(), }

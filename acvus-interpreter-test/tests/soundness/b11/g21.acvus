@@ -1,0 +1,1 @@
+let o = if true { { s: "x".to_string(), } } else { { s: "y".to_string(), t: "z".to_string(), } }; o.s

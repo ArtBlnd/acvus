@@ -1,0 +1,3 @@
+// expect 7
+// deref store through a reference returned by a lambda into an element
+let xs = [1, 2]; let id = |r| -> r; let q = id(&mut xs[1]); *q = 7; xs[1]

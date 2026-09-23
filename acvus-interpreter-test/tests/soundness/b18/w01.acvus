@@ -1,0 +1,1 @@
+let e = A::X("s".to_string()); let r = &e; match r { A::X(t) => t.to_string(), }

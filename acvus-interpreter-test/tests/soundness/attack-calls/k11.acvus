@@ -1,0 +1,3 @@
+// refuse
+// arity: method too many on string
+"ab".len(1)

@@ -1,0 +1,2 @@
+// expect 0
+let v = [None, Some(vec([Some("a".to_string()), None]))]; 0

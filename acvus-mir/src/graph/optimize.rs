@@ -312,6 +312,9 @@ fn run_pass2_body(interner: &Interner, body: &mut crate::ir::MirBody, opt: Opt) 
 /// from both bodies alike (RFC-0071 rule 5).
 fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::ssa_pass::run(cfg);
+    // A `String` copies (RFC-0018), and the copy is emitted here: without
+    // it two names own one string and each drops it.
+    optimize::string_copy::run(cfg);
     optimize::reborrow::run(cfg);
     optimize::fold::run(cfg);
     optimize::branch::run(interner, cfg);
@@ -465,7 +468,7 @@ fn debug_validate(cfg: &CfgBody) {
 
         // -- Check terminator uses --
         let term_uses = match &block.terminator {
-            crate::cfg::Terminator::Return { value, order } => {
+            crate::cfg::Terminator::Return { value, order, .. } => {
                 std::iter::once(*value).chain(*order).collect()
             }
             crate::cfg::Terminator::Jump { args, .. } => args.clone(),

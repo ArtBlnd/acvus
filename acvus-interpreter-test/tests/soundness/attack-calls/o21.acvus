@@ -1,0 +1,3 @@
+// expect 3
+// push piped into &mut
+let v = vec([1]); &mut v | push(2); (&mut v) | push(3); v.len()

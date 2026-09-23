@@ -1,0 +1,3 @@
+// expect 3
+// while let on a local holding a Vec, moved and reassigned each iteration
+let o = Some(vec([1, 2, 3])); let n = 0; while let Some(w) = o { n = n + 1; w.pop(); o = if w.len() > 0u64 { Some(w) } else { None }; } n

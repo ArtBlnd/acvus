@@ -1,0 +1,3 @@
+// expect 3
+// match on a field chain through a local ref
+let o = { a: { b: 3, c: 4, }, }; let r = &o; match r.a { { b: 3, c, } => c - 1, _ => 0, }

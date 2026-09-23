@@ -1,0 +1,2 @@
+// expect 0
+let s = "a".to_string(); s = "b".to_string(); s = "c".to_string(); 0

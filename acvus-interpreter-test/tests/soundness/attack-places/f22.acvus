@@ -1,0 +1,3 @@
+// expect 11
+// lambda capturing a local, read field chain inside
+let o = { a: { b: 11, }, }; let f = |u| -> o.a.b + u; f(0)

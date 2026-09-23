@@ -941,7 +941,12 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
         Expr::ContextRef { name, .. } => {
             refs.set.insert(*name);
         }
-        Expr::Ident { .. } | Expr::Literal { .. } | Expr::Variant { .. } => {}
+        Expr::Ident { .. } | Expr::Literal { .. } => {}
+        Expr::Variant { payload, .. } => {
+            if let Some(payload) = payload {
+                walk_expr(payload, refs);
+            }
+        }
         Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. } => {
             walk_expr(left, refs);
             walk_expr(right, refs);

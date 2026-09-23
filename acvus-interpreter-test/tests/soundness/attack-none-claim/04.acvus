@@ -1,0 +1,2 @@
+// expect 1
+let o = None; let v = vec([o, Some("a".to_string())]); let c = 0; for x in &v { if let Some(s) = x { c = c + 1; }; } c

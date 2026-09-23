@@ -1,0 +1,3 @@
+// expect 10
+// lambda returning its param's element field read, via fold over refs
+let xs = [{ a: 4, }, { a: 6, }]; as_iter(&xs) | fold(0, |acc, r| -> acc + r.a)

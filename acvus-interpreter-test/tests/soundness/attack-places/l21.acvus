@@ -1,0 +1,3 @@
+// expect true
+// lambda param equality on &Vec (operator whose operand type settles after the call)
+let v = vec([1, 2]); let f = |r| -> r == r; f(&v)

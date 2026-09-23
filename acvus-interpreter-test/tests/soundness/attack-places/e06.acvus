@@ -1,0 +1,3 @@
+// expect 8
+// &mut of field of element through a &mut ref local
+let m = [{ v: [1, 5], }]; let r = &mut m; let q = &mut r[0].v; q[0] = 3; m[0].v[0] + m[0].v[1]

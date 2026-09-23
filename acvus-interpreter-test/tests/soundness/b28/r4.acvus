@@ -1,0 +1,1 @@
+let t = 0; for o in [Some(1), None] { match o { Some(s) => { t = t + s; }, None => { t = t + 100; }, }; } t

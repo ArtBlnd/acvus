@@ -1,0 +1,3 @@
+// expect 0
+// uncalled lambda with == on open params (closes to never, admitted)
+let g = |a| -> a == a; 0

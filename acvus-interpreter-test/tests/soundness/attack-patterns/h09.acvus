@@ -1,0 +1,3 @@
+// expect "hihi"
+// String context bound to itself then concatenated
+let t = match @s { @s => @s + &@s, _ => "".to_string(), }; t

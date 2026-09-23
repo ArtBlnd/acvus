@@ -1,0 +1,2 @@
+// expect 3
+let xs = vec([{ a: 1, }, { a: 2, }]); let last = { a: 0, }; for x in &xs { last = { a: x.a + 1, }; } last.a

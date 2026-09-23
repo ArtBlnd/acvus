@@ -1,0 +1,1 @@
+let o = { v: vec(["x".to_string()]), }; let p = o.v.pop(); p.unwrap()

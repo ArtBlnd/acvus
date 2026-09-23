@@ -1,0 +1,1 @@
+let o = Some(vec([1,2,3])); let n = match &o { Some(v) => v.len(), None => 0u64, }; n

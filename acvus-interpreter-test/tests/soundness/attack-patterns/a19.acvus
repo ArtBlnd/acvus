@@ -1,0 +1,3 @@
+// expect "b"
+// Result Err string bound from call
+let f = |x| -> if x > 0 { Ok(x) } else { Err("b".to_string()) }; match f(0) { Ok(v) => v.to_string(), Err(e) => e, }

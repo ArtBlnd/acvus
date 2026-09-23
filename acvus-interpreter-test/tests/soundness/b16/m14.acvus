@@ -1,0 +1,1 @@
+let o = { v: vec([1]), }; let f = |p| -> { p.v.push(5); p }; f(o).v.len()

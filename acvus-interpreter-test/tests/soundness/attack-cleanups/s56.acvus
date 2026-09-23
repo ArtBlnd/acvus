@@ -1,0 +1,2 @@
+// expect 26
+let xs = [{ a: 1, b: 2, }, { a: 3, b: 4, }]; let ys = [{ a: 10, b: 20, }, { a: 30, b: 40, }]; let t = 0; for x in &xs { for y in &ys { t = t + x.a * y.a / 10; } } t + 10

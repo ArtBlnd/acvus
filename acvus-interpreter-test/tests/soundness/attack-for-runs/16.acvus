@@ -1,0 +1,2 @@
+// refuse
+let found = A::X(0); for o in [A::X(1), A::X(3), A::X(5)] { if let A::X(s) = o { if s > 2 { found = o; break; }; }; } match found { A::X(s) => s, }

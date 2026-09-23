@@ -1,0 +1,2 @@
+// expect 1
+let o = { k: A::X(1), }; let a = o.k; match a { A::X(s) => s, }

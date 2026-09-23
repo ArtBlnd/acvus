@@ -1,0 +1,3 @@
+// refuse
+// the shadowed first duplicate took a Vec out of o; o.b read after
+let o = { a: 1, b: vec([2, 3]), }; let n = match o { { b: x, a: x, } => x, _ => 0, }; o.b.len()

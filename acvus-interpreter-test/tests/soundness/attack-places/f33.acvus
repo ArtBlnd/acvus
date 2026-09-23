@@ -1,0 +1,3 @@
+// refuse
+// &mut into temporary element field, store and read
+let mk = |n| -> [{ f: n, }]; let r = &mut mk(1)[0].f; *r = 4; *r

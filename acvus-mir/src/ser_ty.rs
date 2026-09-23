@@ -252,7 +252,7 @@ impl Ty {
                 ok: Box::new(ok.to_ser(interner)),
                 err: Box::new(err.to_ser(interner)),
             },
-            Ty::Enum { name, variants } => SerTy::Enum {
+            Ty::Enum { name, variants, .. } => SerTy::Enum {
                 name: interner.resolve(*name).to_string(),
                 variants: variants
                     .iter()
@@ -348,6 +348,7 @@ impl SerTy {
                         )
                     })
                     .collect(),
+                home: crate::ty::Home::NONE,
             },
         }
     }

@@ -77,7 +77,7 @@ pub fn run(cfg: &mut CfgBody) {
 
 fn terminator_uses_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
     match t {
-        Terminator::Return { value, order } => {
+        Terminator::Return { value, order, .. } => {
             std::iter::once(value).chain(order.as_mut()).collect()
         }
         Terminator::Jump { args, .. } => args.iter_mut().collect(),

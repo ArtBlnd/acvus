@@ -1,0 +1,2 @@
+// expect 1
+let t = 0; for o in [Some(A::X(1)), None] { if let Some(a) = o { match a { A::X(s) => { t = t + s; }, }; }; } t

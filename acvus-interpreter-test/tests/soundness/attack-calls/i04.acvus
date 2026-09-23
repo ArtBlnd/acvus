@@ -1,0 +1,3 @@
+// expect 3
+// index a temporary array literal
+[1, 2, 3][2u64]

@@ -1,0 +1,2 @@
+// expect 9
+let xs = [{ a: 1, b: 2, }, { a: 3, b: 4, }]; let o = { a: 0, b: 0, }; for x in xs { o = { a: o.a + x.a, b: o.b + x.b, }; } o.a + o.b - 1

@@ -1,0 +1,3 @@
+// refuse
+// unary - on a lambda param that settles to Vec
+let f = |a| -> -a; f(vec([1]))

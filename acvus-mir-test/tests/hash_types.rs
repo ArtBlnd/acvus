@@ -5,6 +5,7 @@
 //! the uniform one.
 
 use acvus_extern::{Externs, Monomorphize, Registry, TypesOnly, extern_fn, extern_registry};
+use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -319,8 +320,12 @@ fn check_functions(
         .collect();
     casts.sort();
     let mut calls: Vec<(String, usize)> = resolution
-        .direct_calls
+        .calls
         .values()
+        .filter_map(|target| match target {
+            CallTarget::Declared(callee) => Some(callee),
+            _ => None,
+        })
         .filter_map(|callee| match callee {
             Callee::Extern { id, instance, .. } => {
                 Some((i.resolve(id.name).to_string(), *instance))

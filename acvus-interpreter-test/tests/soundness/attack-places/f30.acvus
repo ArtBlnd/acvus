@@ -1,0 +1,3 @@
+// refuse
+// index with expression that reads the same array
+let a = [1, 2, 3]; a[a[0]] = a[a[1]] + 5; a[1]

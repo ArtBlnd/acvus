@@ -1,0 +1,1 @@
+let a = [Some("a".to_string())]; for o in a { match o { Some(s) => { let x = 1; }, None => { let y = 1; }, }; } 0

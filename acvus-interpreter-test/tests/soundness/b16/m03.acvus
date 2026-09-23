@@ -1,0 +1,1 @@
+let o = { v: vec(["b".to_string(), "a".to_string()]), }; o.v.sort(); o.v[0u64].to_string()

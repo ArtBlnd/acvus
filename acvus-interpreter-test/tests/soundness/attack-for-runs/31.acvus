@@ -1,0 +1,2 @@
+// expect 4
+let t = 0; let o = Some(A::X(1)); for i in 0..4 { while let Some(A::X(s)) = o { t = t + s; o = None; } o = Some(A::X(1)); } t

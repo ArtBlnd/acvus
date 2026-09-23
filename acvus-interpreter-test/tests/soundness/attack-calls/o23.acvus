@@ -1,0 +1,3 @@
+// expect 6
+// sum of a local vec through into_iter pipe and a method
+let v = vec([1, 2, 3]); v.into_iter().sum()

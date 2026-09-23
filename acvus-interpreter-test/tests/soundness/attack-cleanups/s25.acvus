@@ -1,0 +1,2 @@
+// expect 33
+let f = |xs| -> { let t = 0; for x in &xs { t = t + x.a; } t }; f([{ a: 11, }, { a: 22, }])

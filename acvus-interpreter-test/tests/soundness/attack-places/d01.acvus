@@ -1,0 +1,3 @@
+// expect 2
+// lambda param settles to an owned Vec: push lends the param's own storage
+let f = |r| -> { r.push(0); r }; let w = f(vec([1])); w.len()

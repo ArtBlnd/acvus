@@ -1,0 +1,3 @@
+// expect 3
+// match on a block expression with tuple
+match { let t = (1, 2); t } { (a, b) => a + b, _ => 0, }

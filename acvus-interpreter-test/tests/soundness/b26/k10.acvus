@@ -1,0 +1,1 @@
+let a = [Some("a".to_string())]; for o in a { let p = o; } 0

@@ -1,0 +1,2 @@
+// expect 30
+let t = 0; let v = vec([A::Y({ n: 10, }), A::Y({ n: 20, })]); for o in &v { match o { A::Y(p) => { t = t + p.n; }, A::X(s) => { t = t; }, }; } t

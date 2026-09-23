@@ -1,0 +1,3 @@
+// expect 3
+// &Vec converted to a slice for a slice-only function
+let v = vec([3, 1, 2]); v.max().unwrap_or(0)

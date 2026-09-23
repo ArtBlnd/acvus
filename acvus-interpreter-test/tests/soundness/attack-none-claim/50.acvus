@@ -1,0 +1,2 @@
+// expect 2
+let o = None; let p = Some(o); let v = [p, Some(Some("a".to_string()))]; v.len()

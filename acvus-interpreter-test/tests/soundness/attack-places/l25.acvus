@@ -1,0 +1,3 @@
+// expect 3
+// lambda capturing a &mut local, pushes
+let v = vec([1]); let r = &mut v; let f = |x| -> { r.push(x); 0 }; f(2); f(3); v.len()

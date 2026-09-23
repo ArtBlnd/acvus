@@ -1,0 +1,1 @@
+let s = "abc".to_string(); for i in 0..3 { let t = s; } s

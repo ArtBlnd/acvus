@@ -1,0 +1,1 @@
+let g = |x| -> { let a = x?; let b = a?; Some(b) }; g(Some(None)).unwrap_or(9)

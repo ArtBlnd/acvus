@@ -1,0 +1,2 @@
+// expect true
+let s = "a".to_string(); let t = if s.clone() == "a" { s.clone() } else { "z".to_string() }; t == s

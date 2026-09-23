@@ -1,0 +1,1 @@
+let x = true; let r = &mut x; *r = !*r; x

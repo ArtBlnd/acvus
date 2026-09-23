@@ -1,0 +1,3 @@
+// expect xx
+// move String out of a field through a shared ref by binding it and returning it
+let o = { a: { s: "x".to_string(), }, }; let r = &o; let t = match r.a.s { t => t, }; t + &o.a.s

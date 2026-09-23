@@ -1,0 +1,1 @@
+let mk = |o| -> |z| -> o.a + z; let g = mk({ a: 7, }); g(1)

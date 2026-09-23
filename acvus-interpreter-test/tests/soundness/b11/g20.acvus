@@ -1,0 +1,1 @@
+let v = vec([]); v.push({ a: 1, }); v.push({ b: 2, }); v[0u64].b

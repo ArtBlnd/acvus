@@ -1,0 +1,3 @@
+// expect "xz"
+// list pattern through &local, strings
+let a = ["x".to_string(), "y".to_string(), "z".to_string()]; match &a { [p, .., q] => p.to_string() + q, _ => "".to_string(), }

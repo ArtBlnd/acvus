@@ -1,0 +1,2 @@
+// expect "b"
+let o = None; let t = { a: [o, Some("b".to_string())], }; let r = "".to_string(); for e in t.a { if let Some(s) = e { r = s; }; } r

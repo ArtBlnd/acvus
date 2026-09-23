@@ -1,0 +1,3 @@
+// expect 2
+// string literal on a local String, then use String after
+let s = "bb".to_string(); let n = match s { "a" => 1, "bb" => 2, _ => 0, }; n

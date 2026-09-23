@@ -1,0 +1,1 @@
+let c = 0; for o in ["a".to_string(), "b".to_string()] { c = c + 1; } c

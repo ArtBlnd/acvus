@@ -1,0 +1,1 @@
+let mk = |n| -> |m| -> n + m; let add3 = mk(3); add3(4)

@@ -1,0 +1,2 @@
+// expect 0
+let xs = [Some("a".to_string()), None]; for x in &xs { } 0

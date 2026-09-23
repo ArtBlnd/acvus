@@ -1,0 +1,3 @@
+// expect 3
+// for over & elements, if let on field through ref element
+let a = [{ k: Some(1), }, { k: None, }, { k: Some(2), }]; let s = 0; for r in &a { if let Some(x) = &r.k { s = s + *x; }; } s

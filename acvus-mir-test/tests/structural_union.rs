@@ -42,6 +42,7 @@ fn shape(i: &Interner, variants: &[&str]) -> TyTerm<Poly> {
             .iter()
             .map(|v| (i.intern(v), Some(Box::new(TyTerm::I64))))
             .collect(),
+        home: acvus_mir::ty::Home::NONE,
     }
 }
 
@@ -109,7 +110,10 @@ fn an_enum_value_that_may_carry_a_variant_the_callee_lacks_is_a_type_error() {
         "let s = if true { Shape::Circle(1) } else { Shape::Square(2) }; g_circle(s)",
     )
     .expect_err("the extern cannot grow its type");
-    assert!(err.contains("[infer:test] type mismatch"), "{err}");
+    assert!(
+        err.contains("`Square` cannot be added to a type laid out outside this body"),
+        "{err}"
+    );
 }
 
 #[test]

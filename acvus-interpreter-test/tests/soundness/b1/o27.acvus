@@ -1,0 +1,1 @@
+let o = { a: 1, }; let g = |r| -> r.a; g(&o) + g(&o)

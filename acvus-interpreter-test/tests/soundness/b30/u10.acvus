@@ -1,0 +1,1 @@
+let o = { n: 1, }; let p = if true { o } else { { n: 2, } }; p.n

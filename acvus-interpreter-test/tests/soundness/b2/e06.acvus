@@ -1,0 +1,1 @@
+let e = A::X(3); let r = &e; match r { A::X(n) => *n, _ => 0, }

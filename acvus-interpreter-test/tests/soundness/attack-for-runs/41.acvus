@@ -1,0 +1,2 @@
+// expect 3
+let found = A::X(0); let v = vec([A::X(1), A::X(3), A::X(5)]); for o in &v { if let A::X(s) = o { if *s > 2 { found = A::X(*s); break; }; }; } match found { A::X(s) => s, }

@@ -1,0 +1,3 @@
+// expect 8
+// match on &mut element field then deref store through binding
+let xs = [{ c: 1, }]; match &mut xs[0] { { c, } => { let z = *c; }, _ => { let z = 0; }, }; xs[0].c = 8; xs[0].c

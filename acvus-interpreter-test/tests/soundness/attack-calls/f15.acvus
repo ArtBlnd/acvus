@@ -1,0 +1,3 @@
+// expect 1
+// effectful lambda literal piped, discarded
+1 | (|x| -> { @n = @n + x; 0 }); @n

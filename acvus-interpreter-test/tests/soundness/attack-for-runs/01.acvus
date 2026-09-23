@@ -1,0 +1,2 @@
+// expect 21
+let t = 0; for o in [A::X(1), A::Y({ n: 2, })] { match o { A::X(s) => { t = t + s; }, A::Y(p) => { t = t + 10 * p.n; }, }; } t

@@ -1,0 +1,1 @@
+let s = 0; for p in [(1, { n: 2, })] { let (a, b) = p; s = a + b.n; } s

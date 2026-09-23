@@ -1,0 +1,1 @@
+let a = [Some(5)]; let t = 0; for o in a { t = o.unwrap(); } t

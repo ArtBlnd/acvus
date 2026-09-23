@@ -1,0 +1,3 @@
+// expect 20
+// match on an if expression producing Option
+let c = true; match if c { Some(20) } else { None } { Some(x) => x, None => 0, }

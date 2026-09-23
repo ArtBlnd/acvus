@@ -1020,6 +1020,7 @@ fn shape_ty(i: &Interner) -> acvus_extern::Ty {
         ]
         .into_iter()
         .collect(),
+        home: acvus_extern::Home::NONE,
     }
 }
 

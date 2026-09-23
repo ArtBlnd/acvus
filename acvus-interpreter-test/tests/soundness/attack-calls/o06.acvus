@@ -1,0 +1,3 @@
+// expect true
+// contains on str (both &str args) vs String receiver with &String argument
+let s = "hello".to_string(); let p = "ell".to_string(); s.contains(&p)

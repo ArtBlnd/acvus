@@ -1,0 +1,1 @@
+let o = { a: 1, }; if let Some(x) = Some(2) { o.b = x; } else { o.b = 0; }; o.b

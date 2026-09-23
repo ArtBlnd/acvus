@@ -1,0 +1,3 @@
+// expect 6
+// while let on field through &mut ref
+let o = { k: Some(3), }; let r = &mut o; let s = 0; while let Some(x) = r.k { s = s + x; r.k = if x > 1 { Some(x - 1) } else { None }; } s

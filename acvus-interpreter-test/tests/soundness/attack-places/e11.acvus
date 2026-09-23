@@ -1,0 +1,3 @@
+// expect 3
+// method on field of temporary
+let mk = |n| -> { v: vec([n, n, n]), }; mk(1).v.len()

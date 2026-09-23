@@ -1,0 +1,1 @@
+let o = Some(vec(["x".to_string()])); let a = match o { Some(v) => v.len(), _ => 0u64, }; let b = match o { Some(v) => v.len(), _ => 0u64, }; a + b

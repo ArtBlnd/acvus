@@ -1,0 +1,1 @@
+let e = Some(A::X("s".to_string())); match e { Some(A::X(s)) => s, None => "n".to_string(), }

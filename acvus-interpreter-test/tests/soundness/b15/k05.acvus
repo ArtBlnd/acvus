@@ -1,0 +1,1 @@
+let f = |k| -> { @o.a = k; 0 }; let r = &@o; f(9); r.a

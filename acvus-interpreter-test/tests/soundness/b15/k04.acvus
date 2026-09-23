@@ -1,0 +1,1 @@
+for o in &@objs { @objs[0u64].v = 3; } 0

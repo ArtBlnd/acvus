@@ -1,0 +1,2 @@
+// expect 4
+let xs = [(1, 2), (3, 4)]; let last = (0, 0); for x in xs { last = x; } match last { (a, b) => b, _ => 99, }

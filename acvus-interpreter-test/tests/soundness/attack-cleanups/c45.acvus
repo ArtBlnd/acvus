@@ -1,0 +1,2 @@
+// expect "ab"
+let xs = ["a".to_string(), "b".to_string()]; let acc = "".to_string(); for x in xs { acc = acc + &(&x | clone); } acc

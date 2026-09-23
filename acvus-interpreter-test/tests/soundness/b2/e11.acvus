@@ -1,0 +1,1 @@
+let e = A::Y; if let A::X(n) = e { n } else { 7 }

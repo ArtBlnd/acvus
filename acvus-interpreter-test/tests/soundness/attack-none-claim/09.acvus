@@ -1,0 +1,2 @@
+// expect "a"
+let c = false; let o = if c { None } else { Some("a".to_string()) }; match o { Some(s) => s, None => "x".to_string(), }

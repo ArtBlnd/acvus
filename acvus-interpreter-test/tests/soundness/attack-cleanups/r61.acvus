@@ -1,0 +1,2 @@
+// expect 7
+let o = { a: [1, 2], }; let r = &mut o; r.a[0u64] = 7; o.a[0u64]

@@ -1,0 +1,2 @@
+// expect "n"
+let o = None; let e = A::Y(o); let k = Some("z".to_string()); let e2 = A::Y(k); match e { A::Y(Some(s)) => s, _ => "n".to_string(), }

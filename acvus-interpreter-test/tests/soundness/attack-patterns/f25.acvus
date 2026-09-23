@@ -1,0 +1,3 @@
+// expect "the quick brown fox jumps over it"
+// if let on a lambda by-value param with Large payload
+let f = |p| -> if let Some((s, true)) = p { s } else { "no".to_string() }; f(Some(("the quick brown fox jumps over it".to_string(), true)))

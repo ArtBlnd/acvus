@@ -1,0 +1,2 @@
+// expect true
+let s = "ab".to_string(); let t = s.clone(); let u = t.clone(); u == s && t == s

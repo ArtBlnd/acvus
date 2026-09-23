@@ -1,0 +1,1 @@
+let v = vec([Some(1), Some(2)]); let i = 0u64; let s = 0; while let Some(x) = v[i] { s = s + x; i = i + 1u64; if i >= v.len() { break; }; } s

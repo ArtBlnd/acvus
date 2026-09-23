@@ -1,0 +1,3 @@
+// expect true
+// a local closure named cmp does not capture < on decimals
+let cmp = |a, b| -> 0; let d = decimal("1".to_string()).unwrap(); let e = decimal("2".to_string()).unwrap(); d < e

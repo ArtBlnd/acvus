@@ -1,0 +1,1 @@
+let s = "a".to_string(); let f = |k| -> s.to_string(); let g = f; let h = f; g(1) + &h(1)

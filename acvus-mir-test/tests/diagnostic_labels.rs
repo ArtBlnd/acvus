@@ -440,13 +440,14 @@ fn a_field_never_stored_names_the_value_that_lacks_it() {
 }
 
 /// `to_string` is declared for more than one type, so a `$param` only it
-/// reads has no type the resolution can close.
+/// reads has no type the resolution can close, and the call is refused as
+/// the one decision left open.
 #[test]
 fn a_type_the_solve_leaves_open_is_refused_where_it_is_closed() {
     let (message, labels) = only("$count.to_string()", &nothing);
     assert_eq!(
         message,
-        "cannot infer type: resolved to _ which contains unresolved type variables"
+        "cannot infer type: resolved to Fn(&_) -> String which contains unresolved type variables"
     );
     assert_eq!(labels, []);
 }

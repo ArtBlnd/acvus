@@ -1,0 +1,2 @@
+// expect 1
+let o = Some(1); o = None; o = Some(1); let v = vec([o, None]); let s = 0; for e in &v { if let Some(x) = e { s = s + *x; }; } s

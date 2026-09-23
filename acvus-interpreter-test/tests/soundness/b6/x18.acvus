@@ -1,0 +1,1 @@
+match @o { { a: 1, } => "one", _ => "other", } | to_string

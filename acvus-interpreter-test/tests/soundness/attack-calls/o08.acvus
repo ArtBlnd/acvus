@@ -1,0 +1,3 @@
+// expect true
+// contains piped
+let s = "hello".to_string(); &s | contains("lo")

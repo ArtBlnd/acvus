@@ -1,0 +1,1 @@
+let o = Some("s".to_string()); if let Some(t) = o { let _k = 1; }; o.unwrap()

@@ -1,0 +1,3 @@
+// expect true
+// lambda params settle to owned Strings: == operands lent
+let f = |a, b| -> a == b; f("x".to_string(), "x".to_string())

@@ -1,0 +1,1 @@
+let v = vec([1,2,3]); v.truncate(1u64); v.len()

@@ -1,0 +1,3 @@
+// expect 5
+// lambda reference parameter matched with list and literal
+let f = |r| -> match r { [1, x, _z] => *x, [_p, _q, y] => *y, _ => 0, }; let a = [1, 5, 9]; f(&a)

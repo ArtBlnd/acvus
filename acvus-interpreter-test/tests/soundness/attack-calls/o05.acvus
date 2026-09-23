@@ -1,0 +1,3 @@
+// expect 5
+// len on a slice of a String literal and a string reference
+let s = "abc"; let t = "de".to_string(); s.len() + (&t).len()

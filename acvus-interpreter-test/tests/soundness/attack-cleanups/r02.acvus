@@ -1,0 +1,2 @@
+// expect 6
+let v = vec([1, 2, 3]); let r = &v; r.len() + r.len()

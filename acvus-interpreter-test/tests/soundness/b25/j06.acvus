@@ -1,0 +1,1 @@
+let a = [[ "x".to_string() ], [ "y".to_string() ]]; let r = "".to_string(); for row in a { for s in row { r = r + &s; } } r

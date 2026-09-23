@@ -1,0 +1,2 @@
+// expect "hihi"
+let o = { s: "hi".to_string(), n: 1, }; let t = &o.s | clone; t + &o.s

@@ -1,0 +1,2 @@
+// expect 11
+let xs = [(1, { a: 10, }), (2, { a: 20, })]; let r = (0, { a: 0, }); for x in xs { r = x; } match r { (i, o) => i + o.a - 11, _ => 99, }

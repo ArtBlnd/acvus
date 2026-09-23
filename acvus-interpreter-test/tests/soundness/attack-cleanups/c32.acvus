@@ -1,0 +1,2 @@
+// expect 2
+let s = "ab".to_string(); s.clone().len()

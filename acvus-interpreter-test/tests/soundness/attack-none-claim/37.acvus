@@ -1,0 +1,2 @@
+// expect 3
+let o = None; let v = vec([o]); v.push(None); v.push(Some("x".to_string())); v.len()

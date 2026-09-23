@@ -1,0 +1,2 @@
+// expect 2
+let mk = |k| -> None; let a = mk(1); let v = [a, Some("x".to_string())]; v.len()

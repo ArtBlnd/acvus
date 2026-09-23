@@ -1,0 +1,2 @@
+// expect 1
+let t = 0; for o in [B::W(A::X(1))] { match o { B::W(a) => { match a { A::X(s) => { t = t + s; }, }; }, }; } t

@@ -1,0 +1,1 @@
+let t = @s; @s = t + "?"; @s.to_string()

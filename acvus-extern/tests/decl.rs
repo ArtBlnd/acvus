@@ -1810,6 +1810,7 @@ fn a_derived_enum_is_the_language_s_enum_of_the_same_name() {
             ]
             .into_iter()
             .collect(),
+            home: acvus_extern::Home::NONE,
         }
     );
 }

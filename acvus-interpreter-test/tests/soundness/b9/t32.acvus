@@ -1,0 +1,1 @@
+let i = 1u64; let v = vec([10, 20]); v[i - 1u64] + v[i]

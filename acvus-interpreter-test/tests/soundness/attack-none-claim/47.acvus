@@ -1,0 +1,2 @@
+// expect 0
+let o = Some("b".to_string()); o = None; o = None; o = Some("c".to_string()); 0

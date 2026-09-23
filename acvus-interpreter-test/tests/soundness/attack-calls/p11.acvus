@@ -1,0 +1,3 @@
+// refuse
+// != of arrays of strings
+["a".to_string()] != ["b".to_string()]

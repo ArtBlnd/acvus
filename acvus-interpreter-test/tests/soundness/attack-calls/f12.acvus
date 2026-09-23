@@ -1,0 +1,3 @@
+// expect 2
+// effect under && short-circuit: right side not called
+let w = |x| -> { @n = @n + x; true }; let r = w(2) || w(100); @n

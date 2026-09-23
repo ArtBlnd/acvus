@@ -1,0 +1,1 @@
+let s = 0; for i in 0..10 { if i == 3 { continue; }; if i == 6 { break; }; s = s + i; } s

@@ -1,0 +1,1 @@
+let o = { a: 1, }; o.s = "x".to_string(); o.s = o.s + "y"; o.s

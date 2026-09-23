@@ -1,0 +1,1 @@
+let v = vec(["a".to_string(), "bb".to_string()]); let t = 0u64; for s in &v { t = t + s.len(); } t

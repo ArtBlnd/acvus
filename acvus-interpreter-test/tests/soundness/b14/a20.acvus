@@ -1,0 +1,1 @@
+let v = vec([1]); let it = v.as_iter(); v.push(2); it | fold(0, |a, x| -> a + *x)

@@ -1,0 +1,1 @@
+let a = [vec([1]), vec([2])]; for o in a { let x = 1; } 0

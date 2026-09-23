@@ -1,0 +1,1 @@
+if let { b: @s, } = @o { @s.to_string() } else { "no".to_string() }

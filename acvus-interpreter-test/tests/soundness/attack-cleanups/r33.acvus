@@ -1,0 +1,2 @@
+// expect 16
+let v = vec([vec([1, 2, 3])]); for x in &mut v { x.push(9); x.push(x.len()); } v[0u64][3u64] * 2 + v[0u64][4u64] - 6

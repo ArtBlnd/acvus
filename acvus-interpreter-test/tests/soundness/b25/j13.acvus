@@ -1,0 +1,1 @@
+let a = ["a".to_string()]; let f = |k| -> { for s in a { return s; }; "n".to_string() }; f(1)

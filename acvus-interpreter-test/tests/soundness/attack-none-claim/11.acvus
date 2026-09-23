@@ -1,0 +1,2 @@
+// expect 3
+let o = None; let v = [Some(["a".to_string()]), o]; let n = 0u64; for e in v { if let Some(a) = e { n = n + a.len(); }; } n + 2u64

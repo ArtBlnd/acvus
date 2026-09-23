@@ -1,0 +1,3 @@
+// expect "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+// source overwritten in the arm, then read after the match
+let o = Some("the quick brown fox jumps over it".to_string()); let t = match o { Some(s) => { o = Some("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string()); s }, None => "".to_string(), }; match o { Some(u) => u, None => t, }

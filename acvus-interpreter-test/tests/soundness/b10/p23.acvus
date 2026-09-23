@@ -1,0 +1,1 @@
+let x = 2; let y = match x { 1 => "one".to_string(), 2 => return "two!".to_string(), _ => "many".to_string(), }; y

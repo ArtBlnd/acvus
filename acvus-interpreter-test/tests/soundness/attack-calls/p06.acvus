@@ -1,0 +1,3 @@
+// refuse
+// < in a lambda applied to vec
+let lt = |a, b| -> a < b; lt(vec([1]), vec([2]))

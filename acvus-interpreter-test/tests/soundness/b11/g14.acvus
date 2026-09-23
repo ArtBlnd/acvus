@@ -1,0 +1,1 @@
+let x = if true { A::X(1) } else { A::Y("s".to_string()) }; match x { A::Y(s) => s, _ => "other".to_string(), }

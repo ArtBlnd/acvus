@@ -1,0 +1,3 @@
+// refuse
+// arm keeps a reference while the source is reassigned
+let o = Some(1); match &o { Some(x) => { o = None; *x }, None => 0, }

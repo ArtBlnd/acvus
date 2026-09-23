@@ -1,0 +1,1 @@
+let f = |x| -> { if x > 2 { return "big".to_string(); }; "small".to_string() }; f(1) + f(5)

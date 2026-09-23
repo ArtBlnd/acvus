@@ -1,0 +1,1 @@
+let o = { s: "a".to_string(), }; if true { return o.s; }; "b".to_string()

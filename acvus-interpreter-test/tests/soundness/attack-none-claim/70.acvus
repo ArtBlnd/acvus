@@ -1,0 +1,2 @@
+// expect "n"
+let o = None; let oo = Some(o); let x = Some(Some("a".to_string())); match oo { Some(Some(s)) => s, _ => "n".to_string(), }

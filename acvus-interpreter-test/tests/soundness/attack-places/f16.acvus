@@ -1,0 +1,3 @@
+// expect x!
+// string field through ref compare and concat
+let o = { s: "x".to_string(), }; let r = &o; r.s + "!"

@@ -1,0 +1,1 @@
+let mk = |n| -> { x: n, y: n * 2, }; let p = mk(3); p.y

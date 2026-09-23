@@ -1,0 +1,1 @@
+let v = vec(["a".to_string(), "b".to_string()]); for s in &v { if s == "b" { return s.to_string(); }; } "none".to_string()

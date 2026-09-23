@@ -1,0 +1,3 @@
+// expect 3
+// two parts bound through &mut of an Option of tuple
+let o = Some((1, 2)); match &mut o { Some((x, y)) => *x + *y, None => 0, }

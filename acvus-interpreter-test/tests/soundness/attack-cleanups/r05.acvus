@@ -1,0 +1,2 @@
+// expect 9
+let v = vec([1, 2, 3]); let r = &mut v; r[0u64] = 9; r[0u64]

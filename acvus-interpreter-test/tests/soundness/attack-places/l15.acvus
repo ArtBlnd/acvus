@@ -1,0 +1,3 @@
+// expect 3
+// lambda param add operator with refs
+let f = |a, b| -> a + b; let x = 1; let y = 2; f(&x, &y)

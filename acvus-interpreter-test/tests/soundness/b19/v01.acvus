@@ -1,0 +1,1 @@
+let o = Some("s".to_string()); let t = o.unwrap_or("x".to_string()); let u = o.unwrap_or("y".to_string()); t + &u

@@ -1,0 +1,1 @@
+let e = if true { Shape::Circle(2) } else { Shape::Sq(3) }; match e { Shape::Circle(r) => r, Shape::Sq(s) => s * 2, }

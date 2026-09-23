@@ -1,0 +1,3 @@
+// refuse
+// push on a temporary array (no push for arrays)
+[1, 2].push(3)

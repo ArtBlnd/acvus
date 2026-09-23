@@ -283,14 +283,13 @@ fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Pla
         let Terminator::Switch { tag, arms, default } = &block.terminator else {
             continue;
         };
-        let Some(slot) = aliases
-            .get(tag)
-            .copied()
-            .or_else(|| plan.shapes.contains_key(tag).then_some(*tag))
-        else {
+        // A tag that names no slot still planned — never one, or one an
+        // earlier round refused — is the machine's to dispatch.
+        let slot = aliases.get(tag).copied().unwrap_or(*tag);
+        let Some(shape) = plan.shapes.get(&slot) else {
             continue;
         };
-        match dispatch_for(&plan.shapes[&slot], slot, arms, default.as_ref()) {
+        match dispatch_for(shape, slot, arms, default.as_ref()) {
             Some(dispatch) => plan.dispatches[bi] = Some(dispatch),
             None => refused.push(slot),
         }
@@ -658,7 +657,10 @@ fn whole_assign(
     let label = cfg.blocks[at.0].label;
     let mut tails: Vec<Tail> = Vec::new();
     for (pi, pred) in cfg.blocks.iter().enumerate() {
-        for args in incoming(&pred.terminator, label) {
+        for edge in incoming(&pred.terminator, label) {
+            let Incoming::Carries(args) = edge else {
+                return None;
+            };
             let arg = args
                 .get(param)
                 .expect("a jump carries one argument per block parameter");
@@ -798,9 +800,16 @@ fn shape_of(ty: &Ty) -> Option<Shape> {
     }
 }
 
-fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
+/// An edge into a block: the arguments it passes the block's parameters,
+/// or the parameters it fills itself, which no constructor stands behind.
+enum Incoming<'t> {
+    Carries(&'t Vec<ValueId>),
+    Fills,
+}
+
+fn incoming(term: &Terminator, label: Label) -> Vec<Incoming<'_>> {
     match term {
-        Terminator::Jump { label: to, args } if *to == label => vec![args],
+        Terminator::Jump { label: to, args } if *to == label => vec![Incoming::Carries(args)],
         Terminator::JumpIf {
             then_label,
             then_args,
@@ -817,21 +826,21 @@ fn incoming(term: &Terminator, label: Label) -> Vec<&Vec<ValueId>> {
         } => [(then_label, then_args), (else_label, else_args)]
             .into_iter()
             .filter(|(to, _)| **to == label)
-            .map(|(_, args)| args)
+            .map(|(_, args)| Incoming::Carries(args))
             .collect(),
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .map(|(_, to, args)| (to, args))
             .chain(default.iter().map(|(to, args)| (to, args)))
             .filter(|(to, _)| **to == label)
-            .map(|(_, args)| args)
+            .map(|(_, args)| Incoming::Carries(args))
             .collect(),
-        // A `For`'s exit edge carries its target's whole parameter list; the
-        // body edge carries only what follows the parameters the terminator
-        // fills, so its arguments line up with no parameter here (RFC-0057).
+        // A `For`'s exit edge carries its target's whole parameter list; its
+        // body edge fills the body's leading parameters itself (RFC-0057).
         Terminator::For {
             exit, exit_args, ..
-        } if *exit == label => vec![exit_args],
+        } if *exit == label => vec![Incoming::Carries(exit_args)],
+        Terminator::For { body, .. } if *body == label => vec![Incoming::Fills],
         Terminator::For { .. }
         | Terminator::Jump { .. }
         | Terminator::Return { .. }

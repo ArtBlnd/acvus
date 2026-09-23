@@ -1,0 +1,2 @@
+// expect 15
+let xs = [{ a: 1, b: 2, }, { a: 3, b: 4, }]; let t = 0; for x in xs { let y = if x.a > 1 { x } else { { a: 0, b: 5, } }; t = t + y.a + y.b; } t + 3

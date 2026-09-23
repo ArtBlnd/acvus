@@ -1,0 +1,2 @@
+// expect 1
+let xs = [None, Some({ a: 1, })]; let n = 0; for x in xs { n = n + match x { Some(o) => o.a, None => 0, }; } n

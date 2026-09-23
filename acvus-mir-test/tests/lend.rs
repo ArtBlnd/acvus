@@ -184,14 +184,14 @@ fn a_lambda_expecting_a_reference_called_with_an_owned_value_names_both_types() 
 #[test]
 fn a_lambda_never_called_closes_its_lend_on_a_plain_reference() {
     let i = Interner::new();
-    let types = checked(&i, "let f = |k| -> k.as_iter() | map(|x| -> *x) | sum; 0");
+    let refusals = recorded_types(&i, "let f = |k| -> k.as_iter() | map(|x| -> *x) | sum; 0")
+        .expect_err("nothing decides the element type of `k`, so no instance is chosen");
     assert!(
-        !types.iter().any(is_double_reference),
-        "no `&&T` exists (RFC-0029): {types:?}"
+        refusals.iter().all(|r| r.contains("cannot infer type")),
+        "{refusals:?}"
     );
     assert!(
-        distinct_lent_parameter_types(&types).is_empty(),
-        "nothing ever made `k` a reference, so its lend is a plain one and \
-         leaves no reference parameter behind: {types:?}"
+        refusals.iter().all(|r| !r.contains("&&")),
+        "the lend closed on a plain reference, and no `&&T` exists (RFC-0029): {refusals:?}"
     );
 }

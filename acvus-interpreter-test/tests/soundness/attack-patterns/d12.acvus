@@ -1,0 +1,3 @@
+// expect 1
+// Option<&String> with string literal payload
+let s = "the quick brown fox jumps over it".to_string(); match Some(&s) { Some("the quick brown fox jumps over it") => 1, _ => 0, }

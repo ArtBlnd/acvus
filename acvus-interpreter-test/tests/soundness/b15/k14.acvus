@@ -1,0 +1,1 @@
+let { b: @s, } = @o; @s.to_string()

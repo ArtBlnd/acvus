@@ -1,0 +1,2 @@
+// expect 21
+let o = { a: 1, b: 1, }; for i in 0..5 { if i % 2 == 0 { o = { a: o.a + o.b, b: o.b, }; } else { o = { a: o.a, b: o.a + o.b, }; }; } o.a + o.b

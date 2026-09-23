@@ -1,0 +1,2 @@
+// expect 14
+let o = { a: 1, b: 2, }; let i = 0; while i < 3 { o = { a: o.b, b: o.a + o.b, }; i = i + 1; } o.a + o.b + 1

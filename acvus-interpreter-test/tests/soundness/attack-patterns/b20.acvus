@@ -1,0 +1,3 @@
+// expect 5
+// for over &v of arrays, list pattern through the element reference
+let v = vec([[1, 2], [3, 4]]); let s = 0; for e in &v { s = s + match e { [1, b] => *b, [a, 4] => *a, _ => 0, }; } s

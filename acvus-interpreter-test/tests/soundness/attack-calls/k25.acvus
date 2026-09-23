@@ -1,0 +1,3 @@
+// expect 16
+// closure applied twice via higher order compose
+let twice = |f| -> |x| -> f(f(x)); let g = twice(|y| -> y * 2); g(4)

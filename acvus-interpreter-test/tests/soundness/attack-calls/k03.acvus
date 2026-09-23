@@ -1,0 +1,3 @@
+// expect 12
+// closure returned from closure, called immediately
+let mk = |k| -> |x| -> x * k; mk(3)(4)

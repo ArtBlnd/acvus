@@ -1,0 +1,2 @@
+// expect 111
+let t = 0; for o in [Some(A::X(1)), None, Some(A::Y({ n: 11, }))] { if let Some(a) = o { t = t + match a { A::X(s) => s * 100, A::Y(p) => p.n, }; }; } t

@@ -1,0 +1,3 @@
+// expect 3
+// context bind nested in list inside object of a context
+if let { t: [@n, _x], } = @o { }; @n

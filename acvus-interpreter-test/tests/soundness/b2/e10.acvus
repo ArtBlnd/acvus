@@ -1,0 +1,1 @@
+let e = A::X(1); if let A::X(n) = e { n } else { 0 }

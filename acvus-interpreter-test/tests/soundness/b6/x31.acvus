@@ -1,0 +1,1 @@
+let mut_o = &mut @o.c; mut_o.d = 44; @o.c.d

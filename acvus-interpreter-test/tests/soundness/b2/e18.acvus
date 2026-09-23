@@ -1,0 +1,1 @@
+let e = A::X(1); e = A::Y(2); match e { A::X(n) => n, A::Y(n) => n + 100, }

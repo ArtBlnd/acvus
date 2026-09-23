@@ -1,0 +1,2 @@
+// expect "n"
+let n = None; let m = [n, Some("q".to_string())]; let f = |k| -> match &m[0u64] { Some(s) => s.to_string(), None => "n".to_string(), }; f(1)

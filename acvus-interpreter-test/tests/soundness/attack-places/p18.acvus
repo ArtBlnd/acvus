@@ -1,0 +1,3 @@
+// expect 1
+// match on a borrow of element field
+let xs = [{ c: 1, }]; match &xs[0].c { 1 => 1, _ => 0, }

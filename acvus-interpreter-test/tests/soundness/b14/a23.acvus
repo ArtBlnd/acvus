@@ -1,0 +1,1 @@
+let x = "s".to_string(); let r = &x; let rr = r; x = "t".to_string(); rr.to_string()

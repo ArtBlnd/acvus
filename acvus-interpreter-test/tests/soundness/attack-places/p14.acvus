@@ -1,0 +1,3 @@
+// expect 6
+// while let on local option field, reassign field
+let o = { k: Some(3), }; let s = 0; while let Some(x) = o.k { s = s + x; o.k = if x > 1 { Some(x - 1) } else { None }; } s

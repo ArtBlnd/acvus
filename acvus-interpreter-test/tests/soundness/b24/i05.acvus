@@ -1,0 +1,1 @@
+let m = hash_map(); let n = m; let o = m; 0

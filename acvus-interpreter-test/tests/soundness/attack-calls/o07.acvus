@@ -1,0 +1,3 @@
+// expect true
+// contains as free function with converted &String arguments
+let s = "hello".to_string(); let p = "ll".to_string(); contains(&s, &p)

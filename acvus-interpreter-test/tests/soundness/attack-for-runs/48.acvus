@@ -1,0 +1,2 @@
+// expect 1
+let o = B::W(A::X(1)); match o { B::W(a) => match a { A::X(s) => s, }, }

@@ -1,0 +1,3 @@
+// expect 20
+// context array element via ref
+let r = &@arr; r[1u64]

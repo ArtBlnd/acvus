@@ -1,0 +1,1 @@
+let o = Ok("hello world, long enough".to_string()); let a = match o { Ok(t) => t, Err(e) => e, }; a + &o.unwrap_or("x".to_string())

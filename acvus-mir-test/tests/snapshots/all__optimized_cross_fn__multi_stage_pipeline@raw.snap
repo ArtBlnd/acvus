@@ -148,14 +148,15 @@ expression: raw
     ; r39 (@offset) : i64
     ; r40 (s1) : i64
     ; r41 (raw) : i64
-    ; r42 (@stage2) : i64
-    ; r43 (@stage3) : i64
-    ; r44 (@precision) : i64
-    ; r45 (s2) : i64
-    ; r46 (@source_id) : i64
-    ; r47 (@scale) : i64
-    ; r48 (@stage1) : i64
-    ; r49 (s3) : i64
+    ; r42 ($order) : Order
+    ; r43 (@stage2) : i64
+    ; r44 (@stage3) : i64
+    ; r45 (@precision) : i64
+    ; r46 (s2) : i64
+    ; r47 (@source_id) : i64
+    ; r48 (s3) : i64
+    ; r49 (@stage1) : i64
+    ; r50 (@scale) : i64
 
 -- normalize --
 === main ===

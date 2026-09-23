@@ -1,0 +1,2 @@
+// expect 10
+let g = |o| -> o.a * 2; let t = 0; for o in [{ a: 1, b: "x".to_string(), }, { a: 4, b: "y".to_string(), }] { t = t + g(o); } t

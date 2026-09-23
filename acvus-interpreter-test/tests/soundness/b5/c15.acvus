@@ -1,0 +1,1 @@
+let o = { f: |x| -> x + 1, }; let g = o.f; g(3)

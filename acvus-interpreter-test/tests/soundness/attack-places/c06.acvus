@@ -1,0 +1,3 @@
+// expect 4
+// captured &mut used by a method taking &mut in a loop inside the lambda
+let v = vec([1]); let r = &mut v; let f = |n| -> { for i in 0..n { r.push(i); } 0 }; f(3); v.len()

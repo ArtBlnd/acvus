@@ -1,0 +1,2 @@
+// expect "n"
+let f = |x| -> match x { Some(s) => s, None => "n".to_string(), }; let o = None; let r = f(o); let t = f(Some("a".to_string())); r

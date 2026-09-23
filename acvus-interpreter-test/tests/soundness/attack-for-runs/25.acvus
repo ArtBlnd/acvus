@@ -1,0 +1,2 @@
+// expect 3
+let t = 0; let v = vec([Some(1), None, Some(2)]); for o in &v { if let Some(x) = o { t = t + *x; }; } t

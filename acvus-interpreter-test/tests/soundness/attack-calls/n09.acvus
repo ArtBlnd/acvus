@@ -1,0 +1,3 @@
+// refuse
+// binary - on Decimal through a pipe, result discarded
+let f = |a, b| -> a - b; let d = decimal("2".to_string()).unwrap(); let e = decimal("3".to_string()).unwrap(); d | f(e); 0

@@ -1,0 +1,1 @@
+let t = 0; let a = [{ n: 1, }]; let b = a; for o in b { t = t + o.n; } t

@@ -1,0 +1,1 @@
+let f = |v| -> { let r = &v[0u64]; r.to_string() }; f(vec(["x".to_string()]))

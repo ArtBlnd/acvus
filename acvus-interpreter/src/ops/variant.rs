@@ -13,7 +13,7 @@
 
 use acvus_extern::Owned;
 
-use crate::code::{Exit, Marked, Off, Op, successor};
+use crate::code::{Exit, Marked, Op, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::value::{Kind, Value, VariantValue};
@@ -49,16 +49,20 @@ impl<const LARGE: bool> Op for MakeSome<LARGE> {
     }
 }
 
-pub struct MakeNone {
-    pub dst: Off,
+/// `LARGE` is the option's type, as for `MakeSome`: a `None` of an option
+/// whose payload owns a `Large` is that type's owned value, so the frame
+/// claims its register as it claims a `Some`'s, and whatever takes the
+/// register by the type finds the claim.
+pub struct MakeNone<const LARGE: bool> {
+    pub dst: Marked,
     pub next: Box<dyn Op>,
 }
 
-impl Op for MakeNone {
+impl<const LARGE: bool> Op for MakeNone<LARGE> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        m.regs().put(self.dst, Value::NONE);
+        m.regs().define::<LARGE>(self.dst, Value::NONE);
         self.next.run(m, r0)
     }
 }

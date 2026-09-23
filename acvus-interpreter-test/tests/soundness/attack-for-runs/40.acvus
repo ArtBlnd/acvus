@@ -1,0 +1,2 @@
+// expect 3
+let last = None; for o in [{ n: 1, }, { n: 3, }] { last = Some(o); } match last { Some(p) => p.n, None => 0, }

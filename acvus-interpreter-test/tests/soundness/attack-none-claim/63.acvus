@@ -1,0 +1,2 @@
+// expect 3
+let o = None; let v = [o, Some([1, 2])]; let s = 0; for e in v { if let Some(x) = e { s = s + x[0u64] + x[1u64]; }; } s

@@ -1,0 +1,1 @@
+let r = Ok(Some(2)); let f = |r| -> { let o = r?; Ok(o.unwrap_or(0)) }; match f(r) { Ok(n) => n, Err(e) => e, }

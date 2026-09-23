@@ -1,0 +1,3 @@
+// expect 9
+// &mut of element field then store, then compare with element read
+let a = [{ c: 1, }]; let r = &mut a[0].c; *r = 9; a[0].c

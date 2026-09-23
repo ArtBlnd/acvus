@@ -1,0 +1,3 @@
+// expect 6
+// while let over pop through a lambda param settled after the call
+let v = vec([1, 2, 3]); let f = |r| -> { let s = 0; while let Some(x) = r.pop() { s = s + x; } s }; f(&mut v)

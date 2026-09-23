@@ -1,0 +1,2 @@
+// expect 3
+let v = vec([1, 2, 3]); let r = &v; let n = if true { r.len() } else { r[0u64] as u64 }; n

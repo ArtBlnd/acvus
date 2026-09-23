@@ -1,0 +1,1 @@
+let s = "ab".to_string(); let r = &s; r.len()

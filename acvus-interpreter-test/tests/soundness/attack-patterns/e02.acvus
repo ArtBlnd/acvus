@@ -1,0 +1,3 @@
+// expect 5
+// context bind in a failing first arm does not write
+let t = (1, 6); let r = match t { (@n, 5) => 1, (_, _) => 2, _ => 3, }; @n + r - 2

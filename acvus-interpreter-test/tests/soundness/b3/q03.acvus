@@ -1,0 +1,1 @@
+let f = |x| -> { let y = x?; Ok(y * 2) }; match f(Err("e".to_string())) { Ok(n) => n.to_string(), Err(s) => s, }

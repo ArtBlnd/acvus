@@ -1,0 +1,2 @@
+// expect "abc"
+let cur = { s: "".to_string(), n: 0, }; for o in ["a".to_string(), "b".to_string(), "c".to_string()] { cur = { s: cur.s + &o, n: cur.n + 1, }; } cur.s

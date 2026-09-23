@@ -1,0 +1,2 @@
+// expect 12
+let c = true; let o = if c { { a: 1, b: 2, } } else { { a: 3, b: 4, } }; o.a + o.b * 10 - 9

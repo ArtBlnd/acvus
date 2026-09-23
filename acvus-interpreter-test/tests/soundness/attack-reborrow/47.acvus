@@ -1,0 +1,2 @@
+// expect 2
+let v = vec([1, 2, 3]); let r = &mut v; rotate_left(r, 1u64); r.push(4); v[0u64]

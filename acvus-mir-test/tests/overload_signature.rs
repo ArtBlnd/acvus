@@ -14,6 +14,7 @@ use acvus_extern::{
     Closure, Externs, Ref, Registry, Runtime, Shared, TypesOnly, Var, extern_fn, extern_registry,
     extern_signature, kind,
 };
+use acvus_mir::typeck::CallTarget;
 use acvus_mir::graph::{
     CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef, extract, infer,
 };
@@ -155,8 +156,12 @@ fn check_functions(
     };
     let resolution = outcome.resolution().expect("complete");
     let mut callees: Vec<String> = resolution
-        .direct_calls
+        .calls
         .values()
+        .filter_map(|target| match target {
+            CallTarget::Declared(callee) => Some(callee),
+            _ => None,
+        })
         .map(|callee| {
             let id = match callee {
                 Callee::Extern { id, .. } | Callee::Direct(id) => id,

@@ -1,0 +1,1 @@
+let s = "abc"; let t = s.to_string(); let u = t.clone() + &t; u.len()

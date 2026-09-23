@@ -1,0 +1,3 @@
+// expect 3
+// lambda param as receiver of a chained method (iter len)
+let v = vec([1, 2, 3]); let f = |r| -> as_iter(r) | fold(0, |a, x| -> a + 1); f(&v)

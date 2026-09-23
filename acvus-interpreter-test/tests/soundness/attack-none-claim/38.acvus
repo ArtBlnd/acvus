@@ -1,0 +1,2 @@
+// expect "n"
+let v = [None, Some("a".to_string())]; let w = v; match &w[0u64] { Some(s) => s.to_string(), None => "n".to_string(), }

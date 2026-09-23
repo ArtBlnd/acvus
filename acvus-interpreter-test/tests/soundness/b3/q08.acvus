@@ -1,0 +1,1 @@
+let i = 0; let acc = 0; while i < 3 { acc = acc + Some(i)?; i = i + 1; } Some(acc)

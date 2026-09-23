@@ -1,0 +1,1 @@
+let a = "x".to_string(); let b = "x".to_string(); a == b

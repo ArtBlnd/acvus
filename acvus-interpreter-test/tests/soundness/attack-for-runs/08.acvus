@@ -1,0 +1,2 @@
+// expect 5
+let t = 0; for o in [Ok(2), Err("e".to_string()), Ok(3)] { match o { Ok(x) => { t = t + x; }, Err(e) => { t = t + 0; }, }; } t

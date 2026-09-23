@@ -1,0 +1,2 @@
+// expect 7
+let v = vec([1, 2, 3]); let r = &mut v; let rr = &mut r; rr.push(7); v[3u64]

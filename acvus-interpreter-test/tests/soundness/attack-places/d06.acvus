@@ -1,0 +1,3 @@
+// expect 4
+// lambda param settles to &mut of a field; index store via param in a loop
+let o = { v: [0, 0], }; let f = |r| -> { for i in 0u64..2u64 { r[i] = 2; } 0 }; f(&mut o.v); o.v[0u64] + o.v[1u64]

@@ -1,0 +1,2 @@
+// expect 6
+let acc = None; let i = 0; while i < 3 { acc = match acc { Some(s) => Some(s + 2), None => Some(2), }; i = i + 1; } match acc { Some(s) => s, None => 0, }

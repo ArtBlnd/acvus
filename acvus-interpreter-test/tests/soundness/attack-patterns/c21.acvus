@@ -1,0 +1,2 @@
+// control, expect "…it…it": let from a String field through a shared reference
+let o = { k: "the quick brown fox jumps over it".to_string(), }; let r = &o; let t = r.k; t + &o.k

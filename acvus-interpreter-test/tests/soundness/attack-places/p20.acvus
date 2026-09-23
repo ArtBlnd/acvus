@@ -1,0 +1,3 @@
+// expect ab
+// string pattern on field of call result
+let mk = |u| -> { s: u.to_string(), }; match mk("ab").s { "ab" => "ab".to_string(), t => t, }

@@ -1,0 +1,2 @@
+// expect "b"
+let r = "".to_string(); let v = vec([1, 2]); for o in &v { if *o == 2 { r = "b".to_string(); break; }; } r

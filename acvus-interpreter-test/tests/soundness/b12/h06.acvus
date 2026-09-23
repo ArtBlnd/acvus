@@ -1,0 +1,1 @@
+let o = { a: 1, }; o.b = "s".to_string(); let p = o; p.b

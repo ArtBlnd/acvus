@@ -1,0 +1,1 @@
+let xs = vec([{ a: 1, }, { a: 2, }]); for x in &mut xs { x.a = x.a * 10; } xs[1u64].a

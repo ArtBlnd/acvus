@@ -1,0 +1,4 @@
+Hi {{ &@s }}
+% for x in &@strs
+- {{ x }}
+% end

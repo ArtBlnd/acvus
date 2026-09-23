@@ -1,0 +1,3 @@
+// expect 1
+// arity: as_slice via index with a closure named as_slice shadowing? closure with wrong arity named len used as method
+let len = |a, b| -> a; let v = vec([1]); v.len()

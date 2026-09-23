@@ -1,0 +1,3 @@
+// expect 3
+// element field aggregate read into a local (Option field)
+let xs = [{ k: Some(3), }]; let y = xs[0].k; y.unwrap_or(0)

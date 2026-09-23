@@ -379,6 +379,11 @@ pub enum MirErrorKind {
         declared: String,
         field: String,
     },
+    /// A value whose type was laid out outside the body met a type with a
+    /// member it lacks.
+    FixedLacks {
+        member: String,
+    },
     /// An object type with more fields than `ty::ObjectTy::MAX_FIELDS`, whose
     /// positions the machine cannot name.
     ObjectTooWide {
@@ -424,6 +429,17 @@ pub enum MirErrorKind {
         source_ty: Ty,
     },
     ExternParamAssign(String),
+    /// One pattern binds a name twice.
+    NameBoundTwice(String),
+    /// An operator checked where its operand's type was still open, whose
+    /// operand settled to a type the operator on words does not take.
+    OperatorDecidedBeforeItsOperand {
+        op: String,
+        ty: Ty,
+    },
+    /// A `$` input nothing that reads it gives a type, so no value can be
+    /// supplied for it.
+    InputTypeUndecided(String),
     BindingTypeMismatch {
         name: String,
         value: acvus_ast::Literal,
@@ -1008,6 +1024,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     object_ty.shown(interner)
                 )
             }
+            MirErrorKind::FixedLacks { member } => {
+                write!(
+                    f,
+                    "`{member}` cannot be added to a type laid out outside this body"
+                )
+            }
             MirErrorKind::ObjectLacksDeclaredField { declared, field } => {
                 write!(f, "object lacks field `{field}` that `{declared}` declares")
             }
@@ -1088,6 +1110,22 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "`${name}` is bound to {value:?}, which is not a value of {}, the type its uses require",
                     ty.shown(interner)
                 )
+            }
+            MirErrorKind::InputTypeUndecided(name) => {
+                write!(
+                    f,
+                    "nothing that reads `${name}` decides its type; use it where its type is known"
+                )
+            }
+            MirErrorKind::OperatorDecidedBeforeItsOperand { op, ty } => {
+                write!(
+                    f,
+                    "`{op}` is decided where it is written, and its operand is known to be {} only later",
+                    ty.shown(interner)
+                )
+            }
+            MirErrorKind::NameBoundTwice(name) => {
+                write!(f, "`{name}` is bound twice in one pattern")
             }
             MirErrorKind::ExternParamAssign(name) => {
                 write!(

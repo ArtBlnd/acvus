@@ -1,0 +1,1 @@
+let o = { a: { b: { c: 1, }, }, }; let r = &mut o.a.b; r.c = 5; o.a.b.c

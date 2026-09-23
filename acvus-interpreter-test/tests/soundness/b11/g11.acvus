@@ -1,0 +1,1 @@
+let o = { a: 1, }; let p = { a: 2, b: 3, }; o = p; o.b

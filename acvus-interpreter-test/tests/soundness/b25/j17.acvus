@@ -1,0 +1,1 @@
+let a = [1]; let r = &mut a; r[0u64] = 5; let b = a; b[0u64]

@@ -1,0 +1,3 @@
+// refuse
+// < on strings through a lambda
+let less = |a, b| -> a < b; less("a", "b")

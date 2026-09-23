@@ -1,0 +1,3 @@
+// expect 6
+// lambda in a loop pushing
+let v = vec([0]); let f = |r, x| -> { r.push(x); 0 }; for i in 1..6 { f(&mut v, i); } v.len()

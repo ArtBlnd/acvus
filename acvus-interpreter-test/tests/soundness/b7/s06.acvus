@@ -1,0 +1,1 @@
+let t = @s; @s = "z".to_string(); t + @s

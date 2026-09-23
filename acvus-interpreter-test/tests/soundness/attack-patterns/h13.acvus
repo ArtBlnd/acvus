@@ -1,0 +1,3 @@
+// refuse
+// context bind in a pattern through &mut of a context
+if let [@n, _x, _y] = &mut @arr { }; @n

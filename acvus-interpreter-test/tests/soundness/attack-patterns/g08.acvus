@@ -1,0 +1,3 @@
+// expect "the quick brown fox jumps over it"
+// match whose arm is itself a match on a Large String bound by the outer
+let o = Some("the quick brown fox jumps over it".to_string()); match o { Some(s) => match s { "a" => "no".to_string(), t => t, }, None => "n".to_string(), }

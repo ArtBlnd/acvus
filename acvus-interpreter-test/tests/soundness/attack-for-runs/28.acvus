@@ -1,0 +1,2 @@
+// expect 2
+let t = 0; for o in [Some(Some(A::X(2))), Some(None), None] { match o { Some(i) => { match i { Some(a) => { match a { A::X(s) => { t = t + s; }, }; }, None => { t = t; }, }; }, None => { t = t; }, }; } t

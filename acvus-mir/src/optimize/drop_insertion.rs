@@ -51,7 +51,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         let block_idx = BlockIdx(bi);
         let block = &cfg.blocks[bi];
 
-        let mut drops_after: Vec<(usize, ValueId)> = Vec::new();
+        let mut drops: Vec<BlockDrop> = Vec::new();
 
         for (ii, inst) in block.insts.iter().enumerate() {
             for u in loans.uses_with_storage(&inst.kind) {
@@ -60,7 +60,10 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                     && needs_drop(u, val_types)
                     && !ends_ownership(&inst.kind, u, val_types)
                 {
-                    drops_after.push((ii, u));
+                    drops.push(BlockDrop {
+                        at: ii + 1,
+                        value: u,
+                    });
                 }
             }
         }
@@ -68,12 +71,17 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         // Values defined in this block that are never used, or whose last use
         // is the terminator and it consumes them (no Drop needed).
         let term_uses = terminator_uses_with_storage(&block.terminator, &loans);
-        let already_dropped: FxHashSet<ValueId> = drops_after.iter().map(|(_, v)| *v).collect();
+        let already_dropped: FxHashSet<ValueId> = drops.iter().map(|drop| drop.value).collect();
 
-        // Collect all defs in this block.
+        // Collect all defs in this block, each once: a storage an `Assign`
+        // writes is defined at every write.
         let mut all_defs: Vec<ValueId> = block.params.clone();
         for inst in &block.insts {
-            all_defs.extend(inst_info::defs(&inst.kind));
+            for def in inst_info::defs(&inst.kind) {
+                if !all_defs.contains(&def) {
+                    all_defs.push(def);
+                }
+            }
         }
 
         for v in all_defs {
@@ -101,13 +109,23 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                 }
 
                 if !is_used_in_block(block, v, &loans) {
-                    // Unused def - insert drop right after definition.
-                    let idx = block
+                    // Unused def - each value it is given dies where it is
+                    // given, so a drop follows every definition; a block
+                    // parameter is defined before the block's first
+                    // instruction.
+                    let defined: Vec<usize> = block
                         .insts
                         .iter()
-                        .position(|inst| inst_info::defs(&inst.kind).contains(&v))
-                        .unwrap_or(0);
-                    drops_after.push((idx, v));
+                        .enumerate()
+                        .filter(|(_, inst)| inst_info::defs(&inst.kind).contains(&v))
+                        .map(|(at, _)| at + 1)
+                        .collect();
+                    match defined.is_empty() {
+                        true => drops.push(BlockDrop { at: 0, value: v }),
+                        false => {
+                            drops.extend(defined.into_iter().map(|at| BlockDrop { at, value: v }))
+                        }
+                    }
                 }
                 // If used in block but not consumed, it was already handled
                 // in the per-instruction loop above.
@@ -115,15 +133,15 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         }
 
         // Sort by insertion point (reverse order to preserve indices when inserting).
-        drops_after.sort_by(|a, b| b.0.cmp(&a.0));
+        drops.sort_by(|a, b| b.at.cmp(&a.at));
 
         let block = &mut cfg.blocks[bi];
-        for (after_idx, val) in drops_after {
+        for BlockDrop { at, value } in drops {
             let drop_inst = Inst {
                 span: acvus_ast::Span::ZERO,
-                kind: InstKind::Drop { src: val },
+                kind: InstKind::Drop { src: value },
             };
-            block.insts.insert(after_idx + 1, drop_inst);
+            block.insts.insert(at, drop_inst);
         }
     }
 
@@ -431,7 +449,7 @@ fn terminator_uses_with_storage(term: &Terminator, loans: &Loans) -> FxHashSet<V
 fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
     let mut uses = FxHashSet::default();
     match term {
-        Terminator::Return { value, order } => {
+        Terminator::Return { value, order, .. } => {
             uses.insert(*value);
             uses.extend(order.iter().copied());
         }
@@ -562,6 +580,12 @@ fn emptied_in(
     emptied
 }
 
+/// A drop placed inside a block, before the instruction now at `at`.
+struct BlockDrop {
+    at: usize,
+    value: ValueId,
+}
+
 /// Does this value need a Drop instruction?
 fn needs_drop(val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
     val_types
@@ -659,7 +683,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
 fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
     match term {
         // Return consumes the value (transferred to caller).
-        Terminator::Return { value, order } => *value == val || *order == Some(val),
+        Terminator::Return { value, order, .. } => *value == val || *order == Some(val),
         // Jump args are transferred to the target block.
         Terminator::Jump { args, .. } => args.contains(&val),
         // A two-way branch transfers its edge args; the cond is read-only.
@@ -861,6 +885,62 @@ mod tests {
     }
 
     // -- Unused move-only value: dropped immediately ------------------
+
+    /// A storage written twice and never read: each value dies at its own
+    /// write, so a drop follows each write, not two after the first.
+    #[test]
+    fn an_unread_storage_is_dropped_after_every_write() {
+        let (mut cfg, val_types) = make_cfg_with_types(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(0),
+                },
+                InstKind::Assign {
+                    target: RefTarget::Var(v(5)),
+                    path: vec![],
+                    value: v(0),
+                },
+                InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Assign {
+                    target: RefTarget::Var(v(5)),
+                    path: vec![],
+                    value: v(1),
+                },
+                InstKind::Const {
+                    dst: v(2),
+                    value: acvus_ast::Literal::Int(2),
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            vec![
+                (v(0), user_defined_ty()),
+                (v(1), user_defined_ty()),
+                (v(5), user_defined_ty()),
+                (v(2), Ty::I64),
+            ],
+        );
+
+        insert_drops(&mut cfg, &val_types);
+        let kinds: Vec<&InstKind> = cfg.blocks[0].insts.iter().map(|i| &i.kind).collect();
+        let dropped_after = |write: usize| {
+            matches!(kinds.get(write + 1), Some(InstKind::Drop { src }) if *src == v(5))
+        };
+        let writes: Vec<usize> = kinds
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| matches!(k, InstKind::Assign { .. }))
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(writes.len(), 2);
+        assert!(writes.iter().all(|w| dropped_after(*w)), "{kinds:?}");
+    }
 
     #[test]
     fn drop_unused_move_only() {

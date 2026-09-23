@@ -1,0 +1,3 @@
+// refuse
+// closure passed as argument called with wrong arity inside
+let ap = |f, x| -> f(x, x); ap(|y| -> y * 2, 3)

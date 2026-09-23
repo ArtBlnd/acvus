@@ -1,0 +1,3 @@
+// expect 4
+// while loop with index through a reference and pop
+let v = vec([1, 1, 1, 1]); let n = 0; while let Some(x) = v.pop() { n = n + x; } n

@@ -1,0 +1,2 @@
+// expect "d"
+let o = None; o.unwrap_or("d".to_string()) + &Some("".to_string()).unwrap_or("q".to_string())

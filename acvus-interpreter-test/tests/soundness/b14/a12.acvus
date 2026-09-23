@@ -1,0 +1,1 @@
+let v = vec(["a".to_string()]); let r = &v[0u64]; let f = |k| -> r.len() + k; v.clear(); f(0u64)

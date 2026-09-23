@@ -1,0 +1,1 @@
+let out = vec([]); for i in 0..3 { out.push(i.to_string()); } out[2u64].to_string()

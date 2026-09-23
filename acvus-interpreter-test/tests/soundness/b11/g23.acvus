@@ -1,0 +1,1 @@
+let o = if true { Some({ a: 1, }) } else { Some({ a: 2, b: 3, }) }; match o { Some(p) => p.b, None => 0, }

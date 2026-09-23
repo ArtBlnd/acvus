@@ -1,0 +1,3 @@
+// expect true
+// compare &a.b with &a.b after a store through the other field
+let o = { a: { b: 1, }, c: 2, }; o.c = 3; let p = &o.a.b; *p == 1

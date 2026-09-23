@@ -1,0 +1,3 @@
+// expect 6
+// while loop with element index store and read of same element
+let a = [1, 2, 3]; let i = 0u64; let s = 0; while i < 3u64 { a[i] = a[i] + 0; s = s + a[i]; i = i + 1u64; } s

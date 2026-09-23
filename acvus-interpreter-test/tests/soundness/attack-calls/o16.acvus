@@ -1,0 +1,3 @@
+// expect 3
+// is_empty overloads across kinds
+let s = "".to_string(); let v = vec([1]); let a = [1]; (if s.is_empty() { 1 } else { 0 }) + (if v.is_empty() { 0 } else { 1 }) + (if is_empty(&a) { 0 } else { 1 })

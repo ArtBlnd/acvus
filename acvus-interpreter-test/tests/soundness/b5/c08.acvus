@@ -1,0 +1,1 @@
+let v = vec([1, 2]); let f = |i| -> v[i]; let a = f(0u64); a + f(1u64)

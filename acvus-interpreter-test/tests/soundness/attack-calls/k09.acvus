@@ -1,0 +1,3 @@
+// refuse
+// arity: closure piped with too few total
+let f = |a, b, c| -> a + b + c; 1 | f(2)

@@ -1,0 +1,3 @@
+// expect 4
+// lambda passed a local already holding &mut
+let v = vec([1]); let r = &mut v; let f = |q| -> { q.push(2); q.push(3); q.push(4); 0 }; f(r); v.len()

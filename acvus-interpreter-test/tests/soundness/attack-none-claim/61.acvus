@@ -1,0 +1,2 @@
+// expect 2
+let o = None; let v = [Some(1), o]; let w = v; w.len()

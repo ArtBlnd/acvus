@@ -1,0 +1,2 @@
+// expect 7
+let mk = |c| -> if c { { a: 3, b: 4, } } else { { a: 0, b: 0, } }; let o = mk(true); o.a + o.b

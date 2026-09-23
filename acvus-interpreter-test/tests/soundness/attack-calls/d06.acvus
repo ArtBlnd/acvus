@@ -1,0 +1,3 @@
+// refuse
+// duplicate in while let pattern
+let v = vec([(1, 2)]); while let Some((x, x)) = v.pop() { } 0

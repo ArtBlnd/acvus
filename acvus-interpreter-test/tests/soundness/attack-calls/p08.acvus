@@ -1,0 +1,3 @@
+// expect true
+// == on Strings via lambda
+let eq = |a, b| -> a == b; eq("x".to_string(), "x".to_string())

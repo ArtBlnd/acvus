@@ -1,0 +1,3 @@
+// refuse
+// extern param as a pattern binding
+if let Some($p) = Some(1) { }; 0

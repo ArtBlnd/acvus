@@ -66,6 +66,8 @@ pub struct CompileResult {
     pub fn_types: FxHashMap<QualifiedRef, Ty>,
     pub extern_executables: FxHashMap<QualifiedRef, Executable>,
     pub instances: acvus_extern::InstanceTable,
+    /// The `$` inputs the entry still reads, which the host supplies.
+    pub required_inputs: Vec<acvus_mir::graph::ContextInfo>,
 }
 
 fn compile(
@@ -340,6 +342,10 @@ where
         });
     }
 
+    let mut inputs = opt_result.inputs;
+    let required_inputs = inputs
+        .remove(&entry_qref)
+        .expect("the optimizer lists the inputs of every module it returns");
     let modules = opt_result.modules;
 
     // Build context qref -> name mapping.
@@ -356,6 +362,7 @@ where
         fn_types,
         extern_executables,
         instances,
+        required_inputs,
     })
 }
 
@@ -701,6 +708,15 @@ macro_rules! attempt_within {
             $limit,
             $crate::corpus::Caller(::core::module_path!()),
         )
+    };    ($source:expr, contexts = $contexts:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
+        $crate::corpus::attempt_within_in(
+            $source,
+            $contexts,
+            $opt,
+            $stage,
+            $limit,
+            $crate::corpus::Caller(::core::module_path!()),
+        )
     };
 }
 
@@ -728,7 +744,6 @@ pub mod corpus {
     use acvus_mir::graph::{ParsedAst, QualifiedRef};
     use acvus_mir::ty::{IntTy, Ty};
     use acvus_utils::Interner;
-    use rustc_hash::FxHashMap;
 
     use crate::Opt;
 
@@ -1286,7 +1301,23 @@ pub mod corpus {
     /// Compile `source` at `opt`, the way `acvus run` compiles a file: no
     /// context declarations, the standard registries, `!` as the return type.
     pub fn attempt(source: &str, opt: Opt, stage: Stage) -> Outcome {
+        attempt_in(source, &serde_json::Map::new(), opt, stage)
+    }
+
+    /// [`attempt`] with the contexts a JSON object declares: each key is a
+    /// context, its type the value's type, as `acvus run --context` reads it.
+    pub fn attempt_in(
+        source: &str,
+        contexts: &serde_json::Map<String, serde_json::Value>,
+        opt: Opt,
+        stage: Stage,
+    ) -> Outcome {
         let interner = Interner::new();
+        let context: crate::Context = contexts
+            .iter()
+            .map(|(name, value)| (interner.intern(name), crate::value_from_json(&interner, value)))
+            .collect();
+        let (context_types, snapshot) = crate::split_context(&interner, context);
         let parsed = match acvus_ast::parse_script(&interner, source) {
             Ok(ast) => ParsedAst::Script(ast),
             Err(script) => match acvus_ast::parse(&interner, source) {
@@ -1298,7 +1329,7 @@ pub mod corpus {
             crate::check_source(
                 &interner,
                 parsed,
-                &FxHashMap::default(),
+                &context_types,
                 acvus_ext::std_registries(),
                 Ty::Never,
                 opt,
@@ -1306,6 +1337,14 @@ pub mod corpus {
             )
         }));
         let cr = match compiled {
+            Ok(Ok(cr)) if !cr.required_inputs.is_empty() => {
+                let unbound: Vec<String> = cr
+                    .required_inputs
+                    .iter()
+                    .map(|input| format!("`${}` is required and not bound", interner.resolve(input.name.name)))
+                    .collect();
+                return Outcome::Refused(unbound.join("; "));
+            }
             Ok(Ok(cr)) => cr,
             Ok(Err(refusal)) => return Outcome::Refused(refusal.messages.join("; ")),
             Err(panic) => return Outcome::CompilePanicked(message(panic.as_ref())),
@@ -1344,7 +1383,7 @@ pub mod corpus {
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
         let mut interp =
-            Interpreter::new(shared, cr.entry_qref, InMemoryContext::new(HashMap::new()));
+            Interpreter::new(shared, cr.entry_qref, InMemoryContext::new(snapshot));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("a current-thread runtime");
@@ -1355,6 +1394,7 @@ pub mod corpus {
     }
 
     const SOURCE: &str = "ACVUS_CORPUS_SOURCE";
+    const CONTEXTS: &str = "ACVUS_CORPUS_CONTEXTS";
     const LEVEL: &str = "ACVUS_CORPUS_OPT";
     const UNTIL: &str = "ACVUS_CORPUS_STAGE";
     const MARK: &str = "acvus-corpus-outcome ";
@@ -1375,7 +1415,11 @@ pub mod corpus {
             Ok("prepare") => Stage::Prepare,
             _ => Stage::Run,
         };
-        let outcome = attempt(&source, opt, stage);
+        let contexts = match std::env::var(CONTEXTS) {
+            Ok(json) => serde_json::from_str(&json).expect("the parent wrote a JSON object"),
+            Err(_) => serde_json::Map::new(),
+        };
+        let outcome = attempt_in(&source, &contexts, opt, stage);
         println!("{MARK}{}", encode(&outcome));
         use std::io::Write;
         std::io::stdout()
@@ -1439,6 +1483,18 @@ pub mod corpus {
         limit: Duration,
         caller: Caller,
     ) -> Result<Outcome, Lapse> {
+        attempt_within_in(source, &serde_json::Map::new(), opt, stage, limit, caller)
+    }
+
+    /// [`attempt_within`] with the contexts of [`attempt_in`].
+    pub fn attempt_within_in(
+        source: &str,
+        contexts: &serde_json::Map<String, serde_json::Value>,
+        opt: Opt,
+        stage: Stage,
+        limit: Duration,
+        caller: Caller,
+    ) -> Result<Outcome, Lapse> {
         let child_test = caller.child_test();
         let exe = std::env::current_exe().expect("the test binary knows its own path");
         let mut child = std::process::Command::new(exe)
@@ -1449,6 +1505,10 @@ pub mod corpus {
                 "--test-threads=1",
             ])
             .env(SOURCE, source)
+            .env(
+                CONTEXTS,
+                serde_json::Value::Object(contexts.clone()).to_string(),
+            )
             .env(
                 LEVEL,
                 match opt {

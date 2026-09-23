@@ -223,13 +223,14 @@ expression: raw
     ; r42 (v55) : i64
     ; r43 (v56) : Order
     ; r44 (@result_label) : String
-    ; r45 (v46) : Unit
-    ; r46 (history) : i64
+    ; r45 (history) : i64
+    ; r46 ($order) : Order
     ; r47 (@weight) : i64
-    ; r48 (@result_score) : i64
-    ; r49 (@threshold) : i64
-    ; r50 (label) : String
-    ; r51 (score) : i64
-    ; r52 (@alert_count) : i64
-    ; r53 (@user_id) : i64
-    ; r54 (profile) : i64
+    ; r48 (v46) : Unit
+    ; r49 (@result_score) : i64
+    ; r50 (@threshold) : i64
+    ; r51 (label) : String
+    ; r52 (score) : i64
+    ; r53 (@alert_count) : i64
+    ; r54 (@user_id) : i64
+    ; r55 (profile) : i64
