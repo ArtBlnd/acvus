@@ -16,6 +16,9 @@ expression: ir
     12 |   assign @n = r5
     13 |   jump L0
     14 | L2:
+    16 |   r7 = take @n
+    17 |   commit @n = r7
+    18 |   return () (r8)
 
     ; r0 (@n) : i64
     ; r1 (@n) : i64
@@ -24,4 +27,6 @@ expression: ir
     ; r4 (@n) : i64
     ; r5 (v8) : i64
     ; r6 (v7) : i64
-    ; r7 (@n) : i64
+    ; r7 (v10) : i64
+    ; r8 (v9) : Unit
+    ; r9 (@n) : i64

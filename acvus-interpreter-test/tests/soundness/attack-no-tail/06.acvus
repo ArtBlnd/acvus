@@ -1,0 +1,3 @@
+// expect null
+// a body ending in a for loop whose body calls an opaque function
+for i in 0..3 { opaque(i); }

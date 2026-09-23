@@ -42,7 +42,7 @@ fn a_context_assigned_again_before_the_run_ends_is_accepted() {
 
 #[test]
 fn a_second_read_of_a_moved_out_context_is_a_use_after_move_at_that_read() {
-    let errs = errors("let q = @query; let r = @query;");
+    let errs = errors("let q = @query; let r = @query; @query = q;");
     assert_eq!(errs.len(), 1, "{errs:#?}");
     assert!(
         errs[0].ends_with("`@query` is used here after it was moved"),

@@ -1,0 +1,3 @@
+// expect null
+// a body ending in an assignment returns unit
+let d = 0; d = 1;

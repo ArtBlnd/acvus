@@ -69,7 +69,7 @@ fn a_use_after_move_labels_the_move() {
 
 #[test]
 fn a_use_of_a_moved_out_context_labels_the_move() {
-    let (message, labels) = only("let q = @query; let r = @query;", &query);
+    let (message, labels) = only("let q = @query; let r = @query; @query = q;", &query);
     assert_eq!(message, "`@query` is used here after it was moved");
     assert_eq!(labels, [at("@query", "moved here")]);
 }

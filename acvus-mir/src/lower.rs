@@ -431,10 +431,11 @@ impl<'a> Lowerer<'a> {
         for stmt in &script.stmts {
             self.lower_stmt(stmt);
         }
-        if let Some(tail) = &script.tail {
-            let val = self.lower_expr(tail);
-            self.emit_return(script.span, val);
-        }
+        let val = match &script.tail {
+            Some(tail) => self.lower_expr(tail),
+            None => self.emit_unit(script.span),
+        };
+        self.emit_return(script.span, val);
         self.build_module()
     }
 

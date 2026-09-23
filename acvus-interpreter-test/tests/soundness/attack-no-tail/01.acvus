@@ -1,0 +1,6 @@
+// expect null
+// a body ending in a for loop returns unit
+let d = 0;
+for i in 0..3 {
+    d = d + i;
+}

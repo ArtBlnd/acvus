@@ -243,16 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn script_trailing_semicolon_no_yield() {
+    fn script_trailing_semicolon_returns_unit() {
         let i = Interner::new();
         let module = compile_script(&i, "let x = @data;", &[("data", Ty::String)]).unwrap();
-        assert!(
-            !module
-                .main
-                .insts
-                .iter()
-                .any(|i| matches!(&i.kind, InstKind::Return { .. }))
-        );
+        assert!(module.main.insts.iter().any(|i| matches!(
+            &i.kind,
+            InstKind::Return { value, .. } if module.main.val_types.get(value) == Some(&Ty::Unit)
+        )));
     }
 
     // -- Extern fn tests ---------------------------------------------

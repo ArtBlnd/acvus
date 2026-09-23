@@ -1,0 +1,3 @@
+// expect null
+// a body ending in a while loop returns unit
+let d = 0; while d < 3 { d = d + 1; }
