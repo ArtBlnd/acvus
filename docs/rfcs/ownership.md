@@ -233,9 +233,11 @@ Status: Proposed
 5. **A function type labels its positions.** Each parameter and result
    position carries a label: a region the signature names, or the k-th
    position of a type variable, `(T, k)`. The *outputs* are the result's
-   positions and the positions a `&mut` parameter points at; the inputs are
-   every parameter position, a `&mut` pointee's included, since a write
-   joins (rule 4). At a call each output position becomes the join of the
+   positions, the positions a `&mut` parameter points at, and the parameter
+   positions of a function-typed parameter, which the callee may pass
+   values into; the inputs are every parameter position, a `&mut` pointee's
+   included, since a write joins (rule 4), and a function-typed parameter's
+   result positions. At a call each output position becomes the join of the
    input positions that share its label. A value of type `T` is opaque to
    the callee, so its k-th position reaches only a k-th position of `T`. A
    lambda's labels are inferred by the type checker from its body; a named
