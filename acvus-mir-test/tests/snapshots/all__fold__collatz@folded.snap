@@ -6,33 +6,32 @@ expression: listing
      0 |   r0 = fetch @n
      3 |   jump L0(0 (r1), 0 (r2))
      4 | L0(r3: i64, r4: i64):
-     5 |   r5 = r3 < r0
-     6 |   jump_if r5 then L1 else L2
-     7 | L1:
-     9 |   r6 = r3 % 2 (r7)
-    11 |   r8 = r6 == 0 (r9)
-    13 |   r10 = r3 + 1 (r11)
-    14 |   if r8 -> L3 else L5 join L4
-    15 | L3:
-    17 |   r12 = r3 / 2 (r13)
-    18 |   jump L4(r12)
-    19 | L5:
-    21 |   r14 = r3 * 3 (r15)
-    23 |   r16 = r14 + 1 (r17)
-    24 |   jump L4(r16)
-    25 | L4(r18: i64):
-    26 |   r19 = r4 + r18
-    27 |   jump L0(r10, r19)
-    28 | L2:
-    29 |   commit @n = r0
-    30 |   return r4
+     5 |   for range(0 (r1)..r0) -> L1 else L2
+     6 | L1(r5: i64):
+     8 |   r6 = r3 % 2 (r7)
+    10 |   r8 = r6 == 0 (r9)
+    12 |   r10 = r3 + 1 (r11)
+    13 |   if r8 -> L3 else L5 join L4
+    14 | L3:
+    16 |   r12 = r3 / 2 (r13)
+    17 |   jump L4(r12)
+    18 | L5:
+    20 |   r14 = r3 * 3 (r15)
+    22 |   r16 = r14 + 1 (r17)
+    23 |   jump L4(r16)
+    24 | L4(r18: i64):
+    25 |   r19 = r4 + r18
+    26 |   jump L0(r10, r19)
+    27 | L2:
+    28 |   commit @n = r0
+    29 |   return r4
 
     ; r0 (@n) : i64
     ; r1 (v3) : i64
     ; r2 (v5) : i64
     ; r3 (v37) : i64
     ; r4 (v40) : i64
-    ; r5 (v9) : Bool
+    ; r5 (v44) : i64
     ; r6 (v12) : i64
     ; r7 (v11) : i64
     ; r8 (v14) : Bool
@@ -48,25 +47,26 @@ expression: listing
     ; r18 (v23) : i64
     ; r19 (v27) : i64
     ; r20 (acc) : i64
-    ; r21 (acc) : i64
-    ; r22 (i) : i64
+    ; r21 (i) : i64
+    ; r22 (acc) : i64
     ; r23 (acc) : i64
-    ; r24 (d) : i64
-    ; r25 (@n) : i64
-    ; r26 (v33) : i64
-    ; r27 (v34) : i64
-    ; r28 (i) : i64
+    ; r24 (v9) : Bool
+    ; r25 (d) : i64
+    ; r26 (@n) : i64
+    ; r27 (v33) : i64
+    ; r28 (v34) : i64
     ; r29 (i) : i64
-    ; r30 (v43) : i64
-    ; r31 (v36) : i64
-    ; r32 (v39) : i64
-    ; r33 (v42) : i64
-    ; r34 (@n) : i64
-    ; r35 (i) : i64
-    ; r36 (i) : i64
-    ; r37 (d) : i64
+    ; r30 (i) : i64
+    ; r31 (v43) : i64
+    ; r32 (v36) : i64
+    ; r33 (v39) : i64
+    ; r34 (v42) : i64
+    ; r35 (@n) : i64
+    ; r36 (d) : i64
+    ; r37 (i) : i64
     ; r38 (i) : i64
     ; r39 (v35) : i64
     ; r40 (v38) : i64
-    ; r41 (v32) : i64
-    ; r42 (v41) : i64
+    ; r41 (i) : i64
+    ; r42 (v32) : i64
+    ; r43 (v41) : i64

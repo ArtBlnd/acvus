@@ -70,6 +70,7 @@ mod temporary_scrutinee;
 mod through;
 mod try_op;
 mod user_defined_ty;
+mod while_to_for;
 
 /// The targets this crate's manifest declares under `[[test]]`, as the paths
 /// of the files that carry them: `path` when it is written, and otherwise the

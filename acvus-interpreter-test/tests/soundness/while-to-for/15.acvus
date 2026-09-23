@@ -1,0 +1,2 @@
+// expect 604
+let s = 0; let i = 0; while i < @n { if i == 4 { break; }; s = s + i; i = i + 1; } s * 100 + i

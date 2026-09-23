@@ -123,7 +123,8 @@ fn an_if_whose_arms_a_pass_scattered_and_another_rejoined_is_a_diamond_again() {
     assert_eq!(diamond_lines(&ir), ["if r8 -> L3 else L5 join L6"], "{ir}");
     assert_eq!(
         ir.matches(JUMP_IF).count(),
-        1,
-        "the `while` test, only: {ir}"
+        0,
+        "the `while` test is a `for` terminator (RFC-0079), and no other \
+         branch is a `jump_if`: {ir}"
     );
 }

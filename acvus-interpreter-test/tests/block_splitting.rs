@@ -26,11 +26,13 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// A `while` whose body holds an `if` and nothing after it that reads an arm.
+/// Both loops here test with `<=` because RFC-0079 turns `n < 6` into a range
+/// `for`, which has no head part.
 const TAIL_ABOVE_THE_BRANCH: &str =
-    "let acc = 0; let n = 0; while n < 6 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";
+    "let acc = 0; let n = 0; while n <= 5 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";
 
 /// The same loop with a tail that reads what both arms wrote.
-const TAIL_BELOW_THE_JOIN: &str = "let acc = 0; let n = 0; while n < 6 { \
+const TAIL_BELOW_THE_JOIN: &str = "let acc = 0; let n = 0; while n <= 5 { \
      if n % 2 == 0 { acc = acc + n; } else { acc = acc + 1; }; acc = acc * 2; n = n + 1; } acc";
 
 fn ends(blocks: &[BlockListing]) -> Vec<&str> {
@@ -66,7 +68,7 @@ async fn a_regions_head_is_one_operation_list() {
     let blocks = loop_of(TAIL_ABOVE_THE_BRANCH);
     assert_eq!(
         part_of(one_loop(&blocks), "head").ops,
-        ["Lt<i64, Slot, Slot, R0>"],
+        ["Lte<i64, Slot, Slot, R0>"],
         "the head is the condition alone: no terminator, because the head's \
          `JumpIf` is the `cond` the Loop reads itself — and the head's last \
          operation writes it to the argument register, which `Yield` hands \

@@ -50,7 +50,14 @@ fn a_bound_and_a_factor_no_loop_assigns_are_not_block_params() {
     let listing = compile_script_optimized(&i, NESTED, &n_context(&i)).expect("it compiles");
     assert_eq!(
         block_params(&listing),
-        [("L0".to_string(), 2), ("L3".to_string(), 2)],
-        "each header carries its counter and the accumulator, nothing else:\n{listing}"
+        [
+            ("L0".to_string(), 1),
+            ("L1".to_string(), 1),
+            ("L3".to_string(), 1),
+            ("L4".to_string(), 1)
+        ],
+        "each header carries the accumulator and each body the counter its \
+         `for` fills, nothing else. Both `while`s are range `for`s (RFC-0079), \
+         and nothing reads `t` or `i` once the comparisons are gone:\n{listing}"
     );
 }

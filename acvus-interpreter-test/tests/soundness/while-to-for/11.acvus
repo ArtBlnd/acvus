@@ -1,0 +1,2 @@
+// expect 10
+let s = 0; for j in 0..5 { let i = 0; while i < j { s = s + i; i = i + 1; } } s

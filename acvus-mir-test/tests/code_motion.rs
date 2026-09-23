@@ -23,6 +23,7 @@ fn main_body(ir: &str) -> &str {
 }
 
 const IF_TERMINATOR: &str = " if ";
+const FOR_TERMINATOR: &str = "for range";
 
 fn at(body: &str, needle: &str) -> usize {
     body.find(needle)
@@ -43,7 +44,7 @@ fn an_addition_in_a_loop_body_stays_below_the_test() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "jump_if") < at(body, " + "), "{ir}");
+    assert!(at(body, FOR_TERMINATOR) < at(body, " + "), "{ir}");
 }
 
 #[test]
@@ -76,8 +77,8 @@ fn an_addition_after_a_merge_rises_above_the_branch() {
 
 // -- Loop depth -----------------------------------------------------
 
-fn jump_ifs_before(body: &str, needle: &str) -> usize {
-    count(&body[..at(body, needle)], "jump_if")
+fn loop_tests_before(body: &str, needle: &str) -> usize {
+    count(&body[..at(body, needle)], FOR_TERMINATOR)
 }
 
 /// The exit post-dominates the header, so post-dominance alone would take
@@ -92,7 +93,7 @@ fn a_multiplication_after_a_loop_stays_after_it() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "jump_if") < at(body, " * "), "{ir}");
+    assert!(at(body, FOR_TERMINATOR) < at(body, " * "), "{ir}");
 }
 
 /// The same instruction one level in: written between the inner loop and
@@ -110,7 +111,7 @@ fn a_multiplication_between_two_loops_stays_between_them() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert_eq!(jump_ifs_before(body, " * "), 2, "{ir}");
+    assert_eq!(loop_tests_before(body, " * "), 2, "{ir}");
 }
 
 /// The header post-dominates the entry and is no deeper than it, so a
@@ -167,7 +168,7 @@ fn a_borrow_read_by_a_loop_leaves_it() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "ref &v") < at(body, "jump_if"), "{ir}");
+    assert!(at(body, "ref &v") < at(body, FOR_TERMINATOR), "{ir}");
 }
 
 /// The same loop, one `&mut` call added: the write is in the region the
@@ -185,7 +186,7 @@ fn a_borrow_stays_where_the_loop_writes_the_storage() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "jump_if") < at(body, "ref &v"), "{ir}");
+    assert!(at(body, FOR_TERMINATOR) < at(body, "ref &v"), "{ir}");
 }
 
 /// A context assigned in the loop is written there like any other storage.
@@ -213,7 +214,7 @@ fn a_borrow_of_a_context_the_loop_assigns_stays() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "jump_if") < at(body, "ref &@x"), "{ir}");
+    assert!(at(body, FOR_TERMINATOR) < at(body, "ref &@x"), "{ir}");
 }
 
 /// A borrow through a reference is a memory op: it stays in order with the
@@ -235,7 +236,7 @@ fn a_borrow_through_a_reference_never_moves() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "jump_if") < at(body, "ref &(*"), "{ir}");
+    assert!(at(body, FOR_TERMINATOR) < at(body, "ref &(*"), "{ir}");
 }
 
 /// Neither loop writes `v`, so the borrow leaves both.
@@ -252,7 +253,7 @@ fn a_borrow_leaves_both_of_two_nested_loops() {
     )
     .unwrap();
     let body = main_body(&ir);
-    assert!(at(body, "ref &v") < at(body, "jump_if"), "{ir}");
+    assert!(at(body, "ref &v") < at(body, FOR_TERMINATOR), "{ir}");
 }
 
 // -- A second shared borrow in one block ----------------------------

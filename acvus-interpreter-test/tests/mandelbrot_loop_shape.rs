@@ -2,10 +2,14 @@
 //! bench runs: how many operations one iteration of each prepares, and how
 //! many of them the short-circuit diamond in the innermost head holds.
 //!
+//! The two outer `while`s count by one to an invariant bound, so each is a
+//! range `for` (RFC-0079): its terminator is the condition, and its body is
+//! its one chain. The innermost one tests `&&` and stays a `Loop`.
+//!
 //! Under RFC-0052 rule 3 a region is an operation of the list it sits in, so
 //! each count includes the regions that list holds: the innermost head is
 //! its compare and its short-circuit `Diamond`, and each outer body counts
-//! the nested `Loop` among its own operations.
+//! the loop nested in it among its own operations.
 //!
 //! The counts are also the hoist guard. `total = total + i` is written
 //! after the innermost `while` and belongs to the middle loop's body.
@@ -16,7 +20,7 @@
 //! a middle body of eleven.
 
 use acvus_interpreter::Value;
-use acvus_interpreter_test::listing::{family_of, regions_named, script_listing};
+use acvus_interpreter_test::listing::{RegionListing, family_of, script_listing};
 use acvus_interpreter_test::{Context, typed};
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
@@ -49,12 +53,27 @@ while py < @h {
 total
 ";
 
-/// One `while` as the machine runs it.
 #[derive(Debug, PartialEq)]
-struct LoopShape {
-    head_ops: usize,
-    body_ops: usize,
-    diamonds_in_head: usize,
+enum LoopShape {
+    While {
+        head_ops: usize,
+        body_ops: usize,
+        diamonds_in_head: usize,
+    },
+    For {
+        body_ops: usize,
+    },
+}
+
+fn loops_innermost_first<'r>(regions: &'r [RegionListing], found: &mut Vec<&'r RegionListing>) {
+    for region in regions {
+        for part in &region.owns {
+            loops_innermost_first(&part.regions, found);
+        }
+        if matches!(family_of(&region.name), "Loop" | "For") {
+            found.push(region);
+        }
+    }
 }
 
 fn mandelbrot_loops() -> Vec<LoopShape> {
@@ -68,19 +87,30 @@ fn mandelbrot_loops() -> Vec<LoopShape> {
     .collect();
 
     let blocks = script_listing(&interner, MANDELBROT, context, Ty::I64);
-    regions_named(&blocks, "Loop")
+    let mut found = Vec::new();
+    for block in &blocks {
+        loops_innermost_first(&block.regions, &mut found);
+    }
+    found
         .into_iter()
         .map(|region| {
-            let head = region.part("head").expect("a Loop holds a head");
-            let body = region.part("body").expect("a Loop holds a body");
-            LoopShape {
-                head_ops: head.ops.len(),
-                body_ops: body.ops.len(),
-                diamonds_in_head: head
-                    .ops
-                    .iter()
-                    .filter(|name| family_of(name) == "Diamond")
-                    .count(),
+            let body = region.part("body").expect("a loop holds a body");
+            match family_of(&region.name) {
+                "Loop" => {
+                    let head = region.part("head").expect("a Loop holds a head");
+                    LoopShape::While {
+                        head_ops: head.ops.len(),
+                        body_ops: body.ops.len(),
+                        diamonds_in_head: head
+                            .ops
+                            .iter()
+                            .filter(|name| family_of(name) == "Diamond")
+                            .count(),
+                    }
+                }
+                _ => LoopShape::For {
+                    body_ops: body.ops.len(),
+                },
             }
         })
         .collect()
@@ -91,21 +121,13 @@ fn every_while_is_one_loop_operation_and_the_diamond_is_one_more() {
     assert_eq!(
         mandelbrot_loops(),
         vec![
-            LoopShape {
+            LoopShape::While {
                 head_ops: 2,
                 body_ops: 5,
                 diamonds_in_head: 1,
             },
-            LoopShape {
-                head_ops: 1,
-                body_ops: 12,
-                diamonds_in_head: 0,
-            },
-            LoopShape {
-                head_ops: 1,
-                body_ops: 4,
-                diamonds_in_head: 0,
-            },
+            LoopShape::For { body_ops: 12 },
+            LoopShape::For { body_ops: 4 },
         ],
         "the loops are listed innermost first: `i < @max` and the short-circuit \
          diamond, then the pixel loop whose body ends in `total = total + i`, \

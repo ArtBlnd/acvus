@@ -341,6 +341,10 @@ fn run_pass2(interner: &Interner, cfg: &mut CfgBody) {
     optimize::branch::run(interner, cfg);
     optimize::reborrow::run(cfg);
     optimize::dse::run(cfg);
+    // RFC-0079: after `ssa_pass`, which makes the counter a header
+    // parameter, and after the fold, which settles a constant bound; before
+    // `dce`, which sweeps the comparison the new terminator leaves unread.
+    optimize::while_to_for::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);
     // RFC-0066 rule 7: the weak loops' normal form, before `lsr` reduces

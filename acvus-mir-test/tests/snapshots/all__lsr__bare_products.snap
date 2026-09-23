@@ -8,31 +8,29 @@ expression: listing
      2 |   r2 = fetch @n
      7 |   jump L0(0 (r3), 0 (r4))
      8 | L0(r5: i64, r6: i64):
-     9 |   r7 = r6 < r2
-    10 |   jump_if r7 then L1 else L2
-    11 | L1:
-    12 |   r8 = r6 * r1
-    13 |   r9 = r5 + r8
-    15 |   r10 = r6 + 1 (r11)
-    16 |   jump L0(r9, r10)
-    17 | L2:
-    18 |   jump L3(0 (r12), 0 (r13))
-    19 | L3(r14: i64, r15: i64):
-    20 |   r16 = r15 < r2
-    21 |   jump_if r16 then L4 else L5
-    22 | L4:
-    23 |   r17 = r15 * r1
-    24 |   r18 = r14 + r17
-    25 |   r19 = r17 + r0
-    26 |   r20 = r18 + r19
-    28 |   r21 = r15 + 1 (r22)
-    29 |   jump L3(r20, r21)
-    30 | L5:
-    31 |   r23 = r5 - r14
-    32 |   commit @x = r0
-    33 |   commit @k = r1
-    34 |   commit @n = r2
-    35 |   return r23
+     9 |   for range(0 (r4)..r2) -> L1 else L2
+    10 | L1(r7: i64):
+    11 |   r8 = r6 * r1
+    12 |   r9 = r5 + r8
+    14 |   r10 = r6 + 1 (r11)
+    15 |   jump L0(r9, r10)
+    16 | L2:
+    17 |   jump L3(0 (r12), 0 (r13))
+    18 | L3(r14: i64, r15: i64):
+    19 |   for range(0 (r13)..r2) -> L4 else L5
+    20 | L4(r16: i64):
+    21 |   r17 = r15 * r1
+    22 |   r18 = r14 + r17
+    23 |   r19 = r17 + r0
+    24 |   r20 = r18 + r19
+    26 |   r21 = r15 + 1 (r22)
+    27 |   jump L3(r20, r21)
+    28 | L5:
+    29 |   r23 = r5 - r14
+    30 |   commit @x = r0
+    31 |   commit @k = r1
+    32 |   commit @n = r2
+    33 |   return r23
 
     ; r0 (@x) : i64
     ; r1 (@k) : i64
@@ -41,7 +39,7 @@ expression: listing
     ; r4 (v9) : i64
     ; r5 (v59) : i64
     ; r6 (v57) : i64
-    ; r7 (v13) : Bool
+    ; r7 (v73) : i64
     ; r8 (v17) : i64
     ; r9 (v18) : i64
     ; r10 (v21) : i64
@@ -50,7 +48,7 @@ expression: listing
     ; r13 (v24) : i64
     ; r14 (v64) : i64
     ; r15 (v61) : i64
-    ; r16 (v28) : Bool
+    ; r16 (v74) : i64
     ; r17 (v31) : i64
     ; r18 (v35) : i64
     ; r19 (v38) : i64
@@ -61,14 +59,14 @@ expression: listing
     ; r24 (j) : i64
     ; r25 (shared) : i64
     ; r26 (v69) : i64
-    ; r27 (v47) : i64
-    ; r28 (@k) : i64
-    ; r29 (v72) : i64
+    ; r27 (@k) : i64
+    ; r28 (v66) : i64
+    ; r29 (v47) : i64
     ; r30 (v50) : i64
     ; r31 (v56) : i64
-    ; r32 (i) : i64
-    ; r33 (v70) : i64
-    ; r34 (i) : i64
+    ; r32 (v28) : Bool
+    ; r33 (v53) : i64
+    ; r34 (v51) : i64
     ; r35 (@n) : i64
     ; r36 (@x) : i64
     ; r37 (v62) : i64
@@ -88,9 +86,9 @@ expression: listing
     ; r51 (v54) : i64
     ; r52 (@k) : i64
     ; r53 (v60) : i64
-    ; r54 (v66) : i64
-    ; r55 (v53) : i64
-    ; r56 (p) : i64
+    ; r54 (v72) : i64
+    ; r55 (p) : i64
+    ; r56 (i) : i64
     ; r57 (j) : i64
     ; r58 (v65) : i64
     ; r59 (v46) : i64
@@ -103,6 +101,8 @@ expression: listing
     ; r66 (v58) : i64
     ; r67 (@x) : i64
     ; r68 (j) : i64
-    ; r69 (v51) : i64
+    ; r69 (v70) : i64
     ; r70 (p) : i64
-    ; r71 (v63) : i64
+    ; r71 (v13) : Bool
+    ; r72 (i) : i64
+    ; r73 (v63) : i64

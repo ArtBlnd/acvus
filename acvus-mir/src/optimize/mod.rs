@@ -18,3 +18,4 @@ pub mod sroa;
 pub mod ssa;
 pub mod ssa_pass;
 pub mod string_copy;
+pub mod while_to_for;

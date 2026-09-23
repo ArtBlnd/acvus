@@ -1,0 +1,2 @@
+// expect 13403
+let s = 0; let i = 0; while i < @zero { for k in i..@n { s = s + k; } i = i + 1; } s * 100 + i

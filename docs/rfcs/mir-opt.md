@@ -579,3 +579,83 @@ rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
 the machine offers an explicitly reassociable float reduction, which is a
 language decision. What a failed join drops and in what order, which is
 answered in rule 10's operation family.
+
+## RFC-0079: a `while` that counts by one to an invariant bound is a range `for`
+
+Status: Proposed
+
+`let i = b; while i < n { …; i = i + 1; }` is the traversal `b..n` written
+without the terminator that states it. A pass recognizes exactly that form
+and gives its header the `For` terminator (RFC-0057 rule 2), so every reader
+that asks a terminator for a traversal reads this loop unchanged: the nest's
+trip count, IV canonicalization, the region and the lowerer's split
+(RFC-0066). This is the exact recognizer RFC-0066 admits for promoting a
+`while`.
+
+1. **The form.** A `While` loop (RFC-0066 rule 2) is converted when all of
+   these hold, and is left exactly as it was otherwise:
+   - one block enters it, and its header ends in a two-way branch on `c`,
+     to a body block inside the loop when `c` holds and to an exit block
+     outside it when it does not;
+   - `c` is `i < n` or `n > i`, computed in the header;
+   - `i` is a header parameter that every entering edge sends `b` and every
+     back edge sends `i + 1`, with `1` the integer one (RFC-0066 rule 4);
+   - `n` is invariant in the loop (RFC-0066 rule 3);
+   - `i`, `b` and `n` have one integer type. A range admits every width
+     (RFC-0057 rule 1), so no width is declined and nothing is cast;
+   - no block of the loop but the header has an edge out of it or returns,
+     so a `break`, a `return` or a branch into a block that diverges
+     declines;
+   - the body block and the exit block each have one predecessor, the
+     header.
+
+2. **The terminator alone changes.** The header's branch becomes
+   `For { source: Range { at: b, hi: n } }` with the branch's two edges and
+   their arguments, and the body block gains a fresh counter as its leading
+   parameter. `i` stays a header parameter advanced by the body's own
+   `i + 1`, and stays an induction variable (RFC-0066 rule 5). No body
+   instruction changes, and nothing reads the new counter. The comparison
+   loses its reader and `dce` sweeps it, and with it `i` and its `i + 1`
+   when the comparison was their only reader. The pass computes no exit
+   value: the exit edge carries `i` as it did, and what `i` is after the
+   loop is IV canonicalization's (RFC-0066 rule 7). A bound that is a word
+   constant inside the loop, as `while i < 10` lowers, is written again at
+   the end of the entering block, because the machine reads a range's
+   bounds on the entering edge (RFC-0057 rule 7). That is RFC-0056's
+   re-emission of a word.
+
+3. **The two loops are one program at every entry.** Both start at `b` on
+   each entry, so the `k`-th visit of the header holds `b + k` in both. The
+   range runs its body while its counter is below `n`, by the comparison
+   `i < n` makes at the same width, and advances by one, wrapping as
+   `i + 1` does (RFC-0037). `n ≤ b` runs zero times in both. The advance
+   runs only after the counter compared below `n`, so it never wraps, and
+   `n` at the width's maximum ends both loops at `n`.
+
+4. **Placement.** The pass runs after the SSA construction, which makes
+   `i` a header parameter, and after the fold, which settles a constant
+   bound. It runs before `dce`, which sweeps the comparison, and so before
+   `code_motion`, `lsr` and IV canonicalization, each of which then sees the
+   loop as a `for`.
+
+**Why.** A counted `while` is common, and a `for` is what every loop pass
+and the lowerer read a traversal from. Rewriting the terminator alone keeps
+the rewrite checkable by reading it: the body and the value after the loop
+are the ones the source wrote.
+**Cost.** Every other form stays a `while`: `i <= n`, a step of two, a
+bound computed in the header such as `while i < v.len()`, and a loop with a
+`break`. A literal bound costs one constant above the header. Until IV
+canonicalization replaces `i` with the counter, a body that reads `i`
+carries both. Every converted loop loses its head's comparison, and in the
+attention kernel each loop that holds another prepares one more back-edge
+move than its `while` did.
+**Rejected.**
+- Converting `i <= n`, or a step other than one, by computing a bound —
+  `n + 1` wraps at the width's maximum, and a step `s` needs the rounded-up
+  quotient of `n − b` by `s`, which is the arithmetic of the scalar
+  evolution RFC-0066 rejects.
+- Converting with a computed exit value — the value after the loop would
+  be the pass's arithmetic instead of the body's own `i + 1`, and deriving
+  it from the trip count is IV canonicalization's.
+- Declining `n > i` — it is `i < n` on integers, and the spelling would
+  decide the optimization.

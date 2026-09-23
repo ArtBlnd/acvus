@@ -1,6 +1,8 @@
 //! What the register selector makes of the attention loops: how many
-//! operations one iteration of each `while` prepares, and how many slot
-//! moves its back edge carries.
+//! operations one iteration of each loop prepares, and how many slot moves
+//! its back edge carries. Every `while` in the kernel counts by one to an
+//! invariant bound, so each is a range `for` (RFC-0079): its terminator is
+//! the condition, and its body is its one chain.
 //!
 //! `optimize::code_motion` moves work between blocks in two directions that
 //! these counts measure. A borrow hoisted out of a loop lengthens a
@@ -16,9 +18,7 @@ use acvus_interpreter_test::value_from_json;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
-/// One `while` as the machine runs it.
 struct LoopShape {
-    head_ops: usize,
     body_ops: usize,
     back_moves: usize,
 }
@@ -39,13 +39,11 @@ fn attention_loops() -> Vec<LoopShape> {
 
     let source = format!("{ATTENTION} *out.get(0)");
     let blocks = script_listing(&interner, &source, contexts, Ty::Float);
-    regions_named(&blocks, "Loop")
+    regions_named(&blocks, "For")
         .into_iter()
         .map(|region| {
-            let head = region.part("head").expect("a Loop holds a head");
-            let body = region.part("body").expect("a Loop holds a body");
+            let body = region.part("body").expect("a For holds a body");
             LoopShape {
-                head_ops: head.ops.len(),
                 body_ops: body.ops.len(),
                 back_moves: body.leaves_with,
             }
@@ -54,7 +52,7 @@ fn attention_loops() -> Vec<LoopShape> {
 }
 
 /// A region is an operation of the list it sits in (RFC-0052 rule 3), so each
-/// outer body that holds a nested `while` counts that `Loop` among its own
+/// outer body that holds a nested loop counts that `For` among its own
 /// operations.
 ///
 /// The two middle bodies are the large ones because of the loop order, not
@@ -70,20 +68,15 @@ fn attention_loops() -> Vec<LoopShape> {
 fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
         .iter()
-        .map(|l| {
-            format!(
-                "head {} body {} back {}",
-                l.head_ops, l.body_ops, l.back_moves
-            )
-        })
+        .map(|l| format!("body {} back {}", l.body_ops, l.back_moves))
         .collect();
     assert_eq!(
         shapes,
         [
-            "head 1 body 4 back 0",
-            "head 1 body 9 back 0",
-            "head 1 body 7 back 0",
-            "head 1 body 7 back 1",
+            "body 4 back 0",
+            "body 9 back 0",
+            "body 7 back 0",
+            "body 7 back 1",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"
     );

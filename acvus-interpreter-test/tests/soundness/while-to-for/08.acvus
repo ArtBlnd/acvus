@@ -1,0 +1,2 @@
+// expect 4510
+let s = 0; let i = 0; while i < 10 { s = s + i; i = i + 1; } s * 100 + i

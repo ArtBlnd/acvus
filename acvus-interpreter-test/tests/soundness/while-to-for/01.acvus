@@ -1,0 +1,2 @@
+// expect 5
+let s = 0; let i = 5; while i < @zero { s = s + i; i = i + 1; } s * 100 + i
