@@ -198,6 +198,9 @@ pub enum ValidationErrorKind {
     UnheldClosure {
         body: Label,
     },
+    /// An `Index` or `IndexSet` marked `Proven` whose bound the interval
+    /// domain does not derive (RFC-0047 rule 7).
+    UnprovenBound,
 }
 
 /// What the conflicting instruction does to the storage, in the word the
@@ -852,6 +855,7 @@ impl CheckCtx {
                 slice,
                 index,
                 mode,
+                bound: _,
             } => {
                 let index_ty = ty!(*index);
                 self.assert_match(pc, span, "Index", "index", &Ty::U64, index_ty, errors);
@@ -889,6 +893,7 @@ impl CheckCtx {
                 slice,
                 index,
                 value,
+                bound: _,
             } => {
                 let index_ty = ty!(*index);
                 self.assert_match(pc, span, "IndexSet", "index", &Ty::U64, index_ty, errors);

@@ -886,20 +886,24 @@ fn remap_inst(
             slice,
             index,
             mode,
+            bound,
         } => InstKind::Index {
             dst: r(*dst),
             slice: r(*slice),
             index: r(*index),
             mode: *mode,
+            bound: *bound,
         },
         InstKind::IndexSet {
             slice,
             index,
             value,
+            bound,
         } => InstKind::IndexSet {
             slice: r(*slice),
             index: r(*index),
             value: r(*value),
+            bound: *bound,
         },
         InstKind::StringAppend { target, part } => InstKind::StringAppend {
             target: r(*target),

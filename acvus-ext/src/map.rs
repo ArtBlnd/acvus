@@ -505,6 +505,18 @@ where
 
 stored_extern_type!(HashMap<K, V>, name: "HashMap");
 
+impl<K, V, E, Rt> acvus_extern::ensures::Length for HashMap<'_, K, V, E, Rt>
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    fn length(&self) -> usize {
+        self.0.len()
+    }
+}
+
 fn new_map<K, V, E, Rt>(keying: Keying<'_, K, E, Rt>, capacity: usize) -> HashMap<'_, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -555,7 +567,7 @@ where
     new_map(Keying::Closures { hash, eq }, as_capacity(n))
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, ensures(ret = len(m)))]
 fn len<K, V, E, Rt>(m: &HashMap<'_, K, V, E, Rt>) -> u64
 where
     K: Var<kind::Type>,

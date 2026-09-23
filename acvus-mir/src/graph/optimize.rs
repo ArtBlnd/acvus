@@ -100,7 +100,8 @@ pub fn optimize(
         }
         inputs.insert(qref, required_inputs(&module.main));
 
-        let errors = validate::type_check::check_types(&module);
+        let mut errors = validate::type_check::check_types(&module);
+        errors.extend(validate::bounds::check_bounds(&module, laws));
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }
@@ -381,6 +382,12 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // before `reorder`, which schedules within a block.
     optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
+    // RFC-0047 rule 7: after the loop passes, which leave a range `for`
+    // whose counter indexes and one hoisted `as_slice`, and after the last
+    // pass that moves an instruction, so that `validate::bounds` reads the
+    // order this pass read; what follows adds only `Drop`s, which the
+    // interval domain does not read as a write.
+    optimize::bce::run(cfg, laws);
     debug_validate(cfg);
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }

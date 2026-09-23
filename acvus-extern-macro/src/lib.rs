@@ -16,6 +16,7 @@ use syn::{
     Token, Type, TypeParamBound, parse_macro_input,
 };
 
+mod ensures;
 mod generics;
 mod law;
 mod subst;
@@ -51,6 +52,7 @@ struct ExternFnAttr {
     /// signature (RFC-0046).
     sync: Option<Ident>,
     law: Option<law::LawAttr>,
+    ensures: Option<ensures::EnsuresAttr>,
 }
 
 impl Parse for ExternFnAttr {
@@ -63,6 +65,7 @@ impl Parse for ExternFnAttr {
             heavy: false,
             sync: None,
             law: None,
+            ensures: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -90,6 +93,19 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
+            if key == "ensures" {
+                if out.ensures.is_some() {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "`ensures(..)` is stated twice: state every relation in one",
+                    ));
+                }
+                out.ensures = Some(ensures::EnsuresAttr::parse_after(&key, input)?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<Token![=]>()?;
             if key == "name" {
                 out.name = Some(input.parse()?);
@@ -102,7 +118,8 @@ impl Parse for ExternFnAttr {
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, or `law`",
+                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
+                     or `ensures`",
                 ));
             }
             if !input.is_empty() {
@@ -1238,6 +1255,15 @@ fn generate_extern_fn(
         Some(law) => law.checked_laws(fn_ident, &params, &ret, &returning)?,
         None => quote! { ::acvus_extern::Laws::None },
     };
+    let mut emitted = func.clone();
+    let ensures = match &attr.ensures {
+        Some(stated) => {
+            let stated = stated.stated(fn_ident, &params)?;
+            *emitted.block = ensures::wrap_body(&func.block, &ret, is_async, &stated.evaluated);
+            stated.declared
+        }
+        None => quote! { ::std::vec::Vec::new() },
+    };
 
     let fresh_vars = vars.fresh_vars_expr();
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
@@ -1250,7 +1276,7 @@ fn generate_extern_fn(
     });
     let entries = entries.into_inner();
     Ok(quote! {
-        #func
+        #emitted
 
         #(#entries)*
 
@@ -1288,6 +1314,7 @@ fn generate_extern_fn(
                     requires: __requires,
                     names: __vars.names(),
                     laws: #laws,
+                    ensures: #ensures,
                 },
                 instances: __instances,
             };

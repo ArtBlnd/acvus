@@ -134,6 +134,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             slice,
             index,
             value,
+            bound: _,
         } => smallvec![*slice, *index, *value],
 
         // Composite constructors

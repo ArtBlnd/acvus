@@ -5,6 +5,7 @@ pub mod domain;
 pub mod domtree;
 pub mod escape;
 pub mod inst_info;
+pub mod interval;
 pub mod liveness;
 pub mod loans;
 pub mod loops;

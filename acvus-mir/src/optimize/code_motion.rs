@@ -1228,6 +1228,7 @@ mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
     use crate::graph::QualifiedRef;
+    use crate::ir::IndexBound;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
@@ -1525,6 +1526,7 @@ mod tests {
                 slice: v(2),
                 index: v(1),
                 mode: IndexMode::Copy,
+                bound: IndexBound::Checked,
             }]),
             Hoistable::No
         ));
@@ -1533,6 +1535,7 @@ mod tests {
                 slice: v(2),
                 index: v(1),
                 value: v(0),
+                bound: IndexBound::Checked,
             }]),
             Hoistable::No
         ));
@@ -2223,6 +2226,7 @@ mod tests {
                 slice: v(2),
                 index: v(0),
                 mode: IndexMode::Copy,
+                bound: IndexBound::Checked,
             },
         ];
         if writes_the_container {
@@ -2297,6 +2301,7 @@ mod tests {
             slice,
             index: v(0),
             mode: IndexMode::Ref,
+            bound: IndexBound::Checked,
         };
         let ref_through = |dst, reference| InstKind::Ref {
             dst,
@@ -2337,6 +2342,7 @@ mod tests {
                 slice: v(16),
                 index: v(0),
                 mode: IndexMode::Copy,
+                bound: IndexBound::Checked,
             },
         ];
         if writes_the_container {

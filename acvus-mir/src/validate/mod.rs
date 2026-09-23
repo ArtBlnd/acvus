@@ -1,4 +1,5 @@
 pub mod borrow_check;
+pub mod bounds;
 pub mod exhaustive;
 pub mod init_check;
 pub mod move_check;
@@ -183,6 +184,11 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ValidationErrorKind::NotAParameter { value_id } => write!(
                 f,
                 "Val({value_id}) is named as a parameter's storage and is not a parameter of the body"
+            ),
+            ValidationErrorKind::UnprovenBound => write!(
+                f,
+                "an index runs without its bound check, and the interval analysis does not \
+                 put it below its slice's length"
             ),
             ValidationErrorKind::UnheldClosure { body } => write!(
                 f,

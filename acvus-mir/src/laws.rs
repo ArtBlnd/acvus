@@ -1,10 +1,12 @@
-//! The algebraic laws an extern declares (RFC-0082 rules 2 and 3), read by
-//! a MIR pass through a call's callee.
+//! The algebraic laws and the postconditions an extern declares (RFC-0082
+//! rules 2 to 4), read by a MIR pass through a call's callee.
 //!
-//! A law is the author's promise, trusted as an effect is. Nothing here
-//! checks that a function is associative, and no law is inferred from a
+//! A law or a postcondition is the author's promise, trusted as an effect
+//! is. Nothing here checks that a function is associative or that its
+//! result is its argument's length, and neither is inferred from a
 //! handler's body, which is Rust and opaque to the compiler (RFC-0082 rule
-//! 5).
+//! 5). A debug build of the extension evaluates each postcondition at the
+//! function's return; that check is `#[extern_fn]`'s, not this module's.
 
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
@@ -51,9 +53,58 @@ pub struct FoldLaw {
     pub commutative: bool,
 }
 
+/// `#[extern_fn(ensures(left relation right))]` (RFC-0082 rule 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Postcondition {
+    pub left: PostTerm,
+    pub relation: Relation,
+    pub right: PostTerm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relation {
+    /// `=`
+    Eq,
+    /// `≤`, written `<=`
+    Le,
+    /// `<`
+    Lt,
+}
+
+/// A term of RFC-0066 rule 3 over one call: a constant, a parameter, the
+/// result, the length of either, and `+`, `−`, `×` and `max` of terms. It
+/// denotes an integer. A parameter is numbered as the declaration's acvus
+/// parameters are, which is the order of a call's arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PostTerm {
+    Const(i128),
+    Param(usize),
+    Ret,
+    /// The element count of a slice or a container.
+    Len(Subject),
+    Add(Box<PostTerm>, Box<PostTerm>),
+    Sub(Box<PostTerm>, Box<PostTerm>),
+    Mul(Box<PostTerm>, Box<PostTerm>),
+    Max(Box<PostTerm>, Box<PostTerm>),
+}
+
+/// What `len(x)` reads: a parameter or the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Subject {
+    Param(usize),
+    Ret,
+}
+
+/// What one instance of an extern declares.
+#[derive(Debug, Default)]
+struct Declared {
+    laws: Laws,
+    ensures: Vec<Postcondition>,
+}
+
 #[derive(Debug, Default)]
 pub struct LawTable {
-    by_instance: FxHashMap<QualifiedRef, Vec<Laws>>,
+    by_instance: FxHashMap<QualifiedRef, Vec<Declared>>,
 }
 
 impl LawTable {
@@ -68,16 +119,22 @@ impl LawTable {
                 FnKind::Extern { instances, .. }
                     if instances.concrete.is_empty() && instances.generic.is_none() =>
                 {
-                    Some((function.qref, vec![Laws::None]))
+                    Some((function.qref, vec![Declared::default()]))
                 }
                 FnKind::Extern { instances, .. } => {
-                    let laws = instances
+                    let declared = instances
                         .concrete
                         .iter()
-                        .map(|instance| instance.laws.clone())
-                        .chain(instances.generic.as_ref().map(|g| g.laws.clone()))
+                        .map(|instance| Declared {
+                            laws: instance.laws.clone(),
+                            ensures: instance.ensures.clone(),
+                        })
+                        .chain(instances.generic.as_ref().map(|g| Declared {
+                            laws: g.laws.clone(),
+                            ensures: g.ensures.clone(),
+                        }))
                         .collect();
-                    Some((function.qref, laws))
+                    Some((function.qref, declared))
                 }
                 FnKind::Local(_) => None,
             })
@@ -87,18 +144,34 @@ impl LawTable {
 
     pub fn of_callee(&self, callee: &Callee) -> &Laws {
         static NONE: Laws = Laws::None;
+        match self.declared(callee) {
+            Some(declared) => &declared.laws,
+            None => &NONE,
+        }
+    }
+
+    /// The postconditions the instance a call names declares; a call of a
+    /// local function or through a value has none.
+    pub fn postconditions_of(&self, callee: &Callee) -> &[Postcondition] {
+        match self.declared(callee) {
+            Some(declared) => &declared.ensures,
+            None => &[],
+        }
+    }
+
+    fn declared(&self, callee: &Callee) -> Option<&Declared> {
         let Callee::Extern { id, instance, .. } = callee else {
-            return &NONE;
+            return None;
         };
         let Some(instances) = self.by_instance.get(id) else {
             panic!("the law table was built without the extern {id:?} a call names")
         };
-        let Some(laws) = instances.get(*instance) else {
+        let Some(declared) = instances.get(*instance) else {
             panic!(
                 "the extern {id:?} has {} instances, and a call names instance {instance}",
                 instances.len()
             )
         };
-        laws
+        Some(declared)
     }
 }

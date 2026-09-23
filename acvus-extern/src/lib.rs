@@ -12,6 +12,7 @@ pub mod core;
 mod ctx;
 pub mod derive;
 mod effect;
+pub mod ensures;
 mod erased;
 mod func;
 mod handler;
@@ -88,7 +89,9 @@ pub use acvus_extern_macro::{
 };
 
 pub use acvus_mir::graph::{FnKind, Function};
-pub use acvus_mir::laws::{BinaryLaws, FoldLaw, Identity, Laws};
+pub use acvus_mir::laws::{
+    BinaryLaws, FoldLaw, Identity, Laws, PostTerm, Postcondition, Relation, Subject,
+};
 pub use acvus_mir::ty::{
     CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, HeldTy, Home, IdentityTerm, LenTerm,
     Mutability, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty,

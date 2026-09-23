@@ -62,7 +62,7 @@ pub(crate) fn permute<T>(xs: &mut [T], sources: &[usize]) {
 
 // -- the moving half, generic in the element ----------------------------
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, ensures(ret = len(s)))]
 fn len<T, Rt>(s: &[T]) -> u64
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

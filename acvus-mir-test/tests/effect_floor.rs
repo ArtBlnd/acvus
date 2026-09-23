@@ -69,6 +69,7 @@ fn pull(i: &Interner) -> Function {
                     requires: vec![],
                     effect_bounds: vec![EffectVarBound::Suspends],
                     laws: Default::default(),
+                    ensures: Vec::new(),
                 }],
                 generic: None,
             },

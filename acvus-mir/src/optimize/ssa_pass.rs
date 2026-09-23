@@ -182,6 +182,7 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             slice,
             index,
             value,
+            bound: _,
         } => {
             s(slice);
             s(index);

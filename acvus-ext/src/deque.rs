@@ -169,6 +169,15 @@ acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Typ
 
 impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
 
+impl<T> acvus_extern::ensures::Length for Deque<T>
+where
+    T: Var<kind::Type>,
+{
+    fn length(&self) -> usize {
+        self.len()
+    }
+}
+
 // SAFETY: the element is its own canonical form's.
 unsafe impl<T> acvus_extern::Canonical<kind::Type> for Deque<T>
 where
@@ -454,7 +463,7 @@ where
     it.step(ctx, Deque::get)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, ensures(ret = len(d)))]
 fn len<T>(d: &Deque<T>) -> u64
 where
     T: Var<kind::Type>,

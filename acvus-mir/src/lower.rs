@@ -11,7 +11,7 @@ use crate::error::OperatorSignature;
 use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, ExitTrip, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess,
-    IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey,
+    IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey,
     ValOrigin, ValueId, reaches,
 };
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
@@ -1720,6 +1720,7 @@ impl<'a> Lowerer<'a> {
                 slice,
                 index,
                 mode,
+                bound: IndexBound::Checked,
             },
         );
         dst
@@ -3113,6 +3114,7 @@ impl<'a> Lowerer<'a> {
                     slice: taken,
                     index,
                     value,
+                    bound: IndexBound::Checked,
                 },
             );
             return;

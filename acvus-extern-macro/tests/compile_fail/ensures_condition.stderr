@@ -1,0 +1,5 @@
+error: a relation is `t1 = t2`, `t1 <= t2` or `t1 < t2` and nothing after it: there is no condition and no connective (RFC-0082 rule 4)
+ --> tests/compile_fail/ensures_condition.rs:4:45
+  |
+4 | #[extern_fn(effect = pure, ensures(ret <= a if a < b))]
+  |                                             ^^

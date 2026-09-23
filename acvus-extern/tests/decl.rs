@@ -2695,6 +2695,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     requires: Vec::new(),
                     names: Vec::new(),
                     laws: acvus_extern::Laws::None,
+                    ensures: Vec::new(),
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(

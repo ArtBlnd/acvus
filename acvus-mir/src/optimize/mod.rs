@@ -1,3 +1,4 @@
+pub mod bce;
 pub mod branch;
 pub mod code_motion;
 pub mod commute;

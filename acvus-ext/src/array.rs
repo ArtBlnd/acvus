@@ -2,7 +2,7 @@ use acvus_extern::{
     Arr, Registry, Runtime, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, ensures(ret = len(c)))]
 fn len<T, N>(c: &Arr<T, N>) -> u64
 where
     T: Var<kind::Type>,

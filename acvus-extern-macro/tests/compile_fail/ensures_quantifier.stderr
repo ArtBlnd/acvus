@@ -1,0 +1,5 @@
+error: `forall` binds a name, and a postcondition has no quantifier (RFC-0082 rule 4)
+ --> tests/compile_fail/ensures_quantifier.rs:4:36
+  |
+4 | #[extern_fn(effect = pure, ensures(forall i: ret <= i))]
+  |                                    ^^^^^^

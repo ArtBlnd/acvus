@@ -96,7 +96,7 @@ filled_of!(
     filled_str: String,
 );
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, ensures(ret = len(c)))]
 fn len<T>(c: &Vec<T>) -> u64
 where
     T: Var<kind::Type>,

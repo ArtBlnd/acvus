@@ -5175,6 +5175,7 @@ mod requirement_tests {
                     requires: Vec::new(),
                     effect_bounds: Vec::new(),
                     laws: crate::laws::Laws::None,
+                    ensures: Vec::new(),
                 })
                 .collect(),
             generic: None,

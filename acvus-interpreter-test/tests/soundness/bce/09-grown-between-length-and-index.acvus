@@ -1,0 +1,2 @@
+// expect 6
+let v = vec([1, 2, 3]); let n = v.len(); v.push(4); let t = 0; for i in 0..n { t = t + v[i]; } t

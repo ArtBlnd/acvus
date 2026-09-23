@@ -21,7 +21,7 @@ use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, Require
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    BinOp, Callee, Chosen, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
+    BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
     RefTarget, SwitchKey, TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
@@ -4359,6 +4359,7 @@ impl<'a> Prepare<'a> {
                 slice,
                 index,
                 mode,
+                bound,
             } => {
                 let mode = *mode;
                 let read = index::Read {
@@ -4366,30 +4367,25 @@ impl<'a> Prepare<'a> {
                     slice: self.pair(*slice),
                     index: self.off(*index),
                 };
-                made(move |next| index::checked(mode, read, next))
+                match bound {
+                    IndexBound::Checked => made(move |next| index::checked(mode, read, next)),
+                    IndexBound::Proven => made(move |next| index::unchecked(mode, read, next)),
+                }
             }
             InstKind::IndexSet {
                 slice,
                 index,
                 value,
+                bound,
             } => {
+                let written = index::Written {
+                    slice: self.pair(*slice),
+                    index: self.off(*index),
+                    value: self.marked(*value),
+                };
                 let large = self.owns(*value);
-                let (slice, index, held) =
-                    (self.pair(*slice), self.off(*index), self.marked(*value));
-                match large {
-                    true => node(move |next| index::IndexSet::<true, true> {
-                        slice,
-                        index,
-                        value: held,
-                        next,
-                    }),
-                    false => node(move |next| index::IndexSet::<true, false> {
-                        slice,
-                        index,
-                        value: held,
-                        next,
-                    }),
-                }
+                let bound = *bound;
+                made(move |next| index::set(bound, large, written, next))
             }
 
             InstKind::MakeClosure {

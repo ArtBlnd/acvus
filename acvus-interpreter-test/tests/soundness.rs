@@ -35,6 +35,7 @@ const PAST_THE_CHECKER: &[&str] = &[
     ", and it is ",
     "has no type",
     "reaches the machine",
+    "the interval analysis does not put it below",
 ];
 
 /// A program's own trap (RFC-0038): an outcome like a value, the same at
