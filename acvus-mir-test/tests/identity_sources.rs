@@ -28,7 +28,9 @@ fn iter_poly(i: &Interner, identity: IdentityTerm<Poly>) -> PolyTy {
     TyTerm::UserDefined {
         id: QualifiedRef::root(i.intern("Iterator")),
         type_args: vec![TypeArg::uniform(TyTerm::I64)],
-        effect_args: vec![acvus_mir::ty::Effect::PURE.into()],
+        effect_args: vec![acvus_mir::ty::EffectArg::uniform(
+            acvus_mir::ty::Effect::PURE.into(),
+        )],
         identity_args: vec![identity],
     }
 }

@@ -31,7 +31,7 @@ mod vec;
 
 pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
-pub use effect::{Idempotent, InPlaceEffect, Opaque, Pure, Suspends};
+pub use effect::{Idempotent, Opaque, Pure, Suspends};
 pub use erased::Erased;
 pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByValue};
 pub use handler::{
@@ -70,7 +70,7 @@ pub use slice::{BySlice, Slice, Words};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
 pub use ty_arg::{
-    Kind, Monomorphize, Never, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var, kind,
+    Kind, Monomorphize, Never, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var, held_effect, kind,
 };
 pub use vec::vec_ty;
 
@@ -78,7 +78,7 @@ pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, exte
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, EffectVarBound, IdentityTerm, LenTerm, Mutability, ObjectTy, ParamTerm, Poly,
+    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm, LenTerm, Mutability, ObjectTy, ParamTerm, Poly,
     Home, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
     UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };

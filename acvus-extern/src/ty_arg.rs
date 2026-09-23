@@ -12,7 +12,9 @@
 
 use std::marker::PhantomData;
 
-use acvus_mir::ty::{EffectTerm, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy, Repr, TypeArg};
+use acvus_mir::ty::{
+    EffectArg, EffectTerm, IdentityTerm, LenTerm, Poly, PolyBuilder, PolyTy, Repr, TypeArg,
+};
 use acvus_utils::Interner;
 
 /// The variables a polymorphic ExternFn type ranges over, by kind and
@@ -120,6 +122,8 @@ pub trait Term<K>: Send + Sync + 'static
 where
     K: Kind,
 {
+    const SLOT: SlotRepr = SlotRepr::Ground;
+
     fn poly(vars: &PolyVars) -> K::Poly;
 }
 
@@ -132,6 +136,8 @@ impl<K, const N: usize> Term<K> for Nth<K, N>
 where
     K: Kind,
 {
+    const SLOT: SlotRepr = SlotRepr::Var;
+
     fn poly(vars: &PolyVars) -> K::Poly {
         K::nth(vars, N)
     }
@@ -173,6 +179,17 @@ impl SlotRepr {
             SlotRepr::Member => Repr::Specialized,
         }
     }
+
+    /// The representation of an argument of an extension type the runtime
+    /// keeps as one box of its Rust type: a variable is filled with its
+    /// run-time instantiation, which is the uniform one, and any other
+    /// argument is the Rust type it names.
+    pub const fn held(self) -> Repr<Poly> {
+        match self {
+            SlotRepr::Var => Repr::Uniform,
+            SlotRepr::Ground | SlotRepr::Member => Repr::Specialized,
+        }
+    }
 }
 
 /// A Rust type that names an acvus type.
@@ -186,15 +203,21 @@ pub trait TyArg: Var<kind::Type> {
         TypeArg::new(Self::SLOT.repr(), Self::poly_ty(interner, vars))
     }
 
-    /// This type as an argument of a derived extension type, whose payload
-    /// holds it as the Rust type it is.
+    /// This type as an argument of an extension type the runtime keeps as
+    /// one box of its Rust type: a derived type, or a container stored as
+    /// itself.
     fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
-        let repr = match Self::SLOT {
-            SlotRepr::Var => Repr::Uniform,
-            SlotRepr::Ground | SlotRepr::Member => Repr::Specialized,
-        };
-        TypeArg::new(repr, Self::poly_ty(interner, vars))
+        TypeArg::new(Self::SLOT.held(), Self::poly_ty(interner, vars))
     }
+}
+
+/// An effect as an argument of an extension type the runtime keeps as one
+/// box of its Rust type, as `TyArg::held` gives a type.
+pub fn held_effect<E>(vars: &PolyVars) -> EffectArg<Poly>
+where
+    E: Term<kind::Effect>,
+{
+    EffectArg::new(E::SLOT.held(), E::poly(vars))
 }
 
 impl<const N: usize> TyArg for Nth<kind::Type, N> {

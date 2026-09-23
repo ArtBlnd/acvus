@@ -32,7 +32,7 @@ pub use iter::{
     StepBy, Take, TakeWhile,
 };
 pub use iterator::iterator_registry;
-pub use map::{HashMap, HashSet, map_registry, set_registry};
+pub use map::{HashMap, HashSet, Keys, map_registry, set_registry};
 pub use num::{num_constant_registries, num_registry, num_width_registries};
 pub use option::option_registry;
 pub use panic::panic_registry;

@@ -260,14 +260,27 @@ Status: Accepted
 A value of type `τ` has a representation: uniform, the runtime's `Value`,
 which every polymorphic position holds; or specialized, the Rust type `τ`
 itself. `#τ` names the specialized representation and is a fact about a
-**slot** — a type argument of a user-defined type, or the target of a
-reference — never about a bare type: there is no `##τ` and no `#` at a
-position that is not a slot. A user-defined type declares per parameter
-whether its slot can specialize (`specializable`); a slot that cannot is
-uniform. `Fn`, `Object`, `Enum` and handles have no representation the
-language defines and carry no `#`.
+**slot** — a type argument or an effect argument of a user-defined type, or
+the target of a reference — never about a bare type: there is no `##τ` and
+no `#` at a position that is not a slot. A user-defined type declares per
+type parameter whether its slot can specialize (`specializable`); a slot
+that cannot is uniform. Every effect slot can. `Fn`, `Object`, `Enum` and
+handles have no representation the language defines and carry no `#`.
 
-Only a `Monomorphize` member makes `#`. `#[extern_fn] fn reverse<T:
+**An argument written concrete is held.** A map, a set, a deque and a
+derived extension type are each kept as one box of the Rust type their
+arguments name, and the glue fills a variable with its run-time
+instantiation — a type variable with `Owned<R>`, an effect variable with
+`()`. A declaration that writes an argument concrete — `Deque<i64>`,
+`HashMap<K, V, Pure, R>`, `Keys<K, V, Pure, I, R>` — names another box, so
+that argument is held: `#i64`, `#pure`. A variable stays uniform, and a
+`Monomorphize` member is `#` as everywhere. One rule, `SlotRepr::held`,
+gives it for both kinds, through `TyArg::held` and `held_effect`, at every
+crossing: by value, `&` and `&mut`. A value a generic constructor made meets
+a held parameter as a type mismatch that names both types; a writer and a
+reader that write the same concrete argument meet at the held slot.
+
+Only a `Monomorphize` member and a held argument make `#`. `#[extern_fn] fn reverse<T:
 Monomorphize<(f64,)>>(Vec<T>) -> Vec<T>` has the concrete instance
 `reverse@#f64 : Vec<#f64> -> Vec<#f64>` and, when `T` has no other bound, the
 generic instance `Vec<ρT> -> Vec<ρT>`, where `ρ` is the one representation
@@ -301,7 +314,8 @@ An extension reads and edits uniform values in place through `Erased<R, T>`:
 rule 7), made only by `Erased::new(rt, T)`, read by `as_ref(&self, rt)` /
 `as_mut`, and for an `Inline` type (one that fits the value word) by `Deref`,
 `get` and `PartialEq` with no runtime in hand. `T` is `Stored`: a type
-converted on the way in has no `T` in storage to read. `Vec<Erased<R, T>>` is
+converted on the way in has no `T` in storage to read. An extension type is
+`Stored` at its payload. `Vec<Erased<R, T>>` is
 the runtime's `Vec<Value>` and crosses whole. A value leaves an extension type
 by identity (`T` is the runtime's value) or by a checked downcast
 (`FromValue`: the value's `TypeId`, carried by a `Large` payload's vtable and
@@ -321,9 +335,17 @@ to fns that ask for it (`&[f64]`, `Vec<T>` by value into a Rust API). Deciding
 generic-only fn through one erase instead of a mismatch, and a uniform value
 to a member through one materialize. `Erased` lets an extension hold a
 uniform value without naming a Rust `T` for it; `FromValue` and the value's
-own tag make the one remaining reinterpretation checked.
+own tag make the one remaining reinterpretation checked. Holding an argument
+written concrete makes the Rust type of a box a fact of its acvus type, so
+a box of one instantiation never reaches a declaration of another, and the
+refusal is the checker's, where it names the two types.
 
 **Rejected.**
+- Refusing a concrete argument at the declaration, as a bound asked of the
+  variable (`InPlaceElement` of a deque's element, an effect bound of a
+  map's effect) — it covered a borrow only, left the by-value crossing and a
+  derived type's effect argument to read a box of another type, and refused
+  a writer and a reader that name the same concrete argument, which agree.
 - `ρ` on a plain concrete signature and on `let` bindings, so that a value no
   `#` consumer touches is uniform from birth without a cast node — the
   checker is conservative: a value keeps the representation it is born with,
@@ -441,11 +463,10 @@ crossing, never read from tokens.
    once over the representation, ask it through `Lends<T, Rt>`, which
    `Uniform` and `Specialized` implement under each one's bound. A `Vec`
    or an array is borrowable only at an `InPlaceElement` element, which only
-   `Owned<Rt>` is; a map, a set and a deque are each one box of the Rust
-   type at the variables' run-time instantiation, which every declaration
-   that makes one is generic in, so each is borrowable only where each type
-   variable is `InPlaceElement` and each effect variable `InPlaceEffect`
-   (`()`). A result is `Ret<Rt>` — `Val<T, C>`,
+   `Owned<Rt>` is: its storage is the runtime's `Vec<Owned<Rt>>` whatever
+   the element type. A map, a set, a deque and a derived extension type are
+   each one box of the Rust type their arguments name, and each argument is
+   held (RFC-0041), so each is borrowable at every argument. A result is `Ret<Rt>` — `Val<T, C>`,
    `RetStr`, `RetLent<L>` for a returned borrow — and `Ret::Of<'a>` is a
    generic associated type, so a result may borrow what the arguments lent.
 4. **A handler is the operation's type parameter.** The registry holds

@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, InPlaceElement, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
+    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
     QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
     TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn, extern_registry,
     kind,
@@ -146,11 +146,9 @@ where
     acvus_extern::stored_as_itself!();
 }
 
-/// The box holds the Rust type at the element's run-time instantiation,
-/// `Owned<Rt>`, which is the only one a borrow reads in place.
 impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>
 where
-    T: Var<kind::Type> + InPlaceElement<Rt>,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     acvus_extern::whole_box_in_place!(Deque<T>, Rt);
@@ -180,7 +178,7 @@ where
     fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
         PolyTy::UserDefined {
             id: QualifiedRef::root(i.intern("Deque")),
-            type_args: vec![T::slot(i, vars)],
+            type_args: vec![T::held(i, vars)],
             effect_args: vec![],
             identity_args: vec![],
         }
@@ -435,7 +433,7 @@ fn next_refs_deque<'a, T, I, Rt>(
     it: &'a mut Refs<Deque<T>, I, Rt>,
 ) -> Option<&'a T>
 where
-    T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
+    T: Var<kind::Type> + TransparentOver<Rt>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {

@@ -18,7 +18,7 @@ use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
 use crate::ty::{
-    Concrete, Effect, EffectTerm, FieldSet, IdentityId, IdentityTerm, IntTy, LenTerm, ObjectTy,
+    Concrete, Effect, EffectArg, EffectTerm, FieldSet, IdentityId, IdentityTerm, IntTy, LenTerm, ObjectTy,
     Reissue, Repr, Task, Ty, TypeArg,
 };
 
@@ -94,24 +94,53 @@ pub struct SerTypeArg {
     pub ty: SerTy,
 }
 
+/// An effect argument of a user-defined type, with its representation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerEffectArg {
+    pub repr: SerRepr,
+    pub effect: SerEffect,
+}
+
+fn repr_to_ser(repr: Repr<Concrete>) -> SerRepr {
+    match repr {
+        Repr::Uniform => SerRepr::Uniform,
+        Repr::Specialized => SerRepr::Specialized,
+        Repr::Var(v) => match v {},
+    }
+}
+
+fn ser_to_repr(repr: SerRepr) -> Repr<Concrete> {
+    match repr {
+        SerRepr::Uniform => Repr::Uniform,
+        SerRepr::Specialized => Repr::Specialized,
+    }
+}
+
 fn arg_to_ser(arg: &TypeArg<Concrete>, interner: &Interner) -> SerTypeArg {
     SerTypeArg {
-        repr: match arg.repr {
-            Repr::Uniform => SerRepr::Uniform,
-            Repr::Specialized => SerRepr::Specialized,
-            Repr::Var(v) => match v {},
-        },
+        repr: repr_to_ser(arg.repr),
         ty: arg.ty.to_ser(interner),
     }
 }
 
 fn ser_to_arg(arg: &SerTypeArg, interner: &Interner) -> TypeArg<Concrete> {
     TypeArg {
-        repr: match arg.repr {
-            SerRepr::Uniform => Repr::Uniform,
-            SerRepr::Specialized => Repr::Specialized,
-        },
+        repr: ser_to_repr(arg.repr),
         ty: arg.ty.to_ty(interner),
+    }
+}
+
+fn effect_arg_to_ser(arg: &EffectArg<Concrete>, interner: &Interner) -> SerEffectArg {
+    SerEffectArg {
+        repr: repr_to_ser(arg.repr),
+        effect: effect_to_ser(arg.effect.get(), interner),
+    }
+}
+
+fn ser_to_effect_arg(arg: &SerEffectArg, interner: &Interner) -> EffectArg<Concrete> {
+    EffectArg {
+        repr: ser_to_repr(arg.repr),
+        effect: EffectTerm::Known(ser_to_effect(&arg.effect, interner)),
     }
 }
 
@@ -164,7 +193,7 @@ pub enum SerTy {
     UserDefined {
         id: SerQualifiedRef,
         type_args: Vec<SerTypeArg>,
-        effect_args: Vec<SerEffect>,
+        effect_args: Vec<SerEffectArg>,
         identity_args: Vec<u32>,
     },
     Option {
@@ -238,7 +267,7 @@ impl Ty {
                 type_args: type_args.iter().map(|t| arg_to_ser(t, interner)).collect(),
                 effect_args: effect_args
                     .iter()
-                    .map(|e| effect_to_ser(e.get(), interner))
+                    .map(|e| effect_arg_to_ser(e, interner))
                     .collect(),
                 identity_args: identity_args
                     .iter()
@@ -326,7 +355,7 @@ impl SerTy {
                 type_args: type_args.iter().map(|t| ser_to_arg(t, interner)).collect(),
                 effect_args: effect_args
                     .iter()
-                    .map(|e| EffectTerm::Known(ser_to_effect(e, interner)))
+                    .map(|e| ser_to_effect_arg(e, interner))
                     .collect(),
                 identity_args: identity_args
                     .iter()
@@ -376,7 +405,7 @@ mod tests {
         let ud = Ty::UserDefined {
             id: QualifiedRef::root(i.intern("Iterator")),
             type_args: vec![TypeArg::uniform(Ty::I64)],
-            effect_args: vec![Effect::OPAQUE.into()],
+            effect_args: vec![EffectArg::specialized(Effect::OPAQUE.into())],
             identity_args: vec![],
         };
         assert_eq!(ud.to_ser(&i).to_ty(&i), ud);

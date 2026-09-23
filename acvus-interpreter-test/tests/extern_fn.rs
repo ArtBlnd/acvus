@@ -1215,3 +1215,153 @@ async fn a_vec_is_reassigned_from_a_call_that_borrows_it() {
 async fn a_vec_of_an_extension_type_is_read_by_value() {
     assert_eq!(run_tags("sum_tags(make_tags(3))").await, 6);
 }
+
+// =======================================================================
+//  An argument written concrete is held
+// =======================================================================
+
+/// A map, a set, a deque and a derived extension type are each one box of
+/// the Rust type their arguments name. The constructors are generic, so a
+/// script's map is the box at its variables' run-time instantiation; a
+/// declaration naming `i64` or `Pure` there names another box, and its
+/// argument is held (`#i64`, `#Pure`), so the two meet as two types.
+#[extern_fn(effect = pure)]
+fn keys_at_pure<K, V, I, Rt>(_k: &mut acvus_ext::Keys<K, V, acvus_extern::Pure, I, Rt>) -> i64
+where
+    K: acvus_extern::Var<acvus_extern::kind::Type>,
+    V: acvus_extern::Var<acvus_extern::kind::Type>,
+    I: acvus_extern::Var<acvus_extern::kind::Identity>,
+    Rt: acvus_extern::Runtime,
+{
+    1
+}
+
+#[extern_fn(effect = pure)]
+fn keys_at_pure_by_value<K, V, I, Rt>(_k: acvus_ext::Keys<K, V, acvus_extern::Pure, I, Rt>) -> i64
+where
+    K: acvus_extern::Var<acvus_extern::kind::Type>,
+    V: acvus_extern::Var<acvus_extern::kind::Type>,
+    I: acvus_extern::Var<acvus_extern::kind::Identity>,
+    Rt: acvus_extern::Runtime,
+{
+    2
+}
+
+#[extern_fn(effect = pure)]
+fn map_at_ints_by_value<Rt>(_m: acvus_ext::HashMap<i64, i64, acvus_extern::Pure, Rt>) -> i64
+where
+    Rt: acvus_extern::Runtime,
+{
+    3
+}
+
+#[extern_fn(effect = pure)]
+fn deque_at_ints_by_value(d: acvus_ext::Deque<i64>) -> i64 {
+    d.iter().sum()
+}
+
+#[extern_fn(effect = pure)]
+fn deque_of_ints(n: i64) -> acvus_ext::Deque<i64> {
+    let mut d = acvus_ext::Deque::default();
+    for x in 1..=n {
+        d.push_back(x);
+    }
+    d
+}
+
+#[extern_fn(effect = pure)]
+fn deque_at_ints_width(d: &acvus_ext::Deque<i64>) -> i64 {
+    d.len() as i64
+}
+
+fn held_registry() -> Registry<AcvusRuntime> {
+    extern_registry! {
+        ns: "held",
+        fns: [
+            keys_at_pure,
+            keys_at_pure_by_value,
+            map_at_ints_by_value,
+            deque_at_ints_by_value,
+            deque_of_ints,
+            deque_at_ints_width,
+        ],
+    }
+}
+
+fn held_refusal(source: &str) -> String {
+    let i = Interner::new();
+    let ast = acvus_mir::graph::ParsedAst::Script(
+        acvus_ast::parse_script(&i, source).expect("parse error"),
+    );
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(held_registry());
+    match check_source(
+        &i,
+        ast,
+        &FxHashMap::default(),
+        regs,
+        Ty::I64,
+        acvus_mir::graph::optimize::Opt::Full,
+        |_| {},
+    ) {
+        Ok(_) => panic!("the program was admitted: {source}"),
+        Err(refusal) => refusal.messages.join(" | "),
+    }
+}
+
+const MAP_OF_INTS: &str =
+    "let m = hash_map_by(|k| -> hash(k), |a, b| -> a == b); insert(&mut m, 1, 10);";
+
+#[test]
+fn a_derived_type_at_a_known_effect_is_not_the_one_a_generic_constructor_made() {
+    let messages = held_refusal(&format!("{MAP_OF_INTS} let k = keys(&m); keys_at_pure(&mut k)"));
+    assert!(
+        messages.contains("expected &mut Keys<i64, i64, #Pure>, got &mut Keys<i64, i64, Pure>"),
+        "{messages}"
+    );
+}
+
+#[test]
+fn a_derived_type_at_a_known_effect_by_value_is_not_the_one_a_generic_constructor_made() {
+    let messages =
+        held_refusal(&format!("{MAP_OF_INTS} let k = keys(&m); keys_at_pure_by_value(k)"));
+    assert!(
+        messages.contains("expected Keys<i64, i64, #Pure>, got Keys<i64, i64, Pure>"),
+        "{messages}"
+    );
+}
+
+#[test]
+fn a_map_at_concrete_types_by_value_is_not_the_one_a_generic_constructor_made() {
+    let messages = held_refusal(&format!("{MAP_OF_INTS} map_at_ints_by_value(m)"));
+    assert!(
+        messages.contains("expected HashMap<#i64, #i64, #Pure>, got HashMap<i64, i64, Pure>"),
+        "{messages}"
+    );
+}
+
+#[test]
+fn a_deque_at_a_concrete_type_by_value_is_not_the_one_a_generic_constructor_made() {
+    let messages =
+        held_refusal("let d = deque(); push_back(&mut d, 1); deque_at_ints_by_value(d)");
+    assert!(
+        messages.contains("expected Deque<#i64>, got Deque<i64>"),
+        "{messages}"
+    );
+}
+
+#[tokio::test]
+async fn a_deque_made_and_borrowed_at_one_concrete_type_is_read_in_place() {
+    let i = Interner::new();
+    let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
+    regs.push(held_registry());
+    let result = run_script_with_externs(
+        &i,
+        "let d = deque_of_ints(4); deque_at_ints_width(&d) * 100 + deque_at_ints_by_value(d)",
+        ctx(&i, vec![]),
+        regs,
+        Ty::I64,
+    )
+    .await;
+    assert_eq!(result.value.as_int(), 410);
+}

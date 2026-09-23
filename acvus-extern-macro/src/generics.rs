@@ -506,7 +506,14 @@ impl Vars {
     }
 
     pub fn effect_arg_exprs(&self) -> Vec<TokenStream> {
-        self.term_exprs(VarKind::Effect)
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Effect)
+            .map(|v| {
+                let ident = &v.ident;
+                quote! { ::acvus_extern::held_effect::<#ident>(__vars) }
+            })
+            .collect()
     }
 
     /// `<X as Term<K>>::poly(__vars)` for every variable of kind `kind`.

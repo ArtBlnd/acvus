@@ -631,11 +631,37 @@ where
             (EffectTerm::Known(e), EffectTerm::Known(p)) => e == p,
         }
     }
+    fn effect_arg_matches<P>(
+        arg: &EffectArg<P>,
+        pat: &EffectArg<Poly>,
+        unknowns: Unknowns,
+        reprs: Reprs,
+    ) -> bool
+    where
+        P: Phase + PartialEq,
+    {
+        repr_matches(&arg.repr, &pat.repr, unknowns, reprs)
+            && effect_matches(&arg.effect, &pat.effect, unknowns)
+    }
     /// A pattern's representation variable stands for the uniform
     /// representation: the generic instance is the uniform one
     /// (hash-types.md, R3). A fixed representation matches itself; a
     /// variable matches a pattern variable, and a fixed one only when
     /// unknowns are open.
+    fn repr_matches<P>(repr: &Repr<P>, pat: &Repr<Poly>, unknowns: Unknowns, reprs: Reprs) -> bool
+    where
+        P: Phase + PartialEq,
+    {
+        match (repr, pat) {
+            _ if reprs == Reprs::Alike => true,
+            (Repr::Var(_), Repr::Var(_)) => true,
+            (Repr::Var(_), _) => unknowns == Unknowns::Open,
+            (Repr::Uniform, Repr::Var(_)) => true,
+            (Repr::Specialized, Repr::Var(_)) => false,
+            (Repr::Uniform, Repr::Uniform) | (Repr::Specialized, Repr::Specialized) => true,
+            (Repr::Uniform, Repr::Specialized) | (Repr::Specialized, Repr::Uniform) => false,
+        }
+    }
     fn arg_matches<P>(
         arg: &TypeArg<P>,
         pat: &TypeArg<Poly>,
@@ -646,16 +672,8 @@ where
     where
         P: Phase + PartialEq,
     {
-        let repr_ok = match (&arg.repr, &pat.repr) {
-            _ if reprs == Reprs::Alike => true,
-            (Repr::Var(_), Repr::Var(_)) => true,
-            (Repr::Var(_), _) => unknowns == Unknowns::Open,
-            (Repr::Uniform, Repr::Var(_)) => true,
-            (Repr::Specialized, Repr::Var(_)) => false,
-            (Repr::Uniform, Repr::Uniform) | (Repr::Specialized, Repr::Specialized) => true,
-            (Repr::Uniform, Repr::Specialized) | (Repr::Specialized, Repr::Uniform) => false,
-        };
-        repr_ok && go(&arg.ty, &pat.ty, seen, unknowns, reprs)
+        repr_matches(&arg.repr, &pat.repr, unknowns, reprs)
+            && go(&arg.ty, &pat.ty, seen, unknowns, reprs)
     }
     fn go<P>(
         ty: &TyTerm<P>,
@@ -762,7 +780,7 @@ where
                     && effect_args
                         .iter()
                         .zip(peffects)
-                        .all(|(a, b)| effect_matches(a, b, unknowns))
+                        .all(|(a, b)| effect_arg_matches(a, b, unknowns, reprs))
                     && identity_args
                         .iter()
                         .zip(pidentities)
@@ -916,6 +934,10 @@ impl PatternSubst {
         self.unify_repr(&a.repr, &b.repr) && self.unify(&a.ty, &b.ty)
     }
 
+    fn unify_effect_arg(&mut self, a: &EffectArg<Poly>, b: &EffectArg<Poly>) -> bool {
+        self.unify_repr(&a.repr, &b.repr) && self.unify_effect(&a.effect, &b.effect)
+    }
+
     fn unify_effect(&mut self, a: &EffectTerm<Poly>, b: &EffectTerm<Poly>) -> bool {
         let resolve = |s: &Self, e: &EffectTerm<Poly>| match e {
             EffectTerm::Var(v) => s.effect.get(v).cloned().unwrap_or(e.clone()),
@@ -1041,7 +1063,7 @@ impl PatternSubst {
                     && ta.len() == tb.len()
                     && ea.len() == eb.len()
                     && na.len() == nb.len()
-                    && ea.iter().zip(eb).all(|(x, y)| self.unify_effect(x, y))
+                    && ea.iter().zip(eb).all(|(x, y)| self.unify_effect_arg(x, y))
                     && na.iter().zip(nb).all(|(x, y)| self.unify_identity(x, y))
                     && ta.iter().zip(tb).all(|(x, y)| self.unify_arg(x, y))
             }
@@ -1156,12 +1178,17 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
                 let effect_args = ea
                     .iter()
                     .zip(eb)
-                    .map(|(x, y)| {
-                        if x == y {
-                            x.clone()
+                    .map(|(x, y)| EffectArg {
+                        repr: if x.repr == y.repr {
+                            x.repr
+                        } else {
+                            Repr::Var(fresh(next))
+                        },
+                        effect: if x.effect == y.effect {
+                            x.effect.clone()
                         } else {
                             EffectTerm::Var(fresh(next))
-                        }
+                        },
                     })
                     .collect();
                 let identity_args = ida
@@ -2119,7 +2146,12 @@ where
                             write!(f, ", ")?;
                         }
                         first = false;
-                        match arg {
+                        match arg.repr {
+                            Repr::Uniform => {}
+                            Repr::Specialized => write!(f, "#")?,
+                            Repr::Var(_) => V::spell_open_repr(f)?,
+                        }
+                        match &arg.effect {
                             EffectTerm::Known(e) => write!(f, "{e}")?,
                             EffectTerm::Var(v) => V::spell_effect_var(v, f)?,
                         }
@@ -2573,8 +2605,8 @@ impl<V: Phase> Repr<V> {
 
 /// A slot whose storage may be laid out by its argument: a type argument
 /// of a user-defined type, and the target of a reference. `#` lives here
-/// and nowhere else (hash-types.md, R1): a position that holds a bare
-/// `TyTerm` cannot carry a representation.
+/// and on an `EffectArg` and nowhere else (hash-types.md, R1): a position
+/// that holds a bare `TyTerm` cannot carry a representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeArg<V: Phase> {
     pub repr: Repr<V>,
@@ -2627,6 +2659,59 @@ impl<V: Phase> TypeArg<V> {
             ty: self
                 .ty
                 .try_map(on_var, on_identity, on_effect, on_len, on_repr)?,
+        })
+    }
+}
+
+/// An effect argument of a user-defined type. `#e` is an effect the
+/// declaration wrote, which the value's Rust type carries as itself;
+/// `e` is the effect variable's, which the runtime fills with nothing. Two
+/// values whose Rust types differ in it are two types here, as `#τ` and
+/// `τ` are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectArg<V: Phase> {
+    pub repr: Repr<V>,
+    pub effect: EffectTerm<V>,
+}
+
+impl<V: Phase> EffectArg<V> {
+    pub fn new(repr: Repr<V>, effect: EffectTerm<V>) -> Self {
+        Self { repr, effect }
+    }
+
+    pub fn uniform(effect: EffectTerm<V>) -> Self {
+        Self {
+            repr: Repr::Uniform,
+            effect,
+        }
+    }
+
+    pub fn specialized(effect: EffectTerm<V>) -> Self {
+        Self {
+            repr: Repr::Specialized,
+            effect,
+        }
+    }
+
+    pub fn map<W: Phase>(
+        &self,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+    ) -> EffectArg<W> {
+        EffectArg {
+            repr: self.repr.map(on_repr),
+            effect: self.effect.map(on_effect),
+        }
+    }
+
+    pub fn try_map<W: Phase, E>(
+        &self,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+    ) -> Result<EffectArg<W>, E> {
+        Ok(EffectArg {
+            repr: self.repr.try_map(on_repr)?,
+            effect: self.effect.try_map(on_effect)?,
         })
     }
 }
@@ -2981,7 +3066,7 @@ pub enum TyTerm<V: Phase> {
     UserDefined {
         id: QualifiedRef,
         type_args: Vec<TypeArg<V>>,
-        effect_args: Vec<EffectTerm<V>>,
+        effect_args: Vec<EffectArg<V>>,
         identity_args: Vec<IdentityTerm<V>>,
     },
     Enum {
@@ -3538,7 +3623,10 @@ impl<V: Phase> TyTerm<V> {
                     .iter()
                     .map(|t| t.map(on_var, on_identity, on_effect, on_len, on_repr))
                     .collect(),
-                effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
+                effect_args: effect_args
+                    .iter()
+                    .map(|e| e.map(on_effect, on_repr))
+                    .collect(),
                 identity_args: identity_args.iter().map(|i| i.map(on_identity)).collect(),
             },
             TyTerm::Enum { name, variants, .. } => TyTerm::Enum {
@@ -3662,7 +3750,7 @@ impl<V: Phase> TyTerm<V> {
                     .collect::<Result<_, _>>()?,
                 effect_args: effect_args
                     .iter()
-                    .map(|e| e.try_map(on_effect))
+                    .map(|e| e.try_map(on_effect, on_repr))
                     .collect::<Result<_, _>>()?,
                 identity_args: identity_args
                     .iter()
@@ -3751,6 +3839,9 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             ty: go(&a.ty, builder),
         }
     }
+    fn effect_arg(a: &EffectArg<Concrete>) -> EffectArg<Poly> {
+        a.map(&mut |v: Infallible| match v {}, &mut |v: Infallible| match v {})
+    }
     fn go(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
         match ty {
             Ty::Int(k) => TyTerm::Int(*k),
@@ -3797,7 +3888,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
             } => TyTerm::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(|t| arg(t, builder)).collect(),
-                effect_args: effect_args.iter().map(lift_ty_effect).collect(),
+                effect_args: effect_args.iter().map(effect_arg).collect(),
                 identity_args: identity_args
                     .iter()
                     .map(|_| builder.fresh_identity_var())

@@ -950,11 +950,11 @@ crate::for_each_inline!(inline);
 /// A type stored as itself: the runtime keeps the Rust value and hands it
 /// back untouched (RFC-0039 rule 2).
 ///
-/// It takes no generic parameters, and that is a decision: it lends the type
-/// in place at every instantiation, and a generic type stored as itself is
-/// kept at its variables' run-time instantiation, so a borrow of any other
-/// reads a box of another type. Such a type states its `Borrowable` with the
-/// bound on its variables (`Deque<T>`, `HashMap<K, V, E, Rt>`).
+/// It takes no generic parameters. A generic type stored as itself is a
+/// box of the Rust type its arguments name, and its `TyArg` gives each
+/// argument by `TyArg::held` and `held_effect`, so that the checker keeps an
+/// argument written concrete apart from a variable's run-time instantiation;
+/// such a type writes its impls itself (`Deque<T>`, `HashMap<K, V, E, Rt>`).
 #[macro_export]
 macro_rules! cross_as_stored {
     ($t:ty) => {
@@ -1082,12 +1082,10 @@ where
 }
 
 /// A type variable's run-time instantiation, `Owned<Rt>`, at which a
-/// borrowed container over it is read in place. The glue instantiates every
-/// type variable at `Owned<Rt>`, so a `Vec` or an array a script holds is the
-/// runtime's `Vec<Owned<Rt>>`, and a map, a set or a deque is a box of the
-/// Rust type at that instantiation. A borrow at any other element reads a
-/// box of another type, so `Borrowable` for each of these asks this of its
-/// type variables. `in_place` names a `Vec` or an array's storage as a
+/// borrowed `Vec` or array is read in place. A `Vec` or an array a script
+/// holds is the runtime's `Vec<Owned<Rt>>` whatever its element type, since
+/// a `Vec<i64>` crosses by converting each element, so `Borrowable` for each
+/// asks this of its element. `in_place` names that storage as a
 /// `Vec<Self>`: the one impl is `Owned<Rt>`'s, where it is the storage
 /// itself.
 ///
@@ -1107,8 +1105,7 @@ where
     message = "a borrowed container of `{Self}` has no storage of its own type: the container's storage holds the runtime's values, not `{Self}`s",
     label = "this parameter borrows a container of `{Self}`",
     note = "borrow the elements as a slice: the language's `&[{Self}]` and `&mut [{Self}]` are taken as `Slice<Erased<Rt, {Self}>, Shared, Rt>` and `Slice<Erased<Rt, {Self}>, Mut, Rt>`, whose elements read in place as `{Self}` by `as_ref(rt)` and `as_mut(rt)` where `{Self}: Stored<Rt>`; a `{Self}` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<{Self}, Shared, Rt>` and `Slice<{Self}, Mut, Rt>` (RFC-0047).",
-    note = "a `Vec<{Self}>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.",
-    note = "a map, a set or a deque is borrowed at the declaration's own type variables, as `&HashMap<K, V, E, Rt>` with `K: Var<kind::Type>`: the runtime keeps it at their run-time instantiation, where each is `Owned<Rt>`."
+    note = "a `Vec<{Self}>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice."
 )]
 pub trait InPlaceElement<Rt>: OneValue<Rt> + sealed::Sealed
 where

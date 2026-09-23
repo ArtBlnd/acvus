@@ -129,8 +129,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Borrowable` | a type whose values are places the language names | atom — it carries `deref`/`deref_mut`, the in-place read, so the missing impl is the refusal and no reader reaches a storage without it |
 | `BorrowableSpecialized` | the same at a `Monomorphize` member | derived from `Borrowable` — a second trait because a member's storage holds a `Self` only where its specialized crossing wrote one |
 | `Lends` | a representation that lends a `T` in place | derived from `Borrowable` and `BorrowableSpecialized` — `Uniform` under the one, `Specialized` under the other, so `Loan::borrow` and `Restore*` are written once and ask each |
-| `InPlaceElement` | a type variable at its run-time instantiation, `Owned<Rt>` | atom — sealed; a borrowed `Vec`, array, map, set or deque asks it of its type variables, and `in_place` names a `Vec`'s storage as a `Vec<Self>` |
-| `InPlaceEffect` | an effect variable at its run-time instantiation, `()` | atom — sealed; a borrowed map or set asks it of its effect variable |
+| `InPlaceElement` | a type variable at its run-time instantiation, `Owned<Rt>` | atom — sealed; a borrowed `Vec` or array asks it of its element, and `in_place` names a `Vec`'s storage as a `Vec<Self>` |
 | `BorrowedWhole` | the refusal of `&S` on an aggregate | atom — a trait with no impl anywhere; the diagnostic text is what it does |
 | `Borrowed` | the two projection types an aggregate has | atom — named without a runtime, because a projection struct has a lifetime and no runtime parameter |
 | `Project` | a field's borrow, built over the one value a field occupies | atom — the obligation that a field is one value is the interpreter's |

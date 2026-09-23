@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::ops::DerefMut;
 
 use acvus_extern::{
-    ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectTerm, Erased, ExternHandler, ExternType,
+    ArgRun, Arr, Borrowable, ClosureFn, Effect, EffectArg, EffectTerm, Erased, ExternHandler, ExternType,
     Externs, Handler, Instance, Interner, LenTerm, Nth, One, OneRegister, OneValue, Owned, PolyTy,
     Pure, Ref, Registry, Runtime, Shared, Task, TransparentOver, TyArg, TypeArg, TypesOnly, Var,
     Words, extern_fn, extern_registry, extern_signature, kind,
@@ -855,7 +855,7 @@ fn generic_parameters_become_positional_variables() {
     let boxed_of = |t: PolyTy| PolyTy::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![TypeArg::uniform(t)],
-        effect_args: vec![EffectTerm::Var(0)],
+        effect_args: vec![EffectArg::uniform(EffectTerm::Var(0))],
         identity_args: vec![],
     };
     assert_eq!(apply.params[0], boxed_of(PolyTy::Var(0)));
@@ -883,7 +883,7 @@ fn generic_parameters_become_positional_variables() {
         PolyTy::UserDefined {
             id: acvus_extern::QualifiedRef::root(i.intern("Box")),
             type_args: vec![TypeArg::uniform(PolyTy::Var(0))],
-            effect_args: vec![EffectTerm::Known(Effect::PURE)],
+            effect_args: vec![EffectArg::specialized(EffectTerm::Known(Effect::PURE))],
             identity_args: vec![],
         }
     );
@@ -1985,7 +1985,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     let boxed_of = |arg: TypeArg<acvus_mir::ty::Concrete>| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![arg],
-        effect_args: vec![EffectTerm::Known(Effect::PURE)],
+        effect_args: vec![EffectArg::specialized(EffectTerm::Known(Effect::PURE))],
         identity_args: vec![],
     };
     let ty = call_type(
@@ -2026,7 +2026,7 @@ fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
     let boxed_of = |arg: TypeArg<acvus_mir::ty::Concrete>| acvus_extern::Ty::UserDefined {
         id: acvus_extern::QualifiedRef::root(i.intern("Box")),
         type_args: vec![arg],
-        effect_args: vec![EffectTerm::Known(Effect::PURE)],
+        effect_args: vec![EffectArg::specialized(EffectTerm::Known(Effect::PURE))],
         identity_args: vec![],
     };
     let ty = call_type(

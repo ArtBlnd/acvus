@@ -1141,7 +1141,12 @@ impl Terms {
                     }
                 }
                 for (x, y) in ea_args.iter().zip(eb_args.iter()) {
-                    if self.unify_effect(x, y, EffectRelation::Equal).is_err() {
+                    self.unify_repr(x.repr, y.repr, kind)
+                        .map_err(|reason| mismatch_for(self, reason))?;
+                    if self
+                        .unify_effect(&x.effect, &y.effect, EffectRelation::Equal)
+                        .is_err()
+                    {
                         return Err(mismatch(self));
                     }
                 }

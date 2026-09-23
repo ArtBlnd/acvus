@@ -5,7 +5,7 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{
-    CastRule, Effect, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
+    CastRule, Effect, EffectArg, EffectTerm, IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Repr,
     EffectVarBound, RequirementSig, Task, TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed,
     matches_pattern, unify_patterns,
 };
@@ -201,8 +201,10 @@ where
 }
 
 /// A family type as the two patterns its casts are declared between: every
-/// argument a variable, at the representation the member gave it and at the
-/// uniform one.
+/// argument a variable, a type argument at the representation the member
+/// gave it and at the uniform one, and an effect argument at its own in
+/// both, since a cast converts the member and leaves the effect's Rust type
+/// as it was.
 struct FamilyPatterns {
     family: String,
     specialized: PolyTy,
@@ -223,8 +225,10 @@ impl FamilyPatterns {
         };
         let mut b = PolyBuilder::new();
         let ty_vars: Vec<PolyTy> = type_args.iter().map(|_| b.fresh_ty_var()).collect();
-        let effect_vars: Vec<EffectTerm<Poly>> =
-            effect_args.iter().map(|_| b.fresh_effect_var()).collect();
+        let effect_vars: Vec<EffectArg<Poly>> = effect_args
+            .iter()
+            .map(|arg| EffectArg::new(arg.repr, b.fresh_effect_var()))
+            .collect();
         let identity_vars: Vec<IdentityTerm<Poly>> = identity_args
             .iter()
             .map(|_| b.fresh_identity_var())

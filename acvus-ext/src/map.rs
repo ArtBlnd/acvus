@@ -30,12 +30,12 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use acvus_extern::{InPlaceEffect, InPlaceElement, Instance, Later};
+use acvus_extern::{Instance, Later, held_effect};
 use acvus_extern::{
     Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
     FxHashMap, Interner, One, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
     Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg,
-    TyVarBound, TypeArg, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry,
+    TyVarBound, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry,
     kind,
 };
 
@@ -326,10 +326,11 @@ fn unbounded<T>() -> TyVarBound {
     TyVarBound::Any
 }
 
-/// No slot of a map or a set specializes: the storage holds the runtime's
-/// own values whatever the key and value types are.
-fn uniform_slot<T>() -> bool {
-    false
+/// Every slot of a map or a set specializes, so that the solver keeps the
+/// representation `TyArg::held` gives each argument rather than setting it
+/// uniform.
+fn specializable<T>() -> bool {
+    true
 }
 
 /// The crossing of a declared extension type stored as itself, at the one
@@ -363,8 +364,8 @@ macro_rules! stored_extern_type {
             fn poly_ty(i: &Interner, vars: &PolyVars) -> PolyTy {
                 PolyTy::UserDefined {
                     id: QualifiedRef::root(i.intern($name)),
-                    type_args: vec![$(TypeArg::uniform($k::poly_ty(i, vars))),+],
-                    effect_args: vec![<E as Term<kind::Effect>>::poly(vars)],
+                    type_args: vec![$($k::held(i, vars)),+],
+                    effect_args: vec![held_effect::<E>(vars)],
                     identity_args: vec![],
                 }
             }
@@ -382,7 +383,7 @@ macro_rules! stored_extern_type {
                     type_params: vec![$(unbounded::<$k>()),+],
                     effect_params: 1,
                     identity_params: 0,
-                    specializable: vec![$(uniform_slot::<$k>()),+],
+                    specializable: vec![$(specializable::<$k>()),+],
                 }
             }
         }
@@ -396,13 +397,10 @@ macro_rules! stored_extern_type {
             acvus_extern::stored_as_itself!();
         }
 
-        /// The box holds the Rust type at the variables' run-time
-        /// instantiation, `Owned<Rt>` and `()`, which is the only one a
-        /// borrow reads in place.
         impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<$($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type> + InPlaceElement<Rt>,)+
-            E: Var<kind::Effect> + InPlaceEffect,
+            $($k: Var<kind::Type>,)+
+            E: Var<kind::Effect>,
             Rt: Runtime,
         {
             acvus_extern::whole_box_in_place!($t<$($k,)+ E, Rt>, Rt);
@@ -597,10 +595,7 @@ where
     Rt: Runtime,
 {
     /// The key at this step's position, and the step.
-    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a K>
-    where
-        HashMap<K, V, E, Rt>: Borrowable<Rt>,
-    {
+    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a K> {
         let index = self.0.at;
         self.0.at += 1;
         self.0
@@ -642,10 +637,7 @@ where
     Rt: Runtime,
 {
     /// The value at this step's position, and the step.
-    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a V>
-    where
-        HashMap<K, V, E, Rt>: Borrowable<Rt>,
-    {
+    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a V> {
         let index = self.0.at;
         self.0.at += 1;
         self.0
@@ -672,9 +664,9 @@ fn next_keys<'a, K, V, E, I, Rt>(
     it: &'a mut Keys<K, V, E, I, Rt>,
 ) -> Option<&'a K>
 where
-    K: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
-    V: Var<kind::Type> + InPlaceElement<Rt>,
-    E: Var<kind::Effect> + InPlaceEffect,
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
@@ -699,9 +691,9 @@ fn next_values<'a, K, V, E, I, Rt>(
     it: &'a mut Values<K, V, E, I, Rt>,
 ) -> Option<&'a V>
 where
-    K: Var<kind::Type> + InPlaceElement<Rt>,
-    V: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
-    E: Var<kind::Effect> + InPlaceEffect,
+    K: Var<kind::Type>,
+    V: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
@@ -1075,8 +1067,8 @@ fn next_refs_set<'a, K, E, I, Rt>(
     it: &'a mut Refs<HashSet<K, E, Rt>, I, Rt>,
 ) -> Option<&'a K>
 where
-    K: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
-    E: Var<kind::Effect> + InPlaceEffect,
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
 {
