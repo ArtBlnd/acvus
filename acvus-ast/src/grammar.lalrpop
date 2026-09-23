@@ -3,9 +3,9 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use crate::ast::*;
 use crate::span::Span;
 use crate::token::Token;
-use crate::error::{Loop, ParseError, ParseErrorKind};
+use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
-use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern, loop_closed};
+use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern, block_closed};
 use crate::literal::{self, IntWidth, SuffixedInt};
 
 grammar(interner: &Interner);
@@ -169,12 +169,12 @@ Stmt: Stmt = {
         Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
     // while cond { body }
     <l:@L> "while" <cond:Expr> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        loop_closed(Loop::While, semicolon)?;
+        block_closed(BlockStatement::While, semicolon)?;
         Ok(Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) })
     },
     // while let pattern = source { body }
     <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        loop_closed(Loop::While, semicolon)?;
+        block_closed(BlockStatement::While, semicolon)?;
         Ok(Stmt::WhileLet {
             id: AstId::alloc(),
             pattern: expr_to_pattern(&lhs)?,
@@ -185,7 +185,7 @@ Stmt: Stmt = {
     },
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
     <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        loop_closed(Loop::For, semicolon)?;
+        block_closed(BlockStatement::For, semicolon)?;
         Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) })
     },
     // break; | continue;  -- the innermost loop, no labels (RFC-0057 rule 4)
@@ -194,8 +194,10 @@ Stmt: Stmt = {
     <l:@L> "continue" ";" <r:@R> =>
         Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
     // anyorder { body }
-    <l:@L> "anyorder" "{" <body:Stmt*> "}" ";"? <r:@R> =>
-        Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) },
+    <l:@L> "anyorder" "{" <body:Stmt*> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+        block_closed(BlockStatement::Anyorder, semicolon)?;
+        Ok(Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) })
+    },
     // `place = e;` — a place is a name, an `@context` or a `$parameter`
     // under any path of `.field` and `[index]` steps (RFC-0047).
     <l:@L> <lhs:Expr> "=" <rhs:Expr> ";" <r:@R> =>? build_assign(lhs, rhs, Span::new(l, r)),
@@ -203,7 +205,7 @@ Stmt: Stmt = {
     <e:Expr> ";" => Stmt::Expr(e),
 };
 
-// A `;` after the `}` closing a loop, which the loop's rule reads so that it
+// A `;` after the `}` closing a block statement, which its rule reads so that it
 // is reported as what it is: no statement begins with `;`, so reading it
 // here takes nothing from another rule.
 StraySemicolon: Span = <l:@L> ";" <r:@R> => Span::new(l, r);

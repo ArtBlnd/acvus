@@ -59,23 +59,26 @@ pub enum ParseErrorKind {
 
     // Script errors
     InvalidAssignTarget,
-    /// A `;` after the `}` closing a loop: a loop is a statement, not an
-    /// expression a `;` ends.
-    SemicolonAfterLoop(Loop),
+    /// A `;` after the `}` closing a `for`, `while` or `anyorder` block:
+    /// such a block is a statement, not an expression a `;` ends.
+    SemicolonAfterBlock(BlockStatement),
 }
 
-/// The loop a diagnostic names by its keyword.
+/// A statement that ends at the `}` closing its block, as a diagnostic
+/// names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Loop {
+pub enum BlockStatement {
     For,
     While,
+    Anyorder,
 }
 
-impl Loop {
-    fn keyword(self) -> &'static str {
+impl BlockStatement {
+    fn spoken(self) -> &'static str {
         match self {
-            Loop::For => "for",
-            Loop::While => "while",
+            BlockStatement::For => "a `for` block",
+            BlockStatement::While => "a `while` block",
+            BlockStatement::Anyorder => "an `anyorder` block",
         }
     }
 }
@@ -119,11 +122,9 @@ impl fmt::Display for ParseErrorKind {
                  an `@context` or a `$parameter` under any path of `.field` and \
                  `[index]` steps -- or `*reference`"
             ),
-            ParseErrorKind::SemicolonAfterLoop(keyword) => write!(
-                f,
-                "`;` is not allowed after a `{}` block",
-                keyword.keyword()
-            ),
+            ParseErrorKind::SemicolonAfterBlock(block) => {
+                write!(f, "`;` is not allowed after {}", block.spoken())
+            }
         }
     }
 }

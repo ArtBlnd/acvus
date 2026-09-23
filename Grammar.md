@@ -142,12 +142,14 @@ For          = "for" IDENT "in" ForHead "{" Stmt* "}"
 ForHead      = Expr | Expr ".." Expr
 Break        = "break" ";"
 Continue     = "continue" ";"
-Anyorder     = "anyorder" "{" Stmt* "}" ";"?
+Anyorder     = "anyorder" "{" Stmt* "}"
 ExprStmt     = Expr ";"
 ```
 
-Every statement of the language ends in `;`, an `if` and a `match` statement
-included, so a statement that begins with one is the expression statement
+`while`, `for` and `anyorder` are statements, not expressions: each ends at
+the `}` closing its block, and a `;` after that `}` is refused. Every other
+statement ends in `;`, an `if` and a `match` statement included, so a
+statement that begins with one is the expression statement
 rule and the grammar has no decision to make -- there is no
 "a block-like expression at statement start is a statement" rule, as Rust
 has. `if c { … };` and `match e { … };` are `Expr ";"`, and the same

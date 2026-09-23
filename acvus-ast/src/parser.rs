@@ -2,7 +2,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
-use crate::error::{Expected, Found, Loop, ParseError, ParseErrorKind};
+use crate::error::{BlockStatement, Expected, Found, ParseError, ParseErrorKind};
 use crate::grammar::{
     ArmLineParser, BindLineParser, ExprParser, ForLineParser, ScriptParser, TemplateStmtParser,
 };
@@ -687,15 +687,15 @@ pub fn build_assign(
     }
 }
 
-/// The end of a loop statement: the `}` closing its block, with no `;`.
-pub(crate) fn loop_closed(
-    keyword: Loop,
+/// The end of a block statement: the `}` closing its block, with no `;`.
+pub(crate) fn block_closed(
+    block: BlockStatement,
     semicolon: Option<Span>,
 ) -> Result<(), LalrpopError<usize, Token, ParseError>> {
     match semicolon {
         None => Ok(()),
         Some(span) => Err(LalrpopError::User {
-            error: ParseError::new(ParseErrorKind::SemicolonAfterLoop(keyword), span),
+            error: ParseError::new(ParseErrorKind::SemicolonAfterBlock(block), span),
         }),
     }
 }
@@ -1102,23 +1102,24 @@ mod tests {
     }
 
     #[test]
-    fn a_semicolon_after_a_loop_block_is_reported_at_the_semicolon() {
+    fn a_semicolon_after_a_block_statement_is_reported_at_the_semicolon() {
         let interner = Interner::new();
-        for (src, keyword) in [
-            ("for x in xs { } ; 1", "for"),
-            ("while c { } ; 1", "while"),
-            ("while let Some(x) = o { } ; 1", "while"),
+        for (src, block) in [
+            ("for x in xs { } ; 1", "a `for` block"),
+            ("while c { } ; 1", "a `while` block"),
+            ("while let Some(x) = o { } ; 1", "a `while` block"),
+            ("anyorder { } ; 1", "an `anyorder` block"),
         ] {
             let error = parse_script(&interner, src).unwrap_err();
             let at = src.find(';').unwrap();
             assert_eq!(error.span, Span::new(at, at + 1), "{src}");
             assert_eq!(
                 error.kind.to_string(),
-                format!("`;` is not allowed after a `{keyword}` block"),
+                format!("`;` is not allowed after {block}"),
                 "{src}"
             );
         }
-        assert!(parse_script(&interner, "for x in xs { } while c { } 1").is_ok());
+        assert!(parse_script(&interner, "for x in xs { } while c { } anyorder { } 1").is_ok());
     }
 
     #[test]

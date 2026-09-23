@@ -99,7 +99,7 @@ fn anyorder_in_a_script_merges_its_calls() {
     };
     let ir = compile_script_ir_with(
         &i,
-        "anyorder { let a = io(1); let b = io(2); }; 0",
+        "anyorder { let a = io(1); let b = io(2); } 0",
         &rustc_hash::FxHashMap::default(),
         &[io],
     )
