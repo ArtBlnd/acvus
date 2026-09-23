@@ -29,7 +29,7 @@
 //! `Cast` and `Const` instructions, which change no loop's strength, and it
 //! runs before `lsr` (`graph/optimize.rs`), so no loop is rewritten by both.
 
-use acvus_ast::{BinOp, Span};
+use acvus_ast::Span;
 use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::{AffineValues, Derivation, for_body};
@@ -39,7 +39,7 @@ use crate::analysis::inst_info;
 use crate::analysis::loans::{Loans, Summaries};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, Ty};

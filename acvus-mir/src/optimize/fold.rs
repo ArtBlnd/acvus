@@ -18,12 +18,12 @@
 //! compares bit patterns here, so a folded NaN would carry the compiler's
 //! pattern where the machine's belongs.
 
-use acvus_ast::{BinOp, Literal, UnaryOp};
+use acvus_ast::{Literal, UnaryOp};
 use rustc_hash::FxHashMap;
 
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{InstKind, ValueId};
+use crate::ir::{BinOp, InstKind, ValueId};
 use crate::ty::{CastTy, IntTy, Ty, WordTy};
 
 pub fn run(cfg: &mut CfgBody) {
@@ -441,6 +441,8 @@ fn int_result(op: BinOp, k: IntTy, a: i128, b: i128) -> Option<Literal> {
         BinOp::Gt => held(a > b),
         BinOp::Lte => held(a <= b),
         BinOp::Gte => held(a >= b),
+        BinOp::Min => wrap(a.min(b)),
+        BinOp::Max => wrap(a.max(b)),
         BinOp::And | BinOp::Or => None,
     }
 }
@@ -487,7 +489,9 @@ fn float_result(op: BinOp, a: f64, b: f64) -> Option<Literal> {
         | BinOp::Shl
         | BinOp::Shr
         | BinOp::And
-        | BinOp::Or => None,
+        | BinOp::Or
+        | BinOp::Min
+        | BinOp::Max => None,
     }
 }
 
@@ -567,6 +571,8 @@ fn bool_result(op: BinOp, a: bool, b: bool) -> Option<Literal> {
         | BinOp::BitAnd
         | BinOp::BitOr
         | BinOp::Shl
-        | BinOp::Shr => None,
+        | BinOp::Shr
+        | BinOp::Min
+        | BinOp::Max => None,
     }
 }

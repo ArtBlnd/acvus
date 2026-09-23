@@ -1,0 +1,2 @@
+// expect 765
+let s = 0; for i in (-127i8 - 1i8)..127i8 { s = s + 3; } s

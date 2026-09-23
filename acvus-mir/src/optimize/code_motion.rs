@@ -1905,7 +1905,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(0),
                 },
@@ -1976,7 +1976,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(0),
                 },
@@ -2051,7 +2051,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(0),
                 },
@@ -2655,13 +2655,13 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(3),
                     right: v(3),
                 },
                 InstKind::BinOp {
                     dst: v(4),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(1),
                     right: v(2),
                 },
@@ -2713,7 +2713,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(5),
                     right: v(5),
                 },
@@ -2726,7 +2726,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(1),
                     right: v(2),
                 },
@@ -2776,7 +2776,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(5),
                     right: v(5),
                 },
@@ -2786,7 +2786,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(1),
                     right: v(4),
                 },
@@ -2834,7 +2834,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(5),
                     right: v(5),
                 },
@@ -2844,7 +2844,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(1),
                     right: v(2),
                 },
@@ -2902,7 +2902,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(5),
                     right: v(5),
                 },
@@ -2912,7 +2912,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(4),
                     right: v(2),
                 },
@@ -2988,7 +2988,7 @@ mod tests {
         };
         let add = |dst, left, right| InstKind::BinOp {
             dst,
-            op: acvus_ast::BinOp::Add,
+            op: crate::ir::BinOp::Add,
             left,
             right,
         };

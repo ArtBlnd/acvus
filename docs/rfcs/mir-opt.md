@@ -748,14 +748,16 @@ simplifies the integer identities below.
    operation reads. At width `w` wrapping arithmetic is arithmetic modulo
    `2^w` (RFC-0037), where `0` is the additive identity and the absorbing
    element of multiplication, and `1` is the multiplicative identity, at
-   every width and signedness. None of the three operations traps. No float operation
+   every width and signedness. None of the three operations traps. An
+   integer `min(x, x)` or `max(x, x)` whose operands have one number is `x`
+   (RFC-0084 rule 1). No float operation
    is simplified: `-0.0 + 0.0` is `0.0`, `inf * 0.0` is NaN, and a
    signaling NaN times `1.0` comes out quiet.
 
 4. **Commutativity.** The operands of a commutative operation are ordered by
    number in its key, so `a + b` and `b + a` are one entry. The instruction
    keeps the order it was written in. At an integer type `+`, `*`, `==`,
-   `!=`, `&`, `|` and `^` commute, at `bool` `==`, `!=` and `^`, and at a
+   `!=`, `&`, `|`, `^`, `min` and `max` commute, at `bool` `==`, `!=` and `^`, and at a
    float or a `char` `==` and `!=`. A float `+` and `*` are not ordered:
    given two NaN operands the machine returns the payload of one of them,
    chosen by operand order.
@@ -801,3 +803,93 @@ gains or loses a move.
 - Numbering storage reads and calls — a storage read needs to know that no
   write reaches it in between, and a call's declared effect does not say
   that it returns (RFC-0081 rule 3).
+
+## RFC-0084: a `for` whose body does nothing is a jump to its exit
+
+Status: Proposed
+
+IV canonicalization computes a weak loop's induction variables from its
+counter (RFC-0066 rule 7), and value numbering and the `dce` after it sweep
+what that leaves unread (RFC-0083). A loop whose only work was advancing
+those variables is then a `for` whose body only jumps back and whose header
+carries nothing, and it still runs `max(hi − at, 0)` iterations. One pass,
+`optimize::empty_loop`, removes it, which needs the trip count computed
+without the loop, and so needs an integer maximum the MIR did not have.
+
+1. **Integer `min` and `max` are MIR operations.** `Min` and `Max` give the
+   lesser and the greater of two integers of one width, compared at that
+   width's own signedness. Both are total at every width: neither wraps nor
+   traps. The validator admits them only at an integer type, with both
+   operands and the result of that type. `fold` folds them over two
+   constants (RFC-0055). Value numbering orders their operands at an
+   integer type and simplifies `min(x, x)` and `max(x, x)` to `x`
+   (RFC-0083 rules 3 and 4). The machine runs them at every width.
+
+2. **They are the MIR's own.** The MIR's `BinOp` is its own enum: the
+   source's operators and these two. The lowering reaches it through a
+   conversion from the parser's `BinOp`, which has no variant for either
+   and yields neither. That the source cannot write `min` or `max` is a
+   fact of the two types, not a convention every pass keeps.
+
+3. **What qualifies.** A natural loop (RFC-0056) is removed when all
+   of these hold:
+   - its header ends in `For`, has no parameter, and holds no instruction;
+   - every other block of the loop holds no instruction and ends in a jump
+     to a block of the loop, so the loop has no edge out but the header's
+     exit, and no block of it returns or diverges;
+   - its source is a range or an array.
+
+   Every other loop stays exactly as written: one whose body holds any
+   instruction, whose header carries any value, or whose body leaves it.
+
+4. **The rewrite.** The header's `For` becomes a jump to its exit, with the
+   exit's arguments, and the body's blocks, which no path reaches any more,
+   are pruned. Where the exit edge defines the trip count (RFC-0057 rule 9),
+   the count is computed at the end of the header and is the jump's first
+   argument:
+   - for `at..hi` at width `w`, `(max(hi, at) as u64) − (at as u64)`, with no
+     cast where `w` is `u64`;
+   - for an array, its length as a `u64` constant, read off its type.
+
+   A `dce` follows each removal. It sweeps the bounds the removed terminator
+   read, so a loop whose body held only the removed one qualifies in turn.
+   An array is no longer moved into a loop, so the `Drop` that
+   `drop_insertion` places releases every element at once (RFC-0057 rule 6)
+   instead of each element in the body.
+
+5. **The count is exact.** The loop's count is `max(hi − at, 0)` over the
+   integers (RFC-0057 rule 9), which lies in `[0, 2^64)` at every width up to
+   64. `max` compares at `w`'s signedness, so `max(hi, at) − at` is that count
+   over the integers. A cast to `u64` keeps its operand modulo `2^64`, and a
+   `u64` subtraction wraps modulo `2^64` (RFC-0037), so the difference of the
+   two casts is the count exactly. `max(hi − at, 0)` at `w` is not: at `i8`,
+   `-100..100` has `hi − at` wrap to `-56`, and at `u8`, `5..3` has it wrap
+   to `254`.
+
+6. **A slice is declined.** The MIR has no instruction that reads a slice's
+   length: the `For` terminator is its only reader. A slice `for` whose body
+   does nothing stays a loop.
+
+7. **Placement.** The pass runs after the `dce` that follows value
+   numbering, and before `forward`. Until IV canonicalization, value
+   numbering and that `dce` have run, the body still holds the arithmetic
+   they remove, so no loop qualifies earlier. `forward` then collapses a
+   header the removal left holding nothing but its jump.
+
+**Why.** A body that holds no instruction writes nothing, calls nothing and
+defines nothing a later block reads, and a header that holds none and
+carries nothing runs nothing on each test. Running the loop is only
+counting, and the count is one `max`, two casts and a subtraction.
+**Cost.** A dominator tree and the natural loops per removal and one more
+`dce` for each loop removed. A slice loop whose body does nothing still
+runs its iterations.
+**Rejected.**
+- `Min` and `Max` in the parser's `BinOp` — its type would admit two
+  operations the parser never produces, and only a convention would keep
+  them out of the source.
+- An instruction that reads a slice's length, now — it is a new operation
+  on a borrowed value for the machine and every pass, for one decline.
+- The count `max(hi − at, 0)` at the range's width — it wraps, as rule 5
+  shows.
+- The count in a wider type — the MIR has no integer wider than 64 bits, and
+  no 64-bit type holds every difference of two `i64` or two `u64` values.

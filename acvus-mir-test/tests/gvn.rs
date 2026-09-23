@@ -3,11 +3,11 @@
 //! Each program also stands in `acvus-interpreter-test/tests/soundness/gvn/`,
 //! where it runs at both levels to its pinned value.
 
-use acvus_ast::{BinOp, Literal};
+use acvus_ast::Literal;
 use acvus_mir::analysis::affine::for_body;
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::{Callee, InstKind};
+use acvus_mir::ir::{BinOp, Callee, InstKind};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::Ty;
 use acvus_mir_test::compile_script_module_at;

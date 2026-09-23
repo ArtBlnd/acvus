@@ -18,7 +18,9 @@ use crate::ir::{
 use crate::ir::{ExternInstance, ForSource, IndexMode};
 use crate::ty::{CastTy, Mutability, Ty, TypeArg};
 use crate::validate::move_check::is_move_only;
-use acvus_ast::{BinOp, Literal, Span, UnaryOp};
+use acvus_ast::{Literal, Span, UnaryOp};
+
+use crate::ir::BinOp;
 use acvus_utils::{Astr, LocalIdOps};
 use rustc_hash::FxHashMap;
 
@@ -1280,7 +1282,29 @@ impl CheckCtx {
                 let right_ty = ty!(*right);
                 let dst_ty = ty!(*dst);
 
-                if binop_is_logical(*op) {
+                if matches!(op, BinOp::Min | BinOp::Max) {
+                    if !matches!(left_ty, Ty::Int(_)) {
+                        self.invalid(pc, span, "BinOp(min/max)", "Int", left_ty, errors);
+                    }
+                    self.assert_match(
+                        pc,
+                        span,
+                        "BinOp(min/max)",
+                        "left == right",
+                        left_ty,
+                        right_ty,
+                        errors,
+                    );
+                    self.assert_match(
+                        pc,
+                        span,
+                        "BinOp(min/max)",
+                        "left == dst",
+                        left_ty,
+                        dst_ty,
+                        errors,
+                    );
+                } else if binop_is_logical(*op) {
                     self.assert_match(
                         pc,
                         span,
@@ -2621,7 +2645,7 @@ mod tests {
         let module = make_module(
             vec![inst(InstKind::BinOp {
                 dst: v2,
-                op: acvus_ast::BinOp::Add,
+                op: crate::ir::BinOp::Add,
                 left: v0,
                 right: v1,
             })],

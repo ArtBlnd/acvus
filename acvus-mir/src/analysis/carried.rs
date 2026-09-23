@@ -48,7 +48,7 @@
 //! A loop left from anywhere but its header, by a `break` or a `return`,
 //! is ordered: the iterations after the one that leaves never run.
 
-use acvus_ast::BinOp;
+use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::{AffineValues, Arithmetic, Derivation, exact_under_wrapping};
@@ -214,7 +214,9 @@ impl CarriedState {
 
     /// RFC-0057 rule 3's independence: a weak loop that carries nothing.
     pub fn runs_apart(&self) -> bool {
-        self.params.is_empty() && self.storage_merges.is_empty() && self.strength() == Strength::Weak
+        self.params.is_empty()
+            && self.storage_merges.is_empty()
+            && self.strength() == Strength::Weak
     }
 }
 

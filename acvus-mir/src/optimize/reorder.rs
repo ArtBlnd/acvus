@@ -685,7 +685,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(4),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(1),
                     right: v(3),
                 },
@@ -806,7 +806,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(7),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(5),
                     right: v(6),
                 },
@@ -845,7 +845,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(1),
                 },
@@ -884,7 +884,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v(0),
                     right: v(0),
                 },

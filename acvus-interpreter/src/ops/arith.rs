@@ -7,7 +7,8 @@
 
 use std::marker::PhantomData;
 
-use acvus_ast::{BinOp, UnaryOp};
+use acvus_ast::UnaryOp;
+use acvus_mir::ir::BinOp;
 use acvus_mir::ty::IntTy;
 
 use crate::code::{Exit, Marked, Op, successor};
@@ -214,6 +215,8 @@ pub mod word {
         bit_and(a, b) { a.bitand(b).word() }
         bit_or(a, b) { a.bitor(b).word() }
         bit_xor(a, b) { a.bitxor(b).word() }
+        min(a, b) { if b < a { b.word() } else { a.word() } }
+        max(a, b) { if b > a { b.word() } else { a.word() } }
     }
 
     int_compares! {
@@ -383,6 +386,8 @@ int_ops!(
     BitXor = bit_xor -> as_word,
     Shl = shl -> as_word,
     Shr = shr -> as_word,
+    Min = min -> as_word,
+    Max = max -> as_word,
     Eq = eq -> as_bool_word,
     Neq = neq -> as_bool_word,
     Lt = lt -> as_bool_word,
@@ -687,6 +692,8 @@ where
         BinOp::Xor => Box::new(BitXor::<T, L, R, D>::new(at, next)),
         BinOp::Shl => Box::new(Shl::<T, L, R, D>::new(at, next)),
         BinOp::Shr => Box::new(Shr::<T, L, R, D>::new(at, next)),
+        BinOp::Min => Box::new(Min::<T, L, R, D>::new(at, next)),
+        BinOp::Max => Box::new(Max::<T, L, R, D>::new(at, next)),
         other => panic!("unsupported int binop {other:?}"),
     }
 }

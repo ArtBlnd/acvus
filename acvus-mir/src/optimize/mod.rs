@@ -6,6 +6,7 @@ pub(crate) mod context_ops;
 pub mod dce;
 pub mod drop_insertion;
 pub mod dse;
+pub mod empty_loop;
 pub mod fold;
 pub mod forward;
 pub mod gvn;

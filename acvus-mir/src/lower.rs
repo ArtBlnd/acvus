@@ -2569,7 +2569,7 @@ impl<'a> Lowerer<'a> {
                                 *span,
                                 InstKind::BinOp {
                                     dst,
-                                    op: *op,
+                                    op: (*op).into(),
                                     left: ordering,
                                     right: zero,
                                 },
@@ -2596,7 +2596,7 @@ impl<'a> Lowerer<'a> {
                     *span,
                     InstKind::BinOp {
                         dst,
-                        op: *op,
+                        op: (*op).into(),
                         left: l,
                         right: r,
                     },

@@ -1,0 +1,2 @@
+// expect 600
+let s = 0; for i in (@lo8 as i8)..(@hi8 as i8) { s = s + 3; } s

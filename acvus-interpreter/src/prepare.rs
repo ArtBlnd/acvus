@@ -16,12 +16,12 @@ use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use acvus_ast::{BinOp, Literal, UnaryOp};
+use acvus_ast::{Literal, UnaryOp};
 use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
-    Callee, Chosen, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
+    BinOp, Callee, Chosen, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
     RefTarget, SwitchKey, TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
@@ -6722,7 +6722,8 @@ fn check_assignment(edges: &Edges<'_>, ctx: &PrepareCtx<'_>, live: &Live, slots:
 
 #[cfg(test)]
 mod recognizer_tests {
-    use acvus_ast::{BinOp as AstBinOp, Span};
+    use acvus_ast::Span;
+    use acvus_mir::ir::BinOp;
 
     use super::*;
 
@@ -6775,7 +6776,7 @@ mod recognizer_tests {
     fn add(dst: usize, left: usize, right: usize) -> Inst {
         inst(InstKind::BinOp {
             dst: val(dst),
-            op: AstBinOp::Add,
+            op: BinOp::Add,
             left: val(left),
             right: val(right),
         })
@@ -7357,7 +7358,8 @@ mod recognizer_tests {
 
 #[cfg(test)]
 mod assignment_tests {
-    use acvus_ast::{BinOp as AstBinOp, Span};
+    use acvus_ast::Span;
+    use acvus_mir::ir::BinOp;
 
     use super::*;
 
@@ -7389,7 +7391,7 @@ mod assignment_tests {
     fn add(dst: usize, left: usize, right: usize) -> Inst {
         inst(InstKind::BinOp {
             dst: val(dst),
-            op: AstBinOp::Add,
+            op: BinOp::Add,
             left: val(left),
             right: val(right),
         })
@@ -7764,8 +7766,9 @@ impl ChainRun {
 ///
 /// Exhaustive over `BinOp`: the operators the chain claims are the five
 /// arithmetic ones. A comparison is a chain's root, not an interior node,
-/// and the bitwise and shift operators and the boolean connectives are not
-/// claimed at all — an instruction carrying one stops the recognizer.
+/// and the bitwise and shift operators, the boolean connectives and `min`
+/// and `max` are not claimed at all — an instruction carrying one stops the
+/// recognizer.
 fn arith_of(op: BinOp) -> Option<Arith> {
     match op {
         BinOp::Add => Some(Arith::Add),
@@ -7785,7 +7788,9 @@ fn arith_of(op: BinOp) -> Option<Arith> {
         | BinOp::Shl
         | BinOp::Shr
         | BinOp::And
-        | BinOp::Or => None,
+        | BinOp::Or
+        | BinOp::Min
+        | BinOp::Max => None,
     }
 }
 
@@ -7811,7 +7816,9 @@ fn compare_of(op: BinOp) -> Option<Compare> {
         | BinOp::Shl
         | BinOp::Shr
         | BinOp::And
-        | BinOp::Or => None,
+        | BinOp::Or
+        | BinOp::Min
+        | BinOp::Max => None,
     }
 }
 

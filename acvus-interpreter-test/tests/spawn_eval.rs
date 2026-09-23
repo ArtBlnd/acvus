@@ -63,7 +63,7 @@ async fn spawn_eval_basic() {
             }),
             inst(InstKind::BinOp {
                 dst: vids[2],
-                op: acvus_ast::BinOp::Add,
+                op: acvus_mir::ir::BinOp::Add,
                 left: vids[0],
                 right: vids[1],
             }),
@@ -184,7 +184,7 @@ async fn spawn_eval_multi_args() {
         let insts = vec![
             inst(InstKind::BinOp {
                 dst: vids[2],
-                op: acvus_ast::BinOp::Add,
+                op: acvus_mir::ir::BinOp::Add,
                 left: vids[0],
                 right: vids[1],
             }),

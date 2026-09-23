@@ -1,0 +1,2 @@
+// expect 0
+let s = 0; for i in (@top as u8)..250u8 { s = s + 6; } s

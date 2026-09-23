@@ -373,7 +373,7 @@ mod tests {
                 span: span(),
                 kind: InstKind::BinOp {
                     dst: v3,
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v1,
                     right: v2,
                 },
@@ -420,7 +420,7 @@ mod tests {
                 span: span(),
                 kind: InstKind::BinOp {
                     dst: v2,
-                    op: acvus_ast::BinOp::Add,
+                    op: crate::ir::BinOp::Add,
                     left: v0,
                     right: v1,
                 },

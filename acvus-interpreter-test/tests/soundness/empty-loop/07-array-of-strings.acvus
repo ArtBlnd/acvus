@@ -1,0 +1,2 @@
+// expect 9
+let a = ["x".to_string(), "y".to_string(), "z".to_string()]; let s = 0; for x in a { s = s + 3; } s

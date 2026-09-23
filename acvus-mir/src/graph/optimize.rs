@@ -361,6 +361,11 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // merges; before a `dce` of its own, which sweeps what it leaves unread.
     optimize::gvn::run(cfg);
     optimize::dce::run(cfg);
+    // RFC-0084: after that `dce`, which sweeps the arithmetic the loop passes
+    // left in a body that nothing reads, so a body that does nothing holds
+    // no instruction; before `forward`, which collapses the header the
+    // removal leaves only jumping.
+    optimize::empty_loop::run(cfg);
     // A block that only jumps is its target: after `lsr`, which writes a
     // reduction into the preheader `code_motion` may have left empty;
     // before `reorder`, which schedules within a block.

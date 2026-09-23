@@ -330,7 +330,7 @@ mod tests {
     fn binop_defs_dst_uses_operands() {
         let inst = InstKind::BinOp {
             dst: v(2),
-            op: acvus_ast::BinOp::Add,
+            op: crate::ir::BinOp::Add,
             left: v(0),
             right: v(1),
         };

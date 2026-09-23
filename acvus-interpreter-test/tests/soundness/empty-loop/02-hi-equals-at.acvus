@@ -1,0 +1,2 @@
+// expect 0
+let s = 0; for i in @at..@at { s = s + 3; } s

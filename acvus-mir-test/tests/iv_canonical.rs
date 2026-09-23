@@ -6,7 +6,8 @@
 //! both levels to its pinned value. This file says what shape the full
 //! level gives it; that corpus says the shape computes the same number.
 
-use acvus_ast::{BinOp, Literal, Span};
+use acvus_ast::{Literal, Span};
+use acvus_mir::ir::BinOp;
 use acvus_mir::analysis::affine::{AffineValues, for_body};
 use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp, Strength};
 use acvus_mir::analysis::domtree::DomTree;
@@ -376,12 +377,17 @@ fn no_loop_is_rewritten_by_both_passes() {
 
 // -- Nests -----------------------------------------------------------
 
+/// Each inner loop also sums `r`, a merge it keeps carrying, so it stays a
+/// loop once `q` is canonicalized. A body that does nothing is removed
+/// (RFC-0084), which would leave one loop to judge.
 const WEAK_IN_WEAK: &str = "let v = vec([0, 0, 0]); let j = 1; \
-     for x in &mut v { let q = j; for k in 0..4 { q = q + 3; } *x = q; j = j + 2; } \
+     for x in &mut v { let q = j; let r = 0; for k in 0..4 { q = q + 3; r = r + k; } \
+     *x = q + r; j = j + 2; } \
      j * 1000000 + v[0u64] * 10000 + v[1u64] * 100 + v[2u64]";
 
 const WEAK_IN_STRONG: &str = "let t = 0; \
-     for i in 0..@n { let q = 0; for k in 0..@m { q = q + 3; } t = t * 2 + q; } t";
+     for i in 0..@n { let q = 0; let r = 0; for k in 0..@m { q = q + 3; r = r + k; } \
+     t = t * 2 + q + r; } t";
 
 #[test]
 fn nested_loops_are_each_judged_by_their_own_state() {
@@ -390,11 +396,12 @@ fn nested_loops_are_each_judged_by_their_own_state() {
         panic!("two loops:\n{}", full.listing);
     };
     assert!(outer.natural.contains(inner.natural.header));
-    for loop_ in [outer, inner] {
+    for (loop_, carried) in [(outer, vec![]), (inner, vec![exact_add()])] {
         assert_eq!(full.state(loop_).strength(), Strength::Weak);
-        assert!(
-            full.carried(loop_).is_empty(),
-            "both loops carry nothing:\n{}",
+        assert_eq!(
+            full.carried(loop_),
+            carried,
+            "the outer loop carries nothing and the inner one its sum:\n{}",
             full.listing
         );
         assert_eq!(
@@ -412,7 +419,7 @@ fn nested_loops_are_each_judged_by_their_own_state() {
     assert_eq!(full.state(outer).strength(), Strength::Strong);
     assert_eq!(full.exit_trip(outer), ExitTrip::Absent);
     assert_eq!(full.state(inner).strength(), Strength::Weak);
-    assert!(full.carried(inner).is_empty(), "{}", full.listing);
+    assert_eq!(full.carried(inner), vec![exact_add()], "{}", full.listing);
     assert_eq!(full.exit_trip(inner), ExitTrip::Defined);
 }
 

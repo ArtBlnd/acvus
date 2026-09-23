@@ -1,0 +1,2 @@
+// expect 12
+let a = [2, 3, 4, 5]; let s = 0; for x in a { s = s + 3; } s

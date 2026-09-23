@@ -1,4 +1,4 @@
-use acvus_ast::{BinOp, Literal, Span, UnaryOp};
+use acvus_ast::{Literal, Span, UnaryOp};
 use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -14,6 +14,65 @@ pub enum Intrinsic {
 }
 
 acvus_utils::declare_local_id!(pub ValueId);
+
+/// A binary operation of the MIR: the source's operators, and `Min` and
+/// `Max`, which no source expression lowers to and only a pass writes.
+///
+/// It is its own enum, and not `acvus_ast::BinOp`, so that the parser
+/// cannot write `Min` or `Max`: the parser's type has no such variant, and
+/// the lowering reaches this enum through `From<acvus_ast::BinOp>`, which
+/// yields neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Lte,
+    Gte,
+    And,
+    Or,
+    Xor,
+    BitAnd,
+    BitOr,
+    Shl,
+    Shr,
+    Mod,
+    /// The lesser of two integers of one width, compared at that width's
+    /// signedness. Total at every width: it neither wraps nor traps.
+    Min,
+    /// The greater of two integers of one width, as `Min` is the lesser.
+    Max,
+}
+
+impl From<acvus_ast::BinOp> for BinOp {
+    fn from(op: acvus_ast::BinOp) -> BinOp {
+        match op {
+            acvus_ast::BinOp::Add => BinOp::Add,
+            acvus_ast::BinOp::Sub => BinOp::Sub,
+            acvus_ast::BinOp::Mul => BinOp::Mul,
+            acvus_ast::BinOp::Div => BinOp::Div,
+            acvus_ast::BinOp::Eq => BinOp::Eq,
+            acvus_ast::BinOp::Neq => BinOp::Neq,
+            acvus_ast::BinOp::Lt => BinOp::Lt,
+            acvus_ast::BinOp::Gt => BinOp::Gt,
+            acvus_ast::BinOp::Lte => BinOp::Lte,
+            acvus_ast::BinOp::Gte => BinOp::Gte,
+            acvus_ast::BinOp::And => BinOp::And,
+            acvus_ast::BinOp::Or => BinOp::Or,
+            acvus_ast::BinOp::Xor => BinOp::Xor,
+            acvus_ast::BinOp::BitAnd => BinOp::BitAnd,
+            acvus_ast::BinOp::BitOr => BinOp::BitOr,
+            acvus_ast::BinOp::Shl => BinOp::Shl,
+            acvus_ast::BinOp::Shr => BinOp::Shr,
+            acvus_ast::BinOp::Mod => BinOp::Mod,
+        }
+    }
+}
 
 /// Decision not to build, RFC-0051: no `Float` and no `Bytes` key. Equality
 /// on a float is not a jump, and a byte string is a list. A `match` written
