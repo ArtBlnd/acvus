@@ -208,59 +208,72 @@ identity, and with it the checker states what a signature would have.
 
 Status: Proposed
 
-1. **A region is a set of loans; join is union** (RFC-0064). What changes is
-   where regions live: a value holds one region per *position* of its type,
-   not one for the whole value.
+1. **A region is a set of loans; join is union** (RFC-0064). A value holds
+   one region per *position* of its type, not one for the whole value.
 2. **A type's positions are structural.** `&T` has one position, then `T`'s.
-   An option, result, tuple, object, enum or array has its parts' positions
-   in order. A `UserDefined` type has the region parameters its declaration
-   states, then its type arguments' positions. A function type has one
-   position for what it captures, and the positions of its parameters and
-   result. A type variable has none until it resolves. Positions are a shape;
-   no position carries an extent, which stays per instruction (RFC-0064).
-3. **Operations move positions.** A deref gives the target's positions; a
-   field, payload or element read gives that part's; building a value joins,
-   position by position, what it is built from; a join of control paths
-   joins position by position. `&r` gives `r`'s loan at the new position and
-   `r`'s own positions after it.
-4. **A write through a reference joins.** `*m = v` joins `v`'s positions
-   into the matching positions of every storage `m`'s loans name. A write
-   never shrinks a region, so it is sound without variance; a reassigned
-   holder keeping its old loans is the known imprecision.
+   An option, result, tuple, object, enum payload or array has its parts'
+   positions in order. A `UserDefined` type has the region parameters its
+   declaration states, then its type arguments' positions. A function value
+   has one position, for what it captures; its parameters and result are
+   only the ends of its flows. A `Handle` has one position for the
+   arguments of its call in flight, then `T`'s. A type variable has none
+   until it resolves. Positions are a shape; no position carries an
+   extent, which stays per instruction (RFC-0064).
+3. **The storage holds the positions.** A deref reads the current positions
+   of the storage its reference names; a field, payload or element read
+   gives that part's; building a value joins, position by position, what it
+   is built from; a join of control paths joins position by position. A
+   parameter's positions after its first name one outside storage per
+   position, which nothing in the body can touch but through it.
+4. **A write through a reference joins; a whole local assign replaces.**
+   `*m = v` joins `v`'s positions into the matching positions of every
+   storage `m`'s loans name, so a write never shrinks a region there. An
+   assign of a whole local slot replaces its positions: nothing names the
+   slot while it is assigned (RFC-0029).
 5. **A function type states its flows.** A flow is an edge from a result
-   position to a parameter position or to the capture position. A call's
-   result position is the join of the argument positions its flows name. A
-   lambda's flows are inferred by the type checker from its body, and join
-   by union where two types meet; a call through a value of function type
-   reads the flows from that type, as a direct call does.
+   position to a parameter position or to the capture position, written as
+   a pair of type paths and made positional when the types are frozen. A
+   call's result position is the join of the argument positions its flows
+   name. A lambda's flows are inferred by the type checker from its body; a
+   named function's are a flow variable per member of its call-graph
+   component, solved to the least fixpoint as its effect is (RFC-0064).
+   Where two function types meet, their flows join by union. A call through
+   a value of function type reads the flows from that type, as a direct
+   call does.
 6. **An extern states flows with lifetimes.** `#[extern_fn]` and
    `#[derive(ExternType)]` take lifetime parameters. A result position
    written with `'a` flows from every parameter position written with `'a`.
    An elided lifetime follows Rust's elision rules; `'static` names no loan.
-   The handler is generic over its lifetimes, so a carrier (`Ref`, `Slice`,
-   `Closure`, `Instance`) is branded with the call's lifetime and Rust
-   refuses keeping it past the call.
+   The handler is generic over the call's lifetime, so a carrier (`Ref`,
+   `Slice`, `Closure`) is branded with it and Rust refuses keeping it past
+   the call. An `Instance` names a prepared entry, not a program's storage,
+   and is branded with the run's lifetime instead.
 7. **A box key erases lifetimes.** `Canonical::Canon` fills every lifetime
    with `'static`; a box is keyed there, and a value is read out at its
    branded form. Every box key is `'static`.
 8. **The check is RFC-0064's.** A loan in any position of a live value is
-   held; invalidating it is a conflict. RFC-0064 rules 2, 3 and 6 become this
-   decision's rules 5 and 6 when it is accepted; rule 5 of RFC-0064 is
-   unchanged.
+   held; invalidating it is a conflict. When this decision is accepted,
+   RFC-0064 rules 2, 3 and 6 become its rules 5 and 6, and an option,
+   result or enum payload is no longer refused for holding a reference;
+   RFC-0064 rule 5 is otherwise unchanged.
 
 **Why.** One region per value cannot say which loans a value reached through
 it holds: `&Option<&T>` read through its outer reference lost the inner
-loan, and the payload was read after its lender was released. Positions
-give the loans a place to stay, and a flow on the callee's type makes a
-direct call, a lambda call and a call through a function value one rule.
-Loans stay sets joined by union, so no outlives constraint is solved.
+loan, and a write through `&mut Option<&T>` lost the loan written. Positions
+kept by the storage give the loans a place to stay, and a flow on the
+callee's type makes a direct call, a lambda call and a call through a
+function value one rule. Loans stay sets joined by union, so no outlives
+constraint is solved.
 **Cost.** Every value's region becomes a vector; a function type carries
-its flows, and meeting two function types compares them. Extern authors
-write lifetimes where a result borrows from more than one parameter.
+its flows, and meeting two function types joins them. Extern authors write
+lifetimes where a result borrows from more than one parameter, and an
+extension that holds a carrier declares a region parameter.
 **Rejected.**
 - Region variables solved by the type checker — loans exist per MIR slot
   and instruction; the checker would solve what the MIR check solves again.
 - Flows from body summaries alone — a call through a function value has no
   body, and would fall back to the union of its arguments: a second rule.
+- One region with a transitive deref — a value read through `&o` would also
+  hold `o`, refusing writes to `o` the program never makes through it.
 - Written lifetimes in the language — a script's positions and flows are
   inferred; only an extern states them, and Rust checks the handler.
