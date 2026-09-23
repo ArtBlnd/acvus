@@ -1274,6 +1274,28 @@ fn deque_at_ints_width(d: &acvus_ext::Deque<i64>) -> i64 {
     d.len() as i64
 }
 
+/// `HashMap<K, V, Pure, Rt>` with its key and value variables: the effect
+/// alone is written concrete.
+#[extern_fn(effect = pure)]
+fn map_at_pure<K, V, Rt>(_m: &acvus_ext::HashMap<K, V, acvus_extern::Pure, Rt>) -> i64
+where
+    K: acvus_extern::Var<acvus_extern::kind::Type>,
+    V: acvus_extern::Var<acvus_extern::kind::Type>,
+    Rt: acvus_extern::Runtime,
+{
+    4
+}
+
+#[extern_fn(effect = pure)]
+fn map_at_pure_by_value<K, V, Rt>(_m: acvus_ext::HashMap<K, V, acvus_extern::Pure, Rt>) -> i64
+where
+    K: acvus_extern::Var<acvus_extern::kind::Type>,
+    V: acvus_extern::Var<acvus_extern::kind::Type>,
+    Rt: acvus_extern::Runtime,
+{
+    5
+}
+
 fn held_registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "held",
@@ -1284,6 +1306,8 @@ fn held_registry() -> Registry<AcvusRuntime> {
             deque_at_ints_by_value,
             deque_of_ints,
             deque_at_ints_width,
+            map_at_pure,
+            map_at_pure_by_value,
         ],
     }
 }
@@ -1346,6 +1370,26 @@ fn a_deque_at_a_concrete_type_by_value_is_not_the_one_a_generic_constructor_made
         held_refusal("let d = deque(); push_back(&mut d, 1); deque_at_ints_by_value(d)");
     assert!(
         messages.contains("expected Deque<#i64>, got Deque<i64>"),
+        "{messages}"
+    );
+}
+
+/// The effect alone written concrete: the map `hash_map_by` made is the box
+/// at `E = ()`, and a declaration at `Pure` names the box at `Pure`.
+#[test]
+fn a_map_at_a_known_effect_by_reference_is_not_the_one_a_generic_constructor_made() {
+    let messages = held_refusal(&format!("{MAP_OF_INTS} map_at_pure(&m)"));
+    assert!(
+        messages.contains("expected &HashMap<i64, i64, #Pure>, got &HashMap<i64, i64, Pure>"),
+        "{messages}"
+    );
+}
+
+#[test]
+fn a_map_at_a_known_effect_by_value_is_not_the_one_a_generic_constructor_made() {
+    let messages = held_refusal(&format!("{MAP_OF_INTS} map_at_pure_by_value(m)"));
+    assert!(
+        messages.contains("expected HashMap<i64, i64, #Pure>, got HashMap<i64, i64, Pure>"),
         "{messages}"
     );
 }
