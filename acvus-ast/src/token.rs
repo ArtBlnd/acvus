@@ -187,6 +187,11 @@ pub enum Token {
     FmtStringStart(String),
     FmtStringMid(String),
     FmtStringEnd(String),
+
+    /// A character no token begins with. No rule of the grammar reads it, so
+    /// the parse reports it where it stands and recovers past it
+    /// (RFC-0078 rule 2).
+    Unreadable(char),
 }
 
 /// Every word the lexer reserves, each as `Token::keyword` names it.
@@ -263,7 +268,8 @@ impl Token {
             | Token::Semicolon
             | Token::FmtStringStart(_)
             | Token::FmtStringMid(_)
-            | Token::FmtStringEnd(_) => None,
+            | Token::FmtStringEnd(_)
+            | Token::Unreadable(_) => None,
         }
     }
 }
@@ -336,6 +342,7 @@ impl fmt::Display for Token {
             Token::FmtStringStart(s) => write!(f, "fmt_start({s:?})"),
             Token::FmtStringMid(s) => write!(f, "fmt_mid({s:?})"),
             Token::FmtStringEnd(s) => write!(f, "fmt_end({s:?})"),
+            Token::Unreadable(c) => write!(f, "{c}"),
         }
     }
 }

@@ -207,10 +207,12 @@ struct Refused {
 impl Refused {
     fn reread(&mut self, interner: &Interner, path: &Path, vfs: &Vfs) {
         let errors = match vfs.read(path) {
-            Ok(text) => match self.modes[path].parse(interner, &text) {
-                Ok(_) => Vec::new(),
-                Err(error) => vec![parse_error_to_lsp(&error)],
-            },
+            Ok(text) => self.modes[path]
+                .parse(interner, &text)
+                .errors
+                .iter()
+                .map(parse_error_to_lsp)
+                .collect(),
             Err(error) => vec![unreadable(path, &error)],
         };
         self.documents.insert(path.to_path_buf(), errors);

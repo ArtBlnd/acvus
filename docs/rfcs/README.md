@@ -143,6 +143,7 @@ alternative it rejects. A decision another section owns is pointed to with
 ### [tooling.md](tooling.md)
 
 - RFC-0031: `acvus` runs one file as one function, the result alone on stdout
+- RFC-0078: A parse recovers past an error, and a tree that holds one cannot be lowered
 
 ### [types.md](types.md)
 

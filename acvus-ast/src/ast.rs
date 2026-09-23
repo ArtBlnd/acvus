@@ -1,3 +1,5 @@
+use std::fmt;
+
 use acvus_utils::{Astr, QualifiedRef};
 
 pub use crate::literal::{IntWidth, LiteralErrorKind, SuffixedInt};
@@ -15,41 +17,73 @@ impl AstId {
     }
 }
 
+/// What an error node of a tree holds (RFC-0078 rule 4): a parse without
+/// errors yields the tree over `Clean`, a parse with errors the tree over
+/// `ErrorNode`.
+pub trait Slot: Clone + fmt::Debug + PartialEq {
+    fn node(&self) -> ErrorNode;
+}
+
+/// `acvus-mir` lowers only the tree over this slot, so a tree that holds an
+/// error node has no path to the machine (RFC-0078 rule 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clean {}
+
+impl Slot for Clean {
+    fn node(&self) -> ErrorNode {
+        match *self {}
+    }
+}
+
+/// The source a statement, an expression or a pattern that did not parse
+/// covered, which the parse replaced by this node and reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorNode {
+    pub id: AstId,
+    pub span: Span,
+}
+
+impl Slot for ErrorNode {
+    fn node(&self) -> ErrorNode {
+        *self
+    }
+}
+
 /// A parsed script (standalone expressions with semicolons).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Script {
+pub struct Script<S = Clean> {
     pub id: AstId,
-    pub stmts: Vec<Stmt>,
-    pub tail: Option<Box<Expr>>,
+    pub stmts: Vec<Stmt<S>>,
+    pub tail: Option<Box<Expr<S>>>,
     pub span: Span,
 }
 
 /// A statement in a script.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
+pub enum Stmt<S = Clean> {
     /// Store into a place: `@a = 0;`, `a.x.y = 0;`, `a[i] = 0;`,
     /// `a.x[i].y = 0;`.
     Store {
         id: AstId,
-        place: Place,
-        expr: Expr,
+        place: Place<S>,
+        expr: Expr<S>,
         span: Span,
     },
     /// Store through a `&mut`: `*r = 0;`.
     DerefStore {
         id: AstId,
-        target: Box<Expr>,
-        expr: Expr,
+        target: Box<Expr<S>>,
+        expr: Expr<S>,
         span: Span,
     },
-    Expr(Expr),
+    Expr(Expr<S>),
 
     // -- Script mode statements --------------------------------------
     /// `let x = expr;` - new binding (Script mode).
     LetBind {
         id: AstId,
         binder: Binder,
-        expr: Expr,
+        expr: Expr<S>,
         span: Span,
     },
     /// `let x;` - uninitialized binding (Script mode).
@@ -62,14 +96,14 @@ pub enum Stmt {
     Assign {
         id: AstId,
         name: Astr,
-        expr: Expr,
+        expr: Expr<S>,
         span: Span,
     },
     /// `while cond { body }` - conditional loop (Script mode).
     While {
         id: AstId,
-        cond: Expr,
-        body: Vec<Stmt>,
+        cond: Expr<S>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     /// `for x in head { body }` - one traversal (RFC-0057 rule 1).
@@ -79,8 +113,8 @@ pub enum Stmt {
         /// expression records its own (RFC-0047 rule 3).
         callee_id: AstId,
         binder: Binder,
-        head: ForHead,
-        body: Vec<Stmt>,
+        head: ForHead<S>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     /// `break;` - leave the innermost loop (RFC-0057 rule 4).
@@ -96,40 +130,41 @@ pub enum Stmt {
     /// `while let pattern = source { body }` - pattern loop (Script mode).
     WhileLet {
         id: AstId,
-        pattern: Pattern,
-        source: Expr,
-        body: Vec<Stmt>,
+        pattern: Pattern<S>,
+        source: Expr<S>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     /// `anyorder { body }` - the order of effects inside is irrelevant
     /// (RFC-0007). Script mode.
     Anyorder {
         id: AstId,
-        body: Vec<Stmt>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     /// A template's text line or one of its `{{ }}` tags: the value is
     /// appended to the template's result (RFC-0071 rules 2 and 3).
     Append {
         id: AstId,
-        expr: Expr,
+        expr: Expr<S>,
         span: Span,
     },
+    Error(S),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Place {
-    Base(PlaceBase),
+pub enum Place<S = Clean> {
+    Base(PlaceBase<S>),
     Field {
         id: AstId,
-        object: Box<Place>,
+        object: Box<Place<S>>,
         field: Astr,
         span: Span,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum PlaceBase {
+pub enum PlaceBase<S = Clean> {
     Root {
         id: AstId,
         root: Root,
@@ -142,8 +177,8 @@ pub enum PlaceBase {
     Element {
         id: AstId,
         callee_id: AstId,
-        container: PlaceExpr,
-        index: Box<Expr>,
+        container: PlaceExpr<S>,
+        index: Box<Expr<S>>,
         span: Span,
     },
 }
@@ -156,21 +191,21 @@ pub enum Root {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlaceExpr(Expr);
+pub struct PlaceExpr<S = Clean>(Expr<S>);
 
-impl PlaceExpr {
-    pub fn of(expr: Expr) -> Option<Self> {
+impl<S> PlaceExpr<S> {
+    pub fn of(expr: Expr<S>) -> Option<Self> {
         match Self::names_a_place(&expr) {
             true => Some(Self(expr)),
             false => None,
         }
     }
 
-    pub fn expr(&self) -> &Expr {
+    pub fn expr(&self) -> &Expr<S> {
         &self.0
     }
 
-    fn names_a_place(expr: &Expr) -> bool {
+    fn names_a_place(expr: &Expr<S>) -> bool {
         match expr {
             Expr::Ident {
                 ref_kind: RefKind::Value | RefKind::ExternParam,
@@ -180,13 +215,17 @@ impl PlaceExpr {
             Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => {
                 Self::names_a_place(object)
             }
+            Expr::Error(_) => false,
             _ => false,
         }
     }
 }
 
-impl Place {
-    pub fn of(expr: Expr) -> Option<Self> {
+impl<S> Place<S>
+where
+    S: Slot,
+{
+    pub fn of(expr: Expr<S>) -> Option<Self> {
         match expr {
             Expr::FieldAccess {
                 id,
@@ -218,8 +257,11 @@ impl Place {
     }
 }
 
-impl PlaceBase {
-    fn of(expr: Expr) -> Option<Self> {
+impl<S> PlaceBase<S>
+where
+    S: Slot,
+{
+    fn of(expr: Expr<S>) -> Option<Self> {
         match expr {
             Expr::Ident {
                 id,
@@ -251,6 +293,7 @@ impl PlaceBase {
                 index,
                 span,
             }),
+            Expr::Error(_) => None,
             _ => None,
         }
     }
@@ -272,24 +315,24 @@ impl PlaceBase {
 /// a `ForHead::Value` is -- `&v`, `&mut v` or an array by value -- is the
 /// expression's type, which the checker settles (RFC-0057 rule 1).
 #[derive(Debug, Clone, PartialEq)]
-pub enum ForHead {
-    Value(Expr),
-    Range { lo: Expr, hi: Expr },
+pub enum ForHead<S = Clean> {
+    Value(Expr<S>),
+    Range { lo: Expr<S>, hi: Expr<S> },
 }
 
 /// A parsed template: a script whose text lines are output (RFC-0071).
 /// Its statements are the script's, and a text line or a `{{ }}` tag is
 /// the one statement the script does not write, `Stmt::Append`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Template {
+pub struct Template<S = Clean> {
     pub id: AstId,
-    pub body: Vec<Stmt>,
+    pub body: Vec<Stmt<S>>,
     pub span: Span,
 }
 
 /// An expression in the template language.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expr<S = Clean> {
     /// A reference: `name`, `$name`, or `@name`.
     Ident {
         id: AstId,
@@ -306,22 +349,22 @@ pub enum Expr {
     /// A binary operation: `a + b`.
     BinaryOp {
         id: AstId,
-        left: Box<Expr>,
+        left: Box<Expr<S>>,
         op: BinOp,
-        right: Box<Expr>,
+        right: Box<Expr<S>>,
         span: Span,
     },
     /// A unary operation: `-x`, `!x`.
     UnaryOp {
         id: AstId,
         op: UnaryOp,
-        operand: Box<Expr>,
+        operand: Box<Expr<S>>,
         span: Span,
     },
     /// Field access: `a.b`.
     FieldAccess {
         id: AstId,
-        object: Box<Expr>,
+        object: Box<Expr<S>>,
         field: Astr,
         span: Span,
     },
@@ -331,15 +374,15 @@ pub enum Expr {
     Index {
         id: AstId,
         callee_id: AstId,
-        object: Box<Expr>,
-        index: Box<Expr>,
+        object: Box<Expr<S>>,
+        index: Box<Expr<S>>,
         span: Span,
     },
     /// Function call: `f(args)`.
     FuncCall {
         id: AstId,
-        func: Box<Expr>,
-        args: Vec<Expr>,
+        func: Box<Expr<S>>,
+        args: Vec<Expr<S>>,
         span: Span,
     },
     /// `recv.f(args)`: the call `f(recv', args)` (RFC-0030). `callee_id`
@@ -347,36 +390,36 @@ pub enum Expr {
     MethodCall {
         id: AstId,
         callee_id: AstId,
-        receiver: Box<Expr>,
+        receiver: Box<Expr<S>>,
         name: Astr,
-        args: Vec<Expr>,
+        args: Vec<Expr<S>>,
         span: Span,
     },
     /// Pipe: `expr | func`.
     Pipe {
         id: AstId,
-        left: Box<Expr>,
-        right: Box<Expr>,
+        left: Box<Expr<S>>,
+        right: Box<Expr<S>>,
         span: Span,
     },
     /// Lambda: `|x| -> expr` or `|x, y| -> expr`.
     Lambda {
         id: AstId,
         params: Vec<Binder>,
-        body: Box<Expr>,
+        body: Box<Expr<S>>,
         span: Span,
     },
     /// Parenthesized expression: `(expr)`.
     Paren {
         id: AstId,
-        inner: Box<Expr>,
+        inner: Box<Expr<S>>,
         span: Span,
     },
     /// A reference to a place: `&place` or `&mut place` (RFC-0018).
     Borrow {
         id: AstId,
         mutable: bool,
-        place: Box<Expr>,
+        place: Box<Expr<S>>,
         span: Span,
     },
     /// A list: `[a, b, c]`, `[a, b, ..]`, `[.., a, b]`, `[a, .., b]`.
@@ -384,36 +427,36 @@ pub enum Expr {
     /// If no `..`, all elements are in `head` and `tail` is empty.
     List {
         id: AstId,
-        head: Vec<Expr>,
+        head: Vec<Expr<S>>,
         rest: Option<Span>,
-        tail: Vec<Expr>,
+        tail: Vec<Expr<S>>,
         span: Span,
     },
     /// A group used for lambda parameter lists: `(a, b)`.
     /// This is a temporary node that only appears as the LHS of `->`.
     Group {
         id: AstId,
-        elements: Vec<Expr>,
+        elements: Vec<Expr<S>>,
         span: Span,
     },
     /// An object literal: `{ field1, $field2, field3 }`.
     Object {
         id: AstId,
-        fields: Vec<ObjectExprField>,
+        fields: Vec<ObjectExprField<S>>,
         span: Span,
     },
     /// A tuple: `(a, b, c)` - 0 or 2+ elements.
     /// Elements can be expressions or wildcards `_`.
     Tuple {
         id: AstId,
-        elements: Vec<TupleElem>,
+        elements: Vec<TupleElem<S>>,
         span: Span,
     },
     /// A block expression: `{ stmt; stmt; expr }`.
     Block {
         id: AstId,
-        stmts: Vec<Stmt>,
-        tail: Box<Expr>,
+        stmts: Vec<Stmt<S>>,
+        tail: Box<Expr<S>>,
         span: Span,
     },
     /// A context reference: `@name`.
@@ -427,14 +470,14 @@ pub enum Expr {
         id: AstId,
         enum_name: Option<Astr>,
         tag: Astr,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<S>>>,
         span: Span,
     },
     /// `expr as T`, whose value is Rust's `as` at `target`'s type
     /// (RFC-0049).
     Cast {
         id: AstId,
-        expr: Box<Expr>,
+        expr: Box<Expr<S>>,
         target: Astr,
         target_span: Span,
         span: Span,
@@ -443,14 +486,14 @@ pub enum Expr {
     /// `Err` or `None` (RFC-0038).
     Try {
         id: AstId,
-        inner: Box<Expr>,
+        inner: Box<Expr<S>>,
         span: Span,
     },
     /// `return value`: leave the enclosing body -- a script or a lambda --
     /// with `value`, from any depth. Its own type is `!`.
     Return {
         id: AstId,
-        value: Box<Expr>,
+        value: Box<Expr<S>>,
         span: Span,
     },
 
@@ -458,10 +501,10 @@ pub enum Expr {
     /// `if cond { body; tail } else { ... }` - conditional expression (Script mode).
     If {
         id: AstId,
-        cond: Box<Expr>,
-        then_body: Vec<Stmt>,
-        then_tail: Option<Box<Expr>>,
-        else_branch: Option<Box<ElseBranch>>,
+        cond: Box<Expr<S>>,
+        then_body: Vec<Stmt<S>>,
+        then_tail: Option<Box<Expr<S>>>,
+        else_branch: Option<Box<ElseBranch<S>>>,
         span: Span,
     },
     /// `match scrutinee { P => e, .. }` - one dispatch over the scrutinee
@@ -469,54 +512,58 @@ pub enum Expr {
     /// of the whole.
     Match {
         id: AstId,
-        scrutinee: Box<Expr>,
-        arms: Vec<MatchExprArm>,
+        scrutinee: Box<Expr<S>>,
+        arms: Vec<MatchExprArm<S>>,
         span: Span,
     },
     /// `if let pattern = source { body; tail } else { ... }` - pattern match expression (Script mode).
     IfLet {
         id: AstId,
-        pattern: Pattern,
-        source: Box<Expr>,
-        then_body: Vec<Stmt>,
-        then_tail: Option<Box<Expr>>,
-        else_branch: Option<Box<ElseBranch>>,
+        pattern: Pattern<S>,
+        source: Box<Expr<S>>,
+        then_body: Vec<Stmt<S>>,
+        then_tail: Option<Box<Expr<S>>>,
+        else_branch: Option<Box<ElseBranch<S>>>,
         span: Span,
     },
+    Error(S),
 }
 
 /// One arm of a `match` expression: `P => e` or `P => { stmts; }`. An arm
 /// with no tail is typed `Unit`, as an `if` branch with no tail is.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MatchExprArm {
+pub struct MatchExprArm<S = Clean> {
     pub id: AstId,
-    pub pattern: Pattern,
-    pub body: Vec<Stmt>,
-    pub tail: Option<Box<Expr>>,
+    pub pattern: Pattern<S>,
+    pub body: Vec<Stmt<S>>,
+    pub tail: Option<Box<Expr<S>>>,
     pub span: Span,
 }
 
 /// An else branch in an `if` / `if let` expression.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ElseBranch {
+pub enum ElseBranch<S = Clean> {
     /// `else if ...` or `else if let ...` - chains to another conditional.
-    ElseIf(Expr),
+    ElseIf(Expr<S>),
     /// `else { body; tail }` - terminal else block.
     Else {
-        body: Vec<Stmt>,
-        tail: Option<Box<Expr>>,
+        body: Vec<Stmt<S>>,
+        tail: Option<Box<Expr<S>>>,
         span: Span,
     },
 }
 
 /// An element in a tuple expression: either a real expression or a wildcard `_`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TupleElem {
-    Expr(Expr),
+pub enum TupleElem<S = Clean> {
+    Expr(Expr<S>),
     Wildcard(Span),
 }
 
-impl Expr {
+impl<S> Expr<S>
+where
+    S: Slot,
+{
     pub fn id(&self) -> AstId {
         match self {
             Expr::Ident { id, .. }
@@ -544,6 +591,7 @@ impl Expr {
             | Expr::If { id, .. }
             | Expr::Match { id, .. }
             | Expr::IfLet { id, .. } => *id,
+            Expr::Error(node) => node.node().id,
         }
     }
 
@@ -574,6 +622,7 @@ impl Expr {
             | Expr::If { span, .. }
             | Expr::Match { span, .. }
             | Expr::IfLet { span, .. } => *span,
+            Expr::Error(node) => node.node().span,
         }
     }
 }
@@ -590,16 +639,16 @@ pub struct Binder {
 /// Shorthand `{ $name }` -> key="name", value=Ident("name", Variable).
 /// Shorthand `{ @name }` -> key="name", value=Ident("name", Context).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ObjectExprField {
+pub struct ObjectExprField<S = Clean> {
     pub id: AstId,
     pub key: Astr,
-    pub value: Expr,
+    pub value: Expr<S>,
     pub span: Span,
 }
 
 /// A pattern used on the LHS of `=` in a match block.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Pattern {
+pub enum Pattern<S = Clean> {
     /// A binding that captures a value: `item` or `$name`.
     Binding {
         id: AstId,
@@ -623,37 +672,44 @@ pub enum Pattern {
     /// Same structure as `Expr::List`: `head` before `..`, `tail` after.
     List {
         id: AstId,
-        head: Vec<Pattern>,
+        head: Vec<Pattern<S>>,
         rest: Option<Span>,
-        tail: Vec<Pattern>,
+        tail: Vec<Pattern<S>>,
         span: Span,
     },
     /// An object pattern: `{ name, $value, status: "active" }`.
     Object {
         id: AstId,
-        fields: Vec<ObjectPatternField>,
+        fields: Vec<ObjectPatternField<S>>,
         span: Span,
     },
     /// A tuple pattern: `(a, b, c)`.
     Tuple {
         id: AstId,
-        elements: Vec<TuplePatternElem>,
+        elements: Vec<TuplePatternElem<S>>,
         span: Span,
     },
     /// `_`: the position is not read and nothing binds. A `match` arm that
     /// is a bare `_` is the catch-all (RFC-0051).
-    Wildcard { id: AstId, span: Span },
+    Wildcard {
+        id: AstId,
+        span: Span,
+    },
     /// A variant pattern: `Some(inner)`, `None`, or `Color::Red`.
     Variant {
         id: AstId,
         enum_name: Option<Astr>,
         tag: Astr,
-        payload: Option<Box<Pattern>>,
+        payload: Option<Box<Pattern<S>>>,
         span: Span,
     },
+    Error(S),
 }
 
-impl Pattern {
+impl<S> Pattern<S>
+where
+    S: Slot,
+{
     pub fn id(&self) -> AstId {
         match self {
             Pattern::Binding { id, .. }
@@ -664,6 +720,7 @@ impl Pattern {
             | Pattern::Object { id, .. }
             | Pattern::Tuple { id, .. }
             | Pattern::Variant { id, .. } => *id,
+            Pattern::Error(node) => node.node().id,
         }
     }
 
@@ -677,25 +734,26 @@ impl Pattern {
             | Pattern::Object { span, .. }
             | Pattern::Tuple { span, .. }
             | Pattern::Variant { span, .. } => *span,
+            Pattern::Error(node) => node.node().span,
         }
     }
 }
 
 /// An element in a tuple pattern.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TuplePatternElem {
+pub enum TuplePatternElem<S = Clean> {
     /// A sub-pattern.
-    Pattern(Pattern),
+    Pattern(Pattern<S>),
     /// A wildcard `_` that ignores the element.
     Wildcard(Span),
 }
 
 /// A field in an object pattern: `{ key: pattern }` or shorthand `{ name }` / `{ $name }`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ObjectPatternField {
+pub struct ObjectPatternField<S = Clean> {
     pub id: AstId,
     pub key: Astr,
-    pub pattern: Pattern,
+    pub pattern: Pattern<S>,
     pub span: Span,
 }
 
@@ -780,21 +838,24 @@ impl Literal {
 // -- AST walk: context reference extraction --------------------------
 
 /// Extract all `@name` context references from a Script AST.
-pub fn extract_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<QualifiedRef> {
+pub fn extract_script_context_refs<S>(script: &Script<S>) -> rustc_hash::FxHashSet<QualifiedRef> {
     script_context_refs(script, true)
 }
 
-pub fn direct_script_context_refs(script: &Script) -> rustc_hash::FxHashSet<QualifiedRef> {
+pub fn direct_script_context_refs<S>(script: &Script<S>) -> rustc_hash::FxHashSet<QualifiedRef> {
     script_context_refs(script, false)
 }
 
-pub fn direct_expr_context_refs(expr: &Expr) -> rustc_hash::FxHashSet<QualifiedRef> {
+pub fn direct_expr_context_refs<S>(expr: &Expr<S>) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = ContextRefs::new(false);
     walk_expr(expr, &mut refs);
     refs.set
 }
 
-fn script_context_refs(script: &Script, into_lambdas: bool) -> rustc_hash::FxHashSet<QualifiedRef> {
+fn script_context_refs<S>(
+    script: &Script<S>,
+    into_lambdas: bool,
+) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = ContextRefs::new(into_lambdas);
     walk_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
@@ -817,7 +878,7 @@ impl ContextRefs {
     }
 }
 
-fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
+fn walk_stmts<S>(stmts: &[Stmt<S>], refs: &mut ContextRefs) {
     for stmt in stmts {
         match stmt {
             Stmt::Store { place, expr, .. } => {
@@ -859,21 +920,26 @@ fn walk_stmts(stmts: &[Stmt], refs: &mut ContextRefs) {
             Stmt::Break { .. } | Stmt::Continue { .. } => {}
             Stmt::Anyorder { body, .. } => walk_stmts(body, refs),
             Stmt::Append { expr, .. } => walk_expr(expr, refs),
+            Stmt::Error(_) => {}
         }
     }
 }
 
 /// Extract all `@name` context references from a Template AST.
-pub fn extract_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<QualifiedRef> {
+pub fn extract_template_context_refs<S>(
+    template: &Template<S>,
+) -> rustc_hash::FxHashSet<QualifiedRef> {
     template_context_refs(template, true)
 }
 
-pub fn direct_template_context_refs(template: &Template) -> rustc_hash::FxHashSet<QualifiedRef> {
+pub fn direct_template_context_refs<S>(
+    template: &Template<S>,
+) -> rustc_hash::FxHashSet<QualifiedRef> {
     template_context_refs(template, false)
 }
 
-fn template_context_refs(
-    template: &Template,
+fn template_context_refs<S>(
+    template: &Template<S>,
     into_lambdas: bool,
 ) -> rustc_hash::FxHashSet<QualifiedRef> {
     let mut refs = ContextRefs::new(into_lambdas);
@@ -881,12 +947,15 @@ fn template_context_refs(
     refs.set
 }
 
-fn walk_pattern(pattern: &Pattern, refs: &mut ContextRefs) {
+fn walk_pattern<S>(pattern: &Pattern<S>, refs: &mut ContextRefs) {
     match pattern {
         Pattern::ContextBind { name, .. } => {
             refs.set.insert(*name);
         }
-        Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
+        Pattern::Binding { .. }
+        | Pattern::Wildcard { .. }
+        | Pattern::Literal { .. }
+        | Pattern::Error(_) => {}
         Pattern::List { head, tail, .. } => {
             for p in head {
                 walk_pattern(p, refs);
@@ -916,7 +985,7 @@ fn walk_pattern(pattern: &Pattern, refs: &mut ContextRefs) {
     }
 }
 
-fn walk_place(place: &Place, refs: &mut ContextRefs) {
+fn walk_place<S>(place: &Place<S>, refs: &mut ContextRefs) {
     match place {
         Place::Field { object, .. } => walk_place(object, refs),
         Place::Base(PlaceBase::Root {
@@ -935,12 +1004,12 @@ fn walk_place(place: &Place, refs: &mut ContextRefs) {
     }
 }
 
-fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
+fn walk_expr<S>(expr: &Expr<S>, refs: &mut ContextRefs) {
     match expr {
         Expr::ContextRef { name, .. } => {
             refs.set.insert(*name);
         }
-        Expr::Ident { .. } | Expr::Literal { .. } => {}
+        Expr::Ident { .. } | Expr::Literal { .. } | Expr::Error(_) => {}
         Expr::Variant { payload, .. } => {
             if let Some(payload) = payload {
                 walk_expr(payload, refs);
@@ -1058,7 +1127,7 @@ fn walk_expr(expr: &Expr, refs: &mut ContextRefs) {
     }
 }
 
-fn walk_else_branch(eb: &ElseBranch, refs: &mut ContextRefs) {
+fn walk_else_branch<S>(eb: &ElseBranch<S>, refs: &mut ContextRefs) {
     match eb {
         ElseBranch::ElseIf(expr) => walk_expr(expr, refs),
         ElseBranch::Else { body, tail, .. } => {

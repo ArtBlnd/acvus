@@ -2,7 +2,7 @@
 //! as the batch compilation pipeline.
 
 use acvus_extern::{Externs, TypesOnly};
-use acvus_lsp::{CompletionKind, Document, LspSession, Mode};
+use acvus_lsp::{CompletionKind, Document, LspErrorCategory, LspSession, Mode};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeRegistry, lift_to_poly};
@@ -76,11 +76,17 @@ fn template(interner: &Interner, name: &str, source: &str) -> Function {
 
 /// Compile via batch pipeline, return error messages (sorted).
 fn batch_errors(interner: &Interner, environment: &CompilationGraph, source: &str) -> Vec<String> {
+    let Parsed { ast, errors } = Parsed::template(acvus_ast::parse(interner, source));
+    let Document { qref, ty, .. } = template_document(interner, "test");
     let functions: Vec<Function> = environment
         .functions
         .iter()
         .cloned()
-        .chain(std::iter::once(template(interner, "test", source)))
+        .chain(std::iter::once(Function {
+            qref,
+            kind: FnKind::Local(ast),
+            ty,
+        }))
         .collect();
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -88,7 +94,7 @@ fn batch_errors(interner: &Interner, environment: &CompilationGraph, source: &st
     };
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(interner, &graph, &ext);
-    let mut errs: Vec<String> = Vec::new();
+    let mut errs: Vec<String> = errors.iter().map(|e| e.kind.to_string()).collect();
     // Collect infer errors.
     for (_, fn_errs) in inf.errors() {
         for e in fn_errs {
@@ -117,6 +123,49 @@ fn lsp_errors(interner: &Interner, environment: &CompilationGraph, source: &str)
         .collect();
     errs.sort();
     errs
+}
+
+#[test]
+fn a_broken_template_reports_every_parse_error_and_what_parsed() {
+    let i = Interner::new();
+    let source = "% let a = 1\n% let = 2\n{{ a + 1 }}\n{{ f( }}\n";
+    let env = with_std(&i, root_contexts(&i, &[]));
+    let mut session = LspSession::new(&i, env.clone());
+    let doc = session.open(template_document(&i, "test"), source);
+    let categories: Vec<LspErrorCategory> = session
+        .diagnostics(doc)
+        .iter()
+        .map(|error| error.category)
+        .collect();
+    assert_eq!(
+        categories,
+        [
+            LspErrorCategory::Parse,
+            LspErrorCategory::Parse,
+            LspErrorCategory::Type
+        ],
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    assert_eq!(batch_errors(&i, &env, source), lsp_errors(&i, &env, source));
+}
+
+#[test]
+fn broken_sources_report_the_same_in_both_paths() {
+    let i = Interner::new();
+    let ctx = [("name", Ty::String), ("count", Ty::I64)];
+    let env = with_std(&i, root_contexts(&i, &ctx));
+    for source in [
+        "{{ @name }\n",
+        "% for x in [1, 2]\n{{ x.to_string() }}\n",
+        "% if @count > 1\nbig\n% else\nsmall\n% else\n% end\n",
+        "{{ @name # }}\n{{ @count }}\n",
+        "% let out = @name + @count\n% let = 1\n{{ out }}\n",
+    ] {
+        let batch = batch_errors(&i, &env, source);
+        assert!(!batch.is_empty(), "{source:?}");
+        assert_eq!(batch, lsp_errors(&i, &env, source), "{source:?}");
+    }
 }
 
 #[test]

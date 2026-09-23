@@ -16,7 +16,9 @@ use crate::ty::{
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
-use crate::typeck::{BodyView, Checked, ProbeProduct};
+use crate::typeck::{
+    BodyView, Checked, Checks, ProbeProduct, ResultCrossing, TypeChecker, Unresolved,
+};
 
 // -- Phase 1 output --------------------------------------------------
 
@@ -145,6 +147,10 @@ pub fn extract_call_edges(
     let names: Vec<Astr> = match parsed {
         ParsedSource::Script(script) => collect_value_refs_script(script),
         ParsedSource::Template(template) => collect_value_refs_template(template),
+        ParsedSource::Recovered(RecoveredAst::Script(script)) => collect_value_refs_script(script),
+        ParsedSource::Recovered(RecoveredAst::Template(template)) => {
+            collect_value_refs_template(template)
+        }
     };
     let mut callees = Vec::new();
     for name in names {
@@ -187,7 +193,7 @@ fn build_call_graph(
     edges
 }
 
-fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
+fn collect_value_refs_stmts<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     for stmt in stmts {
         match stmt {
@@ -225,12 +231,13 @@ fn collect_value_refs_stmts(stmts: &[acvus_ast::Stmt], refs: &mut Vec<Astr>) {
             }
             Stmt::Anyorder { body, .. } => collect_value_refs_stmts(body, refs),
             Stmt::Append { expr, .. } => collect_value_refs_expr(expr, refs),
+            Stmt::Error(_) => {}
         }
     }
 }
 
 /// Collect all RefKind::Value identifiers from a script AST.
-fn collect_value_refs_script(script: &acvus_ast::Script) -> Vec<Astr> {
+fn collect_value_refs_script<S>(script: &acvus_ast::Script<S>) -> Vec<Astr> {
     let mut refs = Vec::new();
     collect_value_refs_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
@@ -239,13 +246,13 @@ fn collect_value_refs_script(script: &acvus_ast::Script) -> Vec<Astr> {
     refs
 }
 
-fn collect_value_refs_template(template: &acvus_ast::Template) -> Vec<Astr> {
+fn collect_value_refs_template<S>(template: &acvus_ast::Template<S>) -> Vec<Astr> {
     let mut refs = Vec::new();
     collect_value_refs_stmts(&template.body, &mut refs);
     refs
 }
 
-fn collect_value_refs_place(place: &acvus_ast::Place, refs: &mut Vec<Astr>) {
+fn collect_value_refs_place<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     match place {
         Place::Field { object, .. } => collect_value_refs_place(object, refs),
@@ -263,7 +270,7 @@ fn collect_value_refs_place(place: &acvus_ast::Place, refs: &mut Vec<Astr>) {
     }
 }
 
-fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
+fn collect_value_refs_expr<S>(expr: &acvus_ast::Expr<S>, refs: &mut Vec<Astr>) {
     use acvus_ast::*;
     match expr {
         Expr::Ident {
@@ -271,7 +278,7 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
             ref_kind: RefKind::Value,
             ..
         } => refs.push(name.name),
-        Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } => {}
+        Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } | Expr::Error(_) => {}
         Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. } => {
             collect_value_refs_expr(left, refs);
             collect_value_refs_expr(right, refs);
@@ -377,7 +384,7 @@ fn collect_value_refs_expr(expr: &acvus_ast::Expr, refs: &mut Vec<Astr>) {
     }
 }
 
-fn collect_value_refs_else_branch(eb: &acvus_ast::ElseBranch, refs: &mut Vec<Astr>) {
+fn collect_value_refs_else_branch<S>(eb: &acvus_ast::ElseBranch<S>, refs: &mut Vec<Astr>) {
     match eb {
         acvus_ast::ElseBranch::ElseIf(expr) => collect_value_refs_expr(expr, refs),
         acvus_ast::ElseBranch::Else { body, tail, .. } => {
@@ -633,6 +640,58 @@ fn settled_params(solver: &Solver, declared: &[ParamTerm<Infer>]) -> Vec<Param> 
         .collect()
 }
 
+struct BodyCheck<'c> {
+    interner: &'c Interner,
+    env: &'c crate::ty::TypeEnv,
+    declared_params: Vec<ParamTerm<Infer>>,
+    bound_inputs: Vec<(Astr, InferTy)>,
+    effect: EffectTerm<Infer>,
+    probe: Option<acvus_ast::AstId>,
+    expected_tail: Option<&'c Ty>,
+    crossing: ResultCrossing,
+}
+
+impl BodyCheck<'_> {
+    fn check(self, solver: &mut Solver<'_>, parsed: &ParsedSource) -> Checked {
+        match parsed {
+            ParsedSource::Script(script) => {
+                self.checker(solver)
+                    .check_script(script, self.expected_tail, self.crossing)
+            }
+            ParsedSource::Template(template) => self.checker(solver).check_template(template),
+            ParsedSource::Recovered(RecoveredAst::Script(script)) => refused(
+                self.checker(solver)
+                    .check_script(script, self.expected_tail, self.crossing),
+            ),
+            ParsedSource::Recovered(RecoveredAst::Template(template)) => {
+                refused(self.checker(solver).check_template(template))
+            }
+        }
+    }
+
+    fn checker<'s, 'src, S>(&self, solver: &'s mut Solver<'src>) -> TypeChecker<'_, 's, 'src, S>
+    where
+        S: Checks,
+    {
+        let checker = TypeChecker::new(self.interner, self.env, solver)
+            .with_declared_params(self.declared_params.clone())
+            .with_bound_inputs(self.bound_inputs.clone())
+            .with_body_effect(self.effect.clone());
+        match self.probe {
+            Some(marker) => checker.with_probe(marker),
+            None => checker,
+        }
+    }
+}
+
+fn refused(checked: Checked<Unresolved>) -> Checked {
+    Checked {
+        resolution: Err(checked.resolution.refusals),
+        view: checked.view,
+        probe: checked.probe,
+    }
+}
+
 fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck::ResultCrossing {
     match entry == Some(body) {
         true => crate::typeck::ResultCrossing::Host,
@@ -750,20 +809,19 @@ pub fn infer_scc(
             let infer = solver.instantiate_poly(fn_ret);
             solver.freeze_ty(&infer).ok()
         };
-        let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
-            .with_declared_params(fn_declared_params[&fid].clone())
-            .with_bound_inputs(bound_inputs(bindings))
-            .with_body_effect(fn_effect_vars[&fid].clone());
-        let checker = match probe {
-            Some(probe) if probe.body == fid => checker.with_probe(probe.marker),
-            Some(_) | None => checker,
-        };
-        let mut checked = match parsed {
-            ParsedSource::Script(script) => {
-                checker.check_script(script, expected_tail_ty.as_ref(), crossing_of(entry, fid))
-            }
-            ParsedSource::Template(template) => checker.check_template(template),
-        };
+        let mut checked = BodyCheck {
+            interner,
+            env: &env,
+            declared_params: fn_declared_params[&fid].clone(),
+            bound_inputs: bound_inputs(bindings),
+            effect: fn_effect_vars[&fid].clone(),
+            probe: probe
+                .filter(|probe| probe.body == fid)
+                .map(|probe| probe.marker),
+            expected_tail: expected_tail_ty.as_ref(),
+            crossing: crossing_of(entry, fid),
+        }
+        .check(&mut solver, parsed);
 
         if let Ok(unchecked) = &checked.resolution {
             // Unify ret var with tail ty (for inferred return types).
@@ -999,18 +1057,17 @@ pub fn infer(
                 solver.freeze_ty(&infer).ok()
             };
 
-            let checker = crate::typeck::TypeChecker::new(interner, &env, &mut solver)
-                .with_declared_params(scc_declared_params[&fid].clone())
-                .with_bound_inputs(bound_inputs(&graph.bindings))
-                .with_body_effect(scc_effect_vars[&fid].clone());
-            let checked = match parsed {
-                ParsedSource::Script(script) => checker.check_script(
-                    script,
-                    expected_tail_ty.as_ref(),
-                    crossing_of(graph.entry, fid),
-                ),
-                ParsedSource::Template(template) => checker.check_template(template),
-            };
+            let checked = BodyCheck {
+                interner,
+                env: &env,
+                declared_params: scc_declared_params[&fid].clone(),
+                bound_inputs: bound_inputs(&graph.bindings),
+                effect: scc_effect_vars[&fid].clone(),
+                probe: None,
+                expected_tail: expected_tail_ty.as_ref(),
+                crossing: crossing_of(graph.entry, fid),
+            }
+            .check(&mut solver, parsed);
 
             if let Ok(unchecked) = &checked.resolution {
                 // Unify ret var with tail ty (for inferred return types).

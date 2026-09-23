@@ -1,21 +1,24 @@
 use crate::ast::*;
 use crate::error::{ParseError, ParseErrorKind};
+use crate::parser::{GrammarError, Recover, refused};
 use crate::span::Span;
-use crate::token::Token;
 
 /// Intermediate type for parsing list elements before splitting into head/rest/tail.
-pub enum ListElem {
-    Expr(Expr),
+pub enum ListElem<S> {
+    Expr(Expr<S>),
     Rest(Span),
 }
 
 /// Convert a flat `Vec<ListElem>` into a type-safe `Expr::List`.
-/// Errors if multiple `..` are present.
 /// Returns LALRPOP-compatible error type.
-pub fn build_list(
-    items: Vec<ListElem>,
+pub(crate) fn build_list<S>(
+    errors: &mut Vec<ParseError>,
+    items: Vec<ListElem<S>>,
     span: Span,
-) -> Result<Expr, lalrpop_util::ParseError<usize, Token, ParseError>> {
+) -> Result<Expr<S>, GrammarError>
+where
+    S: Recover,
+{
     let mut head = Vec::new();
     let mut rest = None;
     let mut tail = Vec::new();
@@ -30,12 +33,15 @@ pub fn build_list(
             }
             ListElem::Rest(s) => {
                 if rest.is_some() {
-                    return Err(lalrpop_util::ParseError::User {
-                        error: ParseError::new(
+                    return refused::<S>(
+                        errors,
+                        ParseError::new(
                             ParseErrorKind::InvalidPattern("multiple `..` in list".into()),
                             span,
                         ),
-                    });
+                        span,
+                    )
+                    .map(Expr::Error);
                 }
                 rest = Some(s);
             }
@@ -49,4 +55,3 @@ pub fn build_list(
         span,
     })
 }
-

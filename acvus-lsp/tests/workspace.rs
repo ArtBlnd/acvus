@@ -47,7 +47,11 @@ impl TestHost {
         self.root.join(name)
     }
 
-    fn env_of_a(&self, interner: &Interner, vfs: &Vfs) -> Result<CompilationGraph, Vec<HostDiagnostic>> {
+    fn env_of_a(
+        &self,
+        interner: &Interner,
+        vfs: &Vfs,
+    ) -> Result<CompilationGraph, Vec<HostDiagnostic>> {
         let path = self.path("env.txt");
         let refused = |message: String| {
             vec![HostDiagnostic {
@@ -217,7 +221,11 @@ fn a_refusal_two_compilations_make_is_shown_once() {
     let interner = Interner::new();
     let mut alone = LspSession::new(&interner, environment(&interner, Ty::String));
     let doc = alone.open(document(&interner, "shared"), source);
-    let expected: Vec<String> = alone.diagnostics(doc).into_iter().map(|e| e.message).collect();
+    let expected: Vec<String> = alone
+        .diagnostics(doc)
+        .into_iter()
+        .map(|e| e.message)
+        .collect();
 
     assert!(!expected.is_empty());
     assert_eq!(f.messages("shared.acvt"), expected);
@@ -227,7 +235,10 @@ fn a_refusal_two_compilations_make_is_shown_once() {
 fn host_rules_run_only_over_an_accepted_compilation() {
     let f = fixture("string", Some("{{ @x + 1 }}"), "{{ @x }}");
     assert!(!f.messages("a.acvt").is_empty());
-    assert_eq!(f.messages("rules.txt"), ["checked b.id, shared typed: true"]);
+    assert_eq!(
+        f.messages("rules.txt"),
+        ["checked b.id, shared typed: true"]
+    );
 }
 
 #[test]
@@ -239,7 +250,10 @@ fn a_failed_environment_is_reported_on_its_file_and_its_documents_are_parsed() {
 
     let a = f.at("a.acvt");
     f.workspace.set_buffer(a, "{{ ".to_string());
-    assert_eq!(f.categories("a.acvt"), [LspErrorCategory::Parse]);
+    assert_eq!(
+        f.categories("a.acvt"),
+        [LspErrorCategory::Parse, LspErrorCategory::Parse]
+    );
 }
 
 #[test]

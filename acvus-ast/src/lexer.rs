@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use acvus_utils::Interner;
 use logos::Logos;
 
-use crate::error::{ParseError, ParseErrorKind};
 use crate::literal::SuffixedInt;
 use crate::span::Span;
 use crate::token::Token;
@@ -14,12 +13,25 @@ use crate::token::Token;
 /// `{{ }}` tag whose expression is appended in their place.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Piece {
-    Text { value: String, span: Span },
+    Text {
+        value: String,
+        span: Span,
+    },
     Tag {
         content: String,
         span: Span,
         inner_span: Span,
+        end: TagEnd,
     },
+}
+
+/// Where a `{{ }}` tag's content ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagEnd {
+    Closed,
+    /// At the end of its line, which no `}}` closed. The parse reads the tag
+    /// that far and reports it (RFC-0078 rule 3).
+    LineEnd,
 }
 
 /// One line of a template (RFC-0071).
@@ -39,7 +51,7 @@ pub enum Line {
 /// line beginning with `%%` is a text line holding one `%`. A text line
 /// ending in `\` is appended without its newline; every other text line
 /// carries its newline.
-pub fn scan_template(source: &str) -> Result<Vec<Line>, ParseError> {
+pub fn scan_template(source: &str) -> Vec<Line> {
     let mut lines = Vec::new();
     let mut at = 0;
 
@@ -63,7 +75,7 @@ pub fn scan_template(source: &str) -> Result<Vec<Line>, ParseError> {
             let escaped_percent = line.starts_with("%%");
             let start = at + if escaped_percent { 2 } else { 0 };
             let end = content_end - usize::from(continued);
-            let mut pieces = split_tags(source, start, end)?;
+            let mut pieces = split_tags(source, start, end);
             let edges = LineEdges {
                 opening: if escaped_percent { "%" } else { "" },
                 closing: match newline.is_some() && !continued {
@@ -81,7 +93,7 @@ pub fn scan_template(source: &str) -> Result<Vec<Line>, ParseError> {
         at = newline.map_or(source.len(), |nl| nl + 1);
     }
 
-    Ok(lines)
+    lines
 }
 
 /// The text a line owns outside its own bytes: the `%` a leading `%%`
@@ -119,7 +131,7 @@ impl LineEdges {
 }
 
 /// Split `source[start..end]` into text runs and `{{ }}` tags.
-fn split_tags(source: &str, start: usize, end: usize) -> Result<Vec<Piece>, ParseError> {
+fn split_tags(source: &str, start: usize, end: usize) -> Vec<Piece> {
     let bytes = source.as_bytes();
     let mut pieces = Vec::new();
     let mut text_from = start;
@@ -130,27 +142,26 @@ fn split_tags(source: &str, start: usize, end: usize) -> Result<Vec<Piece>, Pars
             at += 1;
             continue;
         }
-        let Some(close) = close_of_tag(bytes, at + 2, end) else {
-            return Err(ParseError::new(
-                ParseErrorKind::UnclosedTag,
-                Span::new(at, end),
-            ));
-        };
         if text_from < at {
             pieces.push(Piece::Text {
                 value: source[text_from..at].to_string(),
                 span: Span::new(text_from, at),
             });
         }
+        let (close, tag_end, after) = match close_of_tag(bytes, at + 2, end) {
+            Some(close) => (close, TagEnd::Closed, close + 2),
+            None => (end, TagEnd::LineEnd, end),
+        };
         let inner = &source[at + 2..close];
         let leading = inner.len() - inner.trim_start().len();
         let trailing = inner.len() - inner.trim_end().len();
         pieces.push(Piece::Tag {
             content: inner.trim().to_string(),
-            span: Span::new(at, close + 2),
+            span: Span::new(at, after),
             inner_span: Span::new(at + 2 + leading, close - trailing),
+            end: tag_end,
         });
-        at = close + 2;
+        at = after;
         text_from = at;
     }
 
@@ -160,7 +171,7 @@ fn split_tags(source: &str, start: usize, end: usize) -> Result<Vec<Piece>, Pars
             span: Span::new(text_from, end),
         });
     }
-    Ok(pieces)
+    pieces
 }
 
 /// The offset of the `}}` that closes a tag whose content starts at `from`,
@@ -305,7 +316,8 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::LBrace
         | Token::Comma
         | Token::Colon
-        | Token::Semicolon => false,
+        | Token::Semicolon
+        | Token::Unreadable(_) => false,
     }
 }
 
@@ -361,7 +373,7 @@ impl<'input> Signed<'input> {
 }
 
 impl Iterator for Signed<'_> {
-    type Item = Result<(usize, Token, usize), ParseError>;
+    type Item = (usize, Token, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (lexed, span) = self.held.take().or_else(|| self.inner.next())?;
@@ -373,19 +385,15 @@ impl Iterator for Signed<'_> {
         self.after_value = matches!(&lexed, Ok(token) if ends_a_value(token));
         let start = self.base_offset + span.start;
         let end = self.base_offset + span.end;
-        Some(match lexed {
-            Ok(token) => Ok((start, token, end)),
-            Err(()) => {
-                let c = self.input[span.start..]
+        let token = lexed.unwrap_or_else(|()| {
+            Token::Unreadable(
+                self.input[span.start..]
                     .chars()
                     .next()
-                    .expect("lexer error token must contain at least one character");
-                Err(ParseError::new(
-                    ParseErrorKind::UnexpectedCharacter(c),
-                    Span::new(start, end),
-                ))
-            }
-        })
+                    .expect("lexer error token must contain at least one character"),
+            )
+        });
+        Some((start, token, end))
     }
 }
 
@@ -397,7 +405,7 @@ impl Iterator for Signed<'_> {
 /// and a final `FmtStringEnd`.
 pub struct ExprTokenizer<'input> {
     tokens: Signed<'input>,
-    pending: VecDeque<Result<(usize, Token, usize), ParseError>>,
+    pending: VecDeque<(usize, Token, usize)>,
     interner: Interner,
 }
 
@@ -412,7 +420,7 @@ impl<'input> ExprTokenizer<'input> {
 }
 
 impl Iterator for ExprTokenizer<'_> {
-    type Item = Result<(usize, Token, usize), ParseError>;
+    type Item = (usize, Token, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(item) = self.pending.pop_front() {
@@ -420,7 +428,7 @@ impl Iterator for ExprTokenizer<'_> {
         }
 
         match self.tokens.next()? {
-            Ok((start, Token::StringLit(text), end)) if text.contains("{{") => {
+            (start, Token::StringLit(text), end) if text.contains("{{") => {
                 self.pending = expand_format_string(&text, start, end, &self.interner);
                 self.pending.pop_front()
             }
@@ -453,7 +461,7 @@ fn expand_format_string(
     base_start: usize,
     base_end: usize,
     interner: &Interner,
-) -> VecDeque<Result<(usize, Token, usize), ParseError>> {
+) -> VecDeque<(usize, Token, usize)> {
     let mut texts: Vec<String> = Vec::new();
     let mut exprs: Vec<Interpolation> = Vec::new();
     let bytes = content.as_bytes();
@@ -481,11 +489,7 @@ fn expand_format_string(
     }
 
     if exprs.is_empty() {
-        return VecDeque::from([Ok((
-            base_start,
-            Token::StringLit(content.to_string()),
-            base_end,
-        ))]);
+        return VecDeque::from([(base_start, Token::StringLit(content.to_string()), base_end)]);
     }
 
     texts.push(content[text_start..].to_string());
@@ -502,7 +506,7 @@ fn expand_format_string(
             n if n == last_text_idx => Token::FmtStringEnd(text),
             _ => Token::FmtStringMid(text),
         };
-        out.push_back(Ok((cursor, tok, tok_end)));
+        out.push_back((cursor, tok, tok_end));
         cursor = tok_end;
 
         if let Some(expr) = exprs.get(i) {
@@ -537,7 +541,7 @@ mod tests {
 
     #[test]
     fn a_line_without_a_percent_is_text_with_its_newline() {
-        let lines = scan_template("hello world\nsecond\n").unwrap();
+        let lines = scan_template("hello world\nsecond\n");
         assert_eq!(lines.len(), 2);
         assert_eq!(text_of(&lines[0]), "hello world\n");
         assert_eq!(text_of(&lines[1]), "second\n");
@@ -545,13 +549,13 @@ mod tests {
 
     #[test]
     fn the_last_line_without_a_newline_carries_none() {
-        let lines = scan_template("hello").unwrap();
+        let lines = scan_template("hello");
         assert_eq!(text_of(&lines[0]), "hello");
     }
 
     #[test]
     fn a_first_non_blank_percent_is_a_statement_line() {
-        let lines = scan_template("    % let x = 1\n").unwrap();
+        let lines = scan_template("    % let x = 1\n");
         assert_eq!(
             lines,
             vec![Line::Stmt {
@@ -563,26 +567,26 @@ mod tests {
 
     #[test]
     fn a_double_percent_is_a_text_line_holding_one() {
-        let lines = scan_template("%% not a statement\n").unwrap();
+        let lines = scan_template("%% not a statement\n");
         assert_eq!(text_of(&lines[0]), "% not a statement\n");
     }
 
     #[test]
     fn a_trailing_backslash_drops_the_newline() {
-        let lines = scan_template("a\\\nb\n").unwrap();
+        let lines = scan_template("a\\\nb\n");
         assert_eq!(text_of(&lines[0]), "a");
         assert_eq!(text_of(&lines[1]), "b\n");
     }
 
     #[test]
     fn a_blank_line_is_its_newline() {
-        let lines = scan_template("a\n\nb").unwrap();
+        let lines = scan_template("a\n\nb");
         assert_eq!(text_of(&lines[1]), "\n");
     }
 
     #[test]
     fn a_tag_splits_the_line() {
-        let lines = scan_template("hello {{ name }} world").unwrap();
+        let lines = scan_template("hello {{ name }} world");
         let Line::Text { pieces, .. } = &lines[0] else {
             panic!();
         };
@@ -596,20 +600,35 @@ mod tests {
     /// hold `{{` or `}}` and an object literal's `}` is not the end.
     #[test]
     fn a_literal_inside_a_tag_does_not_close_it() {
-        assert_eq!(text_of(&scan_template(r#"{{ "a}}b" }}"#).unwrap()[0]), r#"{{"a}}b"}}"#);
-        assert_eq!(text_of(&scan_template(r#"{{ "{{" }}"#).unwrap()[0]), r#"{{"{{"}}"#);
         assert_eq!(
-            text_of(&scan_template("{{ f({ g: 1, }) }}").unwrap()[0]),
+            text_of(&scan_template(r#"{{ "a}}b" }}"#)[0]),
+            r#"{{"a}}b"}}"#
+        );
+        assert_eq!(text_of(&scan_template(r#"{{ "{{" }}"#)[0]), r#"{{"{{"}}"#);
+        assert_eq!(
+            text_of(&scan_template("{{ f({ g: 1, }) }}")[0]),
             "{{f({ g: 1, })}}"
         );
     }
 
+    /// A tag no `}}` closes runs to the end of its line, and the line
+    /// after it is a line of its own (RFC-0078 rule 3).
     #[test]
-    fn a_tag_the_line_does_not_close_is_refused() {
+    fn a_tag_the_line_does_not_close_runs_to_the_line_end() {
+        let lines = scan_template("a {{ hello\nb\n");
+        let Line::Text { pieces, .. } = &lines[0] else {
+            panic!("{:?}", lines[0]);
+        };
         assert_eq!(
-            scan_template("{{ hello").unwrap_err().kind,
-            ParseErrorKind::UnclosedTag
+            pieces[1],
+            Piece::Tag {
+                content: "hello".to_string(),
+                span: Span::new(2, 10),
+                inner_span: Span::new(5, 10),
+                end: TagEnd::LineEnd,
+            }
         );
+        assert_eq!(text_of(&lines[1]), "b\n");
     }
 
     // -- Tokenizer Tests --
@@ -617,9 +636,7 @@ mod tests {
     #[test]
     fn tokenize_ident() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("name", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("name", 0, &interner).collect();
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0].1, Token::Ident(s) if interner.resolve(*s) == "name"));
     }
@@ -627,9 +644,7 @@ mod tests {
     #[test]
     fn tokenize_var_ref() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("$global", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("$global", 0, &interner).collect();
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0].1, Token::ParamRef(s) if interner.resolve(*s) == "global"));
     }
@@ -637,9 +652,7 @@ mod tests {
     #[test]
     fn tokenize_context_ref() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("@users", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("@users", 0, &interner).collect();
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0].1, Token::ContextRef(s) if interner.resolve(*s) == "users"));
     }
@@ -647,9 +660,7 @@ mod tests {
     #[test]
     fn tokenize_underscore() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("_", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("_", 0, &interner).collect();
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0].1, Token::Underscore));
     }
@@ -657,9 +668,7 @@ mod tests {
     #[test]
     fn tokenize_keywords() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("true false", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("true false", 0, &interner).collect();
         assert_eq!(tokens.len(), 2);
         assert!(matches!(&tokens[0].1, Token::True));
         assert!(matches!(&tokens[1].1, Token::False));
@@ -668,9 +677,7 @@ mod tests {
     #[test]
     fn tokenize_numbers() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("42 3.14", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("42 3.14", 0, &interner).collect();
         assert_eq!(tokens.len(), 2);
         assert!(matches!(&tokens[0].1, Token::IntLit(42)));
         assert!(matches!(&tokens[1].1, Token::FloatLit(f) if (*f - 3.14).abs() < f64::EPSILON));
@@ -681,16 +688,14 @@ mod tests {
     #[test]
     fn tokenize_string() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new(r#""hello \"world\"""#, 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new(r#""hello \"world\"""#, 0, &interner).collect();
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0].1, Token::StringLit(s) if s == r#"hello \"world\""#));
     }
 
     fn tokens_of(interner: &Interner, source: &str) -> Vec<Token> {
         ExprTokenizer::new(source, 0, interner)
-            .map(|item| item.expect(source).1)
+            .map(|(_, token, _)| token)
             .collect()
     }
 
@@ -788,9 +793,7 @@ mod tests {
     #[test]
     fn tokenize_two_char_operators() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("== != <= >= -> ..", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("== != <= >= -> ..", 0, &interner).collect();
         assert_eq!(tokens.len(), 6);
         assert!(matches!(&tokens[0].1, Token::Eq));
         assert!(matches!(&tokens[1].1, Token::Neq));
@@ -803,9 +806,8 @@ mod tests {
     #[test]
     fn tokenize_complex_expr() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("list | filter(|x| -> x != 0)", 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> =
+            ExprTokenizer::new("list | filter(|x| -> x != 0)", 0, &interner).collect();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::Ident(s) if interner.resolve(*s) == "list"));
         assert!(matches!(types[1], Token::Pipe));
@@ -824,9 +826,7 @@ mod tests {
     #[test]
     fn tokenize_absolute_offsets() {
         let interner = Interner::new();
-        let tokens: Vec<_> = ExprTokenizer::new("ab", 10, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new("ab", 10, &interner).collect();
         assert_eq!(tokens[0].0, 10); // start
         assert_eq!(tokens[0].2, 12); // end
     }
@@ -837,9 +837,7 @@ mod tests {
     fn tokenize_fmt_simple() {
         let interner = Interner::new();
         // "hello {{ name }}!" -> FmtStringStart("hello "), Ident("name"), FmtStringEnd("!")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""hello {{ name }}!""#, 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new(r#""hello {{ name }}!""#, 0, &interner).collect();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s == "hello "));
         assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "name"));
@@ -850,9 +848,7 @@ mod tests {
     fn tokenize_fmt_multiple_interpolations() {
         let interner = Interner::new();
         // "{{ a }}, {{ b }}" -> FmtStringStart(""), Ident(a), FmtStringMid(", "), Ident(b), FmtStringEnd("")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""{{ a }}, {{ b }}""#, 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new(r#""{{ a }}, {{ b }}""#, 0, &interner).collect();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s.is_empty()));
         assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "a"));
@@ -865,9 +861,8 @@ mod tests {
     fn tokenize_fmt_expr_with_pipe() {
         let interner = Interner::new();
         // "age: {{ age | to_string }}" -> FmtStringStart("age: "), Ident(age), Pipe, Ident(to_string), FmtStringEnd("")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""age: {{ age | to_string }}""#, 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> =
+            ExprTokenizer::new(r#""age: {{ age | to_string }}""#, 0, &interner).collect();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s == "age: "));
         assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "age"));
@@ -880,9 +875,7 @@ mod tests {
     fn tokenize_fmt_no_interpolation_passthrough() {
         let interner = Interner::new();
         // "hello world" without {{ }} -> plain StringLit
-        let tokens: Vec<_> = ExprTokenizer::new(r#""hello world""#, 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new(r#""hello world""#, 0, &interner).collect();
         assert_eq!(tokens.len(), 1);
         assert!(matches!(&tokens[0].1, Token::StringLit(s) if s == "hello world"));
     }
@@ -891,9 +884,7 @@ mod tests {
     fn tokenize_fmt_expr_with_add() {
         let interner = Interner::new();
         // "result: {{ a + b }}" -> FmtStringStart("result: "), Ident(a), Plus, Ident(b), FmtStringEnd("")
-        let tokens: Vec<_> = ExprTokenizer::new(r#""result: {{ a + b }}""#, 0, &interner)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let tokens: Vec<_> = ExprTokenizer::new(r#""result: {{ a + b }}""#, 0, &interner).collect();
         let types: Vec<_> = tokens.iter().map(|t| &t.1).collect();
         assert!(matches!(types[0], Token::FmtStringStart(s) if s == "result: "));
         assert!(matches!(types[1], Token::Ident(s) if interner.resolve(*s) == "a"));

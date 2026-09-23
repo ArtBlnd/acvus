@@ -1,7 +1,7 @@
 use acvus_ast::report::Label;
 use acvus_ast::{
-    AstId, BinOp, Expr, Literal, ObjectExprField, ObjectPatternField, Pattern, RefKind, Span,
-    SuffixedInt, Template, TupleElem, TuplePatternElem,
+    AstId, BinOp, Clean, ErrorNode, Expr, Literal, ObjectExprField, ObjectPatternField, Pattern,
+    RefKind, Slot, Span, SuffixedInt, Template, TupleElem, TuplePatternElem,
 };
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -110,10 +110,13 @@ enum SourceMode {
 }
 
 /// Every name a pattern binds, once per binding.
-fn bound_names(pattern: &Pattern, on_name: &mut impl FnMut(Astr)) {
+fn bound_names<S>(pattern: &Pattern<S>, on_name: &mut impl FnMut(Astr)) {
     match pattern {
         Pattern::Binding { name, .. } => on_name(*name),
-        Pattern::ContextBind { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
+        Pattern::ContextBind { .. }
+        | Pattern::Literal { .. }
+        | Pattern::Wildcard { .. }
+        | Pattern::Error(_) => {}
         Pattern::List { head, tail, .. } => {
             for part in head.iter().chain(tail) {
                 bound_names(part, on_name);
@@ -205,28 +208,28 @@ struct SliceArg {
 /// candidate the signature decision settles on (RFC-0043 rule 2), so what
 /// it owes is that candidate's admission of it, asked once the solve has
 /// named its head.
-struct HeldArgument {
+struct HeldArgument<S> {
     site: ArgSite,
     index: usize,
     arg: InferTy,
     param: InferTy,
-    handed: HeldHanded,
+    handed: HeldHanded<S>,
 }
 
 /// How a held argument reaches the candidate the decision settles on.
-enum HeldHanded {
+enum HeldHanded<S> {
     AsWritten,
     /// A receiver place whose head was open where the call met it: the
     /// settled candidate's mode lends it or moves it (RFC-0043 rule 6), and
     /// that lend or move is recorded once the mode is known. `referent` is
     /// what the lend decision opened at the place names.
     Receiver {
-        place: Expr,
+        place: Expr<S>,
         referent: InferTy,
     },
 }
 
-impl HeldArgument {
+impl<S> HeldArgument<S> {
     fn unjoined(&self) -> UnjoinedArgument {
         UnjoinedArgument {
             index: self.index,
@@ -243,8 +246,8 @@ impl HeldArgument {
 
 /// A receiver place whose head is open where the call meets it, held for
 /// the candidate the decision settles on (RFC-0043 rule 6).
-struct OpenReceiver {
-    place: Expr,
+struct OpenReceiver<S> {
+    place: Expr<S>,
     referent: InferTy,
 }
 
@@ -258,11 +261,11 @@ enum Handing {
 }
 
 /// One `a[i]` as the checker reads it (RFC-0047).
-struct IndexSite<'a> {
+struct IndexSite<'a, S> {
     id: AstId,
     callee_id: AstId,
-    object: &'a Expr,
-    index: &'a Expr,
+    object: &'a Expr<S>,
+    index: &'a Expr<S>,
     span: Span,
     demand: PlaceDemand,
 }
@@ -271,12 +274,12 @@ struct IndexSite<'a> {
 /// A call's arguments as the source wrote them, with the receiver of a
 /// method call counted but not written: `recv.f(a)` has one argument at
 /// offset one, because the receiver's own spelling is not in `args`.
-struct CallAsWritten<'a> {
-    args: &'a [Expr],
+struct CallAsWritten<'a, S> {
+    args: &'a [Expr<S>],
     offset: usize,
 }
 
-fn written_place(interner: &Interner, expr: &Expr) -> ShownValue {
+fn written_place<S>(interner: &Interner, expr: &Expr<S>) -> ShownValue {
     match expr {
         Expr::Ident { name, .. } => ShownValue::Named(interner.resolve(name.name).to_string()),
         Expr::ContextRef { name, .. } => {
@@ -426,10 +429,10 @@ impl Signatures {
     }
 }
 
-struct NamedCall<'e> {
+struct NamedCall<'e, S> {
     callee: CalleeSite,
     name: Astr,
-    args: &'e [Expr],
+    args: &'e [Expr<S>],
     span: Span,
     refused_as: CallRefusal,
 }
@@ -440,32 +443,32 @@ enum CallRefusal {
     CannotIndex,
 }
 
-enum FirstOperand<'e> {
+enum FirstOperand<'e, S> {
     Absent,
     Checked(FirstArg),
-    Receiver(&'e Expr),
+    Receiver(&'e Expr<S>),
 }
 
 /// RFC-0030, RFC-0043.
-enum Received {
+enum Received<S> {
     Taken(Signatures, FirstArg),
-    Held(Vec<SignatureCandidate>, FirstArg, OpenReceiver),
+    Held(Vec<SignatureCandidate>, FirstArg, OpenReceiver<S>),
     Refused(FirstArg),
     AmbiguityReported,
 }
 
 /// RFC-0043.
-struct Narrowing {
+struct Narrowing<S> {
     options: Vec<SignatureOption>,
     awaiting_head: Vec<UnjoinedArgument>,
-    held: Vec<HeldArgument>,
+    held: Vec<HeldArgument<S>>,
     params: Vec<ParamTerm<Infer>>,
-    receiver: Option<OpenReceiver>,
+    receiver: Option<OpenReceiver<S>>,
 }
 
-enum Parameters<'p> {
+enum Parameters<'p, S> {
     Instantiated(&'p [InferTy]),
-    Narrowing(&'p mut Narrowing),
+    Narrowing(&'p mut Narrowing<S>),
 }
 
 enum Reach {
@@ -480,10 +483,10 @@ enum Reach {
 }
 
 /// How an argument of an overloaded call meets the call's parameter.
-enum Narrowed {
+enum Narrowed<S> {
     Reaches(Reach),
     /// RFC-0043 rule 2: as the candidate the decision settles on admits it.
-    Held(HeldHanded),
+    Held(HeldHanded<S>),
 }
 
 struct CallType {
@@ -542,7 +545,10 @@ struct Borrowed {
 }
 
 impl Borrowed {
-    fn of(expr: &Expr) -> Self {
+    fn of<S>(expr: &Expr<S>) -> Self
+    where
+        S: Slot,
+    {
         Self {
             base: projected(expr).base.id(),
             loan: Loan::of(expr),
@@ -551,7 +557,10 @@ impl Borrowed {
 }
 
 impl ArgSite {
-    fn of(expr: &Expr, taken_by: Span) -> Self {
+    fn of<S>(expr: &Expr<S>, taken_by: Span) -> Self
+    where
+        S: Slot,
+    {
         let borrowed = match expr {
             Expr::Borrow { place, .. } => Some(Borrowed::of(place)),
             _ => None,
@@ -564,7 +573,10 @@ impl ArgSite {
         }
     }
 
-    fn value(expr: &Expr, taken_by: Span) -> Self {
+    fn value<S>(expr: &Expr<S>, taken_by: Span) -> Self
+    where
+        S: Slot,
+    {
         Self {
             id: expr.id(),
             span: expr.span(),
@@ -574,7 +586,10 @@ impl ArgSite {
     }
 
     /// A receiver lent to a reference parameter.
-    fn lent(expr: &Expr, taken_by: Span) -> Self {
+    fn lent<S>(expr: &Expr<S>, taken_by: Span) -> Self
+    where
+        S: Slot,
+    {
         Self {
             id: expr.id(),
             span: expr.span(),
@@ -858,9 +873,9 @@ fn view_argument<'t>(
         return Some(ViewArgument { taker, view: ty });
     }
     match ty {
-        TyTerm::UserDefined { type_args, .. } => type_args
-            .iter()
-            .find_map(|arg| view_in_arg(arg, Some(ty))),
+        TyTerm::UserDefined { type_args, .. } => {
+            type_args.iter().find_map(|arg| view_in_arg(arg, Some(ty)))
+        }
         TyTerm::Ref(_, target) => view_in_arg(target, None),
         TyTerm::Array(inner, _)
         | TyTerm::Slice(inner)
@@ -1073,8 +1088,65 @@ enum SettledCallee {
     Binding,
 }
 
-pub struct Checked {
-    pub resolution: Result<Freeze<TypeResolution>, Vec<MirError>>,
+/// A tree that holds an error node has no resolution to lower against,
+/// only the refusals of what parsed around its error nodes (RFC-0078
+/// rule 5). Its parse errors are reported beside it by whoever parsed it.
+#[derive(Debug, Clone)]
+pub struct Unresolved {
+    pub refusals: Vec<MirError>,
+}
+
+pub trait Checks: Slot {
+    type Resolution;
+
+    fn conclude(
+        checker: TypeChecker<'_, '_, '_, Self>,
+        body: Span,
+        tail: BodyTail,
+    ) -> Checked<Self::Resolution>;
+}
+
+pub enum BodyTail {
+    Text,
+    Value { ty: InferTy, at: Span },
+}
+
+impl Checks for Clean {
+    type Resolution = Result<Freeze<TypeResolution>, Vec<MirError>>;
+
+    fn conclude(
+        mut checker: TypeChecker<'_, '_, '_, Self>,
+        body: Span,
+        tail: BodyTail,
+    ) -> Checked<Self::Resolution> {
+        if !checker.errors.is_empty() {
+            return checker.refused(Err);
+        }
+        let tail_ty = match tail {
+            BodyTail::Text => Ty::String,
+            BodyTail::Value { ty, at } => {
+                let resolved = checker.solver.resolve_ty(&ty);
+                checker.closed_or_refused(&resolved, at)
+            }
+        };
+        checker.into_resolution(body, tail_ty)
+    }
+}
+
+impl Checks for ErrorNode {
+    type Resolution = Unresolved;
+
+    fn conclude(
+        checker: TypeChecker<'_, '_, '_, Self>,
+        _: Span,
+        _: BodyTail,
+    ) -> Checked<Unresolved> {
+        checker.refused(|refusals| Unresolved { refusals })
+    }
+}
+
+pub struct Checked<R = Result<Freeze<TypeResolution>, Vec<MirError>>> {
+    pub resolution: R,
     pub view: Freeze<BodyView>,
     /// What the checker saw at the node `with_probe` marked; `None` where
     /// no node was marked or checking never reached the marked one.
@@ -1139,15 +1211,15 @@ pub struct AdmittedDeclaration {
 
 /// What checking recorded at the marked node, held as the solver's types
 /// until the body is solved.
-enum Probed {
+enum Probed<S> {
     Value { marker: Astr, scope: Vec<InScope> },
-    Member(ProbedMember),
+    Member(ProbedMember<S>),
 }
 
-struct ProbedMember {
+struct ProbedMember<S> {
     marker: Astr,
     receiver: ProbedReceiver,
-    receiver_as_written: Expr,
+    receiver_as_written: Expr<S>,
     marker_site: CalleeSite,
 }
 
@@ -1402,7 +1474,7 @@ enum FreeParam {
     Discovered,
 }
 
-pub struct TypeChecker<'a, 's, 'src> {
+pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// Interner for string interning.
     interner: &'a Interner,
     /// Unified type environment: contexts + functions.
@@ -1495,7 +1567,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// RFC-0047 rule 6, drained by `settle_slice_args`.
     slice_args: Vec<SliceArg>,
     /// RFC-0043 rule 2, drained by `settle_held_arguments`.
-    held_arguments: Vec<(DecisionId, HeldArgument)>,
+    held_arguments: Vec<(DecisionId, HeldArgument<S>)>,
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
@@ -1520,10 +1592,66 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Effect variable of the body being checked; every call raises its lower bound.
     body_effect: EffectTerm<Infer>,
     probe: Option<AstId>,
-    probed: Option<Probed>,
+    probed: Option<Probed<S>>,
 }
 
-impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
+impl TypeChecker<'_, '_, '_, Clean> {
+    /// What the lowering reads of a checked body.
+    fn into_resolution(mut self, body: Span, tail_ty: Ty) -> Checked {
+        // A `$` input nothing typed is refused here, in its own words, so it
+        // is refused before the freezes below take every type as closed.
+        let extern_params = self.frozen_extern_params(body);
+        if !self.errors.is_empty() {
+            return self.refused(Err);
+        }
+        let type_map = self.freeze_type_map();
+        let try_returns = self.frozen_try_returns();
+        let effect = self.close_body_effect();
+        let context_types = self.named_context_types();
+        let calls = self.frozen_calls();
+        let coercion_map = self.frozen_coercions();
+        let lambda_captures = self.frozen_lambda_captures();
+        let place_bases = self.frozen_place_bases(&type_map);
+        self.check_value_reads(&type_map, &place_bases);
+        self.check_conversion_places(&place_bases);
+        let passing = self.frozen_passing(&type_map);
+        let pattern_modes = self.frozen_pattern_modes();
+        // A second gate, because freezing is itself a check: a type the
+        // solve left open is found only where it is closed, and every such
+        // type is closed above.
+        if !self.errors.is_empty() {
+            return self.refused(Err);
+        }
+        let view = self.view(type_map.clone(), |ty| self.closed(ty));
+        let probe = self.probe_product();
+        let resolution = Freeze::new(TypeResolution {
+            type_map,
+            coercion_map,
+            calls,
+            index_access: self.index_access,
+            for_kinds: self.for_kinds,
+            passing,
+            pattern_modes,
+            place_bases,
+            try_returns,
+            tail_ty,
+            extern_params,
+            lambda_captures,
+            effect,
+            context_types,
+        });
+        Checked {
+            resolution: Ok(resolution),
+            view,
+            probe,
+        }
+    }
+}
+
+impl<'a, 's, 'src, S> TypeChecker<'a, 's, 'src, S>
+where
+    S: Slot,
+{
     pub fn new(interner: &'a Interner, env: &'a TypeEnv, solver: &'s mut Solver<'src>) -> Self {
         let body_effect = solver.fresh_effect_var();
         Self {
@@ -1712,7 +1840,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// Type check a template. Consumes self, returns TypeResolution.
     /// Template tail type is always String (templates emit text).
-    pub fn check_template(mut self, template: &Template) -> Checked {
+    pub fn check_template(mut self, template: &Template<S>) -> Checked<S::Resolution>
+    where
+        S: Checks,
+    {
         for stmt in &template.body {
             self.check_stmt(stmt);
         }
@@ -1720,20 +1851,20 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
-        if !self.errors.is_empty() {
-            return self.refused();
-        }
-        self.into_resolution(template.span, Ty::String)
+        S::conclude(self, template.span, BodyTail::Text)
     }
 
     /// Type check a script. Consumes self, returns TypeResolution.
     /// `expected_tail`: if provided, the script's tail expression is unified with this type.
     pub fn check_script(
         mut self,
-        script: &acvus_ast::Script,
+        script: &acvus_ast::Script<S>,
         expected_tail: Option<&Ty>,
         crossing: ResultCrossing,
-    ) -> Checked {
+    ) -> Checked<S::Resolution>
+    where
+        S: Checks,
+    {
         // A declared `ret` is the body's return type itself, so every
         // `return` joins against it exactly as the tail does; undeclared, it
         // is the fresh variable the tail resolves.
@@ -1788,66 +1919,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
-        if !self.errors.is_empty() {
-            return self.refused();
-        }
-        let tail_at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
-        let frozen_tail = self.closed_or_refused(&self.solver.resolve_ty(&tail_ty), tail_at);
-        self.into_resolution(script.span, frozen_tail)
+        let at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
+        S::conclude(self, script.span, BodyTail::Value { ty: tail_ty, at })
     }
 
-    /// What the lowering reads of a checked body.
-    fn into_resolution(mut self, body: Span, tail_ty: Ty) -> Checked {
-        // A `$` input nothing typed is refused here, in its own words, so it
-        // is refused before the freezes below take every type as closed.
-        let extern_params = self.frozen_extern_params(body);
-        if !self.errors.is_empty() {
-            return self.refused();
-        }
-        let type_map = self.freeze_type_map();
-        let try_returns = self.frozen_try_returns();
-        let effect = self.close_body_effect();
-        let context_types = self.named_context_types();
-        let calls = self.frozen_calls();
-        let coercion_map = self.frozen_coercions();
-        let lambda_captures = self.frozen_lambda_captures();
-        let place_bases = self.frozen_place_bases(&type_map);
-        self.check_value_reads(&type_map, &place_bases);
-        self.check_conversion_places(&place_bases);
-        let passing = self.frozen_passing(&type_map);
-        let pattern_modes = self.frozen_pattern_modes();
-        // A second gate, because freezing is itself a check: a type the
-        // solve left open is found only where it is closed, and every such
-        // type is closed above.
-        if !self.errors.is_empty() {
-            return self.refused();
-        }
-        let view = self.view(type_map.clone(), |ty| self.closed(ty));
-        let probe = self.probe_product();
-        let resolution = Freeze::new(TypeResolution {
-            type_map,
-            coercion_map,
-            calls,
-            index_access: self.index_access,
-            for_kinds: self.for_kinds,
-            passing,
-            pattern_modes,
-            place_bases,
-            try_returns,
-            tail_ty,
-            extern_params,
-            lambda_captures,
-            effect,
-            context_types,
-        });
-        Checked {
-            resolution: Ok(resolution),
-            view,
-            probe,
-        }
-    }
-
-    fn refused(mut self) -> Checked {
+    fn refused<R, F>(mut self, resolution: F) -> Checked<R>
+    where
+        F: FnOnce(Vec<MirError>) -> R,
+    {
         let written = self
             .type_map
             .iter()
@@ -1856,7 +1935,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let view = self.view(written, |ty| self.type_as_written(ty));
         let probe = self.probe_product();
         Checked {
-            resolution: Err(self.reported()),
+            resolution: resolution(self.reported()),
             view,
             probe,
         }
@@ -1909,7 +1988,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         })
     }
 
-    fn methods_receiving(&self, member: &ProbedMember) -> Vec<ProbedMethod> {
+    fn methods_receiving(&self, member: &ProbedMember<S>) -> Vec<ProbedMethod> {
         let mut names: Vec<Astr> = self
             .env
             .functions
@@ -1948,7 +2027,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn admitted_receiving(
         &self,
         candidates: Vec<SignatureCandidate>,
-        member: &ProbedMember,
+        member: &ProbedMember<S>,
         name: Astr,
     ) -> Vec<SignatureCandidate> {
         match Signatures::of(candidates) {
@@ -1973,7 +2052,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn one_takes_receiver(
         &self,
         candidate: &SignatureCandidate,
-        member: &ProbedMember,
+        member: &ProbedMember<S>,
         name: Astr,
     ) -> bool {
         let call = NamedCall {
@@ -2083,7 +2162,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         marker_site: CalleeSite,
         marker: Astr,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         ty: &InferTy,
     ) {
         if self.probe != Some(marker_site.id) {
@@ -2107,9 +2186,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn check_probed_method_call(
         &mut self,
         id: AstId,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         name: Astr,
-        args: &[Expr],
+        args: &[Expr<S>],
         call_span: Span,
     ) -> InferTy {
         let owned = self.check_expr(receiver);
@@ -2309,12 +2388,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         passing
     }
 
-    fn note_place(&mut self, expr: &Expr) {
+    fn note_place(&mut self, expr: &Expr<S>) {
         let base = projected(expr).base;
         self.place_bases.insert(base.id(), WrittenBase::of(base));
     }
 
-    fn note_value_read(&mut self, place: &Expr) {
+    fn note_value_read(&mut self, place: &Expr<S>) {
         let path = projected(place);
         if path.fields.is_empty() {
             return;
@@ -2328,7 +2407,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         );
     }
 
-    fn pass_receiver(&mut self, receiver: &Expr, passing: Passing) {
+    fn pass_receiver(&mut self, receiver: &Expr<S>, passing: Passing) {
         if let Passing::Lent(_) = passing {
             self.note_place(receiver);
         }
@@ -2706,7 +2785,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn settle_receiver(
         &mut self,
         candidate: &SignatureCandidate,
-        place: &Expr,
+        place: &Expr<S>,
         owned: InferTy,
         referent: &InferTy,
         taken_by: Span,
@@ -3046,7 +3125,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// A lambda, at the function type the position expects where there is
     /// one: its parameters are the expected ones and its body's value
     /// converts into the expected return (RFC-0042 rule 4), else fresh.
-    fn check_lambda(&mut self, expr: &Expr, expected: Option<&InferTy>) -> InferTy {
+    fn check_lambda(&mut self, expr: &Expr<S>, expected: Option<&InferTy>) -> InferTy {
         let Expr::Lambda {
             id, params, body, ..
         } = expr
@@ -3154,7 +3233,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A call argument, checked against the parameter that receives it.
-    fn check_arg(&mut self, arg: &Expr, expected: Option<&InferTy>) -> InferTy {
+    fn check_arg(&mut self, arg: &Expr<S>, expected: Option<&InferTy>) -> InferTy {
         if let (Expr::Lambda { .. }, Some(expected)) = (arg, expected) {
             self.settle_in_body();
             return self.check_lambda(arg, Some(expected));
@@ -3233,7 +3312,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// the container's `as_slice_mut`, which is what makes the element write
     /// exclusive -- the loan the slice holds is the write's, so a container
     /// already held shared is refused there and a root holding `&T` here.
-    fn store_place(&mut self, place: &acvus_ast::Place, span: Span) -> InferTy {
+    fn store_place(&mut self, place: &acvus_ast::Place<S>, span: Span) -> InferTy {
         match place {
             acvus_ast::Place::Field {
                 id, object, field, ..
@@ -4989,7 +5068,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// `&e` / `&mut e`: the reference type. Where `e` names no place, the
     /// value it produces is bound to a temporary storage and the reference
     /// names that temporary, which lives as long as the loans on it do.
-    fn check_borrow(&mut self, place: &Expr, mutable: bool, span: Span) -> InferTy {
+    fn check_borrow(&mut self, place: &Expr<S>, mutable: bool, span: Span) -> InferTy {
         let mutability = if mutable {
             Mutability::Mut
         } else {
@@ -5006,7 +5085,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// evidence, the element read at `i: u64`. The instance goes on
     /// `callee_id`, where every other resolved call's does, and the mode
     /// on the expression's own id, so the lowering decides nothing.
-    fn check_index(&mut self, site: IndexSite<'_>) -> InferTy {
+    fn check_index(&mut self, site: IndexSite<'_, S>) -> InferTy {
         let IndexSite {
             id,
             callee_id,
@@ -5161,7 +5240,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn lend_place(
         &mut self,
         of: &InferTy,
-        place: &Expr,
+        place: &Expr<S>,
         mutability: Mutability,
         span: Span,
     ) -> InferTy {
@@ -5177,7 +5256,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn lend_named(
         &mut self,
         of: &InferTy,
-        place: &Expr,
+        place: &Expr<S>,
         mutability: Mutability,
         span: Span,
     ) -> Option<InferTy> {
@@ -5219,9 +5298,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn check_method_call(
         &mut self,
         callee_id: AstId,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         name: Astr,
-        args: &[Expr],
+        args: &[Expr<S>],
         call_span: Span,
     ) -> InferTy {
         let candidates = self.signature_set(QualifiedRef::root(name), callee_id);
@@ -5252,8 +5331,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn check_named_call(
         &mut self,
         candidates: Vec<SignatureCandidate>,
-        call: &NamedCall<'_>,
-        first: FirstOperand<'_>,
+        call: &NamedCall<'_, S>,
+        first: FirstOperand<'_, S>,
     ) -> InferTy {
         let arity = call.args.len() + usize::from(!matches!(first, FirstOperand::Absent));
         let mut refused = Vec::new();
@@ -5294,8 +5373,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn refuse_arity(
         &mut self,
         refused: Vec<(SignatureCandidate, usize)>,
-        call: &NamedCall<'_>,
-        first: FirstOperand<'_>,
+        call: &NamedCall<'_, S>,
+        first: FirstOperand<'_, S>,
         arity: usize,
     ) -> InferTy {
         let one = <[(SignatureCandidate, usize); 1]>::try_from(refused).ok();
@@ -5331,7 +5410,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Self::infer_error()
     }
 
-    fn check_unadmitted_args(&mut self, first: Option<&FirstArg>, args: &[Expr]) -> Vec<InferTy> {
+    fn check_unadmitted_args(
+        &mut self,
+        first: Option<&FirstArg>,
+        args: &[Expr<S>],
+    ) -> Vec<InferTy> {
         first
             .map(|first| first.ty.clone())
             .into_iter()
@@ -5339,7 +5422,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect()
     }
 
-    fn refuse_call(&mut self, call: &NamedCall<'_>, types: Vec<InferTy>, offset: usize) -> InferTy {
+    fn refuse_call(
+        &mut self,
+        call: &NamedCall<'_, S>,
+        types: Vec<InferTy>,
+        offset: usize,
+    ) -> InferTy {
         match call.refused_as {
             CallRefusal::CannotIndex => Self::infer_error(),
             CallRefusal::NoMatchingFunction => self.no_matching_function(
@@ -5358,7 +5446,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         signatures: Signatures,
         first: Option<FirstArg>,
-        call: &NamedCall<'_>,
+        call: &NamedCall<'_, S>,
     ) -> InferTy {
         match signatures {
             Signatures::One(SignatureCandidate::Named { qref, scheme }) => {
@@ -5388,7 +5476,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         ty: &InferTy,
         first: Option<&FirstArg>,
-        args: &[Expr],
+        args: &[Expr<S>],
         call_span: Span,
     ) -> InferTy {
         let arity = args.len() + usize::from(first.is_some());
@@ -5455,7 +5543,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         call_type: &CallType,
         first: Option<&FirstArg>,
-        args: &[Expr],
+        args: &[Expr<S>],
         call_span: Span,
     ) -> InferTy {
         let mut parameters = Parameters::Instantiated(&call_type.params);
@@ -5470,8 +5558,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         candidates: Vec<SignatureCandidate>,
         first: Option<FirstArg>,
-        receiver: Option<OpenReceiver>,
-        call: &NamedCall<'_>,
+        receiver: Option<OpenReceiver<S>>,
+        call: &NamedCall<'_, S>,
     ) -> InferTy {
         let mut narrowing = Narrowing {
             options: candidates
@@ -5533,9 +5621,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// arguments have already fixed.
     fn admit_arguments(
         &mut self,
-        parameters: &mut Parameters<'_>,
+        parameters: &mut Parameters<'_, S>,
         first: Option<&FirstArg>,
-        args: &[Expr],
+        args: &[Expr<S>],
         call_span: Span,
     ) -> Vec<InferTy> {
         let offset = usize::from(first.is_some());
@@ -5558,7 +5646,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         types
     }
 
-    fn parameter_at(&mut self, parameters: &mut Parameters<'_>, index: usize) -> Option<InferTy> {
+    fn parameter_at(
+        &mut self,
+        parameters: &mut Parameters<'_, S>,
+        index: usize,
+    ) -> Option<InferTy> {
         match parameters {
             Parameters::Instantiated(params) => Some(
                 params
@@ -5580,7 +5672,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn admit_argument(
         &mut self,
-        parameters: &mut Parameters<'_>,
+        parameters: &mut Parameters<'_, S>,
         index: usize,
         param: &InferTy,
         ty: &InferTy,
@@ -5614,10 +5706,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// again. `None` where the argument empties the set.
     fn narrow(
         &mut self,
-        narrowing: &mut Narrowing,
+        narrowing: &mut Narrowing<S>,
         index: usize,
         ty: &InferTy,
-    ) -> Option<Narrowed> {
+    ) -> Option<Narrowed<S>> {
         if index == 0
             && let Some(receiver) = narrowing.receiver.take()
         {
@@ -5699,10 +5791,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// candidate. One that refuses what its mode sees leaves the set here.
     fn hold_receiver(
         &mut self,
-        narrowing: &mut Narrowing,
+        narrowing: &mut Narrowing<S>,
         owned: &InferTy,
-        OpenReceiver { place, referent }: OpenReceiver,
-    ) -> Option<Narrowed> {
+        OpenReceiver { place, referent }: OpenReceiver<S>,
+    ) -> Option<Narrowed<S>> {
         narrowing.options.retain(|option| {
             !matches!(
                 self.receiver_admission(&option.candidate, owned, &referent)
@@ -5720,9 +5812,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn receive(
         &mut self,
         signatures: Signatures,
-        receiver: &Expr,
-        call: &NamedCall<'_>,
-    ) -> Received {
+        receiver: &Expr<S>,
+        call: &NamedCall<'_, S>,
+    ) -> Received<S> {
         let agreed = agreed_receiver_mode(
             signatures
                 .candidates()
@@ -5757,7 +5849,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    fn check_receiver_place(&mut self, receiver: &Expr, agreed: Option<ReceiverMode>) -> InferTy {
+    fn check_receiver_place(
+        &mut self,
+        receiver: &Expr<S>,
+        agreed: Option<ReceiverMode>,
+    ) -> InferTy {
         let outer = std::mem::replace(&mut self.demand, receiver_demand(agreed));
         let owned = self.check_expr(receiver);
         self.demand = outer;
@@ -5771,10 +5867,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn hold_open_receiver(
         &mut self,
         candidates: Vec<SignatureCandidate>,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         owned: InferTy,
-        call: &NamedCall<'_>,
-    ) -> Received {
+        call: &NamedCall<'_, S>,
+    ) -> Received<S> {
         let referent = self.open_lend(&owned, Mutability::Shared, receiver.span());
         let first = FirstArg {
             ty: owned,
@@ -5794,7 +5890,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         candidates: Vec<SignatureCandidate>,
         owned: &InferTy,
         referent: &InferTy,
-        call: &NamedCall<'_>,
+        call: &NamedCall<'_, S>,
     ) -> Option<(Vec<SignatureCandidate>, ReceiverMode)> {
         let admitted: Vec<CandidateAdmission> = candidates
             .into_iter()
@@ -5889,7 +5985,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// that is already a reference value is passed as it is (RFC-0030); a
     /// receiver that is a value is bound to a temporary storage and that
     /// temporary is lent.
-    fn receiver_arg(&mut self, receiver: &Expr, mode: ReceiverMode, taken_by: Span) -> FirstArg {
+    fn receiver_arg(&mut self, receiver: &Expr<S>, mode: ReceiverMode, taken_by: Span) -> FirstArg {
         if names_a_place(receiver) {
             let owned = self.check_receiver_place(receiver, Some(mode));
             return self.receiver_in(receiver, owned, mode, taken_by);
@@ -5900,7 +5996,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn value_receiver_in(
         &mut self,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         ty: InferTy,
         mode: ReceiverMode,
         taken_by: Span,
@@ -5959,7 +6055,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// (RFC-0029, RFC-0041) or the place by value.
     fn receiver_in(
         &mut self,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         owned: InferTy,
         mode: ReceiverMode,
         taken_by: Span,
@@ -5976,7 +6072,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn receiver_handed(
         &mut self,
-        receiver: &Expr,
+        receiver: &Expr<S>,
         owned: InferTy,
         handing: Handing,
         taken_by: Span,
@@ -6024,7 +6120,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Whether the place names its value through a reference, which is the
     /// case the refusal above is about: a field of an object a reference
     /// names.
-    fn reads_through_reference(&self, place: &Expr) -> bool {
+    fn reads_through_reference(&self, place: &Expr<S>) -> bool {
         let Expr::FieldAccess { object, .. } = place else {
             return false;
         };
@@ -6041,7 +6137,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         name: &str,
         types: Vec<InferTy>,
-        written: CallAsWritten<'_>,
+        written: CallAsWritten<'_, S>,
         call_span: Span,
     ) -> InferTy {
         if types
@@ -6081,7 +6177,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// The mode comes from the scheme's parameter, whose type is a
     /// `PolyTy`. Its variables have no reader-facing spelling, so the note
     /// says the mode rather than printing the parameter.
-    fn borrow_that_would_fit(&self, name: &str, written: CallAsWritten<'_>) -> Option<Label> {
+    fn borrow_that_would_fit(&self, name: &str, written: CallAsWritten<'_, S>) -> Option<Label> {
         let CallAsWritten { args, offset } = written;
         let spelled: Option<Vec<&str>> = args
             .iter()
@@ -6176,7 +6272,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         enum_name: Astr,
         tag: Astr,
         first: Option<&FirstArg>,
-        args: &[Expr],
+        args: &[Expr<S>],
         span: Span,
     ) -> InferTy {
         let payload_ty = match (first, args) {
@@ -6440,7 +6536,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// Type-check a single script statement.
-    fn check_stmt(&mut self, stmt: &acvus_ast::Stmt) {
+    fn check_stmt(&mut self, stmt: &acvus_ast::Stmt<S>) {
         match stmt {
             acvus_ast::Stmt::Append { expr, span, .. } => self.check_append(expr, *span),
             acvus_ast::Stmt::Store {
@@ -6649,6 +6745,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => self.check_for(*id, *callee_id, binder, head, body, *span),
             acvus_ast::Stmt::Break { span, .. } => self.check_loop_jump("break", *span),
             acvus_ast::Stmt::Continue { span, .. } => self.check_loop_jump("continue", *span),
+            // Its parse error is its refusal (RFC-0078 rule 5).
+            acvus_ast::Stmt::Error(_) => {}
         }
     }
 
@@ -6661,8 +6759,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         id: AstId,
         callee_id: AstId,
         binder: &acvus_ast::Binder,
-        head: &acvus_ast::ForHead,
-        body: &[acvus_ast::Stmt],
+        head: &acvus_ast::ForHead<S>,
+        body: &[acvus_ast::Stmt<S>],
         span: Span,
     ) {
         let (kind, element) = match head {
@@ -6704,7 +6802,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// `lo..hi`: one integer width at both bounds, which is the element's
     /// type (RFC-0057 rule 1).
-    fn check_range(&mut self, lo: &Expr, hi: &Expr, span: Span) -> InferTy {
+    fn check_range(&mut self, lo: &Expr<S>, hi: &Expr<S>, span: Span) -> InferTy {
         let lo_ty = self.check_expr(lo);
         let hi_ty = self.check_expr(hi);
         if self.solver.unify(&lo_ty, &hi_ty).is_err() {
@@ -6737,7 +6835,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn check_for_slice(
         &mut self,
         callee_id: AstId,
-        place: &Expr,
+        place: &Expr<S>,
         mutability: Mutability,
         span: Span,
     ) -> InferTy {
@@ -6777,7 +6875,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// is the array's own (RFC-0057 rule 1). Every other value held by
     /// value is refused here, a container by value with the message that
     /// names the borrow it wanted.
-    fn check_for_array(&mut self, array: &Expr) -> InferTy {
+    fn check_for_array(&mut self, array: &Expr<S>) -> InferTy {
         let array_ty = self.check_expr(array);
         let resolved = self.solver.resolve_ty(&array_ty);
         match &resolved {
@@ -6808,7 +6906,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A template's append reads a `String` or a `&str`; nothing is
     /// converted to text implicitly (RFC-0071 rule 3).
-    fn check_append(&mut self, expr: &Expr, span: Span) {
+    fn check_append(&mut self, expr: &Expr<S>, span: Span) {
         let ty = self.check_expr(expr);
         let resolved = self.solver.resolve_ty(&ty);
         let site = ConversionSite {
@@ -6840,7 +6938,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// A demand reaches a place and the places it projects from; any other
     /// expression, and every operand inside it, is read as a value.
-    fn check_expr(&mut self, expr: &Expr) -> InferTy {
+    fn check_expr(&mut self, expr: &Expr<S>) -> InferTy {
         if names_a_place(expr) {
             return self.check_expr_at_demand(expr);
         }
@@ -6850,8 +6948,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         ty
     }
 
-    fn check_expr_at_demand(&mut self, expr: &Expr) -> InferTy {
+    fn check_expr_at_demand(&mut self, expr: &Expr<S>) -> InferTy {
         match expr {
+            // Poison, so what reads it is not refused a second time
+            // (RFC-0078 rule 5).
+            Expr::Error(_) => Self::infer_error(),
             // `&place` / `&mut place`: a reference to the place's storage.
             Expr::Borrow {
                 id,
@@ -7489,6 +7590,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         ref_kind: RefKind::Value,
                         ..
                     } => self.check_func_call(right, &[], pipe_left, stage),
+                    Expr::Error(_) => {
+                        self.check_expr(left);
+                        Self::infer_error()
+                    }
                     _ => {
                         let first = FirstArg {
                             ty: self.check_expr(left),
@@ -7853,8 +7958,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// `validate`, where the body's definitions are visible.
     fn check_match(
         &mut self,
-        scrutinee: &Expr,
-        arms: &[acvus_ast::MatchExprArm],
+        scrutinee: &Expr<S>,
+        arms: &[acvus_ast::MatchExprArm<S>],
         span: Span,
     ) -> InferTy {
         let source_ty = self.check_expr(scrutinee);
@@ -7910,7 +8015,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// still binds.
     fn reachable_arm_source(
         &mut self,
-        pattern: &Pattern,
+        pattern: &Pattern<S>,
         source_ty: &InferTy,
         span: Span,
     ) -> InferTy {
@@ -7948,7 +8053,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Self::infer_error()
     }
 
-    fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch) -> Branch {
+    fn check_else_branch(&mut self, eb: &acvus_ast::ElseBranch<S>) -> Branch {
         match eb {
             acvus_ast::ElseBranch::ElseIf(expr) => Branch {
                 ty: self.check_expr(expr),
@@ -7977,9 +8082,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn check_func_call(
         &mut self,
-        func: &Expr,
-        args: &[Expr],
-        pipe_left: Option<&Expr>,
+        func: &Expr<S>,
+        args: &[Expr<S>],
+        pipe_left: Option<&Expr<S>>,
         call_span: Span,
     ) -> InferTy {
         let first = pipe_left.map(|e| FirstArg {
@@ -8047,7 +8152,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// reference. A scrutinee whose head is still a variable settles the
     /// same question later, through a decision; a part of a pattern is
     /// read in the mode its whole was.
-    fn refuse_names_bound_twice(&mut self, pattern: &Pattern, span: Span) {
+    fn refuse_names_bound_twice(&mut self, pattern: &Pattern<S>, span: Span) {
         let mut bound = FxHashSet::default();
         let mut twice = Vec::new();
         bound_names(pattern, &mut |name| {
@@ -8063,7 +8168,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     fn check_pattern(
         &mut self,
-        pattern: &Pattern,
+        pattern: &Pattern<S>,
         source_ty: &InferTy,
         source: PatternSource,
         span: Span,
@@ -8105,7 +8210,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// resolves it.
     fn check_pattern_deferred(
         &mut self,
-        pattern: &Pattern,
+        pattern: &Pattern<S>,
         source_ty: &InferTy,
         source: PatternSource,
         span: Span,
@@ -8304,13 +8409,13 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// A pattern refused against its source still binds its names, as
     /// poison, so a use of one is not refused a second time (docs/solver.md,
     /// Poison).
-    fn bind_as_poison(&mut self, pattern: &Pattern, span: Span) {
+    fn bind_as_poison(&mut self, pattern: &Pattern<S>, span: Span) {
         self.check_pattern_inner(pattern, &Self::infer_error(), PatternSource::Member, span);
     }
 
     fn check_pattern_inner(
         &mut self,
-        pattern: &Pattern,
+        pattern: &Pattern<S>,
         source_ty: &InferTy,
         source: PatternSource,
         span: Span,
@@ -8378,8 +8483,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
             },
 
-            // `_` reads the position and asks nothing of it.
-            Pattern::Wildcard { .. } => {}
+            // `_` reads the position and asks nothing of it, and so does a
+            // pattern that did not parse, whose parse error is its refusal.
+            Pattern::Wildcard { .. } | Pattern::Error(_) => {}
 
             // Obligation across artifacts: what makes this admission sound
             // is that a string literal pattern never becomes a value.
@@ -8703,7 +8809,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// `inner?` (RFC-0038): the payload of an `Ok` or a `Some`, while the
     /// `Err` or `None` leaves the function early, so the function returns a
     /// `Result` whose error type unifies with the operand's, or an `Option`.
-    fn check_try(&mut self, inner: &Expr, span: Span) -> InferTy {
+    fn check_try(&mut self, inner: &Expr<S>, span: Span) -> InferTy {
         let operand = self.check_expr(inner);
         let mut operand = self.solver.resolve_ty(&operand);
         let Some(return_ty) = self.return_ty.clone() else {

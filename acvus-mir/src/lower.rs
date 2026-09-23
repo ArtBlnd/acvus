@@ -1,5 +1,5 @@
 use acvus_ast::{
-    AstId, BinOp, ElseBranch, Expr, ForHead, Literal, MatchExprArm, ObjectExprField,
+    AstId, BinOp, Clean, ElseBranch, Expr, ForHead, Literal, MatchExprArm, ObjectExprField,
     ObjectPatternField, Pattern, RefKind, Script, Span, Stmt, Template, TupleElem,
     TuplePatternElem, UnaryOp,
 };
@@ -284,13 +284,16 @@ impl Dispatch {
     /// Whether the arms can hold one dispatch at all: an arm that is a
     /// catch-all answers yes on its own, because `_` is always the way
     /// through (RFC-0051 rule 3).
-    pub(crate) fn is_decidable(arms: &[MatchExprArm], interner: &Interner) -> bool {
+    pub(crate) fn is_decidable<S>(arms: &[MatchExprArm<S>], interner: &Interner) -> bool {
         Self::plan(arms, interner).is_some() || arms.iter().any(Self::is_catch_all)
     }
 
     /// The first key two arms of this dispatch both name, which is an arm no
     /// value can reach because the one before it holds first.
-    pub(crate) fn repeated_key(arms: &[MatchExprArm], interner: &Interner) -> Option<SwitchKey> {
+    pub(crate) fn repeated_key<S>(
+        arms: &[MatchExprArm<S>],
+        interner: &Interner,
+    ) -> Option<SwitchKey> {
         let plan = Self::plan(arms, interner)?;
         plan.keys
             .iter()
@@ -299,7 +302,7 @@ impl Dispatch {
             .map(|(_, key)| *key)
     }
 
-    fn is_catch_all(arm: &MatchExprArm) -> bool {
+    fn is_catch_all<S>(arm: &MatchExprArm<S>) -> bool {
         matches!(
             arm.pattern,
             Pattern::Wildcard { .. }
@@ -307,10 +310,11 @@ impl Dispatch {
                     ref_kind: RefKind::Value,
                     ..
                 }
+                | Pattern::Error(_)
         )
     }
 
-    fn plan(arms: &[MatchExprArm], interner: &Interner) -> Option<Self> {
+    fn plan<S>(arms: &[MatchExprArm<S>], interner: &Interner) -> Option<Self> {
         let mut keys: Vec<SwitchKey> = Vec::with_capacity(arms.len());
         let mut catch_all = None;
         for (index, arm) in arms.iter().enumerate() {
@@ -325,7 +329,10 @@ impl Dispatch {
                 | Pattern::Binding {
                     ref_kind: RefKind::Value,
                     ..
-                } if catch_all.is_none() => {
+                }
+                | Pattern::Error(_)
+                    if catch_all.is_none() =>
+                {
                     catch_all = Some(index);
                     continue;
                 }
@@ -355,9 +362,12 @@ fn holds_text(ty: &Ty) -> bool {
     }
 }
 
-fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
+fn pattern_is_irrefutable<S>(pattern: &Pattern<S>) -> bool {
     match pattern {
-        Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => true,
+        Pattern::Binding { .. }
+        | Pattern::Wildcard { .. }
+        | Pattern::ContextBind { .. }
+        | Pattern::Error(_) => true,
         Pattern::Tuple { elements, .. } => elements.iter().all(|e| match e {
             TuplePatternElem::Pattern(p) => pattern_is_irrefutable(p),
             TuplePatternElem::Wildcard(_) => true,
@@ -384,6 +394,7 @@ fn test_reads_a_part(pattern: &Pattern) -> bool {
         Pattern::Variant { payload, .. } => payload
             .as_deref()
             .is_some_and(|p| !pattern_is_irrefutable(p)),
+        Pattern::Error(clean) => match *clean {},
     }
 }
 
@@ -832,6 +843,7 @@ impl<'a> Lowerer<'a> {
             Stmt::Break { span, .. } => self.leave_loop(Leave::Break, *span),
             Stmt::Continue { span, .. } => self.leave_loop(Leave::Continue, *span),
             Stmt::Append { expr, span, .. } => self.lower_append(expr, *span),
+            Stmt::Error(clean) => match *clean {},
         }
     }
 
@@ -1778,7 +1790,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn element_reference(&mut self, access: IndexAccess, element: Element<'_>) -> RefTarget {
+    fn element_reference(&mut self, access: IndexAccess, element: Element<'_, Clean>) -> RefTarget {
         let Element {
             id,
             callee_id,
@@ -3067,6 +3079,7 @@ impl<'a> Lowerer<'a> {
                 else_branch,
                 *span,
             ),
+            Expr::Error(clean) => match *clean {},
         }
     }
 
@@ -3676,6 +3689,7 @@ impl<'a> Lowerer<'a> {
             | Pattern::ContextBind { .. }
             | Pattern::Literal { .. }
             | Pattern::Wildcard { .. } => Vec::new(),
+            Pattern::Error(clean) => match *clean {},
         }
     }
 
@@ -3850,6 +3864,7 @@ impl<'a> Lowerer<'a> {
                 self.close_diamond(pending);
                 result
             }
+            Pattern::Error(clean) => match *clean {},
         }
     }
 
@@ -3880,6 +3895,7 @@ impl<'a> Lowerer<'a> {
                 let payload_src = self.project_payload(src, *tag, span);
                 self.lower_pattern_bind(payload, &payload_src, span);
             }
+            Pattern::Error(clean) => match *clean {},
         }
     }
 }

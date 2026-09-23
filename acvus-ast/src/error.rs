@@ -111,10 +111,9 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::ArmOutsideMatch => {
                 write!(f, "`% pattern =>` needs a `% match` to belong to")
             }
-            ParseErrorKind::MatchBodyBeforeArm => write!(
-                f,
-                "a `% match` body begins with a `% pattern =>` arm"
-            ),
+            ParseErrorKind::MatchBodyBeforeArm => {
+                write!(f, "a `% match` body begins with a `% pattern =>` arm")
+            }
             ParseErrorKind::InvalidPattern(s) => write!(f, "invalid pattern: {s}"),
             ParseErrorKind::InvalidAssignTarget => write!(
                 f,
@@ -369,6 +368,7 @@ pub enum Terminal {
     FmtStart,
     FmtMid,
     FmtEnd,
+    Unreadable,
 }
 
 /// Every terminal an operand can begin with.
@@ -425,7 +425,7 @@ const LITERALS: [Terminal; 7] = [
 ];
 
 impl Terminal {
-    pub const ALL: [Terminal; 65] = [
+    pub const ALL: [Terminal; 66] = [
         Terminal::Int,
         Terminal::IntOf,
         Terminal::Char,
@@ -491,6 +491,7 @@ impl Terminal {
         Terminal::FmtStart,
         Terminal::FmtMid,
         Terminal::FmtEnd,
+        Terminal::Unreadable,
     ];
 
     pub fn of_token(token: &Token) -> Self {
@@ -560,6 +561,7 @@ impl Terminal {
             Token::FmtStringStart(_) => Terminal::FmtStart,
             Token::FmtStringMid(_) => Terminal::FmtMid,
             Token::FmtStringEnd(_) => Terminal::FmtEnd,
+            Token::Unreadable(_) => Terminal::Unreadable,
         }
     }
 
@@ -634,6 +636,7 @@ impl Terminal {
             Terminal::FmtStart => "fmt_start",
             Terminal::FmtMid => "fmt_mid",
             Terminal::FmtEnd => "fmt_end",
+            Terminal::Unreadable => "unreadable",
         }
     }
 
@@ -650,6 +653,7 @@ impl Terminal {
             Terminal::FmtStart | Terminal::FmtMid | Terminal::FmtEnd => {
                 Class::Named("a format string")
             }
+            Terminal::Unreadable => Class::Named("an unreadable character"),
             other => Class::Written(other.grammar_name()),
         }
     }
@@ -769,6 +773,7 @@ mod tests {
             Token::FmtStringStart("f".into()),
             Token::FmtStringMid("f".into()),
             Token::FmtStringEnd("f".into()),
+            Token::Unreadable('#'),
         ];
         let mut reached: Vec<Terminal> = tokens.iter().map(Terminal::of_token).collect();
         reached.sort_unstable();

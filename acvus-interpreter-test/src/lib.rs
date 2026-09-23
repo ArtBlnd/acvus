@@ -703,7 +703,8 @@ macro_rules! attempt_within {
             $limit,
             $crate::corpus::Caller(::core::module_path!()),
         )
-    };    ($source:expr, contexts = $contexts:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
+    };
+    ($source:expr, contexts = $contexts:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
         $crate::corpus::attempt_within_in(
             $source,
             $contexts,
@@ -1333,14 +1334,19 @@ pub mod corpus {
         let interner = Interner::new();
         let context: crate::Context = contexts
             .iter()
-            .map(|(name, value)| (interner.intern(name), crate::value_from_json(&interner, value)))
+            .map(|(name, value)| {
+                (
+                    interner.intern(name),
+                    crate::value_from_json(&interner, value),
+                )
+            })
             .collect();
         let (context_types, snapshot) = crate::split_context(&interner, context);
         let parsed = match acvus_ast::parse_script(&interner, source) {
             Ok(ast) => ParsedAst::Script(ast),
             Err(script) => match acvus_ast::parse(&interner, source) {
                 Ok(ast) => ParsedAst::Template(ast),
-                Err(_) => return Outcome::Refused(format!("parse: {}", script.kind)),
+                Err(_) => return Outcome::Refused(format!("parse: {}", script.errors[0].kind)),
             },
         };
         let compiled = catch_unwind(AssertUnwindSafe(|| {
@@ -1359,7 +1365,12 @@ pub mod corpus {
                 let unbound: Vec<String> = cr
                     .required_inputs
                     .iter()
-                    .map(|input| format!("`${}` is required and not bound", interner.resolve(input.name.name)))
+                    .map(|input| {
+                        format!(
+                            "`${}` is required and not bound",
+                            interner.resolve(input.name.name)
+                        )
+                    })
                     .collect();
                 return Outcome::Refused(unbound.join("; "));
             }
@@ -1400,8 +1411,7 @@ pub mod corpus {
         let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor))
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
-        let mut interp =
-            Interpreter::new(shared, cr.entry_qref, InMemoryContext::new(snapshot));
+        let mut interp = Interpreter::new(shared, cr.entry_qref, InMemoryContext::new(snapshot));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("a current-thread runtime");

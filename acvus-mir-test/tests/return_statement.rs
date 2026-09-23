@@ -47,7 +47,10 @@ fn a_return_in_a_template_is_refused() {
 fn a_return_without_a_value_does_not_parse() {
     let i = Interner::new();
     let err = acvus_ast::parse_script(&i, "let x = 1; return; x").expect_err("no `return;`");
-    assert_eq!(err.kind.to_string(), "expected an expression, found `;`");
+    assert_eq!(
+        err.errors[0].kind.to_string(),
+        "expected an expression, found `;`"
+    );
 }
 
 /// A `return` fixes an undeclared body's return type, and what the source

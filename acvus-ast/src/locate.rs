@@ -21,7 +21,10 @@ pub struct Nodes {
 }
 
 impl Nodes {
-    pub fn of_script(script: &Script) -> Self {
+    pub fn of_script<S>(script: &Script<S>) -> Self
+    where
+        S: Slot,
+    {
         let mut nodes = Self {
             preorder: Vec::new(),
         };
@@ -33,7 +36,10 @@ impl Nodes {
         nodes
     }
 
-    pub fn of_template(template: &Template) -> Self {
+    pub fn of_template<S>(template: &Template<S>) -> Self
+    where
+        S: Slot,
+    {
         let mut nodes = Self {
             preorder: Vec::new(),
         };
@@ -71,17 +77,31 @@ impl Nodes {
         });
     }
 
+    fn error<S>(&mut self, node: &S)
+    where
+        S: Slot,
+    {
+        let ErrorNode { id, span } = node.node();
+        self.push(id, span, None);
+    }
+
     fn binder(&mut self, binder: &Binder) {
         self.push(binder.id, binder.span, None);
     }
 
-    fn stmts(&mut self, stmts: &[Stmt]) {
+    fn stmts<S>(&mut self, stmts: &[Stmt<S>])
+    where
+        S: Slot,
+    {
         for stmt in stmts {
             self.stmt(stmt);
         }
     }
 
-    fn stmt(&mut self, stmt: &Stmt) {
+    fn stmt<S>(&mut self, stmt: &Stmt<S>)
+    where
+        S: Slot,
+    {
         match stmt {
             Stmt::Store {
                 id,
@@ -172,10 +192,14 @@ impl Nodes {
                 self.push(*id, *span, None);
                 self.expr(expr);
             }
+            Stmt::Error(node) => self.error(node),
         }
     }
 
-    fn place(&mut self, place: &Place) {
+    fn place<S>(&mut self, place: &Place<S>)
+    where
+        S: Slot,
+    {
         match place {
             Place::Base(PlaceBase::Root { id, span, .. }) => self.push(*id, *span, None),
             Place::Base(PlaceBase::Element {
@@ -198,7 +222,10 @@ impl Nodes {
         }
     }
 
-    fn expr(&mut self, expr: &Expr) {
+    fn expr<S>(&mut self, expr: &Expr<S>)
+    where
+        S: Slot,
+    {
         match expr {
             Expr::Ident { id, span, .. }
             | Expr::Literal { id, span, .. }
@@ -398,15 +425,18 @@ impl Nodes {
                     }
                 }
             }
+            Expr::Error(node) => self.error(node),
         }
     }
 
-    fn branch(
+    fn branch<S>(
         &mut self,
-        then_body: &[Stmt],
-        then_tail: Option<&Expr>,
-        else_branch: Option<&ElseBranch>,
-    ) {
+        then_body: &[Stmt<S>],
+        then_tail: Option<&Expr<S>>,
+        else_branch: Option<&ElseBranch<S>>,
+    ) where
+        S: Slot,
+    {
         self.stmts(then_body);
         if let Some(tail) = then_tail {
             self.expr(tail);
@@ -423,7 +453,10 @@ impl Nodes {
         }
     }
 
-    fn pattern(&mut self, pattern: &Pattern) {
+    fn pattern<S>(&mut self, pattern: &Pattern<S>)
+    where
+        S: Slot,
+    {
         match pattern {
             Pattern::Binding { id, span, .. }
             | Pattern::ContextBind { id, span, .. }
@@ -465,6 +498,7 @@ impl Nodes {
                     self.pattern(payload);
                 }
             }
+            Pattern::Error(node) => self.error(node),
         }
     }
 }

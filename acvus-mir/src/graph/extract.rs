@@ -22,6 +22,7 @@ pub struct ExtractResult {
 pub enum ParsedSource {
     Script(acvus_ast::Script),
     Template(acvus_ast::Template),
+    Recovered(RecoveredAst),
 }
 
 // -- Extraction -----------------------------------------------------
@@ -51,6 +52,7 @@ pub fn extract_one(_interner: &Interner, func: &Function) -> Option<ParsedSource
                 let _ = acvus_ast::extract_template_context_refs(template);
                 Some(ParsedSource::Template(template.clone()))
             }
+            ParsedAst::Recovered(recovered) => Some(ParsedSource::Recovered(recovered.clone())),
         },
         FnKind::Extern { .. } => None,
     }

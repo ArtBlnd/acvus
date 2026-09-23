@@ -39,3 +39,58 @@ data's type: what the script reads is what the file holds.
 **Rejected.**
 - Guessing a type where JSON is silent — a guessed type is one the script did
   not ask for.
+
+## RFC-0078: A parse recovers past an error, and a tree that holds one cannot be lowered
+
+Status: Accepted
+
+1. A parse does not stop at its first error. A statement, an expression or a
+   pattern that does not parse becomes an error node over its span, parsing
+   resumes after it, and every error is reported, all at once (RFC-0031
+   rule 6).
+2. A character the lexer cannot read is an error token the grammar recovers
+   over, not the end of the parse.
+3. In a template (RFC-0071), a `%` line that does not parse is one error
+   statement; a tag that does not parse is one error expression, and a tag
+   that does not close runs to the end of its line and is reported; a block
+   no `% end` closes is closed at the end of the source and reported.
+4. The tree is parameterized by what an error node holds. A parse without
+   errors yields the tree whose error slot is an uninhabited type; a parse
+   with errors yields the tree whose error nodes hold their id and span,
+   together with the errors.
+5. The checker takes either tree. An error node's type is poison, so what
+   parsed around it is checked without refusals that only repeat the parse
+   error; a body that holds an error node is refused by its parse errors.
+6. Lowering takes only the tree whose error slot is uninhabited, so a tree
+   that holds an error node has no path to the machine. A match in lowering
+   answers the error case by eliminating that slot, which the compiler
+   checks; none answers it with a panic.
+7. A batch path and an editor parse the same way, so `acvus check` and the
+   editor report the same errors for the same source.
+8. An editor keeps a document that does not parse in its graph: hover,
+   definition and completion answer from the recovered tree, and the
+   diagnostics are the parse errors and the refusals of what parsed.
+
+**Why.** An editor sees a source that does not parse most of the time: a
+statement being written has no `;` yet, and any broken line elsewhere made
+the whole document unreadable, so hover, definition and completion answered
+nothing exactly when they were needed. A tree that keeps what parsed answers
+them. Carrying the error slot in the type makes "an erroneous tree never
+reaches the machine" a fact the compiler checks rather than a convention every
+match in lowering has to keep.
+
+**Cost.** Every tree type that holds an expression, a statement or a pattern
+takes the parameter, and the checker is instantiated for both trees. The
+grammar carries recovery points, and each has to leave a tree whose spans
+still cover the source they claim.
+
+**Rejected.**
+- An error variant without a parameter, with lowering fed a wrapper that
+  promises no error node: every match in lowering still names the error case
+  and answers it with `unreachable!`, a convention in place of a type.
+- Converting a recovered tree into a clean one by a fold: a second walk of the
+  whole tree that exists only because the parser did not say which tree it
+  made.
+- Repairing the probe source for completion by inserting the closing tokens
+  the parser expected: it answers completion near the cursor only, leaves a
+  broken line elsewhere fatal, and leaves hover and definition without a tree.

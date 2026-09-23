@@ -25,12 +25,15 @@ mod grammar {
 pub use acvus_utils::{LocalFactory, LocalIdOps};
 pub use ast::*;
 pub use error::ParseError;
-pub use parser::{parse_expr, parse_script, parse_template};
+pub use parser::{Recovered, parse_expr, parse_script, parse_template};
 pub use span::{Span, Spanned};
 
 use acvus_utils::Interner;
 
 /// Parse a template source string into an AST.
-pub fn parse(interner: &Interner, source: &str) -> Result<Template, ParseError> {
+pub fn parse(
+    interner: &Interner,
+    source: &str,
+) -> Result<Template, Recovered<Template<ErrorNode>>> {
     parse_template(interner, source)
 }

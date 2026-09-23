@@ -302,13 +302,48 @@ fn a_context_and_an_extern_call_have_no_definition() {
 }
 
 #[test]
-fn a_source_that_does_not_parse_has_neither() {
+fn a_binding_whose_value_does_not_parse_is_poison_and_still_defined() {
     let i = Interner::new();
     let source = "let s = ; s";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
     assert!(!session.diagnostics(doc).is_empty());
-    assert_eq!(session.hover(doc, nth(source, "s", 1)), None);
-    assert_eq!(session.definition(doc, nth(source, "s", 1)), None);
+    let binder = nth(source, "s", 0);
+    assert_eq!(
+        session
+            .hover(doc, nth(source, "s", 1))
+            .map(|hover| hover.ty),
+        Some("<error>".to_string())
+    );
+    assert_eq!(
+        session.definition(doc, nth(source, "s", 1)),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+}
+
+#[test]
+fn hover_and_definition_answer_beside_a_broken_line() {
+    let i = Interner::new();
+    let source = "let s = @name;\nlet = 2;\ns";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    assert_eq!(session.diagnostics(doc).len(), 1);
+    let at = nth(source, "s", 1);
+    let hover = session.hover(doc, at).expect("the use has a type");
+    assert_eq!(hover.span, (at, at + 1));
+    assert_eq!(hover.ty, string_display(&i));
+    let binder = nth(source, "s", 0);
+    assert_eq!(
+        session.definition(doc, at),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
 }
 
 // -- Workspace -------------------------------------------------------

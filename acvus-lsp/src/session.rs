@@ -46,14 +46,10 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub(crate) fn parse(
-        self,
-        interner: &Interner,
-        source: &str,
-    ) -> Result<ParsedAst, acvus_ast::ParseError> {
+    pub(crate) fn parse(self, interner: &Interner, source: &str) -> Parsed {
         match self {
-            Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
-            Mode::Template => acvus_ast::parse(interner, source).map(ParsedAst::Template),
+            Mode::Script => Parsed::script(acvus_ast::parse_script(interner, source)),
+            Mode::Template => Parsed::template(acvus_ast::parse(interner, source)),
         }
     }
 }
@@ -128,7 +124,7 @@ pub struct LspSession {
     graph: IncrementalGraph,
     documents: FxHashMap<DocId, Document>,
     doc_sources: FxHashMap<DocId, String>,
-    doc_parse_errors: FxHashMap<DocId, acvus_ast::ParseError>,
+    doc_parse_errors: FxHashMap<DocId, Vec<acvus_ast::ParseError>>,
     next_doc_id: u32,
 }
 
@@ -181,15 +177,8 @@ impl LspSession {
         let interner = self.graph.interner().clone();
         let document = self.documents[&id].clone();
         self.doc_sources.insert(id, source.to_string());
-        let ast = match document.mode.parse(&interner, source) {
-            Ok(ast) => ast,
-            Err(error) => {
-                self.doc_parse_errors.insert(id, error);
-                self.graph.remove_function(document.qref);
-                return;
-            }
-        };
-        self.doc_parse_errors.remove(&id);
+        let Parsed { ast, errors } = document.mode.parse(&interner, source);
+        self.doc_parse_errors.insert(id, errors);
         match self.graph.function(document.qref) {
             Some(_) => self.graph.update_ast(document.qref, ast),
             None => self.graph.add_function(Function {
@@ -230,18 +219,28 @@ impl LspSession {
 
     /// Diagnostics for a document.
     pub fn diagnostics(&self, id: DocId) -> Vec<LspError> {
-        if let Some(error) = self.doc_parse_errors.get(&id) {
-            return vec![parse_error_to_lsp(error)];
-        }
         let Some(qref) = self.function_ref(id) else {
             return vec![];
         };
         let interner = self.graph.interner();
-        self.graph
+        let parse_errors = self
+            .doc_parse_errors
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .map(parse_error_to_lsp);
+        let refusals = self
+            .graph
             .diagnostics(qref)
             .iter()
-            .map(|refusal| refusal_to_lsp(refusal, interner))
-            .collect()
+            .map(|refusal| refusal_to_lsp(refusal, interner));
+        let mut diagnostics: Vec<LspError> = Vec::new();
+        for diagnostic in parse_errors.chain(refusals) {
+            if !diagnostics.contains(&diagnostic) {
+                diagnostics.push(diagnostic);
+            }
+        }
+        diagnostics
     }
 
     /// Context/param info for a document.
@@ -376,14 +375,8 @@ impl LspSession {
             &source[..site.word.start],
             &source[site.word.end..]
         );
-        let ast = document.mode.parse(interner, &probed).ok()?;
-        let marked: AstId = match &ast {
-            ParsedAst::Script(script) => Nodes::of_script(script),
-            ParsedAst::Template(template) => Nodes::of_template(template),
-        }
-        .at(site.word.start)
-        .first()?
-        .id;
+        let Parsed { ast, .. } = document.mode.parse(interner, &probed);
+        let marked: AstId = nodes_of(&ast).at(site.word.start).first()?.id;
         let body = Function {
             qref: document.qref,
             kind: FnKind::Local(ast),
@@ -437,11 +430,16 @@ impl LspSession {
         let FnKind::Local(ast) = &self.graph.function(qref)?.kind else {
             return None;
         };
-        let nodes = match ast {
-            ParsedAst::Script(script) => Nodes::of_script(script),
-            ParsedAst::Template(template) => Nodes::of_template(template),
-        };
-        Some((nodes, self.graph.view(qref)?))
+        Some((nodes_of(ast), self.graph.view(qref)?))
+    }
+}
+
+fn nodes_of(ast: &ParsedAst) -> Nodes {
+    match ast {
+        ParsedAst::Script(script) => Nodes::of_script(script),
+        ParsedAst::Template(template) => Nodes::of_template(template),
+        ParsedAst::Recovered(RecoveredAst::Script(script)) => Nodes::of_script(script),
+        ParsedAst::Recovered(RecoveredAst::Template(template)) => Nodes::of_template(template),
     }
 }
 
@@ -514,7 +512,6 @@ fn code_around(source: &str, cursor: usize, mode: Mode) -> Option<Span> {
     match mode {
         Mode::Script => Some(Span::new(0, source.len())),
         Mode::Template => scan_template(source)
-            .ok()?
             .into_iter()
             .find_map(|line| match line {
                 Line::Stmt { span, .. } => holds(span).then_some(span),

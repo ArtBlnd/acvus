@@ -12,7 +12,7 @@ pub enum Storage {
 }
 
 impl Storage {
-    fn of(expr: &Expr) -> Option<Self> {
+    fn of<S>(expr: &Expr<S>) -> Option<Self> {
         match expr {
             Expr::Ident {
                 name,
@@ -25,6 +25,7 @@ impl Storage {
                 ..
             } => Some(Self::Input(name.name)),
             Expr::ContextRef { name, .. } => Some(Self::Context(*name)),
+            Expr::Error(_) => None,
             _ => None,
         }
     }
@@ -38,12 +39,12 @@ impl Storage {
     }
 }
 
-pub struct Projected<'e> {
-    pub base: &'e Expr,
+pub struct Projected<'e, S> {
+    pub base: &'e Expr<S>,
     pub fields: Vec<Astr>,
 }
 
-pub fn projected(expr: &Expr) -> Projected<'_> {
+pub fn projected<S>(expr: &Expr<S>) -> Projected<'_, S> {
     let mut fields = Vec::new();
     let mut base = expr;
     loop {
@@ -60,7 +61,7 @@ pub fn projected(expr: &Expr) -> Projected<'_> {
     Projected { base, fields }
 }
 
-pub fn projected_store(place: &acvus_ast::Place) -> (&acvus_ast::PlaceBase, Vec<Astr>) {
+pub fn projected_store<S>(place: &acvus_ast::Place<S>) -> (&acvus_ast::PlaceBase<S>, Vec<Astr>) {
     let mut fields = Vec::new();
     let mut node = place;
     let base = loop {
@@ -76,17 +77,24 @@ pub fn projected_store(place: &acvus_ast::Place) -> (&acvus_ast::PlaceBase, Vec<
     (base, fields)
 }
 
-#[derive(Clone, Copy)]
-pub struct Element<'e> {
+pub struct Element<'e, S> {
     pub id: AstId,
     pub callee_id: AstId,
-    pub container: &'e Expr,
-    pub index: &'e Expr,
+    pub container: &'e Expr<S>,
+    pub index: &'e Expr<S>,
     pub span: Span,
 }
 
-impl<'e> Element<'e> {
-    pub fn of(expr: &'e Expr) -> Option<Self> {
+impl<S> Clone for Element<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Element<'_, S> {}
+
+impl<'e, S> Element<'e, S> {
+    pub fn of(expr: &'e Expr<S>) -> Option<Self> {
         let Expr::Index {
             id,
             callee_id,
@@ -106,7 +114,7 @@ impl<'e> Element<'e> {
         })
     }
 
-    pub fn of_store(base: &'e acvus_ast::PlaceBase) -> Option<Self> {
+    pub fn of_store(base: &'e acvus_ast::PlaceBase<S>) -> Option<Self> {
         let acvus_ast::PlaceBase::Element {
             id,
             callee_id,
@@ -135,7 +143,7 @@ pub enum WrittenBase {
 }
 
 impl WrittenBase {
-    pub fn of(base: &Expr) -> Self {
+    pub fn of<S>(base: &Expr<S>) -> Self {
         if let Some(storage) = Storage::of(base) {
             return Self::Storage(storage);
         }
@@ -145,7 +153,7 @@ impl WrittenBase {
         }
     }
 
-    pub fn of_store(base: &acvus_ast::PlaceBase) -> Self {
+    pub fn of_store<S>(base: &acvus_ast::PlaceBase<S>) -> Self {
         match base {
             acvus_ast::PlaceBase::Root { root, .. } => Self::Storage(Storage::of_store_root(*root)),
             acvus_ast::PlaceBase::Element { .. } => Self::Element,
@@ -182,7 +190,7 @@ pub struct Loan {
 }
 
 impl Loan {
-    pub fn of(expr: &Expr) -> Option<Self> {
+    pub fn of<S>(expr: &Expr<S>) -> Option<Self> {
         let Projected { base, fields } = projected(expr);
         let mut loan = match Storage::of(base) {
             Some(root) => Self {
@@ -208,6 +216,6 @@ impl Loan {
     }
 }
 
-pub fn names_a_place(expr: &Expr) -> bool {
+pub fn names_a_place<S>(expr: &Expr<S>) -> bool {
     Loan::of(expr).is_some()
 }

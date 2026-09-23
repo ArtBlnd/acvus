@@ -107,6 +107,7 @@ pub fn lower_one(
     let mut module = match parsed {
         ParsedSource::Script(script) => lowerer.lower_script(script),
         ParsedSource::Template(template) => lowerer.lower_template(template),
+        ParsedSource::Recovered(_) => return None,
     };
 
     let mut errors = super::bind::substitute(interner, &mut module.main, bindings);

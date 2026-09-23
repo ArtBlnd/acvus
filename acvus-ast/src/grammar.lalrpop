@@ -5,10 +5,13 @@ use crate::span::Span;
 use crate::token::Token;
 use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
-use crate::parser::{BindLine, ForLine, build_assign, build_call, decoded, expr_to_pattern, block_closed, stated};
+use crate::parser::{
+    BindLine, ForLine, Recover, block_closed, build_assign, build_call, literal_of, pattern_of,
+    recovered, resumed, stated,
+};
 use crate::literal::{self, IntWidth, SuffixedInt};
 
-grammar(interner: &Interner);
+grammar<'err, S>(interner: &Interner, errors: &'err mut Vec<ParseError>) where S: Recover;
 
 extern {
     type Location = usize;
@@ -80,6 +83,9 @@ extern {
         "fmt_start" => Token::FmtStringStart(<String>),
         "fmt_mid" => Token::FmtStringMid(<String>),
         "fmt_end" => Token::FmtStringEnd(<String>),
+        // No rule reads it: a character no token begins with is reported
+        // where it stands and recovered past (RFC-0078 rule 2).
+        "unreadable" => Token::Unreadable(<char>),
     }
 }
 
@@ -87,7 +93,7 @@ extern {
 //
 // One statement grammar for every block: `let` binds, `x = e;` assigns.
 
-pub Script: Script = {
+pub Script: Script<S> = {
     <l:@L> <body:Body> <r:@R> =>
         Script { id: AstId::alloc(), stmts: body.0, tail: body.1.map(Box::new), span: Span::new(l, r) }
 };
@@ -107,7 +113,7 @@ pub Script: Script = {
 
 // Statements and an optional tail: a script, an `if` or `else` block.
 #[inline]
-Body: (Vec<Stmt>, Option<Expr>) = {
+Body: (Vec<Stmt<S>>, Option<Expr<S>>) = {
     => (vec![], None),
     <stmts:Stmts> => (stmts, None),
     <body:TailedBody> => (body.0, Some(body.1)),
@@ -115,23 +121,29 @@ Body: (Vec<Stmt>, Option<Expr>) = {
 
 // Statements and a tail: a block expression.
 #[inline]
-TailedBody: (Vec<Stmt>, Expr) = {
+TailedBody: (Vec<Stmt<S>>, Expr<S>) = {
     <tail:StmtExpr> => (vec![], tail),
     <stmts:Stmts> <tail:StmtExpr> => (stmts, tail),
     <open:Open> <tail:StmtExpr> => (stated(open), tail),
     Open,
+    <tail:Unparsed> => (vec![], Expr::Error(tail)),
+    <stmts:Stmts> <tail:Unparsed> => (stmts, Expr::Error(tail)),
+    <open:Open> <tail:Unparsed> => (stated(open), Expr::Error(tail)),
 };
 
 // Statements and no tail: a `while`, `for` or `anyorder` block.
 #[inline]
-LoopBody: Vec<Stmt> = {
+LoopBody: Vec<Stmt<S>> = {
     => vec![],
     Stmts,
     <open:Open> => stated(open),
+    <last:Unparsed> => vec![Stmt::Error(last)],
+    <mut stmts:Stmts> <last:Unparsed> => { stmts.push(Stmt::Error(last)); stmts },
+    <open:Open> <last:Unparsed> => { let mut stmts = stated(open); stmts.push(Stmt::Error(last)); stmts },
 };
 
 // Statements that end in a `;` or in a `while`, `for` or `anyorder` block.
-Stmts: Vec<Stmt> = {
+Stmts: Vec<Stmt<S>> = {
     <stmt:Stmt> => vec![stmt],
     <mut stmts:Stmts> <stmt:Stmt> => { stmts.push(stmt); stmts },
     <open:Open> <stmt:Stmt> => { let mut stmts = stated(open); stmts.push(stmt); stmts },
@@ -139,7 +151,7 @@ Stmts: Vec<Stmt> = {
 
 // Statements that end in an `if` or a `match` with no `;` after it, whose
 // place the next token decides.
-Open: (Vec<Stmt>, Expr) = {
+Open: (Vec<Stmt<S>>, Expr<S>) = {
     <last:BranchExpr> => (vec![], last),
     <stmts:Stmts> <last:BranchExpr> => (stmts, last),
     <open:Open> <last:BranchExpr> => (stated(open), last),
@@ -147,7 +159,7 @@ Open: (Vec<Stmt>, Expr) = {
 
 // The expressions that stand as a statement without `;`. A block is not
 // one: a statement that begins with `{` reads on, so `{ [5, 6] }[1]` is `6`.
-BranchExpr: Expr = {
+BranchExpr: Expr<S> = {
     MatchExpr,
     IfExpr,
 };
@@ -158,7 +170,7 @@ BranchExpr: Expr = {
 // `e` (RFC-0051): the scrutinee is evaluated once, every arm has the type
 // of the whole, and exhaustiveness is decided in `validate`.
 
-MatchExpr: Expr = {
+MatchExpr: Expr<S> = {
     <l:@L> "match" <scrutinee:Expr> "{" <arms:CommaSep<MatchArmRule>> "}" <r:@R> =>
         Expr::Match {
             id: AstId::alloc(),
@@ -168,23 +180,32 @@ MatchExpr: Expr = {
         },
 };
 
-MatchArmRule: MatchExprArm = {
+MatchArmRule: MatchExprArm<S> = {
     // `P => { stmts; }` — an arm run for its effect; its type is Unit.
     <l:@L> <pattern:ArmPattern> "=>" "{" <body:Stmts> "}" <r:@R> =>
         MatchExprArm { id: AstId::alloc(), pattern, body, tail: None, span: Span::new(l, r) },
     // `P => e` — including `P => { stmts; tail }`, which is a block expression.
     <l:@L> <pattern:ArmPattern> "=>" <e:Expr> <r:@R> =>
         MatchExprArm { id: AstId::alloc(), pattern, body: vec![], tail: Some(Box::new(e)), span: Span::new(l, r) },
+    <l:@L> <pattern:ArmPattern> "=>" <value:Unparsed> <r:@R> =>
+        MatchExprArm { id: AstId::alloc(), pattern, body: vec![], tail: Some(Box::new(Expr::Error(value))), span: Span::new(l, r) },
 };
 
 // An arm's pattern: every pattern the grammar already has, plus `_`.
-ArmPattern: Pattern = {
+ArmPattern: Pattern<S> = {
     <l:@L> "_" <r:@R> => Pattern::Wildcard { id: AstId::alloc(), span: Span::new(l, r) },
-    <e:Expr> =>? Ok(expr_to_pattern(&e)?),
+    PatternRule,
 };
 
+PatternRule: Pattern<S> = {
+    <e:Expr> =>? pattern_of::<S>(errors, &e),
+    <node:Unparsed> => Pattern::Error(node),
+};
+
+Unparsed: S = <l:@L> <e:!> <r:@R> =>? recovered::<S>(errors, e, Span::new(l, r));
+
 // If expression (recursive via else-if chain).
-IfExpr: Expr = {
+IfExpr: Expr<S> = {
     // if cond { body; tail } else ...
     <l:@L> "if" <cond:Expr> "{" <body:Body> "}"
         <eb:ElseBranch?> <r:@R> =>
@@ -197,20 +218,20 @@ IfExpr: Expr = {
             span: Span::new(l, r),
         },
     // if let pattern = source { body; tail } else ...
-    <l:@L> "if" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:Body> "}"
-        <eb:ElseBranch?> <r:@R> =>?
-        Ok(Expr::IfLet {
+    <l:@L> "if" "let" <pattern:PatternRule> "=" <rhs:Expr> "{" <body:Body> "}"
+        <eb:ElseBranch?> <r:@R> =>
+        Expr::IfLet {
             id: AstId::alloc(),
-            pattern: expr_to_pattern(&lhs)?,
+            pattern,
             source: Box::new(rhs),
             then_body: body.0,
             then_tail: body.1.map(Box::new),
             else_branch: eb.map(Box::new),
             span: Span::new(l, r),
-        }),
+        },
 };
 
-ElseBranch: ElseBranch = {
+ElseBranch: ElseBranch<S> = {
     "else" <e:IfExpr> => ElseBranch::ElseIf(e),
     <l:@L> "else" "{" <body:Body> "}" <r:@R> =>
         ElseBranch::Else {
@@ -220,24 +241,26 @@ ElseBranch: ElseBranch = {
         },
 };
 
-Stmt: Stmt = {
+Stmt: Stmt<S> = {
     // let x = expr;
-    <l:@L> "let" <binder:Binder> "=" <expr:Expr> ";" <r:@R> =>
-        Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, r) },
+    <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> <end:StatementEnd> =>
+        Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, end.unwrap_or(r)) },
+    <l:@L> "let" <binder:Binder> "=" <value:Unparsed> <er:@R> <end:ClosingSemi?> =>
+        Stmt::LetBind { id: AstId::alloc(), binder, expr: Expr::Error(value), span: Span::new(l, end.unwrap_or(er)) },
     // let x;
-    <l:@L> "let" <binder:Binder> ";" <r:@R> =>
-        Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, r) },
+    <l:@L> "let" <binder:Binder> <r:@R> <end:StatementEnd> =>
+        Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, end.unwrap_or(r)) },
     // while cond { body }
     <l:@L> "while" <cond:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        block_closed(BlockStatement::While, semicolon)?;
+        block_closed::<S>(errors, BlockStatement::While, semicolon)?;
         Ok(Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) })
     },
     // while let pattern = source { body }
-    <l:@L> "while" "let" <lhs:Expr> "=" <rhs:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        block_closed(BlockStatement::While, semicolon)?;
+    <l:@L> "while" "let" <pattern:PatternRule> "=" <rhs:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+        block_closed::<S>(errors, BlockStatement::While, semicolon)?;
         Ok(Stmt::WhileLet {
             id: AstId::alloc(),
-            pattern: expr_to_pattern(&lhs)?,
+            pattern,
             source: rhs,
             body,
             span: Span::new(l, r),
@@ -245,26 +268,37 @@ Stmt: Stmt = {
     },
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
     <l:@L> "for" <binder:Binder> "in" <head:ForHead> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        block_closed(BlockStatement::For, semicolon)?;
+        block_closed::<S>(errors, BlockStatement::For, semicolon)?;
         Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binder, head, body, span: Span::new(l, r) })
     },
     // break; | continue;  -- the innermost loop, no labels (RFC-0057 rule 4)
-    <l:@L> "break" ";" <r:@R> =>
-        Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
-    <l:@L> "continue" ";" <r:@R> =>
-        Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
+    <l:@L> "break" <r:@R> <end:StatementEnd> =>
+        Stmt::Break { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) },
+    <l:@L> "continue" <r:@R> <end:StatementEnd> =>
+        Stmt::Continue { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) },
     // anyorder { body }
     <l:@L> "anyorder" "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
-        block_closed(BlockStatement::Anyorder, semicolon)?;
+        block_closed::<S>(errors, BlockStatement::Anyorder, semicolon)?;
         Ok(Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) })
     },
     // `place = e;` — a place is a name, an `@context` or a `$parameter`
     // under any path of `.field` and `[index]` steps (RFC-0047).
-    <l:@L> <lhs:StmtExpr> "=" <rhs:Expr> ";" <r:@R> =>? build_assign(lhs, rhs, Span::new(l, r)),
+    <l:@L> <lhs:StmtExpr> "=" <rhs:Expr> <r:@R> <end:StatementEnd> =>?
+        build_assign::<S>(errors, lhs, rhs, Span::new(l, end.unwrap_or(r))),
+    <l:@L> <lhs:StmtExpr> "=" <value:Unparsed> <er:@R> <end:ClosingSemi?> =>?
+        build_assign::<S>(errors, lhs, Expr::Error(value), Span::new(l, end.unwrap_or(er))),
     // expression statement
-    <e:StmtExpr> ";" => Stmt::Expr(e),
+    <e:StmtExpr> StatementEnd => Stmt::Expr(e),
     <e:BranchExpr> ";" => Stmt::Expr(e),
+    <node:Unparsed> ";" => Stmt::Error(node),
 };
+
+StatementEnd: Option<usize> = {
+    ";" <r:@R> => Some(r),
+    <e:!> =>? resumed::<S>(errors, e).map(|()| None),
+};
+
+ClosingSemi: usize = ";" <r:@R> => r;
 
 // A `;` after the `}` closing a block statement, which its rule reads so that it
 // is reported as what it is: no statement begins with `;`, so reading it
@@ -273,7 +307,7 @@ StraySemicolon: Span = <l:@L> ";" <r:@R> => Span::new(l, r);
 
 // `lo..hi` is a `for` head and not a value: there is no `Range` type, so
 // `..` appears in no expression rule (RFC-0057 rule 1).
-pub ForHead: ForHead = {
+pub ForHead: ForHead<S> = {
     <lo:Expr> ".." <hi:Expr> => ForHead::Range { lo, hi },
     <e:Expr> => ForHead::Value(e),
 };
@@ -286,7 +320,7 @@ pub ForHead: ForHead = {
 // tell a block head from a complete statement.
 
 // A `%` line that opens no block.
-pub TemplateStmt: Stmt = {
+pub TemplateStmt: Stmt<S> = {
     <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> =>
         Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, r) },
     <l:@L> "let" <binder:Binder> <r:@R> =>
@@ -295,23 +329,23 @@ pub TemplateStmt: Stmt = {
         Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
     <l:@L> "continue" <r:@R> =>
         Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
-    <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>? build_assign(lhs, rhs, Span::new(l, r)),
+    <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>? build_assign::<S>(errors, lhs, rhs, Span::new(l, r)),
     <e:Expr> => Stmt::Expr(e),
 };
 
 // `x in head`, what follows the `for` of a `% for` line.
-pub ForLine: ForLine = {
+pub ForLine: ForLine<S> = {
     <binder:Binder> "in" <head:ForHead> => ForLine { binder, head },
 };
 
 // `pattern = source`, what follows the `let` of a `% if let` or
 // `% while let` line.
-pub BindLine: BindLine = {
-    <lhs:Expr> "=" <rhs:Expr> =>? Ok(BindLine { pattern: expr_to_pattern(&lhs)?, source: rhs }),
+pub BindLine: BindLine<S> = {
+    <pattern:PatternRule> "=" <rhs:Expr> => BindLine { pattern, source: rhs },
 };
 
 // The pattern of a `% pattern =>` arm line, `_` included.
-pub ArmLine: Pattern = {
+pub ArmLine: Pattern<S> = {
     ArmPattern,
 };
 
@@ -320,18 +354,18 @@ pub ArmLine: Pattern = {
 // Each level is written once over `Lead`, the primary its leftmost operand
 // may be. An operand anywhere else is the full level.
 
-pub Expr: Expr = {
+pub Expr: Expr<S> = {
     ExprFrom<PrimaryExpr>,
 };
 
 // The expression a statement or a tail begins with: its leftmost operand is
 // no `if` or `match`, since such an expression is a statement of its own
 // (`Open` above).
-StmtExpr: Expr = {
+StmtExpr: Expr<S> = {
     ExprFrom<PlainPrimary>,
 };
 
-ExprFrom<Lead>: Expr = {
+ExprFrom<Lead>: Expr<S> = {
     // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
     <l:@L> "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>
         Expr::Lambda {
@@ -349,7 +383,7 @@ ExprFrom<Lead>: Expr = {
 };
 
 // Pipe: left-associative (lowest precedence among non-lambda)
-PipeExpr<Lead>: Expr = {
+PipeExpr<Lead>: Expr<S> = {
     <l:@L> <left:PipeExpr<Lead>> "|" <right:OrExpr<PrimaryExpr>> <r:@R> =>
         Expr::Pipe {
             id: AstId::alloc(),
@@ -365,21 +399,21 @@ Binder: Binder = {
 };
 
 // Logical Or: left-associative
-OrExpr<Lead>: Expr = {
+OrExpr<Lead>: Expr<S> = {
     <l:@L> <left:OrExpr<Lead>> "||" <right:AndExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: Span::new(l, r) },
     AndExpr<Lead>,
 };
 
 // Logical And: left-associative
-AndExpr<Lead>: Expr = {
+AndExpr<Lead>: Expr<S> = {
     <l:@L> <left:AndExpr<Lead>> "&&" <right:CompExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::And, right: Box::new(right), span: Span::new(l, r) },
     CompExpr<Lead>,
 };
 
 // Comparison: ==, !=, <, >, <=, >=
-CompExpr<Lead>: Expr = {
+CompExpr<Lead>: Expr<S> = {
     <l:@L> <left:CompExpr<Lead>> "==" <right:AddExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:CompExpr<Lead>> "!=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
@@ -396,7 +430,7 @@ CompExpr<Lead>: Expr = {
 };
 
 // Add/Sub: left-associative
-AddExpr<Lead>: Expr = {
+AddExpr<Lead>: Expr<S> = {
     <l:@L> <left:AddExpr<Lead>> "+" <right:MulExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Add, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:AddExpr<Lead>> "-" <right:MulExpr<PrimaryExpr>> <r:@R> =>
@@ -405,7 +439,7 @@ AddExpr<Lead>: Expr = {
 };
 
 // Mul/Div: left-associative
-MulExpr<Lead>: Expr = {
+MulExpr<Lead>: Expr<S> = {
     <l:@L> <left:MulExpr<Lead>> "*" <right:CastExpr<PrimaryExpr>> <r:@R> =>
         Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
     <l:@L> <left:MulExpr<Lead>> "/" <right:CastExpr<PrimaryExpr>> <r:@R> =>
@@ -417,7 +451,7 @@ MulExpr<Lead>: Expr = {
 
 // Cast: `e as T`, left-associative, between the unary operators and `*`,
 // exactly where Rust binds it (RFC-0049).
-CastExpr<Lead>: Expr = {
+CastExpr<Lead>: Expr<S> = {
     <l:@L> <e:CastExpr<Lead>> "as" <tl:@L> <target:"ident"> <r:@R> =>
         Expr::Cast {
             id: AstId::alloc(),
@@ -430,7 +464,7 @@ CastExpr<Lead>: Expr = {
 };
 
 // Unary: -x, !x, *r, &place, &mut place (RFC-0018)
-UnaryExpr<Lead>: Expr = {
+UnaryExpr<Lead>: Expr<S> = {
     <l:@L> "-" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
         Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
     <l:@L> "!" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
@@ -447,7 +481,7 @@ UnaryExpr<Lead>: Expr = {
 // Postfix: field access `.field` and function call `f(args)`
 // A field is never a callee: `recv.f(args)` is a method call, and a
 // closure held in a field is called as `(recv.f)(args)` (RFC-0030).
-PostfixExpr<Lead>: Expr = {
+PostfixExpr<Lead>: Expr<S> = {
     <l:@L> <obj:PostfixExpr<Lead>> "." <f:"ident"> <r:@R> =>
         Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
     // `e?`: the Ok or Some payload, or an early return of the Err or None (RFC-0038).
@@ -467,7 +501,7 @@ PostfixExpr<Lead>: Expr = {
     CalleeExpr<Lead>,
 };
 
-CalleeExpr<Lead>: Expr = {
+CalleeExpr<Lead>: Expr<S> = {
     <l:@L> <recv:PostfixExpr<Lead>> "." <name:"ident"> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
         Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver: Box::new(recv), name, args, span: Span::new(l, r) },
     <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
@@ -475,12 +509,13 @@ CalleeExpr<Lead>: Expr = {
     Lead,
 };
 
-CallArg: Expr = {
+CallArg: Expr<S> = {
     Expr,
+    <node:Unparsed> => Expr::Error(node),
 };
 
 // Primary expressions
-PrimaryExpr: Expr = {
+PrimaryExpr: Expr<S> = {
     PlainPrimary,
     // `match` and `if` are operands: an operator's side, a call argument, a
     // list element, a field value, a pipe stage — wherever an expression
@@ -489,7 +524,7 @@ PrimaryExpr: Expr = {
 };
 
 // Every primary but an `if` or a `match`.
-PlainPrimary: Expr = {
+PlainPrimary: Expr<S> = {
     // `Enum::Tag`, and the callee of `ns::f(args)`: the checker tells a
     // namespace from an enum name (RFC-0030). It is a primary, so every
     // postfix — `?` included — follows a qualified call.
@@ -506,19 +541,16 @@ PlainPrimary: Expr = {
     <l:@L> <n:"int_of"> <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::IntOf(n), span: Span::new(l, r) },
     <l:@L> <t:"char"> <r:@R> =>?
-        decoded(literal::decode_char(&t), Span::new(l, r)).map(|c|
-            Expr::Literal { id: AstId::alloc(), value: Literal::Char(c), span: Span::new(l, r) }),
+        literal_of(errors, literal::decode_char(&t), Span::new(l, r), Literal::Char),
     <l:@L> <t:"byte"> <r:@R> =>?
-        decoded(literal::decode_byte(&t), Span::new(l, r)).map(|b|
-            Expr::Literal { id: AstId::alloc(), value: Literal::IntOf(SuffixedInt { value: i128::from(b), width: IntWidth::U8 }), span: Span::new(l, r) }),
+        literal_of(errors, literal::decode_byte(&t), Span::new(l, r), |b|
+            Literal::IntOf(SuffixedInt { value: i128::from(b), width: IntWidth::U8 })),
     <l:@L> <t:"bytes"> <r:@R> =>?
-        decoded(literal::decode_bytes(&t), Span::new(l, r)).map(|b|
-            Expr::Literal { id: AstId::alloc(), value: Literal::Bytes(b), span: Span::new(l, r) }),
+        literal_of(errors, literal::decode_bytes(&t), Span::new(l, r), Literal::Bytes),
     <l:@L> <n:"float"> <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::Float(n), span: Span::new(l, r) },
     <l:@L> <s:"string"> <r:@R> =>?
-        decoded(literal::decode_str(&s), Span::new(l, r)).map(|s|
-            Expr::Literal { id: AstId::alloc(), value: Literal::String(s), span: Span::new(l, r) }),
+        literal_of(errors, literal::decode_str(&s), Span::new(l, r), Literal::String),
     <l:@L> "true" <r:@R> =>
         Expr::Literal { id: AstId::alloc(), value: Literal::Bool(true), span: Span::new(l, r) },
     <l:@L> "false" <r:@R> =>
@@ -550,7 +582,7 @@ PlainPrimary: Expr = {
 
     // List: [a, b, c], [a, b, ..], [.., a, b], [a, .., b]
     <l:@L> "[" <items:CommaSep<ListElem>> "]" <r:@R> =>?
-        build_list(items, Span::new(l, r)),
+        build_list::<S>(errors, items, Span::new(l, r)),
 
     // Block expression: { stmt; stmt; expr } or { expr }
     <l:@L> "{" <body:TailedBody> "}" <r:@R> =>
@@ -563,21 +595,19 @@ PlainPrimary: Expr = {
     // Format string: "hello {{ name }}, age {{ age | to_string }}"
     // Desugars to BinOp::Add chain: "hello " + name + ", age " + (age | to_string)
     <sl:@L> <start:"fmt_start"> <sr:@R> <first:Expr> <rest:FmtMidPair*> <el:@L> <end:"fmt_end"> <er:@R> =>? {
-        let mut parts: Vec<Expr> = Vec::new();
+        let mut parts: Vec<Expr<S>> = Vec::new();
 
         // Start text segment (span = start token position)
         let start_span = Span::new(sl, sr);
         if !start.is_empty() {
-            let start = decoded(literal::decode_str(&start), start_span)?;
-            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(start), span: start_span });
+            parts.push(literal_of(errors, literal::decode_str(&start), start_span, Literal::String)?);
         }
         parts.push(first);
 
         // Mid text + expr pairs (each mid has its own span)
         for (mid_span, mid, expr) in rest {
             if !mid.is_empty() {
-                let mid = decoded(literal::decode_str(&mid), mid_span)?;
-                parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(mid), span: mid_span });
+                parts.push(literal_of(errors, literal::decode_str(&mid), mid_span, Literal::String)?);
             }
             parts.push(expr);
         }
@@ -585,8 +615,7 @@ PlainPrimary: Expr = {
         // End text segment (span = end token position)
         let end_span = Span::new(el, er);
         if !end.is_empty() {
-            let end = decoded(literal::decode_str(&end), end_span)?;
-            parts.push(Expr::Literal { id: AstId::alloc(), value: Literal::String(end), span: end_span });
+            parts.push(literal_of(errors, literal::decode_str(&end), end_span, Literal::String)?);
         }
 
         // Fold into BinOp::Add chain
@@ -607,26 +636,30 @@ PlainPrimary: Expr = {
 };
 
 // Format string mid segment: captures token span for the text literal.
-FmtMidPair: (Span, String, Expr) = {
+FmtMidPair: (Span, String, Expr<S>) = {
     <ml:@L> <mid:"fmt_mid"> <mr:@R> <expr:Expr> => (Span::new(ml, mr), mid, expr),
 };
 
 // Tuple element: an expression or `_`
-TupleElemRule: TupleElem = {
+TupleElemRule: TupleElem<S> = {
     <e:Expr> => TupleElem::Expr(e),
     <l:@L> "_" <r:@R> => TupleElem::Wildcard(Span::new(l, r)),
+    <node:Unparsed> => TupleElem::Expr(Expr::Error(node)),
 };
 
 // List element: an expression or `..`
-ListElem: ListElem = {
+ListElem: ListElem<S> = {
     <e:Expr> => ListElem::Expr(e),
     <l:@L> ".." <r:@R> => ListElem::Rest(Span::new(l, r)),
+    <node:Unparsed> => ListElem::Expr(Expr::Error(node)),
 };
 
 // Object field: `key: expr`, or shorthand `name`, `$name`, `@name`
-ObjectField: ObjectExprField = {
+ObjectField: ObjectExprField<S> = {
     <l:@L> <key:"ident"> ":" <value:Expr> <r:@R> =>
         ObjectExprField { id: AstId::alloc(), key, value, span: Span::new(l, r) },
+    <l:@L> <key:"ident"> ":" <value:Unparsed> <r:@R> =>
+        ObjectExprField { id: AstId::alloc(), key, value: Expr::Error(value), span: Span::new(l, r) },
     <l:@L> <name:"ident"> <r:@R> => {
         let span = Span::new(l, r);
         ObjectExprField {

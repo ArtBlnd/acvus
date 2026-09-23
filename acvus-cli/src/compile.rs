@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use acvus_interpreter::{AcvusRuntime, Executable, PrepareCtx, Prepared, prepare_module};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
-    Bindings, CompilationGraph, Context, ContextInfo, FnKind, Function, ParsedAst, QualifiedRef,
+    Bindings, CompilationGraph, Context, ContextInfo, FnKind, Function, Parsed, QualifiedRef,
     extract, infer, lower, optimize,
 };
 use acvus_mir::ir::MirModule;
@@ -286,19 +286,13 @@ pub fn check(
 ) -> Result<(Checked, Option<CompileTimes>), Vec<Diagnostic>> {
     let mut stages = Stages::of(opt);
     let watch = Stopwatch::start(timed);
-    let parsed = match mode {
-        Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
-        Mode::Expr => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
-        Mode::Template => acvus_ast::parse(interner, source).map(ParsedAst::Template),
+    let Parsed {
+        ast: parsed,
+        errors: parse_errors,
+    } = match mode {
+        Mode::Script | Mode::Expr => Parsed::script(acvus_ast::parse_script(interner, source)),
+        Mode::Template => Parsed::template(acvus_ast::parse(interner, source)),
     };
-    let parsed = parsed.map_err(|e| {
-        vec![Diagnostic {
-            message: e.kind.to_string(),
-            primary: None,
-            span: span_of(e.span),
-            labels: Vec::new(),
-        }]
-    })?;
     stages.parse = watch.stop();
 
     let Environment {
@@ -333,17 +327,28 @@ pub fn check(
     let inf = infer::infer(interner, &graph, &ext);
     stages.typeck = watch.stop();
 
-    let mut diagnostics: Vec<Diagnostic> = inf
-        .errors()
-        .into_iter()
-        .flat_map(|(_, errs)| errs.iter())
+    // A recovered tree is checked for what parsed and never lowered, so its
+    // parse errors and those refusals are reported together (RFC-0078).
+    let mut diagnostics: Vec<Diagnostic> = parse_errors
+        .iter()
         .map(|e| Diagnostic {
-            message: e.display(interner).to_string(),
-            primary: e.primary(),
+            message: e.kind.to_string(),
+            primary: None,
             span: span_of(e.span),
-            labels: e.labels.clone(),
+            labels: Vec::new(),
         })
         .collect();
+    diagnostics.extend(
+        inf.errors()
+            .into_iter()
+            .flat_map(|(_, errs)| errs.iter())
+            .map(|e| Diagnostic {
+                message: e.display(interner).to_string(),
+                primary: e.primary(),
+                span: span_of(e.span),
+                labels: e.labels.clone(),
+            }),
+    );
 
     let watch = Stopwatch::start(timed);
     let lowered = lower::lower(interner, &graph, &ext.view(), &inf);

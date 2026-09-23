@@ -41,6 +41,63 @@ pub enum FnKind {
 pub enum ParsedAst {
     Script(acvus_ast::Script),
     Template(acvus_ast::Template),
+    /// A source that did not parse, as the parse recovered it. It is checked
+    /// for what parsed and never lowered (RFC-0078); its parse errors are
+    /// the caller's to report.
+    Recovered(RecoveredAst),
+}
+
+#[derive(Debug, Clone)]
+pub enum RecoveredAst {
+    Script(acvus_ast::Script<acvus_ast::ErrorNode>),
+    Template(acvus_ast::Template<acvus_ast::ErrorNode>),
+}
+
+/// A source as its parse left it. The batch path and an editor both build
+/// a function's AST through this, so both report the same errors for the
+/// same source (RFC-0078 rule 7).
+#[derive(Debug, Clone)]
+pub struct Parsed {
+    pub ast: ParsedAst,
+    pub errors: Vec<acvus_ast::ParseError>,
+}
+
+impl Parsed {
+    pub fn script(
+        parsed: Result<
+            acvus_ast::Script,
+            acvus_ast::Recovered<acvus_ast::Script<acvus_ast::ErrorNode>>,
+        >,
+    ) -> Self {
+        match parsed {
+            Ok(script) => Self {
+                ast: ParsedAst::Script(script),
+                errors: Vec::new(),
+            },
+            Err(recovered) => Self {
+                ast: ParsedAst::Recovered(RecoveredAst::Script(recovered.tree)),
+                errors: recovered.errors,
+            },
+        }
+    }
+
+    pub fn template(
+        parsed: Result<
+            acvus_ast::Template,
+            acvus_ast::Recovered<acvus_ast::Template<acvus_ast::ErrorNode>>,
+        >,
+    ) -> Self {
+        match parsed {
+            Ok(template) => Self {
+                ast: ParsedAst::Template(template),
+                errors: Vec::new(),
+            },
+            Err(recovered) => Self {
+                ast: ParsedAst::Recovered(RecoveredAst::Template(recovered.tree)),
+                errors: recovered.errors,
+            },
+        }
+    }
 }
 
 /// An executable entity in the graph. Identified by `QualifiedRef`.

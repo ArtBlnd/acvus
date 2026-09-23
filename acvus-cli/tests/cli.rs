@@ -370,6 +370,30 @@ fn a_parse_error_names_what_the_grammar_wanted_in_the_language_s_words() {
 }
 
 #[test]
+fn a_check_reports_every_parse_error_and_what_parsed_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "broken.acvus",
+        "let a = 1;\nlet = 2;\nlet b = a * \"x\";\nfoo(;\nb\n",
+    );
+    let out = acvus(dir.path(), &["check", "broken.acvus"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = text(&out.stderr);
+    let headlines: Vec<&str> = err
+        .lines()
+        .filter(|line| line.starts_with("error:"))
+        .collect();
+    assert_eq!(headlines.len(), 3, "{err}");
+    assert_eq!(headlines[0], "error: expected a name, found `=`");
+    assert!(
+        headlines[1].starts_with("error: expected an expression")
+            && headlines[1].ends_with("found `;`"),
+        "{err}"
+    );
+}
+
+#[test]
 fn json_puts_the_diagnostics_on_stdout_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "bad.acvus", "let x = 1;\nlet y = x + \"a\";\n");

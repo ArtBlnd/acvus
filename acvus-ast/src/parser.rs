@@ -1,150 +1,385 @@
+use std::convert::Infallible;
+
 use acvus_utils::{Interner, QualifiedRef};
-use lalrpop_util::ParseError as LalrpopError;
+use lalrpop_util::{ErrorRecovery, ParseError as LalrpopError};
 
 use crate::ast::*;
 use crate::error::{BlockStatement, Expected, Found, ParseError, ParseErrorKind};
 use crate::grammar::{
     ArmLineParser, BindLineParser, ExprParser, ForLineParser, ScriptParser, TemplateStmtParser,
 };
-use crate::lexer::{ExprTokenizer, Line, Piece, scan_template};
+use crate::lexer::{ExprTokenizer, Line, Piece, TagEnd, scan_template};
 use crate::span::Span;
 use crate::token::Token;
 
+pub(crate) type GrammarError = LalrpopError<usize, Token, ParseError>;
+type Recovery = ErrorRecovery<usize, Token, ParseError>;
+
+/// A parse that met errors: the tree it recovered and every error it met,
+/// in source order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Recovered<T> {
+    pub tree: T,
+    pub errors: Vec<ParseError>,
+}
+
+impl<T> Recovered<T> {
+    fn new(tree: T, mut errors: Vec<ParseError>) -> Self {
+        errors.sort_by_key(|error| error.span.start);
+        Self { tree, errors }
+    }
+}
+
+pub(crate) trait Recover: Slot {
+    type Stop: Into<ParseError>;
+
+    fn recovered(
+        errors: &mut Vec<ParseError>,
+        reported: Reported,
+        span: Span,
+    ) -> Result<Self, Self::Stop>;
+    fn resumed(errors: &mut Vec<ParseError>, reported: Reported) -> Result<(), Self::Stop>;
+    fn widened(&self, span: Span) -> Self;
+}
+
+impl Recover for Clean {
+    type Stop = ParseError;
+
+    fn recovered(_: &mut Vec<ParseError>, reported: Reported, _: Span) -> Result<Self, ParseError> {
+        Err(reported.first)
+    }
+
+    fn resumed(_: &mut Vec<ParseError>, reported: Reported) -> Result<(), ParseError> {
+        Err(reported.first)
+    }
+
+    fn widened(&self, _: Span) -> Self {
+        match *self {}
+    }
+}
+
+impl Recover for ErrorNode {
+    type Stop = Infallible;
+
+    fn recovered(
+        errors: &mut Vec<ParseError>,
+        reported: Reported,
+        span: Span,
+    ) -> Result<Self, Infallible> {
+        reported.record(errors);
+        Ok(ErrorNode {
+            id: AstId::alloc(),
+            span,
+        })
+    }
+
+    fn resumed(errors: &mut Vec<ParseError>, reported: Reported) -> Result<(), Infallible> {
+        reported.record(errors);
+        Ok(())
+    }
+
+    fn widened(&self, span: Span) -> Self {
+        ErrorNode { id: self.id, span }
+    }
+}
+
+impl From<Infallible> for ParseError {
+    fn from(never: Infallible) -> Self {
+        match never {}
+    }
+}
+
+pub(crate) struct Reported {
+    first: ParseError,
+    stepped_over: Vec<ParseError>,
+}
+
+impl Reported {
+    fn one(error: ParseError) -> Self {
+        Self {
+            first: error,
+            stepped_over: Vec::new(),
+        }
+    }
+
+    fn of(recovery: Recovery) -> Self {
+        let first = convert_lalrpop_error(recovery.error);
+        let stepped_over = recovery
+            .dropped_tokens
+            .into_iter()
+            .filter_map(|(start, token, end)| match token {
+                Token::Unreadable(c) if start != first.span.start => Some(ParseError::new(
+                    ParseErrorKind::UnexpectedCharacter(c),
+                    Span::new(start, end),
+                )),
+                _ => None,
+            })
+            .collect();
+        Self {
+            first,
+            stepped_over,
+        }
+    }
+
+    fn record(self, errors: &mut Vec<ParseError>) {
+        errors.push(self.first);
+        errors.extend(self.stepped_over);
+    }
+}
+
+fn stopped<S>(stop: S::Stop) -> GrammarError
+where
+    S: Recover,
+{
+    LalrpopError::User { error: stop.into() }
+}
+
+pub(crate) fn recovered<S>(
+    errors: &mut Vec<ParseError>,
+    recovery: Recovery,
+    span: Span,
+) -> Result<S, GrammarError>
+where
+    S: Recover,
+{
+    S::recovered(errors, Reported::of(recovery), span).map_err(stopped::<S>)
+}
+
+pub(crate) fn resumed<S>(
+    errors: &mut Vec<ParseError>,
+    recovery: Recovery,
+) -> Result<(), GrammarError>
+where
+    S: Recover,
+{
+    S::resumed(errors, Reported::of(recovery)).map_err(stopped::<S>)
+}
+
+pub(crate) fn refused<S>(
+    errors: &mut Vec<ParseError>,
+    error: ParseError,
+    span: Span,
+) -> Result<S, GrammarError>
+where
+    S: Recover,
+{
+    S::recovered(errors, Reported::one(error), span).map_err(stopped::<S>)
+}
+
+fn reported<S>(errors: &mut Vec<ParseError>, error: ParseError) -> Result<(), GrammarError>
+where
+    S: Recover,
+{
+    S::resumed(errors, Reported::one(error)).map_err(stopped::<S>)
+}
+
 /// `x in head`: what the `for` of a `% for` line is followed by.
-pub struct ForLine {
+pub struct ForLine<S> {
     pub binder: Binder,
-    pub head: ForHead,
+    pub head: ForHead<S>,
 }
 
 /// `pattern = source`: what the `let` of a `% if let` or `% while let`
 /// line is followed by.
-pub struct BindLine {
-    pub pattern: Pattern,
-    pub source: Expr,
+pub struct BindLine<S> {
+    pub pattern: Pattern<S>,
+    pub source: Expr<S>,
 }
 
-/// A decoded literal, or the grammar's error at the literal's span
-/// (`literal::LiteralErrorKind`).
-pub fn decoded<T>(
+pub(crate) fn literal_of<S, T, F>(
+    errors: &mut Vec<ParseError>,
     decoded: Result<T, LiteralErrorKind>,
     span: Span,
-) -> Result<T, LalrpopError<usize, Token, ParseError>> {
-    decoded.map_err(|kind| LalrpopError::User {
-        error: ParseError::new(ParseErrorKind::BadLiteral(kind), span),
-    })
+    value: F,
+) -> Result<Expr<S>, GrammarError>
+where
+    S: Recover,
+    F: FnOnce(T) -> Literal,
+{
+    match decoded {
+        Ok(decoded) => Ok(Expr::Literal {
+            id: AstId::alloc(),
+            value: value(decoded),
+            span,
+        }),
+        Err(kind) => refused::<S>(
+            errors,
+            ParseError::new(ParseErrorKind::BadLiteral(kind), span),
+            span,
+        )
+        .map(Expr::Error),
+    }
 }
 
 /// Parse a single expression.
 pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
     ExprParser::new()
-        .parse(interner, tokenizer)
-        .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
+        .parse(interner, &mut Vec::new(), tokenizer)
+        .map_err(convert_lalrpop_error)
 }
 
 /// Parse a script source string. One statement grammar: `let x = e;` binds,
 /// `x = e;` assigns the `x` in scope, and `if`/`while`/`anyorder` are
 /// statements of the same rule in every block.
-pub fn parse_script(interner: &Interner, source: &str) -> Result<Script, ParseError> {
+pub fn parse_script(
+    interner: &Interner,
+    source: &str,
+) -> Result<Script, Recovered<Script<ErrorNode>>> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
-    ScriptParser::new()
-        .parse(interner, tokenizer)
-        .map_err(|e| convert_lalrpop_error(e, 0, source.len()))
+    match ScriptParser::new().parse(interner, &mut Vec::new(), tokenizer) {
+        Ok(script) => Ok(script),
+        Err(_) => Err(recover_script(interner, source)),
+    }
+}
+
+fn recover_script(interner: &Interner, source: &str) -> Recovered<Script<ErrorNode>> {
+    let mut errors = Vec::new();
+    let tokenizer = ExprTokenizer::new(source, 0, interner);
+    let whole = Span::new(0, source.len());
+    let tree = match ScriptParser::new().parse(interner, &mut errors, tokenizer) {
+        Ok(script) => script,
+        Err(error) => {
+            let Ok(node) = ErrorNode::recovered(
+                &mut errors,
+                Reported::one(convert_lalrpop_error(error)),
+                whole,
+            );
+            Script {
+                id: AstId::alloc(),
+                stmts: vec![Stmt::Error(node)],
+                tail: None,
+                span: whole,
+            }
+        }
+    };
+    Recovered::new(tree, errors)
 }
 
 /// Parse a template source string into an AST (RFC-0071).
-pub fn parse_template(interner: &Interner, source: &str) -> Result<Template, ParseError> {
-    let lines = scan_template(source)?;
-    let mut builder = Builder {
-        interner,
-        open: Vec::new(),
-        body: Vec::new(),
-    };
-    for line in &lines {
-        builder.line(line)?;
+pub fn parse_template(
+    interner: &Interner,
+    source: &str,
+) -> Result<Template, Recovered<Template<ErrorNode>>> {
+    let lines = scan_template(source);
+    let span = Span::new(0, source.len());
+    match Builder::<Clean>::new(interner, &mut Vec::new()).template(&lines, span) {
+        Ok(template) => Ok(template),
+        Err(_) => {
+            let mut errors = Vec::new();
+            let Ok(template) =
+                Builder::<ErrorNode>::new(interner, &mut errors).template(&lines, span);
+            Err(Recovered::new(template, errors))
+        }
     }
-    builder.finish(Span::new(0, source.len()))
 }
 
 /// A block a `%` line opened and `% end` has yet to close.
-enum Open {
-    If(IfChain),
-    Match(MatchChain),
+enum Open<S> {
+    If(IfChain<S>),
+    Match(MatchChain<S>),
     For {
         id: AstId,
         callee_id: AstId,
         binder: Binder,
-        head: ForHead,
-        body: Vec<Stmt>,
+        head: ForHead<S>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     While {
-        cond: Expr,
-        body: Vec<Stmt>,
+        cond: Expr<S>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     WhileLet {
-        pattern: Pattern,
-        source: Expr,
-        body: Vec<Stmt>,
+        pattern: Pattern<S>,
+        source: Expr<S>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
     Anyorder {
-        body: Vec<Stmt>,
+        body: Vec<Stmt<S>>,
         span: Span,
     },
 }
 
 /// The `% if` / `% else if` / `% else` chain of one block.
-struct IfChain {
-    first: IfArm,
-    else_ifs: Vec<IfArm>,
-    otherwise: Option<ElseArm>,
+struct IfChain<S> {
+    first: IfArm<S>,
+    else_ifs: Vec<IfArm<S>>,
+    otherwise: Option<ElseArm<S>>,
     span: Span,
 }
 
-struct IfArm {
-    head: IfHead,
-    body: Vec<Stmt>,
+struct IfArm<S> {
+    head: IfHead<S>,
+    body: Vec<Stmt<S>>,
     span: Span,
 }
 
-struct ElseArm {
-    body: Vec<Stmt>,
+struct ElseArm<S> {
+    body: Vec<Stmt<S>>,
     span: Span,
 }
 
-enum IfHead {
-    Cond(Expr),
-    Bind { pattern: Pattern, source: Expr },
+enum IfHead<S> {
+    Cond(Expr<S>),
+    Bind {
+        pattern: Pattern<S>,
+        source: Expr<S>,
+    },
 }
 
 /// The `% match` scrutinee and the `% pattern =>` arms opened under it.
-struct MatchChain {
-    scrutinee: Expr,
-    arms: Vec<MatchExprArm>,
+struct MatchChain<S> {
+    scrutinee: Expr<S>,
+    arms: Vec<MatchExprArm<S>>,
     span: Span,
 }
 
 /// A `%` line's head, once the leading keyword has been read.
-enum Head {
-    Open(Open),
-    Else(ElseArm),
-    ElseIf(IfArm),
-    Arm { pattern: Pattern, span: Span },
+enum Head<S> {
+    Open(Open<S>),
+    Else(ElseArm<S>),
+    ElseIf(IfArm<S>),
+    Arm { pattern: Pattern<S>, span: Span },
     End(Span),
-    Plain(Stmt),
+    Plain(Stmt<S>),
     Comment,
 }
 
-struct Builder<'a> {
+struct Builder<'a, 'e, S> {
     interner: &'a Interner,
-    open: Vec<Open>,
-    body: Vec<Stmt>,
+    errors: &'e mut Vec<ParseError>,
+    open: Vec<Open<S>>,
+    body: Vec<Stmt<S>>,
 }
 
-impl Builder<'_> {
-    fn line(&mut self, line: &Line) -> Result<(), ParseError> {
+impl<'a, 'e, S> Builder<'a, 'e, S>
+where
+    S: Recover,
+{
+    fn new(interner: &'a Interner, errors: &'e mut Vec<ParseError>) -> Self {
+        Self {
+            interner,
+            errors,
+            open: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    fn template(mut self, lines: &[Line], span: Span) -> Result<Template<S>, S::Stop> {
+        for line in lines {
+            self.line(line)?;
+        }
+        self.finish(span)
+    }
+
+    fn refused(&mut self, error: ParseError, span: Span) -> Result<S, S::Stop> {
+        S::recovered(self.errors, Reported::one(error), span)
+    }
+
+    fn line(&mut self, line: &Line) -> Result<(), S::Stop> {
         match line {
             Line::Text { pieces, .. } => {
                 for piece in pieces {
@@ -153,23 +388,29 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            Line::Stmt { content, span } => match self.head(content, *span)? {
-                Head::Comment => Ok(()),
-                Head::Plain(stmt) => self.push(stmt),
-                Head::Open(open) => {
-                    self.open.push(open);
-                    Ok(())
+            Line::Stmt { content, span } => {
+                let head = match self.head(content, *span) {
+                    Ok(head) => head,
+                    Err(error) => Head::Plain(Stmt::Error(self.refused(error, *span)?)),
+                };
+                match head {
+                    Head::Comment => Ok(()),
+                    Head::Plain(stmt) => self.push(stmt),
+                    Head::Open(open) => {
+                        self.open.push(open);
+                        Ok(())
+                    }
+                    Head::End(span) => self.close(span),
+                    Head::ElseIf(arm) => self.else_if(arm, *span),
+                    Head::Else(arm) => self.otherwise(arm, *span),
+                    Head::Arm { pattern, span } => self.arm(pattern, span),
                 }
-                Head::End(span) => self.close(span),
-                Head::ElseIf(arm) => self.else_if(arm, *span),
-                Head::Else(arm) => self.otherwise(arm, *span),
-                Head::Arm { pattern, span } => self.arm(pattern, span),
-            },
+            }
         }
     }
 
     /// One piece of a text line, as the append it is (RFC-0071 rule 2).
-    fn append_of(&self, piece: &Piece) -> Result<Stmt, ParseError> {
+    fn append_of(&mut self, piece: &Piece) -> Result<Stmt<S>, S::Stop> {
         match piece {
             Piece::Text { value, span } => Ok(append(
                 Expr::Literal {
@@ -183,10 +424,30 @@ impl Builder<'_> {
                 content,
                 span,
                 inner_span,
+                end,
             } => {
-                let expr = parse_slice(self.interner, content, inner_span.start, |tokenizer| {
-                    ExprParser::new().parse(self.interner, tokenizer)
-                })?;
+                match end {
+                    TagEnd::Closed => {}
+                    TagEnd::LineEnd => S::resumed(
+                        self.errors,
+                        Reported::one(ParseError::new(ParseErrorKind::UnclosedTag, *span)),
+                    )?,
+                }
+                let parsed = Rest {
+                    text: content,
+                    at: inner_span.start,
+                }
+                .parse(
+                    self.interner,
+                    self.errors,
+                    |interner, errors, tokenizer| {
+                        ExprParser::new().parse(interner, errors, tokenizer)
+                    },
+                );
+                let expr = match parsed {
+                    Ok(expr) => expr,
+                    Err(error) => Expr::Error(self.refused(error, *inner_span)?),
+                };
                 Ok(append(expr, *span))
             }
         }
@@ -194,9 +455,9 @@ impl Builder<'_> {
 
     /// Read a `%` line: the leading keyword names the rule the rest of the
     /// line is parsed by, so the grammar has no line form to disambiguate.
-    fn head(&self, content: &str, span: Span) -> Result<Head, ParseError> {
+    fn head(&mut self, content: &str, span: Span) -> Result<Head<S>, ParseError> {
         let tokens: Vec<(usize, Token, usize)> =
-            ExprTokenizer::new(content, span.start, self.interner).collect::<Result<_, _>>()?;
+            ExprTokenizer::new(content, span.start, self.interner).collect();
         let Some((_, first, first_end)) = tokens.first().cloned() else {
             return Ok(Head::Comment);
         };
@@ -216,9 +477,10 @@ impl Builder<'_> {
                 text: &content[..arrow_start - span.start],
                 at: span.start,
             };
-            let pattern = head.parse(self.interner, |interner, tokenizer| {
-                ArmLineParser::new().parse(interner, tokenizer)
-            })?;
+            let pattern =
+                head.parse(self.interner, self.errors, |interner, errors, tokenizer| {
+                    ArmLineParser::new().parse(interner, errors, tokenizer)
+                })?;
             return Ok(Head::Arm { pattern, span });
         }
 
@@ -231,9 +493,13 @@ impl Builder<'_> {
                 span,
             }))),
             Token::For => {
-                let line = rest(first_end).parse(self.interner, |interner, tokenizer| {
-                    ForLineParser::new().parse(interner, tokenizer)
-                })?;
+                let line = rest(first_end).parse(
+                    self.interner,
+                    self.errors,
+                    |interner, errors, tokenizer| {
+                        ForLineParser::new().parse(interner, errors, tokenizer)
+                    },
+                )?;
                 Ok(Head::Open(Open::For {
                     id: AstId::alloc(),
                     callee_id: AstId::alloc(),
@@ -245,9 +511,13 @@ impl Builder<'_> {
             }
             Token::While => match tokens.get(1).map(|t| &t.1) {
                 Some(Token::Let) => {
-                    let bind = rest(tokens[1].2).parse(self.interner, |interner, tokenizer| {
-                        BindLineParser::new().parse(interner, tokenizer)
-                    })?;
+                    let bind = rest(tokens[1].2).parse(
+                        self.interner,
+                        self.errors,
+                        |interner, errors, tokenizer| {
+                            BindLineParser::new().parse(interner, errors, tokenizer)
+                        },
+                    )?;
                     Ok(Head::Open(Open::WhileLet {
                         pattern: bind.pattern,
                         source: bind.source,
@@ -256,17 +526,25 @@ impl Builder<'_> {
                     }))
                 }
                 _ => Ok(Head::Open(Open::While {
-                    cond: rest(first_end).parse(self.interner, |interner, tokenizer| {
-                        ExprParser::new().parse(interner, tokenizer)
-                    })?,
+                    cond: rest(first_end).parse(
+                        self.interner,
+                        self.errors,
+                        |interner, errors, tokenizer| {
+                            ExprParser::new().parse(interner, errors, tokenizer)
+                        },
+                    )?,
                     body: Vec::new(),
                     span,
                 })),
             },
             Token::Match => Ok(Head::Open(Open::Match(MatchChain {
-                scrutinee: rest(first_end).parse(self.interner, |interner, tokenizer| {
-                    ExprParser::new().parse(interner, tokenizer)
-                })?,
+                scrutinee: rest(first_end).parse(
+                    self.interner,
+                    self.errors,
+                    |interner, errors, tokenizer| {
+                        ExprParser::new().parse(interner, errors, tokenizer)
+                    },
+                )?,
                 arms: Vec::new(),
                 span,
             }))),
@@ -279,36 +557,46 @@ impl Builder<'_> {
                     text: content,
                     at: span.start,
                 }
-                .parse(self.interner, |interner, tokenizer| {
-                    TemplateStmtParser::new().parse(interner, tokenizer)
-                })?,
+                .parse(
+                    self.interner,
+                    self.errors,
+                    |interner, errors, tokenizer| {
+                        TemplateStmtParser::new().parse(interner, errors, tokenizer)
+                    },
+                )?,
             )),
         }
     }
 
     fn if_arm(
-        &self,
+        &mut self,
         tokens: &[(usize, Token, usize)],
         rest: Rest<'_>,
         span: Span,
-    ) -> Result<IfArm, ParseError> {
+    ) -> Result<IfArm<S>, ParseError> {
         let head = match tokens.get(1).map(|t| &t.1) {
             Some(Token::Let) => {
                 let bind = Rest {
                     text: &rest.text[tokens[1].2 - rest.at..],
                     at: tokens[1].2,
                 }
-                .parse(self.interner, |interner, tokenizer| {
-                    BindLineParser::new().parse(interner, tokenizer)
-                })?;
+                .parse(
+                    self.interner,
+                    self.errors,
+                    |interner, errors, tokenizer| {
+                        BindLineParser::new().parse(interner, errors, tokenizer)
+                    },
+                )?;
                 IfHead::Bind {
                     pattern: bind.pattern,
                     source: bind.source,
                 }
             }
-            _ => IfHead::Cond(rest.parse(self.interner, |interner, tokenizer| {
-                ExprParser::new().parse(interner, tokenizer)
-            })?),
+            _ => IfHead::Cond(rest.parse(
+                self.interner,
+                self.errors,
+                |interner, errors, tokenizer| ExprParser::new().parse(interner, errors, tokenizer),
+            )?),
         };
         Ok(IfArm {
             head,
@@ -318,11 +606,11 @@ impl Builder<'_> {
     }
 
     fn else_head(
-        &self,
+        &mut self,
         tokens: &[(usize, Token, usize)],
         rest: Rest<'_>,
         span: Span,
-    ) -> Result<Head, ParseError> {
+    ) -> Result<Head<S>, ParseError> {
         match tokens.get(1).map(|t| &t.1) {
             None => Ok(Head::Else(ElseArm {
                 body: Vec::new(),
@@ -342,64 +630,81 @@ impl Builder<'_> {
 
     /// The body the next statement joins: the innermost open block's, or
     /// the template's own.
-    fn body_mut(&mut self, span: Span) -> Result<&mut Vec<Stmt>, ParseError> {
-        let Some(open) = self.open.last_mut() else {
-            return Ok(&mut self.body);
-        };
-        match open {
-            Open::If(chain) => match &mut chain.otherwise {
-                Some(arm) => Ok(&mut arm.body),
-                None => Ok(&mut chain.else_ifs.last_mut().unwrap_or(&mut chain.first).body),
-            },
-            Open::Match(chain) => match chain.arms.last_mut() {
-                Some(arm) => Ok(&mut arm.body),
-                None => Err(ParseError::new(ParseErrorKind::MatchBodyBeforeArm, span)),
-            },
-            Open::For { body, .. }
-            | Open::While { body, .. }
-            | Open::WhileLet { body, .. }
-            | Open::Anyorder { body, .. } => Ok(body),
+    fn body_mut(&mut self) -> &mut Vec<Stmt<S>> {
+        for open in self.open.iter_mut().rev() {
+            match open {
+                Open::If(chain) => {
+                    return match &mut chain.otherwise {
+                        Some(arm) => &mut arm.body,
+                        None => &mut chain.else_ifs.last_mut().unwrap_or(&mut chain.first).body,
+                    };
+                }
+                Open::Match(chain) => match chain.arms.last_mut() {
+                    Some(arm) => return &mut arm.body,
+                    None => continue,
+                },
+                Open::For { body, .. }
+                | Open::While { body, .. }
+                | Open::WhileLet { body, .. }
+                | Open::Anyorder { body, .. } => return body,
+            }
         }
+        &mut self.body
     }
 
-    fn push(&mut self, stmt: Stmt) -> Result<(), ParseError> {
-        let span = stmt_span(&stmt);
-        self.body_mut(span)?.push(stmt);
+    fn push(&mut self, stmt: Stmt<S>) -> Result<(), S::Stop> {
+        let stmt = match self.open.last() {
+            Some(Open::Match(chain)) if chain.arms.is_empty() => {
+                let span = stmt_span(&stmt);
+                Stmt::Error(self.refused(
+                    ParseError::new(ParseErrorKind::MatchBodyBeforeArm, span),
+                    span,
+                )?)
+            }
+            Some(_) | None => stmt,
+        };
+        self.body_mut().push(stmt);
         Ok(())
     }
 
-    fn else_if(&mut self, arm: IfArm, span: Span) -> Result<(), ParseError> {
-        let Some(chain) = self.if_chain_mut() else {
-            return Err(ParseError::new(ParseErrorKind::ElseOutsideIf, span));
+    fn else_if(&mut self, arm: IfArm<S>, span: Span) -> Result<(), S::Stop> {
+        let refusal = match self.if_chain_mut() {
+            None => ParseErrorKind::ElseOutsideIf,
+            Some(chain) if chain.otherwise.is_some() => ParseErrorKind::ElseAfterElse,
+            Some(chain) => {
+                chain.else_ifs.push(arm);
+                return Ok(());
+            }
         };
-        if chain.otherwise.is_some() {
-            return Err(ParseError::new(ParseErrorKind::ElseAfterElse, span));
-        }
-        chain.else_ifs.push(arm);
-        Ok(())
+        let node = self.refused(ParseError::new(refusal, span), span)?;
+        self.push(Stmt::Error(node))
     }
 
-    fn otherwise(&mut self, arm: ElseArm, span: Span) -> Result<(), ParseError> {
-        let Some(chain) = self.if_chain_mut() else {
-            return Err(ParseError::new(ParseErrorKind::ElseOutsideIf, span));
+    fn otherwise(&mut self, arm: ElseArm<S>, span: Span) -> Result<(), S::Stop> {
+        let refusal = match self.if_chain_mut() {
+            None => ParseErrorKind::ElseOutsideIf,
+            Some(chain) if chain.otherwise.is_some() => ParseErrorKind::ElseAfterElse,
+            Some(chain) => {
+                chain.otherwise = Some(arm);
+                return Ok(());
+            }
         };
-        if chain.otherwise.is_some() {
-            return Err(ParseError::new(ParseErrorKind::ElseAfterElse, span));
-        }
-        chain.otherwise = Some(arm);
-        Ok(())
+        let node = self.refused(ParseError::new(refusal, span), span)?;
+        self.push(Stmt::Error(node))
     }
 
-    fn if_chain_mut(&mut self) -> Option<&mut IfChain> {
+    fn if_chain_mut(&mut self) -> Option<&mut IfChain<S>> {
         match self.open.last_mut() {
             Some(Open::If(chain)) => Some(chain),
             _ => None,
         }
     }
 
-    fn arm(&mut self, pattern: Pattern, span: Span) -> Result<(), ParseError> {
+    fn arm(&mut self, pattern: Pattern<S>, span: Span) -> Result<(), S::Stop> {
         let Some(Open::Match(chain)) = self.open.last_mut() else {
-            return Err(ParseError::new(ParseErrorKind::ArmOutsideMatch, span));
+            let node =
+                self.refused(ParseError::new(ParseErrorKind::ArmOutsideMatch, span), span)?;
+            return self.push(Stmt::Error(node));
         };
         chain.arms.push(MatchExprArm {
             id: AstId::alloc(),
@@ -411,20 +716,27 @@ impl Builder<'_> {
         Ok(())
     }
 
-    fn close(&mut self, span: Span) -> Result<(), ParseError> {
+    fn close(&mut self, span: Span) -> Result<(), S::Stop> {
         let Some(open) = self.open.pop() else {
-            return Err(ParseError::new(ParseErrorKind::UnmatchedEnd, span));
+            let node = self.refused(ParseError::new(ParseErrorKind::UnmatchedEnd, span), span)?;
+            return self.push(Stmt::Error(node));
         };
         let stmt = closed(open, span);
         self.push(stmt)
     }
 
-    fn finish(mut self, span: Span) -> Result<Template, ParseError> {
-        if let Some(open) = self.open.pop() {
-            return Err(ParseError::new(
-                ParseErrorKind::UnclosedBlock,
-                open_span(&open),
-            ));
+    fn finish(mut self, span: Span) -> Result<Template<S>, S::Stop> {
+        let end = Span::new(span.end, span.end);
+        while let Some(open) = self.open.pop() {
+            S::resumed(
+                self.errors,
+                Reported::one(ParseError::new(
+                    ParseErrorKind::UnclosedBlock,
+                    open_span(&open),
+                )),
+            )?;
+            let stmt = closed(open, end);
+            self.push(stmt)?;
         }
         Ok(Template {
             id: AstId::alloc(),
@@ -442,28 +754,25 @@ struct Rest<'a> {
 }
 
 impl Rest<'_> {
-    fn parse<T, F>(&self, interner: &Interner, parse: F) -> Result<T, ParseError>
+    fn parse<T, F>(
+        &self,
+        interner: &Interner,
+        errors: &mut Vec<ParseError>,
+        parse: F,
+    ) -> Result<T, ParseError>
     where
-        F: FnOnce(
-            &Interner,
-            ExprTokenizer<'_>,
-        ) -> Result<T, LalrpopError<usize, Token, ParseError>>,
+        F: FnOnce(&Interner, &mut Vec<ParseError>, ExprTokenizer<'_>) -> Result<T, GrammarError>,
     {
-        parse_slice(interner, self.text, self.at, |tokenizer| {
-            parse(interner, tokenizer)
-        })
+        parse(
+            interner,
+            errors,
+            ExprTokenizer::new(self.text, self.at, interner),
+        )
+        .map_err(convert_lalrpop_error)
     }
 }
 
-fn parse_slice<T, F>(interner: &Interner, text: &str, at: usize, parse: F) -> Result<T, ParseError>
-where
-    F: FnOnce(ExprTokenizer<'_>) -> Result<T, LalrpopError<usize, Token, ParseError>>,
-{
-    parse(ExprTokenizer::new(text, at, interner))
-        .map_err(|e| convert_lalrpop_error(e, at, text.len()))
-}
-
-fn append(expr: Expr, span: Span) -> Stmt {
+fn append<S>(expr: Expr<S>, span: Span) -> Stmt<S> {
     Stmt::Append {
         id: AstId::alloc(),
         expr,
@@ -471,7 +780,7 @@ fn append(expr: Expr, span: Span) -> Stmt {
     }
 }
 
-fn open_span(open: &Open) -> Span {
+fn open_span<S>(open: &Open<S>) -> Span {
     match open {
         Open::If(chain) => chain.span,
         Open::Match(chain) => chain.span,
@@ -482,7 +791,10 @@ fn open_span(open: &Open) -> Span {
     }
 }
 
-fn stmt_span(stmt: &Stmt) -> Span {
+fn stmt_span<S>(stmt: &Stmt<S>) -> Span
+where
+    S: Slot,
+{
     match stmt {
         Stmt::Store { span, .. }
         | Stmt::DerefStore { span, .. }
@@ -497,11 +809,12 @@ fn stmt_span(stmt: &Stmt) -> Span {
         | Stmt::Anyorder { span, .. }
         | Stmt::Append { span, .. } => *span,
         Stmt::Expr(expr) => expr.span(),
+        Stmt::Error(node) => node.node().span,
     }
 }
 
 /// The statement a `% end` closes the block into.
-fn closed(open: Open, end: Span) -> Stmt {
+fn closed<S>(open: Open<S>, end: Span) -> Stmt<S> {
     match open {
         Open::If(chain) => Stmt::Expr(if_expr_of(chain, end)),
         Open::Match(chain) => Stmt::Expr(Expr::Match {
@@ -551,7 +864,7 @@ fn closed(open: Open, end: Span) -> Stmt {
     }
 }
 
-fn if_expr_of(chain: IfChain, end: Span) -> Expr {
+fn if_expr_of<S>(chain: IfChain<S>, end: Span) -> Expr<S> {
     let mut branch = chain.otherwise.map(|arm| {
         Box::new(ElseBranch::Else {
             body: arm.body,
@@ -565,7 +878,7 @@ fn if_expr_of(chain: IfChain, end: Span) -> Expr {
     if_arm_expr(chain.first, branch, end)
 }
 
-fn if_arm_expr(arm: IfArm, branch: Option<Box<ElseBranch>>, end: Span) -> Expr {
+fn if_arm_expr<S>(arm: IfArm<S>, branch: Option<Box<ElseBranch<S>>>, end: Span) -> Expr<S> {
     let span = arm.span.merge(end);
     match arm.head {
         IfHead::Cond(cond) => Expr::If {
@@ -591,11 +904,7 @@ fn if_arm_expr(arm: IfArm, branch: Option<Box<ElseBranch>>, end: Span) -> Expr {
 /// Convert a LALRPOP error to our ParseError. The `expected` set arrives as
 /// the grammar's terminal names, which `Expected` maps to the nonterminal
 /// they stand for.
-fn convert_lalrpop_error(
-    error: LalrpopError<usize, Token, ParseError>,
-    _base_offset: usize,
-    _content_len: usize,
-) -> ParseError {
+fn convert_lalrpop_error(error: GrammarError) -> ParseError {
     match error {
         LalrpopError::InvalidToken { location } => ParseError::new(
             ParseErrorKind::InvalidToken,
@@ -605,6 +914,16 @@ fn convert_lalrpop_error(
             location,
             expected: _,
         } => ParseError::new(ParseErrorKind::UnexpectedEof, Span::new(location, location)),
+        LalrpopError::UnrecognizedToken {
+            token: (start, Token::Unreadable(c), end),
+            expected: _,
+        }
+        | LalrpopError::ExtraToken {
+            token: (start, Token::Unreadable(c), end),
+        } => ParseError::new(
+            ParseErrorKind::UnexpectedCharacter(c),
+            Span::new(start, end),
+        ),
         // An empty expected set is the grammar saying nothing may follow,
         // which is what `ExtraToken` reports. A template's `%` line reaches
         // it wherever a line holds a complete statement and more text.
@@ -642,11 +961,15 @@ fn convert_lalrpop_error(
 /// `place = value;`. A bare name stays a statement of its own because
 /// `acvus-mir`'s checker refuses assigning a name that is not bound, or one
 /// the enclosing lambda captured, against the bindings in scope.
-pub fn build_assign(
-    lhs: Expr,
-    rhs: Expr,
+pub(crate) fn build_assign<S>(
+    errors: &mut Vec<ParseError>,
+    lhs: Expr<S>,
+    rhs: Expr<S>,
     span: Span,
-) -> Result<Stmt, LalrpopError<usize, Token, ParseError>> {
+) -> Result<Stmt<S>, GrammarError>
+where
+    S: Recover,
+{
     match lhs {
         Expr::Ident {
             name,
@@ -668,6 +991,7 @@ pub fn build_assign(
             expr: rhs,
             span,
         }),
+        Expr::Error(target) => Ok(Stmt::Error(target.widened(span))),
         lhs => match Place::of(lhs) {
             Some(place) => Ok(Stmt::Store {
                 id: AstId::alloc(),
@@ -675,29 +999,37 @@ pub fn build_assign(
                 expr: rhs,
                 span,
             }),
-            None => Err(LalrpopError::User {
-                error: ParseError::new(ParseErrorKind::InvalidAssignTarget, span),
-            }),
+            None => refused::<S>(
+                errors,
+                ParseError::new(ParseErrorKind::InvalidAssignTarget, span),
+                span,
+            )
+            .map(Stmt::Error),
         },
     }
 }
 
 /// The end of a block statement: the `}` closing its block, with no `;`.
-pub(crate) fn block_closed(
+pub(crate) fn block_closed<S>(
+    errors: &mut Vec<ParseError>,
     block: BlockStatement,
     semicolon: Option<Span>,
-) -> Result<(), LalrpopError<usize, Token, ParseError>> {
+) -> Result<(), GrammarError>
+where
+    S: Recover,
+{
     match semicolon {
         None => Ok(()),
-        Some(span) => Err(LalrpopError::User {
-            error: ParseError::new(ParseErrorKind::SemicolonAfterBlock(block), span),
-        }),
+        Some(span) => reported::<S>(
+            errors,
+            ParseError::new(ParseErrorKind::SemicolonAfterBlock(block), span),
+        ),
     }
 }
 
 /// Statements whose last `if` or `match` a following statement or tail
 /// made a statement of its own.
-pub(crate) fn stated((mut stmts, last): (Vec<Stmt>, Expr)) -> Vec<Stmt> {
+pub(crate) fn stated<S>((mut stmts, last): (Vec<Stmt<S>>, Expr<S>)) -> Vec<Stmt<S>> {
     stmts.push(Stmt::Expr(last));
     stmts
 }
@@ -705,7 +1037,7 @@ pub(crate) fn stated((mut stmts, last): (Vec<Stmt>, Expr)) -> Vec<Stmt> {
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
-pub fn build_call(func: Expr, args: Vec<Expr>, span: Span) -> Expr {
+pub fn build_call<S>(func: Expr<S>, args: Vec<Expr<S>>, span: Span) -> Expr<S> {
     let func = match func {
         Expr::Variant {
             enum_name: Some(namespace),
@@ -729,7 +1061,13 @@ pub fn build_call(func: Expr, args: Vec<Expr>, span: Span) -> Expr {
 }
 
 /// Convert an expression (parsed from the LHS of `=`) to a pattern.
-pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
+pub(crate) fn pattern_of<S>(
+    errors: &mut Vec<ParseError>,
+    expr: &Expr<S>,
+) -> Result<Pattern<S>, GrammarError>
+where
+    S: Recover,
+{
     match expr {
         Expr::Ident {
             name,
@@ -758,50 +1096,40 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             tail,
             span,
             ..
-        } => {
-            let head_pats: Result<Vec<_>, _> = head.iter().map(expr_to_pattern).collect();
-            let tail_pats: Result<Vec<_>, _> = tail.iter().map(expr_to_pattern).collect();
-            Ok(Pattern::List {
-                id: AstId::alloc(),
-                head: head_pats?,
-                rest: *rest,
-                tail: tail_pats?,
-                span: *span,
-            })
-        }
+        } => Ok(Pattern::List {
+            id: AstId::alloc(),
+            head: patterns_of(errors, head)?,
+            rest: *rest,
+            tail: patterns_of(errors, tail)?,
+            span: *span,
+        }),
         Expr::Object { fields, span, .. } => {
-            let pattern_fields: Result<Vec<_>, _> = fields
-                .iter()
-                .map(|f| {
-                    let pattern = expr_to_pattern(&f.value)?;
-                    Ok(ObjectPatternField {
-                        id: AstId::alloc(),
-                        key: f.key,
-                        pattern,
-                        span: f.span,
-                    })
-                })
-                .collect();
+            let mut pattern_fields = Vec::with_capacity(fields.len());
+            for field in fields {
+                pattern_fields.push(ObjectPatternField {
+                    id: AstId::alloc(),
+                    key: field.key,
+                    pattern: pattern_of(errors, &field.value)?,
+                    span: field.span,
+                });
+            }
             Ok(Pattern::Object {
                 id: AstId::alloc(),
-                fields: pattern_fields?,
+                fields: pattern_fields,
                 span: *span,
             })
         }
         Expr::Tuple { elements, span, .. } => {
-            let elems: Result<Vec<_>, _> = elements
-                .iter()
-                .map(|elem| match elem {
-                    TupleElem::Wildcard(s) => Ok(TuplePatternElem::Wildcard(*s)),
-                    TupleElem::Expr(e) => {
-                        let pat = expr_to_pattern(e)?;
-                        Ok(TuplePatternElem::Pattern(pat))
-                    }
-                })
-                .collect();
+            let mut elems = Vec::with_capacity(elements.len());
+            for elem in elements {
+                elems.push(match elem {
+                    TupleElem::Wildcard(s) => TuplePatternElem::Wildcard(*s),
+                    TupleElem::Expr(e) => TuplePatternElem::Pattern(pattern_of(errors, e)?),
+                });
+            }
             Ok(Pattern::Tuple {
                 id: AstId::alloc(),
-                elements: elems?,
+                elements: elems,
                 span: *span,
             })
         }
@@ -827,7 +1155,7 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 id: AstId::alloc(),
                 enum_name: name.namespace,
                 tag: name.name,
-                payload: Some(Box::new(expr_to_pattern(&args[0])?)),
+                payload: Some(Box::new(pattern_of(errors, &args[0])?)),
                 span: *span,
             })
         }
@@ -839,7 +1167,7 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
             ..
         } => {
             let pat_payload = match payload {
-                Some(inner) => Some(Box::new(expr_to_pattern(inner)?)),
+                Some(inner) => Some(Box::new(pattern_of(errors, inner)?)),
                 None => None,
             };
             Ok(Pattern::Variant {
@@ -850,28 +1178,54 @@ pub fn expr_to_pattern(expr: &Expr) -> Result<Pattern, ParseError> {
                 span: *span,
             })
         }
-        other => Err(ParseError::new(
-            ParseErrorKind::InvalidPattern("expression cannot be used as a pattern".into()),
+        Expr::Error(node) => Ok(Pattern::Error(node.clone())),
+        other => refused::<S>(
+            errors,
+            ParseError::new(
+                ParseErrorKind::InvalidPattern("expression cannot be used as a pattern".into()),
+                other.span(),
+            ),
             other.span(),
-        )),
+        )
+        .map(Pattern::Error),
     }
 }
 
+fn patterns_of<S>(
+    errors: &mut Vec<ParseError>,
+    exprs: &[Expr<S>],
+) -> Result<Vec<Pattern<S>>, GrammarError>
+where
+    S: Recover,
+{
+    exprs.iter().map(|expr| pattern_of(errors, expr)).collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn template(src: &str) -> Template {
         let interner = Interner::new();
-        parse_template(&interner, src).unwrap_or_else(|e| panic!("{src}: {e}"))
+        parse_template(&interner, src).unwrap_or_else(|e| panic!("{src}: {:?}", e.errors))
+    }
+
+    fn first_error<T>(recovered: Recovered<T>) -> ParseError {
+        recovered
+            .errors
+            .into_iter()
+            .next()
+            .expect("a recovered parse reports its errors")
     }
 
     fn refusal(src: &str) -> ParseErrorKind {
         let interner = Interner::new();
-        parse_template(&interner, src).expect_err(src).kind
+        first_error(parse_template(&interner, src).expect_err(src)).kind
     }
 
-    fn appended(stmt: &Stmt) -> &Expr {
+    fn appended<S>(stmt: &Stmt<S>) -> &Expr<S>
+    where
+        S: std::fmt::Debug,
+    {
         let Stmt::Append { expr, .. } = stmt else {
             panic!("{stmt:?}");
         };
@@ -1067,12 +1421,16 @@ mod tests {
     #[test]
     fn a_percent_line_that_does_not_parse_is_refused() {
         let interner = Interner::new();
-        let err = parse_template(&interner, "ok\n% let = \nmore\n").expect_err("a malformed line");
+        let err = first_error(
+            parse_template(&interner, "ok\n% let = \nmore\n").expect_err("a malformed line"),
+        );
         assert_eq!(err.span, Span::new(9, 10));
         assert_eq!(err.kind.to_string(), "expected a name, found `=`");
 
-        let err = parse_template(&interner, "% if $c { 1 } else { 2 }\n")
-            .expect_err("an inline `if` on a `%` line");
+        let err = first_error(
+            parse_template(&interner, "% if $c { 1 } else { 2 }\n")
+                .expect_err("an inline `if` on a `%` line"),
+        );
         assert_eq!(err.kind.to_string(), "found `{` after the end of the input");
     }
 
@@ -1112,7 +1470,7 @@ mod tests {
             ("while let Some(x) = o { } ; 1", "a `while` block"),
             ("anyorder { } ; 1", "an `anyorder` block"),
         ] {
-            let error = parse_script(&interner, src).unwrap_err();
+            let error = first_error(parse_script(&interner, src).unwrap_err());
             let at = src.find(';').unwrap();
             assert_eq!(error.span, Span::new(at, at + 1), "{src}");
             assert_eq!(
@@ -1433,7 +1791,7 @@ mod tests {
         let s = parse_script(&interner, "if c { f(); } *r = 1;").unwrap();
         assert!(matches!(&s.stmts[1], Stmt::DerefStore { .. }));
         let src = "if c { 1 } else { 2 } + 1";
-        let error = parse_script(&interner, src).unwrap_err();
+        let error = first_error(parse_script(&interner, src).unwrap_err());
         let at = src.find('+').unwrap();
         assert_eq!(error.span, Span::new(at, at + 1));
         assert!(matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }));
@@ -1613,7 +1971,7 @@ mod tests {
             "f(x)[0] = 1;",
         ] {
             assert_eq!(
-                parse_script(&interner, src).unwrap_err().kind,
+                first_error(parse_script(&interner, src).unwrap_err()).kind,
                 ParseErrorKind::InvalidAssignTarget,
                 "{src}"
             );
@@ -1870,7 +2228,8 @@ mod tests {
     fn a_character_literal_inside_a_tag_does_not_close_it() {
         let interner = Interner::new();
         for source in ["{{ '\"' }}", "{{ '}' }}"] {
-            parse_template(&interner, source).unwrap_or_else(|e| panic!("{source}: {e}"));
+            parse_template(&interner, source)
+                .unwrap_or_else(|e| panic!("{source}: {:?}", e.errors));
         }
     }
 
@@ -1913,6 +2272,312 @@ mod tests {
         for (binder, name) in [(t, "t"), (u, "u"), (v, "v")] {
             assert_eq!(interner.resolve(binder.name), name);
             assert_eq!(&source[binder.span.start..binder.span.end], name);
+        }
+    }
+
+    mod recovery {
+        use super::*;
+
+        fn recovered_script(source: &str) -> Recovered<Script<ErrorNode>> {
+            let interner = Interner::new();
+            parse_script(&interner, source).expect_err(source)
+        }
+
+        fn recovered_template(source: &str) -> Recovered<Template<ErrorNode>> {
+            let interner = Interner::new();
+            parse_template(&interner, source).expect_err(source)
+        }
+
+        fn error_span(stmt: &Stmt<ErrorNode>) -> Span {
+            let Stmt::Error(node) = stmt else {
+                panic!("expected an error statement, got {stmt:?}");
+            };
+            node.span
+        }
+
+        fn error_spans(recovered: &Recovered<impl std::fmt::Debug>) -> Vec<Span> {
+            recovered.errors.iter().map(|error| error.span).collect()
+        }
+
+        #[test]
+        fn every_broken_statement_is_reported_and_the_rest_parses() {
+            let source = "let a = 1;\nlet = 2;\nlet b = a;\nfoo(;\nb";
+            let recovered = recovered_script(source);
+            assert_eq!(
+                error_spans(&recovered),
+                vec![Span::new(15, 16), Span::new(35, 36)]
+            );
+            assert_eq!(
+                recovered.errors[0].kind.to_string(),
+                "expected a name, found `=`"
+            );
+            let [a, first, b, second] = recovered.tree.stmts.as_slice() else {
+                panic!("{:?}", recovered.tree.stmts);
+            };
+            assert!(matches!(a, Stmt::LetBind { .. }));
+            assert_eq!(
+                &source[error_span(first).start..error_span(first).end],
+                "let = 2"
+            );
+            assert!(matches!(b, Stmt::LetBind { .. }));
+            assert_eq!(
+                &source[error_span(second).start..error_span(second).end],
+                "foo("
+            );
+            assert!(matches!(
+                recovered.tree.tail.as_deref(),
+                Some(Expr::Ident { .. })
+            ));
+        }
+
+        #[test]
+        fn a_let_whose_value_ends_at_the_end_of_the_source_keeps_its_binding() {
+            let source = "let y = x.";
+            let recovered = recovered_script(source);
+            assert_eq!(recovered.errors.len(), 1);
+            assert_eq!(recovered.errors[0].kind, ParseErrorKind::UnexpectedEof);
+            let [
+                Stmt::LetBind {
+                    expr: Expr::Error(value),
+                    span,
+                    ..
+                },
+            ] = recovered.tree.stmts.as_slice()
+            else {
+                panic!("{:?}", recovered.tree.stmts);
+            };
+            assert_eq!(&source[value.span.start..value.span.end], "x.");
+            assert_eq!(*span, Span::new(0, source.len()));
+            assert!(recovered.tree.tail.is_none());
+        }
+
+        #[test]
+        fn a_broken_let_value_leaves_the_next_line_parsed() {
+            let source = "let y = x.\nlet z = 1;";
+            let recovered = recovered_script(source);
+            assert_eq!(error_spans(&recovered), vec![Span::new(11, 14)]);
+            let [
+                Stmt::LetBind {
+                    expr: Expr::Error(value),
+                    ..
+                },
+                Stmt::LetBind {
+                    expr: Expr::Literal { .. },
+                    ..
+                },
+            ] = recovered.tree.stmts.as_slice()
+            else {
+                panic!("{:?}", recovered.tree.stmts);
+            };
+            assert_eq!(&source[value.span.start..value.span.end], "x.");
+
+            let source = "let y = x.;\nfoo(y);";
+            let recovered = recovered_script(source);
+            assert_eq!(error_spans(&recovered), vec![Span::new(10, 11)]);
+            let [
+                Stmt::LetBind {
+                    expr: Expr::Error(value),
+                    span,
+                    ..
+                },
+                Stmt::Expr(Expr::FuncCall { .. }),
+            ] = recovered.tree.stmts.as_slice()
+            else {
+                panic!("{:?}", recovered.tree.stmts);
+            };
+            assert_eq!(&source[value.span.start..value.span.end], "x.");
+            assert_eq!(&source[span.start..span.end], "let y = x.;");
+        }
+
+        #[test]
+        fn a_trailing_dot_reads_the_next_line() {
+            let interner = Interner::new();
+            let script = parse_script(&interner, "let y = x.\nfoo(y);").expect("a method call");
+            assert!(matches!(
+                &script.stmts[0],
+                Stmt::LetBind {
+                    expr: Expr::MethodCall { .. },
+                    ..
+                }
+            ));
+        }
+
+        #[test]
+        fn a_call_the_source_ends_inside_is_the_error_tail() {
+            let source = "f(x.";
+            let recovered = recovered_script(source);
+            assert_eq!(recovered.errors.len(), 1);
+            assert!(recovered.tree.stmts.is_empty());
+            let Some(Expr::Error(tail)) = recovered.tree.tail.as_deref() else {
+                panic!("{:?}", recovered.tree.tail);
+            };
+            assert_eq!(tail.span, Span::new(0, source.len()));
+        }
+
+        #[test]
+        fn an_argument_that_does_not_parse_leaves_the_call() {
+            let source = "f(x., y)";
+            let recovered = recovered_script(source);
+            assert_eq!(error_spans(&recovered), vec![Span::new(4, 5)]);
+            let Some(Expr::FuncCall { args, .. }) = recovered.tree.tail.as_deref() else {
+                panic!("{:?}", recovered.tree.tail);
+            };
+            let [Expr::Error(first), Expr::Ident { .. }] = args.as_slice() else {
+                panic!("{args:?}");
+            };
+            assert_eq!(&source[first.span.start..first.span.end], "x.");
+        }
+
+        #[test]
+        fn a_missing_semicolon_is_reported_and_the_statement_kept() {
+            let source = "let a = 1\nlet b = a;";
+            let recovered = recovered_script(source);
+            assert_eq!(error_spans(&recovered), vec![Span::new(10, 13)]);
+            let [Stmt::LetBind { span, .. }, Stmt::LetBind { .. }] =
+                recovered.tree.stmts.as_slice()
+            else {
+                panic!("{:?}", recovered.tree.stmts);
+            };
+            assert_eq!(&source[span.start..span.end], "let a = 1");
+        }
+
+        #[test]
+        fn an_unreadable_character_is_reported_and_stepped_over() {
+            let source = "let a = #;\nlet b = 2;";
+            let recovered = recovered_script(source);
+            assert_eq!(
+                recovered.errors,
+                vec![ParseError::new(
+                    ParseErrorKind::UnexpectedCharacter('#'),
+                    Span::new(8, 9)
+                )]
+            );
+            let [
+                Stmt::LetBind {
+                    expr: Expr::Error(value),
+                    ..
+                },
+                Stmt::LetBind { .. },
+            ] = recovered.tree.stmts.as_slice()
+            else {
+                panic!("{:?}", recovered.tree.stmts);
+            };
+            assert_eq!(value.span, Span::new(8, 9));
+
+            let recovered = recovered_script("let a = # ^;");
+            assert_eq!(
+                recovered
+                    .errors
+                    .iter()
+                    .map(|error| error.kind.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    ParseErrorKind::UnexpectedCharacter('#'),
+                    ParseErrorKind::UnexpectedCharacter('^'),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_percent_line_that_does_not_parse_is_one_error_statement() {
+            let source = "a\n% let = 1\nb {{ x }}\n";
+            let recovered = recovered_template(source);
+            assert_eq!(error_spans(&recovered), vec![Span::new(8, 9)]);
+            assert_eq!(error_span(&recovered.tree.body[1]), Span::new(3, 11));
+            assert!(matches!(
+                appended(&recovered.tree.body[3]),
+                Expr::Ident { .. }
+            ));
+        }
+
+        #[test]
+        fn a_tag_that_does_not_parse_is_one_error_expression() {
+            let source = "a {{ x + }} b\n";
+            let recovered = recovered_template(source);
+            assert_eq!(recovered.errors.len(), 1);
+            let Stmt::Append {
+                expr: Expr::Error(node),
+                span,
+                ..
+            } = &recovered.tree.body[1]
+            else {
+                panic!("{:?}", recovered.tree.body);
+            };
+            assert_eq!(&source[node.span.start..node.span.end], "x +");
+            assert_eq!(&source[span.start..span.end], "{{ x + }}");
+        }
+
+        #[test]
+        fn a_tag_no_brace_pair_closes_runs_to_its_line_end() {
+            let source = "a {{ name\nb\n";
+            let recovered = recovered_template(source);
+            assert_eq!(
+                recovered.errors,
+                vec![ParseError::new(
+                    ParseErrorKind::UnclosedTag,
+                    Span::new(2, 9)
+                )]
+            );
+            assert!(matches!(
+                appended(&recovered.tree.body[1]),
+                Expr::Ident { .. }
+            ));
+            let Stmt::Append {
+                expr:
+                    Expr::Literal {
+                        value: Literal::String(text),
+                        ..
+                    },
+                ..
+            } = recovered.tree.body.last().expect("the second line")
+            else {
+                panic!("{:?}", recovered.tree.body);
+            };
+            assert_eq!(text, "b\n");
+        }
+
+        #[test]
+        fn a_block_no_end_closes_is_closed_at_the_end_of_the_source() {
+            let source = "% for x in $xs\n{{ x }}\n";
+            let recovered = recovered_template(source);
+            assert_eq!(
+                recovered.errors,
+                vec![ParseError::new(
+                    ParseErrorKind::UnclosedBlock,
+                    Span::new(1, 14)
+                )]
+            );
+            let [Stmt::For { body, span, .. }] = recovered.tree.body.as_slice() else {
+                panic!("{:?}", recovered.tree.body);
+            };
+            assert_eq!(body.len(), 2);
+            assert_eq!(*span, Span::new(1, source.len()));
+        }
+
+        #[test]
+        fn errors_are_in_source_order() {
+            let recovered = recovered_template("% for x in $xs\n% let = 1\n");
+            let spans = error_spans(&recovered);
+            assert_eq!(spans.len(), 2);
+            assert_eq!(spans[0], Span::new(1, 14));
+            assert!(spans.windows(2).all(|pair| pair[0].start <= pair[1].start));
+        }
+
+        #[test]
+        fn a_misplaced_template_line_is_an_error_statement() {
+            for (source, kind) in [
+                ("% end\n", ParseErrorKind::UnmatchedEnd),
+                ("% else\n", ParseErrorKind::ElseOutsideIf),
+                ("% 1 =>\n", ParseErrorKind::ArmOutsideMatch),
+            ] {
+                let recovered = recovered_template(source);
+                assert_eq!(recovered.errors.len(), 1, "{source}");
+                assert_eq!(recovered.errors[0].kind, kind, "{source}");
+                assert!(
+                    matches!(recovered.tree.body.as_slice(), [Stmt::Error(_)]),
+                    "{source}"
+                );
+            }
         }
     }
 }

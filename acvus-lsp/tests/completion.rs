@@ -391,6 +391,27 @@ fn a_probe_that_does_not_parse_offers_what_needs_no_tree() {
 }
 
 #[test]
+fn a_statement_being_written_completes_from_what_parsed() {
+    let i = Interner::new();
+    let source = "let o = { alpha: 1, beta: true, }; let y = o.";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(
+        !session.diagnostics(doc).is_empty(),
+        "the `let` is unfinished"
+    );
+    let items = session.completions(doc, source.len());
+    assert_eq!(
+        labels(&of_kind(&items, CompletionKind::Field)),
+        ["alpha", "beta"]
+    );
+
+    let source = "let = 3;\nlet alpha = 1; al";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    let items = session.completions(doc, source.len());
+    assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["alpha"]);
+}
+
+#[test]
 fn completion_leaves_the_graph_unchanged() {
     let i = Interner::new();
     let contexts = root_contexts(&i, &[("name", Ty::String)]);
