@@ -343,7 +343,7 @@ fn a_bound_the_header_computes_from_invariant_operands_is_a_range_for() {
 
 #[test]
 fn a_computed_bound_nested_in_a_for_reads_the_outer_counter() {
-    let o = Optimized::of(
+    let o = Promoted::of(
         "let s = 0; for j in 0..5 { let i = 0; while i < j * 2 + 1 { s = s + i; i = i + 1; } } s",
     );
     assert!(
