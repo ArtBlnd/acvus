@@ -105,6 +105,10 @@ pub enum SerHeld {
         part: Box<SerTypeArg>,
         len: usize,
     },
+    RustArray {
+        part: Box<SerTypeArg>,
+        len: usize,
+    },
     Leaf {
         ty: SerLeaf,
     },
@@ -169,6 +173,10 @@ fn held_to_ser(held: &HeldTy<Concrete>, interner: &Interner) -> SerHeld {
             part: part(p),
             len: len.get(),
         },
+        HeldTy::RustArray(p, len) => SerHeld::RustArray {
+            part: part(p),
+            len: *len,
+        },
         HeldTy::Leaf(leaf) => SerHeld::Leaf {
             ty: SerLeaf(leaf.ty().to_ser(interner)),
         },
@@ -192,6 +200,7 @@ fn ser_to_held(held: &SerHeld, interner: &Interner) -> HeldTy<Concrete> {
         SerHeld::Option { part: p } => HeldTy::Option(part(p)),
         SerHeld::Result { ok, err } => HeldTy::Result(part(ok), part(err)),
         SerHeld::Array { part: p, len } => HeldTy::Array(part(p), LenTerm::Known(*len)),
+        SerHeld::RustArray { part: p, len } => HeldTy::RustArray(part(p), *len),
         SerHeld::Leaf { ty } => HeldTy::of(ty.0.to_ty(interner)),
     }
 }

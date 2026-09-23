@@ -913,9 +913,9 @@ impl Terms {
                 }
                 Ok(())
             }
-            (HeldTy::Option(x), HeldTy::Option(y)) | (HeldTy::Array(x, _), HeldTy::Array(y, _)) => {
-                self.meet_reprs(x, y, kind)
-            }
+            (HeldTy::Option(x), HeldTy::Option(y))
+            | (HeldTy::Array(x, _), HeldTy::Array(y, _))
+            | (HeldTy::RustArray(x, _), HeldTy::RustArray(y, _)) => self.meet_reprs(x, y, kind),
             (HeldTy::Result(xo, xe), HeldTy::Result(yo, ye)) => {
                 self.meet_reprs(xo, yo, kind)?;
                 self.meet_reprs(xe, ye, kind)
@@ -929,6 +929,7 @@ impl Terms {
                 | HeldTy::Option(_)
                 | HeldTy::Result(..)
                 | HeldTy::Array(..)
+                | HeldTy::RustArray(..)
                 | HeldTy::Leaf(_)
                 | HeldTy::Held(_),
                 _,

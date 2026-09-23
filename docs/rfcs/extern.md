@@ -271,7 +271,12 @@ language defines and carry no `#`.
 (`TypeArg`, `HeldTy`): a `#` tuple, option, result or array marks each of its
 parts again, a part whose Rust type is itself is `#`, and a part a type
 variable's run-time instantiation fills (`Owned`, `Erased`) is uniform.
-`Bag<(i64, U)>` is `Bag<#(#i64, U)>`; any other head is one `#` leaf. Two
+`Bag<(i64, U)>` is `Bag<#(#i64, U)>`; any other head is one `#` leaf. A `#`
+array states its Rust head as well: the language's array, whose Rust type is
+`Arr` with its elements in a buffer, is `#Array<#i64, 2>`, and a Rust
+`[i64; 2]` with its elements in place is `#[#i64; 2]`. They are one type and
+two trees. `Held(T)` is never a Rust array, since `T` with every part `#`
+writes an array as the language's. Two
 types meet only where the marks agree at every part: uniform with uniform,
 `#τ` with `#τ`; uniform against `#` is a mismatch. A variable inside a `#`
 composite is uniform at its own position and never binds across a `#` leaf.
@@ -339,12 +344,18 @@ a box of one instantiation never reaches a declaration of another, and the
 refusal is the checker's, where it names the two types. The mark is per part because a box's Rust
 type differs part by part and the runtime reads a held value by its parts:
 a handler taking `Bag<(i64, U)>` reads `.0` of a `Vec<(i64, Owned)>`, and
-`Vec<(i64, i64)>` handed to it panicked in debug and crashed in release.
+`Vec<(i64, i64)>` handed to it panicked in debug and crashed in release. The
+array's head is in the tree for the same reason: a `Bag<[i64; 2]>` handed to
+a declaration of `Bag<Arr<i64, N>>` panicked in debug and aborted in release.
 
 **Rejected.**
 - One mark per argument, a composite taking the strongest of its parts — it
   admitted `Vec<(i64, i64)>` where `Vec<(i64, Owned)>` was declared. One
   more mark, "mixed", admits `Bag<(i64, U)>` against `Bag<(V, i64)>`.
+- A Rust array as one `#` leaf of its type — a leaf keeps no marks of its
+  parts, so `[Arr<i64, N>; 2]` and `[[i64; 2]; 2]` would be one leaf, and a
+  leaf's type is written back as the tree `#` builds, so the next
+  substitution turns it into the language's array.
 - A cast-only matching mode where a pattern's `ρ` matches any tree —
   `Held(T)` states the family's pattern under the one matching rule.
 - Refusing a concrete argument at the declaration, as a bound asked of the

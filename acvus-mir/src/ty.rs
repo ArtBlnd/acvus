@@ -730,9 +730,9 @@ fn chosen_held(
                 chosen_arg(p, t, chosen, found);
             }
         }
-        (HeldTy::Option(p), HeldTy::Option(t)) | (HeldTy::Array(p, _), HeldTy::Array(t, _)) => {
-            chosen_arg(p, t, chosen, found)
-        }
+        (HeldTy::Option(p), HeldTy::Option(t))
+        | (HeldTy::Array(p, _), HeldTy::Array(t, _))
+        | (HeldTy::RustArray(p, _), HeldTy::RustArray(t, _)) => chosen_arg(p, t, chosen, found),
         (HeldTy::Result(p_ok, p_err), HeldTy::Result(t_ok, t_err)) => {
             chosen_arg(p_ok, t_ok, chosen, found);
             chosen_arg(p_err, t_err, chosen, found);
@@ -869,12 +869,16 @@ where
             (HeldTy::Array(a, n), HeldTy::Array(p, pn)) => {
                 len_matches(n, pn, unknowns) && arg_matches(a, p, seen, unknowns, reprs)
             }
+            (HeldTy::RustArray(a, n), HeldTy::RustArray(p, pn)) => {
+                n == pn && arg_matches(a, p, seen, unknowns, reprs)
+            }
             (HeldTy::Leaf(a), HeldTy::Leaf(p)) => go(a.ty(), p.ty(), seen, unknowns, reprs),
             (
                 HeldTy::Tuple(_)
                 | HeldTy::Option(_)
                 | HeldTy::Result(..)
                 | HeldTy::Array(..)
+                | HeldTy::RustArray(..)
                 | HeldTy::Leaf(_),
                 _,
             ) => false,
@@ -1140,9 +1144,9 @@ impl PatternSubst {
             (HeldTy::Tuple(xs), HeldTy::Tuple(ys)) => {
                 xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| self.meet_reprs(x, y))
             }
-            (HeldTy::Option(x), HeldTy::Option(y)) | (HeldTy::Array(x, _), HeldTy::Array(y, _)) => {
-                self.meet_reprs(x, y)
-            }
+            (HeldTy::Option(x), HeldTy::Option(y))
+            | (HeldTy::Array(x, _), HeldTy::Array(y, _))
+            | (HeldTy::RustArray(x, _), HeldTy::RustArray(y, _)) => self.meet_reprs(x, y),
             (HeldTy::Result(xo, xe), HeldTy::Result(yo, ye)) => {
                 self.meet_reprs(xo, yo) && self.meet_reprs(xe, ye)
             }
@@ -1153,6 +1157,7 @@ impl PatternSubst {
                 | HeldTy::Option(_)
                 | HeldTy::Result(..)
                 | HeldTy::Array(..)
+                | HeldTy::RustArray(..)
                 | HeldTy::Leaf(_),
                 _,
             ) => false,
@@ -1501,6 +1506,9 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
                 };
                 Some(HeldTy::Array(Box::new(elem), len))
             }
+            (HeldTy::RustArray(x, la), HeldTy::RustArray(y, lb)) if la == lb => {
+                Some(HeldTy::RustArray(Box::new(walk_arg(x, y, next)), *la))
+            }
             _ if a.is_full(false) && b.is_full(false) => {
                 Some(HeldTy::of(walk(&a.ty(), &b.ty(), next)))
             }
@@ -1587,6 +1595,7 @@ enum ArgHead {
     Option(Box<ArgHead>),
     Result(Box<ArgHead>, Box<ArgHead>),
     Array(Box<ArgHead>),
+    RustArray(Box<ArgHead>),
     Leaf,
     Held,
 }
@@ -1602,6 +1611,7 @@ fn arg_head(arg: &TypeArg<Poly>) -> ArgHead {
                 ArgHead::Result(Box::new(arg_head(ok)), Box::new(arg_head(err)))
             }
             HeldTy::Array(part, _) => ArgHead::Array(Box::new(arg_head(part))),
+            HeldTy::RustArray(part, _) => ArgHead::RustArray(Box::new(arg_head(part))),
             HeldTy::Leaf(_) => ArgHead::Leaf,
             HeldTy::Held(_) => ArgHead::Held,
         },
@@ -2365,6 +2375,7 @@ where
                     }
                 }
             }
+            HeldTy::RustArray(part, len) => write!(f, "[{}; {len}]", self.part(part)),
             HeldTy::Leaf(leaf) => write!(f, "{}", self.ty(leaf.ty())),
             HeldTy::Held(v) => V::spell_ty_var(v, f),
         }
@@ -2977,7 +2988,12 @@ pub enum HeldTy<V: Phase> {
     Tuple(Vec<TypeArg<V>>),
     Option(Box<TypeArg<V>>),
     Result(Box<TypeArg<V>>, Box<TypeArg<V>>),
+    /// The language's array, whose Rust head is the runtime's `Arr`: its
+    /// elements in a buffer of their own.
     Array(Box<TypeArg<V>>, LenTerm<V>),
+    /// A Rust `[T; N]`, its `N` elements in place: the same acvus type as
+    /// `Array`, another box.
+    RustArray(Box<TypeArg<V>>, usize),
     Leaf(LeafTy<V>),
     /// `α` with every part `#`: once `α` resolves, the node is the fully
     /// specialized tree of `α`'s type. What a family cast's pattern writes
@@ -3045,6 +3061,7 @@ impl<V: Phase> TypeArg<V> {
                 | HeldTy::Option(_)
                 | HeldTy::Result(..)
                 | HeldTy::Array(..)
+                | HeldTy::RustArray(..)
                 | HeldTy::Held(_),
             ) => None,
         }
@@ -3194,6 +3211,9 @@ impl<V: Phase> HeldTy<V> {
             HeldTy::Array(part, len) => {
                 TyTerm::Array(Box::new(part.ty().into_owned()), len.clone())
             }
+            HeldTy::RustArray(part, len) => {
+                TyTerm::Array(Box::new(part.ty().into_owned()), LenTerm::Known(*len))
+            }
             HeldTy::Leaf(leaf) => leaf.0.clone(),
             HeldTy::Held(v) => TyTerm::Var(*v),
         }
@@ -3202,7 +3222,9 @@ impl<V: Phase> HeldTy<V> {
     pub fn parts(&self) -> Vec<&TypeArg<V>> {
         match self {
             HeldTy::Tuple(parts) => parts.iter().collect(),
-            HeldTy::Option(part) | HeldTy::Array(part, _) => vec![part],
+            HeldTy::Option(part) | HeldTy::Array(part, _) | HeldTy::RustArray(part, _) => {
+                vec![part]
+            }
             HeldTy::Result(ok, err) => vec![ok, err],
             HeldTy::Leaf(_) | HeldTy::Held(_) => Vec::new(),
         }
@@ -3215,7 +3237,9 @@ impl<V: Phase> HeldTy<V> {
                     part.rewrite_types(rewrite);
                 }
             }
-            HeldTy::Option(part) | HeldTy::Array(part, _) => part.rewrite_types(rewrite),
+            HeldTy::Option(part) | HeldTy::Array(part, _) | HeldTy::RustArray(part, _) => {
+                part.rewrite_types(rewrite)
+            }
             HeldTy::Result(ok, err) => {
                 ok.rewrite_types(rewrite);
                 err.rewrite_types(rewrite);
@@ -3229,9 +3253,19 @@ impl<V: Phase> HeldTy<V> {
     }
 
     /// Whether every part is `#`, or could still be where `open` lets an
-    /// open representation stand for `#`.
+    /// open representation stand for `#`: the tree `of` writes for this
+    /// type. A Rust array is not, since `of` writes an array as the
+    /// language's.
     pub fn is_full(&self, open: bool) -> bool {
-        self.parts().into_iter().all(|part| part.is_full(open))
+        match self {
+            HeldTy::RustArray(..) => false,
+            HeldTy::Tuple(_)
+            | HeldTy::Option(_)
+            | HeldTy::Result(..)
+            | HeldTy::Array(..)
+            | HeldTy::Leaf(_)
+            | HeldTy::Held(_) => self.parts().into_iter().all(|part| part.is_full(open)),
+        }
     }
 
     fn same_by(&self, other: &Self, same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool) -> bool {
@@ -3253,6 +3287,7 @@ impl<V: Phase> HeldTy<V> {
                 };
                 same_len && a.same_by(b, same)
             }
+            (HeldTy::RustArray(a, an), HeldTy::RustArray(b, bn)) => an == bn && a.same_by(b, same),
             (HeldTy::Leaf(a), HeldTy::Leaf(b)) => same(&a.0, &b.0),
             (HeldTy::Held(a), HeldTy::Held(b)) => a == b,
             (
@@ -3260,6 +3295,7 @@ impl<V: Phase> HeldTy<V> {
                 | HeldTy::Option(_)
                 | HeldTy::Result(..)
                 | HeldTy::Array(..)
+                | HeldTy::RustArray(..)
                 | HeldTy::Leaf(_)
                 | HeldTy::Held(_),
                 _,
@@ -3287,6 +3323,7 @@ impl<V: Phase> HeldTy<V> {
                 let p = part(p);
                 HeldTy::Array(Box::new(p), len.map(on_len))
             }
+            HeldTy::RustArray(p, len) => HeldTy::RustArray(Box::new(part(p)), *len),
             HeldTy::Leaf(leaf) => {
                 HeldTy::of(leaf.0.map(on_var, on_identity, on_effect, on_len, on_repr))
             }
@@ -3316,6 +3353,7 @@ impl<V: Phase> HeldTy<V> {
                 let p = part(p)?;
                 HeldTy::Array(Box::new(p), len.try_map(on_len)?)
             }
+            HeldTy::RustArray(p, len) => HeldTy::RustArray(Box::new(part(p)?), *len),
             HeldTy::Leaf(leaf) => {
                 HeldTy::of(
                     leaf.0
@@ -4523,6 +4561,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                 HeldTy::Result(ok, Box::new(arg(err, builder)))
             }
             HeldTy::Array(p, len) => HeldTy::Array(Box::new(arg(p, builder)), lift_ty_len(len)),
+            HeldTy::RustArray(p, len) => HeldTy::RustArray(Box::new(arg(p, builder)), *len),
             HeldTy::Leaf(leaf) => HeldTy::of(go(leaf.ty(), builder)),
             HeldTy::Held(v) => match *v {},
         }

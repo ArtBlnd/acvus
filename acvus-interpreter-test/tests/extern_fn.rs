@@ -1515,6 +1515,36 @@ where
     })
 }
 
+/// A bag of Rust arrays: `Vec<[i64; 2]>`, each array's two elements in
+/// place.
+#[extern_fn(effect = pure)]
+fn rust_array_bag_of(a: i64) -> Bag<[i64; 2]> {
+    Bag(vec![[a, a + 1]])
+}
+
+#[extern_fn(effect = pure)]
+fn rust_array_bag_sum(b: Bag<[i64; 2]>) -> i64 {
+    b.0.first().map_or(-1, |x| x[0] + x[1])
+}
+
+/// A bag of the language's arrays: `Vec<Arr<i64, ()>>`, each array's
+/// elements in a buffer of their own.
+#[extern_fn(effect = pure)]
+fn array_bag_of<N>(a: acvus_extern::Arr<i64, N>) -> Bag<acvus_extern::Arr<i64, N>>
+where
+    N: acvus_extern::Var<acvus_extern::kind::Length>,
+{
+    Bag(vec![a])
+}
+
+#[extern_fn(effect = pure)]
+fn array_bag_sum<N>(b: Bag<acvus_extern::Arr<i64, N>>) -> i64
+where
+    N: acvus_extern::Var<acvus_extern::kind::Length>,
+{
+    b.0.first().map_or(-1, |x| x.0.iter().sum())
+}
+
 fn erased_held_registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "erased_held",
@@ -1530,6 +1560,10 @@ fn erased_held_registry() -> Registry<AcvusRuntime> {
             pair_bag_of,
             int_second_bag_of,
             deque_bag_width,
+            rust_array_bag_of,
+            rust_array_bag_sum,
+            array_bag_of,
+            array_bag_sum,
         ],
     }
 }
@@ -1548,6 +1582,10 @@ async fn run_erased_held(source: &str) -> i64 {
 }
 
 fn erased_held_refusal(source: &str) -> String {
+    erased_held_refusal_at(source, acvus_mir::graph::optimize::Opt::Full)
+}
+
+fn erased_held_refusal_at(source: &str, opt: acvus_mir::graph::optimize::Opt) -> String {
     let i = Interner::new();
     let ast = acvus_mir::graph::ParsedAst::Script(
         acvus_ast::parse_script(&i, source).expect("parse error"),
@@ -1558,10 +1596,10 @@ fn erased_held_refusal(source: &str) -> String {
         &FxHashMap::default(),
         erased_held_regs(),
         Ty::I64,
-        acvus_mir::graph::optimize::Opt::Full,
+        opt,
         |_| {},
     ) {
-        Ok(_) => panic!("the program was admitted: {source}"),
+        Ok(_) => panic!("the program was admitted at {opt:?}: {source}"),
         Err(refusal) => refusal.messages.join(" | "),
     }
 }
@@ -1647,5 +1685,66 @@ async fn a_composite_holding_a_variable_is_read_by_its_parts_where_it_was_made()
     assert_eq!(
         run_erased_held("pair_bag_first(pair_bag_of(1, 2))").await,
         1
+    );
+}
+
+// =======================================================================
+//  A Rust array and the language's array are two boxes
+// =======================================================================
+
+/// Refuses `source` at both levels, with `expected` among its messages.
+fn array_refused_with(source: &str, expected: &str) {
+    for opt in [
+        acvus_mir::graph::optimize::Opt::None,
+        acvus_mir::graph::optimize::Opt::Full,
+    ] {
+        let messages = erased_held_refusal_at(source, opt);
+        assert!(messages.contains(expected), "at {opt:?}: {messages}");
+    }
+}
+
+/// `Vec<Arr<i64, ()>>` against `Vec<[i64; 2]>`: one acvus type, two Rust
+/// heads, so `#Array` and `#[_; 2]` are two trees.
+#[test]
+fn a_bag_of_arrays_is_not_a_bag_of_rust_arrays() {
+    array_refused_with(
+        "rust_array_bag_sum(array_bag_of([1, 2]))",
+        "expected Bag<#[#i64; 2]>, got Bag<#Array<#i64, 2>>",
+    );
+}
+
+/// The reverse: `Vec<[i64; 2]>` against `Vec<Arr<i64, ()>>`.
+#[test]
+fn a_bag_of_rust_arrays_is_not_a_bag_of_arrays() {
+    array_refused_with(
+        "array_bag_sum(rust_array_bag_of(1))",
+        "expected Bag<#Array<#i64, 2>>, got Bag<#[#i64; 2]>",
+    );
+}
+
+/// Run, the program is refused before any box is read at the other Rust
+/// type.
+#[tokio::test]
+#[should_panic(expected = "expected Bag<#[#i64; 2]>, got Bag<#Array<#i64, 2>>")]
+async fn a_bag_of_arrays_does_not_run_as_a_bag_of_rust_arrays() {
+    run_erased_held("rust_array_bag_sum(array_bag_of([1, 2]))").await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "expected Bag<#Array<#i64, 2>>, got Bag<#[#i64; 2]>")]
+async fn a_bag_of_rust_arrays_does_not_run_as_a_bag_of_arrays() {
+    run_erased_held("array_bag_sum(rust_array_bag_of(1))").await;
+}
+
+/// Each array made and read at its own Rust head.
+#[tokio::test]
+async fn an_array_is_read_at_the_rust_head_it_was_made_at() {
+    assert_eq!(
+        run_erased_held("rust_array_bag_sum(rust_array_bag_of(1))").await,
+        3
+    );
+    assert_eq!(
+        run_erased_held("array_bag_sum(array_bag_of([1, 2]))").await,
+        3
     );
 }

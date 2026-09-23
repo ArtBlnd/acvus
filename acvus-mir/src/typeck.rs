@@ -826,9 +826,11 @@ fn closure_in_arg(arg: &TypeArg<Infer>) -> Option<&InferTy> {
         TypeArg::Specialized(held) => match held {
             HeldTy::Leaf(leaf) => closure_in_result(leaf.ty()),
             HeldTy::Held(_) => None,
-            HeldTy::Tuple(_) | HeldTy::Option(_) | HeldTy::Result(..) | HeldTy::Array(..) => {
-                held.parts().into_iter().find_map(closure_in_arg)
-            }
+            HeldTy::Tuple(_)
+            | HeldTy::Option(_)
+            | HeldTy::Result(..)
+            | HeldTy::Array(..)
+            | HeldTy::RustArray(..) => held.parts().into_iter().find_map(closure_in_arg),
         },
     }
 }

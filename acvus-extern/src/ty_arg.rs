@@ -252,7 +252,8 @@ pub trait TyArg: Var<kind::Type> {
     /// variable is filled with its run-time instantiation, which is
     /// uniform, and any other part is the Rust type it names, `#`. A type
     /// whose acvus head is a tuple, option, result or array states its
-    /// parts; any other head is one `#` leaf.
+    /// parts; any other head is one `#` leaf. An array states its Rust head
+    /// too: `Arr` is the language's array, `[T; N]` a Rust array.
     fn held(interner: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
         TypeArg::specialized(Self::poly_ty(interner, vars))
     }
@@ -512,8 +513,10 @@ where
         PolyTy::Array(Box::new(T::poly_ty(i, vars)), LenTerm::Known(N))
     }
 
+    /// Its `N` elements in place, where `Arr` keeps its own in a buffer:
+    /// another box of the same acvus type.
     fn held(i: &Interner, vars: &PolyVars) -> TypeArg<Poly> {
-        TypeArg::Specialized(HeldTy::Array(Box::new(T::held(i, vars)), LenTerm::Known(N)))
+        TypeArg::Specialized(HeldTy::RustArray(Box::new(T::held(i, vars)), N))
     }
 }
 
