@@ -87,6 +87,9 @@ unsafe impl crate::Canonical<kind::Type> for StrView {
     type Canon = Self;
 }
 
+// SAFETY: a type with no type parameter reaches none.
+unsafe impl<M> crate::UniformPayload<M> for StrView {}
+
 impl TyArg for StrView {
     fn poly_ty(_: &Interner, _: &PolyVars) -> PolyTy {
         PolyTy::Ref(Mutability::Shared, Box::new(TypeArg::uniform(PolyTy::Str)))

@@ -14,6 +14,15 @@ pub mod variant;
 use crate::obj::OneValue;
 use crate::owned::Owned;
 use crate::runtime::Runtime;
+use crate::uniform::UniformPayload;
+
+/// The obligation `#[derive(ExternType)]` writes on its payload, at a
+/// marker `M` only its check names.
+pub fn uniform_payload<P, M>()
+where
+    P: UniformPayload<M>,
+{
+}
 
 pub fn erase_field<T, Rt>(rt: &Rt, value: T) -> Owned<Rt>
 where

@@ -28,6 +28,7 @@ mod slice;
 mod space;
 mod str;
 mod ty_arg;
+mod uniform;
 mod vec;
 
 pub use canonical::Canonical;
@@ -75,9 +76,12 @@ pub use ty_arg::{
     Bottom, Chosen, ChosenNth, Kind, Monomorphize, Nth, PolyVars, SlotRepr, Spec, Term, TyArg, Var,
     held_effect, kind,
 };
+pub use uniform::UniformPayload;
 pub use vec::vec_ty;
 
-pub use acvus_extern_macro::{ExternType, TyArg, extern_fn, extern_registry, extern_signature};
+pub use acvus_extern_macro::{
+    ExternType, TyArg, UniformPayload, extern_fn, extern_registry, extern_signature,
+};
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::ty::{

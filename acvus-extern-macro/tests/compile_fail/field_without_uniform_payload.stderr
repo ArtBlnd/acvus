@@ -1,0 +1,27 @@
+error[E0277]: `Pair<T>` is not known to hold its type parameters only as fields
+  --> tests/compile_fail/field_without_uniform_payload.rs:13:18
+   |
+13 | struct Paired<T>(Pair<T>)
+   |                  ^^^^^^^ `Pair<T>` is not `UniformPayload`
+   |
+help: the trait `UniformPayload<__M>` is not implemented for `Pair<T>`
+  --> tests/compile_fail/field_without_uniform_payload.rs:5:1
+   |
+ 5 | struct Pair<T> {
+   | ^^^^^^^^^^^^^^
+   = note: an extension type's payload that names a type parameter is proved `UniformPayload`, field type by field type, so that its layout reaches each parameter only by holding it (RFC-0076)
+   = note: derive `UniformPayload` for `Pair<T>` if it is a struct or enum of this crate; for another crate's type, `#[extern_type(unsafe(uniform_payload))]` on the extension type asserts it of the payload by hand
+help: the trait `UniformPayload<__M>` is implemented for `Paired<T>`
+  --> tests/compile_fail/field_without_uniform_payload.rs:10:10
+   |
+10 | #[derive(ExternType)]
+   |          ^^^^^^^^^^
+note: required by a bound in `uniform_payload`
+  --> $WORKSPACE/acvus-extern/src/derive.rs
+   |
+   | pub fn uniform_payload<P, M>()
+   |        --------------- required by a bound in this function
+   | where
+   |     P: UniformPayload<M>,
+   |        ^^^^^^^^^^^^^^^^^ required by this bound in `uniform_payload`
+   = note: this error originates in the derive macro `ExternType` (in Nightly builds, run with -Z macro-backtrace for more info)

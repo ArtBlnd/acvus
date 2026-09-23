@@ -16,8 +16,8 @@ use crate::runtime::Runtime;
 /// is that field's type with each uniform type parameter `X` replaced by
 /// `<X as Canonical<kind::Type>>::Canon`. The two differ as `Canonical`'s
 /// contract lets a type and its canonical form differ, and the read between
-/// them rests on its three layers; the derive's `unsafe(uniform_payload)`
-/// is the author's assertion of the third.
+/// them rests on its three layers; the derive proves the payload's part of
+/// the third as `UniformPayload`, or `unsafe(uniform_payload)` asserts it.
 pub unsafe trait Transparent<P>: Sized {}
 
 pub fn erase<T, P, Rt>(value: T, rt: &Rt) -> Rt::Value

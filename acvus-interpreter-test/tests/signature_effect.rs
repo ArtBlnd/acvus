@@ -22,7 +22,6 @@ use rustc_hash::FxHashMap;
 
 #[derive(ExternType)]
 #[extern_type(name = "Pipe")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Pipe<Ts, O, E, I, Rt>(i64, PhantomData<(Ts, O, E, I, Rt)>)
 where

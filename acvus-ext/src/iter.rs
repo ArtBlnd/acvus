@@ -31,7 +31,7 @@ use std::ops::Deref;
 use acvus_extern::{Arr, InPlaceElement, PassedByValue};
 use acvus_extern::{
     Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared,
-    Stored, Suspends, TransparentOver, Var, core, extern_fn, kind,
+    Stored, Suspends, TransparentOver, UniformPayload, Var, core, extern_fn, kind,
 };
 
 /// The shared signatures of the iterator surface.
@@ -68,6 +68,7 @@ pub mod sig {
     }
 }
 
+#[derive(UniformPayload)]
 pub struct ItemsBody<T> {
     rest: std::vec::IntoIter<T>,
 }
@@ -75,7 +76,6 @@ pub struct ItemsBody<T> {
 /// The owned source: the elements of a container that was consumed.
 #[derive(ExternType)]
 #[extern_type(name = "Items")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Items<T, I, Rt>(ItemsBody<T>, PhantomData<(I, Rt)>)
 where
@@ -130,6 +130,7 @@ macro_rules! next_items_of {
 
 pub(crate) use next_items_of;
 
+#[derive(UniformPayload)]
 pub struct RefsBody<C, Rt>
 where
     C: Var<kind::Type>,
@@ -144,7 +145,6 @@ where
 /// own `Refs`.
 #[derive(ExternType)]
 #[extern_type(name = "Refs")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Refs<C, I, Rt>(pub(crate) RefsBody<C, Rt>, PhantomData<I>)
 where
@@ -261,6 +261,7 @@ where
     Some(current)
 }
 
+#[derive(UniformPayload)]
 pub struct MapBody<I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -276,7 +277,6 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "Map")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Map<I, T, U, E, Rt>(pub(crate) MapBody<I, T, U, E, Rt>)
 where
@@ -314,11 +314,13 @@ where
     Some(it.0.f.call(ctx, (x,)).await)
 }
 
+#[derive(UniformPayload)]
 pub enum UnorderedDraw<U> {
     Undrawn,
     Drawn(VecDeque<U>),
 }
 
+#[derive(UniformPayload)]
 pub struct UnorderedBody<I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -341,7 +343,6 @@ where
 /// order.
 #[derive(ExternType)]
 #[extern_type(name = "Unordered")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Unordered<I, T, U, E, Rt>(pub(crate) UnorderedBody<I, T, U, E, Rt>)
 where
@@ -401,6 +402,7 @@ where
     futures::future::join_all(calls).await.into()
 }
 
+#[derive(UniformPayload)]
 pub struct FilterBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -415,7 +417,6 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "Filter")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Filter<I, T, E, Rt>(pub(crate) FilterBody<I, T, E, Rt>)
 where
@@ -458,6 +459,7 @@ where
     }
 }
 
+#[derive(UniformPayload)]
 pub struct TakeBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -473,7 +475,6 @@ where
 /// The first `n` elements, and fewer when the source ends first.
 #[derive(ExternType)]
 #[extern_type(name = "Take")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Take<I, T, E, Rt>(pub(crate) TakeBody<I, T, E, Rt>)
 where
@@ -508,6 +509,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
+#[derive(UniformPayload)]
 pub struct SkipBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -524,7 +526,6 @@ where
 /// at the first step, not at construction.
 #[derive(ExternType)]
 #[extern_type(name = "Skip")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Skip<I, T, E, Rt>(pub(crate) SkipBody<I, T, E, Rt>)
 where
@@ -565,6 +566,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
+#[derive(UniformPayload)]
 pub struct StepByBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -582,7 +584,6 @@ where
 /// constructor traps on zero before this is reached.
 #[derive(ExternType)]
 #[extern_type(name = "StepBy")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct StepBy<I, T, E, Rt>(pub(crate) StepByBody<I, T, E, Rt>)
 where
@@ -627,6 +628,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
+#[derive(UniformPayload)]
 pub struct TakeWhileBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -645,7 +647,6 @@ where
 /// again.
 #[derive(ExternType)]
 #[extern_type(name = "TakeWhile")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct TakeWhile<I, T, E, Rt>(pub(crate) TakeWhileBody<I, T, E, Rt>)
 where
@@ -697,6 +698,7 @@ where
     None
 }
 
+#[derive(UniformPayload)]
 pub struct SkipWhileBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -714,7 +716,6 @@ where
 /// included; the predicate is not called again after it.
 #[derive(ExternType)]
 #[extern_type(name = "SkipWhile")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct SkipWhile<I, T, E, Rt>(pub(crate) SkipWhileBody<I, T, E, Rt>)
 where
@@ -764,6 +765,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
+#[derive(UniformPayload)]
 pub struct ChunksBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -781,7 +783,6 @@ where
 /// before this is reached. One chunk is the only buffer.
 #[derive(ExternType)]
 #[extern_type(name = "Chunks")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Chunks<I, T, E, Rt>(pub(crate) ChunksBody<I, T, E, Rt>)
 where
@@ -835,6 +836,7 @@ where
 /// element it holds when it meets the next one that differs, one draw
 /// behind its source, because it keeps the element itself and requires no
 /// `core::clone` to keep a copy of it.
+#[derive(UniformPayload)]
 pub(crate) enum Held<T> {
     NothingDrawn,
     Drawn(T),
@@ -847,6 +849,7 @@ enum Step<T> {
     End,
 }
 
+#[derive(UniformPayload)]
 pub struct DedupBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -896,7 +899,6 @@ where
 /// `core::eq` deciding which are equal.
 #[derive(ExternType)]
 #[extern_type(name = "Dedup")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Dedup<I, T, E, Rt>(pub(crate) DedupBody<I, T, E, Rt>)
 where
@@ -966,6 +968,7 @@ where
     None
 }
 
+#[derive(UniformPayload)]
 pub struct ChainBody<A, B, T, E, Rt>
 where
     A: Var<kind::Type>,
@@ -985,7 +988,6 @@ where
 /// each stands beside its own `next`.
 #[derive(ExternType)]
 #[extern_type(name = "Chain")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Chain<A, B, T, E, Rt>(pub(crate) ChainBody<A, B, T, E, Rt>)
 where
@@ -1033,6 +1035,7 @@ where
     it.0.next_second.call_await(ctx, &mut it.0.second, ()).await
 }
 
+#[derive(UniformPayload)]
 pub struct FlattenBody<I, C, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -1051,7 +1054,6 @@ where
 /// one it last drew is the only buffer.
 #[derive(ExternType)]
 #[extern_type(name = "Flatten")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Flatten<I, C, T, E, Rt>(pub(crate) FlattenBody<I, C, T, E, Rt>)
 where
@@ -1163,6 +1165,7 @@ where
     next_flatten_at(ctx, it).await
 }
 
+#[derive(UniformPayload)]
 pub struct FlatMapBody<I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -1182,7 +1185,6 @@ where
 /// intermediate one has no name to require an instance at.
 #[derive(ExternType)]
 #[extern_type(name = "FlatMap")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct FlatMap<I, T, U, E, Rt>(pub(crate) FlatMapBody<I, T, U, E, Rt>)
 where

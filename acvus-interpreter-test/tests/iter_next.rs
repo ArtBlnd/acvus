@@ -66,6 +66,7 @@ fn next_nrange(it: &mut NRange) -> Option<i64> {
     })
 }
 
+#[derive(acvus_extern::UniformPayload)]
 pub struct NMapBody<I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -81,7 +82,6 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "NMap")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct NMap<I, T, U, E, Rt>(NMapBody<I, T, U, E, Rt>)
 where
@@ -120,6 +120,7 @@ where
     Some(it.0.f.call_now(ctx, (x,)))
 }
 
+#[derive(acvus_extern::UniformPayload)]
 pub struct NFilterBody<I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -134,7 +135,6 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "NFilter")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct NFilter<I, T, E, Rt>(NFilterBody<I, T, E, Rt>)
 where
@@ -194,6 +194,7 @@ where
     acc
 }
 
+#[derive(acvus_extern::UniformPayload)]
 pub struct NSlowedBody<I, Rt>
 where
     I: Var<kind::Type>,
@@ -205,7 +206,6 @@ where
 
 #[derive(ExternType)]
 #[extern_type(name = "NSlowed")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct NSlowed<I, Rt>(NSlowedBody<I, Rt>)
 where

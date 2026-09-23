@@ -478,7 +478,6 @@ impl Runtime for Tiny {
 #[derive(ExternType)]
 #[repr(transparent)]
 #[extern_type(name = "Box")]
-#[extern_type(unsafe(uniform_payload))]
 struct Boxed<T, E, Rt>(Vec<T>, PhantomData<(E, Rt)>)
 where
     T: Var<kind::Type>,

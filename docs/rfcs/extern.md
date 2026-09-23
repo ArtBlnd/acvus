@@ -710,24 +710,41 @@ breaks its `T`.
 3. Every read of a box at a type other than its canonical one carries an
    inline `const` assert that the two `Layout`s agree in size and alignment,
    and a `SAFETY` note. An instantiation where they differ does not compile.
-4. A derived type with a type parameter not bounded by `Chosen` takes
-   `#[extern_type(unsafe(uniform_payload))]`. By it the author asserts that
-   the payload's layout reaches no such parameter through a trait, including
-   where the parameter is an argument of another type's projection (`O` in
-   `<Ts as TypeList>::Body<O, E>`). Without it the derive refuses.
-5. A payload that projects through a uniform type parameter, `<T as Tr>::A`,
-   is refused with or without the attribute. A derived type may bound a
-   parameter by `Chosen`: it is never canonicalized, and a projection through
-   it is admitted. `Pipe<Ts, …>` holds `<Ts as TypeList>::Body`, so each
-   instance's box is its own Rust type. A type whose type parameters are all
-   `Chosen`, or which has none, takes no attribute.
+4. A derived payload that names a uniform type parameter is proved
+   `UniformPayload<M>`, the unsafe marker of a type whose layout reaches its
+   type parameters only by holding them. acvus-extern implements it for the
+   primitives, `String`, `Vec`, `VecDeque`, `vec::IntoIter`, `Option`,
+   `Result`, `Box`, tuples, arrays, `PhantomData` and the runtime's own
+   types; `#[derive(UniformPayload)]` implements it for a struct or enum by
+   bounding each field type that names a type parameter; `#[derive(ExternType)]`
+   implements it for the extension type by bounding its payload. The derive
+   proves the payload in a generated `fn` generic over a marker `__M` that
+   only it names, under the struct's own predicates, with each type variable
+   assumed `UniformPayload<__M>`: a variable counts as held, and what it
+   holds is its own `Canonical`'s obligation. No bound the struct writes and
+   no associated type a trait declares names that marker, so a projection
+   hidden behind an alias is refused as a visible one is, and every other
+   impl the proof selects holds at every argument the struct admits. A
+   payload that fails is refused with the field type that is not
+   `UniformPayload`.
+5. `#[extern_type(unsafe(uniform_payload))]` skips that proof for the whole
+   payload: the author asserts it where the marker does not reach, for
+   another crate's generic type or a projection through a `Chosen`
+   parameter (`O` in `<Ts as TypeList>::Body<O, E>`). A payload that visibly
+   projects through a uniform type parameter, `<T as Tr>::A`, is refused
+   with or without the attribute. A derived type may bound a parameter by
+   `Chosen`: it is never canonicalized, and a projection through it is
+   admitted. `Pipe<Ts, …>` holds `<Ts as TypeList>::Body`, so each
+   instance's box is its own Rust type. A payload that names no uniform
+   type parameter is read at its own type and is not proved.
 
 A read at a type other than the canonical one rests on three layers.
 Release: `Drop` cannot be implemented with bounds narrower than the type's
 (E0367), so every `Erased<R, X>`, and every type built over one, releases
 the same way for every `X`. Size and alignment: checked per instantiation by
 rule 3's assert. Field order within one size and alignment: argued, not
-checked. It rests on rule 1 within acvus-extern, rule 4's obligation,
+checked. It rests on rule 1 within acvus-extern, rule 4's proof or rule 5's
+assertion,
 `repr(transparent)`, `PhantomData` having size 0, alignment 1 and auto
 traits that do not follow `X`, and `Never` having no value. It does not rest
 on a promise that two instantiations of one `repr(Rust)` type share a
@@ -743,14 +760,17 @@ canonical key makes them one box, and the layers are what make reading it
 at either name sound. `X` can reach a layout only through a trait, so the
 rule keeps every `T`-dependent impl off a value-making `Erased`; a derived
 payload is the one place a downstream trait can reach `X`, which rule 4
-makes its author's stated obligation and rule 5 refuses where it is
-visible. An inherent method takes part in no specialization or projection,
+proves it does not, at a marker no downstream trait can name. An inherent method takes part in no specialization or projection,
 so `Owned`'s construction and mutable access keep rule 1.
 
 **Cost.** Rule 1 binds acvus-extern only: the orphan rule lets another
-crate implement its own trait for `Erased<R, i64>` with a bound on `T`, and
-a payload that reads `X` through one breaks the obligation its author
-asserted. Every generic derived type carries an `unsafe` attribute. A type
+crate implement its own trait for `Erased<R, i64>` with a bound on `T`,
+and a payload under rule 5 that reads `X` through one breaks the
+obligation its author asserted. A payload's own struct derives
+`UniformPayload`, and another crate's generic type the marker does not
+reach takes the `unsafe` attribute. A projection through a `Chosen`
+parameter takes it too: the proof does not see through a projection. A
+type
 stored as itself states its canonical form, so a concrete type under
 `cross_as_stored!` writes its `Var` and `Canonical` impls.
 
@@ -768,6 +788,14 @@ stored as itself states its canonical form, so a concrete type under
   acvus-extern from implementing its trait for one.
 - Refusing every projection in a payload — it refuses `Pipe`, whose
   projection is through a `Chosen` parameter.
+- Proving the payload in the generated impls' own `where` clauses — a bound
+  the struct puts on a uniform parameter, whose trait declares an
+  associated type `UniformPayload`, lets an alias hide a projection the
+  proof then accepts.
+- Proving it with each uniform parameter bounded by `Var<kind::Type>`
+  alone — no user trait reaches the parameter, but a payload of a type that
+  bounds its parameter by more, as each iterator stage's body does, is then
+  refused.
 
 ## RFC-0077: A converted `&place` argument is taken out of its slot for the call
 

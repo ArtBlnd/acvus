@@ -89,6 +89,14 @@ where
     at: PhantomData<fn() -> (S, I, T)>,
 }
 
+// SAFETY: an `Instance` is one `Rt::Value` at every `S`, `I` and `T`.
+unsafe impl<M, S, I, Rt, T> crate::UniformPayload<M> for Instance<S, I, Rt, T>
+where
+    S: Signature<Rt>,
+    Rt: Runtime,
+{
+}
+
 impl<S, I, Rt, T> Clone for Instance<S, I, Rt, T>
 where
     S: Signature<Rt>,

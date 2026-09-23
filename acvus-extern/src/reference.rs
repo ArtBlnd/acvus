@@ -94,6 +94,16 @@ where
     type Canon = Ref<T::Canon, M, Rt>;
 }
 
+// SAFETY: a `Ref` is one `Rt::Value` at every `T` and `M`; the referent is
+// a box of its own, read through its own `Canonical`.
+unsafe impl<Mk, T, M, Rt> crate::UniformPayload<Mk> for Ref<T, M, Rt>
+where
+    T: Send + Sync + 'static,
+    M: Loan,
+    Rt: Runtime,
+{
+}
+
 impl<T, M, Rt> TyArg for Ref<T, M, Rt>
 where
     T: TyArg + Send + Sync + 'static,

@@ -161,6 +161,16 @@ where
     type Canon = Slice<T::Canon, M, Rt>;
 }
 
+// SAFETY: a `Slice` is a pointer to the runtime's values and a length at
+// every `T` and `M`.
+unsafe impl<Mk, T, M, Rt> crate::UniformPayload<Mk> for Slice<T, M, Rt>
+where
+    T: Send + Sync + 'static,
+    M: Loan,
+    Rt: Runtime,
+{
+}
+
 /// The acvus type: a reference to the unsized `[T]`.
 impl<T, M, Rt> TyArg for Slice<T, M, Rt>
 where

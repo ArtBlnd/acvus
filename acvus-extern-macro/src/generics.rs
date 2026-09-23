@@ -466,6 +466,15 @@ impl Vars {
         self.0.iter().find(|v| v.chosen).map(|v| &v.ident)
     }
 
+    /// Every type variable, uniform or `Chosen`.
+    pub fn type_var_idents(&self) -> Vec<Ident> {
+        self.0
+            .iter()
+            .filter(|v| v.kind == VarKind::Ty)
+            .map(|v| v.ident.clone())
+            .collect()
+    }
+
     /// The type variables a box holds at their run-time fill, which its key
     /// takes to their canonical form: every one not bounded by `Chosen`.
     pub fn uniform_type_vars(&self) -> Vec<Ident> {

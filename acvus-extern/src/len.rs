@@ -72,6 +72,14 @@ where
     type Canon = Arr<T::Canon, N>;
 }
 
+// SAFETY: an `Arr` is a `Vec<T>`, and a length has no layout.
+unsafe impl<M, T, N> crate::UniformPayload<M> for Arr<T, N>
+where
+    T: Send + Sync + 'static + crate::UniformPayload<M>,
+    N: Var<kind::Length>,
+{
+}
+
 impl<T, N> TyArg for Arr<T, N>
 where
     T: TyArg + Send + Sync + 'static,

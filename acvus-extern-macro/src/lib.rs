@@ -1400,10 +1400,9 @@ fn qref_expr_in(ns: Option<&str>, name: &str) -> proc_macro2::TokenStream {
 struct ExternTypeAttr {
     name: Option<String>,
     ns: Option<String>,
-    /// `unsafe(uniform_payload)`: the author asserts that the payload's
-    /// layout reaches no uniform type parameter through a trait, which is
-    /// what lets its box be read at the payload's canonical form
-    /// (`Canonical`, RFC-0076).
+    /// `unsafe(uniform_payload)`: the author asserts of the payload what
+    /// `UniformPayload` states, for a payload whose field types the marker
+    /// does not reach (RFC-0076).
     uniform_payload: bool,
     /// `space`: the type is a context a space holds, through the author's
     /// `Journaled` impl at the form the runtime holds (RFC-0033).
@@ -1518,19 +1517,6 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             ),
         ));
     }
-    if let Some(first) = uniform.first()
-        && !attr.uniform_payload
-    {
-        return Err(syn::Error::new(
-            first.span(),
-            format!(
-                "`{first}` is a uniform type parameter, so the box is keyed by the payload with \
-                 `{first}` at its canonical form and read at `{first}`'s own: write \
-                 `#[extern_type(unsafe(uniform_payload))]` to assert that the payload's layout \
-                 reaches no uniform type parameter through a trait (RFC-0076)"
-            ),
-        ));
-    }
     if !is_repr_transparent(&input.attrs) {
         return Err(syn::Error::new(
             ident.span(),
@@ -1567,6 +1553,18 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     // The key and the canonical form name each uniform parameter's
     // canonical form, so every impl that names either restates the struct's
     // predicates at it.
+    let self_ident = Ident::new("Self", Span::call_site());
+    let type_params: Vec<Ident> = input
+        .generics
+        .type_params()
+        .map(|tp| tp.ident.clone())
+        .chain([self_ident.clone()])
+        .collect();
+    let read_at_canon: Vec<Ident> = uniform.iter().cloned().chain([self_ident]).collect();
+    let uniform_check = (!attr.uniform_payload && names_any(payload_ty, &read_at_canon))
+        .then(|| uniform_check(&input.generics, payload_ty, &vars.type_var_idents()));
+    let payload_bound = (!attr.uniform_payload && names_any(payload_ty, &type_params))
+        .then(|| quote! { #payload_ty: ::acvus_extern::UniformPayload<__M>, });
     let struct_predicates = struct_predicates(&input.generics);
     let restated: Vec<syn::WherePredicate> = struct_predicates
         .iter()
@@ -1698,10 +1696,22 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         {
         }
 
+        #uniform_check
+
+        // SAFETY: the struct is `#[repr(transparent)]` over its payload, which
+        // is bounded by `UniformPayload` here where it names a type
+        // parameter, or asserted to be one by `unsafe(uniform_payload)`.
+        unsafe impl<__M, #impl_params> ::acvus_extern::UniformPayload<__M> for #ident #ty_generics
+        where
+            #where_predicates
+            #payload_bound
+        {
+        }
+
         // SAFETY: the canonical form takes each uniform parameter to its own
-        // and keeps every other, and `unsafe(uniform_payload)` is the
-        // author's assertion that the payload reaches no uniform parameter
-        // through a trait.
+        // and keeps every other, and the payload is `UniformPayload`, proved
+        // above with each type variable held as itself, or asserted to be by
+        // `unsafe(uniform_payload)`.
         unsafe impl<#impl_params> ::acvus_extern::Canonical<::acvus_extern::kind::Type>
             for #ident #ty_generics
         where
@@ -1849,6 +1859,63 @@ fn struct_predicates(generics: &syn::Generics) -> Vec<syn::WherePredicate> {
     inline.chain(written).collect()
 }
 
+/// The payload's obligation, proved at a marker `__M` that only this `fn`
+/// names, with each type variable assumed `UniformPayload<__M>`: a bound
+/// the struct writes, or an associated type a trait declares, names no such
+/// marker, so the proof reaches a type variable only by holding it.
+fn uniform_check(
+    generics: &syn::Generics,
+    payload_ty: &Type,
+    type_vars: &[Ident],
+) -> proc_macro2::TokenStream {
+    let params = generics.params.iter().map(|param| match param {
+        GenericParam::Type(tp) => {
+            let ident = &tp.ident;
+            quote! { #ident }
+        }
+        GenericParam::Lifetime(lt) => {
+            let lifetime = &lt.lifetime;
+            quote! { #lifetime }
+        }
+        GenericParam::Const(c) => {
+            let ident = &c.ident;
+            let ty = &c.ty;
+            quote! { const #ident: #ty }
+        }
+    });
+    let predicates = struct_predicates(generics);
+    let obligation = quote::quote_spanned! {syn::spanned::Spanned::span(payload_ty)=>
+        ::acvus_extern::derive::uniform_payload::<#payload_ty, __M>()
+    };
+    quote! {
+        const _: () = {
+            #[allow(dead_code)]
+            fn __uniform_payload<__M, #(#params),*>()
+            where
+                #(#predicates,)*
+                #(#type_vars: ::acvus_extern::UniformPayload<__M>,)*
+            {
+                #obligation;
+            }
+        };
+    }
+}
+
+/// Whether `node` names one of `idents` anywhere in its tokens.
+fn names_any<T>(node: &T, idents: &[Ident]) -> bool
+where
+    T: quote::ToTokens,
+{
+    fn walk(tokens: proc_macro2::TokenStream, idents: &[Ident]) -> bool {
+        tokens.into_iter().any(|tree| match tree {
+            proc_macro2::TokenTree::Ident(ident) => idents.contains(&ident),
+            proc_macro2::TokenTree::Group(group) => walk(group.stream(), idents),
+            proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
+        })
+    }
+    walk(node.to_token_stream(), idents)
+}
+
 /// Takes each uniform type parameter to its canonical form.
 struct Canonicalize<'a> {
     uniform: &'a [Ident],
@@ -1907,6 +1974,59 @@ fn projection_through(ty: &Type, uniform: &[Ident]) -> Option<(Ident, syn::TypeP
     };
     syn::visit_mut::VisitMut::visit_type_mut(&mut find, &mut ty.clone());
     find.found
+}
+
+// -- #[derive(UniformPayload)] ---------------------------------------
+
+#[proc_macro_derive(UniformPayload)]
+pub fn derive_uniform_payload(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match generate_uniform_payload(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let ident = &input.ident;
+    let fields: Vec<&syn::Field> = match &input.data {
+        syn::Data::Struct(data) => data.fields.iter().collect(),
+        syn::Data::Enum(data) => data.variants.iter().flat_map(|v| v.fields.iter()).collect(),
+        syn::Data::Union(_) => {
+            return Err(syn::Error::new(
+                ident.span(),
+                "UniformPayload is derived on a struct or an enum",
+            ));
+        }
+    };
+    let type_params: Vec<Ident> = input
+        .generics
+        .type_params()
+        .map(|tp| tp.ident.clone())
+        .chain([Ident::new("Self", Span::call_site())])
+        .collect();
+    let bounded = fields
+        .iter()
+        .map(|field| &field.ty)
+        .filter(|ty| names_any(*ty, &type_params));
+    let written = input
+        .generics
+        .where_clause
+        .iter()
+        .flat_map(|w| w.predicates.iter());
+    let params = &input.generics.params;
+    let (_, ty_generics, _) = input.generics.split_for_impl();
+    Ok(quote! {
+        // SAFETY: each field that names a type parameter is bounded by
+        // `UniformPayload` here, and a field that names none has one layout
+        // at every instantiation.
+        unsafe impl<__M, #params> ::acvus_extern::UniformPayload<__M> for #ident #ty_generics
+        where
+            #(#written,)*
+            #(#bounded: ::acvus_extern::UniformPayload<__M>,)*
+        {
+        }
+    })
 }
 
 // -- #[derive(TyArg)] ------------------------------------------------
@@ -2037,6 +2157,9 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
     let borrowable = borrowing.borrowable(ident);
     quote! {
         impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident {}
+
+        // SAFETY: a type with no type parameter reaches none.
+        unsafe impl<__M> ::acvus_extern::UniformPayload<__M> for #ident {}
 
         // SAFETY: a converted type is no box and names no parameter.
         unsafe impl ::acvus_extern::Canonical<::acvus_extern::kind::Type> for #ident {

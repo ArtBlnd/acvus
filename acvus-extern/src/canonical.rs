@@ -22,9 +22,11 @@ use crate::ty_arg::{Kind, Var};
 ///   - acvus-extern has no trait impl on `Erased<Rt, X>` whose existence or
 ///     items depend on `X` at a runtime that makes values; the ones that
 ///     read `X` for the checker hold only at `TypesOnly`;
-///   - a derived payload's author asserts with `unsafe(uniform_payload)`
-///     that its layout reaches no uniform parameter through a trait, and a
-///     visible projection through one is refused;
+///   - a derived payload is proved `UniformPayload`: its layout reaches a
+///     uniform parameter only by holding it, and the parameter's own
+///     `Canonical` covers what it holds. `unsafe(uniform_payload)` is the
+///     author's assertion of the same where a field type has no impl, and a
+///     visible projection through a uniform parameter is refused;
 ///   - `Erased` is `repr(transparent)` over the runtime value;
 ///   - `PhantomData<fn() -> X>` has size 0 and alignment 1, and its auto
 ///     traits do not follow `X`;

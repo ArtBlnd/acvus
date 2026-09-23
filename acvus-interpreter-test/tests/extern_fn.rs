@@ -1421,7 +1421,6 @@ async fn a_deque_made_and_borrowed_at_one_concrete_type_is_read_in_place() {
 #[derive(ExternType)]
 #[repr(transparent)]
 #[extern_type(name = "Bag")]
-#[extern_type(unsafe(uniform_payload))]
 struct Bag<T>(Vec<T>)
 where
     T: acvus_extern::Var<acvus_extern::kind::Type>;

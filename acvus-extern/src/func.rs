@@ -205,6 +205,17 @@ where
     type Canon = Closure<A, R::Canon, E, Rt>;
 }
 
+// SAFETY: a `Closure` is an `Owned<Rt>` and a flag at every `A`, `R` and
+// `E`.
+unsafe impl<M, A, R, E, Rt> crate::UniformPayload<M> for Closure<A, R, E, Rt>
+where
+    A: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+}
+
 impl<A, R, E, Rt> TyArg for Closure<A, R, E, Rt>
 where
     A: ArgTypes,

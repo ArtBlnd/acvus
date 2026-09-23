@@ -284,6 +284,10 @@ where
     type Canon = Owned<R>;
 }
 
+// SAFETY: the runtime value is one `R::Value` at every `T`, and `R` is
+// bounded by `Runtime` here.
+unsafe impl<M, R, T> crate::UniformPayload<M> for Erased<R, T> where R: Runtime {}
+
 impl<R, T> TyArg for Erased<R, T>
 where
     R: HoldsNoValues,

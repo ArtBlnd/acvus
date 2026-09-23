@@ -35,7 +35,7 @@ use acvus_extern::{
     Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
     FxHashMap, Interner, One, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
     Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg,
-    TyVarBound, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry,
+    TyVarBound, UniformPayload, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry,
     kind,
 };
 
@@ -54,6 +54,7 @@ type EqOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>, Ref<K, Shared, Rt>), bool, E,
 /// LLVM must assume keeps it, and its sibling-call rule then refuses the
 /// tail jump every operation owes its successor (RFC-0052, enforced by
 /// `acvus-interpreter-test/benches/asm_probe.rs`).
+#[derive(UniformPayload)]
 enum Keying<K, E, Rt>
 where
     K: Var<kind::Type>,
@@ -105,12 +106,14 @@ where
     }
 }
 
+#[derive(UniformPayload)]
 struct Entry<K, V> {
     hash: u64,
     binding: Binding<K, V>,
 }
 
 /// A key and the value it names, each at the type the declaration gave it.
+#[derive(UniformPayload)]
 struct Binding<K, V> {
     key: K,
     value: V,
@@ -139,6 +142,7 @@ struct Placed<K, V> {
 /// insertion order, and the positions each hash occupies. A set's value
 /// slot is `()`: nothing reads it, and a runtime value written there would
 /// be a value the table owns for no reader.
+#[derive(UniformPayload)]
 pub struct Table<K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -475,6 +479,7 @@ macro_rules! stored_extern_type {
 
 // -- The map ------------------------------------------------------------
 
+#[derive(UniformPayload)]
 pub struct HashMap<K, V, E, Rt>(Table<K, V, E, Rt>, PhantomData<(K, V, E)>)
 where
     K: Var<kind::Type>,
@@ -573,6 +578,7 @@ where
 /// type. A map has two element types and a stage carries one `iter::next`,
 /// so reading the keys and reading the values are two stages, each with a
 /// body of its own.
+#[derive(UniformPayload)]
 pub struct KeysBody<K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -587,7 +593,6 @@ where
 /// The borrowed source over a map's keys.
 #[derive(ExternType)]
 #[extern_type(name = "Keys")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Keys<K, V, E, I, Rt>(KeysBody<K, V, E, Rt>, PhantomData<I>)
 where
@@ -616,6 +621,7 @@ where
 }
 
 /// As `KeysBody`, over the values.
+#[derive(UniformPayload)]
 pub struct ValuesBody<K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -630,7 +636,6 @@ where
 /// The borrowed source over a map's values.
 #[derive(ExternType)]
 #[extern_type(name = "Values")]
-#[extern_type(unsafe(uniform_payload))]
 #[repr(transparent)]
 pub struct Values<K, V, E, I, Rt>(ValuesBody<K, V, E, Rt>, PhantomData<I>)
 where
@@ -978,6 +983,7 @@ where
 /// thing a set does not have is a value to hold.
 type SetTable<K, E, Rt> = Table<K, (), E, Rt>;
 
+#[derive(UniformPayload)]
 pub struct HashSet<K, E, Rt>(SetTable<K, E, Rt>, PhantomData<(K, E)>)
 where
     K: Var<kind::Type>,
