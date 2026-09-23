@@ -17,7 +17,7 @@ use acvus_ast::report::{LineIndex, Report, Severity};
 use acvus_extern::Registry;
 use acvus_interpreter::{
     AcvusRuntime, Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter,
-    InterpreterContext, Kind, Mode as SpaceMode, RuntimeContext, SequentialExecutor, Space,
+    InterpreterContext, Kind, Log as SpaceLog, RuntimeContext, SequentialExecutor, Space,
     SpacePage, TokioExecutor, Value, hex,
 };
 use acvus_utils::Interner;
@@ -242,7 +242,7 @@ fn bound_literals(interner: &Interner, bindings: &[Binding]) -> Result<Bindings,
 fn open_space(interner: &Interner, dir: &Path) -> Result<Arc<Space>, String> {
     let store = DirStore::open(dir, interner).map_err(|e| e.to_string())?;
     Ok(Arc::new(Space::over(
-        SpaceMode::Log {
+        SpaceLog {
             checkpoint_every: 64,
         },
         Box::new(store),

@@ -16,7 +16,7 @@ use crate::value::Value;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
-enum Kind {
+pub enum NodeKind {
     /// The whole value as canonical bytes.
     State = 0,
     /// One op on the parent's value.
@@ -27,12 +27,26 @@ enum Kind {
 /// and its bytes. Its address is the hash of exactly this.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Node {
-    kind: Kind,
+    kind: NodeKind,
     parent: Option<NodeHash>,
     bytes: Vec<u8>,
 }
 
 impl Node {
+    pub fn kind(&self) -> NodeKind {
+        self.kind
+    }
+
+    /// The node this one follows; `None` at a log's first state.
+    pub fn parent(&self) -> Option<NodeHash> {
+        self.parent
+    }
+
+    /// The payload: a state's canonical bytes, or one op's.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// The node's bytes: kind, a parent flag and the parent, then the
     /// payload. The address is the BLAKE3 hash of exactly these.
     fn to_bytes(&self) -> Vec<u8> {
@@ -54,8 +68,8 @@ impl Node {
             .split_first()
             .ok_or_else(|| SpaceError::new("empty node"))?;
         let kind = match kind {
-            0 => Kind::State,
-            1 => Kind::Op,
+            0 => NodeKind::State,
+            1 => NodeKind::Op,
             other => return Err(SpaceError::new(format!("node kind {other}"))),
         };
         let (&flag, rest) = rest
@@ -83,15 +97,56 @@ impl Node {
     }
 }
 
-/// How a space keeps a value that changes in place.
+/// How a space keeps an extension value that changes in place: at a
+/// commit that changed it, what follows the head it was loaded at.
+///
+/// A commit whose nested value's head moved always ends in a state node,
+/// whatever the mode answers: the parent's state is what names its
+/// children's heads, and an op does not.
+pub trait Mode: Send + Sync {
+    fn record(&self, commit: &Commit) -> Record;
+}
+
+/// What a commit brings to its mode.
+pub struct Commit {
+    /// The ops recorded since the value was loaded.
+    pub ops: usize,
+    /// The op nodes between the head and the last state node before it.
+    pub ops_since_state: usize,
+}
+
+/// What a commit writes after the head.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mode {
-    /// Every commit is a state node; history is not kept.
-    Plain,
-    /// A commit appends the ops recorded since the last one, and ends in
-    /// a state node once `checkpoint_every` ops have accrued since the last
-    /// state, or when a nested value's head moved.
-    Log { checkpoint_every: usize },
+pub enum Record {
+    /// One state node; the ops are not kept.
+    State,
+    /// One op node per op, then a state node where `then_state`.
+    Ops { then_state: bool },
+}
+
+/// Every commit is a state node; the ops are not kept.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Plain;
+
+impl Mode for Plain {
+    fn record(&self, _: &Commit) -> Record {
+        Record::State
+    }
+}
+
+/// A commit appends its ops, and ends in a state node once
+/// `checkpoint_every` ops have accrued since the last state.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Log {
+    pub checkpoint_every: usize,
+}
+
+impl Mode for Log {
+    fn record(&self, commit: &Commit) -> Record {
+        Record::Ops {
+            then_state: commit.ops_since_state + commit.ops >= self.checkpoint_every,
+        }
+    }
 }
 
 /// The head of one identity: the node and the type its value has.
@@ -294,21 +349,30 @@ impl Store for DirStore {
 }
 
 pub struct Space {
-    mode: Mode,
+    mode: Box<dyn Mode>,
     store: Box<dyn Store>,
 }
 
 impl Space {
-    pub fn new(mode: Mode) -> Self {
+    pub fn new<M>(mode: M) -> Self
+    where
+        M: Mode + 'static,
+    {
         Self::over(mode, Box::new(MemoryStore::default()))
     }
 
-    pub fn over(mode: Mode, store: Box<dyn Store>) -> Self {
-        Self { mode, store }
+    pub fn over<M>(mode: M, store: Box<dyn Store>) -> Self
+    where
+        M: Mode + 'static,
+    {
+        Self {
+            mode: Box::new(mode),
+            store,
+        }
     }
 
-    pub fn mode(&self) -> Mode {
-        self.mode
+    pub fn mode(&self) -> &dyn Mode {
+        self.mode.as_ref()
     }
 
     pub fn head(&self, id: &str) -> Option<NodeHash> {
@@ -336,7 +400,9 @@ impl Space {
         Ok(hash)
     }
 
-    fn get(&self, hash: NodeHash) -> SpaceResult<Node> {
+    /// The node at `hash`: a head, or any node a head's chain reaches
+    /// through its parents.
+    pub fn get(&self, hash: NodeHash) -> SpaceResult<Node> {
         let bytes = self
             .store
             .get(hash)?
@@ -399,7 +465,7 @@ impl Space {
     fn load_at(&self, rt: &AcvusRuntime, ty: &Ty, head: NodeHash) -> SpaceResult<Value> {
         if !matches!(ty, Ty::UserDefined { .. }) {
             let node = self.get(head)?;
-            if node.kind != Kind::State {
+            if node.kind != NodeKind::State {
                 return Err(SpaceError::new(
                     "a value of a language shape is a state node",
                 ));
@@ -412,8 +478,8 @@ impl Space {
         let state = loop {
             let node = self.get(at)?;
             match node.kind {
-                Kind::State => break node,
-                Kind::Op => {
+                NodeKind::State => break node,
+                NodeKind::Op => {
                     at = node
                         .parent
                         .ok_or_else(|| SpaceError::new("an op node has a parent"))?;
@@ -436,7 +502,7 @@ impl Space {
             let mut bytes = Vec::new();
             layout::encode(rt, self, ty, value, &mut bytes)?;
             return self.put(Node {
-                kind: Kind::State,
+                kind: NodeKind::State,
                 parent: None,
                 bytes,
             });
@@ -456,7 +522,7 @@ impl Space {
             let mut bytes = Vec::new();
             (hooks.encode_state)(rt, value, &args, &encode, &mut bytes)?;
             Ok(Node {
-                kind: Kind::State,
+                kind: NodeKind::State,
                 parent,
                 bytes,
             })
@@ -470,21 +536,23 @@ impl Space {
         if ops.is_empty() && !children_moved {
             return Ok(head);
         }
-        match self.mode {
-            Mode::Plain => {
+        let commit = Commit {
+            ops: ops.len(),
+            ops_since_state: self.ops_since_state(head)?,
+        };
+        match self.mode.record(&commit) {
+            Record::State => {
                 head = self.put(state(Some(head))?)?;
             }
-            Mode::Log { checkpoint_every } => {
-                let mut since_state = self.ops_since_state(head)?;
+            Record::Ops { then_state } => {
                 for op in ops {
                     head = self.put(Node {
-                        kind: Kind::Op,
+                        kind: NodeKind::Op,
                         parent: Some(head),
                         bytes: op,
                     })?;
-                    since_state += 1;
                 }
-                if children_moved || since_state >= checkpoint_every {
+                if children_moved || then_state {
                     head = self.put(state(Some(head))?)?;
                 }
             }
@@ -565,12 +633,12 @@ impl Space {
         loop {
             let node = self.get(at)?;
             match (node.kind, node.parent) {
-                (Kind::State, _) => return Ok(n),
-                (Kind::Op, Some(parent)) => {
+                (NodeKind::State, _) => return Ok(n),
+                (NodeKind::Op, Some(parent)) => {
                     n += 1;
                     at = parent;
                 }
-                (Kind::Op, None) => return Err(SpaceError::new("an op node has a parent")),
+                (NodeKind::Op, None) => return Err(SpaceError::new("an op node has a parent")),
             }
         }
     }

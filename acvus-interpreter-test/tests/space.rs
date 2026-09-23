@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use acvus_ext::Deque;
 use acvus_extern::{Externs, Owned, Runtime};
-use acvus_interpreter::{AcvusRuntime, InterpreterContext, Mode, SequentialExecutor, Space, Value};
+use acvus_interpreter::{
+    AcvusRuntime, Commit, InterpreterContext, Log, Mode, NodeKind, Plain, Record, SequentialExecutor,
+    Space, Value,
+};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{LenTerm, ObjectTy, Ty, TypeArg};
@@ -60,7 +63,7 @@ fn with_deque(rt: &AcvusRuntime, value: &Value, f: impl FnOnce(&mut ValueDeque))
 fn a_value_of_a_language_shape_comes_back_equal() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Plain);
+    let space = Space::new(Plain);
     let ty = Ty::Object(ObjectTy::written(
         [
             (i.intern("name"), Ty::String),
@@ -109,7 +112,7 @@ fn a_value_of_a_language_shape_comes_back_equal() {
 fn a_deque_s_commit_is_its_ops_replayed_from_the_last_checkpoint() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Log {
+    let space = Space::new(Log {
         checkpoint_every: 100,
     });
     let ty = deque_ty(&i, Ty::I64);
@@ -138,7 +141,7 @@ fn a_deque_s_commit_is_its_ops_replayed_from_the_last_checkpoint() {
 fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Log {
+    let space = Space::new(Log {
         checkpoint_every: 2,
     });
     let ty = deque_ty(&i, Ty::I64);
@@ -171,7 +174,7 @@ fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
 fn in_plain_mode_a_commit_is_one_state_node() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Plain);
+    let space = Space::new(Plain);
     let ty = deque_ty(&i, Ty::I64);
     let mut d = deque_of(&rt, [Value::int(1)]);
     space.commit(&rt, "d", &ty, &mut d).unwrap();
@@ -191,7 +194,7 @@ fn in_plain_mode_a_commit_is_one_state_node() {
 fn a_deque_nested_in_a_deque_has_its_own_log() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Log {
+    let space = Space::new(Log {
         checkpoint_every: 100,
     });
     let inner_ty = deque_ty(&i, Ty::I64);
@@ -231,7 +234,7 @@ fn a_deque_nested_in_a_deque_has_its_own_log() {
 fn a_head_that_moved_refuses_the_commit() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Log {
+    let space = Space::new(Log {
         checkpoint_every: 100,
     });
     let ty = deque_ty(&i, Ty::I64);
@@ -256,7 +259,7 @@ fn a_head_that_moved_refuses_the_commit() {
 async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Log {
+    let space = Space::new(Log {
         checkpoint_every: 100,
     });
     let ty = deque_ty(&i, Ty::I64);
@@ -298,7 +301,7 @@ fn a_directory_store_holds_nodes_and_heads_across_openings() {
     {
         let store = acvus_interpreter::DirStore::open(dir.path(), &i).unwrap();
         let space = Space::over(
-            Mode::Log {
+            Log {
                 checkpoint_every: 100,
             },
             Box::new(store),
@@ -313,7 +316,7 @@ fn a_directory_store_holds_nodes_and_heads_across_openings() {
     }
     let store = acvus_interpreter::DirStore::open(dir.path(), &i).unwrap();
     let space = Space::over(
-        Mode::Log {
+        Log {
             checkpoint_every: 100,
         },
         Box::new(store),
@@ -333,7 +336,7 @@ fn a_directory_store_holds_nodes_and_heads_across_openings() {
 async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
     use acvus_interpreter::{Interpreter, InterpreterContext, SpacePage};
     let i = Interner::new();
-    let space = Arc::new(Space::new(Mode::Log {
+    let space = Arc::new(Space::new(Log {
         checkpoint_every: 100,
     }));
     let ty = deque_ty(&i, Ty::I64);
@@ -403,7 +406,7 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
 fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let i = Interner::new();
     let rt = runtime(&i);
-    let space = Space::new(Mode::Log {
+    let space = Space::new(Log {
         checkpoint_every: 100,
     });
     let inner_ty = deque_ty(&i, Ty::I64);
@@ -456,4 +459,58 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let field = |name: &str| unsafe { obj.field_by_name(i.intern(name)) }.expect("the field");
     assert_eq!(unsafe { field("name").as_str() }, "a");
     assert_eq!(ints(&rt, field("log")), [1, 2]);
+}
+
+/// A mode a host writes: every commit's ops, and a state only every third
+/// commit, counted by the mode itself.
+struct EveryThirdCommit(std::sync::atomic::AtomicUsize);
+
+impl Mode for EveryThirdCommit {
+    fn record(&self, _: &Commit) -> Record {
+        let n = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        Record::Ops {
+            then_state: n % 3 == 0,
+        }
+    }
+}
+
+/// A host's own mode decides what a commit writes, and the history is read
+/// back node by node from the head through the parents.
+#[test]
+fn a_host_s_mode_decides_the_nodes_and_the_history_reads_back() {
+    let i = Interner::new();
+    let rt = runtime(&i);
+    let space = Space::new(EveryThirdCommit(std::sync::atomic::AtomicUsize::new(0)));
+    let ty = deque_ty(&i, Ty::I64);
+    let mut d = deque_of(&rt, []);
+    space.commit(&rt, "d", &ty, &mut d).unwrap();
+    for n in 1..=3 {
+        let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
+        with_deque(&rt, &loaded, |d| {
+            d.push_back(Owned::from_value(Value::int(n)))
+        });
+        space.commit(&rt, "d", &ty, &mut loaded).unwrap();
+    }
+
+    let mut kinds = Vec::new();
+    let mut at = space.head("d");
+    while let Some(hash) = at {
+        let node = space.get(hash).unwrap();
+        kinds.push(node.kind());
+        at = node.parent();
+    }
+    kinds.reverse();
+    assert_eq!(
+        kinds,
+        [
+            NodeKind::State,
+            NodeKind::Op,
+            NodeKind::Op,
+            NodeKind::Op,
+            NodeKind::State,
+        ],
+        "the first state, one op per commit, and the state the third commit closes with"
+    );
+    let again = space.load(&rt, "d", &ty).unwrap().expect("held");
+    assert_eq!(ints(&rt, &again), [1, 2, 3]);
 }
