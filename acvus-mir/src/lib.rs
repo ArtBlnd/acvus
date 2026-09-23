@@ -3,6 +3,7 @@ pub mod cfg;
 pub mod error;
 pub mod graph;
 pub mod ir;
+pub mod laws;
 pub mod lower;
 pub mod optimize;
 pub mod place;

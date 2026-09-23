@@ -17,6 +17,7 @@ use syn::{
 };
 
 mod generics;
+mod law;
 mod subst;
 
 use generics::{VarKind, Vars, signature_path};
@@ -49,6 +50,7 @@ struct ExternFnAttr {
     /// call's task is `Sync`, declared beside the `async fn` at the same
     /// signature (RFC-0046).
     sync: Option<Ident>,
+    law: Option<law::LawAttr>,
 }
 
 impl Parse for ExternFnAttr {
@@ -60,6 +62,7 @@ impl Parse for ExternFnAttr {
             commutative: false,
             heavy: false,
             sync: None,
+            law: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -77,6 +80,16 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
+            if key == "law" {
+                if out.law.is_some() {
+                    return Err(syn::Error::new(key.span(), "`law(..)` is stated twice"));
+                }
+                out.law = Some(law::LawAttr::parse_after(key, input)?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<Token![=]>()?;
             if key == "name" {
                 out.name = Some(input.parse()?);
@@ -89,7 +102,7 @@ impl Parse for ExternFnAttr {
             } else {
                 return Err(syn::Error::new(
                     key.span(),
-                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, or `sync`",
+                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, or `law`",
                 ));
             }
             if !input.is_empty() {
@@ -1194,6 +1207,10 @@ fn generate_extern_fn(
         })
         .collect::<syn::Result<_>>()?;
     let declared_ty = signature(None);
+    let laws = match &attr.law {
+        Some(law) => law.checked_laws(fn_ident, &params, &ret, &returning)?,
+        None => quote! { ::acvus_extern::Laws::None },
+    };
 
     let fresh_vars = vars.fresh_vars_expr();
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
@@ -1243,6 +1260,7 @@ fn generate_extern_fn(
                     instance_of: #instance_of,
                     requires: __requires,
                     names: __vars.names(),
+                    laws: #laws,
                 },
                 instances: __instances,
             };

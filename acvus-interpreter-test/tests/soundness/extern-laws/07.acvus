@@ -1,0 +1,2 @@
+// expect 250
+let m = 0u8; for x in [3u8, 250u8, 7u8] { m = max(m, x); } m

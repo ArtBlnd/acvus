@@ -15,7 +15,10 @@ use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{ForSource, ValueId};
 use acvus_mir::optimize::{dce, ssa_pass};
 use acvus_mir::ty::{Effect, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
-use acvus_mir_test::lowered_script_module;
+use acvus_extern::{Registry, TypesOnly, Var, extern_fn, extern_registry, kind};
+use acvus_mir::analysis::carried::{ExternMerge, StorageMerge};
+use acvus_mir::laws::LawTable;
+use acvus_mir_test::{LoweredScript, lowered_script};
 use acvus_utils::Interner;
 
 struct Analyzed {
@@ -23,6 +26,7 @@ struct Analyzed {
     nest: LoopNest,
     invariants: Invariants,
     loans: Loans,
+    laws: LawTable,
 }
 
 impl Analyzed {
@@ -31,8 +35,15 @@ impl Analyzed {
     }
 
     fn with_externs(i: &Interner, source: &str, externs: &[Function]) -> Self {
-        let module =
-            lowered_script_module(i, source, externs).unwrap_or_else(|e| panic!("{source}\n{e}"));
+        Self::lowered(source, lowered_script(i, source, externs, vec![]))
+    }
+
+    fn with_registries(i: &Interner, source: &str, own: Vec<Registry<TypesOnly>>) -> Self {
+        Self::lowered(source, lowered_script(i, source, &[], own))
+    }
+
+    fn lowered(source: &str, lowered: Result<LoweredScript, String>) -> Self {
+        let LoweredScript { module, laws } = lowered.unwrap_or_else(|e| panic!("{source}\n{e}"));
         let mut cfg = promote(module.main);
         ssa_pass::run(&mut cfg);
         dce::run(&mut cfg);
@@ -44,6 +55,7 @@ impl Analyzed {
             nest,
             invariants,
             loans,
+            laws,
         }
     }
 
@@ -60,7 +72,13 @@ impl Analyzed {
     }
 
     fn state(&self, loop_: &Loop) -> CarriedState {
-        CarriedState::of(&self.cfg, loop_, &self.affine(loop_), &self.loans)
+        CarriedState::of(
+            &self.cfg,
+            loop_,
+            &self.affine(loop_),
+            &self.loans,
+            &self.laws,
+        )
     }
 
     fn carried(&self, loop_: &Loop) -> Vec<Carried> {
@@ -342,4 +360,197 @@ fn a_break_from_the_body_orders_the_iterations() {
         state.dependences
     );
     assert_eq!(state.strength(), Strength::Strong);
+}
+
+// -- Merges an extern declares (RFC-0082 rules 2, 3 and 6) ---------------
+
+/// Type-only fixtures: two copies of one binary function and of one
+/// storage write, one declaring laws and one declaring none, so that a
+/// loop's strength moves with the declaration alone.
+mod laws_fx {
+    use super::*;
+
+    #[extern_fn(effect = pure, law(associative, commutative))]
+    pub fn joined(a: i64, b: i64) -> i64 {
+        let _ = (a, b);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure, law(associative))]
+    pub fn joined_in_order(a: i64, b: i64) -> i64 {
+        let _ = (a, b);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn lawless(a: i64, b: i64) -> i64 {
+        let _ = (a, b);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure, law(fold(combine = append, identity = empty)))]
+    pub fn put<T>(c: &mut Vec<T>, x: T)
+    where
+        T: Var<kind::Type>,
+    {
+        let _ = (c, x);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn put_lawless<T>(c: &mut Vec<T>, x: T)
+    where
+        T: Var<kind::Type>,
+    {
+        let _ = (c, x);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn append<T>(c: &mut Vec<T>, part: Vec<T>)
+    where
+        T: Var<kind::Type>,
+    {
+        let _ = (c, part);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    pub fn empty<T>() -> Vec<T>
+    where
+        T: Var<kind::Type>,
+    {
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "lawful",
+            fns: [joined, joined_in_order, lawless, put, put_lawless, append, empty],
+        }
+    }
+}
+
+fn with_laws(source: &str) -> Analyzed {
+    Analyzed::with_registries(&Interner::new(), source, vec![laws_fx::registry()])
+}
+
+fn extern_merge(carried: Carried) -> Option<ExternMerge> {
+    match carried {
+        Carried::Merge {
+            op: MergeOp::Extern(merge),
+            exact: true,
+        } => Some(merge),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_max_over_a_range_is_a_weak_merge_on_the_extern() {
+    let a = Analyzed::of("let n = 10; let m = 0; for x in 0..n { m = max(m, x); } m");
+    let loop_ = a.sole_loop();
+    let state = a.state(loop_);
+    let [param] = state.params[..] else {
+        panic!("one carried value: {:?}", state.params);
+    };
+    let merge = extern_merge(param.carried)
+        .unwrap_or_else(|| panic!("`max` declares itself associative: {:?}", param.carried));
+    assert!(merge.commutative);
+    assert_eq!(state.strength(), Strength::Weak, "{:?}", state.dependences);
+}
+
+#[test]
+fn the_same_loop_over_an_extern_that_declares_no_law_is_a_strong_recurrence() {
+    let lawful = with_laws("let n = 10; let m = 0; for x in 0..n { m = lawful::joined(m, x); } m");
+    let loop_ = lawful.sole_loop();
+    assert!(extern_merge(lawful.carried(loop_)[0]).is_some());
+    assert_eq!(lawful.state(loop_).strength(), Strength::Weak);
+
+    let lawless = with_laws("let n = 10; let m = 0; for x in 0..n { m = lawful::lawless(m, x); } m");
+    let loop_ = lawless.sole_loop();
+    let state = lawless.state(loop_);
+    assert_eq!(lawless.carried(loop_), [Carried::Recurrence]);
+    assert_eq!(state.dependences, [Dependence::Recurrence(state.params[0].param)]);
+    assert_eq!(state.strength(), Strength::Strong);
+}
+
+#[test]
+fn the_state_as_the_second_operand_merges_only_when_the_extern_commutes() {
+    let commutes = with_laws("let n = 10; let m = 0; for x in 0..n { m = lawful::joined(x, m); } m");
+    let loop_ = commutes.sole_loop();
+    assert!(extern_merge(commutes.carried(loop_)[0]).is_some());
+
+    let in_order =
+        with_laws("let n = 10; let m = 0; for x in 0..n { m = lawful::joined_in_order(x, m); } m");
+    let loop_ = in_order.sole_loop();
+    assert_eq!(in_order.carried(loop_), [Carried::Recurrence]);
+
+    let first = with_laws(
+        "let n = 10; let m = 0; for x in 0..n { m = lawful::joined_in_order(m, x); } m",
+    );
+    let loop_ = first.sole_loop();
+    let merge = extern_merge(first.carried(loop_)[0]).expect("the state is the first operand");
+    assert!(!merge.commutative);
+}
+
+#[test]
+fn a_state_read_beside_the_merge_is_a_recurrence() {
+    let a = with_laws(
+        "let n = 10; let m = 0; let t = 0; for x in 0..n { m = lawful::joined(m, x); t = t + m; } t",
+    );
+    let loop_ = a.sole_loop();
+    let state = a.state(loop_);
+    assert!(
+        state
+            .params
+            .iter()
+            .all(|p| extern_merge(p.carried).is_none()),
+        "the loop reads the partial `m`: {:?}",
+        state.params
+    );
+    assert_eq!(state.strength(), Strength::Strong);
+}
+
+#[test]
+fn a_push_with_a_fold_law_is_a_weak_storage_merge_and_without_it_strong() {
+    let lawful = with_laws("let n = 3; let w = vec([0]); for x in 0..n { lawful::put(&mut w, x); } 0");
+    let loop_ = lawful.sole_loop();
+    let state = lawful.state(loop_);
+    let [StorageMerge { fold, .. }] = state.storage_merges[..] else {
+        panic!("`w` is merged through its storage: {:?}", state.storage_merges);
+    };
+    assert!(!fold.commutative);
+    assert!(state.dependences.is_empty(), "{:?}", state.dependences);
+    assert_eq!(state.strength(), Strength::Weak);
+    assert!(!state.runs_apart(), "a storage merge carries state");
+
+    let lawless =
+        with_laws("let n = 3; let w = vec([0]); for x in 0..n { lawful::put_lawless(&mut w, x); } 0");
+    let loop_ = lawless.sole_loop();
+    let state = lawless.state(loop_);
+    assert!(state.storage_merges.is_empty());
+    assert!(
+        matches!(state.dependences[..], [Dependence::StorageWrite(_)]),
+        "{:?}",
+        state.dependences
+    );
+    assert_eq!(state.strength(), Strength::Strong);
+}
+
+#[test]
+fn a_fold_storage_the_loop_also_reads_is_a_strong_write() {
+    let a = with_laws(
+        "let n = 3; let w = vec([0]); let t = 0; for x in 0..n { lawful::put(&mut w, x); t = t + w.len(); } t",
+    );
+    let loop_ = a.sole_loop();
+    let state = a.state(loop_);
+    assert!(state.storage_merges.is_empty(), "{:?}", state.storage_merges);
+    assert!(
+        state
+            .dependences
+            .iter()
+            .any(|d| matches!(d, Dependence::StorageWrite(_))),
+        "{:?}",
+        state.dependences
+    );
 }

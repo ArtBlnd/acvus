@@ -490,9 +490,11 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    by rule 4; `Merge { op, exact }`, whose back edges send `p ⊕ x` where the
    body reads `p` only as that operand and `p ⊕ x` only on the back edges;
    or `Recurrence`, anything else. Integer `+` and `*` are exact merges.
-   Float `+` and `*` are inexact merges. `&&`, `||`, `min` and `max` are
-   exact operations, but they reach MIR as a short-circuit `Diamond` and as
-   extension calls, and their recognition is open.
+   Float `+` and `*` are inexact merges. A call of an extern that declares
+   itself associative is an exact merge (RFC-0082), which is how `min` and
+   `max` over integers are recognized. `&&` and `||` are exact operations,
+   but they reach MIR as a short-circuit `Diamond`, and their recognition
+   is open.
 
 6. **Weak and strong, by kind.** A loop is weak when every carried
    parameter is an `Iv` or a `Merge`, no instruction of the body carries an
@@ -502,9 +504,10 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    count: how many merges a loop carries is a cost, and cost is the
    lowerer's. An inexact merge is weak and marked inexact, and whether to
    split one is the lowerer's, by its reassociation policy. A merge through
-   storage, such as `v.push(x)` in a loop, is a write and strong; what kind
-   of merge such an operation is, ordered or not, is declared by the extern,
-   not discovered here. A loop left from anywhere but its header, by a
+   storage, such as `v.push(x)` in a loop, is a write and strong unless the
+   extern declares what kind of merge it is, ordered or not, by a `fold`
+   law (RFC-0082 rule 3); that is declared by the extern, not discovered
+   here. A loop left from anywhere but its header, by a
    `break` or a `return`, is strong: the iterations after the one that
    leaves never run. RFC-0057 rule 3's question
    is a weak loop that carries nothing.
@@ -574,7 +577,7 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - An explicit `par for` — the facts the split needs are the checker's. Where
   they are not established, the author is told why, not asked to assert them.
 
-**Open.** How `&&`, `||`, `min` and `max` are recognized as merges. Whether
+**Open.** How `&&` and `||` are recognized as merges. Whether
 rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
 the machine offers an explicitly reassociable float reduction, which is a
 language decision. What a failed join drops and in what order, which is

@@ -1,0 +1,2 @@
+// expect 3
+let m = 100; for x in [5, 3, 9] { m = min(x, m); } m

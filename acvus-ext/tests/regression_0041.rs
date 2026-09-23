@@ -605,7 +605,7 @@ fn a_member_under_an_option_inside_a_vec_marks_the_vec_slot_and_declares_the_vec
     let FnKind::Extern { instances, .. } = &function.kind else {
         panic!("sum_opt is extern")
     };
-    assert!(!instances.generic, "Float keeps the generic instance out");
+    assert!(instances.generic.is_none(), "Float keeps the generic instance out");
     let [at_f64] = instances.concrete.as_slice() else {
         panic!("sum_opt has one member")
     };

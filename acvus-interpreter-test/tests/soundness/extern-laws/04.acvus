@@ -1,0 +1,2 @@
+// expect 10
+let s = 0; for x in 0..5 { s = wrapping_add(s, x); } s

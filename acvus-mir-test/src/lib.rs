@@ -8,6 +8,7 @@ use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::*;
 use acvus_mir::graph::{extract, lower as graph_lower};
 use acvus_mir::ir::MirModule;
+use acvus_mir::laws::LawTable;
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{ObjectTy, PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_declaration};
 use acvus_utils::{Astr, Freeze, Interner};
@@ -451,8 +452,7 @@ pub fn lowered_script_module(
     source: &str,
     extern_fns: &[Function],
 ) -> Result<MirModule, String> {
-    let mut pb = PolyBuilder::new();
-    lower_script_returning(interner, source, extern_fns, vec![], pb.fresh_ty_var())
+    lowered_script(interner, source, extern_fns, vec![]).map(|lowered| lowered.module)
 }
 
 /// `lowered_script_module` with registries of the caller's own beside the
@@ -463,8 +463,22 @@ pub fn lowered_script_module_with_registries(
     source: &str,
     own: Vec<Registry<TypesOnly>>,
 ) -> Result<MirModule, String> {
+    lowered_script(interner, source, &[], own).map(|lowered| lowered.module)
+}
+
+pub struct LoweredScript {
+    pub module: MirModule,
+    pub laws: LawTable,
+}
+
+pub fn lowered_script(
+    interner: &Interner,
+    source: &str,
+    extern_fns: &[Function],
+    own: Vec<Registry<TypesOnly>>,
+) -> Result<LoweredScript, String> {
     let mut pb = PolyBuilder::new();
-    lower_script_returning(interner, source, &[], own, pb.fresh_ty_var())
+    lower_script_returning(interner, source, extern_fns, own, pb.fresh_ty_var())
 }
 
 /// `lowered_script_module` for a host that declares what the entry returns
@@ -479,6 +493,7 @@ pub fn declared_script_module(
     let mut pb = PolyBuilder::new();
     let declared = lift_declaration(&ret, &mut pb);
     lower_script_returning(interner, source, extern_fns, vec![], declared)
+        .map(|lowered| lowered.module)
 }
 
 fn lower_script_returning(
@@ -487,7 +502,7 @@ fn lower_script_returning(
     extern_fns: &[Function],
     own: Vec<Registry<TypesOnly>>,
     ret: acvus_mir::ty::PolyTy,
-) -> Result<MirModule, String> {
+) -> Result<LoweredScript, String> {
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let ast =
         acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
@@ -533,10 +548,14 @@ fn lower_script_returning(
     if !errors.is_empty() {
         return Err(errors.join("\n"));
     }
-    result
+    let module = result
         .module(test_qref)
         .cloned()
-        .ok_or_else(|| "no module produced for target".to_string())
+        .ok_or_else(|| "no module produced for target".to_string())?;
+    Ok(LoweredScript {
+        module,
+        laws: LawTable::of(graph.functions.iter()),
+    })
 }
 
 /// Lower a script-mode source with the standard registries and run the full
@@ -587,7 +606,7 @@ pub fn optimized_script_module(
         return Err(errors.join("\n"));
     }
 
-    let opt = acvus_mir::graph::optimize::optimize(interner, result.modules, Opt::Full);
+    let opt = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, Opt::Full);
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
@@ -673,7 +692,12 @@ pub fn compile_script_module_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, opt);
+    let opt_result = acvus_mir::graph::optimize::optimize(
+        interner,
+        &LawTable::of(graph.functions.iter()),
+        result.modules,
+        opt,
+    );
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -808,7 +832,7 @@ pub fn refuse_script_mode_optimized(
         return Err(refusals);
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1178,7 +1202,7 @@ fn compile_multi_fn_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, opt);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1255,7 +1279,7 @@ pub fn compile_template_bound(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, result.modules, opt);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, opt);
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {

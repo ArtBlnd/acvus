@@ -1,0 +1,2 @@
+// expect -31
+let m = 100; for x in 0..10 { m = min(m, 50 - x * x); } m

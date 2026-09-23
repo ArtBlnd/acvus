@@ -80,6 +80,7 @@ fn advance_fn(i: &Interner) -> Function {
         task: Task::Sync,
         requires: vec![],
         effect_bounds: vec![],
+        laws: Default::default(),
     };
     let mut inner = PolyBuilder::new();
     Function {
@@ -95,7 +96,7 @@ fn advance_fn(i: &Interner) -> Function {
                     at(user(i, "Counter", vec![])),
                     at(user(i, "Doubled", vec![inner.fresh_ty_var()])),
                 ],
-                generic: false,
+                generic: None,
             },
             requires: vec![],
         },

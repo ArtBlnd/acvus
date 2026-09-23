@@ -1,0 +1,5 @@
+error: the law `fold` is stated over `f(s: &mut S, x: X)` returning nothing, and `put` is not of that shape
+ --> tests/compile_fail/law_fold_not_a_storage_write.rs:5:32
+  |
+5 | #[extern_fn(effect = pure, law(fold(combine = join, identity = empty)))]
+  |                                ^^^^

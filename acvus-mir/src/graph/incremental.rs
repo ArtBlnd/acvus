@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::Refusal;
 use crate::ir::MirModule;
+use crate::laws::LawTable;
 use crate::ty::{PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
 use crate::typeck::ProbeProduct;
 
@@ -686,7 +687,8 @@ impl IncrementalGraph {
             .filter(|(_, entry)| entry.refusals.is_empty())
             .map(|(&qref, entry)| (qref, entry.module.clone()))
             .collect();
-        let result = optimize(&self.interner, modules, Opt::Full);
+        let laws = LawTable::of(self.functions.values());
+        let result = optimize(&self.interner, &laws, modules, Opt::Full);
 
         let mut refused: FxHashMap<QualifiedRef, Vec<Refusal>> = FxHashMap::default();
         for (qref, errors) in result.errors {

@@ -46,7 +46,7 @@ fn pick_fn(i: &Interner) -> Function {
                     .into_iter()
                     .map(acvus_mir::ty::InstanceSig::any_task)
                     .collect(),
-                generic: false,
+                generic: None,
             },
             requires: vec![],
         },

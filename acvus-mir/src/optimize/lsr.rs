@@ -83,10 +83,11 @@ use crate::analysis::loans::{Loans, Summaries};
 use crate::analysis::loops::{Invariant, Invariants, LoopNest, NaturalLoop, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::laws::LawTable;
 use crate::optimize::ssa_pass::apply_subst;
 use crate::ty::Ty;
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
     let loans = Loans::build(cfg, Summaries::NONE);
@@ -96,7 +97,7 @@ pub fn run(cfg: &mut CfgBody) {
         };
         let invariants = Invariants::of(cfg);
         let affine = AffineValues::of(cfg, loop_, &invariants);
-        if CarriedState::of(cfg, loop_, &affine, &loans).strength() == Strength::Weak {
+        if CarriedState::of(cfg, loop_, &affine, &loans, laws).strength() == Strength::Weak {
             continue;
         }
         let uses = use_blocks(cfg);

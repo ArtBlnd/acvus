@@ -70,7 +70,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
 
     // Drops are inserted by the optimize pipeline, so a leaked element
     // trips the machine rather than passing quietly (RFC-0048 rule 6).
-    let result = graph_optimize::optimize(interner, lowered.modules.into_iter().collect(), opt);
+    let result = graph_optimize::optimize(interner, &acvus_mir::laws::LawTable::of(graph.functions.iter()), lowered.modules.into_iter().collect(), opt);
     assert!(
         result.errors.is_empty(),
         "validation failed: {:?}",

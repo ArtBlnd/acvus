@@ -104,7 +104,7 @@ fn an_async_fn_at_a_suspending_effect_needs_no_twin() {
     };
     assert_eq!(effect_bounds, &vec![EffectVarBound::Suspends]);
     assert!(instances.concrete.is_empty(), "{instances:?}");
-    assert!(instances.generic, "{instances:?}");
+    assert!(instances.generic.is_some(), "{instances:?}");
     let tasks: Vec<Task> = reg.handlers[&each].iter().map(|h| h.task()).collect();
     assert_eq!(tasks, vec![Task::Async]);
 }

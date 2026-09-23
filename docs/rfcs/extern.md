@@ -926,14 +926,23 @@ Status: Proposed
    A law or a postcondition no pass reads is not written, and a form is
    added to the vocabulary with the pass that reads it.
 2. **Laws of a binary extern.** `#[extern_fn(law(associative, commutative,
-   identity = e))]` on `f(a, b)` states that `f` is associative, that it is
-   commutative, and that `e`, a constant or a registered extern of no
-   argument, is its identity. Any subset may be stated.
+   identity = e))]` on `f(a: T, b: T) -> T` states that `f` is associative,
+   that it is commutative, and that `e` is its identity. Any nonempty subset
+   may be stated. `e` written as a literal is a constant, held to `T`; `e`
+   written as a path is a registered extern of no argument returning `T`,
+   `g` naming it in the declaration's own namespace and `ns::g` in `ns`.
+   A law is a declaration's, so each instance of a shared signature states
+   its own: `num::min` over an integer width is associative and commutative
+   with that width's `MAX` as identity, and over `f64` it states none.
 3. **Laws of a storage write.** `#[extern_fn(law(fold(combine = g,
-   identity = e)))]` on `f(&mut s, x)` states that a run of `f` over `s`
-   equals `g` applied to the states that runs over its parts reach, each
-   part started from `e`. Without `commutative`, `g` keeps the parts in
-   order. `g` and `e` are registered externs.
+   identity = e)))]` on `f(s: &mut S, x: X)` returning nothing states that
+   a run of `f` over `s` equals `g` applied to the states that runs over
+   its parts reach, each part started from `e`. `commutative` written
+   beside `fold` states that `g` commutes; without it, `g` keeps the parts
+   in order. `g` is a registered `g(s: &mut S, part: S)` and `e` a
+   registered `e() -> S`, named as rule 2 names an extern.
+   `associative` and `identity` beside `fold` are refused: they are a
+   binary function's.
 4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2))]` relates two terms
    by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
    parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and
@@ -943,12 +952,23 @@ Status: Proposed
    law and a postcondition as they trust an effect (RFC-0080 rule 3), and
    an extern that breaks one answers for what a pass does with it. A debug
    build evaluates each postcondition at the extern's return; a law is
-   sampled only by tests.
-6. **The readers.** `analysis::carried` classifies a header parameter
-   whose back edges send `f(p, x)` for an associative `f`, or pass it to a
-   storage write with a `fold` law, as a `Merge` (RFC-0066 rule 5), exact
-   when `f` is. Postconditions are read by the interval analysis and are
-   built with it.
+   sampled only by tests. `#[extern_fn]` refuses a law on a signature it
+   is not stated over, and a word outside the vocabulary; combining the
+   registries refuses an identity or a combine that names no registered
+   extern or one of the wrong type.
+6. **The readers.** `analysis::carried` reads a law through a call's
+   callee. A header parameter `p` whose back edges send `f(p, x)` for an
+   associative `f`, or `f(x, p)` when `f` also commutes, where the body
+   reads `p` only as that operand, is a `Merge` (RFC-0066 rule 5) on `f`,
+   exact. A storage `s` every write of which in the loop is a call of one
+   instance of an extern with a `fold` law, lending `s` through its first
+   argument and no other, and which the loop reads only to lend it to those
+   calls, is a merge through storage: it does not make the loop strong,
+   and it is carried state. Postconditions are read by the interval
+   analysis and are built with it. The merge names the extern instance,
+   and its identity and `combine` are for the split of RFC-0066 rule 10,
+   which is not built; until it is, no pass reads them, and rule 1 holds
+   them only by that reader to come.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no

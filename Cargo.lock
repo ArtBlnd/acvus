@@ -74,6 +74,7 @@ dependencies = [
 name = "acvus-extern"
 version = "0.1.0"
 dependencies = [
+ "acvus-ast",
  "acvus-extern-macro",
  "acvus-mir",
  "acvus-utils",

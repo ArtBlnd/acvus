@@ -317,7 +317,7 @@ where
         });
     }
 
-    let opt_result = graph_optimize::optimize(interner, result.modules.clone(), opt);
+    let opt_result = graph_optimize::optimize(interner, &acvus_mir::laws::LawTable::of(graph.functions.iter()), result.modules.clone(), opt);
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {

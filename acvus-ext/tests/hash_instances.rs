@@ -528,7 +528,7 @@ fn a_member_instance_marks_the_slots_holding_the_member() {
     let w = World::new();
     let instances = w.instances("t", "dot");
     assert!(
-        !instances.generic,
+        instances.generic.is_none(),
         "dot has no generic instance: `Float` is not on the value"
     );
     let [at_f64] = instances.concrete.as_slice() else {
@@ -596,7 +596,7 @@ fn a_family_in_a_member_signature_declares_its_two_casts_once() {
     );
     for name in ["erase", "materialize"] {
         let instances = w.instances("Vec", name);
-        assert!(!instances.generic);
+        assert!(instances.generic.is_none());
         assert_eq!(
             instances.concrete.len(),
             1,

@@ -1,0 +1,5 @@
+error: unknown law `idempotent`: a law is `associative`, `commutative`, `identity = e`, or `fold(combine = g, identity = e)` (RFC-0082)
+ --> tests/compile_fail/law_unknown_word.rs:5:45
+  |
+5 | #[extern_fn(effect = pure, law(associative, idempotent))]
+  |                                             ^^^^^^^^^^

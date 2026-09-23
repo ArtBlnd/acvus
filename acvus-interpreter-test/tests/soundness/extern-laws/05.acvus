@@ -1,0 +1,2 @@
+// expect 60
+let v = vec([0]); for x in 1..4 { v.push(x * 10); } let t = 0; for y in &v { t = t + *y; } t

@@ -11,6 +11,7 @@ use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
 use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
+use crate::laws::LawTable;
 use crate::optimize;
 use crate::ty::Ty;
 
@@ -40,6 +41,7 @@ pub enum Opt {
 
 pub fn optimize(
     interner: &Interner,
+    laws: &LawTable,
     modules: FxHashMap<QualifiedRef, MirModule>,
     opt: Opt,
 ) -> OptimizeResult {
@@ -92,9 +94,9 @@ pub fn optimize(
     let mut inputs = FxHashMap::default();
 
     for (qref, mut module) in inlined.modules {
-        run_pass2_body(interner, &mut module.main, opt);
+        run_pass2_body(interner, laws, &mut module.main, opt);
         for closure in module.closures.values_mut() {
-            run_pass2_body(interner, closure, opt);
+            run_pass2_body(interner, laws, closure, opt);
         }
         inputs.insert(qref, required_inputs(&module.main));
 
@@ -296,11 +298,11 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-fn run_pass2_body(interner: &Interner, body: &mut crate::ir::MirBody, opt: Opt) {
+fn run_pass2_body(interner: &Interner, laws: &LawTable, body: &mut crate::ir::MirBody, opt: Opt) {
     let mut cfg = cfg::promote(std::mem::take(body));
     match opt {
         Opt::None => run_pass2_required(interner, &mut cfg),
-        Opt::Full => run_pass2(interner, &mut cfg),
+        Opt::Full => run_pass2(interner, laws, &mut cfg),
     }
     *body = cfg::demote(cfg);
     optimize::rejoin::run(body);
@@ -323,7 +325,7 @@ fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
-fn run_pass2(interner: &Interner, cfg: &mut CfgBody) {
+fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     // RFC-0050: an aggregate no use lets out of the body never exists.
@@ -354,7 +356,7 @@ fn run_pass2(interner: &Interner, cfg: &mut CfgBody) {
     // RFC-0056: after the hoist, which puts a loop's invariants above the
     // header and leaves the preheader a block of its own; before the
     // reorder, which schedules within a block.
-    optimize::lsr::run(cfg);
+    optimize::lsr::run(cfg, laws);
     // A block that only jumps is its target: after `lsr`, which writes a
     // reduction into the preheader `code_motion` may have left empty;
     // before `reorder`, which schedules within a block.

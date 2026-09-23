@@ -1,0 +1,2 @@
+// expect 10
+let m = 0; let t = 0; for x in 0..5 { m = max(m, x); t = t + m; } t

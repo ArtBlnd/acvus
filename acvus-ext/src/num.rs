@@ -198,7 +198,7 @@ fn octal_text(a: impl fmt::Octal) -> String {
 /// signatures. Each width gets its own Rust module, so a handler is named
 /// exactly like the `std` method it calls.
 macro_rules! int_common {
-    ($t:ty) => {
+    ($t:ident) => {
         use acvus_extern::extern_fn;
 
         // -- checked ----------------------------------------------------
@@ -240,7 +240,11 @@ macro_rules! int_common {
 
         // -- wrapping ---------------------------------------------------
 
-        #[extern_fn(instance_of = crate::num::sig::wrapping_add, effect = pure)]
+        #[extern_fn(
+            instance_of = crate::num::sig::wrapping_add,
+            effect = pure,
+            law(associative, commutative, identity = 0)
+        )]
         pub fn wrapping_add(a: $t, b: $t) -> $t {
             a.wrapping_add(b)
         }
@@ -250,7 +254,11 @@ macro_rules! int_common {
             a.wrapping_sub(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::wrapping_mul, effect = pure)]
+        #[extern_fn(
+            instance_of = crate::num::sig::wrapping_mul,
+            effect = pure,
+            law(associative, commutative, identity = 1)
+        )]
         pub fn wrapping_mul(a: $t, b: $t) -> $t {
             a.wrapping_mul(b)
         }
@@ -353,12 +361,20 @@ macro_rules! int_common {
 
         // -- ordering ---------------------------------------------------
 
-        #[extern_fn(instance_of = crate::num::sig::min, effect = pure)]
+        #[extern_fn(
+            instance_of = crate::num::sig::min,
+            effect = pure,
+            law(associative, commutative, identity = $t::MAX)
+        )]
         pub fn min(a: $t, b: $t) -> $t {
             a.min(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::max, effect = pure)]
+        #[extern_fn(
+            instance_of = crate::num::sig::max,
+            effect = pure,
+            law(associative, commutative, identity = $t::MIN)
+        )]
         pub fn max(a: $t, b: $t) -> $t {
             a.max(b)
         }
@@ -493,7 +509,7 @@ macro_rules! int_unsigned {
 /// eight declarations; the signature they instantiate collects them into
 /// one language name when the registries combine (RFC-0019).
 macro_rules! signed_width {
-    ($m:ident: $t:ty) => {
+    ($m:ident: $t:ident) => {
         pub mod $m {
             use acvus_extern::{Registry, Runtime, extern_registry};
 
@@ -530,7 +546,7 @@ macro_rules! signed_width {
 }
 
 macro_rules! unsigned_width {
-    ($m:ident: $t:ty, pow = $pow:ident) => {
+    ($m:ident: $t:ident, pow = $pow:ident) => {
         pub mod $m {
             use acvus_extern::{Registry, Runtime, extern_registry};
 
@@ -874,5 +890,123 @@ mod tests {
             reg.handlers.len() - core.handlers.len(),
             shared_signatures + float_fns + int_constants + float_constants
         );
+    }
+
+    /// A fixed-seed linear congruential sequence (Knuth's MMIX constants),
+    /// so a failing law names the same inputs on every run.
+    struct Samples(u64);
+
+    const SEED: u64 = 0x5eed_1a55_0c1a_7e00;
+    const SAMPLED: usize = 64;
+
+    impl Samples {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0
+        }
+    }
+
+    struct Declared<T> {
+        name: &'static str,
+        f: fn(T, T) -> T,
+        identity: T,
+    }
+
+    /// Each declared law of `min`, `max`, `wrapping_add` and `wrapping_mul`
+    /// at one width, over the width's edges and a sample of its words.
+    macro_rules! laws_hold_at {
+        ($test:ident, $m:ident: $t:ident) => {
+            #[test]
+            fn $test() {
+                let edges: [$t; 5] = [$t::MIN, $t::MAX, 0, 1, $t::MAX / 2];
+                let mut samples = Samples(SEED);
+                let words: Vec<$t> = edges
+                    .into_iter()
+                    .chain((0..SAMPLED).map(|_| samples.next() as $t))
+                    .collect();
+                let declared: [Declared<$t>; 4] = [
+                    Declared { name: "min", f: $m::min, identity: $t::MAX },
+                    Declared { name: "max", f: $m::max, identity: $t::MIN },
+                    Declared { name: "wrapping_add", f: $m::wrapping_add, identity: 0 },
+                    Declared { name: "wrapping_mul", f: $m::wrapping_mul, identity: 1 },
+                ];
+                for Declared { name, f, identity } in declared {
+                    for &a in &words {
+                        assert_eq!(f(a, identity), a, "{name}: identity on the right of {a}");
+                        assert_eq!(f(identity, a), a, "{name}: identity on the left of {a}");
+                        for &b in &words {
+                            assert_eq!(f(a, b), f(b, a), "{name}: commutes at {a}, {b}");
+                            for &c in words.iter().take(16) {
+                                assert_eq!(
+                                    f(f(a, b), c),
+                                    f(a, f(b, c)),
+                                    "{name}: associates at {a}, {b}, {c}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    laws_hold_at!(declared_laws_hold_at_i8, i8s: i8);
+    laws_hold_at!(declared_laws_hold_at_i16, i16s: i16);
+    laws_hold_at!(declared_laws_hold_at_i32, i32s: i32);
+    laws_hold_at!(declared_laws_hold_at_i64, i64s: i64);
+    laws_hold_at!(declared_laws_hold_at_u8, u8s: u8);
+    laws_hold_at!(declared_laws_hold_at_u16, u16s: u16);
+    laws_hold_at!(declared_laws_hold_at_u32, u32s: u32);
+    laws_hold_at!(declared_laws_hold_at_u64, u64s: u64);
+
+    /// The identities the laws name resolve to the constants the property
+    /// tests above sample against.
+    #[test]
+    fn min_and_max_name_their_width_s_bounds_as_identities() {
+        use acvus_extern::{BinaryLaws, FnKind, Identity, Laws, QualifiedRef};
+        let i = Interner::new();
+        let mut registries = vec![num_registry::<TypesOnly>()];
+        registries.extend(num_width_registries());
+        registries.extend(num_constant_registries());
+        let reg = Externs::combine(registries, &i).expect("registries combine");
+        let named = |ns: &str, name: &str| QualifiedRef::qualified(i.intern(ns), i.intern(name));
+        for (sig, bound) in [("min", "MAX"), ("max", "MIN")] {
+            let function = reg
+                .functions
+                .iter()
+                .find(|f| f.qref == named("num", sig))
+                .expect("the signature is declared");
+            let FnKind::Extern { instances, .. } = &function.kind else {
+                panic!("{sig} is an extern")
+            };
+            let mut widths: Vec<&str> = Vec::new();
+            for instance in &instances.concrete {
+                let acvus_extern::PolyTy::Fn { ret, .. } = &instance.ty else {
+                    panic!("an instance is a function")
+                };
+                let width = match &**ret {
+                    acvus_extern::PolyTy::Int(width) => width.name(),
+                    acvus_extern::PolyTy::Float => {
+                        assert_eq!(instance.laws, Laws::None, "{sig} over f64 declares no law");
+                        continue;
+                    }
+                    other => panic!("{sig} at {other:?}"),
+                };
+                assert_eq!(
+                    instance.laws,
+                    Laws::Binary(BinaryLaws {
+                        associative: true,
+                        commutative: true,
+                        identity: Some(Identity::Extern(named(width, bound))),
+                    }),
+                    "{sig} at {width}"
+                );
+                widths.push(width);
+            }
+            assert_eq!(widths.len(), 8, "{sig}: {widths:?}");
+        }
     }
 }

@@ -371,7 +371,7 @@ pub fn check(
     }
 
     let watch = Stopwatch::start(timed);
-    let optimized = optimize::optimize(interner, lowered.modules, opt);
+    let optimized = optimize::optimize(interner, &acvus_mir::laws::LawTable::of(graph.functions.iter()), lowered.modules, opt);
     stages.optimize = watch.stop();
 
     diagnostics.extend(

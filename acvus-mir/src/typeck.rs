@@ -4211,7 +4211,7 @@ where
             effect_bounds: vec![],
             instances: Some(crate::ty::Instances {
                 concrete: Vec::new(),
-                generic: false,
+                generic: None,
             }),
             requires: Vec::new(),
         }
@@ -4946,7 +4946,7 @@ where
                 continue;
             };
             let concrete = instances.concrete.iter().map(|c| &c.ty);
-            let generic = instances.generic.then_some(&scheme.ty);
+            let generic = instances.generic.as_ref().map(|_| &scheme.ty);
             for instance in concrete.chain(generic) {
                 let TyTerm::Fn { params, ret, .. } = instance else {
                     continue;

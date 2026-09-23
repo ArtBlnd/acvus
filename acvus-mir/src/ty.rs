@@ -358,13 +358,19 @@ impl TyVarBound {
 }
 
 /// The instances of an Extern function, numbered as the runtime numbers
-/// its handlers: the concrete ones in order, then the generic one when
-/// `generic` holds (RFC-0040). `acvus_extern::Instances` is the runtime's
+/// its handlers: the concrete ones in order, then the generic one
+/// (RFC-0040). `acvus_extern::Instances` is the runtime's
 /// half of that contract.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Instances {
     pub concrete: Vec<InstanceSig>,
-    pub generic: bool,
+    pub generic: Option<GenericSig>,
+}
+
+/// The generic instance, whose type is the function's own scheme.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GenericSig {
+    pub laws: crate::laws::Laws,
 }
 
 impl Instances {
@@ -388,6 +394,7 @@ pub struct InstanceSig {
     /// that is no signature's instance states its bounds on its scheme, so
     /// its instances carry none.
     pub effect_bounds: Vec<EffectVarBound>,
+    pub laws: crate::laws::Laws,
 }
 
 impl InstanceSig {
@@ -398,6 +405,7 @@ impl InstanceSig {
             task: Task::Sync,
             requires: Vec::new(),
             effect_bounds: Vec::new(),
+            laws: crate::laws::Laws::None,
         }
     }
 }

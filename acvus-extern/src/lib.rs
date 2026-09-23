@@ -86,11 +86,13 @@ pub use acvus_extern_macro::{
 };
 
 pub use acvus_mir::graph::{FnKind, Function};
+pub use acvus_mir::laws::{BinaryLaws, FoldLaw, Identity, Laws};
 pub use acvus_mir::ty::{
     CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm, LenTerm, Mutability, ObjectTy, ParamTerm, Poly,
     HeldTy, Home, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeRegistry,
     UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };
+pub use acvus_ast::Literal;
 pub use acvus_utils::{Astr, Interner, QualifiedRef};
 pub use futures::future::{BoxFuture, Either};
 pub use rustc_hash::FxHashMap;

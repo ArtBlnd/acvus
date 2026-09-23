@@ -241,3 +241,44 @@ fn a_weak_loop_is_left_as_written_and_a_strong_one_is_reduced() {
          start and step stand above it and the body keeps only `acc * 2`:\n{strong}"
     );
 }
+
+/// `max` declares itself associative and commutative (RFC-0082 rule 2), so
+/// the loop merging through it is weak; `saturating_add` over `i64`
+/// declares no law, since it is not associative, so the loop merging
+/// through it carries a recurrence and is strong.
+const MERGED_BY_LAW: &str = "\
+let acc = 0; \
+let i = 0; \
+while i < @n { \
+    acc = max(acc, i * @k + @x); \
+    i = i + 1; \
+} \
+acc";
+
+const MERGED_WITHOUT_LAW: &str = "\
+let acc = 0; \
+let i = 0; \
+while i < @n { \
+    acc = saturating_add(acc, i * @k + @x); \
+    i = i + 1; \
+} \
+acc";
+
+#[test]
+fn a_loop_merging_through_a_lawful_extern_is_left_as_written() {
+    let i = Interner::new();
+    let names = ctx(&i, &["n", "k", "x"]);
+    let lawful = compile_script_optimized(&i, MERGED_BY_LAW, &names).expect("it compiles");
+    let lawless = compile_script_optimized(&i, MERGED_WITHOUT_LAW, &names).expect("it compiles");
+    assert_eq!(
+        where_it_multiplies(&lawful),
+        ["L1: 1".to_string()],
+        "`max` is a declared merge and `i` an induction variable, so the loop is \
+         weak and keeps `i * @k` in its body:\n{lawful}"
+    );
+    assert_eq!(
+        where_it_multiplies(&lawless),
+        [format!("{ENTRY}: 2")],
+        "`saturating_add` declares no law, so the loop is strong and reduced:\n{lawless}"
+    );
+}

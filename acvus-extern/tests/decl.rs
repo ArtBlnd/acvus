@@ -1438,7 +1438,7 @@ fn instance_for<'a>(
         .concrete
         .iter()
         .position(|sig| acvus_mir::ty::matches_poly(callee_ty, &sig.ty));
-    let index = concrete.or_else(|| instances.generic.then(|| instances.generic_index()))?;
+    let index = concrete.or_else(|| instances.generic.as_ref().map(|_| instances.generic_index()))?;
     Some(&handlers[index])
 }
 
@@ -2133,7 +2133,7 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         panic!("first is extern")
     };
     assert_eq!(instances.concrete.len(), 2);
-    assert!(!instances.generic);
+    assert!(instances.generic.is_none());
     let acvus_extern::TyVarBound::OneOf { shapes, .. } = &bounds[0] else {
         panic!("the instance variable is bounded")
     };
@@ -2689,6 +2689,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     instance_of: None,
                     requires: Vec::new(),
                     names: Vec::new(),
+                    laws: acvus_extern::Laws::None,
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(

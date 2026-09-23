@@ -4463,7 +4463,7 @@ impl<'src> Solver<'src> {
         let mut bounded_effects: Vec<EffectVarId> = Vec::new();
         let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
             instances.concrete.is_empty()
-                && !instances.generic
+                && instances.generic.is_none()
                 && compiler_instances.is_empty()
                 && structural.is_none()
         });
@@ -4552,7 +4552,7 @@ impl<'src> Solver<'src> {
                     })
                     .chain(compiler_instances)
                     .collect(),
-                generic: instances.generic.then(|| GenericInstance {
+                generic: instances.generic.as_ref().map(|_| GenericInstance {
                     instance: instances.generic_index(),
                     ty: scheme.ty.clone(),
                 }),
@@ -5169,9 +5169,10 @@ mod requirement_tests {
                     task: Task::Sync,
                     requires: Vec::new(),
                     effect_bounds: Vec::new(),
+                    laws: crate::laws::Laws::None,
                 })
                 .collect(),
-            generic: false,
+            generic: None,
         }
     }
 

@@ -142,7 +142,7 @@ fn externs(i: &Interner) -> Vec<Function> {
                     .into_iter()
                     .map(acvus_mir::ty::InstanceSig::any_task)
                     .collect(),
-                generic: true,
+                generic: Some(Default::default()),
             },
         ),
     ]

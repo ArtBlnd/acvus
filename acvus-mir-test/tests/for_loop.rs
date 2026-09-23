@@ -10,7 +10,7 @@ use acvus_mir::analysis::loops::{
 };
 use acvus_mir::cfg::{BlockIdx, promote};
 use acvus_mir::optimize::{dce, ssa_pass};
-use acvus_mir_test::{compile_script_ir, compile_script_optimized, lowered_script_module};
+use acvus_mir_test::{compile_script_ir, compile_script_optimized, lowered_script, lowered_script_module};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -206,8 +206,8 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
             false,
         ),
     ] {
-        let module = lowered_script_module(&i, source, &[]).expect("it compiles");
-        let mut cfg = promote(module.main);
+        let lowered = lowered_script(&i, source, &[], vec![]).expect("it compiles");
+        let mut cfg = promote(lowered.module.main);
         ssa_pass::run(&mut cfg);
         dce::run(&mut cfg);
         let headers = for_headers(&cfg);
@@ -219,7 +219,7 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
         let loop_ = nest.get(nest.by_header(header).expect("the header heads a loop"));
         let affine = AffineValues::of(&cfg, loop_, &invariants);
         let loans = Loans::build(&cfg, Summaries::NONE);
-        let state = CarriedState::of(&cfg, loop_, &affine, &loans);
+        let state = CarriedState::of(&cfg, loop_, &affine, &loans, &lowered.laws);
         assert_eq!(state.runs_apart(), apart, "{source}");
     }
 }

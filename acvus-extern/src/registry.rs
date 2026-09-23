@@ -4,6 +4,7 @@
 use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::laws::{FoldLaw, Identity, Laws};
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
     ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg,
@@ -37,6 +38,7 @@ pub struct FnDecl {
     /// `#[extern_fn]` read its `Instance` parameters.
     pub requires: Vec<Requirement>,
     pub names: Vec<Named>,
+    pub laws: Laws,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +182,7 @@ where
             instance_of: None,
             requires: Vec::new(),
             names: Vec::new(),
+            laws: Laws::None,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -302,6 +305,7 @@ where
             instance_of: None,
             requires: Vec::new(),
             names: decl.names,
+            laws: decl.laws,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -499,6 +503,21 @@ pub enum CombineError {
         instance: String,
         ty: PolyTy,
     },
+    LawNamesUnfitExtern {
+        function: String,
+        law: &'static str,
+        named: String,
+        expected: &'static str,
+    },
+    LawOnUnfitSignature {
+        function: String,
+        law: &'static str,
+    },
+    IdentityNotOfResultType {
+        function: String,
+        constant: acvus_ast::Literal,
+        ty: PolyTy,
+    },
     /// A handler that runs above the task its declaration names (RFC-0046).
     HandlerTask {
         function: String,
@@ -572,6 +591,28 @@ impl fmt::Display for CombineError {
                  `#[state]` value, and one taking a `&str` or a projection parameter are the \
                  shapes that have no mono glue. Give that instance one of the other shapes, \
                  or drop the requirement."
+            ),
+            Self::LawNamesUnfitExtern {
+                function,
+                law,
+                named,
+                expected,
+            } => write!(
+                f,
+                "{function} declares `{law}` naming `{named}`, which must be {expected}"
+            ),
+            Self::LawOnUnfitSignature { function, law } => write!(
+                f,
+                "{function} declares `{law}`, which its type is not of the shape to state"
+            ),
+            Self::IdentityNotOfResultType {
+                function,
+                constant,
+                ty,
+            } => write!(
+                f,
+                "{function} declares the identity {constant:?}, which is not a value of its \
+                 result type {ty:?}"
             ),
             Self::HandlerTask {
                 function,
@@ -750,11 +791,16 @@ pub struct InstanceAt {
 struct Collected<R: Runtime> {
     decl: SignatureDecl,
     instance_types: Vec<PolyTy>,
-    instances: Vec<DeclaredInstance<R>>,
+    instances: Vec<LawfulInstance<R>>,
     /// One per declared instance, which `instances` is not: a declaration
     /// with a `sync =` companion contributes two handlers and one type.
     entries: Vec<InstanceAt>,
     casts: Vec<CastRule>,
+}
+
+struct LawfulInstance<R: Runtime> {
+    instance: DeclaredInstance<R>,
+    laws: Laws,
 }
 
 impl<R: Runtime> Externs<R> {
@@ -903,7 +949,7 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
                     effect_bounds: decl.effect_bounds,
-                    instances: instances.signatures(),
+                    instances: instances.signatures(&decl.laws),
                     requires: decl
                         .requires
                         .iter()
@@ -933,7 +979,7 @@ impl<R: Runtime> Externs<R> {
             let row: Option<Vec<InstanceRun>> = c
                 .instances
                 .iter()
-                .map(|arm| arm.handler.instance())
+                .map(|arm| arm.instance.handler.instance())
                 .collect();
             if let Some(row) = row {
                 instance_table.by_signature.insert(c.decl.qref, row);
@@ -945,8 +991,16 @@ impl<R: Runtime> Externs<R> {
             for cast in c.casts {
                 types.register_cast(cast);
             }
+            let signatures = acvus_mir::ty::Instances {
+                concrete: c
+                    .instances
+                    .iter()
+                    .map(|arm| arm.instance.signature_under(arm.laws.clone()))
+                    .collect(),
+                generic: None,
+            };
             let instances = Instances {
-                concrete: c.instances,
+                concrete: c.instances.into_iter().map(|arm| arm.instance).collect(),
                 generic: None,
             };
             functions.push(Function {
@@ -954,12 +1008,30 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds,
                     effect_bounds: Vec::new(),
-                    instances: instances.signatures(),
+                    instances: signatures,
                     requires: Vec::new(),
                 },
                 ty: c.decl.ty,
             });
             handlers.insert(c.decl.qref, instances.into_handlers());
+        }
+        let declared: FxHashMap<QualifiedRef, &Function> =
+            functions.iter().map(|f| (f.qref, f)).collect();
+        for function in &functions {
+            let FnKind::Extern { instances, .. } = &function.kind else {
+                continue;
+            };
+            let concrete = instances.concrete.iter().map(|at| (&at.ty, &at.laws));
+            let generic = instances.generic.as_ref().map(|at| (&function.ty, &at.laws));
+            for (ty, laws) in concrete.chain(generic) {
+                LawSite {
+                    interner,
+                    declared: &declared,
+                    function: function.qref,
+                    ty,
+                }
+                .resolve(laws)?;
+            }
         }
         Ok(Externs {
             functions,
@@ -968,6 +1040,148 @@ impl<R: Runtime> Externs<R> {
             space,
             instances: instance_table,
         })
+    }
+}
+
+struct LawSite<'a> {
+    interner: &'a Interner,
+    declared: &'a FxHashMap<QualifiedRef, &'a Function>,
+    function: QualifiedRef,
+    ty: &'a PolyTy,
+}
+
+impl LawSite<'_> {
+    fn resolve(&self, laws: &Laws) -> Result<(), CombineError> {
+        let law = match laws {
+            Laws::None => return Ok(()),
+            Laws::Binary(_) => "law",
+            Laws::Fold(_) => "fold",
+        };
+        let PolyTy::Fn { params, ret, .. } = self.ty else {
+            return Err(self.unshaped(law));
+        };
+        match laws {
+            Laws::None => Ok(()),
+            Laws::Binary(binary) => match &binary.identity {
+                None => Ok(()),
+                Some(Identity::Extern(named)) => self.returning(
+                    named,
+                    "identity",
+                    ret,
+                    "a registered extern of no argument returning the result type",
+                ),
+                Some(Identity::Const(constant)) => match is_value_of(constant, ret) {
+                    true => Ok(()),
+                    false => Err(CombineError::IdentityNotOfResultType {
+                        function: written(self.interner, self.function),
+                        constant: constant.clone(),
+                        ty: (**ret).clone(),
+                    }),
+                },
+            },
+            Laws::Fold(FoldLaw {
+                combine, identity, ..
+            }) => {
+                let Some(PolyTy::Ref(acvus_mir::ty::Mutability::Mut, state)) =
+                    params.first().map(|p| &p.ty)
+                else {
+                    return Err(self.unshaped(law));
+                };
+                let state = state.ty();
+                self.combining(combine, &state)?;
+                self.returning(
+                    identity,
+                    "fold identity",
+                    &state,
+                    "a registered extern of no argument returning the folded state",
+                )
+            }
+        }
+    }
+
+    fn unshaped(&self, law: &'static str) -> CombineError {
+        CombineError::LawOnUnfitSignature {
+            function: written(self.interner, self.function),
+            law,
+        }
+    }
+
+    fn named(
+        &self,
+        named: &QualifiedRef,
+        law: &'static str,
+        expected: &'static str,
+    ) -> Result<&PolyTy, CombineError> {
+        let refused = || CombineError::LawNamesUnfitExtern {
+            function: written(self.interner, self.function),
+            law,
+            named: written(self.interner, *named),
+            expected,
+        };
+        let function = self.declared.get(named).ok_or_else(refused)?;
+        match &function.kind {
+            FnKind::Extern { .. } => Ok(&function.ty),
+            FnKind::Local(_) => Err(refused()),
+        }
+    }
+
+    fn returning(
+        &self,
+        named: &QualifiedRef,
+        law: &'static str,
+        value: &PolyTy,
+        expected: &'static str,
+    ) -> Result<(), CombineError> {
+        let ty = self.named(named, law, expected)?;
+        match ty {
+            PolyTy::Fn { params, ret, .. }
+                if params.is_empty() && unify_patterns(ret, value).is_some() =>
+            {
+                Ok(())
+            }
+            _ => Err(CombineError::LawNamesUnfitExtern {
+                function: written(self.interner, self.function),
+                law,
+                named: written(self.interner, *named),
+                expected,
+            }),
+        }
+    }
+
+    fn combining(&self, named: &QualifiedRef, state: &PolyTy) -> Result<(), CombineError> {
+        const EXPECTED: &str =
+            "a registered extern `g(s: &mut S, part: S)` over the folded state `S`";
+        let takes_two_states = match self.named(named, "fold combine", EXPECTED)? {
+            PolyTy::Fn { params, ret, .. } if **ret == PolyTy::Unit => match params.as_slice() {
+                [into, part] => match &into.ty {
+                    PolyTy::Ref(acvus_mir::ty::Mutability::Mut, into) => {
+                        *into.ty() == part.ty && unify_patterns(&part.ty, state).is_some()
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        };
+        match takes_two_states {
+            true => Ok(()),
+            false => Err(CombineError::LawNamesUnfitExtern {
+                function: written(self.interner, self.function),
+                law: "fold combine",
+                named: written(self.interner, *named),
+                expected: EXPECTED,
+            }),
+        }
+    }
+}
+
+fn is_value_of(constant: &acvus_ast::Literal, ty: &PolyTy) -> bool {
+    use acvus_ast::Literal;
+    match (constant, ty) {
+        (Literal::Int(value), PolyTy::Int(int)) => int.holds(*value),
+        (Literal::Float(_), PolyTy::Float) | (Literal::Bool(_), PolyTy::Bool) => true,
+        (Literal::String(_), PolyTy::String) => true,
+        _ => false,
     }
 }
 
@@ -1064,7 +1278,12 @@ fn add_instance<R: Runtime>(
             .fold(Task::Heavy, Task::meet),
     });
     collected.instance_types.push(ty);
-    collected.instances.extend(admitted);
+    collected
+        .instances
+        .extend(admitted.into_iter().map(|instance| LawfulInstance {
+            instance,
+            laws: decl.laws.clone(),
+        }));
     Ok(())
 }
 

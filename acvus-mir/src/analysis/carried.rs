@@ -16,11 +16,12 @@
 //! whether to regroup is the lowerer's, by its reassociation policy
 //! (RFC-0066). Integer and float `+` and `*` reach MIR as `InstKind::BinOp`,
 //! the instruction an operator on a language-owned type is (RFC-0020), and
-//! that is how they are recognized. `&&` and `||` reach it as the lowering's short-circuit
-//! `Diamond`, and `min` and `max` as calls of the `num` extension's
-//! signatures, which this crate does not name. Recognizing either form is
-//! not settled, and until it is, a loop that merges through one carries a
-//! recurrence.
+//! that is how they are recognized. A call of an extern that declares
+//! itself associative (RFC-0082 rule 2), such as `num::min`, is an exact
+//! merge on the extern's word: the analysis reads the declaration and does
+//! not discover the law. `&&` and `||` reach MIR as the lowering's
+//! short-circuit `Diamond`, and recognizing that form is not settled; until
+//! it is, a loop that merges through one carries a recurrence.
 //!
 //! A loop is weak when every carried parameter is an `Iv` or a `Merge`, no
 //! instruction of the body carries an `Order`, and every storage the body
@@ -37,10 +38,12 @@
 //! element write RFC-0057 rule 3 admits: rule 5 holds the container
 //! exclusively for the loop, so the element is the only path to it.
 //!
-//! A merge through storage, `v.push(x)` in a loop, is a write of `v` and so
-//! strong. What kind of merge such an operation is, ordered or not, is the
-//! extern's to declare, not this analysis's to discover; reading that
-//! declaration is a later rule.
+//! A merge through storage, `v.push(x)` in a loop, is a write of `v`, and
+//! what kind of merge it is, ordered or not, is the extern's to declare
+//! (RFC-0066 rule 6). Where every write of a storage in the loop is a call
+//! of one extern that declares a `fold` law (RFC-0082 rule 3), and the loop
+//! reads that storage only to lend it to those calls, the storage is a
+//! [`StorageMerge`] and not a dependence. Every other write is strong.
 //!
 //! A loop left from anywhere but its header, by a `break` or a `return`,
 //! is ordered: the iterations after the one that leaves never run.
@@ -54,13 +57,30 @@ use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Loop, LoopKind};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{ForSource, InstKind, ValueId};
+use crate::ir::{Callee, ForSource, InstKind, ValueId};
+use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
 use crate::ty::{Mutability, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeOp {
     Add,
     Mul,
+    Extern(ExternMerge),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExternMerge {
+    pub callee: QualifiedRef,
+    pub instance: usize,
+    pub commutative: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StorageMerge {
+    pub storage: ValueId,
+    pub callee: QualifiedRef,
+    pub instance: usize,
+    pub fold: FoldLaw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,15 +118,23 @@ pub enum Strength {
 
 pub struct CarriedState {
     pub params: Vec<CarriedParam>,
+    pub storage_merges: Vec<StorageMerge>,
     pub dependences: Vec<Dependence>,
 }
 
 impl CarriedState {
-    pub fn of(cfg: &CfgBody, loop_: &Loop, affine: &AffineValues, loans: &Loans) -> Self {
+    pub fn of(
+        cfg: &CfgBody,
+        loop_: &Loop,
+        affine: &AffineValues,
+        loans: &Loans,
+        laws: &LawTable,
+    ) -> Self {
         let natural = &loop_.natural;
         let body = Body {
             cfg,
             loop_,
+            laws,
             reads: Reads::in_loop(cfg, loop_),
             arithmetic: Arithmetic::in_loop(cfg, loop_),
         };
@@ -132,6 +160,7 @@ impl CarriedState {
             .map(|p| Dependence::Recurrence(p.param))
             .collect();
         let lent = lent_by_source(loop_, loans);
+        let storage_merges = body.storage_merges(loans, &lent);
         for block in natural.blocks().filter(|&block| block != natural.header) {
             let leaves = matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
                 || cfg
@@ -149,6 +178,7 @@ impl CarriedState {
                     .writes
                     .into_iter()
                     .filter(|storage| !lent.contains(storage))
+                    .filter(|storage| !storage_merges.iter().any(|m| m.storage == *storage))
                     .map(Dependence::StorageWrite)
                     .collect();
                 if let InstKind::Commit { context, .. } = &inst.kind {
@@ -166,6 +196,7 @@ impl CarriedState {
         }
         Self {
             params,
+            storage_merges,
             dependences,
         }
     }
@@ -179,13 +210,14 @@ impl CarriedState {
 
     /// RFC-0057 rule 3's independence: a weak loop that carries nothing.
     pub fn runs_apart(&self) -> bool {
-        self.params.is_empty() && self.strength() == Strength::Weak
+        self.params.is_empty() && self.storage_merges.is_empty() && self.strength() == Strength::Weak
     }
 }
 
 struct Body<'a> {
     cfg: &'a CfgBody,
     loop_: &'a Loop,
+    laws: &'a LawTable,
     reads: Reads,
     arithmetic: Arithmetic,
 }
@@ -195,24 +227,162 @@ impl Body<'_> {
     fn merge(&self, index: usize, param: ValueId) -> Option<Carried> {
         let natural = &self.loop_.natural;
         let next = natural.back_arg(self.cfg, index)?;
-        let operation = self.arithmetic.get(next)?;
-        if !operation.one_operand_is(param) {
-            return None;
-        }
-        let op = match operation.op {
-            BinOp::Add => MergeOp::Add,
-            BinOp::Mul => MergeOp::Mul,
-            _ => return None,
-        };
-        let exact = match &self.cfg.val_types[&next] {
-            ty if exact_under_wrapping(ty) => true,
-            Ty::Float => false,
-            _ => return None,
+        let merge = match self.arithmetic.get(next) {
+            Some(operation) => {
+                if !operation.one_operand_is(param) {
+                    return None;
+                }
+                let op = match operation.op {
+                    BinOp::Add => MergeOp::Add,
+                    BinOp::Mul => MergeOp::Mul,
+                    _ => return None,
+                };
+                let exact = match &self.cfg.val_types[&next] {
+                    ty if exact_under_wrapping(ty) => true,
+                    Ty::Float => false,
+                    _ => return None,
+                };
+                Carried::Merge { op, exact }
+            }
+            None => Carried::Merge {
+                op: MergeOp::Extern(self.extern_merge(next, param)?),
+                exact: true,
+            },
         };
         let read_only_as_operand = self.reads.count(param) == 1;
         let read_only_by_back_edges = self.reads.count(next) == natural.latches.len();
-        (read_only_as_operand && read_only_by_back_edges).then_some(Carried::Merge { op, exact })
+        (read_only_as_operand && read_only_by_back_edges).then_some(merge)
     }
+
+    fn extern_merge(&self, next: ValueId, param: ValueId) -> Option<ExternMerge> {
+        let InstKind::FunctionCall { callee, args, .. } = self.defining(next)? else {
+            return None;
+        };
+        let Callee::Extern { id, instance, .. } = callee else {
+            return None;
+        };
+        let Laws::Binary(BinaryLaws {
+            associative: true,
+            commutative,
+            ..
+        }) = self.laws.of_callee(callee)
+        else {
+            return None;
+        };
+        let &[first, second] = args.as_slice() else {
+            return None;
+        };
+        let param_is_first = first == param && second != param;
+        let param_is_second = second == param && first != param;
+        (param_is_first || (*commutative && param_is_second)).then_some(ExternMerge {
+            callee: *id,
+            instance: *instance,
+            commutative: *commutative,
+        })
+    }
+
+    fn defining(&self, value: ValueId) -> Option<&InstKind> {
+        self.loop_
+            .natural
+            .blocks()
+            .flat_map(|block| &self.cfg.blocks[block.0].insts)
+            .map(|inst| &inst.kind)
+            .find(|kind| inst_info::defs(kind).contains(&value))
+    }
+
+    fn storage_merges(&self, loans: &Loans, lent: &[ValueId]) -> Vec<StorageMerge> {
+        let insts: Vec<&InstKind> = self
+            .loop_
+            .natural
+            .blocks()
+            .flat_map(|block| &self.cfg.blocks[block.0].insts)
+            .map(|inst| &inst.kind)
+            .collect();
+        let mut written: Vec<ValueId> = Vec::new();
+        for kind in &insts {
+            for storage in loans.storage_effect(kind).writes {
+                if !lent.contains(&storage) && !written.contains(&storage) {
+                    written.push(storage);
+                }
+            }
+        }
+        written
+            .into_iter()
+            .filter_map(|storage| self.storage_merge(storage, &insts, loans))
+            .collect()
+    }
+
+    fn storage_merge(
+        &self,
+        storage: ValueId,
+        insts: &[&InstKind],
+        loans: &Loans,
+    ) -> Option<StorageMerge> {
+        let mut merge: Option<StorageMerge> = None;
+        let mut lenders: Vec<ValueId> = Vec::new();
+        for kind in insts {
+            let effect = loans.storage_effect(kind);
+            if !effect.writes.contains(&storage) {
+                continue;
+            }
+            let found = self.fold_call(kind, storage, loans)?;
+            lenders.push(found.lender);
+            match merge {
+                Some(merged) if merged != found.merge => return None,
+                Some(_) => {}
+                None => merge = Some(found.merge),
+            }
+        }
+        let only_lent_to_the_folds = insts.iter().all(|kind| {
+            let effect = loans.storage_effect(kind);
+            if !effect.reads.contains(&storage) || effect.writes.contains(&storage) {
+                return true;
+            }
+            match kind {
+                InstKind::Ref { dst, .. } => lenders.contains(dst) && self.reads.count(*dst) == 1,
+                _ => false,
+            }
+        });
+        merge.filter(|_| only_lent_to_the_folds)
+    }
+
+    fn fold_call(&self, kind: &InstKind, storage: ValueId, loans: &Loans) -> Option<FoldCall> {
+        let InstKind::FunctionCall { callee, args, .. } = kind else {
+            return None;
+        };
+        let Callee::Extern { id, instance, .. } = callee else {
+            return None;
+        };
+        let Laws::Fold(fold) = self.laws.of_callee(callee) else {
+            return None;
+        };
+        let (&lender, rest) = args.split_first()?;
+        let lends = |value: ValueId, mutability: Mutability| {
+            loans
+                .region(value)
+                .loans
+                .iter()
+                .any(|loan| loan.storage.value() == storage && loan.mutability == mutability)
+        };
+        let lent_by_the_state_alone = lends(lender, Mutability::Mut)
+            && !rest
+                .iter()
+                .any(|&arg| lends(arg, Mutability::Mut) || lends(arg, Mutability::Shared));
+        lent_by_the_state_alone.then_some(FoldCall {
+            lender,
+            merge: StorageMerge {
+                storage,
+                callee: *id,
+                instance: *instance,
+                fold: *fold,
+            },
+        })
+    }
+}
+
+struct FoldCall {
+    lender: ValueId,
+    merge: StorageMerge,
 }
 
 /// How many times the loop's instructions and terminators read each value.

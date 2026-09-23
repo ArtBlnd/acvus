@@ -1,0 +1,2 @@
+// expect 0
+let p = 1; for x in 0..3 { p = wrapping_mul(p, 4611686018427387904); } p
