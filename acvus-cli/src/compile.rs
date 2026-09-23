@@ -273,19 +273,14 @@ pub fn check(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(types),
         bindings,
         entry: Some(entry),
     };
 
     let watch = Stopwatch::start(timed);
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(types),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
     stages.typeck = watch.stop();
 
     let mut diagnostics: Vec<Diagnostic> = inf

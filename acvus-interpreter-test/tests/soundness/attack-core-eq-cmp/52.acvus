@@ -1,0 +1,3 @@
+// expect 1
+// comparison feeds if through lambda
+let f = |a| -> if a > 10u32 { 1 } else { 0 }; f(11u32)

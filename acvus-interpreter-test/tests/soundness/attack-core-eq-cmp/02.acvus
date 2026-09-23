@@ -1,0 +1,3 @@
+// expect true
+// u16 <= known
+let a = 65535u16; let b = 65535u16; a <= b

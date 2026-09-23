@@ -20,7 +20,6 @@ use acvus_mir::ty::{
 };
 use acvus_mir_test::{lowered_script_module, optimized_script_module};
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
 fn fn_ty(i: &Interner, params: &[(&str, PolyTy)], ret: PolyTy, effect: EffectTerm<Poly>) -> PolyTy {
     TyTerm::Fn {
@@ -335,17 +334,12 @@ fn effect_of(i: &Interner, functions: Vec<Function>, name: &str) -> Effect {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(
-        i,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(TypeRegistry::new()),
-    );
+    let inf = infer::infer(i, &graph, &ext);
     assert!(!inf.has_errors(), "infer errors: {:?}", inf.errors());
     inf.outcomes
         .get(&QualifiedRef::root(i.intern(name)))

@@ -3,13 +3,13 @@
 //! it was frozen with, and no solver mints that number again.
 
 use acvus_mir::graph::incremental::IncrementalGraph;
-use acvus_mir::graph::{FnKind, Function, ParsedAst, QualifiedRef};
+use acvus_mir::graph::{Bindings, CompilationGraph, FnKind, Function, ParsedAst, QualifiedRef};
 use acvus_mir::ty::{
     IdentityTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Solver, Sources, Ty, TyTerm, TypeArg,
     TypeRegistry, lift_to_poly,
 };
 use acvus_mir_test::inferred_function;
-use acvus_utils::Interner;
+use acvus_utils::{Freeze, Interner};
 use rustc_hash::FxHashMap;
 
 fn iterator_registry(i: &Interner) -> TypeRegistry {
@@ -80,8 +80,6 @@ fn a_source_frozen_in_one_solver_is_never_minted_by_another() {
 #[test]
 fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
     let i = Interner::new();
-    let mut graph = IncrementalGraph::with_type_registry(&i, iterator_registry(&i));
-
     let mut pb = PolyBuilder::new();
     let mk = Function {
         qref: QualifiedRef::root(i.intern("mk")),
@@ -130,8 +128,16 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
         )),
         vec![],
     );
-    graph.add_function(mk);
-    graph.add_function(same);
+    let mut graph = IncrementalGraph::new(
+        &i,
+        CompilationGraph {
+            functions: Freeze::new(vec![mk, same]),
+            contexts: Freeze::default(),
+            types: Freeze::new(iterator_registry(&i)),
+            bindings: Bindings::default(),
+            entry: None,
+        },
+    );
     graph.add_function(get);
     graph.add_function(main);
 

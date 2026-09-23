@@ -1,0 +1,3 @@
+// expect true
+// u16 via lambda with & operands
+let f = |a, b| -> a < b; let x = 1u16; let y = 2u16; f(&x, &y)

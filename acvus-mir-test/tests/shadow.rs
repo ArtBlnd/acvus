@@ -14,7 +14,6 @@ use acvus_mir::graph::{
 use acvus_mir::ir::Callee;
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm};
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
 fn script_fn(i: &Interner, source: &str) -> Function {
     let mut pb = PolyBuilder::new();
@@ -50,11 +49,12 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(i, &graph, &ext, &FxHashMap::default(), Freeze::new(types));
+    let inf = infer::infer(i, &graph, &ext);
     if inf.has_errors() {
         return Err(inf
             .errors()

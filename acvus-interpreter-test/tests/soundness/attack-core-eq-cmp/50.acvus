@@ -1,0 +1,3 @@
+// refuse
+// operand never settles
+let f = |a, b| -> a < b; 1

@@ -45,17 +45,12 @@ fn infer_effects(i: &Interner, functions: Vec<Function>) -> FxHashMap<String, Ef
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(acvus_mir::ty::TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(
-        i,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(acvus_mir::ty::TypeRegistry::new()),
-    );
+    let inf = infer::infer(i, &graph, &ext);
     assert!(!inf.has_errors(), "infer errors: {:?}", inf.errors());
     inf.outcomes
         .iter()

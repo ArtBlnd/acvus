@@ -1,0 +1,3 @@
+// expect 2
+// comparison feeds match
+let f = |a, b| -> match a == b { true => 1, false => 2, }; f(-1i8, 1i8)

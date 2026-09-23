@@ -10,7 +10,6 @@ use acvus_mir::ty::{
     LenTerm, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, TyVarBound, TypeRegistry,
 };
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
 fn fn_of(i: &Interner, params: &[(&str, PolyTy)], ret: PolyTy) -> PolyTy {
     TyTerm::Fn {
@@ -90,17 +89,12 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![pick_fn(i), text_fn(i), f]),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(
-        i,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(TypeRegistry::new()),
-    );
+    let inf = infer::infer(i, &graph, &ext);
     if inf.has_errors() {
         return Err(inf
             .errors()

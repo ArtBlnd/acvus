@@ -150,17 +150,6 @@ fn a_name_bound_twice_in_one_pattern_is_refused() {
     );
 }
 
-/// An operator is decided where it is written: an operand whose type is
-/// still open there is taken as a word, and one that settles to anything
-/// else is refused rather than compared as a word.
-#[test]
-fn an_operator_on_an_operand_that_settles_late_is_refused() {
-    refused_with(
-        "let v = vec([1, 2]); let f = |r| -> r == r; f(&v)",
-        "is decided where it is written",
-    );
-}
-
 /// An operator on an operand still open where it is checked bounds the
 /// operand by the types it takes, and the bound is checked when the operand
 /// settles: never settling, or settling outside it, is refused.

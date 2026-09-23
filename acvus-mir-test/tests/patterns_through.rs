@@ -182,11 +182,12 @@ fn recorded_types(i: &Interner, source: &str) -> Result<Vec<Ty>, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(i, &graph, &ext, &FxHashMap::default(), Freeze::new(types));
+    let inf = infer::infer(i, &graph, &ext);
     if inf.has_errors() {
         return Err(inf
             .errors()

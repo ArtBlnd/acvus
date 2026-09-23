@@ -1,0 +1,3 @@
+// expect true
+// i32 via lambda with &mut operands
+let f = |a, b| -> a >= b; let x = -3i32; let y = -4i32; f(&mut x, &mut y)

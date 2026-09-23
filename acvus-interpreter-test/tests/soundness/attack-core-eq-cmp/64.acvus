@@ -1,0 +1,3 @@
+// refuse
+// ordering on a Unit reached through a reference
+let f = |a, b| -> a < b; let u = (); f(&u, &u)

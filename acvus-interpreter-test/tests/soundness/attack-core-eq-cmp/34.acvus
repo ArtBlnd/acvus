@@ -1,0 +1,3 @@
+// expect true
+// Unit equality known
+() == ()

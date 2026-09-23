@@ -55,20 +55,13 @@ fn extend_with_registries(
     types
 }
 
-fn run_pipeline_with_registry(
+fn run_pipeline(
     interner: &Interner,
     graph: &CompilationGraph,
     target: QualifiedRef,
-    type_registry: TypeRegistry,
 ) -> Result<MirModule, String> {
     let ext = extract::extract(interner, graph);
-    let inf = infer::infer(
-        interner,
-        graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, graph, &ext);
 
     // Collect infer errors.
     let mut errors: Vec<String> = Vec::new();
@@ -182,10 +175,11 @@ pub fn compile_to_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
-    let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
+    let module = run_pipeline(interner, &graph, test_qref)?;
     Ok(dump_with(interner, &module))
 }
 
@@ -265,10 +259,11 @@ pub fn compile_script_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
-    let module = run_pipeline_with_registry(interner, &graph, test_qref, type_registry)?;
+    let module = run_pipeline(interner, &graph, test_qref)?;
     Ok(dump_with(interner, &module))
 }
 
@@ -300,18 +295,13 @@ pub fn compile_script_raw(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -405,18 +395,13 @@ pub fn refuse_script_mode_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut refusals: Vec<Refusal> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -521,18 +506,13 @@ fn lower_script_returning(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -579,18 +559,13 @@ pub fn optimized_script_module(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -657,18 +632,13 @@ pub fn compile_script_optimized(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -790,18 +760,13 @@ pub fn refuse_script_mode_optimized(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut refusals: Vec<Refusal> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -937,19 +902,14 @@ pub fn compile_inline_ir_with(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: None,
     };
 
     // Run extract -> infer -> lower (full pipeline).
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -1068,18 +1028,13 @@ fn compile_graph_raw(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: None,
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -1182,18 +1137,13 @@ fn compile_multi_fn_at(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(ctx_vec),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: None,
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {
@@ -1270,18 +1220,13 @@ pub fn compile_template_bound(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(type_registry),
         bindings,
         entry: Some(test_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     let mut errors: Vec<String> = Vec::new();
     for (qref, errs) in inf.errors() {

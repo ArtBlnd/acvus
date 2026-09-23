@@ -1,0 +1,3 @@
+// expect true
+// u8 < known
+let a = 2u8; let b = 3u8; a < b

@@ -1,0 +1,3 @@
+// expect true
+// nested lambdas settle inner operand later
+let outer = |x| -> { let inner = |y| -> x < y; inner(5u16) }; outer(4u16)

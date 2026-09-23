@@ -1,0 +1,3 @@
+// expect true
+// i16 >=
+let a = -300i16; let b = -300i16; a >= b

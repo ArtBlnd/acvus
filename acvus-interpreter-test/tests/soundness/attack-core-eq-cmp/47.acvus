@@ -1,0 +1,3 @@
+// expect true
+// Vec == direct (possible source completeness gap)
+vec([1]) == vec([1])

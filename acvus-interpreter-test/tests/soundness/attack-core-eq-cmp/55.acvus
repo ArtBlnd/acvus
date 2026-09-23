@@ -1,0 +1,3 @@
+// expect true
+// char == by &mut
+let f = |a, b| -> a == b; let c = 'z'; let d = 'z'; f(&mut c, &mut d)

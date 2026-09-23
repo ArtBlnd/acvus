@@ -1,0 +1,3 @@
+// expect true
+// NaN == NaN through lambda
+let f = |a, b| -> a == b; let n = 0.0 / 0.0; f(n, n)

@@ -1,0 +1,3 @@
+// refuse
+// signed vs unsigned same width
+let a = 1i32; let b = 1u32; a == b

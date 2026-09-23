@@ -1,0 +1,3 @@
+// expect false
+// u32 > known unsigned
+let a = 1u32; let b = 4294967295u32; a > b

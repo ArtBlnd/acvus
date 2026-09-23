@@ -1,0 +1,3 @@
+// refuse
+// mixed widths through lambda
+let f = |a, b| -> a < b; f(1u8, 1u32)

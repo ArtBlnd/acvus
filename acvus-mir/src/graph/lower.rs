@@ -159,6 +159,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         }
@@ -175,8 +176,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "1 + 2", &[]);
         let ext = extract::extract(&i, &graph);
-        let inf =
-            crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let result = lower(&i, &graph, &ext.view(), &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
@@ -189,8 +189,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
-        let inf =
-            crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let result = lower(&i, &graph, &ext.view(), &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
@@ -207,8 +206,7 @@ mod tests {
         )])));
         let graph = make_graph_with_ctx(&i, "@user.name", &[("user", obj_ty)]);
         let ext = extract::extract(&i, &graph);
-        let inf =
-            crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let result = lower(&i, &graph, &ext.view(), &inf);
 
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
@@ -225,8 +223,7 @@ mod tests {
             &[("data", Ty::I64), ("out", Ty::I64)],
         );
         let ext = extract::extract(&i, &graph);
-        let inf =
-            crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let result = lower(&i, &graph, &ext.view(), &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
@@ -250,8 +247,7 @@ mod tests {
             &[("val", Ty::I64), ("out", Ty::I64)],
         );
         let ext = extract::extract(&i, &graph);
-        let inf =
-            crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
         let result = lower(&i, &graph, &ext.view(), &inf);
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
         let module = result.module(first_fn_ref(&graph)).unwrap();
@@ -273,8 +269,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let inf =
-            crate::graph::infer::infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let inf = crate::graph::infer::infer(&i, &graph, &ext);
         // Infer should produce Incomplete for this function (type mismatch).
         // Lower should produce no module for this unit.
         let result = lower(&i, &graph, &ext.view(), &inf);

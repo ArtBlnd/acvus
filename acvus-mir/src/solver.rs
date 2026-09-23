@@ -1528,6 +1528,51 @@ pub struct DecisionId(pub u32);
 pub enum InstanceKind {
     Extern(usize),
     Intrinsic(Intrinsic),
+    /// The language's own instance at an operator over a word or text: the
+    /// operator's instruction (RFC-0020).
+    Operator,
+}
+
+/// The compiler's instances of a shared signature at one use, and which of
+/// the declared instances they keep from it.
+pub struct CompilerInstances {
+    pub candidates: Vec<Candidate>,
+    pub withholds: Withholds,
+}
+
+impl CompilerInstances {
+    pub fn none() -> Self {
+        Self {
+            candidates: Vec::new(),
+            withholds: Withholds::SameType,
+        }
+    }
+}
+
+/// The declared instances a use does not reach beside the compiler's own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Withholds {
+    /// The ones at a type the compiler has its own instance for: a named
+    /// call of `clone` on a `String` is the instruction.
+    SameType,
+    /// Every one at a language-owned type: an operator over a word or text
+    /// is an instruction or nothing (RFC-0020).
+    LanguageOwned,
+}
+
+/// Whether an instance's first parameter takes a word or text.
+fn takes_a_language_owned_type(ty: &PolyTy) -> bool {
+    let TyTerm::Fn { params, .. } = ty else {
+        return false;
+    };
+    let Some(first) = params.first() else {
+        return false;
+    };
+    let taken = match &first.ty {
+        TyTerm::Ref(_, named) => &named.ty,
+        other => other,
+    };
+    taken.is_primitive() || matches!(taken, TyTerm::String | TyTerm::Str)
 }
 
 /// A concrete instance an instance decision may still settle on.
@@ -3891,7 +3936,7 @@ impl<'src> Solver<'src> {
     }
 
     pub fn instantiate_scheme(&mut self, scheme: &Scheme) -> Instantiated {
-        self.instantiate_scheme_with(scheme, Vec::new())
+        self.instantiate_scheme_with(scheme, CompilerInstances::none())
     }
 
     /// A scheme with instances the compiler adds to the declared ones
@@ -3899,8 +3944,12 @@ impl<'src> Solver<'src> {
     pub fn instantiate_scheme_with(
         &mut self,
         scheme: &Scheme,
-        compiler_instances: Vec<Candidate>,
+        compiler: CompilerInstances,
     ) -> Instantiated {
+        let CompilerInstances {
+            candidates: compiler_instances,
+            withholds,
+        } = compiler;
         let mut bounded: Vec<TypeBoundId> = Vec::new();
         let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
             instances.concrete.is_empty() && !instances.generic && compiler_instances.is_empty()
@@ -3960,6 +4009,10 @@ impl<'src> Solver<'src> {
             }
             let shadowed_by_the_compiler: Vec<_> =
                 compiler_instances.iter().map(|c| c.ty.clone()).collect();
+            let withheld = |ty: &PolyTy| {
+                shadowed_by_the_compiler.contains(ty)
+                    || (withholds == Withholds::LanguageOwned && takes_a_language_owned_type(ty))
+            };
             let id = self.decide(Decision::Instance {
                 call: ty.clone(),
                 candidates: instances
@@ -3967,7 +4020,7 @@ impl<'src> Solver<'src> {
                     .iter()
                     .cloned()
                     .enumerate()
-                    .filter(|(_, sig)| !shadowed_by_the_compiler.contains(&sig.ty))
+                    .filter(|(_, sig)| !withheld(&sig.ty))
                     .map(|(instance, sig)| Candidate {
                         instance: InstanceKind::Extern(instance),
                         ty: sig.ty,

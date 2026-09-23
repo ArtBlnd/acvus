@@ -280,18 +280,13 @@ where
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: Bindings::default(),
         entry: Some(entry_qref),
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     // Collect all errors: infer (unresolved functions) + lower.
     let mut all_errors: Vec<String> = Vec::new();

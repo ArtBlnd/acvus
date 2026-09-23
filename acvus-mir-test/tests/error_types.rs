@@ -8,7 +8,6 @@ use acvus_mir::graph::{
 };
 use acvus_mir::ty::{PolyBuilder, TyTerm};
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
 /// The errors a script reports.
 fn errors(i: &Interner, source: &str) -> Vec<String> {
@@ -33,11 +32,12 @@ fn errors(i: &Interner, source: &str) -> Vec<String> {
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(i, &graph, &ext, &FxHashMap::default(), Freeze::new(types));
+    let inf = infer::infer(i, &graph, &ext);
     inf.errors()
         .into_iter()
         .flat_map(|(_, errs)| errs.iter().map(|e| e.display(i).to_string()))

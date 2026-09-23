@@ -1,0 +1,3 @@
+// expect false
+// Vec != via lambda by &
+let f = |a, b| -> a != b; let v = vec([3]); f(&v, &v)

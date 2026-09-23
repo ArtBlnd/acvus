@@ -133,10 +133,18 @@ call: `f(x)` with `f: Fn(&T)` stays a type error (RFC-0018). A `&word`
 operand is read through the reference; `==`, `!=` and `+` read what a
 reference names at any size.
 
-An operand still unresolved carries the operator's bound (RFC-0011 rule 4):
-`+` bounds it by every integer width, `f64` and `String`; `-`, `*`, `/`,
-`%` and the comparisons by every integer width, `f64` and `char`; the bit
-operators by the integer widths. Where one side of `==`/`!=` is text and
+`==`, `!=`, `<`, `<=`, `>` and `>=` are calls of `core::eq` and `core::cmp`
+at every operand type. At a word or text the language's own instance is
+the operator's instruction; a registry's instance at a language-owned type
+is kept for requirement sites and named calls, and an operator does not
+reach it, so a type with no ordering (`Bool`, `Unit`, text) has none at an
+operator. An operand whose type is still open leaves the choice of
+instance to the solve (RFC-0042 rule 2), and an operand that settles to a
+reference is read through it (RFC-0029 rule 3). An operand of the other
+operators still unresolved carries the operator's bound (RFC-0011 rule 4):
+`+` bounds it by every integer width, `f64` and `String`; `-`, `*`, `/` and
+`%` by every integer width, `f64` and `char`; the bit operators by the
+integer widths. Where one side of `==`/`!=` is text and
 the other still a variable, the variable is bounded by `String` and `str`
 and closes on `String` (RFC-0042 rule 3). The integer bound meets a literal's,
 so `k + 7` leaves `k` an integer and `k + 7.0` an `f64`. Nothing converts

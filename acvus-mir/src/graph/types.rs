@@ -9,7 +9,7 @@ use acvus_ast::Literal;
 use acvus_utils::{Astr, Freeze};
 use rustc_hash::FxHashMap;
 
-use crate::ty::{Mutability, PolyTy, Ty, TyTerm, TypeArg};
+use crate::ty::{Mutability, PolyTy, Ty, TyTerm, TypeArg, TypeRegistry};
 
 // -- Identifiers -----------------------------------------------------
 
@@ -145,6 +145,7 @@ pub fn bound_input_ty(value: &Literal) -> Option<Ty> {
 pub struct CompilationGraph {
     pub functions: Freeze<Vec<Function>>,
     pub contexts: Freeze<Vec<Context>>,
+    pub types: Freeze<TypeRegistry>,
     pub bindings: Bindings,
     /// Obligation across artifacts: this body's result crosses to the host
     /// as one `Value` read by kind, which `acvus_interpreter::Interpreter::

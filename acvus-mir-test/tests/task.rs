@@ -64,6 +64,7 @@ fn graph_of(functions: Vec<Function>) -> CompilationGraph {
     CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     }
@@ -74,13 +75,7 @@ fn inferred(
     graph: &CompilationGraph,
 ) -> (extract::ExtractResult, infer::InferResult) {
     let ext = extract::extract(i, graph);
-    let inf = infer::infer(
-        i,
-        graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(TypeRegistry::new()),
-    );
+    let inf = infer::infer(i, graph, &ext);
     (ext, inf)
 }
 

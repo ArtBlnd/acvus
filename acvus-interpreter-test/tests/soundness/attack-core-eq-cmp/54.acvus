@@ -1,0 +1,3 @@
+// expect true
+// char ordering via lambda
+let f = |a, b| -> a < b; f('a', 'b')

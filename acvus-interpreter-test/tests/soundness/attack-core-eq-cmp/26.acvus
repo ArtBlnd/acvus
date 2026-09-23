@@ -1,0 +1,3 @@
+// refuse
+// Bool ordering through lambda
+let f = |a, b| -> a < b; f(true, false)

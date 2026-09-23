@@ -1,0 +1,3 @@
+// expect true
+// one lambda used at two widths?
+let f = |a, b| -> a < b; f(1u8, 2u8)

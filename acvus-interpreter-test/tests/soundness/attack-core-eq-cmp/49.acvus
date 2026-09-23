@@ -1,0 +1,3 @@
+// expect true
+// Vec < via lambda (lexicographic)
+let f = |a, b| -> a < b; f(vec([1, 2]), vec([1, 3]))

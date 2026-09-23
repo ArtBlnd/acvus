@@ -18,7 +18,7 @@ fn compile_analysis(
     use acvus_mir::graph::{extract, lower as graph_lower};
     use acvus_mir::ty::PolyBuilder;
     use acvus_utils::Freeze;
-    use rustc_hash::{FxHashMap, FxHashSet};
+    use rustc_hash::FxHashSet;
 
     // Build contexts from declared types.
     let mut contexts: Vec<Context> = ctx
@@ -67,18 +67,13 @@ fn compile_analysis(
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
         contexts: Freeze::new(contexts),
+        types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
 
     let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(
-        interner,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(type_registry),
-    );
+    let inf = infer::infer(interner, &graph, &ext);
 
     // Collect infer errors.
     let mut errors: Vec<String> = Vec::new();

@@ -1,0 +1,3 @@
+// refuse
+// String ordering
+let a = "a".to_string(); let b = "b".to_string(); a < b

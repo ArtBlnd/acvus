@@ -30,17 +30,12 @@ fn return_type(i: &Interner, source: &str) -> Ty {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![f]),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(acvus_mir::ty::TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(
-        i,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(acvus_mir::ty::TypeRegistry::new()),
-    );
+    let inf = infer::infer(i, &graph, &ext);
     assert!(!inf.has_errors(), "infer errors: {:?}", inf.errors());
     match &inf.outcomes[&qref].meta().ty {
         Ty::Fn { ret, .. } => (**ret).clone(),

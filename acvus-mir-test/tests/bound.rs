@@ -9,7 +9,6 @@ use acvus_mir::ty::{
     TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, try_freeze_poly,
 };
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
 /// `add: Fn(T, T) -> T` with `T: OneOf([Int, Float])`.
 fn add_fn(i: &Interner) -> Function {
@@ -174,17 +173,12 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
     let graph = CompilationGraph {
         functions: Freeze::new(vec![add_fn(i), advance_fn(i), drain_fn(i), wrap_fn(i), f]),
         contexts: Freeze::new(vec![]),
+        types: Freeze::new(types(i)),
         bindings: acvus_mir::graph::Bindings::default(),
         entry: None,
     };
     let ext = extract::extract(i, &graph);
-    let inf = infer::infer(
-        i,
-        &graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::new(types(i)),
-    );
+    let inf = infer::infer(i, &graph, &ext);
     if inf.has_errors() {
         return Err(inf
             .errors()

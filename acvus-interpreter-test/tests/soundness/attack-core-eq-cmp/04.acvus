@@ -1,0 +1,3 @@
+// expect true
+// u64 large unsigned ordering
+let a = 18446744073709551615u64; let b = 1u64; a > b

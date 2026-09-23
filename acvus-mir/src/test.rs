@@ -4,7 +4,6 @@
 //! Real callers should use the graph phases directly.
 
 use acvus_utils::{Freeze, Interner};
-use rustc_hash::FxHashMap;
 
 use crate::graph::*;
 use crate::graph::{extract, infer, lower as graph_lower};
@@ -49,6 +48,7 @@ pub(crate) fn make_graph(
             to_string(interner),
         ]),
         contexts: Freeze::new(contexts),
+        types: Freeze::default(),
         bindings: Bindings::default(),
         entry: None,
     };
@@ -89,13 +89,7 @@ fn run_pipeline(
     target: QualifiedRef,
 ) -> Result<MirModule, String> {
     let ext = extract::extract(interner, graph);
-    let inf = infer::infer(
-        interner,
-        graph,
-        &ext,
-        &FxHashMap::default(),
-        Freeze::default(),
-    );
+    let inf = infer::infer(interner, graph, &ext);
 
     // Collect infer errors.
     let mut errors: Vec<String> = Vec::new();

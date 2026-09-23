@@ -1,0 +1,3 @@
+// refuse
+// literal 300 against open operand settled to u8 does not fit
+let f = |k| -> k < 300; f(1u8)

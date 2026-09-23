@@ -79,6 +79,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         };
@@ -117,6 +118,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         };

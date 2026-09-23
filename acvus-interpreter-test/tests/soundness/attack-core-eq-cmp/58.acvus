@@ -1,0 +1,3 @@
+// refuse
+// Bool ordering through nested lambda
+let g = |a| -> { let h = |b| -> a < b; h(true) }; g(false)

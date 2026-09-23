@@ -1,0 +1,3 @@
+// expect true
+// u8 via lambda by & ==
+let f = |a, b| -> a == b; let x = 9u8; f(&x, &x)

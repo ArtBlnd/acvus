@@ -1,0 +1,3 @@
+// refuse
+// &u8 against u8: no implicit read-through of one side
+let f = |a, b| -> a == b; let x = 3u8; f(&x, 3u8)

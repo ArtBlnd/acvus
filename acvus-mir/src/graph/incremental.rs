@@ -49,8 +49,7 @@ pub struct IncrementalGraph {
     interner: Interner,
     /// The sources of this compilation, shared by every solver it runs.
     sources: Sources,
-    /// The user-defined types and cast rules of this compilation.
-    type_registry: TypeRegistry,
+    types: Freeze<TypeRegistry>,
     bindings: Bindings,
 
     // -- Source data --
@@ -83,19 +82,22 @@ pub struct IncrementalGraph {
 }
 
 impl IncrementalGraph {
-    pub fn new(interner: &Interner) -> Self {
-        Self::with_type_registry(interner, TypeRegistry::new())
-    }
-
-    pub fn with_type_registry(interner: &Interner, type_registry: TypeRegistry) -> Self {
-        Self {
+    pub fn new(interner: &Interner, graph: CompilationGraph) -> Self {
+        let CompilationGraph {
+            functions,
+            contexts,
+            types,
+            bindings,
+            entry,
+        } = graph;
+        let mut this = Self {
             interner: interner.clone(),
             sources: Sources::new(),
-            type_registry,
-            bindings: Bindings::default(),
-            functions: FxHashMap::default(),
-            contexts: FxHashMap::default(),
-            entry: None,
+            types,
+            bindings,
+            functions: functions.iter().map(|f| (f.qref, f.clone())).collect(),
+            contexts: contexts.iter().map(|c| (c.qref, c.clone())).collect(),
+            entry,
             extract_cache: FxHashMap::default(),
             call_edges: FxHashMap::default(),
             reverse_edges: FxHashMap::default(),
@@ -105,40 +107,16 @@ impl IncrementalGraph {
             lower_cache: FxHashMap::default(),
             optimized: FxHashMap::default(),
             diagnostics: FxHashMap::default(),
+        };
+        let qrefs: Vec<QualifiedRef> = this.functions.keys().copied().collect();
+        for qref in qrefs {
+            this.run_extract(qref);
         }
-    }
-
-    // -- Namespace management -----------------------------------------
-
-    pub fn remove_namespace(&mut self, ns_name: Astr) {
-        // Remove all functions and contexts in this namespace.
-        let fn_refs: Vec<QualifiedRef> = self
-            .functions
-            .values()
-            .filter(|f| f.qref.namespace == Some(ns_name))
-            .map(|f| f.qref)
-            .collect();
-        for qref in fn_refs {
-            self.remove_function(qref);
-        }
-        let ctx_refs: Vec<QualifiedRef> = self
-            .contexts
-            .iter()
-            .filter(|(_, c)| c.qref.namespace == Some(ns_name))
-            .map(|(qref, _)| *qref)
-            .collect();
-        for qref in ctx_refs {
-            self.remove_context(qref);
-        }
+        this.rebuild_graph();
+        this
     }
 
     // -- Registration ------------------------------------------------
-
-    pub fn set_entry(&mut self, qref: QualifiedRef) {
-        self.entry = Some(qref);
-        self.invalidate_all_infer();
-        self.recompile();
-    }
 
     pub fn add_function(&mut self, func: Function) {
         let qref = func.qref;
@@ -156,38 +134,6 @@ impl IncrementalGraph {
             self.optimized.remove(&qref);
             self.remove_reverse_edges(qref);
             self.rebuild_graph();
-        }
-    }
-
-    /// Bind a `$` name to a constant. Every function is re-inferred: the
-    /// binding gives the name a type, which is what the bodies reading it
-    /// were checked against.
-    pub fn bind_input(&mut self, name: Astr, value: acvus_ast::Literal) {
-        self.bindings.bind(name, value);
-        self.invalidate_all_infer();
-        self.recompile();
-    }
-
-    /// The arms a fold of this name decided against are code again, so every
-    /// name they read is required once more (RFC-0071 rule 5).
-    pub fn unbind_input(&mut self, name: Astr) {
-        self.bindings.unbind(name);
-        self.invalidate_all_infer();
-        self.recompile();
-    }
-
-    pub fn add_context(&mut self, ctx: Context) {
-        let qref = ctx.qref;
-        self.contexts.insert(qref, ctx);
-        // Context change can affect all infer - full rebuild.
-        self.invalidate_all_infer();
-        self.recompile();
-    }
-
-    pub fn remove_context(&mut self, qref: QualifiedRef) {
-        if self.contexts.remove(&qref).is_some() {
-            self.invalidate_all_infer();
-            self.recompile();
         }
     }
 
@@ -486,7 +432,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
-                &self.type_registry,
+                &self.types,
             );
 
             resolved_fn_types.extend(
@@ -581,7 +527,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
-                &self.type_registry,
+                &self.types,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -741,13 +687,6 @@ impl IncrementalGraph {
             .collect()
     }
 
-    fn invalidate_all_infer(&mut self) {
-        for slot in &mut self.infer_cache {
-            *slot = None;
-        }
-        self.lower_cache.clear();
-    }
-
     /// Build a snapshot InferResult for compatibility with batch APIs.
     pub fn infer_result(&mut self) -> super::infer::InferResult {
         let outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = self
@@ -765,7 +704,7 @@ impl IncrementalGraph {
                 let known = self.known_context_types();
                 let signatures = FxHashMap::default();
                 let mut solver =
-                    crate::ty::Solver::new(&mut self.sources, &self.type_registry, &signatures);
+                    crate::ty::Solver::new(&mut self.sources, &self.types, &signatures);
                 Freeze::new(
                     known
                         .into_iter()

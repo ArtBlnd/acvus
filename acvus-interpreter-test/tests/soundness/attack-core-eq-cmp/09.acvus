@@ -1,0 +1,3 @@
+// expect true
+// u8 through lambda settled later by value
+let f = |a, b| -> a < b; f(2u8, 200u8)

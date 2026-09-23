@@ -1,0 +1,3 @@
+// expect true
+// Decimal < via lambda
+let f = |a, b| -> a < b; f(decimal("1.5".to_string()).unwrap(), decimal("2.5".to_string()).unwrap())

@@ -831,14 +831,11 @@ pub fn infer(
     interner: &Interner,
     graph: &CompilationGraph,
     extract: &ExtractResult,
-    user_context_types: &FxHashMap<QualifiedRef, PolyTy>,
-    type_registry: Freeze<TypeRegistry>,
 ) -> InferResult {
     let mut sources = Sources::new();
-    let registry_ref: &TypeRegistry = &type_registry;
     let declared = declared_bounds(graph.functions.iter());
     let signatures = declared_instances(&declared);
-    let mut solver = Solver::new(&mut sources, registry_ref, &signatures);
+    let mut solver = Solver::new(&mut sources, &graph.types, &signatures);
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
@@ -858,19 +855,11 @@ pub fn infer(
         }
     }
 
-    // Known context types: graph declarations + user-provided.
-    // Internally work with InferTy; freeze to Ty at the output boundary.
-    // If ctx.ty is fully concrete -> instantiate_poly gives a concrete InferTy.
-    // If ctx.ty contains Var placeholders -> instantiate_poly maps each Var to a fresh solver var.
-    let mut known_ctx: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
-    for ctx in graph.contexts.iter() {
-        known_ctx.insert(ctx.qref, solver.instantiate_poly(&ctx.ty));
-    }
-    known_ctx.extend(
-        user_context_types
-            .iter()
-            .map(|(&k, v)| (k, solver.instantiate_poly(v))),
-    );
+    let known_ctx: FxHashMap<QualifiedRef, InferTy> = graph
+        .contexts
+        .iter()
+        .map(|ctx| (ctx.qref, solver.instantiate_poly(&ctx.ty)))
+        .collect();
 
     let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
         .functions
@@ -933,10 +922,10 @@ pub fn infer(
             );
         }
 
-        let machine_signatures = machine_signatures(registry_ref, &resolved_fn_types, &declared);
+        let machine_signatures = machine_signatures(&graph.types, &resolved_fn_types, &declared);
         let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
             .iter()
-            .filter(|(qref, _)| registry_ref.machine_view(**qref).is_none())
+            .filter(|(qref, _)| graph.types.machine_view(**qref).is_none())
             .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
             .collect();
         env_functions.extend(
@@ -1142,6 +1131,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(vec![]),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         }
@@ -1175,6 +1165,7 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         }
@@ -1193,7 +1184,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
         assert!(params(&result, only_function(&i)).is_empty());
         let refused = refusals(&i, &result);
         assert_eq!(refused.len(), 1, "{refused:?}");
@@ -1207,7 +1198,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + @y", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
         assert!(params(&result, only_function(&i)).is_empty());
         assert_eq!(
             result.context_type(&QualifiedRef::root(i.intern("x"))),
@@ -1227,7 +1218,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "1 + 2");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
         assert_eq!(refusals(&i, &result), Vec::<String>::new());
         assert!(result.context_types.is_empty());
         assert_eq!(tail_type(&result, only_function(&i)), Some(Ty::I64));
@@ -1269,6 +1260,7 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         }
@@ -1350,17 +1342,12 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         };
         let ext = extract::extract(interner, &graph);
-        let result = infer(
-            interner,
-            &graph,
-            &ext,
-            &FxHashMap::default(),
-            Freeze::default(),
-        );
+        let result = infer(interner, &graph, &ext);
         (result, ids)
     }
 
@@ -1431,7 +1418,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_no_ctx_with_builtins(&i, "1 + 2");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         assert!(
             !result.has_errors(),
@@ -1448,25 +1435,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@x + 1", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
-
-        assert!(
-            !result.has_errors(),
-            "errors: {:?}",
-            error_strings(&i, &result)
-        );
-        let uid = last_local_id(&graph);
-        assert_eq!(tail_type(&result, uid).unwrap(), Ty::I64);
-    }
-
-    #[test]
-    fn resolve_with_user_provided_context() {
-        let i = Interner::new();
-        let graph = make_graph_no_ctx_with_builtins(&i, "@x + 1");
-        let ext = extract::extract(&i, &graph);
-        let mut user = FxHashMap::default();
-        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::I64));
-        let result = infer(&i, &graph, &ext, &user, Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         assert!(
             !result.has_errors(),
@@ -1482,7 +1451,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@name", &[("name", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         assert!(
             !result.has_errors(),
@@ -1502,7 +1471,7 @@ mod tests {
         )])));
         let graph = make_graph_with_ctx_and_builtins(&i, "@user.name", &[("user", obj_ty)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         assert!(
             !result.has_errors(),
@@ -1520,7 +1489,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@x + 1", &[("x", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         assert!(result.has_errors(), "should detect type mismatch");
     }
@@ -1532,7 +1501,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx_and_builtins(&i, "@x", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         let ctx_ref = graph.contexts[0].qref;
         assert_eq!(*result.context_type(&ctx_ref).unwrap(), Ty::I64);
@@ -2470,7 +2439,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
         let refused = refusals(&i, &result);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(refused[0].contains('x'), "{refused:?}");
@@ -2482,7 +2451,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + @y");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
         let refused = refusals(&i, &result);
         assert_eq!(refused.len(), 2, "{refused:?}");
         assert!(refused.iter().any(|r| r.contains('x')), "{refused:?}");
@@ -2495,7 +2464,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "{ @x + 1 }");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
         let refused = refusals(&i, &result);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(refused[0].contains('x'), "{refused:?}");
@@ -2511,7 +2480,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::I64)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2544,11 +2513,12 @@ mod tests {
                 },
             }]),
             contexts: Freeze::new(contexts),
+            types: Freeze::default(),
             bindings: Bindings::default(),
             entry: None,
         };
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         let fid = graph.functions[0].qref;
         assert!(
@@ -2568,7 +2538,7 @@ mod tests {
         let i = Interner::new();
         let graph = make_graph(&i, "@x + 1");
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         let fid = graph.functions[0].qref;
         let words: Vec<String> = result
@@ -2580,23 +2550,6 @@ mod tests {
         assert!(!result.outcomes[&fid].is_complete());
     }
 
-    /// User-provided context type -> Complete.
-    #[test]
-    fn context_user_provided_is_complete() {
-        let i = Interner::new();
-        let graph = make_graph(&i, "@x + 1");
-        let ext = extract::extract(&i, &graph);
-        let mut user = FxHashMap::default();
-        user.insert(QualifiedRef::root(i.intern("x")), lift_to_poly(&Ty::I64));
-        let result = infer(&i, &graph, &ext, &user, Freeze::default());
-
-        let fid = graph.functions[0].qref;
-        assert!(
-            result.outcomes[&fid].is_complete(),
-            "user-provided context should be Complete"
-        );
-    }
-
     // -- Soundness: type mismatch detected --
 
     /// Declared context type conflicts with usage -> Incomplete.
@@ -2606,7 +2559,7 @@ mod tests {
         // @x is String but used in arithmetic.
         let graph = make_graph_with_ctx(&i, "@x + 1", &[("x", Ty::String)]);
         let ext = extract::extract(&i, &graph);
-        let result = infer(&i, &graph, &ext, &FxHashMap::default(), Freeze::default());
+        let result = infer(&i, &graph, &ext);
 
         let fid = graph.functions[0].qref;
         assert!(

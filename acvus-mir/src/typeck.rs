@@ -16,10 +16,11 @@ use crate::place::{
 };
 use crate::solver::{
     Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
-    Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation, InstanceChoice,
-    InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode, MatchOutcome, Mismatch,
-    MismatchReason, ReceiverMode, ReferencePair, RequiredDecision, SettledSignature,
+    CompilerInstances, Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation,
+    InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding, MatchMode, MatchOutcome,
+    Mismatch, MismatchReason, ReceiverMode, ReferencePair, RequiredDecision, SettledSignature,
     SignatureCandidate, SignatureName, SignatureOption, UndecidedCall, UnjoinedArgument, Unsettled,
+    Withholds,
 };
 use crate::ty::generalize_patterns;
 use crate::ty::{
@@ -127,12 +128,6 @@ fn bound_names(pattern: &Pattern, on_name: &mut impl FnMut(Astr)) {
     }
 }
 
-struct OpenOperand {
-    operand: InferTy,
-    op: &'static str,
-    span: Span,
-}
-
 struct LentWhole {
     place: AstId,
     mutability: Mutability,
@@ -237,6 +232,14 @@ fn written_place(interner: &Interner, expr: &Expr) -> ShownValue {
 fn behind_a_reference(ty: &Ty) -> &Ty {
     match ty {
         TyTerm::Ref(_, referent) => &referent.ty,
+        other => other,
+    }
+}
+
+/// What a lent operand's reference names, as the operator's report shows it.
+fn referent_shown(ty: Ty) -> Ty {
+    match ty {
+        Ty::Ref(_, named) => named.ty,
         other => other,
     }
 }
@@ -579,20 +582,21 @@ fn operand_bound(op: BinOp) -> Option<TyVarBound> {
         BinOp::Add => Some(TyVarBound::one_of(
             integers().chain([TyTerm::Float, TyTerm::String]).collect(),
         )),
-        BinOp::Sub
-        | BinOp::Mul
-        | BinOp::Div
-        | BinOp::Mod
-        | BinOp::Lt
-        | BinOp::Gt
-        | BinOp::Lte
-        | BinOp::Gte => Some(TyVarBound::one_of(
+        BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => Some(TyVarBound::one_of(
             integers().chain([TyTerm::Float, TyTerm::Char]).collect(),
         )),
         BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
             Some(TyVarBound::one_of(integers().collect()))
         }
-        BinOp::Eq | BinOp::Neq | BinOp::And | BinOp::Or => None,
+        // `core::cmp`'s instances are what an ordering takes (RFC-0020).
+        BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte
+        | BinOp::Eq
+        | BinOp::Neq
+        | BinOp::And
+        | BinOp::Or => None,
     }
 }
 
@@ -989,6 +993,10 @@ enum ConversionReport {
     /// A lend of a place a call holds (RFC-0041): the held reference
     /// against the parameter.
     HeldLend,
+    /// An operator's operand against the operator's parameter: the operand
+    /// is lent as it stands, so a conversion there is the identity or a
+    /// mismatch of the operator's.
+    Operand { op: &'static str },
 }
 
 /// The expression a pattern's source is: a conversion of the source is a
@@ -1139,9 +1147,6 @@ pub struct TypeChecker<'a, 's, 'src> {
     source_modes: FxHashMap<AstId, SourceMode>,
     /// Places lent whole, whose passing is read off their settled types.
     lent_places: Vec<LentWhole>,
-    /// Operators whose operand was still open where they were checked,
-    /// and so were taken as operators on words.
-    open_operands: Vec<OpenOperand>,
     place_bases: FxHashMap<AstId, WrittenBase>,
     /// Conversion decisions registered so far, at their sites.
     conversions: Vec<PendingConversion>,
@@ -1158,6 +1163,9 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// Decisions instantiated so far, each at the span that will report a
     /// failure.
     decision_sites: FxHashMap<DecisionId, Span>,
+    /// The operator each operand's head decision was opened for: its failure
+    /// is that operator's mismatch.
+    operand_decisions: FxHashMap<DecisionId, &'static str>,
     requirer_of: FxHashMap<DecisionId, DecisionId>,
     /// The declaration whose scheme opened each instance decision: the
     /// callee for a call's own instance, and the declaration that carries
@@ -1207,7 +1215,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             passing: FxHashMap::default(),
             source_modes: FxHashMap::default(),
             lent_places: Vec::new(),
-            open_operands: Vec::new(),
             place_bases: FxHashMap::default(),
             conversions: Vec::new(),
             refused_in_body: Vec::new(),
@@ -1215,6 +1222,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             slice_args: Vec::new(),
             holds: Vec::new(),
             decision_sites: FxHashMap::default(),
+            operand_decisions: FxHashMap::default(),
             requirer_of: FxHashMap::default(),
             decision_callees: FxHashMap::default(),
             source_begins_by_decision: FxHashMap::default(),
@@ -1454,7 +1462,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
-        self.refuse_operands_that_settled_late();
         if !self.errors.is_empty() {
             return Err(self.reported());
         }
@@ -1523,30 +1530,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 (id, base)
             })
             .collect()
-    }
-
-    /// An operator is decided where it is written. One whose operand was
-    /// open there was taken as the operator on a word; an operand that then
-    /// settled to anything but a word or text is refused, not compared as a
-    /// word.
-    fn refuse_operands_that_settled_late(&mut self) {
-        for OpenOperand { operand, op, span } in std::mem::take(&mut self.open_operands) {
-            let resolved = self.solver.resolve_ty(&operand);
-            let Ok(settled) = self.solver.close_ty(&resolved) else {
-                // An operand that never settles is its bound site's refusal.
-                continue;
-            };
-            if settled.is_primitive() || matches!(settled, Ty::String) {
-                continue;
-            }
-            self.error(
-                MirErrorKind::OperatorDecidedBeforeItsOperand {
-                    op: op.to_string(),
-                    ty: settled,
-                },
-                span,
-            );
-        }
     }
 
     fn frozen_pattern_modes(&self) -> FxHashMap<AstId, MatchMode> {
@@ -2743,19 +2726,38 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         scheme: &crate::ty::Scheme,
         site: SchemeUse,
     ) -> SchemeAt {
-        let compiler_instances = self.compiler_instances(qref);
+        let compiler = CompilerInstances {
+            candidates: self.compiler_instances(qref),
+            withholds: Withholds::SameType,
+        };
+        self.instantiate_with_instances(qref, scheme, site, compiler)
+    }
+
+    /// `instantiate_at` with the compiler's instances the site admits: a
+    /// named call's (`compiler_instances`) or an operator's
+    /// (`operator_instances`). Each widens the signature's bound by the type
+    /// its first parameter takes.
+    fn instantiate_with_instances(
+        &mut self,
+        qref: QualifiedRef,
+        scheme: &crate::ty::Scheme,
+        site: SchemeUse,
+        compiler: CompilerInstances,
+    ) -> SchemeAt {
         let mut scheme = scheme.clone();
+        let compiler_instances = &compiler.candidates;
         if !compiler_instances.is_empty()
             && let Some(TyVarBound::OneOf { shapes, .. }) = scheme.bounds.first_mut()
         {
             shapes.extend(compiler_instances.iter().filter_map(|c| match &c.ty {
-                TyTerm::Fn { ret, .. } => Some((**ret).clone()),
+                TyTerm::Fn { params, .. } => match &params.first()?.ty {
+                    TyTerm::Ref(_, taken) => Some(taken.ty.clone()),
+                    taken => Some(taken.clone()),
+                },
                 _ => None,
             }));
         }
-        let inst = self
-            .solver
-            .instantiate_scheme_with(&scheme, compiler_instances);
+        let inst = self.solver.instantiate_scheme_with(&scheme, compiler);
         self.bound_sites.extend(
             inst.bounded
                 .into_iter()
@@ -2789,11 +2791,25 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         scheme: &crate::ty::Scheme,
         site: SchemeUse,
     ) -> (CallType, ResolvedCallee) {
+        let compiler = CompilerInstances {
+            candidates: self.compiler_instances(qref),
+            withholds: Withholds::SameType,
+        };
+        self.instantiate_call_with(qref, scheme, site, compiler)
+    }
+
+    fn instantiate_call_with(
+        &mut self,
+        qref: QualifiedRef,
+        scheme: &crate::ty::Scheme,
+        site: SchemeUse,
+        compiler: CompilerInstances,
+    ) -> (CallType, ResolvedCallee) {
         let SchemeAt {
             ty,
             instance,
             requirements,
-        } = self.instantiate_at(qref, scheme, site);
+        } = self.instantiate_with_instances(qref, scheme, site, compiler);
         let call_type = CallType::of(ty).expect("a declared signature is a function type");
         let callee = ResolvedCallee {
             qref,
@@ -2831,7 +2847,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     fn settled_instance(&self, decision: DecisionId) -> Option<usize> {
         match self.solver.answer(decision)? {
             Answer::Instance(InstanceKind::Extern(instance)) => Some(instance),
-            Answer::Instance(InstanceKind::Intrinsic(_)) => None,
+            Answer::Instance(InstanceKind::Intrinsic(_) | InstanceKind::Operator) => None,
             Answer::Conversion(_)
             | Answer::Signature { .. }
             | Answer::Lend(_)
@@ -2942,6 +2958,90 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Some(bounded.into_iter().map(move |var| BoundSite { var, span }))
             })
             .flatten()
+            .collect()
+    }
+
+    /// `core::eq` and `core::cmp` as `acvus_extern::core` declares them, for
+    /// an environment that registers neither: an operator over a word or
+    /// text needs only the language's own instances.
+    fn operator_scheme(&self, signature: OperatorSignature) -> crate::ty::Scheme {
+        let taken = || {
+            TyTerm::Ref(
+                Mutability::Shared,
+                Box::new(TypeArg::uniform(TyTerm::Var(0))),
+            )
+        };
+        let ret = match signature {
+            OperatorSignature::Eq => TyTerm::Bool,
+            OperatorSignature::Cmp => TyTerm::Int(crate::ty::IntTy::I64),
+        };
+        crate::ty::Scheme {
+            ty: TyTerm::Fn {
+                params: vec![
+                    ParamTerm::new(self.interner.intern("a"), taken()),
+                    ParamTerm::new(self.interner.intern("b"), taken()),
+                ],
+                ret: Box::new(ret),
+                captures: vec![],
+                effect: Effect::PURE.into(),
+            },
+            bounds: vec![TyVarBound::one_of(vec![])],
+            instances: Some(crate::ty::Instances {
+                concrete: Vec::new(),
+                generic: false,
+            }),
+            requires: Vec::new(),
+        }
+    }
+
+    /// The language's instances of `core::eq` and `core::cmp` at an operator
+    /// over a word or text (RFC-0020): the operator's instruction. A named call of the
+    /// signature does not see them and reaches the registry's instances.
+    fn operator_instances(&self, signature: OperatorSignature) -> Vec<Candidate> {
+        let (words, ret): (Vec<crate::ty::PolyTy>, crate::ty::PolyTy) = match signature {
+            OperatorSignature::Eq => (
+                crate::ty::IntTy::ALL
+                    .iter()
+                    .map(|width| TyTerm::Int(*width))
+                    .chain([
+                        TyTerm::Float,
+                        TyTerm::Bool,
+                        TyTerm::Char,
+                        TyTerm::Unit,
+                        TyTerm::String,
+                        TyTerm::Str,
+                    ])
+                    .collect(),
+                TyTerm::Bool,
+            ),
+            OperatorSignature::Cmp => (
+                crate::ty::IntTy::ALL
+                    .iter()
+                    .map(|width| TyTerm::Int(*width))
+                    .chain([TyTerm::Float, TyTerm::Char])
+                    .collect(),
+                TyTerm::Int(crate::ty::IntTy::I64),
+            ),
+        };
+        let a = self.interner.intern("a");
+        let b = self.interner.intern("b");
+        words
+            .into_iter()
+            .map(|word| {
+                let taken =
+                    || TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(word.clone())));
+                Candidate {
+                    instance: InstanceKind::Operator,
+                    requires: Vec::new(),
+                    ty: TyTerm::Fn {
+                        params: vec![ParamTerm::new(a, taken()), ParamTerm::new(b, taken())],
+                        ret: Box::new(ret.clone()),
+                        captures: vec![],
+                        effect: Effect::PURE.into(),
+                    },
+                    admits: Task::Heavy,
+                }
+            })
             .collect()
     }
 
@@ -3226,7 +3326,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             };
             let span = conversion.site.span;
             if let (
-                ConversionReport::HeldLend,
+                ConversionReport::HeldLend | ConversionReport::Operand { .. },
                 Conversion::Cast(_) | Conversion::ThroughRef { .. },
             ) = (conversion.site.report, answer)
             {
@@ -3609,6 +3709,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     let from = self.type_as_written(&from);
                     let to = self.type_as_written(&to);
                     match report {
+                        Some(ConversionReport::Operand { op }) => MirErrorKind::TypeMismatchBinOp {
+                            op,
+                            left: referent_shown(from),
+                            right: referent_shown(to),
+                        },
                         Some(ConversionReport::Emit) => {
                             MirErrorKind::EmitNotString { actual: from }
                         }
@@ -3662,6 +3767,15 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared {
                     subject: ShownValue::Anonymous,
                 },
+                Unsettled::MatchMismatch { expected, got, .. }
+                    if let Some(&op) = self.operand_decisions.get(&decision) =>
+                {
+                    MirErrorKind::TypeMismatchBinOp {
+                        op,
+                        left: self.type_as_written(&expected),
+                        right: self.type_as_written(&got),
+                    }
+                }
                 Unsettled::LendMismatch { expected, got, .. }
                 | Unsettled::MatchMismatch { expected, got, .. } => {
                     MirErrorKind::UnificationFailure {
@@ -4958,43 +5072,68 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// An operator on a non-primitive is a call of its shared signature
     /// (RFC-0020).
+    /// What an operand whose head is still open names: itself, or what it
+    /// references, as the solve settles it — the decision a pattern opens on
+    /// an open source (RFC-0024 rule 5). An operator borrows its operands,
+    /// and a borrow of a reference is that reference (RFC-0029 rule 3).
+    fn named_by_open_operand(
+        &mut self,
+        operand: &InferTy,
+        op: &'static str,
+        span: Span,
+    ) -> InferTy {
+        let named = self.solver.fresh_ty_var();
+        let decision = self.solver.decide(Decision::Match {
+            scrutinee: operand.clone(),
+            referent: named.clone(),
+            bindings: Vec::new(),
+        });
+        self.decision_sites.insert(decision, span);
+        self.operand_decisions.insert(decision, op);
+        named
+    }
+
     fn check_operator_call(
         &mut self,
         id: AstId,
         op: &'static str,
         signature: OperatorSignature,
         operand: &InferTy,
-        operands: &[InferTy],
+        operands: [(&InferTy, AstId); 2],
         span: Span,
     ) {
         let qref = QualifiedRef::qualified(
             self.interner.intern("core"),
             self.interner.intern(signature.name()),
         );
-        let Some(scheme) = self.env.functions.get(&qref).cloned() else {
-            self.error(
-                MirErrorKind::UndefinedFunction {
-                    name: format!("{signature} for {op}"),
-                    near: DidYouMean::default(),
-                },
-                span,
-            );
-            return;
-        };
+        let scheme = self
+            .env
+            .functions
+            .get(&qref)
+            .cloned()
+            .unwrap_or_else(|| self.operator_scheme(signature));
         let site = SchemeUse {
             at: span,
             source_begins: span,
         };
-        let (call_type, callee) = self.instantiate_call(qref, &scheme, site);
-        for (given, param) in operands.iter().zip(&call_type.params) {
-            let borrowed = match given {
-                TyTerm::Ref(..) => given.clone(),
-                other => TyTerm::Ref(
-                    Mutability::Shared,
-                    Box::new(TypeArg::uniform(other.clone())),
-                ),
+        let compiler = CompilerInstances {
+            candidates: self.operator_instances(signature),
+            withholds: Withholds::LanguageOwned,
+        };
+        let (call_type, callee) = self.instantiate_call_with(qref, &scheme, site, compiler);
+        for ((given, at), param) in operands.into_iter().zip(&call_type.params) {
+            let named = match self.solver.shallow_resolve_ty(given) {
+                TyTerm::Ref(_, named) => named.ty,
+                TyTerm::Var(_) => self.named_by_open_operand(given, op, span),
+                other => other,
             };
-            if self.solver.unify(&borrowed, param).is_err() {
+            let borrowed = TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(named)));
+            let site = ConversionSite {
+                id: at,
+                span,
+                report: ConversionReport::Operand { op },
+            };
+            if self.flow(&borrowed, param, site).is_err() {
                 let shown = self.type_as_written(operand);
                 self.error(
                     MirErrorKind::NoOperatorInstance {
@@ -5041,8 +5180,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// RFC-0043: `false` where no type satisfies both operands and the
     /// operator's bound.
+    /// The two operands of one operator meet at one type. An open
+    /// representation a signature left on either side is the operator's
+    /// instance decision to join, as a call argument's is (RFC-0042 rule 4).
+    fn operands_meet(&mut self, lt: &InferTy, rt: &InferTy) -> bool {
+        match self.solver.unify(lt, rt) {
+            Ok(())
+            | Err(Mismatch {
+                reason: MismatchReason::ReprOpen(_),
+                ..
+            }) => true,
+            Err(_) => false,
+        }
+    }
+
     fn unify_operands(&mut self, op: BinOp, lt: &InferTy, rt: &InferTy, span: Span) -> bool {
-        if self.solver.unify(lt, rt).is_err() {
+        if !self.operands_meet(lt, rt) {
             return false;
         }
         let Some(bound) = operand_bound(op) else {
@@ -5742,24 +5895,18 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             }
                             return self.record_ret(*id, TyTerm::Bool);
                         }
-                        if self.solver.unify(&lt, &rt).is_err() {
+                        if !self.operands_meet(&lt, &rt) {
                             self.binop_error(op_str(*op), lt, rt, *span);
                             return self.record_ret(*id, TyTerm::Bool);
                         }
                         let operand = self.solver.resolve_ty(&lt);
-                        if let TyTerm::Var(_) = operand {
-                            self.open_operands.push(OpenOperand {
-                                operand: lt.clone(),
-                                op: op_str(*op),
-                                span: *span,
-                            });
-                        } else if !operand.is_primitive() && !matches!(operand, TyTerm::String) {
+                        if !matches!(operand, TyTerm::String) {
                             self.check_operator_call(
                                 *id,
                                 op_str(*op),
                                 OperatorSignature::Eq,
                                 &operand,
-                                &[lt, rt],
+                                [(&lt, left.id()), (&rt, right.id())],
                                 *span,
                             );
                         }
@@ -5820,13 +5967,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         }
                         let operand = self.solver.resolve_ty(&lt);
                         match &operand {
-                            TyTerm::Var(_) => self.open_operands.push(OpenOperand {
-                                operand: lt.clone(),
-                                op: op_str(*op),
-                                span: *span,
-                            }),
-                            TyTerm::Int(_) | TyTerm::Float | TyTerm::Char => {}
-                            word if word.is_primitive() => {
+                            TyTerm::Bool | TyTerm::Unit => {
                                 self.no_ordering(op_str(*op), operand.clone(), *span)
                             }
                             _ => self.check_operator_call(
@@ -5834,7 +5975,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                                 op_str(*op),
                                 OperatorSignature::Cmp,
                                 &operand,
-                                &[lt, rt],
+                                [(&lt, left.id()), (&rt, right.id())],
                                 *span,
                             ),
                         }

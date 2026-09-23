@@ -1,0 +1,3 @@
+// expect true
+// Unit equality through lambda
+let f = |a, b| -> a == b; f((), ())
