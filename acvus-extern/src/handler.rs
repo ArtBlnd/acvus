@@ -45,7 +45,7 @@ where
 {
     fn glue(&self, _: QualifiedRef, _: RequiredInstance) -> InstanceRun {
         panic!(
-            "this call site was built with no registry, so a required instance cannot be resolved (RFC-0067 Decision 1)"
+            "this call site was built with no registry, so a required instance cannot be resolved (RFC-0070 rule 2)"
         )
     }
 }
@@ -58,7 +58,7 @@ pub struct ArgAt<'a> {
 
 /// One call site as `prepare` hands it to a handler: the settled type of
 /// each argument, and the word of the entry `prepare` chose for each
-/// requirement the callee states, in the declaration's order (RFC-0070 D2).
+/// requirement the callee states, in the declaration's order (RFC-0070 rule 2).
 pub struct CallSite<'a, Rt>
 where
     Rt: Runtime,
@@ -115,7 +115,7 @@ impl SitesNoParameterReads {
     }
 }
 
-/// Which crossing a parameter or a result takes (RFC-0040).
+/// Which crossing a parameter or a result takes (RFC-0041).
 pub struct Uniform;
 /// The crossing of a `Monomorphize` member instance.
 pub struct Specialized;
@@ -150,7 +150,7 @@ where
 
 /// How one Rust parameter takes its argument out of a call's argument run.
 /// The mode — by value, by shared reference, by exclusive reference — is
-/// written in Rust and read by the macro (RFC-0015); the width is the
+/// written in Rust and read by the macro (RFC-0023 rule 5); the width is the
 /// type's.
 pub trait Arg<'a, Rt>: Sited<Rt>
 where
@@ -161,7 +161,7 @@ where
     /// The run this parameter takes out of the call's argument run. A bound
     /// that admits only a parameter which survives the caller suspending
     /// says `Form = One`: the `Pair` a slice is borrows the caller's frame
-    /// (RFC-0047 §3).
+    /// (RFC-0047 rule 6).
     type Form: Form;
 
     /// How many of the run's values this parameter consumes.
@@ -359,7 +359,7 @@ where
 }
 
 /// The destination run a call's result is written into, lent for the call's
-/// duration by the frame that owns it (RFC-0050 rule 6). It is the caller's
+/// duration by the frame that owns it (RFC-0050 rule 5). It is the caller's
 /// own registers where the result stays in the frame, and the heap object's
 /// body where it escapes; a handler writes the same components either way.
 pub type Out<'a, Rt> = &'a mut [<Rt as Runtime>::Value];
@@ -371,7 +371,7 @@ where
     type Of<'a>;
     /// The run the result is written into. A bound that admits only a result
     /// the caller can take away says `Form = One`: the `Pair` a view or a
-    /// slice is borrows the caller's frame (RFC-0047 §3), and the `Run<W>` an
+    /// slice is borrows the caller's frame (RFC-0047 rule 3), and the `Run<W>` an
     /// aggregate is names the caller's destination.
     type Form: Returned;
 
@@ -387,7 +387,7 @@ where
 
 /// The arguments of a closure call, written into the callee's parameter
 /// registers — the run the window a handler was lent begins with (RFC-0052
-/// §7). Each member crosses at its own width, as a result does through `Ret`.
+/// rule 7). Each member crosses at its own width, as a result does through `Ret`.
 pub trait IntoRun<Rt>: Sized
 where
     Rt: Runtime,
@@ -437,7 +437,7 @@ into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6);
 into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6, A7: 7);
 
 /// A result that is a borrow of a parameter the caller lent, at the carrier
-/// type the declaration names for it (RFC-0047 §3, RFC-0068 D4): `Ref`,
+/// type the declaration names for it (RFC-0047 rule 3, RFC-0068 rule 4): `Ref`,
 /// `Slice`, and an `Option` of one. The handler returns Rust's borrow with
 /// Rust's lifetime; the crossing writes the word or pair.
 pub trait LentBack<Rt>: Sized
@@ -516,7 +516,7 @@ where
     type Of<'a> = T;
     /// The specialized crossing is the value and nothing beside it, so there
     /// is no run for a verdict to be returned beside and no `OptionOf` here
-    /// (RFC-0040).
+    /// (RFC-0041).
     type Form = One;
 
     fn into_run(value: T, rt: &Rt, out: Out<'_, Rt>) {
@@ -540,7 +540,7 @@ pub struct Width {
 
 /// The widest argument run a register form covers: a call of this many of the
 /// runtime's values or fewer takes each in a register, and a wider one is lent
-/// its window. RFC-0044 stage 2c fixed the cut at three parameters, which with
+/// its window. RFC-0044 rule 3 fixed the cut at three parameters, which with
 /// a `&str` or a slice parameter counting two values is four values.
 ///
 /// Four is where the handlers run out, not where the operations do. Of the 248
@@ -581,7 +581,7 @@ where
 
     /// `frame` is the window above the calling frame, which a handler that
     /// calls a closure calls it in and a handler that calls none ignores
-    /// (RFC-0050 rule 6).
+    /// (RFC-0052 rule 7).
     ///
     /// # Safety
     /// Every reference the handler takes out of `run` names storage live for
@@ -833,7 +833,7 @@ where
     fn arity(&self) -> usize;
     fn at_site(self: Box<Self>, site: &CallSite<'_, Rt>) -> Box<dyn AtSite<Rt>>;
     /// This handler as the plain function an `Instance` value names
-    /// (RFC-0067 Decision 1), for the declarations that have one.
+    /// (RFC-0067 rule 8), for the declarations that have one.
     fn instance(&self) -> Option<InstanceRun>;
 }
 
@@ -861,7 +861,7 @@ where
 /// parameter and no result is a slice. This is what a task above `Sync`
 /// runs. Such a call is awaited, and a slice is a borrow of the frame the
 /// call laid its arguments on, whose loan is gone by the time the caller
-/// resumes (RFC-0047 §3, rule 6).
+/// resumes (RFC-0047 rule 6, RFC-0023 rule 6).
 pub trait ValuesOnly<Rt>: HandlerFactory<Rt>
 where
     Rt: Runtime,
@@ -930,7 +930,7 @@ pub struct Unsited;
 
 /// A Rust closure with the crossing on both sides of it: `A` is the tuple of
 /// the declaration's parameter modes, in the order the machine lays a call's
-/// arguments (RFC-0052 §7), `R` its result, and `S` the site table — one
+/// arguments (RFC-0052 rule 7), `R` its result, and `S` the site table — one
 /// `Arg::Site` per parameter, or `Unsited` before `at_site` has filled it.
 ///
 /// `Handler` is implemented for the sited glue alone, so an operation cannot
@@ -1121,7 +1121,7 @@ where
 }
 
 /// As `glue`, with the declaration's body also as the plain function a
-/// resolved instance of it is called through (RFC-0067 Decision 1).
+/// resolved instance of it is called through (RFC-0067 rule 8).
 pub fn glue_at_instance<Rt, F, A, R, E>(f: F) -> Glue<Rt, F, A, R, Unsited, E>
 where
     Rt: Runtime,
@@ -1445,7 +1445,7 @@ impl<R: Runtime> ExternHandler<R> {
         }
     }
 
-    /// This instance's entry (RFC-0067 Decision 3), at the task its
+    /// This instance's entry (RFC-0070 rule 2), at the task its
     /// declaration named.
     ///
     /// `Heavy` has none, and that is a proof rather than a gap. Reaching a
@@ -1470,7 +1470,7 @@ pub struct DeclaredInstance<R: Runtime> {
     /// as `Async`, because it awaits either; the plain `fn` glue admits
     /// only `Sync`.
     pub admits: Task,
-    /// Written at this instance's own variables (RFC-0070 D1): the solver
+    /// Written at this instance's own variables (RFC-0070 rule 3): the solver
     /// opens one decision per entry once it settles on this candidate. A
     /// declaration that is no signature's instance reaches the solver
     /// through `FnKind::Extern::requires` instead, and its instances carry

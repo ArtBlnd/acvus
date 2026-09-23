@@ -1,9 +1,9 @@
-//! The register file (RFC-0048 §3, RFC-0052 §5, §6 and rule 7).
+//! The register file (RFC-0048 rule 3, RFC-0052 rules 5 and 7).
 //!
 //! A frame is a run of `Cell`s in one `Vec`: its registers, then the one
 //! `Value`-wide slot that holds its mark word, then the window a call out of
 //! it takes its callee's frame from. The caller owns the `Vec` and lends it
-//! (RFC-0052 §6), so a call neither allocates nor frees: it computes one
+//! (RFC-0052 rule 7), so a call neither allocates nor frees: it computes one
 //! displacement and steps past its own cells. An unbound frame is an empty
 //! `Vec` — a stage whose closure is a `CodeBody::Expr` never binds one and
 //! pays nothing for it.
@@ -128,7 +128,7 @@ impl BoundTo {
 }
 
 /// The frame a call chain runs in: one `Vec`, owned by the caller and lent
-/// per call (RFC-0052 §6).
+/// per call (RFC-0052 rule 7).
 pub struct Store {
     cells: Vec<Cell>,
     root: FrameState,
@@ -207,7 +207,7 @@ impl RootFrame {
 /// The cells a call takes its callee's frame from, and the body they are bound
 /// to (RFC-0050 rule 6): the window above a running frame, or a `Store`'s own
 /// cells at the root of a chain. A call lays its arguments in the registers the
-/// callee reads them from and then `bind`s the callee there (RFC-0052 §7).
+/// callee reads them from and then `bind`s the callee there (RFC-0052 rule 7).
 ///
 /// The frame below owns the state — inside the `Ctx` its `Machine` holds, or
 /// inside the `Ctx` a `RootCells` pair was built with — and lends a handler
@@ -320,7 +320,7 @@ impl FrameState {
     }
 
     /// The argument run a caller laid, read where the callee's body is one
-    /// chain and has no frame to read it from (RFC-0044, stage 4).
+    /// chain and has no frame to read it from (RFC-0044 rule 5).
     #[inline]
     pub fn laid(&self, arity: u16) -> &[Value] {
         let first = self.at(Off::of(0));
@@ -444,7 +444,7 @@ impl<'f> Regs<'f> {
     }
 
     /// The register's first byte. No arithmetic: the operation's field is
-    /// already the byte displacement (RFC-0052 §5).
+    /// already the byte displacement (RFC-0052 rule 5).
     #[inline(always)]
     fn at(&self, off: Off) -> *const Value {
         debug_assert!(
@@ -549,7 +549,7 @@ impl<'f> Regs<'f> {
     }
 
     /// One 8-byte load: the kind byte was written when the frame was made and
-    /// no run of a word-typed register changes it (RFC-0052 §5).
+    /// no run of a word-typed register changes it (RFC-0052 rule 5).
     #[inline(always)]
     pub fn word(&self, off: Off) -> u64 {
         self.peek(off).bits()
@@ -563,7 +563,7 @@ impl<'f> Regs<'f> {
 
     /// The word of a word-typed register, with the frame's claim untouched:
     /// a register whose kind the frame opened holds no `Large`, so there is
-    /// no mark bit to clear (RFC-0052 §5).
+    /// no mark bit to clear (RFC-0052 rule 5).
     #[inline(always)]
     pub fn take_word(&mut self, at: Marked) -> u64 {
         debug_assert!(
@@ -574,12 +574,12 @@ impl<'f> Regs<'f> {
     }
 
     /// One store, and one `or` on the frame's mark word where the operation's
-    /// type says the value owns a `Large` (RFC-0048 §4).
+    /// type says the value owns a `Large` (RFC-0048 rule 4).
     #[inline(always)]
     pub fn define<const LARGE: bool>(&mut self, at: Marked, value: Value) {
         // SAFETY: `check_assignment`, as stated on `Regs`. A register this
         // overwrites was released by a drop instruction or never owned
-        // (RFC-0041, RFC-0048 §6), so no value is lost here.
+        // (RFC-0018, RFC-0048 rule 6), so no value is lost here.
         unsafe { self.at_mut(at.at).write(value) };
         if LARGE {
             let word = at.word_byte();
@@ -589,14 +589,14 @@ impl<'f> Regs<'f> {
 
     /// A whole `Value` in a register the frame claims nothing in: the
     /// operation's type says the value owns no `Large`, so there is no mark
-    /// bit to set and no mark word to name (RFC-0048 §4).
+    /// bit to set and no mark word to name (RFC-0048 rule 4).
     #[inline(always)]
     pub fn put(&mut self, at: Off, value: Value) {
         // SAFETY: as `define`.
         unsafe { self.at_mut(at).write(value) };
     }
 
-    /// The store a call's result takes (RFC-0052 §5).
+    /// The store a call's result takes (RFC-0052 rule 5).
     #[inline(always)]
     pub fn store<const LARGE: bool, const WORD: bool>(&mut self, at: Marked, value: Value) {
         const {
@@ -612,7 +612,7 @@ impl<'f> Regs<'f> {
     }
 
     /// The frame's first write of a word-typed register, which fixes its kind
-    /// for every `set_word` after it (RFC-0052 §5).
+    /// for every `set_word` after it (RFC-0052 rule 5).
     #[inline]
     pub fn open(&mut self, off: Off, value: Value) {
         // SAFETY: `check_assignment`, as stated on `Regs`; this is the
@@ -622,7 +622,7 @@ impl<'f> Regs<'f> {
 
     /// The value, and — where its type owns a `Large` — the frame's claim on
     /// it dropped. A word operand touches neither register nor mark word
-    /// (RFC-0052 §5).
+    /// (RFC-0052 rule 5).
     #[inline(always)]
     pub fn take<const LARGE: bool>(&mut self, at: Marked) -> Value {
         let value = self.read(at.at);
@@ -634,7 +634,7 @@ impl<'f> Regs<'f> {
     }
 
     /// The batched form: one `and` of the constant mask of the registers this
-    /// operation consumes (RFC-0048 §5).
+    /// operation consumes (RFC-0048 rule 5).
     ///
     /// `prepare::take_mask` and `prepare::window_take_mask` are what keep every
     /// register of a mask inside mark word 0; each asserts it where it builds
@@ -668,7 +668,7 @@ impl<'f> Regs<'f> {
 
     /// Leaving: the set bits of the frame's mark words, released, and the words
     /// cleared. It iterates the set bits, never the registers — the 16-slot
-    /// kind scan at every return is what RFC-0048 §6 removed.
+    /// kind scan at every return is what RFC-0048 rule 6 removed.
     /// The runtime word count costs `map cap | sum` 2.7 % against a build that
     /// sweeps word 0 alone, which is what this cost before frames grew past one
     /// mark word. Lifting word 0 out into an `#[inline(always)]` helper, so its
@@ -697,7 +697,7 @@ impl<'f> Regs<'f> {
     }
 
     /// The registers an extern call's arguments sit in, lent to the handler
-    /// (RFC-0044, stage 2b).
+    /// (RFC-0044 rule 2).
     #[inline]
     pub fn run_of(&self, at: Off, arity: u16) -> &[Value] {
         // SAFETY: `prepare` allocated the run contiguously in this frame and
@@ -729,7 +729,7 @@ impl<'f> Regs<'f> {
 
     /// The frame's claim on a register whose value the frame did not write
     /// itself: an aggregate-returning call's handler wrote the `Large` into
-    /// the lent run, and the frame takes ownership of it here (RFC-0048 §4).
+    /// the lent run, and the frame takes ownership of it here (RFC-0048 rule 4).
     #[inline]
     pub fn claim(&mut self, at: Marked) {
         let word = at.word_byte();

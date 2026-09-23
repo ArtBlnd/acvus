@@ -14,7 +14,7 @@ use acvus_extern::{
 use crate::slice::{permute, swap_index};
 use crate::word::verdict;
 
-// A container demotes to a vec (RFC-0027).
+// A container demotes to a vec (RFC-0019).
 extern_signature! {
     ns: "std",
     fn vec<C, T>(items: C) -> Vec<T>
@@ -106,7 +106,7 @@ where
 /// The whole run of elements, borrowed in place (RFC-0047): the machine
 /// indexes this and nothing else. No copy — the slice is a pointer and a
 /// length into the container's own storage, returned as Rust's own borrow
-/// of the parameter the caller lent (RFC-0068 D4).
+/// of the parameter the caller lent (RFC-0068 rule 4).
 #[extern_fn(effect = pure)]
 #[extern_view]
 fn as_slice<T, Rt>(c: &Vec<T>) -> &[T]

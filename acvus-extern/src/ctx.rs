@@ -2,7 +2,7 @@
 
 use crate::runtime::Runtime;
 
-/// RFC-0050 rule 6.
+/// RFC-0023 rule 2, RFC-0067 rule 7.
 pub struct Ctx<'a, Rt>
 where
     Rt: Runtime,

@@ -1,4 +1,4 @@
-//! RFC-0064 step 2 at its contract: what a lambda may capture, what it may
+//! RFC-0064 rule 5 at its contract: what a lambda may capture, what it may
 //! leave with, and what a lambda holding a loan may not be used as.
 
 use acvus_mir_test::{compile_script_mode_optimized, refuse_script_mode_optimized};
@@ -68,7 +68,7 @@ fn a_lambda_returning_a_reference_to_its_parameter_is_admitted() {
 
 // -- The refusals that stay --------------------------------------------
 
-/// A view is the register pair of RFC-0062 Decision 1 and a capture is one
+/// A view is the register pair of RFC-0047 rule 6 and a capture is one
 /// word, so this one capture stays refused where a bare reference is now
 /// admitted.
 #[test]
@@ -79,7 +79,7 @@ fn a_lambda_capturing_a_view_is_refused() {
     );
 }
 
-/// RFC-0062 Decision 5, as RFC-0064 Decision 5 extends it: a lambda that
+/// RFC-0062 rule 5, as RFC-0064 rule 5 extends it: a lambda that
 /// holds a loan is a holder, and a holder is not data.
 #[test]
 fn a_capturing_lambda_is_not_stored_in_a_list() {

@@ -1,4 +1,4 @@
-//! RFC-0026: a `String` value used before its last use is copied first.
+//! RFC-0018 rule 2: a `String` value used before its last use is copied first.
 
 use acvus_ast::Span;
 use rustc_hash::{FxHashMap, FxHashSet};

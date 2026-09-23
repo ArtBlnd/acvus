@@ -32,7 +32,7 @@ struct LowerEntry {
 
 struct OptimizedEntry {
     /// Read off the code the passes left, which is what makes this the set
-    /// RFC-0071 Decision 5 calls required.
+    /// RFC-0071 rule 5 calls required.
     inputs: Vec<ContextInfo>,
     refusals: Vec<Refusal>,
 }
@@ -169,7 +169,7 @@ impl IncrementalGraph {
     }
 
     /// The arms a fold of this name decided against are code again, so every
-    /// name they read is required once more (RFC-0071 Decision 5).
+    /// name they read is required once more (RFC-0071 rule 5).
     pub fn unbind_input(&mut self, name: Astr) {
         self.bindings.unbind(name);
         self.invalidate_all_infer();
@@ -239,7 +239,7 @@ impl IncrementalGraph {
     }
 
     /// The inputs this one function requires: neither a `$` a binding fixed
-    /// nor one whose type closed to `!` is among them (RFC-0071 Decision 5).
+    /// nor one whose type closed to `!` is among them (RFC-0071 rule 5).
     ///
     /// A function that lowered answers with the set its surviving code reads,
     /// which is the fold's and is what `acvus check` reports. A function
@@ -266,7 +266,7 @@ impl IncrementalGraph {
 
     /// The inputs a run starting at `qref` requires: `context_info` of it
     /// and of every function it reaches through calls, since a `$` is shared
-    /// by the whole graph (RFC-0071 Decision 4).
+    /// by the whole graph (RFC-0071 rule 4).
     pub fn required_inputs(&self, qref: QualifiedRef) -> Vec<ContextInfo> {
         let mut seen: FxHashSet<QualifiedRef> = FxHashSet::default();
         let mut work = vec![qref];

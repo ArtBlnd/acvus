@@ -231,7 +231,7 @@ impl From<acvus_ast::IntWidth> for IntTy {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TyVarBound {
     Any,
-    /// The variable resolves to a type of one of these shapes (RFC-0027).
+    /// The variable resolves to a type of one of these shapes (RFC-0011 rule 2).
     OneOf {
         shapes: Vec<PolyTy>,
     },
@@ -383,7 +383,7 @@ impl InstanceSig {
 
 /// What a declaration requires of its type variables: an instance of
 /// `signature` whose type joins `pattern`, written at the declaration's own
-/// variables, and called at no task above `calls` (RFC-0068 D1). The
+/// variables, and called at no task above `calls` (RFC-0068 rule 5). The
 /// checker decides it as it decides a call of the signature.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequirementSig {
@@ -1434,10 +1434,10 @@ impl fmt::Display for Task {
     }
 }
 
-/// The contexts a call may touch (RFC-0017), as a set of context names.
+/// The contexts a call may touch (RFC-0025 rule 4), as a set of context names.
 pub type Contexts = BTreeSet<QualifiedRef>;
 
-/// The effect of a call (RFC-0013, RFC-0017): the reissue chain, whether
+/// The effect of a call (RFC-0013, RFC-0025): the reissue chain, whether
 /// two calls commute, and the contexts the call may read and write. A
 /// Pure call that writes nothing commutes by definition; a call that
 /// writes a context never commutes, since a second call may read it.
@@ -2128,7 +2128,7 @@ pub struct MachineCoercion {
 }
 
 /// The run behind a reference: a container's elements (RFC-0047 rule 6),
-/// or a `String`'s bytes (RFC-0062 Decision 3).
+/// or a `String`'s bytes (RFC-0062 rule 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Slice,

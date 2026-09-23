@@ -2,7 +2,7 @@
 //! bench runs: how many operations one iteration of each prepares, and how
 //! many of them the short-circuit diamond in the innermost head holds.
 //!
-//! Under RFC-0052 §3 a region is an operation of the list it sits in, so
+//! Under RFC-0052 rule 3 a region is an operation of the list it sits in, so
 //! each count includes the regions that list holds: the innermost head is
 //! its compare and its short-circuit `Diamond`, and each outer body counts
 //! the nested `Loop` among its own operations.

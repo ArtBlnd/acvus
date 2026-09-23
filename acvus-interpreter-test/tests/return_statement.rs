@@ -140,7 +140,7 @@ async fn a_return_of_another_type_than_the_host_declared_is_refused() {
 const RETURN_IN_A_RANGE: &str =
     "let acc = 0; for i in 0..10 { acc = acc + i; if acc > 5 { return acc; }; } acc";
 
-/// RFC-0057 Decision 4 names `return` as the third exit edge a region's body
+/// RFC-0057 rule 8 names `return` as the third exit edge a region's body
 /// may hold, beside `break` and `continue`; change that decision and this
 /// test moves with it.
 #[test]

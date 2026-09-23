@@ -86,7 +86,7 @@ pub fn scan_template(source: &str) -> Result<Vec<Line>, ParseError> {
 
 /// The text a line owns outside its own bytes: the `%` a leading `%%`
 /// stands for, and the newline the line carries where it did not end in
-/// `\` (RFC-0071 Decision 2).
+/// `\` (RFC-0071 rule 2).
 struct LineEdges {
     opening: &'static str,
     closing: &'static str,
@@ -166,7 +166,7 @@ fn split_tags(source: &str, start: usize, end: usize) -> Result<Vec<Piece>, Pars
 /// The offset of the `}}` that closes a tag whose content starts at `from`,
 /// with the content's literals and its nested braces stepped over, so a
 /// `}}` inside a string literal or an object literal's `}` is not the
-/// tag's end (RFC-0071 Decision 3). `None` where no `}}` closes it before
+/// tag's end (RFC-0071 rule 3). `None` where no `}}` closes it before
 /// `limit`.
 fn close_of_tag(bytes: &[u8], from: usize, limit: usize) -> Option<usize> {
     let mut at = from;
@@ -446,7 +446,7 @@ struct Interpolation {
 /// The tokens are `FmtStringStart(text0) <expr0> FmtStringMid(text1) <expr1>
 /// … FmtStringEnd(textn)`. A `{{` the literal never closes is not an
 /// interpolation: it is the two characters, which is how `{{ "{{" }}`
-/// writes a literal `{{` (RFC-0071 Decision 3). A literal holding no
+/// writes a literal `{{` (RFC-0071 rule 3). A literal holding no
 /// interpolation at all comes back as the `StringLit` it was.
 fn expand_format_string(
     content: &str,

@@ -9,7 +9,7 @@
 //! call, no way out to the value, and no retyping: a `new` over a word put
 //! `A`, `R`, `E` on it unchecked, and `erased` re-spelled a closure at the
 //! runtime's own value in every position, which is the same word with the
-//! checker's decision taken off it (RFC-0068 D1).
+//! checker's decision taken off it (RFC-0068 rule 1).
 //!
 //! Calling one is the one operation, and it is at the declared types only:
 //! `f.call_now(ctx, (a, b))` takes each parameter as the handler passes it
@@ -36,7 +36,7 @@ use crate::ty_arg::{Term, Var, kind};
 /// A declared type at a handler's own boundary: a value as itself, a
 /// declared `Ref<T, M, Rt>` as the Rust borrow it stands for. What a
 /// handler passes to a closure at that position, and what it receives back
-/// from a signature's instance there (RFC-0068 D4, D6).
+/// from a signature's instance there (RFC-0068 rules 4 and 6).
 pub trait Passed<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,

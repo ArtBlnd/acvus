@@ -3,7 +3,7 @@
 //! An integer operation is the same Rust operator in a release build, at
 //! the operand's width, panic messages included (RFC-0037). Every operand
 //! and every result here is a word, so a run is two `word` loads and one
-//! `set_word` store, and the kind byte the frame wrote stands (RFC-0052 §5).
+//! `set_word` store, and the kind byte the frame wrote stands (RFC-0052 rule 5).
 
 use std::marker::PhantomData;
 

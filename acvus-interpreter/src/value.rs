@@ -36,13 +36,13 @@ macro_rules! kind {
             /// is this one kind and a reader of it does not know which it has.
             LargeRef,
             /// An option whose payload is a `None`: the word is how many
-            /// `Some`s wrap it, and zero is `None` itself (RFC-0022).
+            /// `Some`s wrap it, and zero is `None` itself (RFC-0039 rule 6).
             None,
             /// The word is the address of the instance's mono glue.
             Instance,
             InstanceAwait,
             /// A closure of no captures: the word is the address of its
-            /// `Code` (RFC-0069 D3).
+            /// `Code` (RFC-0069 rule 3).
             Code,
             $($name,)*
         }
@@ -478,7 +478,7 @@ impl PartialEq for Value {
 }
 
 /// Where a read landed: a place inside a value, or the `None` that a
-/// `Some`'s payload is when it has no place of its own (RFC-0022).
+/// `Some`'s payload is when it has no place of its own (RFC-0039 rule 6).
 pub enum Place<'a> {
     At(&'a Value),
     Depth(Value),
@@ -504,7 +504,7 @@ pub enum PlaceMut<'a> {
 // -- The interpreter's own composites --------------------------------
 
 /// The language's array is the extern contract's `Arr` at
-/// `T = Owned<AcvusRuntime>` (RFC-0022, RFC-0048 §7): it crosses without a
+/// `T = Owned<AcvusRuntime>` (RFC-0039 rule 8, RFC-0048 rule 7): it crosses without a
 /// copy.
 ///
 /// A crossing erases and materializes this composite by its `TypeId`, so
@@ -514,7 +514,7 @@ pub enum PlaceMut<'a> {
 pub type Array = acvus_extern::Arr<Owned<AcvusRuntime>, ()>;
 pub struct Tuple(pub Vec<Owned<AcvusRuntime>>);
 /// The language's object is the extern contract's `Obj` at
-/// `V = Owned<AcvusRuntime>` (RFC-0032), under the same obligation as
+/// `V = Owned<AcvusRuntime>` (RFC-0039 rule 4), under the same obligation as
 /// `Array`.
 pub type Object = acvus_extern::Obj<Owned<AcvusRuntime>>;
 
@@ -524,7 +524,7 @@ pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 
 /// The head of a closure record: what it runs and how many values it
 /// captured. The captures follow the head in the same allocation, laid at
-/// `Slot<FnValue>`'s size (RFC-0069 D4); a closure of no captures has no
+/// `Slot<FnValue>`'s size (RFC-0069 rule 4); a closure of no captures has no
 /// record at all (`Kind::Code`). `code` is first so that a boxed record and
 /// an inline `Kind::Code` word are read alike (`Value::code_of`).
 #[repr(C)]
@@ -812,7 +812,7 @@ impl Value {
     }
     /// `Some(payload)`, in the one shape every option takes: the payload's
     /// own value, unless the payload is itself a `None`, whose depth word
-    /// this `Some` raises by one (RFC-0022).
+    /// this `Some` raises by one (RFC-0039 rule 6).
     pub fn some(payload: Value) -> Self {
         if payload.kind != Kind::None {
             return payload;
@@ -839,7 +839,7 @@ impl Value {
     }
 
     /// A closure that captures: one block, the head and the captures
-    /// behind it (RFC-0069 D4). `captures` is not empty; a closure of no
+    /// behind it (RFC-0069 rule 4). `captures` is not empty; a closure of no
     /// captures is `Value::code`.
     pub fn closure(
         code: crate::code::CodeRef,
@@ -872,7 +872,7 @@ impl Value {
         }
     }
 
-    /// A closure of no captures: its code, inline (RFC-0069 D3).
+    /// A closure of no captures: its code, inline (RFC-0069 rule 3).
     #[inline]
     pub fn code(code: crate::code::CodeRef) -> Self {
         Value {

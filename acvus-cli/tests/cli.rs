@@ -680,7 +680,7 @@ fn a_write_while_a_reference_is_live_is_refused_once() {
     );
 }
 
-/// RFC-0064 "What it costs": a lambda called after the storage it borrows was
+/// RFC-0064 rule 5: a lambda called after the storage it borrows was
 /// written names the capture and the call. One write is one conflict, so the
 /// reference the lambda captured adds its own labels to this refusal rather
 /// than a refusal of its own — here it has none, because `r`'s last use in

@@ -182,7 +182,7 @@ Stmt: Stmt = {
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
     <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:Stmt*> "}" <r:@R> =>
         Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) },
-    // break; | continue;  -- the innermost loop, no labels (RFC-0057 Decision 4)
+    // break; | continue;  -- the innermost loop, no labels (RFC-0057 rule 4)
     <l:@L> "break" ";" <r:@R> =>
         Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
     <l:@L> "continue" ";" <r:@R> =>
@@ -198,7 +198,7 @@ Stmt: Stmt = {
 };
 
 // `lo..hi` is a `for` head and not a value: there is no `Range` type, so
-// `..` appears in no expression rule (RFC-0057 Decision 1).
+// `..` appears in no expression rule (RFC-0057 rule 1).
 pub ForHead: ForHead = {
     <lo:Expr> ".." <hi:Expr> => ForHead::Range { lo, hi },
     <e:Expr> => ForHead::Value(e),

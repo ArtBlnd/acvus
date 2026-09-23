@@ -24,7 +24,7 @@ pub use layout::Hooks as SpaceHooksByType;
 pub use machine::fn_value_call;
 pub use ops::chain::{ChainTy, LeafRead, Node as ChainNode, Nodes as ChainNodes, Reads};
 /// The handlers an `Index` runs, and the unchecked form beside them that
-/// `prepare` never emits (RFC-0047 §7).
+/// `prepare` never emits (RFC-0047 rule 7).
 pub use ops::index as index_handlers;
 pub use prepare::{PrepareCtx, prepare_module};
 pub use runtime::{AcvusRuntime, ExternHandler};

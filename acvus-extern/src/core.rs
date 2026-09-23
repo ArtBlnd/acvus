@@ -1,5 +1,5 @@
-//! The shared signatures the compiler names (RFC-0019, RFC-0020, RFC-0070
-//! D5).
+//! The shared signatures the compiler names (RFC-0019, RFC-0020, RFC-0070 rule
+//! 5).
 
 use crate::{Registry, Runtime, extern_fn, extern_registry, extern_signature};
 
@@ -22,7 +22,7 @@ extern_signature! { ns: "core", fn to_string<T>(a: &T) -> String where T: crate:
 
 /// An obligation across artifacts. `acvus-mir`'s `slice_coercion` takes
 /// this declaration out of the environment's machine set to lower a
-/// `&String` argument at a `&str` parameter (RFC-0062 Decision 3), so the
+/// `&String` argument at a `&str` parameter (RFC-0062 rule 3), so the
 /// registry that carries it is the registry in which a `&str` parameter is
 /// reachable; it is core because the instruction is the language's
 /// (RFC-0039).

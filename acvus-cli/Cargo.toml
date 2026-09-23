@@ -20,7 +20,6 @@ path = "tests/all.rs"
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
 acvus-ext = { path = "../acvus-ext" }
-acvus-ext-llm = { path = "../acvus-ext-llm" }
 acvus-ext-net = { path = "../acvus-ext-net" }
 acvus-extern = { path = "../acvus-extern" }
 # `probe` carries `Op::successor`, `Op::owns` and `Named::name`, which the
@@ -28,7 +27,6 @@ acvus-extern = { path = "../acvus-extern" }
 acvus-interpreter = { path = "../acvus-interpreter", features = ["probe"] }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rustc-hash = { workspace = true }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

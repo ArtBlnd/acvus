@@ -11,7 +11,7 @@ and `num::pow` do (`acvus-ext/src/num.rs`, RFC-0058).
 
 `as_slice` and `as_slice_mut` are the view. They are the coercion the
 compiler inserts behind `&v` at a `&[T]` parameter, behind `a[i]` and behind
-`for x in &v` (RFC-0047 §5), and a script may also write the call itself,
+`for x in &v` (RFC-0047 rules 3 and 5), and a script may also write the call itself,
 which resolves to the container's own instance. Where the target asks for no
 view, `&v` stays a `&Vec<T>`.
 
@@ -25,7 +25,7 @@ view, so the element operations — `sort`, `contains`, `binary_search`,
 
 | language | signature | Rust `std` twin | difference |
 | --- | --- | --- | --- |
-| `vec` | `vec(items: C) -> Vec<T>` | `Vec::from` | a shared signature; any container demotes to a vec (RFC-0027) |
+| `vec` | `vec(items: C) -> Vec<T>` | `Vec::from` | a shared signature; any container demotes to a vec (RFC-0019) |
 | `filled` | `filled(n: u64, x: T) -> Vec<T>` | `vec![x; n]` | instances for `i64`, `f64`, `bool`, `String` |
 | `with_capacity` | `with_capacity(n: u64) -> Vec<T>` | `Vec::with_capacity` | none |
 | `len` | `len(c: &Vec<T>) -> u64` | `Vec::len` | `u64`, not `usize` |
@@ -82,7 +82,7 @@ it. `next(&mut it)` is that signature called directly, so
 consumer.
 
 `dedup` is one stage over any element type that has an instance of
-`core::eq`, which it requires and the call site decides (RFC-0070 D5):
+`core::eq`, which it requires and the call site decides (RFC-0070 rule 5):
 `into_iter([1, 1, 2]) | dedup` collapses to `[1, 2]`. The stage holds the
 element it last drew rather than a copy of it, so it requires no
 `core::clone` and runs one draw behind its source; what it yields is
@@ -90,7 +90,7 @@ unchanged by that.
 
 `Vec<T>` has an instance of each of `core::eq`, `core::clone`, `core::cmp`
 and `core::hash`, and each requires the same signature at `T`
-(RFC-0070 D5). So `clone(&v)` copies a `Vec<Vec<String>>` through the
+(RFC-0070 rule 5). So `clone(&v)` copies a `Vec<Vec<String>>` through the
 `String` instance at the bottom, `cmp` is lexicographic with the length
 deciding a tie between a prefix and what extends it, and `hash` folds the
 element digests in the order the elements are in. An element type with no

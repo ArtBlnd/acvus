@@ -7,7 +7,7 @@ their own `as_slice` / `as_slice_mut` view, the way Rust's `[T]` serves
 
 The view is a call a script may write (`v.as_slice()`), and it is also the
 coercion the compiler inserts behind `&v` at a `&[T]` parameter, behind
-`a[i]` and behind `for x in &v` (RFC-0047 §5). Where the target asks for no
+`a[i]` and behind `for x in &v` (RFC-0047 rules 3 and 5). Where the target asks for no
 view, `&v` stays a `&Vec<T>`.
 
 Indices are `u64`; where Rust panics on an index, the language traps with

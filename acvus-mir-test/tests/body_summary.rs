@@ -137,8 +137,8 @@ fn a_mutable_summary_excludes_a_read_of_the_argument() {
 
 // -- A summary over two parameters ------------------------------------
 
-/// The `match` of RFC-0064's "where this is hard": two arms holding two
-/// different parameters, whose summary is the union of both.
+/// A `match` of two arms holding two different parameters, whose summary
+/// is the union of both (RFC-0064 rule 2).
 fn pick(i: &Interner) -> Helper<'static> {
     Helper {
         name: "pick",
@@ -177,7 +177,7 @@ fn a_union_summary_refuses_a_write_to_either_argument() {
     }
 }
 
-// -- Recursion is a fixpoint (RFC-0064 Decision 4) --------------------
+// -- Recursion is a fixpoint (RFC-0064 rule 4) --------------------
 
 fn lends_and_stops(i: &Interner) -> Vec<PolyParam> {
     sig(

@@ -65,7 +65,7 @@ fn to_string_string(a: &String) -> String {
     a.clone()
 }
 
-/// The copy RFC-0062 Decision 3 names: a `&str` reaches a `String`
+/// The copy RFC-0062 rule 3 names: a `&str` reaches a `String`
 /// parameter only through this, and `"x".to_string()` is how a literal is
 /// written where an owned string is wanted.
 #[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]

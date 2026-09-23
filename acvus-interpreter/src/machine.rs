@@ -1,4 +1,4 @@
-//! The machine that runs a prepared body (RFC-0052 §2).
+//! The machine that runs a prepared body (RFC-0052 rule 2).
 //!
 //! `Machine::run` is synchronous and is one loop with one compare: a block
 //! runs its operations straight through and its terminator names the next
@@ -47,7 +47,7 @@ pub struct LentCall<'r, 'c> {
 /// Obligation across artifacts: the two-`Value` run a `Words` is read out of
 /// here is the one `acvus_extern`'s `Ret::into_run` writes and
 /// `Runtime::slice_from_run` reads, so a view crossing a body call and a view
-/// crossing an extern call are one representation (RFC-0062 Decision 1).
+/// crossing an extern call are one representation (RFC-0047 rule 6).
 pub trait Returned {
     fn of(exit: [Value; 2]) -> Self;
 }
@@ -279,7 +279,7 @@ where
 /// What a frame holds for as long as it is bound to one body: the kind byte
 /// of every word-typed register and the body's entry constants. A `set_word`
 /// leaves the kind byte and an entry constant's register has no writer, so a
-/// second call on the same frame reads what this wrote (RFC-0052 §5, §6).
+/// second call on the same frame reads what this wrote (RFC-0052 rules 5 and 7).
 fn open_frame(body: &Body, regs: &mut Regs<'_>) {
     regs.open_marks(body.mark_words);
     for kind in &body.slot_kinds {
@@ -408,7 +408,7 @@ where
 /// `Machine` on it (RFC-0052 rule 7), whether the window is the one above a
 /// calling frame or the one a handler was lent (RFC-0050 rule 6).
 ///
-/// The `#[inline(never)]` is a measurement (RFC-0069 D2): a frame inlined
+/// The `#[inline(never)]` is a measurement (RFC-0069 rule 2): a frame inlined
 /// into the caller is part of every call that reaches this `Code`, framed or
 /// not.
 ///

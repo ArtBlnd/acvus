@@ -25,7 +25,7 @@ pub struct OptimizeResult {
     /// Validation errors per function (empty = valid).
     pub errors: Vec<(QualifiedRef, Vec<ValidationError>)>,
     /// Read off the code that survived the passes, which is what makes this
-    /// the set RFC-0071 Decision 5 calls required.
+    /// the set RFC-0071 rule 5 calls required.
     pub inputs: FxHashMap<QualifiedRef, Vec<ContextInfo>>,
 }
 
@@ -118,7 +118,7 @@ pub fn optimize(
 
 /// A name every read of which a fold removed is absent here: it constrains
 /// nothing, so its type closes to `!` and it is not required (RFC-0071
-/// Decision 5).
+/// rule 5).
 fn required_inputs(body: &MirBody) -> Vec<ContextInfo> {
     let mut read: FxHashSet<ValueId> = FxHashSet::default();
     for inst in &body.insts {
@@ -165,7 +165,7 @@ fn named_callees(module: &MirModule) -> Vec<QualifiedRef> {
 
 /// The order every callee's summary exists in before its callers are
 /// checked. Components, not a flat topological order, because a cycle has no
-/// such order: RFC-0064 Decision 4 answers a cycle with a fixpoint, which
+/// such order: RFC-0064 rule 4 answers a cycle with a fixpoint, which
 /// [`Component::settle`] computes.
 fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<QualifiedRef>> {
     let mut ids: Vec<QualifiedRef> = modules.keys().copied().collect();
@@ -189,7 +189,7 @@ fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<Qual
 const LOANS_PER_PARAM: usize = 2;
 
 /// One strongly connected component of the call graph, and the least fixpoint
-/// of the borrow check over its summaries (RFC-0064 Decision 4).
+/// of the borrow check over its summaries (RFC-0064 rule 4).
 ///
 /// Every member starts at the bottom — the empty summary, written into the
 /// table rather than left absent. Absent is not bottom here: a call whose
@@ -309,7 +309,7 @@ fn run_pass2_body(interner: &Interner, body: &mut crate::ir::MirBody, opt: Opt) 
 /// Which inputs a body requires is a fact about the language and not an
 /// optimization, so the two folds that decide it run at every level: a bound
 /// `$` is a constant here as well, and the arms it decides against are gone
-/// from both bodies alike (RFC-0071 Decision 5).
+/// from both bodies alike (RFC-0071 rule 5).
 fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::ssa_pass::run(cfg);
     optimize::reborrow::run(cfg);
@@ -323,7 +323,7 @@ fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
 fn run_pass2(interner: &Interner, cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
-    // RFC-0053: an aggregate no use lets out of the body never exists.
+    // RFC-0050: an aggregate no use lets out of the body never exists.
     // Before `ssa_pass`, whose builder places the phis its parts need;
     // before `dce`, which sweeps the constructor left with no reader.
     optimize::sroa::run(cfg);

@@ -64,7 +64,7 @@ impl StrView {
 
     /// Obligation across artifacts: the UTF-8 that `from_utf8_unchecked`
     /// relies on here is the checker's. A `Ty::Str` is reached only by
-    /// borrowing a `String` or by a string literal (RFC-0062 Decision 2),
+    /// borrowing a `String` or by a string literal (RFC-0062 rule 2),
     /// and `substring` is the one producer that cuts a run at a chosen
     /// offset, which is why it checks `is_char_boundary` at both ends
     /// before it cuts.
@@ -123,7 +123,7 @@ where
 
     fn into_run(value: &str, rt: &Rt, out: &mut [Rt::Value]) {
         // SAFETY: the result is a borrow of a parameter the caller lent
-        // for this call (RFC-0047 §3), which outlives the pair.
+        // for this call (RFC-0047 rule 3), which outlives the pair.
         rt.slice_into_run(unsafe { StrView::of(value) }.words(), out)
     }
 }

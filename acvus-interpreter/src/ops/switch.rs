@@ -1,4 +1,4 @@
-//! A `match` is one dispatch (RFC-0051 §5): the key is read once and the
+//! A `match` is one dispatch (RFC-0051 rule 5): the key is read once and the
 //! block it names is returned, where the chain used to run one
 //! `TestVariant` or `TestLiteral` and one `JumpIf` per arm.
 //!
@@ -7,9 +7,9 @@
 //! `default` that is a real successor — the catch-all where the `match`
 //! wrote one, and otherwise the last arm, which is then the one tag left
 //! untested. So no `run` here has to decide that no arm holds;
-//! `validate::exhaustive` (RFC-0051 §3) decided that already.
+//! `validate::exhaustive` (RFC-0051 rule 3) decided that already.
 //!
-//! Decision not to build: the table RFC-0051 §5 names. A tag word is the
+//! Decision not to build: the table RFC-0051 rejects. A tag word is the
 //! program's number for an interned name, which is sparse, so no table can be
 //! indexed by it; the nearest form is a hashed table whose lookup is a multiply
 //! and a dependent load, and at the seven arms of `benches/programs.rs`'s
@@ -76,7 +76,7 @@ impl<const THROUGH: bool> Op for SwitchOption<THROUGH> {
 
 /// One tested arm of a `match` whose arms all rejoin: the word it names and
 /// the chain the machine runs for it, ended by `Yield` as every region part
-/// is (RFC-0052 §3).
+/// is (RFC-0052 rule 3).
 pub struct RegionArm {
     pub key: u64,
     pub head: Box<dyn Op>,

@@ -23,15 +23,14 @@ let total_perimeter = 0.0;
 let refused = vec([]);
 
 for e in &@entries {
-    let kind = e.kind.to_string();
-    let parsed = if kind == "circle".to_string() {
+    let parsed = if e.kind == "circle" {
         Ok(Shape::Circle(e.a))
-    } else if kind == "square".to_string() {
+    } else if e.kind == "square" {
         Ok(Shape::Square(e.a))
-    } else if kind == "rect".to_string() {
+    } else if e.kind == "rect" {
         Ok(Shape::Rect((e.a, e.b)))
     } else {
-        Err(kind)
+        Err(e.kind.to_string())
     };
 
     let measured = measure(parsed);

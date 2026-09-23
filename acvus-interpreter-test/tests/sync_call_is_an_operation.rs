@@ -1,4 +1,4 @@
-//! RFC-0052: a call whose callee's task is `Sync` is an operation, and only a
+//! RFC-0052 rule 4: a call whose callee's task is `Sync` is an operation, and only a
 //! call above `Sync` is a terminator.
 //!
 //! Each `step` below is a closure the inliner leaves alone, which is what

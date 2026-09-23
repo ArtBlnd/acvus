@@ -20,7 +20,7 @@
 //!
 //! **The element contract.** The table holds its keys at `K` and its values
 //! at `V` — the handler's own type variables — and the two closures at the
-//! `K` and `E` the map's type carries (RFC-0068 D3). A handler takes
+//! `K` and `E` the map's type carries (RFC-0068 rule 3). A handler takes
 //! `m: &HashMap<K, V, E, Rt>` or a `HashSet` as a declared parameter, so the
 //! checker unified those variables with the key and value types of the table
 //! the argument names, and Rust's own checker carries that decision from
@@ -44,7 +44,7 @@ use crate::iter::{Items, Refs, sig};
 /// The hash and the comparator as the declaration sees them, and as the
 /// table keeps them: at the key type and the effect the map's own type
 /// carries. A closure is stored at the types it was declared with and is
-/// not re-spelled (RFC-0068 D1).
+/// not re-spelled (RFC-0068 rule 1).
 type HashOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>,), u64, E, Rt>;
 type EqOf<K, E, Rt> = Closure<(Ref<K, Shared, Rt>, Ref<K, Shared, Rt>), bool, E, Rt>;
 
@@ -757,8 +757,8 @@ where
     m.0.put(ctx, Binding { key, value }).await
 }
 
-/// The result is Rust's borrow of the map the caller lent (RFC-0047 §3,
-/// RFC-0068 D4), so the declaration runs at `Task::Sync`: there is no
+/// The result is Rust's borrow of the map the caller lent (RFC-0047 rule 3,
+/// RFC-0068 rule 4), so the declaration runs at `Task::Sync`: there is no
 /// awaited form of a result that names the frame the call laid its
 /// arguments on.
 #[extern_fn(effect = E)]

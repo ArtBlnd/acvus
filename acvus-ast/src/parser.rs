@@ -168,7 +168,7 @@ impl Builder<'_> {
         }
     }
 
-    /// One piece of a text line, as the append it is (RFC-0071 Decision 2).
+    /// One piece of a text line, as the append it is (RFC-0071 rule 2).
     fn append_of(&self, piece: &Piece) -> Result<Stmt, ParseError> {
         match piece {
             Piece::Text { value, span } => Ok(append(
@@ -875,7 +875,7 @@ mod tests {
     }
 
     /// A line that does not begin with `%` is text, its newline included
-    /// (RFC-0071 Decision 2).
+    /// (RFC-0071 rule 2).
     #[test]
     fn a_text_line_is_one_append_with_its_newline() {
         let t = template("hello world\n");
@@ -1005,7 +1005,7 @@ mod tests {
     }
 
     /// An `if` and a `match` are operands of the expression grammar, so
-    /// inline branching needs no template form (RFC-0071 Rationale).
+    /// inline branching needs no template form (RFC-0071).
     #[test]
     fn an_inline_if_is_an_expression() {
         let t = template(r#"{{ if $c { "a" } else { "b" } }}"#);
@@ -1013,7 +1013,7 @@ mod tests {
     }
 
     /// The tag's content is tokenized, so a string literal inside it may
-    /// hold the delimiters (RFC-0071 Decision 3).
+    /// hold the delimiters (RFC-0071 rule 3).
     #[test]
     fn a_tag_writes_a_literal_brace_pair() {
         let t = template(r#"{{ "{{" }}"#);

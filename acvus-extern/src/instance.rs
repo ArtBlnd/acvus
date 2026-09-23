@@ -1,11 +1,11 @@
 //! An instance as one value of its own, beside the value it serves
-//! (RFC-0067 Decision 1).
+//! (RFC-0067 rule 1).
 //!
 //! A handler declares a requirement by taking an `Instance` parameter;
 //! `#[extern_fn]` reads it and records it on `FnDecl::requires`, which is
 //! what `Externs::combine` meets with the signature's instances. An
 //! ordinary handler's word lands in its call site's table, an instance's in
-//! its own entry (RFC-0070 D2).
+//! its own entry (RFC-0070 rule 2).
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -52,7 +52,7 @@ impl InstanceRun {
     }
 }
 
-/// What a value made by `Runtime::instance_value` addresses (RFC-0070 D2).
+/// What a value made by `Runtime::instance_value` addresses (RFC-0070 rule 2).
 pub struct InstanceEntry<Rt>
 where
     Rt: Runtime,
@@ -227,7 +227,7 @@ where
     Rt: Runtime,
 {
     /// What the signature's first parameter stands at: the variable a bound
-    /// names, which RFC-0019 makes the one an instance is matched by.
+    /// names, which RFC-0067 rule 2 makes the one an instance is matched by.
     type This;
     /// The first parameter's mode: `&'a This`, `&'a mut This`, or `This`.
     /// The mode reaches a requiring handler through this projection alone,
@@ -239,7 +239,7 @@ where
     type Rest<'a>;
     /// The result as the requirer receives it: a value as itself; a result
     /// standing at a `Ref<T, M, Rt>` marker as `&'r T` / `&'r mut T`, for
-    /// the `'r` of the receiver the call lent (RFC-0068 D6).
+    /// the `'r` of the receiver the call lent (RFC-0068 rule 6).
     type Ret<'r>;
 
     /// Obligation across artifacts: `extern_signature!` writes this `fn`
@@ -273,7 +273,7 @@ where
 
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is no receiver `Instance::call` can name",
-    note = "a required instance is called with the receiver its signature declared, `&T` or `&mut T`, where `T` derefs to the runtime's value; a signature taking its receiver by value cannot be required (RFC-0070 D4)."
+    note = "a required instance is called with the receiver its signature declared, `&T` or `&mut T`, where `T` derefs to the runtime's value; a signature taking its receiver by value cannot be required (RFC-0070 rule 4)."
 )]
 pub trait Receiver<Rt>
 where

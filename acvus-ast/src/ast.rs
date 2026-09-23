@@ -72,18 +72,18 @@ pub enum Stmt {
         body: Vec<Stmt>,
         span: Span,
     },
-    /// `for x in head { body }` - one traversal (RFC-0057 Decision 1).
+    /// `for x in head { body }` - one traversal (RFC-0057 rule 1).
     For {
         id: AstId,
         /// Where the head's `as_slice` instance is recorded, as an index
-        /// expression records its own (RFC-0047 rule 6).
+        /// expression records its own (RFC-0047 rule 3).
         callee_id: AstId,
         binding: Astr,
         head: ForHead,
         body: Vec<Stmt>,
         span: Span,
     },
-    /// `break;` - leave the innermost loop (RFC-0057 Decision 4).
+    /// `break;` - leave the innermost loop (RFC-0057 rule 4).
     Break {
         id: AstId,
         span: Span,
@@ -109,7 +109,7 @@ pub enum Stmt {
         span: Span,
     },
     /// A template's text line or one of its `{{ }}` tags: the value is
-    /// appended to the template's result (RFC-0071 Decisions 2 and 3).
+    /// appended to the template's result (RFC-0071 rules 2 and 3).
     Append {
         id: AstId,
         expr: Expr,
@@ -270,7 +270,7 @@ impl PlaceBase {
 
 /// What a `for` traverses, as the parser reads it. Which of the four heads
 /// a `ForHead::Value` is -- `&v`, `&mut v` or an array by value -- is the
-/// expression's type, which the checker settles (RFC-0057 Decision 1).
+/// expression's type, which the checker settles (RFC-0057 rule 1).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForHead {
     Value(Expr),

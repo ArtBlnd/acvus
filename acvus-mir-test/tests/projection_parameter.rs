@@ -1,7 +1,7 @@
 //! A projection parameter is matched at least (RFC-0050 rule 6): a handler
 //! that declares `SRef<'_>` borrows the fields the projection names, so an
 //! object carrying more of them is admitted. A by-value `S` parameter keeps
-//! RFC-0042 R1's exact meet, which `declared_struct.rs` is the contract of.
+//! RFC-0042 rule 1's exact meet, which `declared_struct.rs` is the contract of.
 //!
 //! What `#[derive(TyArg)] #[projection]` emits is what these externs declare:
 //! the struct's own `TyArg` is `ObjectTy::declared`, and the projection's is

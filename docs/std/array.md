@@ -5,7 +5,7 @@ function here is generic in it and none changes the length.
 
 An array's view is `as_slice` / `as_slice_mut`, which a script may write as
 a call as well as receive as the coercion behind `&a` at a `&[T]` parameter,
-behind `a[i]` and behind `for x in &a` (RFC-0047 §5).
+behind `a[i]` and behind `for x in &a` (RFC-0047 rules 3 and 5).
 Through it an array reaches everything `docs/std/slice.md` tabulates. A
 `&Vec<T>` and a `&Array<T, N>` reach that surface through the same
 `as_slice` view, so the element operations live once, over `&[T]`.

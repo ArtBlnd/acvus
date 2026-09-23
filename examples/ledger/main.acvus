@@ -12,19 +12,19 @@ let to_cents = |text| -> {
     let read_whole = i64::from_str(&parts[0u64]);
     let read_frac = i64::from_str(&parts[1u64]);
     let cents = read_whole? * 100 + read_frac?;
-    let signed = if negative { 0 - cents } else { cents };
+    let signed = if negative { -cents } else { cents };
     Ok(signed)
 };
 
 let money = |cents| -> {
     let negative = cents < 0;
     let size = cents.abs();
-    let sign = if negative { "-".to_string() } else { "".to_string() };
+    let sign = if negative { "-" } else { "" };
     let whole = size / 100;
     let frac = size % 100;
     let frac_text = frac.to_string();
     let padded = frac_text.pad_start(2, "0");
-    "{{ &sign }}{{ &whole | to_string }}.{{ &padded }}"
+    "{{ sign }}{{ &whole | to_string }}.{{ &padded }}"
 };
 
 let balance = 0;

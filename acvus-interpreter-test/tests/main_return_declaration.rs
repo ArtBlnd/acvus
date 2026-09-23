@@ -24,7 +24,7 @@ async fn a_body_returning_what_the_host_declared_runs() {
     assert_eq!(v.as_int(), 3);
 }
 
-/// RFC-0047 T2's sabotage, made permanent: the body leaves with a `String`
+/// A sabotage probe, made permanent: the body leaves with a `String`
 /// where the host reads an `i64`, and the compilation refuses it, naming the
 /// entry, the declared type and the type the body leaves with.
 #[tokio::test]

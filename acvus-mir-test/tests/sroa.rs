@@ -1,4 +1,4 @@
-//! An aggregate that does not escape never exists (RFC-0053).
+//! An aggregate that does not escape never exists (RFC-0050).
 //!
 //! The sources are the `shapes` bench cases
 //! (`acvus-interpreter-test/benches/shapes.rs`), so the listings below and

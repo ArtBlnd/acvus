@@ -1,4 +1,4 @@
-//! RFC-0064 step 1 on the machine: a body whose result is a bare reference
+//! RFC-0064 rule 2 on the machine: a body whose result is a bare reference
 //! is compiled, run, and the number the caller reads through it is the
 //! number the program names.
 

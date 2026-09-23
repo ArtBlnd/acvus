@@ -140,7 +140,7 @@ async fn attention_written_as_chains_is_the_same_value() {
     assert_close(&second, expected[1]);
 }
 
-/// RFC-0064 Decision 2 admits the capture the inner lambda makes of `b`, a
+/// RFC-0064 rule 5 admits the capture the inner lambda makes of `b`, a
 /// reference parameter of the outer one, and the product it reads is the
 /// dot product of `@query` with itself.
 #[tokio::test]

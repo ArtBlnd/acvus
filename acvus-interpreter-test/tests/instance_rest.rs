@@ -1,4 +1,4 @@
-//! RFC-0067 "The call": a rest position standing at the signature's own
+//! RFC-0067 rule 6: a rest position standing at the signature's own
 //! type variable.
 //!
 //! `eq(a: &T, b: &T)` is the shape the iterator spike never reached — its

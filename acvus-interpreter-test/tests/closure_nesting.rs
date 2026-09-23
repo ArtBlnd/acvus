@@ -52,7 +52,7 @@ async fn a_word_reaches_the_innermost_of_three_closures_as_a_copy() {
 
 /// A closure called in a handler's window calls a driving extern itself, so
 /// the inner handler's window is the one above the closure's frame (RFC-0050
-/// rule 6, RFC-0052 §7).
+/// rule 6, RFC-0052 rule 7).
 #[tokio::test]
 async fn a_closure_in_the_window_drives_an_extern_of_its_own() {
     let v = run(

@@ -34,7 +34,7 @@ its own union-find arena inside `Terms`:
 | Variable | Bound | What the bound says |
 | --- | --- | --- |
 | type | `TypeBound` (`Unresolved { bound: TyVarBound }`, `Resolved`, `Forward`) | `TyVarBound::Any`, `OneOf(shapes)`, or `Integer { signed, among }` |
-| effect | `EffectBound` | `Range { lower, upper }` on the reissue chain (RFC-0017), or `Bound` |
+| effect | `EffectBound` | `Range { lower, upper }` on the reissue chain (RFC-0013 rule 1), or `Bound` |
 | length | `LenBound` | an array's length, `Unbound` until an element count fixes it |
 | identity | `IdentityBound` | which source a value came from (RFC-0012); identities are invariant |
 | representation | `ReprBound` | `Uniform` or `Specialized` for a slot (RFC-0041, hash-types.md) |
@@ -79,7 +79,7 @@ representation.**
   thing that decides it. At the top of a decision's join the effect also
   runs both ways rather than one: the caller runs what the callee does
   (RFC-0046), where at a value position the value's effect is only at most
-  what the position allows (RFC-0017).
+  what the position allows (RFC-0046 rule 7).
 - `Pattern` — a pattern tested against its source. The source's structural
   type grows by what the pattern names, and a pattern naming fewer members
   than a ground source is within it (RFC-0024).
@@ -93,7 +93,7 @@ the head is known it answers on the spot. Each kind, and what it waits on:
 | `Decision` | Question | Waits on |
 | --- | --- | --- |
 | `Signature` | which of a bare name's declarations this call is (RFC-0043) | the arguments' heads |
-| `Instance` | which instance of an extern the call runs (RFC-0027, RFC-0040) | the call's type, and the body's task |
+| `Instance` | which instance of an extern the call runs (RFC-0019, RFC-0040) | the call's type, and the body's task |
 | `Conversion` | which conversion takes `from` to `to` (RFC-0023) | both heads, and any open representation |
 | `Lend` | what `&place` names, since no `&&T` exists (RFC-0029) | the head of `of` |
 | `Capture` | how a lambda's body reads a captured name (RFC-0018) | the head of `of` |
@@ -115,7 +115,7 @@ Four rules govern which argument may narrow the set:
 
 1. **An argument whose type is known narrows.** `admits` says how a
    candidate takes it: `Direct`, `Converted` (a declared cast, RFC-0023),
-   `Viewed` (a `&String` at a `&str` parameter, RFC-0062 Decision 3), or
+   `Viewed` (a `&String` at a `&str` parameter, RFC-0062 rule 3), or
    `Refused`.
 2. **An argument whose head the solve owns narrows nothing.** If the
    storage the argument lends has no head yet
@@ -152,7 +152,7 @@ by the least element of what it admits, in this order:
 6. an instance: the one the body's task allows.
 
 An open effect closes the same way: it is the least element of its
-interval, the join of what the body requires (RFC-0014).
+interval, the join of what the body requires (RFC-0013 rule 5).
 
 `settle` runs again after each close. A decision that neither settled nor
 could take a least element is an `Unsettled`, which `typeck` turns into a
@@ -228,8 +228,8 @@ for `(Never, _)` and there is no second arm for `(Never, Never)`.
 
 Some declarations are not functions a script calls but coercions the
 machine settles for instructions of its own: `a[i]` takes the container's
-own `as_slice` (RFC-0047 §5), `for x in &v` the same, and a `&String`
-argument reaches a `&str` parameter through `as_str` (RFC-0062 Decision 3).
+own `as_slice` (RFC-0047 rules 3 and 5), `for x in &v` the same, and a `&String`
+argument reaches a `&str` parameter through `as_str` (RFC-0062 rule 3).
 
 These live in `TypeEnv::machine`, which `TypeEnv::resolve_fn` does not
 read, so a script's name resolution does not reach them.

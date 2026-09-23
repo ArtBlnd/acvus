@@ -2,7 +2,7 @@
 //! and the registries that hand them to a compiler and a runtime.
 //!
 //! Nothing here names a runtime. A runtime implements `Runtime` and gets
-//! every declaration and every handler. See RFC-0009.
+//! every declaration and every handler. See RFC-0023.
 
 extern crate self as acvus_extern;
 

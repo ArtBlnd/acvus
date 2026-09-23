@@ -61,7 +61,7 @@ impl Op for StringEq {
 }
 
 /// A string literal pattern against text the scrutinee lends: the bytes,
-/// compared, with no value made (RFC-0062 Decision 2). `pattern::TestString`
+/// compared, with no value made (RFC-0062 rule 3). `pattern::TestString`
 /// is the same test where the scrutinee is a `String` in a register; this is
 /// the one where it is the pair of a `&str`.
 pub struct TestLentText {
@@ -187,8 +187,8 @@ pub struct StrArm {
 /// A `match` on string literals (RFC-0051): the text is read once and the
 /// arms are scanned in the order the `match` wrote them.
 ///
-/// Decision not to build: the sorted keys and the binary search RFC-0051 §5
-/// names for a table. A string comparison starts with the length, so a
+/// Decision not to build: the sorted keys and the binary search RFC-0051 rejects
+/// for a table. A string comparison starts with the length, so a
 /// missing arm costs one word compare, and the arm counts here are the
 /// handful a `match` on names is written with — the same measurement that
 /// kept `Switch`'s scan over a hashed table at seven arms.
@@ -212,7 +212,7 @@ impl Op for SwitchStr {
 }
 
 /// One arm of a rejoining text dispatch: the string it names and the chain
-/// the machine runs for it (RFC-0052 §3).
+/// the machine runs for it (RFC-0052 rule 3).
 pub struct StrRegionArm {
     pub key: Box<str>,
     pub head: Box<dyn Op>,

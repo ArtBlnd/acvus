@@ -1,5 +1,5 @@
 //! Where a container's slice stands, by the kind of write the loop makes
-//! to it (RFC-0047 §2).
+//! to it (RFC-0047 rule 8).
 
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::listing::{regions_named, script_listing};

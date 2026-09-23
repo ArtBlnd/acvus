@@ -18,7 +18,7 @@ pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 /// One run as a `Runtime`: the state its functions read and the page its
 /// contexts live on (RFC-0014). `Interpreter` makes the pair and a spawned
 /// run is handed its parent's, so a closure value carries neither
-/// (RFC-0069 D1): every caller of one holds a `&AcvusRuntime`.
+/// (RFC-0069 rule 1): every caller of one holds a `&AcvusRuntime`.
 #[derive(Clone)]
 pub struct AcvusRuntime {
     pub shared: Arc<InterpreterContext>,
@@ -325,7 +325,7 @@ impl Runtime for AcvusRuntime {
 }
 
 /// One of the machine's registers holding a bare word rather than a value of
-/// the language: half of the pair a slice occupies (RFC-0047 amended), which
+/// the language: half of the pair a slice occupies (RFC-0047 rule 6), which
 /// the machine reads with `Value::bits`.
 pub fn word(bits: u64) -> Value {
     // SAFETY: `u64` is `Inline`, so the word is the value.

@@ -215,7 +215,7 @@ impl LspSession {
     // -- Inputs ------------------------------------------------------
 
     /// The binding is the whole graph's, not this document's (RFC-0071
-    /// Decision 4).
+    /// rule 4).
     pub fn bind_input(&mut self, name: &str, value: acvus_ast::Literal) {
         let interned = self.graph.interner().intern(name);
         self.graph.bind_input(interned, value);
@@ -228,7 +228,7 @@ impl LspSession {
 
     /// The inputs a run starting at this document requires: its own and those
     /// of every function it calls, since one host injects the `$` names of
-    /// the whole graph (RFC-0071 Decision 4).
+    /// the whole graph (RFC-0071 rule 4).
     pub fn required_inputs(&self, id: DocId) -> Vec<ContextInfo> {
         let Some(&qref) = self.doc_to_fn.get(&id) else {
             return vec![];

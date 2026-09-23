@@ -1,6 +1,6 @@
 //! `--bind` at the CLI's contract: a bound `$` is a constant and the text it
 //! decides against is not written, while a `$` no binding fixed and the code
-//! still reads is a compile-time refusal (RFC-0071 Decision 5).
+//! still reads is a compile-time refusal (RFC-0071 rule 5).
 
 use std::path::Path;
 use std::process::{Command, Output};

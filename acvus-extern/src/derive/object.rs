@@ -1,4 +1,4 @@
-//! The object a derived struct crosses as (RFC-0032, RFC-0048 §7, RFC-0050
+//! The object a derived struct crosses as (RFC-0039 rule 4, RFC-0048 rule 7, RFC-0050
 //! rules 3, 4 and 8).
 //!
 //! The layout — an `Obj<Owned<Rt>>`: the type's field names in rule 8's order,
@@ -13,7 +13,7 @@
 //! unreachable — a value crossing into a declared struct's parameter has
 //! exactly that struct's fields, since `ObjectTy::meet` refuses an object that
 //! lacks one (`Lacks`) or carries one the struct does not name (`Undeclared`),
-//! RFC-0042 R1.
+//! RFC-0042 rule 1.
 
 use acvus_utils::Astr;
 
@@ -50,7 +50,7 @@ where
 /// `value` is what `object_in_order` wrote.
 ///
 /// # Panics
-/// When the object's width is not `N`, which RFC-0042 R1 admits no value of.
+/// When the object's width is not `N`, which RFC-0042 rule 1 admits no value of.
 pub unsafe fn open_in_order<Rt, const N: usize>(rt: &Rt, value: Rt::Value) -> [Owned<Rt>; N]
 where
     Rt: Runtime,

@@ -634,7 +634,7 @@ fn try_consume_value(
     true
 }
 
-/// RFC-0026.
+/// RFC-0018 rule 2.
 pub(crate) fn moves_out(ty: &Ty) -> bool {
     !matches!(ty, Ty::String) && is_move_only(ty) == Some(true)
 }
@@ -648,7 +648,7 @@ pub(crate) fn moves_out(ty: &Ty) -> bool {
 /// word counting the `Some`s around it (RFC-0039, `docs/runtime-value.md`) —
 /// so a take that reaches a payload through nothing but options empties the
 /// whole storage. A `String` payload is copied out rather than moved under
-/// RFC-0026, which is what `moves_out` asks. An unwrap empties its source in
+/// RFC-0018 rule 2, which is what `moves_out` asks. An unwrap empties its source in
 /// every variant form: `variant::unwrap_option`, `unwrap_result` and
 /// `unwrap_variant` each open with `machine.take(op.b)` and hand the payload
 /// on, so the box a `Result` or an enum carried is gone with them.

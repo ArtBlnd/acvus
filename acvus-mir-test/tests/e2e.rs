@@ -3407,7 +3407,7 @@ fn a_template_traverses_a_vec_of_objects() {
 
 /// A template calls another function as any function that returns a
 /// `String`; composition is a call and there is no include (RFC-0071
-/// Decision 4).
+/// rule 4).
 #[test]
 fn a_template_calls_a_function_returning_a_string() {
     let i = Interner::new();

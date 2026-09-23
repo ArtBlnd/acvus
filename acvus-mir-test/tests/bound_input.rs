@@ -1,5 +1,5 @@
 //! A bound `$` is a constant, and what it makes unreachable is `!`
-//! (RFC-0071 Decision 5).
+//! (RFC-0071 rule 5).
 
 use acvus_ast::Literal;
 use acvus_mir::graph::optimize::Opt;

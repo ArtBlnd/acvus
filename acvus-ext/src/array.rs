@@ -75,7 +75,7 @@ where
 // The element surface is not declared here. `contains`, `binary_search`
 // and `is_sorted` read an element at its own type, and every such operation
 // lives once over `&[T]` in `crate::slice`; an array reaches it through the
-// `as_slice` view below (RFC-0047 §5).
+// `as_slice` view below (RFC-0047 rule 3).
 
 pub fn array_registry<R>() -> Registry<R>
 where

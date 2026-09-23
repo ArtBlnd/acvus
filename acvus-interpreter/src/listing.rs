@@ -1,4 +1,4 @@
-//! A prepared body's blocks, read back as names (RFC-0052 §1, §3).
+//! A prepared body's blocks, read back as names (RFC-0052 rules 1 and 3).
 
 use std::fmt;
 
@@ -247,7 +247,7 @@ impl fmt::Display for Text<'_> {
 }
 
 /// `Frameless` is a prepared `Expr`: one chain the machine runs with no frame,
-/// no block and no dispatch loop (RFC-0044, stage 4).
+/// no block and no dispatch loop (RFC-0044 rule 5).
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeText {

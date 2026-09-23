@@ -95,7 +95,7 @@ pub enum CastKind {
     },
     /// At a call argument of `&String` whose parameter is `&str`: the
     /// `String`'s own `as_str` of the reference, which the lowering emits as
-    /// an `AsSlice` and not a call (RFC-0062 Decision 3).
+    /// an `AsSlice` and not a call (RFC-0062 rule 3).
     Str { as_str: ExternCast },
 }
 
@@ -138,7 +138,7 @@ pub enum Callee {
     /// A function with a body in the graph. Enables pre-fetch and inlining.
     Direct(QualifiedRef),
     /// An ExternFn at the instance the checker settled on (RFC-0040), with
-    /// what that call's requirements settled on (RFC-0070 D3).
+    /// what that call's requirements settled on (RFC-0070 rule 3).
     Extern {
         id: QualifiedRef,
         instance: usize,
@@ -158,7 +158,7 @@ impl Callee {
     }
 }
 
-/// One node of the instance tree the checker settled (RFC-0070 D3).
+/// One node of the instance tree the checker settled (RFC-0070 rule 3).
 /// `instance` numbers `signature`'s instances as the registry numbers its
 /// handlers, and `required` stands one to one against the requirements the
 /// chosen instance's declaration states, which is the order
@@ -188,7 +188,7 @@ impl From<ExternInstance> for Callee {
     }
 }
 
-/// How an `Index` yields its element (RFC-0047 §4). The checker decides it
+/// How an `Index` yields its element (RFC-0047 rule 4). The checker decides it
 /// from the element type, so no run-time branch reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexMode {
@@ -199,7 +199,7 @@ pub enum IndexMode {
 }
 
 /// How one `a[i]` reaches its element: which slice the container gives up,
-/// and how the element comes back (RFC-0047 §3, §4). The checker settles
+/// and how the element comes back (RFC-0047 rules 3 and 4). The checker settles
 /// both; the lowering reads them and decides neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexAccess {
@@ -207,14 +207,14 @@ pub struct IndexAccess {
     pub mode: IndexMode,
 }
 
-/// What a `for` traverses (RFC-0057 Decision 1). Every source is settled
+/// What a `for` traverses (RFC-0057 rule 1). Every source is settled
 /// before the header runs: a slice pair, an array value, or two bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForSource {
     /// A `&[T]`: the element is a `&T`.
     Slice(ValueId),
     /// A `&mut [T]`: the element is a `&mut T`, and the container is held
-    /// exclusively for the loop (RFC-0057 Decision 5).
+    /// exclusively for the loop (RFC-0057 rule 5).
     SliceMut(ValueId),
     /// An `Array<T, N>` moved into the loop: the element is a `T` taken out
     /// of it, and the array is empty when the loop ends.
@@ -273,7 +273,7 @@ impl ForSource {
     }
 }
 
-/// Which of the four heads a `for` was written with (RFC-0057 Decision 1).
+/// Which of the four heads a `for` was written with (RFC-0057 rule 1).
 /// The checker settles it from the head's type; the lowering reads it and
 /// decides nothing, as it reads an [`IndexAccess`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,7 +301,7 @@ pub enum InstKind {
     /// instruction. `acvus-interpreter`'s preparation copies each distinct
     /// text of a module once and the module's prepared code owns that copy,
     /// so a `&str` constant is the pointer and length of a run whose owner
-    /// is the code holding this operation (RFC-0062 Decision 2).
+    /// is the code holding this operation (RFC-0062 rule 2).
     ConstStr {
         dst: ValueId,
         text: String,
@@ -437,7 +437,7 @@ pub enum InstKind {
     ///
     /// `CastKind` above is not reused because it is not this: it names a
     /// pure ExternFn performing a declared coercion between user-defined
-    /// types (RFC-0016), which is a call, not a width.
+    /// types (RFC-0023 rule 8), which is a call, not a width.
     Cast {
         dst: ValueId,
         src: ValueId,
@@ -569,7 +569,7 @@ pub enum InstKind {
     /// rewrites the labels it reaches through edges misses it. Every such
     /// pass rewrites this one alongside — `graph::inliner::remap`,
     /// `cfg::promote` and `demote`, `optimize::forward::collapse`,
-    /// `optimize::sroa::settle_joins` (RFC-0063 Decision 4).
+    /// `optimize::sroa::settle_joins` (RFC-0063 rule 4).
     Diamond {
         cond: ValueId,
         then_label: Label,
@@ -642,7 +642,7 @@ pub struct TwoWay<'a> {
     pub else_args: &'a [ValueId],
 }
 
-/// RFC-0063 "What it costs" asks for one helper where a pass treats
+/// RFC-0063 rule 4 asks for one helper where a pass treats
 /// [`InstKind::JumpIf`] and [`InstKind::Diamond`] alike. Most such passes do
 /// not call it: the two variants' field names agree, so one or-pattern over
 /// both is the whole arm, and that cannot drift from the enum the way a

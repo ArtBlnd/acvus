@@ -79,9 +79,9 @@ where
 /// Whose instance a refused instance decision was looking for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstanceWanted {
-    /// The callee's own shared signature (RFC-0027).
+    /// The callee's own shared signature (RFC-0019).
     Callee(Option<QualifiedRef>),
-    /// RFC-0068 D1.
+    /// RFC-0068 rule 5.
     Requirement {
         signature: QualifiedRef,
         required_by: Option<QualifiedRef>,
@@ -340,14 +340,14 @@ pub enum MirErrorKind {
     },
     /// A comparison operator on a language-owned type whose representation
     /// carries no order. An extension type reaches `core::cmp` instead of
-    /// this refusal (RFC-0070 D5). Both operands are text often enough that
+    /// this refusal (RFC-0070 rule 5). Both operands are text often enough that
     /// the refusal names the ordering functions `string::cmp` offers, which
     /// is what a program reaching for `<` on a `String` wants.
     NoOrdering {
         op: &'static str,
         ty: Ty,
     },
-    /// A call of a shared signature that no instance matches (RFC-0027):
+    /// A call of a shared signature that no instance matches (RFC-0019):
     /// the call's type, and the instances the call could have reached.
     NoInstance {
         ty: Ty,
@@ -404,15 +404,15 @@ pub enum MirErrorKind {
     MissingCatchAll,
     /// A `match` whose arms are not one dispatch over a tag -- a literal,
     /// a tuple, a nested refutable payload -- has no shape `validate` can
-    /// decide exhaustiveness on, so it must say so itself (RFC-0051 §3).
+    /// decide exhaustiveness on, so it must say so itself (RFC-0051 rule 3).
     MatchIsNotADispatch,
     /// The later arm can never be taken, and the language has no warning
-    /// axis (RFC-0051 §2).
+    /// axis (RFC-0051 rule 2).
     MatchArmKeyRepeated {
         key: SwitchKey,
     },
     /// A `match` arm names a variant the scrutinee cannot hold (RFC-0051
-    /// §2). The arms contribute no variant: the scrutinee's type is its
+    /// rule 2). The arms contribute no variant: the scrutinee's type is its
     /// own, so an arm outside it can never be taken.
     UnreachablePattern {
         pattern: String,
@@ -445,32 +445,32 @@ pub enum MirErrorKind {
         expected: usize,
         got: usize,
     },
-    /// `a[i]` where `a`'s type has no `as_slice` instance (RFC-0047 §2).
+    /// `a[i]` where `a`'s type has no `as_slice` instance (RFC-0047 rule 3).
     CannotIndex {
         ty: Ty,
     },
-    /// `a[i]` read as a value where the element type moves (RFC-0047 §5);
+    /// `a[i]` read as a value where the element type moves (RFC-0047 rule 5);
     /// `clone(&a[i])` is the way (RFC-0028).
     MoveOutOfIndex {
         ty: Ty,
     },
     /// A `for` head that is none of the four the language has (RFC-0057
-    /// Decision 1).
+    /// rule 1).
     ForSourceNotAdmitted {
         ty: Ty,
     },
     /// `for x in v` where `v` is a container held by value: a loop borrows
     /// its container and does not consume it, the one exception being an
-    /// `Array` (RFC-0057 Decision 1).
+    /// `Array` (RFC-0057 rule 1).
     ForConsumesContainer,
-    /// `break` or `continue` outside a loop (RFC-0057 Decision 4).
+    /// `break` or `continue` outside a loop (RFC-0057 rule 4).
     OutsideLoop {
         keyword: &'static str,
     },
     /// A `for` over an `Array` whose element owns something, left early:
     /// the elements the loop did not take have no release, because how many
     /// were taken is a run-time number and the array's own release does not
-    /// know it (RFC-0057 Decision 2).
+    /// know it (RFC-0057 rule 6).
     ArrayLoopLeftEarly {
         keyword: &'static str,
         element: Ty,
@@ -503,7 +503,7 @@ pub enum MirErrorKind {
     ViewInData(DataShape),
     /// A script body returned a reference.
     ReferenceReturnedFromBody(Ty),
-    /// RFC-0069 D2: the entry's result reaches the host, which outlives
+    /// RFC-0069 rule 1: the entry's result reaches the host, which outlives
     /// the run a closure belongs to.
     ClosureReturnedToTheHost(Ty),
     /// RFC-0043.
@@ -1129,7 +1129,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
     }
 }
 
-/// The spelling that turns a view into the owned text (RFC-0062 Decision 3).
+/// The spelling that turns a view into the owned text (RFC-0062 rule 3).
 const COPY_OF_A_VIEW: &str = "; write `.to_string()` for the owned text";
 
 /// The bytewise ordering `acvus-ext`'s `string` module offers in place of

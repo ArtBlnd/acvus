@@ -1,4 +1,4 @@
-//! Structural types join by union (solver.md R1), and what a union that
+//! Structural types join by union (RFC-0042 rule 1), and what a union that
 //! cannot be recorded means at the contract: an object's missing field is
 //! the definite-assignment check's error at the read or call, an enum's
 //! missing variant is the type checker's, and a pattern may be narrower

@@ -22,11 +22,10 @@ acvus-mir            type system, IR, analysis, optimization, validation
   +-- acvus-extern         #[extern_fn], Registry, Externs::combine, Runtime
   |     |
   |     +-- acvus-ext            the standard library of ExternFns
-  |     +-- acvus-ext-llm        LLM providers
   |     +-- acvus-ext-net        HTTP
   |     +-- acvus-interpreter    the register machine
   |           |
-  |           +-- acvus-orchestration  TOML specs into the same graph
+  |           +-- pomollu-core         TOML specs into the same graph
   |
   +-- kovac-interpreter    a second runtime over the same MIR
   |
@@ -83,7 +82,7 @@ Forty-three variants (`ir.rs`).
 | Slices | `AsSlice`, `Index`, `IndexSet` | RFC-0047; `Index`'s index is a `u64` and its one check is `index < len` |
 | Scalar field | `FieldGet`, `FieldSet` | on a value, not a storage; `FieldSet` produces a new value |
 | Arithmetic | `BinOp`, `UnaryOp` | words only |
-| String | `StringConcat`, `StringEq`, `StringClone` | the language-owned string operators (RFC-0020, RFC-0026); a template body is one `StringConcat` |
+| String | `StringConcat`, `StringEq`, `StringClone` | the language-owned string operators (RFC-0020, RFC-0018 rule 2); a template body is one `StringConcat` |
 | Functions | `LoadFunction`, `FunctionCall` | `FunctionCall { callee: Direct \| Indirect, callee_ty, args, order: Option<OrderEdge> }` |
 | Async | `Spawn`, `Eval`, `Merge` | `Spawn` takes the order before, `Eval` yields the order after, `Merge` joins orders |
 | Construction | `MakeArray`, `MakeObject`, `MakeTuple`, `MakeVariant`, `MakeClosure` | all pure |
@@ -110,7 +109,7 @@ The five storage instructions (RFC-0018):
 
 A context is a variable of the body that names it (RFC-0025): the lowering
 fetches every named context into a slot at entry, commits each slot at
-every return, and brackets each call whose summary (RFC-0017, joined with
+every return, and brackets each call whose summary (RFC-0025 rule 5, joined with
 the summaries of its function-typed arguments) touches the context with a
 `Commit` before and a `Fetch` after (`lower.rs`). `@x`, `&@x` and `@x = v`
 are then the variable rules on that slot, and a context left moved out at a
@@ -146,11 +145,11 @@ has a reference type — there is no mode beside the type.
 
 ```
 Effect {
-    reissue:  Reissue,   -- Pure < Idempotent < Opaque (RFC-0014)
+    reissue:  Reissue,   -- Pure < Idempotent < Opaque (RFC-0013 rule 1)
     task:     Task,      -- Sync < Async < Heavy      (RFC-0046)
     commutes: bool,      -- same program in either order (RFC-0013)
-    reads:    Contexts,  -- what the call may read  (RFC-0017)
-    writes:   Contexts,  -- what the call may write (RFC-0017)
+    reads:    Contexts,  -- what the call may read  (RFC-0025 rule 4)
+    writes:   Contexts,  -- what the call may write (RFC-0025 rule 4)
 }
 
 EffectTerm<V> = Known(Effect) | Var(V::EffectVar)
@@ -163,7 +162,7 @@ effect is not Pure carries `OrderEdge { before, after }` and a Pure call
 carries none — `validate` rejects the other two combinations.
 
 A type variable carries its bound with it (`TyVarBound`): `Any`,
-`OneOf(Vec<PolyTy>)` (RFC-0011, RFC-0027), or `Integer { signed, among }`
+`OneOf(Vec<PolyTy>)` (RFC-0011 rule 2), or `Integer { signed, among }`
 for a literal's width (RFC-0037). Identity is a parameter of a user-defined
 type, at most one per declaration (RFC-0012); two identities unify only
 when they are the same.
@@ -248,9 +247,9 @@ then inliner::inline over every module
 promote
   commute        commutative runs share one Order
   spawn_split    a call that runs_apart -> Spawn + Eval
-  sroa           a non-escaping aggregate becomes registers (RFC-0053)
+  sroa           a non-escaping aggregate becomes registers (RFC-0050 rule 11)
   ssa_pass       promote whole Take/Assign
-  string_copy    a String read before its last use is copied (RFC-0026)
+  string_copy    a String read before its last use is copied (RFC-0018 rule 2)
   fold           a constant expression folds (RFC-0055)
   dse            dead context Commits
   dce            dead pure instructions, dead handles
@@ -302,7 +301,7 @@ moved. Entry definitions are spliced at the start of block 0 after phi
 insertion. Trivial phis are eliminated, and the two substitution maps are
 chained — the builder's, then the forwarding one.
 
-**`sroa`** (RFC-0053) — a storage slot of object or enum type that
+**`sroa`** (RFC-0050 rule 11) — a storage slot of object or enum type that
 `analysis::escape` says nothing outside the body reaches, and whose every
 use one arm of the pass's table covers, is replaced by one register per
 field or by a `(tag, payload)` pair. The phis are `SSABuilder`'s, under a
@@ -337,7 +336,7 @@ target is also held to the source's loop depth (`analysis::loops`), because
 post-dominance alone would let an instruction written after a loop land in
 its header and run once per iteration. The one exception is a **shared
 borrow** — `Ref` of a `Var`/`Param` under no path, and a shared `AsSlice`,
-which is the same borrow one level down (RFC-0047 §3) — which moves under a
+which is the same borrow one level down (RFC-0047 rule 3) — which moves under a
 borrow condition instead, and is what lifts a slice out of a loop that does
 not write its container. `Spawn` never moves: the work starts there, and
 issuing it on a path that would not have reached it speculates an effect
@@ -437,7 +436,7 @@ they read the shape the source wrote.
   last use (RFC-0029).
 - **`exhaustive`** — reads `InstKind::Switch`, the one shape that names a
   `match`, and asks `known_variants` whether the variant set is closed
-  (RFC-0051 §3–§4). An `if let` is two arms and never wears a `Switch`.
+  (RFC-0051 rules 3 and 4). An `if let` is two arms and never wears a `Switch`.
 - **`init_check`** — definite assignment, field-level, on the pre-SSA
   `CfgBody`: which fields of each storage are initialized at each point,
   and whether a call's arguments carry every field the parameter type

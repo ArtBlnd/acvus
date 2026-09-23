@@ -27,7 +27,7 @@ use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One scalar an aggregate is made of, once the aggregate itself is gone
-/// (RFC-0053). A tag is not a [`crate::ir::PathSeg`] because no place names
+/// (RFC-0050 rule 11). A tag is not a [`crate::ir::PathSeg`] because no place names
 /// one: it is which variant the value holds, and it exists only here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Part {

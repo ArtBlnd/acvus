@@ -99,7 +99,7 @@ macro_rules! for_head {
             ForSource::Range { at, hi } => {
                 let Ty::Int(width) = prep.ty(*at) else {
                     panic!(
-                        "a `for` over a range names the bound type {:?}; RFC-0057 Decision 1 \
+                        "a `for` over a range names the bound type {:?}; RFC-0057 rule 1 \
                          admits one integer width and no other",
                         prep.ty(*at)
                     )
@@ -654,7 +654,7 @@ struct SwitchArm {
 
 /// The facts a `Select` is built from, read off a diamond whose one arm is a
 /// single pure node and whose other arm passes the incoming word through
-/// (RFC-0052 §"a diamond of two pure arms is a select").
+/// (RFC-0074).
 struct SelectShape {
     cond: ValueId,
     dst: ValueId,
@@ -1204,7 +1204,7 @@ impl<'a> Prepare<'a> {
     }
 
     /// The byte displacement of `id`'s register: what every operation holds
-    /// (RFC-0052 §5). `slot` is the index, and it stays inside `prepare`.
+    /// (RFC-0052 rule 5). `slot` is the index, and it stays inside `prepare`.
     fn off(&self, id: ValueId) -> Off {
         Off::of(self.slot(id))
     }
@@ -1242,7 +1242,7 @@ impl<'a> Prepare<'a> {
     }
 
     /// The two registers a slice-typed value occupies, both fixed here so no
-    /// `run` computes the second (RFC-0047 amended, rule 1).
+    /// `run` computes the second (RFC-0047 rule 6).
     fn pair(&self, id: ValueId) -> SlicePair {
         SlicePair::at(self.off(id))
     }
@@ -1297,7 +1297,7 @@ impl<'a> Prepare<'a> {
     }
 
     /// Whether a value of this type holds a `Large` its register owns
-    /// (RFC-0048 §4), which is the `LARGE` parameter of every operation
+    /// (RFC-0048 rule 4), which is the `LARGE` parameter of every operation
     /// that writes or empties a register.
     fn owns(&self, id: ValueId) -> bool {
         owns_large(self.ty(id))
@@ -1381,7 +1381,7 @@ impl<'a> Prepare<'a> {
     }
 
     /// The path under `root` with each step resolved against the type it
-    /// stands on, and the steps that read nothing dropped (RFC-0022).
+    /// stands on, and the steps that read nothing dropped (RFC-0039 rule 6).
     fn walked(&self, root: &Ty, path: &[PathSeg]) -> Vec<Walked> {
         let mut at = vec![root.clone()];
         let mut kept = Vec::with_capacity(path.len());
@@ -1399,7 +1399,7 @@ impl<'a> Prepare<'a> {
 
     /// The kind every word-typed register is opened with when the frame is
     /// made, so that each `set_word` after it writes the word alone
-    /// (RFC-0052 §5).
+    /// (RFC-0052 rule 5).
     ///
     /// The table is complete by construction: `assign_slots` gives a
     /// register only to values of one kind class, and a value whose type
@@ -1497,7 +1497,7 @@ impl<'a> Prepare<'a> {
     }
 
     /// The registers of a list of operands, and the mask of the ones this
-    /// operation takes the frame's claim on (RFC-0048 §5).
+    /// operation takes the frame's claim on (RFC-0048 rule 5).
     fn taken(&self, ids: &[ValueId]) -> Operands {
         Operands {
             slots: ids.iter().map(|id| self.off(*id)).collect(),
@@ -1629,15 +1629,15 @@ impl<'a> Prepare<'a> {
             .map_or(default, |arm| arm.block)
     }
 
-    /// `Terminator::Switch` as the machine's one dispatch (RFC-0051 §5).
+    /// `Terminator::Switch` as the machine's one dispatch (RFC-0051 rule 5).
     ///
     /// Obligation across artifacts: the operation is handed a `default` that
     /// is a real edge, so no `ops::switch` run decides that no arm holds. It
     /// is the catch-all where the `match` wrote one, and otherwise the last
     /// arm — the one tag then left untested, which is sound exactly because
-    /// `validate::exhaustive` (RFC-0051 §3) decided some arm holds.
+    /// `validate::exhaustive` (RFC-0051 rule 3) decided some arm holds.
     ///
-    /// `arms` is the IR's own positional shape, which RFC-0051 §5 fixes as
+    /// `arms` is the IR's own positional shape, which RFC-0051 rule 5 fixes as
     /// `(tag, label, args)`; `Placed` is that arm once its block is decided.
     fn switch_op(
         &mut self,
@@ -4038,7 +4038,7 @@ impl<'a> Prepare<'a> {
                             handler.width().ret,
                             1,
                             "a spawn names a handler that returns a run, which would \
-                             outlive the frame that lent it (RFC-0047 §3)"
+                             outlive the frame that lent it (RFC-0047 rule 3)"
                         );
                         match handler {
                             ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
@@ -4136,7 +4136,7 @@ impl<'a> Prepare<'a> {
             }
 
             // The handler hands back two words, which go to the two
-            // registers the slice's pair is (RFC-0047 amended, rule 2).
+            // registers the slice's pair is (RFC-0047 rule 6).
             InstKind::AsSlice {
                 dst,
                 container,
@@ -4152,7 +4152,7 @@ impl<'a> Prepare<'a> {
                     panic!(
                         "an AsSlice names a handler of task {:?}; a run of a container's \
                          elements is lent for the caller's frame and no other task can hold \
-                         it (RFC-0047 §3)",
+                         it (RFC-0047 rule 3)",
                         handler.task()
                     )
                 };
@@ -4166,7 +4166,7 @@ impl<'a> Prepare<'a> {
                     },
                     "an AsSlice names a handler of another shape than the one container in \
                      and the two words of a run out, which is `Handler::call_pair1`'s \
-                     contract (RFC-0047 amended, rule 2)"
+                     contract (RFC-0047 rule 6)"
                 );
                 let f = {
                     let sites = self.arg_sites(args);
@@ -4633,7 +4633,7 @@ impl<'a> Prepare<'a> {
 
     /// The destination is the two adjacent registers `assign_slots` placed
     /// for a value of `SlotClass::Slice`, which is every `&[T]` and every
-    /// `&str` (RFC-0047 amended rule 1, RFC-0062 Decision 4). Neither
+    /// `&str` (RFC-0047 rule 6, RFC-0062 rule 4). Neither
     /// register carries a mark bit, so no `Dest` flag reaches here.
     #[allow(clippy::too_many_arguments)]
     fn call_into_pair(
@@ -4652,7 +4652,7 @@ impl<'a> Prepare<'a> {
             CallForm::Registers(0) => panic!(
                 "a declaration of no parameter returns a view of nothing: a result that \
                  borrows has no parameter it can be a borrow of, and `#[extern_fn]` refuses \
-                 the declaration ahead of this (RFC-0047 §3)"
+                 the declaration ahead of this (RFC-0047 rule 3)"
             ),
             CallForm::Registers(1) => {
                 let a = nth(&slots, 0);
@@ -4759,12 +4759,12 @@ impl<'a> Prepare<'a> {
             shape.len(),
             width,
             "a handler returns {width} components and the settled type of the call's result \
-             declares {} fields (RFC-0042 R1)",
+             declares {} fields (RFC-0042 rule 1)",
             shape.len()
         );
         assert!(
             self.owns(result),
-            "a realized aggregate is a `Large` its register owns (RFC-0048 §4)"
+            "a realized aggregate is a `Large` its register owns (RFC-0048 rule 4)"
         );
         call::RunDest::Heap {
             dst: self.marked(result),
@@ -4951,7 +4951,7 @@ impl<'a> Prepare<'a> {
     }
 
     /// The register an operation writes, and whether the type it writes
-    /// makes the frame the owner of a `Large` (RFC-0048 §4).
+    /// makes the frame the owner of a `Large` (RFC-0048 rule 4).
     fn dest(&self, dst: ValueId) -> Dest {
         Dest {
             slot: self.marked(dst),
@@ -5165,7 +5165,7 @@ impl<'a> Prepare<'a> {
             dst: out,
             src: self.marked(id),
         });
-        // An option is its payload's own value (RFC-0022), and a variant boxes
+        // An option is its payload's own value (RFC-0039 rule 6), and a variant boxes
         // whatever it carries, so `LARGE` here is always the payload's own
         // ownership.
         let large = payload.is_some_and(|id| self.owns(id));
@@ -5243,13 +5243,13 @@ struct Pair {
     to: Slot,
 }
 
-/// What a moved value is (RFC-0052 §5).
+/// What a moved value is (RFC-0052 rule 5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Moved {
     /// Both registers were opened with a kind, so the move writes the word.
     Word,
     /// Two adjacent word registers: a slice's `ptr` and `len` (RFC-0047
-    /// amended, rule 4).
+    /// rule 6).
     Pair,
     /// The move changes the owner of a `Large`, and the mark word with it.
     Large,
@@ -5358,7 +5358,7 @@ fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
     }
 }
 
-// -- The slot assignment (RFC-0044, stage 2b) --------------------------
+// -- The slot assignment (RFC-0044 rule 2) -----------------------------
 
 /// A bit per `ValueId` of one body.
 #[derive(Clone, PartialEq, Eq)]
@@ -5502,7 +5502,7 @@ fn step(at: &[Ty], seg: &PathSeg) -> Vec<Ty> {
 
 /// The step the machine runs, or none where the type makes it a no-op: an
 /// option's payload is the option's own value, unless the payload type is
-/// itself an option and the depth word is what separates them (RFC-0022).
+/// itself an option and the depth word is what separates them (RFC-0039 rule 6).
 fn resolve_step(at: &[Ty], seg: &PathSeg, interner: &Interner) -> Option<Step> {
     match seg {
         PathSeg::Field(f) => Some(Step::Field(field_at(at, *f, interner))),
@@ -5891,7 +5891,7 @@ fn carried_moves(into: &mut Vec<EdgeMove>, params: &[ValueId], args: &[ValueId])
 
 /// The arguments of the extern call or spawn at this instruction.
 /// A spawn stages at every arity: its work owns its arguments past this
-/// frame (RFC-0044, stage 2c).
+/// frame (RFC-0044 rule 3).
 fn window_args<'a>(inst: &'a Inst, ctx: &PrepareCtx<'_>) -> Option<&'a [ValueId]> {
     match &inst.kind {
         InstKind::FunctionCall {
@@ -6099,7 +6099,7 @@ enum Claim {
 /// the kind class it was claimed for.
 ///
 /// A register's kind byte is written once, when the frame is made
-/// (RFC-0052 §5), and every `set_word` after it writes the word alone. So
+/// (RFC-0052 rule 5), and every `set_word` after it writes the word alone. So
 /// two values may share a register only where `word_kind` gives them the
 /// same answer: this is where that rule holds, and `Prepare::slot_kinds`
 /// is the table it makes complete.
@@ -6190,9 +6190,11 @@ struct ClassRange {
 }
 
 /// Where each `ValueId` of a body lives, and what each extern call site's
-/// argument window is (RFC-0044, stage 2b).
+/// argument window is (RFC-0044 rule 2).
 pub struct Slots {
     of: Box<[u32]>,
+    #[cfg(debug_assertions)]
+    class_of: Box<[SlotClass]>,
     frame: u32,
     windows: FxHashMap<usize, WindowPlan>,
     /// Each value's live range, indexed by `ValueId::to_raw`. `runs::plan` reads
@@ -6215,6 +6217,12 @@ impl Slots {
     /// `slot_kinds` walks, where `of` is what an operation asks.
     fn raw(&self, id: ValueId) -> u32 {
         self.of[id.to_raw()]
+    }
+
+    #[cfg(debug_assertions)]
+    fn run_of(&self, id: usize) -> std::ops::Range<u32> {
+        let base = self.of[id];
+        base..base + self.class_of[id].width() as u32
     }
 
     fn window(&self, call: usize) -> &WindowPlan {
@@ -6464,6 +6472,8 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
 
     let slots = Slots {
         of: of.into_boxed_slice(),
+        #[cfg(debug_assertions)]
+        class_of: classes_of.into_boxed_slice(),
         frame,
         windows,
         ranges: ranges.into_boxed_slice(),
@@ -7403,7 +7413,7 @@ mod move_ordering_tests {
     }
 }
 
-// -- The arithmetic-chain recognizer (RFC-0044, stage 4) ----------------
+// -- The arithmetic-chain recognizer (RFC-0044 rule 5) ------------------
 
 enum Tree {
     Leaf(Off, LeafRead),
@@ -7748,16 +7758,16 @@ impl Growing<'_> {
 }
 
 /// Whether a value of this type is a slice: a borrow of a run, which the
-/// machine keeps in two adjacent word registers (RFC-0047 amended).
+/// machine keeps in two adjacent word registers (RFC-0047 rule 6).
 /// Whether a value of this type is the register pair the machine keeps a
 /// run in: a container's elements (RFC-0047) or a `String`'s bytes
-/// (RFC-0062 Decision 1).
+/// (RFC-0062 rule 1).
 fn is_slice(ty: &Ty) -> bool {
     matches!(ty, Ty::Ref(_, target) if matches!(target.ty, Ty::Slice(_) | Ty::Str))
 }
 
 /// How many registers a value takes, and what the frame opens them with
-/// (RFC-0052 rule 5, RFC-0047 amended rule 1). Two values share a register
+/// (RFC-0052 rule 5, RFC-0047 rule 6). Two values share a register
 /// only where this is the same, which is what keeps a kind byte written
 /// once true.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -7810,7 +7820,7 @@ impl SlotClass {
 
 /// `None` is a type whose register is written whole every time, so the
 /// frame writes no kind ahead of it and no operation on it is a `set_word`
-/// (RFC-0052 §5).
+/// (RFC-0052 rule 5).
 fn word_kind(ty: &Ty) -> Option<Kind> {
     match ty {
         Ty::Int(k) => Some(Kind::int(*k)),
@@ -7822,7 +7832,7 @@ fn word_kind(ty: &Ty) -> Option<Kind> {
     }
 }
 
-/// Where a body's blocks begin and end (RFC-0052 §1). A block begins at the
+/// Where a body's blocks begin and end (RFC-0052 rule 1). A block begins at the
 /// entry, at every label a jump names, and after every terminator; it ends
 /// at its terminator, or falls through to the next block with a `Goto`.
 struct Split {
@@ -8457,7 +8467,7 @@ impl Prepare<'_> {
 // -- What an instruction's operands become -----------------------------
 
 /// The registers an operation's operands sit in, and the frame's claim on
-/// the ones it consumes (RFC-0048 §5).
+/// the ones it consumes (RFC-0048 rule 5).
 struct Operands {
     slots: Box<[Off]>,
     takes: u64,
@@ -8489,7 +8499,7 @@ struct Under {
 }
 
 /// The three facts a read of a place is chosen by, each off a type:
-/// RFC-0026 for `clone`, RFC-0018 for `owned`.
+/// RFC-0018 rule 2 for `clone`, RFC-0018 for `owned`.
 #[derive(Clone, Copy)]
 struct Reading {
     through: bool,
@@ -8564,12 +8574,12 @@ fn nth(slots: &[Off], k: usize) -> Off {
 }
 
 /// Whether a register holding a value of this type owns a `Large` the frame
-/// has to release (RFC-0048 §4).
+/// has to release (RFC-0048 rule 4).
 fn owns_large(ty: &Ty) -> bool {
     match ty {
         Ty::Int(_) | Ty::Float | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,
         Ty::Ref(..) => false,
-        // RFC-0022: an option is its payload's own value, so it owns what
+        // RFC-0039 rule 6: an option is its payload's own value, so it owns what
         // the payload owns and nothing else.
         Ty::Option(inner) => owns_large(inner),
         Ty::String

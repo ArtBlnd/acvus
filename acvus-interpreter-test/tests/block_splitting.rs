@@ -1,5 +1,5 @@
 //! Where a body's blocks begin and end, and what a region holds (RFC-0052
-//! §1, §3).
+//! rules 1 and 3).
 //!
 //! The contract under test, as `prepare::Split` states it: a block begins at
 //! the entry, at every label a jump names, and after every terminator; it
@@ -70,7 +70,7 @@ async fn a_regions_head_is_one_operation_list() {
         "the head is the condition alone: no terminator, because the head's \
          `JumpIf` is the `cond` the Loop reads itself — and the head's last \
          operation writes it to the argument register, which `Yield` hands \
-         the `Loop` (RFC-0052 §3)"
+         the `Loop` (RFC-0052 rule 3)"
     );
 }
 

@@ -9,7 +9,7 @@ use crate::ir::*;
 use crate::ty::{Task, Ty};
 
 /// Whether the iterations of a `for` are independent of one another
-/// (RFC-0057 Decision 3): the header carries no value from one iteration to
+/// (RFC-0057 rule 3): the header carries no value from one iteration to
 /// the next -- its parameters are the carried values and it has none -- and
 /// every element the body writes it writes through the element the terminator
 /// hands it, which is a different element each time.

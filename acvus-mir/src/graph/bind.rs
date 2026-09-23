@@ -1,4 +1,4 @@
-//! A bound `$` is a constant (RFC-0071 Decision 5).
+//! A bound `$` is a constant (RFC-0071 rule 5).
 //!
 //! Obligation across passes: the type written here is the type
 //! `graph::types::bound_input_ty` gave the checker for the same name, and the

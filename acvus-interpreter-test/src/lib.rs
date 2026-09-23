@@ -166,7 +166,7 @@ pub struct Refusal {
 /// A local function beside `main` in a compiled graph.
 ///
 /// There is no result type here — not an omission, a decision. A helper's
-/// result is the thing RFC-0064 step 1 is about, and a declared one would
+/// result is the thing RFC-0064 rule 2 is about, and a declared one would
 /// let a test assert a result type the body never produced.
 pub struct Helper<'a> {
     pub name: &'a str,

@@ -1,5 +1,5 @@
 //! Where the slice of `rows[li][i]` stands: the inner loop's own body, or
-//! the block above it (RFC-0047 §8).
+//! the block above it (RFC-0047 rule 8).
 
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::listing::{regions_named, script_listing};

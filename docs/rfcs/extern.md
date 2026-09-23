@@ -1,0 +1,541 @@
+# Extern boundary
+
+acvus does nothing by itself: a host supplies every capability as an ExternFn.
+This topic decides how an ExternFn is declared, how registries combine into
+one input for the compiler and one for the runtime, how a value crosses
+between Rust and the language, the ABI a runtime implements to call a handler,
+and what the host states about the value the entry returns.
+
+## RFC-0021: A registry is a manifest and a handler table, combined once
+
+Status: Accepted
+
+1. A registry contributes a manifest — type declarations, shared signatures
+   (RFC-0019) and function declarations, free of any runtime — and a handler
+   table, one handler per declared function, for one runtime. A function
+   declaration carries its name, its polymorphic type, the bound of each type
+   variable, whether it is a cast or a view, the signature it is an instance
+   of if any, and the instances it requires.
+2. Every registry declares one namespace, and every name it declares lives
+   under it: `core::eq`, `vec::push`. A name without a namespace is a
+   script's own.
+3. There is one way to declare a function, `#[extern_fn]` (RFC-0023). A
+   function that needs state beyond its arguments — a client, a cache — takes
+   it as a `#[state]` parameter; the registry lists the function with its
+   state value (`greet(greeting)`) and the handler holds it.
+4. All registries are combined once, before anything is checked or run,
+   together with the `core` registry of the shared signatures the compiler
+   names. Combining rejects a name declared twice and a second instance of
+   one signature at one type, collects every instance of a signature into one
+   function under the signature's name, registers cast rules and views, and
+   yields the compiler's input — the functions and the type registry — and
+   the runtime's — the handler table. Nothing is registered after combining:
+   a program's externs are fixed before its first check.
+5. A requirement stays on the declaration that takes it: the signature, its
+   pattern at the declaration's own variables, and the highest task an
+   instance it reaches may run at. The checker decides it as it decides a
+   call of the signature (RFC-0068 rule 5). Where the requirement's receiver
+   stands at one of the declaration's type variables, combining also meets
+   that variable's declared bound with `OneOf` the types the signature has
+   instances at; a signature's own receiver variable is bounded the same way.
+
+**Why.** Joining a declaration to its handler in one value made a registry
+generic over a runtime even where only its declarations were wanted, and
+registering one registry at a time into a type registry left no place that
+held all of them. Shared signatures need that place. A parameter marked as
+state gives what a closure's capture gave, inside the one declaration form,
+and the declaration's acvus type does not mention it.
+
+**Rejected.**
+- Declaration by closure, a handler trait over closure types, `with_effect` —
+  a second form every consumer meets; state is a parameter and the effect is
+  on the attribute.
+- Registration one registry at a time, by side effect — no place holds every
+  registry, and shared signatures need one.
+
+## RFC-0023: An ExternFn is declared once, as a Rust function under `#[extern_fn]`
+
+Status: Accepted
+
+    #[extern_fn(effect = pure)]
+    fn len<T>(c: &Vec<T>) -> u64
+    where
+        T: Var<kind::Type>,
+
+1. The acvus type and the handler both come from the one Rust signature.
+2. A function that uses the runtime takes `ctx: &mut Ctx<'_, Rt>` first: the
+   runtime and the window above the calling frame as one parameter (RFC-0067
+   rule 7). A function that does not use it takes nothing for it. The runtime
+   is first or absent, and is not part of the acvus type.
+3. A `#[state]` parameter is taken by shared reference and is not part of the
+   acvus type: its value is supplied when the registry is built (RFC-0021
+   rule 3).
+4. An `Instance<S, I, Rt, Task>` parameter declares a requirement (RFC-0067)
+   and is not part of the acvus type.
+5. Every other parameter is an acvus parameter, and its Rust spelling is its
+   mode: `T` is taken by value; `&T` / `&mut T` declare `&T` / `&mut T`
+   (RFC-0018) and are read at entry; `&str` declares the string view
+   (RFC-0062); `&[T]` / `&mut [T]` declare the slice (RFC-0047); a type that
+   carries a lifetime is a projection (RFC-0050 rule 6). `T` names the acvus
+   type through `TyArg`. There is no `&mut str`.
+6. The return type names the acvus return type. `Result<T, E>` is the
+   language's `Result<T, E>` (RFC-0038) and crosses as one value. A returned
+   borrow — `&T`, `&mut T`, `&[T]`, `&str`, `Option<&T>` — is a reference
+   into storage a parameter lent: the declaration must take a parameter by
+   reference and runs at `Task::Sync` (RFC-0047 rule 3).
+7. The acvus name is the Rust identifier unless `name = "..."` says
+   otherwise; the namespace is the registry's.
+8. `effect = pure | idempotent | opaque | <effect variable>`; undeclared is
+   opaque. `commutative` marks a commuting effect (RFC-0013); `heavy` and
+   `sync = <fn>` name the task (RFC-0046); `instance_of = sig` declares an
+   instance of a shared signature (RFC-0019). `#[extern_cast]` declares a
+   cast rule from the one parameter's type to the return type, and a cast is
+   pure; `#[extern_view]` declares a machine view (RFC-0047 rule 3, RFC-0062).
+9. Generic parameters are the declaration's variables, one kind each:
+   `Var<kind::Type>`, `Var<kind::Effect>`, `Var<kind::Length>`,
+   `Var<kind::Identity>`, and at most one `Runtime`. A type variable may add
+   `Monomorphize<(T0, ..)>` (RFC-0011, RFC-0041).
+10. A body never opens a type variable: at run time it is the runtime's value
+    (RFC-0039 rule 8), read back at a type only through the crossing
+    (RFC-0068).
+11. Positions acvus has and Rust does not are spelled by host types:
+    `Arr<T, N>` for an array of variable length, `Closure<A, R, E, Rt>` for a
+    function-typed parameter, `Ref<T, M, Rt>` for a reference the body keeps
+    (RFC-0028 rule 5), and `Pure` / `Idempotent` / `Opaque` / `()` where an
+    effect, length or identity argument is fixed.
+
+**Why.** A declaration stated three times — handler, hand-built type,
+registration — can disagree, and only a script finds it. A runtime parameter
+every function must declare and most never read is the glue's convenience
+written into every signature; the glue knows whether it passed one.
+
+**Rejected.**
+- A closure-declared ExternFn — state is a parameter, not a capture.
+- A parameter mode written beside the type — the Rust spelling already is
+  the mode.
+- A runtime parameter every function takes — see Why.
+
+## RFC-0028: An element read out of a container is a loan on it; a reference is one carrier
+
+Status: Accepted
+
+1. A container is read through plain functions, one set per container
+   namespace (`vec`, `array`, `deque`, `string`), under shared bare names —
+   `len`, `is_empty`, `get`, `first`, `last`. A bare name is the set of these
+   signatures, settled by the call's evidence (RFC-0043); the qualified name
+   picks one. `core::` shared signatures are kept for operations every type
+   answers: `clone`, `eq`, `cmp`, `hash`, `to_string`.
+2. A container is read through a reference to it, and an element read out of
+   a borrowed container is a reference into it: the result holds the
+   container's loan (RFC-0018), so the container is neither moved nor changed
+   while the element is in use. No function reads an element out by value; a
+   value of the element type is a `clone` of the reference, for the types
+   with a `core::clone` instance.
+3. A `Vec<T>` is changed through `&mut Vec<T>` under Rust's own names —
+   `push`, `pop`, `insert`, `remove`, `clear`, `truncate`, `extend`, `swap`
+   and their neighbours. Each takes the vec first, so `v.push(x)` is the call
+   written as a method on a place (RFC-0030), and each panics where Rust's
+   does, with Rust's message.
+4. `vec::filled` is a shared signature with one instance per element type,
+   not one generic function: `Runtime` offers no clone of a value, so the
+   copies are made in Rust by an instance that knows the element type.
+5. In an extern declaration, `Ref<T, Shared, Rt>` and `Ref<T, Mut, Rt>` are
+   the acvus types `&T` and `&mut T` wherever they stand — a parameter, a
+   result, a type argument — and each is the reference value itself, for a
+   body that keeps it, returns it, or hands it to a closure. A Rust `&T` /
+   `&mut T` parameter declares the same type and is read at entry. A returned
+   `Ref`, or `Option` of one, is the reference it carries, and `None` is
+   `Runtime::none()` (RFC-0039 rule 6). A parameter `&Option<T>` or
+   `&mut Option<T>` is refused where it is declared: no storage is shaped like
+   an `Option<T>`; take `Option<&T>` or the option by value.
+
+**Why.** A shared signature is one generic handler per instance, so a
+per-element `Monomorphize` function cannot be one of its instances, and a
+signature's name is one function to the resolver, so `string::len` and a
+container `len` could not both exist; a bare name as a set of signatures
+(RFC-0043) gives every container the same names and admits both. An element
+is returned as a reference because a body cannot copy an erased element, and
+taking the container by value to read one element costs the whole container.
+
+**Rejected.**
+- Container reads as shared signatures under one `container::` name — see
+  Why.
+- An element read out by value, the container taken by value — costs the
+  container for one element.
+- A phantom `Ref<T>` naming the type beside a `Lent<T, Rt>` carrying the
+  value — every use of the phantom stood where a runtime was in scope, so one
+  carrier serves both.
+
+## RFC-0039: Every type that crosses the boundary says how, through one trait
+
+Status: Accepted
+
+1. Every type an ExternFn takes or returns implements `Cross`, and the glue
+   calls it and nothing else. No crossing is chosen where a macro expands:
+   the type says how it crosses. The crossing's width, its one-value half and
+   the argument modes are RFC-0059 rules 1–3.
+2. A scalar is stored as itself.
+3. An extension type — `#[derive(ExternType)]` — is stored as its payload,
+   the first field, and is `#[repr(transparent)]` over it, so a reference to
+   the payload is a reference to the type; the derive requires the attribute.
+   Its phantom parameters never reach the store: the checker's types live
+   only in the name.
+4. `#[derive(TyArg)]` on a Rust struct declares the object type its fields
+   spell, and on a Rust enum the language's enum of the same name, and the
+   value crosses as that object or enum: an ExternFn takes and returns the
+   Rust type, and a script reads every field and matches every variant. A
+   unit variant has no payload, a one-field tuple variant's payload is that
+   field, and a struct variant's payload is the object its fields spell. Each
+   field crosses by its own `Cross` — a struct inside a `Vec` inside a struct
+   is rebuilt at every level, an extension-typed field crosses as itself. The
+   derive reads no attribute of another derive: what `serde` renames or tags
+   is the wire's, and the language sees the Rust names. It refuses generic
+   parameters and a tuple variant of two or more fields, since a variant has
+   one payload. The runtime layout is RFC-0050 rules 4 and 8. A derived value
+   has no storage of its own type: a borrowed aggregate crosses as its
+   projection (RFC-0050 rule 6), a `#[projection]` type borrowed whole is a
+   compile error, and any other derived type read through a reference panics
+   at the crossing.
+5. A container crosses each element by the element's own crossing. The
+   dynamic-length sequence is `Vec<T>` in the language and
+   `std::vec::Vec<T>` in Rust, with no newtype; its `TyArg`, `Cross` and
+   `ExternTypeDecl` impls live in `acvus-extern`, the crate that owns the
+   traits, and its functions in the registries. A `Vec<T>` is stored as the
+   runtime's `Vec<Owned<Rt>>` — the whole buffer when its element is the
+   runtime's value in place, element by element when the element converts.
+   `Arr<T, N>` crosses per element; `Result<T, E>` is one runtime value
+   holding each side by its own crossing. A container is read through a
+   reference only when its element is the runtime's value: a converted
+   container has no storage of its element type.
+6. An `Option<T>` is its payload's value with no shape of its own:
+   `Runtime::none()` is `None`, `Runtime::some(v)` is `Some(v)`, and
+   `is_none` and `unwrap_some` read them back. It adds no allocation and no
+   indirection, and its `Cross` is those four calls over `T`'s own crossing
+   and nothing else — no static type, no marker, no `TypeId` — so a handler
+   at `T = Rt::Value` crosses it by the same calls. The runtime holds the two
+   apart however it likes; the interpreter gives a `None` a word that counts
+   the `Some`s around it, so `Some(Some(None))` is one word at depth two and
+   `Some(v)` for any other `v` is `v`. No storage is shaped like an
+   `Option<T>`, so `&Option<T>` and `&mut Option<T>` are refused where an
+   extern declares them.
+7. A carrier — `Ref<T, M, Rt>`, `Closure<A, R, E, Rt>` — is the runtime value
+   it holds, and is made only by the crossing (RFC-0068 rule 1). A slice and a
+   string view are the register pair (RFC-0047 rule 6, RFC-0062).
+8. The runtime's own value crosses as itself. A type variable of an ExternFn
+   is that value at run time, so a `Vec<T>` parameter reaches the store as
+   `Vec<Value>` in one erase. The ABI passes `Rt::Value` and owes nothing; a
+   Rust store that owns a runtime value holds `Owned<Rt>`, converted at the
+   glue (RFC-0048 rules 1 and 7).
+
+**Why.** A crossing chosen by autoref specialization where the glue expands
+resolves at the generic definition, not at the instantiation: a derived
+struct nested in another crossed as an opaque Rust value, and
+`Result<Regex, E>` fell to the as-is tier as a whole. One trait every
+boundary type implements makes an element's crossing a bound the compiler
+checks and puts the choice where the type is declared. `repr(transparent)` is
+the one fact that lets a reference cross between the checker's phantoms and
+the store's payload. A struct and an object are different layouts, so the
+conversion is O(fields), paid once per crossing and never on access. `Vec<T>`
+under Rust's own name lets a wire struct and its language object be one
+struct.
+
+**Rejected.**
+- Crossing tiers chosen at the expansion site — see Why; a nested type
+  silently crosses opaque.
+- A `List<T>` newtype over `Vec<T>` — every function on it wraps and
+  unwraps, and a struct declared for the boundary has to name `List<T>` where
+  the rest of its code says `Vec<T>`.
+- A shared layout between a derived struct and its object — they have none.
+- Parsing a wire format at run time through a language type — parsing is the
+  extern fn's job; the derive projects its result.
+- A write through an option in Rust storage (`take`, `replace`, an
+  `&mut Option<T>` parameter) — there is no such storage: a
+  `Vec<Option<i64>>` crosses to flat elements, and a pattern through `&mut`
+  binds `&T`, through which the checker refuses a store.
+
+## RFC-0041: `#τ` is the representation of a slot, and an extension holds values through `Erased`
+
+Status: Accepted
+
+A value of type `τ` has a representation: uniform, the runtime's `Value`,
+which every polymorphic position holds; or specialized, the Rust type `τ`
+itself. `#τ` names the specialized representation and is a fact about a
+**slot** — a type argument of a user-defined type, or the target of a
+reference — never about a bare type: there is no `##τ` and no `#` at a
+position that is not a slot. A user-defined type declares per parameter
+whether its slot can specialize (`specializable`); a slot that cannot is
+uniform. `Fn`, `Object`, `Enum` and handles have no representation the
+language defines and carry no `#`.
+
+Only a `Monomorphize` member makes `#`. `#[extern_fn] fn reverse<T:
+Monomorphize<(f64,)>>(Vec<T>) -> Vec<T>` has the concrete instance
+`reverse@#f64 : Vec<#f64> -> Vec<#f64>` and, when `T` has no other bound, the
+generic instance `Vec<ρT> -> Vec<ρT>`, where `ρ` is the one representation
+variable of the signature. A plain concrete signature (`-> Vec<String>`)
+stays uniform. The compiler chooses the instance by type (RFC-0040); a
+member's glue crosses the family whole (`OneValue<Rt, Specialized>`: one box,
+O(1)); every family a member names declares its two casts `F<#m> -> F<m>`
+(erase) and `F<m> -> F<#m>` (materialize), one generic fn each with concrete
+instances, merged across registries by type.
+
+A signature's `ρ` is bound only by a decision — the instance choice, or
+`solve`'s default `Uniform` — never by a value flow. A flow whose only
+disagreement with its target is such an open `ρ` against a fixed
+representation is a conversion decision at that site (RFC-0042): a call
+argument, a store into a typed place, a return, a pattern's source, an `else`
+branch. It is answered by identity when the decision agrees and by the
+family's cast when it does not. A conversion consumes the value it converts.
+At a `&place` argument that is the place's value: taken, converted, stored
+back, and from then until the call the place holds the referent type the
+parameter names; every later lend of that place inside the call — a later
+argument, or an argument of a nested call — lends the held type, and after
+the call the place is restored to its binding's type, for `&` and `&mut`
+alike. A later lend of a held place is a conversion decision like the first,
+from the held reference to the parameter, whose only answer is identity, so a
+second representation demanded of a held place is a type mismatch; a take
+while a reference is live is a borrow error. A reference that is not a borrow
+of a place is an error naming both types.
+
+An extension reads and edits uniform values in place through `Erased<R, T>`:
+`repr(transparent)` over the runtime's value (held as `Owned<R>`, RFC-0048
+rule 7), made only by `Erased::new(rt, T)`, read by `as_ref(&self, rt)` /
+`as_mut`, and for an `Inline` type (one that fits the value word) by `Deref`,
+`get` and `PartialEq` with no runtime in hand. `T` is `Stored`: a type
+converted on the way in has no `T` in storage to read. `Vec<Erased<R, T>>` is
+the runtime's `Vec<Value>` and crosses whole. A value leaves an extension type
+by identity (`T` is the runtime's value) or by a checked downcast
+(`FromValue`: the value's `TypeId`, carried by a `Large` payload's vtable and
+by an inline value's kind byte, must equal `T`'s); nothing else reinterprets a
+`Value`. A reference into storage is read only through a layout the language
+promises: the same type, `repr(transparent)`, or a slice under
+`TransparentOver`. `OneValue::materialize` and `Cross::from_run` are
+`unsafe fn` with the contract "erased from `Self`"; every caller states its
+proof, and no extension handler body contains `unsafe`.
+
+**Why.** Two representations of one type need one rule for where they meet.
+Putting `#` on the slot keeps it structural and lets the solver treat it as
+one more component of a type; making it only by `Monomorphize` leaves a
+program that asks for no native layout unchanged and confines the second box
+to fns that ask for it (`&[f64]`, `Vec<T>` by value into a Rust API). Deciding
+`ρ` by instance choice rather than by flow is what takes a `#` value to a
+generic-only fn through one erase instead of a mismatch, and a uniform value
+to a member through one materialize. `Erased` lets an extension hold a
+uniform value without naming a Rust `T` for it; `FromValue` and the value's
+own tag make the one remaining reinterpretation checked.
+
+**Rejected.**
+- `ρ` on a plain concrete signature and on `let` bindings, so that a value no
+  `#` consumer touches is uniform from birth without a cast node — the
+  checker is conservative: a value keeps the representation it is born with,
+  and `#` arises only by conversion at a site whose instance demands it. The
+  cost is a copy at that site; moving a representation beyond it is the
+  optimizer's.
+
+## RFC-0054: The host declares what `main` returns
+
+Status: Accepted
+
+**The host declares the entry's return type at compile time, and the
+compilation holds the body to it.**
+
+1. **A compilation declares the entry's return type.** The declaration is a
+   `Ty`, and it enters through the slot the graph already has for one: the
+   entry `Function`'s `PolyTy::Fn { ret }`. A declared entry is an ordinary
+   declared function. The entry is the `QualifiedRef` the `CompilationGraph`
+   carries, and `None` says the graph has no host. A template's entry
+   declares `String` itself, since its tail is text.
+2. **The body joins the declaration on the shared path.** `check_script`
+   sets the body's own return variable from the declaration, so the tail and
+   every `?`'s early return join it through one path; a body with no tail
+   joins `Unit`. There is no entry-only branch in the solver.
+3. **`validate` receives the declaration by structure.** `MirModule` carries
+   `ret: Ty` — not `Option<Ty>` — and every pass carries it through, so no
+   module has an unchecked `main`.
+4. **`validate` holds the pipeline, not the source.** A source-level mismatch
+   is refused by the checker and produces no module; `validate` checks what
+   the passes left against the declaration.
+5. **`!` declares that the host states no return type.** A host that cannot
+   name a type — one that prints whatever the file returns — declares `!`
+   (RFC-0038). Under it every `Return` is accepted, the checker holds the
+   tail to nothing, and the host reads the value it gets back by the kind the
+   runtime carries with the value. It is spelled by the host, never
+   defaulted. `types_match` reads a declared `!` on the expected side; a `!`
+   value satisfying any slot is a separate site.
+
+What the entry's result is at run time — one runtime value — is RFC-0062 and
+RFC-0064.
+
+**Why.** An entry return type inferred from the body is a summary of the
+body's returns, so every return agrees with it by construction and nothing is
+refused. The declaration is the contract the host reads the value with.
+
+**Cost.** Every host names a type.
+
+**Rejected.**
+- Inferring `main`'s return type and checking the body against it —
+  circular; see Why.
+- A run-time kind check on the host side — a convention every host must
+  remember, it fires after the run, and it says nothing at the contract the
+  script was compiled against.
+- An explicit-any `Ty` beside `!`, or an `Error` token that unifies with
+  everything — a second spelling of "I state no type" that every site reading
+  a declaration would have to keep in step with the first.
+- A `--returns` flag at the CLI — moves the declaration to the person running
+  the file, who has no more to say about it than the CLI.
+- An entry-only branch in the checker — leaves `?` unheld.
+
+## RFC-0059: The macro emits only calls; the runtime owns the ABI
+
+Status: Accepted
+
+`#[extern_fn]`'s output for a handler is a call to a library constructor over
+typed markers, and every ABI fact is a constant or an associated type of the
+crossing, never read from tokens.
+
+1. **A crossing is the run of values it occupies.** `Cross<Rt>` carries
+   `type Form: Form`, `unsafe fn from_run(rt, run) -> Self` and
+   `fn into_run(self, rt, out)`, and at the return position `type ReturnForm:
+   Returned` and `into_return_run(self, rt, out) -> Verdict`, which has no
+   default: a crossing whose result may be absent answers its verdict from
+   the value. A form is the width as a type — `One`; `Pair`, the register
+   pair of a slice or a string view (RFC-0047 rule 6); `Run<W>`, an
+   aggregate's `W` components (RFC-0050 rules 5, 6, 8); `Nothing`, a
+   parameter that takes no argument value; and at a result `OptionOf<One>`.
+   `Form::WIDTH` is the only place a width is a number, and `Form::KIND`
+   (`Value`, `View`, `Components`) tells apart forms of one width. A
+   declaration's argument width is the sum of its parameters' widths, added
+   in the library from the types. A slice or a view crosses through
+   `Runtime::slice_into_run` / `slice_from_run`, because only a runtime knows
+   what one of its values is made of. A `#[derive(TyArg)]` struct is one heap
+   value as a field, an element or a by-value parameter, and its own
+   components as a result: its `ReturnForm` is `Run<W>`, with `W` the field
+   count the derive writes as a literal.
+2. **Two crossings, and no blanket.** `OneValue<Rt, Rep>` is the crossing
+   that is one of the runtime's values — `erase`, `materialize`, `deref`,
+   `deref_mut`, `STORED_AS_VALUE` — at `Rep = Uniform` or `Specialized`
+   (RFC-0041). Every bound that needs a value says `OneValue`: an object's
+   field, a container's element, a closure's argument and result, a
+   parameter taken by reference. A slice and a view implement `Cross` alone,
+   so a slice in any of those positions is a compile error. A parameter by value is built by
+   its `Cross` at that crossing's width, which is what admits a slice
+   parameter. There is no `impl<T: OneValue> Cross for T`: coherence cannot
+   admit it beside `impl Cross for Slice`, so each one-value type states both
+   impls, the `Cross` half through `cross_one_value!`. `Cross` is not a
+   supertrait of `OneValue`: `Option<T>`'s `Cross` holds only where `T`
+   crosses uniformly, and a supertrait would demand that of the specialized
+   impl too.
+3. **Argument modes are one trait.** `Arg<'a, Rt>` carries `type Out`,
+   `type Form` and `unsafe fn take(rt, run, site) -> Out`. What a parameter
+   needs from its call site — nothing for most; an object projection's field
+   positions, an enum projection's tag words, a required instance's entry —
+   is `Sited<Rt>::Site`, on a lifetime-free trait so that a site table built
+   once is one type per parameter and not one per lifetime it is read at. The
+   macro names the marker from the Rust parameter's spelling (RFC-0023 rule
+   5): `ByValue<T, C>`, `ByRef<T, M, C>` with `M` = `Shared` | `Mut` and `C`
+   = `Uniform` | `Specialized`, `ByStr`, `BySlice<T, M>`, `ByProjection<P>`,
+   `Required<S, I, Task, N>`. The borrow modes require `Borrowable<Rt>` (or
+   `BorrowableSpecialized<Rt>`), whose `on_unimplemented` text is the
+   refusal of `&Option<T>` and of a whole borrowed `#[projection]` aggregate:
+   a trait error, not a name check. A result is `Ret<Rt>` — `Val<T, C>`,
+   `RetStr`, `RetLent<L>` for a returned borrow — and `Ret::Of<'a>` is a
+   generic associated type, so a result may borrow what the arguments lent.
+4. **A handler is the operation's type parameter.** The registry holds
+   object-safe factories: a `HandlerFactory<Rt>`, sited into an `AtSite<Rt>`
+   that makes the operation; `ExternHandler` is `Sync`, `Heavy` or `Async`
+   over them. The operation's trait is not object-safe:
+   `Handler<Rt>` carries `type Args: ArgRun`, `type Ret: Returned`,
+   `const WIDTH: Width` and one call,
+
+       unsafe fn call(
+           &self,
+           ctx: &mut Ctx<'_, Rt>,
+           run: <Self::Args as ArgRun>::Run<'_, Rt>,
+           out: <Self::Ret as Returned>::Out<'_, Rt>,
+       ) -> <Self::Ret as Returned>::Verdict;
+
+   where `run` is the argument run — an array at a register form, the window
+   otherwise — and `out` the destination run; the verdict is `()`, or
+   `bool` for a result that may be absent. `Runtime::op<H>`, `fused<H>` and
+   `async_extern_op<H>` take the handler by value under its own type, and the
+   host builds an operation holding it as a type parameter, so a call is a
+   static call and the handler's body is what the operation runs. The one
+   `dyn` on the synchronous path is taken at preparation, in `into_op`.
+   Which form an operation takes is a fact of the handler's type: `ArgRun`
+   (`InRegisters<0>` … `InRegisters<4>`, `InWindow`) and `Returned` each name
+   their form, and `select` hands the handler to the one method of the host's
+   `CallForms` / `RetForms` that form names, so a handler instantiates its own
+   form and no other.
+
+   The library implements the handler for closures: `Glue<Rt, F, A, R, S,
+   E>` over a tuple `A` of `Arg` markers and a result marker `R`, one impl
+   per arity through a `macro_rules!` over tuples, with the `Width` sum
+   written once there. `Handler` is implemented for the sited glue alone, so
+   an operation cannot hold a glue whose site table was never filled;
+   `Unsited` is what the registry holds. `#[state]` is a capture: the macro
+   emits a closure over an `Arc<(T0, …)>` — typed, never `Any`, never
+   downcast. `ExternHandler::heavy` takes `ValuesOnly` handlers — every
+   parameter one that survives the caller suspending, the result one
+   register — because a call the caller
+   waits for outlives the frame its arguments were lent from.
+
+   A call that crosses a thread — heavy, awaited, spawned — keeps a shared
+   `dyn`: it is sent to a pool rather than run in the caller's frame, and the
+   send, not the call, is its cost. A fused run keeps its `dyn` over nodes
+   rather than handlers, because its calls reach different declarations
+   (RFC-0044). A host with no registers to lay a call in implements the three
+   entries with `direct_call_forms!` and gets `DirectOp`: the handler behind a
+   closure that takes the argument run as it comes.
+5. **Object, enum and transparent glue are library functions.**
+   `#[derive(TyArg)]` calls `acvus_extern::derive::object` for a struct and
+   `derive::variant` for an enum, so the layout (RFC-0050 rules 4 and 8)
+   lives in those files alone and a layout change touches no macro.
+   `#[derive(ExternType)]`'s pointer cast is `derive::transparent::{erase,
+   materialize, deref, deref_mut}`, guarded by `unsafe trait
+   Transparent<P>`, which the derive implements only for a
+   `#[repr(transparent)]` struct. A family's
+   specialization casts are glues like every other handler: argument
+   `ByValue<T, Specialized>` and result `Val<T, Uniform>`, or the reverse,
+   over the identity body — the two markers are the whole conversion.
+6. **Async stays boxed.** `AsyncCall::call(&self, rt, run) ->
+   BoxFuture<'static, Rt::Value>` is one `Pin<Box<dyn Future>>` per call,
+   owning the runtime and a copy of the argument run so the future outlives
+   the frame. Storing the future in the operation needs an `async` block's
+   type named in an associated type, which is `impl_trait_in_assoc_type`,
+   unstable on the pinned toolchain.
+7. **The host reads the handler's width.** `prepare` reads
+   `HandlerFactory::width()`, sites the factory with each argument's settled
+   type, and builds the `CallShape` the form names; it counts nothing of its
+   own. Both halves count the runtime's values, not parameters: a
+   `&str` or slice parameter is two, so a declaration whose arguments total
+   `REGISTER_FORM` — four — values or fewer takes a register form with one
+   register per value, and a wider one is lent its window.
+   `HandlerFactory::arity` counts parameters, which is what a site table is
+   indexed by. `Width::absent` is the one fact about the result a caller
+   holding no handler type needs: whether the call answers a verdict.
+
+**Why.** A macro that decides ABI facts by counting tokens puts every layout
+change in a proc macro rather than the library, and answers wrongly for an
+alias or a type parameter. A handler behind a `dyn` in the operation is an
+indirect call and a body the operation cannot inline; state behind
+`Arc<dyn Any>` pays a downcast on every call for a type known when the
+registry was built.
+
+**Cost.** One operation instance per handler and form, so the binary grows
+with the declarations. A handler called from one operation is inlined there,
+and a body that takes a local's address across a callee costs that operation
+its tail call.
+
+**Rejected.**
+- `Box<dyn Handler>` or `Arc<dyn Handler>` in the operation — one indirect
+  call per call and a Rust body the operation cannot inline.
+- Every form instantiated for every handler — the forms a width does not
+  name are dead code that still costs size and tail calls; forms as types
+  make the dead instance unwritable.
+- `fn` pointers with `Arc<dyn Any>` state — a `fn` pointer cannot close over
+  typed state, so the state is erased and re-checked per call, and every
+  statefulness × arity pair is a form enumerated by hand.
+- Token detection (`returns_slice`, `names_option`, `by_value_variant`) —
+  see Why.
+- A panicking one-value crossing for a slice — "has none" is a missing impl,
+  and rule 2's split makes the same mistake a compile error.
+- A future stored in the operation — rule 6.

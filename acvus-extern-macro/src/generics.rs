@@ -234,7 +234,7 @@ impl Vars {
     }
 
     /// The first type variable, which is the one an instance of a signature
-    /// is matched by (RFC-0019).
+    /// is matched by (RFC-0067 rule 2).
     pub fn first_ty(&self) -> Option<&Ident> {
         self.0
             .iter()

@@ -169,7 +169,7 @@ impl Checking {
         })
     }
 
-    /// RFC-0064 Decision 2: what the body's result borrows from its
+    /// RFC-0064 rules 2 and 5: what the body's result borrows from its
     /// parameters is the body's summary, and a local's loan in the result is
     /// refused.
     fn check_result(&self, errors: &mut Vec<ValidationError>) -> Summary {

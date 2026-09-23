@@ -1,4 +1,4 @@
-//! Pins the pair `4216d0fc` relies on for `Option<String>`: RFC-0026's
+//! Pins the pair `4216d0fc` relies on for `Option<String>`: RFC-0018 rule 2's
 //! clone-on-take and the drop the inserter still emits for the option.
 //!
 

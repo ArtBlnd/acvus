@@ -98,7 +98,7 @@ switches of the same names.
 
 `RegexFlags` declares those six fields and a value of it has exactly
 them, so a literal that leaves one out is refused at the call by the
-field's name (RFC-0042 R1). Write all six, or start from `regex_flags()`,
+field's name (RFC-0042 rule 1). Write all six, or start from `regex_flags()`,
 which is Unicode on and every other switch off — the set `regex` itself
 compiles with.
 

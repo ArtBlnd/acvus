@@ -1,119 +1,152 @@
 # acvus RFCs
 
-An RFC records one design ruling that code cannot carry: a decision not to
-build something, a direction the code is moving toward, or a boundary the
-code must respect. Anything the code can carry lives in the code. An RFC is
-therefore never a status report.
+An RFC is one design decision that the code cannot carry by itself: a
+direction, a boundary, or a thing not to build. The decisions live in topic
+documents in this directory; each is a section headed by its number.
+
+Check the tree against these rules with:
+
+```sh
+cargo test --manifest-path docs/rfcs/lint/Cargo.toml
+```
 
 ## Rules
 
-- One ruling per RFC. A second ruling is a second RFC.
-- An RFC cites the tree where a sentence is checkable there — a file and
-  line at the commit it names — and carries no statements of
-  implementation progress.
-- Status is exactly one of `Accepted`, `Proposed`, or `Superseded by RFC-NNNN`.
-  An RFC may hold an `Accepted` ruling and a `Proposed` mechanism only when the
-  two are separated under their own headings inside `## Ruling`.
-- A superseded RFC is not edited beyond its `Status:` line. The successor
-  names it under `Supersedes:`.
-- Numbers are allocated sequentially and never reused.
+Every rule here is one check of `lint/`.
 
-## Template
+- A topic document opens with its `# ` title. Its only `## ` headings are
+  decisions: `## RFC-NNNN: <the ruling as one sentence>`.
+- A number is one decision, is never reused, and appears in one heading. A
+  number no longer in use is listed under Retired.
+- The first line of a decision is `Status: Accepted` or `Status: Proposed`,
+  and no other status line appears.
+- A decision's rules are the lines that begin `N. ` at the start of a line,
+  numbered upward. Nothing else in a document is numbered that way.
+- A decision changes in place, in its own section. A document carries no
+  dates, commit hashes, `file:line` references, tables, or revision notes
+  (`Extends:`, `Supersedes:`, amended, superseded).
+- A decision is at most 1500 words.
+- Every citation in the tree names a decision that exists: `RFC-NNNN`, or
+  `RFC-NNNN rule N` for a rule of it. A rule is cited in that one form.
+- The Index below is the one the headings give.
 
-```markdown
-# RFC-NNNN: <title>
+Every sentence of a decision is the decision, its reason, its cost, or an
+alternative it rejects. A decision another section owns is pointed to with
+`(RFC-NNNN)`, not restated.
 
-Status: Accepted | Proposed | Superseded by RFC-NNNN
-Date: YYYY-MM-DD
-Supersedes: none | RFC-NNNN
+## Retired
 
-## Ruling
-The decision, stated positively, in a few sentences.
-
-## Rationale
-Why this ruling and not its alternatives.
-
-## Not built
-Decisions not to build, each with its reason. `none` if empty.
-
-## Consequences
-Interface-level obligations the code must satisfy. Never locations.
-
-## Open questions
-What the ruling leaves undecided. `none` if empty.
-```
+- RFC-0005
+- RFC-0006
+- RFC-0008
+- RFC-0009
+- RFC-0010
+- RFC-0015
+- RFC-0016
+- RFC-0017
+- RFC-0022
+- RFC-0026
+- RFC-0027
+- RFC-0032
+- RFC-0034
+- RFC-0035
+- RFC-0036
+- RFC-0053
+- RFC-0065
 
 ## Index
 
-| RFC | Ruling | Status |
-|---|---|---|
-| [RFC-0001](0001-enrichment-pipeline.md) | Enrichment pipeline | Accepted |
-| [RFC-0002](0002-infrastructure-boundaries.md) | Infrastructure boundaries | Accepted |
-| [RFC-0003](0003-interpreter-direction.md) | Interpreter direction | Accepted |
-| [RFC-0004](0004-no-first-class-hashmap.md) | No first-class HashMap | Accepted |
-| [RFC-0005](0005-extern-fn-fusion.md) | ExternFn fusion | Proposed |
-| [RFC-0006](0006-orchestration-lowering.md) | Orchestration lowering | Accepted |
-| [RFC-0007](0007-io-ordering.md) | IO ordering | Accepted |
-| [RFC-0008](0008-static-context-and-resume.md) | Static context and resumable execution | Superseded by RFC-0014 |
-| [RFC-0009](0009-extern-declaration.md) | ExternFn declaration from a Rust function | Superseded by RFC-0023 |
-| [RFC-0010](0010-runtime-contract.md) | The runtime contract | Superseded by RFC-0022 |
-| [RFC-0011](0011-declared-type-bounds.md) | Declared bounds on type variables | Accepted |
-| [RFC-0012](0012-identity-parameters.md) | Identity as a parameter of a user-defined type | Accepted |
-| [RFC-0013](0013-commutative-effects.md) | Commutative effects | Accepted |
-| [RFC-0014](0014-run-and-static-variables.md) | The run is the unit; a static variable outlives it | Accepted |
-| [RFC-0015](0015-borrowed-places.md) | A place may be lent to a call | Superseded by RFC-0018 |
-| [RFC-0016](0016-extension-types-as-views.md) | An extension type is a view over the runtime's value | Superseded by RFC-0022 |
-| [RFC-0017](0017-context-access-summary.md) | A function's type says which contexts it reads and writes | Accepted |
-| [RFC-0018](0018-references-are-types.md) | A reference is a type, and only a primitive copies | Accepted |
-| [RFC-0019](0019-shared-signatures.md) | A shared signature and its instances | Accepted |
-| [RFC-0020](0020-operators-borrow.md) | Operators on language-owned types are instructions; on extension types, a shared signature | Accepted |
-| [RFC-0021](0021-registry.md) | A registry is a manifest and a handler table, combined once | Accepted |
-| [RFC-0022](0022-thin-runtime-contract.md) | The runtime contract is erase, materialize, reference, and call | Superseded by RFC-0039 |
-| [RFC-0023](0023-extern-declaration.md) | Declaring an ExternFn | Accepted |
-| [RFC-0024](0024-patterns-through-a-reference.md) | A pattern matched against a reference binds references | Accepted |
-| [RFC-0025](0025-context-is-a-variable.md) | A context is a variable of the body that touches it | Accepted |
-| [RFC-0026](0026-string-copies.md) | A String is an immutable value, copied by `StringClone` | Accepted |
-| [RFC-0027](0027-polymorphic-instances.md) | A polymorphic instance of a shared signature | Accepted |
-| [RFC-0028](0028-container-signatures.md) | A container is read through shared signatures; a reference is one carrier | Accepted |
-| [RFC-0029](0029-exclusion-as-written.md) | Exclusion is checked as the source wrote it, over every holder | Accepted |
-| [RFC-0030](0030-paths-and-method-calls.md) | A qualified call names a namespace; a method call is a call on its receiver | Accepted |
-| [RFC-0031](0031-script-runner.md) | `acvus`, the script runner | Accepted |
-| [RFC-0032](0032-objects-across-the-boundary.md) | An object crosses the boundary as its fields | Accepted |
-| [RFC-0033](0033-space.md) | A space holds a context as its type lays it out and its ops change it | Accepted (first instance) |
-| [RFC-0034](0034-vec.md) | The dynamic-length sequence is `Vec<T>` on both sides | Accepted |
-| [RFC-0035](0035-runtime-parameter-by-use.md) | An extern fn takes its runtime only when it uses it | Accepted |
-| [RFC-0036](0036-enums-across-the-boundary.md) | A Rust enum crosses the boundary as the language's enum | Accepted |
-| [RFC-0037](0037-integer-widths.md) | Integers have a width, and a literal takes the width its use demands | Accepted |
-| [RFC-0038](0038-result-and-trap.md) | `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error | Accepted (Result, `!`, `?` built; trap to follow) |
-| [RFC-0039](0039-one-crossing.md) | One crossing at the boundary | Accepted |
-| [RFC-0040](0040-instance-chosen-by-the-compiler.md) | The compiler chooses an ExternFn's instance and the runtime indexes it | Accepted |
-| [RFC-0041](0041-representation-of-a-slot.md) | `#τ` is the representation of a slot, and an extension holds a uniform value through `Erased` | Accepted |
-| [RFC-0042](0042-equality-and-decision.md) | The solver separates equality from decision: one join, one settlement | Accepted |
-| [RFC-0043](0043-a-name-is-a-set-of-signatures.md) | A bare name is a set of signatures, decided as an instance is | Accepted |
-| [RFC-0044](0044-a-body-is-prepared-once.md) | A body is prepared once, and a failure at run time is a panic | Accepted |
-| [RFC-0045](0045-let-binds-and-assignment-assigns.md) | `let` binds, `x = e;` assigns, in one statement grammar | Accepted |
-| [RFC-0046](0046-a-calls-task-is-an-effect.md) | A call's task is an effect: `Task::{Sync, Async, Heavy}` | Accepted |
-| [RFC-0047](0047-a-slice-is-the-one-thing-the-machine-indexes.md) | A slice is the one thing the machine indexes, and a bound is proved by an interval | Accepted |
-| [RFC-0048](0048-ownership-is-the-machines.md) | Ownership is the machine's: a value copies, a register is written once | Accepted |
-| [RFC-0049](0049-a-cast-is-a-leaf.md) | `expr as T` is Rust's `as`, and inside a chain it is a leaf | Accepted |
-| [RFC-0050](0050-an-aggregate-is-its-components-until-it-escapes.md) | An aggregate is its components until it escapes, and the heap is the spill | Accepted |
-| [RFC-0051](0051-a-match-is-one-dispatch-and-is-exhaustive.md) | A `match` is one dispatch, and it is exhaustive where the variant set is known | Accepted |
-| [RFC-0052](0052-an-operation-is-a-struct-the-machine-calls-once.md) | An operation is a struct the machine calls once, and it holds its successor | Accepted |
-| [RFC-0053](0053-an-aggregate-that-does-not-escape-never-exists.md) | An aggregate that does not escape never exists | Accepted |
-| [RFC-0054](0054-the-host-declares-what-main-returns.md) | The host declares what `main` returns, and the compilation holds the body to it | Accepted |
-| [RFC-0055](0055-a-constant-expression-folds.md) | A constant expression folds | Accepted |
-| [RFC-0056](0056-a-loop-multiplies-once.md) | A loop multiplies once | Accepted |
-| [RFC-0057](0057-a-for-loop-is-a-terminator.md) | A `for` loop is a terminator | Accepted |
-| [RFC-0058](0058-a-literal-says-its-type.md) | A literal says its type — `10u64`, `'c'`, `b"…"`, and `char` | Accepted |
-| [RFC-0060](0060-a-small-pure-closure-called-where-it-was-made-is-its-body.md) | A small pure closure called where it was made is its body | Accepted |
-| [RFC-0061](0061-a-store-nothing-reads-is-dead.md) | A store nothing reads is dead | Accepted |
-| [RFC-0062](0062-a-string-slice-is-a-register-pair.md) | A string slice is a register pair | Accepted |
-| [RFC-0063](0063-an-if-is-a-terminator.md) | An `if` is a terminator | Accepted |
-| [RFC-0064](0064-a-references-extent-is-its-loans.md) | A reference's extent is its loans | Accepted |
-| [RFC-0065](0065-an-iterator-is-the-types-its-elements-pass-through.md) | An iterator is the types its elements pass through | Rejected |
-| [RFC-0066](0066-a-loop-is-analyzed-and-the-lowerer-decides.md) | A loop is analyzed, and the lowerer decides | Draft |
-| [RFC-0067](0067-a-required-instance-is-a-function-pointer-beside-the-value.md) | A required instance is a function pointer beside the value | Accepted |
-| [RFC-0068](0068-a-value-is-read-back-only-where-the-checker-decided.md) | A value is read back only where the checker decided | Draft |
-| [RFC-0069](0069-a-closure-is-a-code-word-beside-its-captures.md) | A closure is a code word beside its captures | Draft |
-| [RFC-0070](0070-an-instance-requires-what-its-own-declaration-says.md) | An instance requires what its own declaration says | Accepted |
-| [RFC-0071](0071-a-template-is-a-script-whose-text-lines-are-output.md) | A template is a script whose text lines are output | Proposed |
+### [context.md](context.md)
+
+- RFC-0014: The run is the unit; a context is a static variable that outlives it
+- RFC-0025: A context is a variable of the body that touches it, and a call is bracketed by its callee's summary
+- RFC-0033: A space holds a context as its type lays it out and its ops change it
+
+### [effects.md](effects.md)
+
+- RFC-0007: IO runs in source order; `anyorder` declares a region where order is irrelevant
+- RFC-0013: An effect is three declared axes — reissue, commutation, task
+- RFC-0046: A call's task is an effect — `Sync < Async < Heavy`
+
+### [extern.md](extern.md)
+
+- RFC-0021: A registry is a manifest and a handler table, combined once
+- RFC-0023: An ExternFn is declared once, as a Rust function under `#[extern_fn]`
+- RFC-0028: An element read out of a container is a loan on it; a reference is one carrier
+- RFC-0039: Every type that crosses the boundary says how, through one trait
+- RFC-0041: `#τ` is the representation of a slot, and an extension holds values through `Erased`
+- RFC-0054: The host declares what `main` returns
+- RFC-0059: The macro emits only calls; the runtime owns the ABI
+
+### [identity.md](identity.md)
+
+- RFC-0012: Identity is a parameter of a user-defined type
+
+### [instances.md](instances.md)
+
+- RFC-0067: The machine holds no generics; a required instance is one word beside the value
+- RFC-0068: A value is read back at a type only where the checker decided
+- RFC-0070: An instance requires what its own declaration says
+
+### [machine.md](machine.md)
+
+- RFC-0044: A body is prepared once into a `Code`, and the machine that runs it is synchronous
+- RFC-0048: Ownership is the machine's — a value copies, a register is written once
+- RFC-0052: An operation is a struct, and the machine calls it once
+- RFC-0069: A closure is a code word beside its captures
+- RFC-0073: A capture is read in place (Proposed)
+- RFC-0074: A diamond of two pure arms is a select
+
+### [mir-opt.md](mir-opt.md)
+
+- RFC-0055: a binary operation on two constants is the constant
+- RFC-0056: a loop's `i * k + x` becomes its own counter
+- RFC-0057: a `for` loop is one terminator that is its own condition
+- RFC-0060: a small pure closure called where it was made is its body
+- RFC-0061: a store nothing reads is dead
+- RFC-0063: an `if` whose arms rejoin is a `Diamond` terminator
+- RFC-0066: a loop is analyzed, and the lowerer decides (Proposed)
+
+### [ownership.md](ownership.md)
+
+- RFC-0018: A reference is a type, and only a word or a String copies
+- RFC-0024: A pattern matched against a reference binds references
+- RFC-0029: Exclusion is checked as the source wrote it; a reference to a reference is a reborrow
+- RFC-0064: A reference's extent is its loans
+
+### [positioning.md](positioning.md)
+
+- RFC-0001: acvus is an enrichment pipeline; information is lost at the execution boundary alone
+- RFC-0002: ExternFn is the only door to the outside world, and everything inside it is sound
+- RFC-0003: The interpreter mediates every execution
+- RFC-0004: The language has no map; a map is an extension type
+
+### [representation.md](representation.md)
+
+- RFC-0047: The machine indexes one thing, a slice
+- RFC-0050: An aggregate is its components until it escapes
+- RFC-0051: A `match` is one dispatch, and it is exhaustive
+- RFC-0062: A string slice is a register pair
+
+### [syntax.md](syntax.md)
+
+- RFC-0030: A qualified call names a namespace; a method call is a call on its receiver
+- RFC-0038: `Result<T, E>` is a primitive, `?` widens the error, and a trap is not an error
+- RFC-0045: `let` binds, `x = e;` assigns
+- RFC-0049: `expr as T` is Rust's `as`, and inside a chain it is a leaf
+- RFC-0058: A literal says its type
+- RFC-0071: A template is a script whose text lines are output
+
+### [tooling.md](tooling.md)
+
+- RFC-0031: `acvus` runs one file as one function, the result alone on stdout
+
+### [types.md](types.md)
+
+- RFC-0011: A declaration bounds its type variables, and the bound is verified when the variable freezes
+- RFC-0019: A shared signature is a name with one polymorphic type and no body, filled by instances the registries declare
+- RFC-0020: Operators on language-owned types are instructions; on extension types, a call of a `core` signature
+- RFC-0037: Integers have Rust's widths, and a literal takes the width its use demands
+- RFC-0040: The compiler chooses an ExternFn's instance, and the IR records it by number
+- RFC-0042: The solver separates equality from decision
+- RFC-0043: A bare name is a set of signatures, settled by evidence

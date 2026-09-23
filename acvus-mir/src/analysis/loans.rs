@@ -1,5 +1,5 @@
-//! Regions: the storage a value may name, as a trivial lifetime (RFC-0015,
-//! RFC-0018). A region is a set of loans; join is union; bottom names
+//! Regions: the storage a value may name, as a trivial lifetime (RFC-0018,
+//! RFC-0064). A region is a set of loans; join is union; bottom names
 //! nothing. A `Ref` starts a region at its slot, a parameter or capture of
 //! reference type starts one at itself (RFC-0029), and a value whose type
 //! contains a reference takes the join of the regions it is built from:
@@ -98,7 +98,7 @@ pub struct ParamLoan {
 }
 
 /// What a body's result borrows from the body's parameters: the object
-/// RFC-0064 Decision 2 calls a body's summary.
+/// RFC-0064 rule 2 calls a body's summary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Summary {
     pub loans: Vec<ParamLoan>,
@@ -328,7 +328,7 @@ impl RegionAnalysis<'_> {
     }
 
     /// An extern declares its summary in its signature, and reading it is
-    /// RFC-0064 step 4; until then an extern call takes the union of its
+    /// RFC-0064 rule 6; until then an extern call takes the union of its
     /// arguments like any callee with no summary.
     fn summary_of(&self, callee: &Callee) -> Option<&Summary> {
         match callee {
@@ -341,7 +341,7 @@ impl RegionAnalysis<'_> {
         }
     }
 
-    /// RFC-0064 Decision 3: a call substitutes each `Param(i)` of the
+    /// RFC-0064 rule 3: a call substitutes each `Param(i)` of the
     /// callee's summary with argument `i`'s region, and a lambda's call adds
     /// the region of the closure value itself. That addition is what a
     /// captured reference travels on: inside the closure the value read out
@@ -451,7 +451,7 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
                     self.flow(state, *a, *dst, true);
                 }
             }
-            // RFC-0064 Decision 5: a lambda that captures a reference is a
+            // RFC-0064 rule 5: a lambda that captures a reference is a
             // holder of that loan, so its region is the join of what it
             // captured whatever its type says about the captures.
             InstKind::MakeClosure { dst, captures, .. } => {
@@ -485,7 +485,7 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
 
     /// A `For` over a slice hands the body a reference into it, so the
     /// element holds the source's loan for as long as the loop runs, which
-    /// is the terminator's own extent (RFC-0057 Decision 3). An array's
+    /// is the terminator's own extent (RFC-0057 rule 2). An array's
     /// element is moved out and a range's is a number: neither is a loan.
     fn terminator_uses(&self, term: &Terminator, state: &mut DataflowState<ValueId, Region>) {
         let Terminator::For { source, body, .. } = term else {
@@ -587,7 +587,7 @@ impl Loans {
         self.region.get(&value).unwrap_or(&NOTHING)
     }
 
-    /// RFC-0064 Decision 2: a body's summary is the region of its result
+    /// RFC-0064 rules 2 and 5: a body's summary is the region of its result
     /// over `Param` loans, and a local loan in the result is refused.
     pub fn leaving(&self, value: ValueId) -> Leaving {
         let mut leaving = Leaving::default();
@@ -726,7 +726,7 @@ impl Loans {
 /// A parameter or capture of reference type names storage outside the body,
 /// and inside the body that storage is the entry itself (RFC-0029). A
 /// parameter that is a lambda holding a loan names storage outside the body
-/// the same way (RFC-0064 Decision 5), so it starts a loan too.
+/// the same way (RFC-0064 rule 1), so it starts a loan too.
 fn entry_loan(ty: &Ty) -> Option<Mutability> {
     match ty {
         Ty::Ref(mutability, _) => Some(*mutability),

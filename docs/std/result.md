@@ -20,8 +20,8 @@ side's payload through `Debug`; a language value has no `Debug`, so
 `unwrap` on an `Err` says `unwrap: called on Err` with nothing of the
 payload in it.
 
-A closure parameter carries the handler's effect, as in `Option` (RFC-0050
-rule 6).
+A closure parameter carries the handler's effect, as in `Option` (RFC-0023
+rule 8).
 
 | name | signature | Rust `std` twin | semantic difference |
 | --- | --- | --- | --- |

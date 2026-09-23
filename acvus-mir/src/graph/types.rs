@@ -83,7 +83,7 @@ pub struct ContextInfo {
 
 /// The `$` names a host fixed before this compilation: each is a constant in
 /// every body that reads it, and none of them is an input the host must still
-/// supply (RFC-0071 Decision 5).
+/// supply (RFC-0071 rule 5).
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
     by_name: FxHashMap<Astr, Literal>,

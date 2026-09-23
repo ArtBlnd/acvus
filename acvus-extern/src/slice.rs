@@ -4,7 +4,7 @@
 //! A slice is a borrow of the container it was taken from: it holds that
 //! container's loan and is never stored beyond it (RFC-0018). Every
 //! sliceable container stores the runtime's own values, so the element
-//! width is the runtime's `Value` and nothing else (RFC-0047 §1); an
+//! width is the runtime's `Value` and nothing else (RFC-0047 rule 1); an
 //! `Elements` is therefore the only payload it carries, and the
 //! machine reads it without knowing any container's layout.
 //!
@@ -13,7 +13,7 @@
 //! checker typed `&[T]` / `&mut [T]` in. That is the whole ground of `T`,
 //! so there is no constructor a handler can call: `of` over a `[Rt::Value]`
 //! put a `T` on a run nothing checked, and `from_elements` did the same
-//! over the pair (RFC-0068 D1).
+//! over the pair (RFC-0068 rule 1).
 //!
 //! `with` is the one operation, and Rust proves it safe: it hands `f` a
 //! `&'a [T]` for the `'a` of `&'a self`, or a `&'a mut [T]` for `&'a mut
@@ -66,7 +66,7 @@ where
     Rt: Runtime,
 {
     /// Obligation across artifacts: `acvus-interpreter`'s `ops::index` keeps
-    /// a slice in the register pair these two words are (RFC-0047 amended).
+    /// a slice in the register pair these two words are (RFC-0047 rule 6).
     ///
     /// # Safety
     /// `words.ptr` is the first of `words.len` live `Rt::Value`s of one run,
@@ -91,7 +91,7 @@ where
 
 /// A borrow of a run of a container's elements. Taking a `Mut` one is an
 /// exclusive take of the container, so no shared slice of it is live
-/// (RFC-0047 §2).
+/// (RFC-0047 rule 2).
 pub struct Slice<T, M, Rt>(Elements<Rt>, PhantomData<(T, M)>)
 where
     T: Send + Sync + 'static,
@@ -134,7 +134,7 @@ where
     /// The elements, read and written in place as the `[T]` they are.
     pub fn with<'a, R>(&'a mut self, f: impl FnOnce(&'a mut [T]) -> R) -> R {
         // SAFETY: as the shared `with`'s, and an exclusive slice is the only
-        // live name of its run (RFC-0047 §2), which `&'a mut self` keeps.
+        // live name of its run (RFC-0047 rule 2), which `&'a mut self` keeps.
         f(
             unsafe {
                 std::slice::from_raw_parts_mut(self.0.ptr.cast_mut().cast::<T>(), self.0.len)
@@ -169,7 +169,7 @@ where
 }
 
 /// A result declared `&[T]` / `&mut [T]` is returned as Rust's slice of a
-/// parameter the caller lent (RFC-0047 §3), and crosses as the pair.
+/// parameter the caller lent (RFC-0047 rule 3), and crosses as the pair.
 impl<T, Rt> crate::LentBack<Rt> for Slice<T, Shared, Rt>
 where
     T: TransparentOver<Rt>,
@@ -247,7 +247,7 @@ where
 
     unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a mut [T] {
         // SAFETY: as the shared form's, and a `&mut [T]` argument is the
-        // only live name of its run (RFC-0047 §2).
+        // only live name of its run (RFC-0047 rule 2).
         let words = unsafe { rt.slice_from_run(run) };
         unsafe { std::slice::from_raw_parts_mut(words.ptr as *mut T, words.len as usize) }
     }

@@ -183,7 +183,7 @@ impl Invariants {
 }
 
 /// The loop headers a terminator names, with the traversal each one is
-/// (RFC-0057 Decision 3). A `for` header is a loop header by what ends it, so
+/// (RFC-0057 rule 3). A `for` header is a loop header by what ends it, so
 /// a reader that wants the loop and its induction variable asks the
 /// terminator rather than searching for a back edge.
 pub fn for_headers(cfg: &CfgBody) -> FxHashMap<BlockIdx, ForSource> {

@@ -1,5 +1,5 @@
 //! Which of the standard declarations hand a run back in two registers
-//! (RFC-0047 amended, rule 2; RFC-0062 Decision 1 for the run of bytes).
+//! (RFC-0047 rule 6; RFC-0062 rule 1 for the run of bytes).
 
 use acvus_extern::{Externs, FormKind, Interner, QualifiedRef, TypesOnly};
 
@@ -41,7 +41,7 @@ fn the_slice_entry_is_the_slice_returning_declarations_and_nothing_else() {
     );
 }
 
-/// RFC-0062 Decision 3 reaches a `&str` parameter through `as_str`, which
+/// RFC-0062 rule 3 reaches a `&str` parameter through `as_str`, which
 /// `slice_coercion` resolves out of the environment's machine set, so a
 /// registry set that declares no `string` module still has it.
 #[test]

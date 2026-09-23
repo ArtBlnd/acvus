@@ -1,7 +1,7 @@
 //! The boundary's one crossing (RFC-0039): every type an ExternFn takes or
 //! returns implements `Cross`, and the glue calls it and nothing else. A
 //! scalar and an extension type are stored as themselves; a derived struct
-//! or enum is rebuilt field by field (RFC-0032, RFC-0036); a container
+//! or enum is rebuilt field by field (RFC-0039 rule 4); a container
 //! crosses each element; a carrier (`Ref`, `Closure`) is the runtime value it
 //! holds. `Obj<V>` and `Variant<V>` are the runtime's own object and
 //! variant shapes.
@@ -245,7 +245,7 @@ pub struct Nothing;
 /// One of the runtime's values.
 pub struct One;
 
-/// The two registers the machine keeps a slice in (RFC-0047 amended).
+/// The two registers the machine keeps a slice in (RFC-0047 rule 6).
 pub struct Pair;
 
 /// An aggregate's `W` components, written where the caller placed its
@@ -271,10 +271,10 @@ pub struct OptionOf<F>(PhantomData<fn() -> F>);
 ///
 /// The destination is the run itself, at this form's own length, so a
 /// handler's entry carries the result width in its type and no call of one
-/// measures a slice (RFC-0050 rule 6).
+/// measures a slice (RFC-0059 rule 1).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is no form a result is written in",
-    note = "`Nothing` is the form of a parameter that takes none of the call's argument run — a required instance — and a declaration returns no such thing (RFC-0068 D5).",
+    note = "`Nothing` is the form of a parameter that takes none of the call's argument run — a required instance — and a declaration returns no such thing (RFC-0067 rule 3).",
     note = "`OptionOf<F>` is a result form only at `F = One`: the registers hold no representation of an absent view or an absent aggregate, so a result that may be absent is one of the runtime's values (RFC-0039)."
 )]
 pub trait Returned: Form {
@@ -325,10 +325,10 @@ pub trait Returned: Form {
 /// `CallExternN`, `CallWindow`, the fused nodes, `SentCall` and `DirectOp`
 /// build for. `One` lands as itself; `OptionOf<One>` lands as the `some` or
 /// the `none` its verdict names, and that landing is the operation's, not the
-/// handler's (RFC-0069 step 4).
+/// handler's (RFC-0059 rule 1).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is no result form that lands in one of the runtime's values",
-    note = "a view and an aggregate are wider than one register: a `Pair` is the caller's two, and a `Run<W>` the destination run it lent (RFC-0047 amended, RFC-0050 rule 6)."
+    note = "a view and an aggregate are wider than one register: a `Pair` is the caller's two, and a `Run<W>` the destination run it lent (RFC-0047 rule 6, RFC-0050 rule 6)."
 )]
 pub trait OneRegister: Returned {
     /// The one-register destination, at this form's own `Out`.
@@ -530,9 +530,9 @@ impl<const W: usize> Returned for Run<W> {
 /// A form whose parameter still names what it named after the caller
 /// suspends: one of the runtime's values, or nothing of the run at all. A
 /// `Pair` borrows the frame the call laid its arguments on, and that frame
-/// is gone by the time an awaited call resumes (RFC-0047 §3).
+/// is gone by the time an awaited call resumes (RFC-0047 rule 6).
 #[diagnostic::on_unimplemented(
-    message = "a parameter of form `{Self}` does not survive the caller suspending, so a declaration above `Task::Sync` cannot take one: it borrows the frame the call laid its arguments on, and that frame is gone when the call resumes (RFC-0047 §3)"
+    message = "a parameter of form `{Self}` does not survive the caller suspending, so a declaration above `Task::Sync` cannot take one: it borrows the frame the call laid its arguments on, and that frame is gone when the call resumes (RFC-0047 rule 6)"
 )]
 pub trait SurvivesSuspension: Form {}
 
@@ -615,7 +615,7 @@ where
 
     /// How many of the runtime's values one `Self` occupies. A declaration's
     /// slot count is the sum of its parameters' widths, and the library adds
-    /// them from these constants (RFC-0050 rule 6).
+    /// them from these constants (RFC-0059 rule 1).
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
 
     /// `Self` read out of the run of `WIDTH` values it was written into.
@@ -642,7 +642,7 @@ where
 }
 
 /// The crossing of a type that is one of the runtime's values, at one of the
-/// two representations a slot can take (`Uniform`, `Specialized` — RFC-0040):
+/// two representations a slot can take (`Uniform`, `Specialized` — RFC-0041):
 /// `erase` hands the runtime that value, `materialize` takes it back, and
 /// `deref` reads a `Self` through a reference the runtime holds, which only a
 /// type stored as itself can do. Every bound that needs a value — a
@@ -801,7 +801,7 @@ macro_rules! passed_as_one_value {
 }
 
 /// The message a converted type gives when read through a reference: it
-/// has no storage of its own type (RFC-0032).
+/// has no storage of its own type (RFC-0039 rule 4).
 const NO_STORAGE: &str =
     "a value converted at the boundary has no storage of its own type to read through";
 
@@ -933,7 +933,7 @@ macro_rules! inline {
 crate::for_each_inline!(inline);
 
 /// A type stored as itself: the runtime keeps the Rust value and hands it
-/// back untouched (RFC-0022).
+/// back untouched (RFC-0039 rule 2).
 #[macro_export]
 macro_rules! cross_as_stored {
     ($t:ty $(, $($g:tt)*)?) => {
@@ -984,7 +984,7 @@ macro_rules! cross_whole {
 macro_rules! whole_box {
     ($t:ty, $rt:ident) => {
         fn erase(self, rt: &$rt) -> <$rt as $crate::Runtime>::Value {
-            // SAFETY: stored as itself (RFC-0022).
+            // SAFETY: stored as itself (RFC-0039 rule 2).
             unsafe { rt.erase::<$t>(self) }
         }
 
@@ -1071,7 +1071,7 @@ where
 crate::passed_as_one_value!(Option<T>, T: OneValue<__Rt>);
 
 /// An option's result leaves the verdict to the operation instead of encoding
-/// `some`/`none` in the handler (RFC-0069).
+/// `some`/`none` in the handler (RFC-0059 rule 1).
 impl<T, Rt> Cross<Rt> for Option<T>
 where
     T: OneValue<Rt>,
@@ -1126,7 +1126,7 @@ crate::cross_one_value!(Result<T, E>, T: OneValue<__Rt>, E: OneValue<__Rt>);
 /// a `Result<Owned<Rt>, Owned<Rt>>` because that is the type
 /// `acvus-interpreter`'s `Runtime::erase` answers with the language's flat
 /// variant; erasing a `Result` of anything else there boxes a Rust value
-/// instead (RFC-0038, RFC-0048 §7, RFC-0050 rule 8).
+/// instead (RFC-0038, RFC-0048 rule 7, RFC-0050 rule 8).
 fn erase_result<T, E, Rt>(
     value: Result<T, E>,
     rt: &Rt,
@@ -1140,7 +1140,7 @@ where
         .map(|v| Owned::from_value(erase_ok(v, rt)))
         .map_err(|e| Owned::from_value(erase_err(e, rt)));
     // SAFETY: the language's Result is the runtime's
-    // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 §7).
+    // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 rule 7).
     unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
 }
 
@@ -1218,8 +1218,8 @@ where
             .into_iter()
             .map(|v| Owned::from_value(v.erase(rt)))
             .collect();
-        // SAFETY: the language's array is `Arr<Owned<Rt>, ()>` (RFC-0022,
-        // RFC-0048 §7).
+        // SAFETY: the language's array is `Arr<Owned<Rt>, ()>` (RFC-0047 rule 1,
+        // RFC-0048 rule 7).
         unsafe { rt.erase::<Arr<Owned<Rt>, ()>>(Arr::new(items)) }
     }
 

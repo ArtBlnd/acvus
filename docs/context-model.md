@@ -33,7 +33,7 @@ substance does not surface. A space is content-addressed and append-only,
 and a type declares once how its value is laid out and which ops it records
 (RFC-0033).
 
-**A place, not a value** (RFC-0015, RFC-0025). A context is reached through
+**A place, not a value** (RFC-0018, RFC-0025). A context is reached through
 `&` and `&mut`; it is never moved out, and usually never copied. The value
 is pinned to its space, as a memory-mapped register is pinned to its
 address.
@@ -43,7 +43,7 @@ The type knows its own shape and its own persistence — a `Regex` dumps its
 pattern and recompiles on restore — and the program reaches the value only
 through those operations, never through a generic move, copy, or serialize.
 
-**Effect and commutativity** (RFC-0013, RFC-0017). Which contexts an
+**Effect and commutativity** (RFC-0013, RFC-0025 rule 4). Which contexts an
 operation reads and writes, and whether two operations commute, is the
 dependency and ordering model. It is what the optimizer reorders against,
 and it is the schedule a transpiler would emit.
@@ -69,8 +69,8 @@ primitives, so a language with neither cannot carry one. There is no
 standard library — an absence by decision, not omission.
 
 Without one, the language cannot stand alone, so it lives as a guest inside
-a host and borrows the host's world through the extern boundary (RFC-0009,
-RFC-0010). The host supplies the operator functions and the concrete values
+a host and borrows the host's world through the extern boundary (RFC-0023,
+RFC-0039). The host supplies the operator functions and the concrete values
 they act on. The current host is Rust: a `Regex` is Rust's `regex::Regex`,
 and a context's persistence is Rust code.
 

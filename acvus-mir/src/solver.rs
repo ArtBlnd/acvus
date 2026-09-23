@@ -1,4 +1,4 @@
-//! The type solver: equality now, decisions later (docs/solver.md).
+//! The type solver: equality now, decisions later (RFC-0042).
 //!
 //! `Terms` is the union-find over type, effect, length, identity, and
 //! representation variables, and `join` on it is the one unification: the
@@ -37,7 +37,7 @@ pub enum TypeBound {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectBound {
-    /// `lower <= var <= upper` on the reissue chain (RFC-0017).
+    /// `lower <= var <= upper` on the reissue chain (RFC-0013 rule 1).
     Range {
         lower: Effect,
         upper: Effect,
@@ -234,7 +234,7 @@ enum JoinKind {
 struct Terms {
     ty_bounds: Vec<TypeBound>,
     effect_vars: Vec<EffectBound>,
-    /// `a <= b` (RFC-0017).
+    /// `a <= b` (RFC-0013 rule 1).
     effect_below: Vec<(EffectVarId, EffectVarId)>,
     len_vars: Vec<LenBound>,
     identity_vars: Vec<IdentityBound>,
@@ -558,7 +558,7 @@ impl Terms {
     }
 
     /// An open effect is the least element of its interval: the join of
-    /// what the body requires (RFC-0014, solver.md R3).
+    /// what the body requires (RFC-0014, RFC-0042 rule 3).
     fn freeze_effect(&self, term: &EffectTerm<Infer>) -> Effect {
         match self.resolve_effect(term) {
             EffectTerm::Known(e) => e,
@@ -781,11 +781,11 @@ impl Terms {
 
     // -- Join ----------------------------------------------------------
 
-    /// The join of two types (solver.md, R1), `a` the value and `b` the
+    /// The join of two types (RFC-0042 rule 1), `a` the value and `b` the
     /// type it flows into. Written to the root variable of a side that is a
     /// variable; `Mismatch` where no join exists. A closure's effect is the
     /// one directional component: the value's is at most what the position
-    /// allows (RFC-0017). At the top of a decision's own join `a` is not a
+    /// allows (RFC-0046 rule 7). At the top of a decision's own join `a` is not a
     /// value flowing into `b` but a call settling on the signature it took,
     /// and there the effect runs both ways: the caller runs what the callee
     /// does (RFC-0046).
@@ -1173,7 +1173,7 @@ impl Terms {
     }
 }
 
-/// `lower <= var <= upper` on the reissue chain (RFC-0017).
+/// `lower <= var <= upper` on the reissue chain (RFC-0013 rule 1).
 #[derive(Debug, Clone, PartialEq)]
 struct Interval {
     lower: Effect,
@@ -1362,7 +1362,7 @@ pub struct Candidate {
     pub instance: InstanceKind,
     pub ty: PolyTy,
     pub admits: Task,
-    /// Written at this candidate's own variables, as `ty` is (RFC-0070 D3).
+    /// Written at this candidate's own variables, as `ty` is (RFC-0070 rule 3).
     pub requires: Vec<RequirementSig>,
 }
 
@@ -1447,16 +1447,16 @@ pub struct GenericInstance {
     pub ty: PolyTy,
 }
 
-/// A position with more than one admissible answer (solver.md, R2).
+/// A position with more than one admissible answer (RFC-0042 rule 2).
 #[derive(Debug, Clone)]
 pub enum Decision {
-    /// Which instance of an Extern function a call runs (RFC-0027,
+    /// Which instance of an Extern function a call runs (RFC-0019,
     /// RFC-0040).
     Instance {
         call: InferTy,
         candidates: Vec<Candidate>,
         generic: Option<GenericInstance>,
-        /// The signature a requirement asked an instance of (RFC-0068 D1);
+        /// The signature a requirement asked an instance of (RFC-0068 rule 5);
         /// a call's own decision is named by its site.
         required: Option<QualifiedRef>,
         tie: InstanceTie,
@@ -1642,7 +1642,7 @@ pub struct SignatureOption {
     /// conversion; every other argument it takes directly.
     pub converted: Vec<ConvertedArgument>,
     /// The arguments this candidate takes as a view of what the caller
-    /// lent: a `&String` at a `&str` parameter (RFC-0062 Decision 3).
+    /// lent: a `&String` at a `&str` parameter (RFC-0062 rule 3).
     pub viewed: Vec<ConvertedArgument>,
 }
 
@@ -1677,7 +1677,7 @@ pub struct ConvertedArgument {
 /// A call runs what the instance it settles on runs, so before the
 /// signature decision settles there is no effect to hold; a field holding
 /// one would be a second term for one effect, and the settle joins the two
-/// under RFC-0017's demotion, which leaves the call's free to freeze below
+/// under RFC-0046 rule 7's demotion, which leaves the call's free to freeze below
 /// the instance's. That is how `find` and `last` over a suspending pipeline
 /// took their asynchronous instance while the call froze to `Pure`,
 /// carrying neither the task nor the contexts.
@@ -1719,7 +1719,7 @@ pub enum Admission {
     Converted,
     /// The argument reaches the parameter as a view of the storage it
     /// lends, which the checker takes at the argument and the decision
-    /// therefore cannot unify (RFC-0062 Decision 3).
+    /// therefore cannot unify (RFC-0062 rule 3).
     Viewed,
     Refused,
 }
@@ -1852,7 +1852,7 @@ pub enum Unsettled {
         decision: DecisionId,
         conflict: EffectConflict,
     },
-    /// RFC-0018, narrowed by RFC-0064 Decision 2 to the view a capture
+    /// RFC-0018, narrowed by RFC-0064 rule 5 to the view a capture
     /// register has no room for.
     ViewCaptured {
         decision: DecisionId,
@@ -1962,7 +1962,7 @@ pub struct Solver<'src> {
     /// The instances of every shared signature, for the requirements a
     /// settled instance opens. They cannot be carried by the candidate:
     /// `clone` at `Vec<T>` requires `clone`, whose instances include it
-    /// (RFC-0070 D3).
+    /// (RFC-0070 rule 3).
     signatures: &'src FxHashMap<QualifiedRef, Instances>,
 }
 
@@ -2080,7 +2080,7 @@ impl<'src> Solver<'src> {
 
     // -- Unify -------------------------------------------------------
 
-    /// Two types that must be one type, at a value position (solver.md R1):
+    /// Two types that must be one type, at a value position (RFC-0042 rule 1):
     /// `a` is the value, `b` the type it flows into.
     pub fn unify(&mut self, a: &InferTy, b: &InferTy) -> Result<(), Mismatch> {
         self.terms
@@ -2265,7 +2265,7 @@ impl<'src> Solver<'src> {
     }
 
     /// Settle, then close every decision still open by its least element
-    /// (solver.md R3): a width is `i64`, a text `String`, a representation `Uniform`, a lend
+    /// (RFC-0042 rule 3): a width is `i64`, a text `String`, a representation `Uniform`, a lend
     /// a reference, a capture a word, an identity a source of its own;
     /// then settle again, and report every decision that neither settled
     /// nor could take a least element.
@@ -2598,7 +2598,7 @@ impl<'src> Solver<'src> {
 
     /// `MakeClosure` writes one word per capture and `machine::bind_captures`
     /// hands the body one reference to that word, so a view — the two
-    /// adjacent registers of RFC-0062 Decision 1 — has nowhere to put its
+    /// adjacent registers of RFC-0047 rule 6 — has nowhere to put its
     /// length. `typeck::is_view` is the same predicate over a closed type,
     /// and the two must name the same types.
     pub fn captured_shape(&self, target: &InferTy) -> CapturedShape {
@@ -3429,7 +3429,7 @@ impl<'src> Solver<'src> {
                 Repr::Specialized => Ok(Repr::Specialized),
                 // A report runs before `solve` has taken the least
                 // elements, and `Uniform` is the one an open
-                // representation takes there (solver.md R3), so a report
+                // representation takes there (RFC-0042 rule 3), so a report
                 // shows the rest of the type rather than nothing.
                 Repr::Var(_) if matches!(open, Open::AsWritten) => Ok(Repr::Uniform),
                 Repr::Var(root) => Err(FreezeError::UnresolvedRepr(root)),
@@ -3504,7 +3504,7 @@ impl<'src> Solver<'src> {
     // -- Requirements of a settled instance --------------------------
 
     /// The decisions the instance `decision` settled on requires, in the
-    /// order its declaration states them (RFC-0070 D3).
+    /// order its declaration states them (RFC-0070 rule 3).
     pub fn children_of(&self, decision: DecisionId) -> &[RequiredDecision] {
         self.children.get(&decision).map_or(&[], Vec::as_slice)
     }
@@ -3984,7 +3984,7 @@ fn conversion_rules(
 /// One declared rule (RFC-0023) takes `from` to `to`; through a reference,
 /// the value is cast back when the call ends (RFC-0041).
 /// `&str`, the one parameter a `&String` argument reaches by the view the
-/// checker takes at the argument (RFC-0062 Decision 3).
+/// checker takes at the argument (RFC-0062 rule 3).
 fn borrows_a_str<V>(shape: &TyTerm<V>) -> bool
 where
     V: Phase,
@@ -4007,7 +4007,7 @@ where
 
 /// A parameter that takes a run of what its argument lends rather than the
 /// storage itself: `&[T]` or `&mut [T]` (RFC-0047 rule 6), `&str` (RFC-0062
-/// Decision 3).
+/// rule 3).
 fn borrows_a_view<V>(shape: &TyTerm<V>) -> bool
 where
     V: Phase,
@@ -4194,7 +4194,7 @@ pub struct Instantiated {
     /// `Some` for an Extern function.
     pub instance: Option<InstanceChoice>,
     /// One instance decision per requirement the scheme states, in the
-    /// scheme's order (RFC-0068 D1).
+    /// scheme's order (RFC-0068 rule 5).
     pub requirements: Vec<RequiredDecision>,
 }
 

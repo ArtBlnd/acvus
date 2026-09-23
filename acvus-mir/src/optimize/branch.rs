@@ -1,4 +1,4 @@
-//! A branch on a constant is a jump (RFC-0071 Decision 5).
+//! A branch on a constant is a jump (RFC-0071 rule 5).
 //!
 //! The arms the constant decides against are then blocks no path reaches and
 //! leave with them, so the `$` names only they read are no longer inputs the

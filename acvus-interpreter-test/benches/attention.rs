@@ -32,7 +32,7 @@ use rustc_hash::FxHashMap;
 use tokio::runtime::Runtime;
 
 /// The elements reach the body as the caller's own run (RFC-0047 rule 6,
-/// RFC-0068 D4): an `Erased<Rt, f64>` is read in place through its deref,
+/// RFC-0068 rule 4): an `Erased<Rt, f64>` is read in place through its deref,
 /// so the loop is the same multiply-add over the script's container that
 /// the view-based form ran.
 #[extern_fn(effect = pure)]

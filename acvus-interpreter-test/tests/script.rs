@@ -81,7 +81,7 @@ async fn if_let_refutable_no_match() {
 }
 
 // =======================================================================
-//  Iteration: `while let Some(x) = next(&mut it)` (RFC-0015)
+//  Iteration: `while let Some(x) = next(&mut it)` (RFC-0018)
 //  (restored from the `for` tests cut in 69eac8d)
 // =======================================================================
 
@@ -264,7 +264,7 @@ async fn iter_with_to_string() {
 
 /// A closure reads a context as it is when the closure runs, not as it
 /// was when the closure was made: the store before the call that runs
-/// it is visible, as it is to any call (RFC-0014).
+/// it is visible, as it is to any call (RFC-0025).
 #[tokio::test]
 async fn closure_reads_context_at_call() {
     let i = Interner::new();

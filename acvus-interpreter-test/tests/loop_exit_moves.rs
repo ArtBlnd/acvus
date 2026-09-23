@@ -1,5 +1,5 @@
 //! What an exit flag costs the machine, and what `break` costs instead
-//! (RFC-0057 Decision 4).
+//! (RFC-0057 rule 4).
 //!
 //! A loop whose exit is a flag carries that flag from one iteration to the
 //! next, and a carried value the machine keeps in a block argument is a `Mov`

@@ -1,6 +1,6 @@
 # The Runtime boundary
 
-A host runs the language by signing one trait (RFC-0022). The contract
+A host runs the language by signing one trait (RFC-0059). The contract
 carries no value taxonomy: a value is opaque to it, extraction and
 construction are one `transmute`-based pair, a reference is a value the host
 makes, and a closure is run by three calls. `acvus-interpreter` is one host;
@@ -123,9 +123,9 @@ RFC-0043.
    register the operation names; `Window` — four or more arguments, every
    asynchronous handler, and every spawn — is lent a contiguous run of the
    caller's registers; `Slice` returns its run in two registers with no
-   boxing (RFC-0047 §6). `prepare` reads the shape once and gives the call
+   boxing (RFC-0047 rule 6). `prepare` reads the shape once and gives the call
    operation the bare `fn` pointer, so no decision stands between the
-   dispatch and the handler (RFC-0052 §6).
+   dispatch and the handler (RFC-0052 rule 6).
 2. **Closure.** `Fn1::call` is `rt.call_1(&value, arg, token)`. The iterator
    pipeline keeps its closures as `Fn1<Value, Value, (), Rt>` — the same
    value under erased element types (`Fn1::erased`) — so one op shape serves
@@ -167,7 +167,7 @@ A type rides in the word when it fits and owns nothing (`size_of <= 8 &&
 address of the target register under `Kind::Ref`; everything else is
 `Kind::Large`, a `Box<Slot<T>>` whose header holds one `&'static Vtable` —
 `type_id` (an assert only), `name`, `drop`, `debug`, and which composite it
-is. A vtable is a constant of the type it describes (RFC-0048 §7), so
+is. A vtable is a constant of the type it describes (RFC-0048 rule 2), so
 erasing a `Large` reads no registry and takes no lock. Releasing one is
 `Release::release`, called by a drop operation, by the frame's sweep, or by
 the `Drop` of the `Owned<R>` a Rust holder keeps. `target`, `peek`, `bits`
@@ -188,8 +188,8 @@ cell is `CELL_SLOTS = 16` slots — 256 bytes, four cache lines, starting one
 to be one run of `Value`s and an interleaved word would break the
 displacement an `Off` already is. A frame of `n` registers takes the
 `cells_for(n)` cells that `n + 1` slots reach, and `MAX_FRAME_SLOTS = 64` is
-where `prepare` stops, one mark word covering a frame (RFC-0048 §3,
-RFC-0052 §5, §6).
+where `prepare` stops, one mark word covering a frame (RFC-0050
+rule 2).
 
 A call's frame is the cells above the caller's, taken after one capacity
 compare against the `WINDOW_CELLS = 3` the `Vec` keeps above the bound
@@ -201,7 +201,7 @@ does not leave `prepare`.
 
 A synchronous call is lent its frame; it never makes one. `Runtime` carries
 `type Frame` and `fn frame(&self) -> Self::Frame`, and `call_now` takes
-`&mut Self::Frame` (RFC-0052 §6): a stage in `acvus-ext` makes one `Store`
+`&mut Self::Frame` (RFC-0052 rule 7): a stage in `acvus-ext` makes one `Store`
 when it is built and lends it per element, and a consumer makes one before
 its drain loop. An unbound `Store` is an empty `Vec` and reaches no
 allocator. `Store::bind(body)` is the only way to a frame: it sizes the

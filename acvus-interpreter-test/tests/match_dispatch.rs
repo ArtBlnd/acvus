@@ -1,4 +1,4 @@
-//! A `match` arrives at the value its arm names (RFC-0051 §5).
+//! A `match` arrives at the value its arm names (RFC-0051 rule 5).
 //!
 //! The contract is the value the script returns, so each case runs every arm
 //! of one `match` over the same source and asks for that arm's own answer.

@@ -1,4 +1,4 @@
-//! Proc macros for acvus-extern. See RFC-0009.
+//! Proc macros for acvus-extern. See RFC-0023.
 //!
 //! - `#[extern_fn]`: a Rust function declares an ExternFn.
 //! - `#[derive(ExternType)]`: a Rust struct declares an extension type.
@@ -108,7 +108,7 @@ struct ExternParam {
     mode: Mode,
 }
 
-/// How the Rust parameter takes its argument (RFC-0015).
+/// How the Rust parameter takes its argument (RFC-0023 rule 5).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Value,
@@ -116,7 +116,7 @@ enum Mode {
     BorrowMut,
     Str,
     /// `&[T]` / `&mut [T]`: the language's slice, taken as Rust's
-    /// (RFC-0047, RFC-0068 D4).
+    /// (RFC-0047, RFC-0068 rule 4).
     Slice,
     SliceMut,
     /// `SRef<'_>` / `SMut<'_>`, which `#[derive(TyArg)]` emits beside the
@@ -127,7 +127,7 @@ enum Mode {
 impl Mode {
     /// A parameter that occupies the register pair a view or a slice is,
     /// or a projection: not one value, so no mono glue and no `Ctx`
-    /// receiver can carry it (RFC-0067 "What waits").
+    /// receiver can carry it (RFC-0067 rule 8).
     fn is_two_words(self) -> bool {
         matches!(
             self,
@@ -176,7 +176,7 @@ enum Returning {
     Value,
     Str,
     /// A Rust borrow of a parameter, at the carrier the declaration names
-    /// for it (RFC-0047 §3, RFC-0068 D4).
+    /// for it (RFC-0047 rule 3, RFC-0068 rule 4).
     Lent(LentShape),
 }
 
@@ -330,7 +330,7 @@ impl Returning {
 }
 
 /// The test is the lifetime and not the type's name because reading a
-/// crossing out of a path's last segment is exactly what RFC-0050 rule 6
+/// crossing out of a path's last segment is exactly what RFC-0059
 /// withdrew `returns_slice` for: an alias defeated it.
 fn borrows_caller(ty: &Type) -> bool {
     let Type::Path(p) = ty else {
@@ -370,7 +370,7 @@ struct StateParam {
     ty: Type,
 }
 
-/// A declaration states a requirement by taking it (RFC-0067 Decision 1).
+/// A declaration states a requirement by taking it (RFC-0067 rule 1).
 struct RequiredParam {
     signature: Type,
     var: Ident,
@@ -480,7 +480,7 @@ fn generate_extern_fn(
                 &ret,
                 "a declaration returning a borrow has no parameter it can be a borrow of: \
                  every parameter is taken by value, so what the result names belongs to \
-                 no storage the caller kept (RFC-0047 §3). Take one parameter by \
+                 no storage the caller kept (RFC-0047 rule 3). Take one parameter by \
                  reference, or return an owned value.",
             ));
         }
@@ -489,7 +489,7 @@ fn generate_extern_fn(
                 func.sig.ident.span(),
                 "a declaration returning a borrow runs at `Task::Sync`: the borrow names \
                  the frame the call laid its arguments on, and that frame is gone by the \
-                 time an awaited or offloaded call resumes (RFC-0047 §3). Return an owned \
+                 time an awaited or offloaded call resumes (RFC-0023 rule 6). Return an owned \
                  value, or declare this at `Sync`.",
             ));
         }
@@ -840,7 +840,7 @@ fn generate_extern_fn(
         let call = quote! { #callee #turbofish (#ctx_arg #(#passed),*) };
         // An instance whose result is a borrow crosses it through the
         // marker that borrow stands at; an owned result through the
-        // signature's own `Returned` (RFC-0068 D6).
+        // signature's own `Returned` (RFC-0068 rule 6).
         let (lent_cross, lent_cross_await) = match &returning {
             Returning::Lent(shape) if !shape.slice => {
                 let carrier = shape.one_carrier(&quote! { #rt_ret }, &quote! { __R });
@@ -1152,7 +1152,7 @@ fn generate_extern_fn(
             // The marker alone says the task: `Later` on a plain `fn` is a
             // declaration that holds the instance for a stage to call, and
             // the stage's own effect variable is what narrows the site that
-            // runs its `sync =` twin (RFC-0046, RFC-0068 D5).
+            // runs its `sync =` twin (RFC-0046, RFC-0068 rule 5).
             let calls = quote! { <#task as ::acvus_extern::CalledAt>::TASK };
             let marker = types_only_marker(&vars.to_compile_time_instance(&r.signature, None));
             Ok(quote! {
@@ -1274,7 +1274,7 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             return Err(syn::Error::new_spanned(
                 &pat_type.ty,
                 "the runtime and the window above the calling frame cross as one parameter, \
-                 `ctx: &mut Ctx<'_, Rt>`, written first (RFC-0050 rule 6). Write that in place \
+                 `ctx: &mut Ctx<'_, Rt>`, written first (RFC-0023 rule 2). Write that in place \
                  of `rt: &Rt` and `frame: &mut Rt::Frame<'_>`, and read `ctx.rt` in the body.",
             ));
         }
@@ -3140,7 +3140,7 @@ fn span_of(param: &GenericParam) -> Span {
 }
 
 /// The first parameter of a shared signature, as the `Signature` impl
-/// spells it (RFC-0070 D4).
+/// spells it (RFC-0070 rule 4).
 struct Receiver {
     recv: proc_macro2::TokenStream,
 }
@@ -3181,7 +3181,7 @@ fn mentions(ty: &Type, ident: &Ident) -> bool {
 /// sees it: a position standing at the signature's own variable crosses as
 /// the caller's own value, one type per runtime, and the instance's own
 /// handler type is restored on the far side; every other position crosses
-/// as the signature wrote it (RFC-0067 "The call").
+/// as the signature wrote it (RFC-0067 rule 6).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RestAt {
     VariableShared,
@@ -3458,7 +3458,7 @@ fn signature_module(
 }
 
 /// How a signature's result crosses between an instance's glue and a
-/// requirer (RFC-0068 D6): as it is typed where it names no type variable;
+/// requirer (RFC-0068 rule 6): as it is typed where it names no type variable;
 /// as `Option<Rt::Value>` where it is an `Option` of one of the signature's
 /// variables, so the option stays in registers; as one `Rt::Value` where a
 /// variable stands anywhere else in it.
@@ -3496,7 +3496,7 @@ impl RetShape {
     }
 }
 
-/// The result as the requirer receives it (RFC-0068 D6): its type at the
+/// The result as the requirer receives it (RFC-0068 rule 6): its type at the
 /// requirer's own markers, the bound that read needs, and the read itself
 /// from the word the glue wrote (`__r`, with `__rt` in scope).
 struct Received {
@@ -3573,7 +3573,7 @@ fn signature_module_path(path: &Path) -> Path {
 /// A signature outside that shape gets no impl, and the missing impl is the
 /// refusal: a handler that writes `InstanceOf<sig::vec<C, T, Rt>>` is told
 /// that `vec` is not a signature a bound can name, because its arguments
-/// are not a run of whole values (RFC-0067 Decision 1).
+/// are not a run of whole values (RFC-0067 rule 1).
 fn signature_call(
     ns: &LitStr,
     ident: &Ident,

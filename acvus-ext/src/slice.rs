@@ -1,10 +1,10 @@
 //! The `&[T]` surface, Rust's `impl<T> [T]`: every operation over a
 //! container's *elements* lives here once, and a `Vec<T>` or an
-//! `Array<T, N>` reaches it through its own `as_slice` view (RFC-0047 §5),
+//! `Array<T, N>` reaches it through its own `as_slice` view (RFC-0047 rule 3),
 //! the way Rust's `[T]` serves `Vec<T>` and `[T; N]` through deref.
 //!
 //! A handler takes Rust's own `&[T]` / `&mut [T]` at the run's lifetime
-//! (RFC-0068 D4): the crossing made the borrow, so nothing here reads a
+//! (RFC-0068 rule 4): the crossing made the borrow, so nothing here reads a
 //! value back at a type the acvus checker did not settle.
 //!
 //! An operation that only moves elements is generic in `T`. One that *reads*

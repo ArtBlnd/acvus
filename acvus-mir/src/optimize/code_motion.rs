@@ -618,7 +618,7 @@ fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
 
         // A shared `AsSlice` is the same borrow one level down: pure,
         // infallible, and a projection of the storage its container names
-        // (RFC-0047 §3). The container is a reference value, so the storage
+        // (RFC-0047 rule 3). The container is a reference value, so the storage
         // behind it is the one its region holds; a container whose region
         // holds anything but one storage is not named, and does not move.
         // An exclusive take does not move at all.
@@ -673,7 +673,7 @@ struct SliceOfStorage {
     mutability: Mutability,
 }
 
-/// RFC-0047 §2 is why one exclusive slice can serve the reads as well: a
+/// RFC-0047 rule 2 is why one exclusive slice can serve the reads as well: a
 /// slice is a pointer and a length, and an element write leaves both where
 /// they were. What moves them is a write to the container's shape - a
 /// `push`, a `pop`, an `Assign` of a whole new container - and the loans
@@ -2203,7 +2203,7 @@ mod tests {
         );
     }
 
-    /// The shape RFC-0047 §3 exists for: a loop that reads `v(1)` through
+    /// The shape RFC-0047 rule 8 exists for: a loop that reads `v(1)` through
     /// an `AsSlice` and an `Index`, with or without a write to the
     /// container in the body.
     fn a_loop_that_slices_a_container(writes_the_container: bool) -> Vec<InstKind> {

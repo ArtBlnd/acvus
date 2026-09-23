@@ -2,7 +2,7 @@
 //! that run their own operations straight, and the instructions that produce
 //! no control at all.
 //!
-//! Obligation across artifacts (RFC-0052 §3): a region's parts are operation
+//! Obligation across artifacts (RFC-0052 rule 3): a region's parts are operation
 //! lists, so nothing here chooses a `BlockId` inside a region — and it is
 //! `prepare::straight_run` that stops a region at the first instruction which
 //! is not straight-line, so that no part ever needs one.
@@ -72,7 +72,7 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
 }
 
 /// A slice's move: the two adjacent registers `prepare::assign_slots` gave
-/// it (RFC-0047 amended, rule 4).
+/// it (RFC-0047 rule 6).
 ///
 /// Decided against the narrower two `set_word`s: `prepare::order_moves`
 /// routes a cycle through the scratch registers, whose kind bytes are
@@ -140,7 +140,7 @@ where
 ///
 /// Obligation across artifacts: under `PAIR`, `prepare::assign_slots` placed
 /// the result in the two adjacent registers `SlicePair::at` derives, and the
-/// caller's destination is a pair of the same shape (RFC-0062 Decision 1).
+/// caller's destination is a pair of the same shape (RFC-0047 rule 6).
 pub struct Return<const WORD: bool, const PAIR: bool> {
     pub slot: Marked,
 }
@@ -178,7 +178,7 @@ impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
 }
 
 /// The last node of a region's inner chain: it hands the word the chain
-/// computed last to the region that owns the chain (RFC-0052 §3).
+/// computed last to the region that owns the chain (RFC-0052 rule 3).
 ///
 /// A part chooses no block, so what it hands back is a word and not a
 /// `BlockId`; where the part's last operation wrote its result to the frame
@@ -277,7 +277,7 @@ where
 }
 
 /// The `if` whose one arm ends in a `break`, a `continue`, a `?` or a
-/// `return`, as `prepare::recognize_escape` finds it (RFC-0057 amended).
+/// `return`, as `prepare::recognize_escape` finds it (RFC-0057 rule 4).
 pub struct Escape<C, const ARM_ON: bool>
 where
     C: Place,
@@ -316,8 +316,8 @@ where
     }
 }
 
-/// The `while` shape `prepare::recognize_loop` finds in the IR (RFC-0044,
-/// stage 3), as one operation holding its two chains.
+/// The `while` shape `prepare::recognize_loop` finds in the IR (RFC-0044
+/// rule 4), as one operation holding its two chains.
 ///
 /// Every move this shape used to interpret is an operation `prepare` placed:
 /// the entering move before this operation, the move into the body at the head
@@ -455,7 +455,7 @@ impl Slice {
     fn lay(&self, regs: &mut Regs<'_>, at: u64) {
         // SAFETY: the slice holds its container's loan, and `at` is below the
         // length `bound` read — the terminator is the bound, so the read is
-        // the unchecked one (RFC-0057 Decision 3).
+        // the unchecked one (RFC-0057 rule 3).
         let target = unsafe { crate::ops::index::element::<false>(regs, self.slice, at) };
         regs.put(self.elem, Value::reference(target));
         regs.set_word(self.index, at);
@@ -729,7 +729,7 @@ where
     fn advance(_regs: &mut Regs<'_>, _counter: Off) {}
 }
 
-/// The shape `prepare::recognize_for` finds in the IR (RFC-0057 Decision 3).
+/// The shape `prepare::recognize_for` finds in the IR (RFC-0057 rule 3).
 ///
 /// `E` is `Loop`'s parameter.
 pub struct For<S, E>
@@ -864,7 +864,7 @@ where
 }
 
 /// The `if/else` shape `prepare::recognize_diamond` finds in the IR
-/// (RFC-0044, stage 5), as one operation holding both arms. The moves the
+/// (RFC-0044 rule 6), as one operation holding both arms. The moves the
 /// join edge carries are the last operations of each arm.
 /// `E` is the ending of both arms: over `Escapes` an arm that reached a
 /// `break`, a `continue` or a `return` hands its verdict past this operation
@@ -948,7 +948,7 @@ impl Op for Merge {
     }
 }
 
-/// RFC-0052 §5 fixes a word-typed slot's kind at the frame's making; which
+/// RFC-0052 rule 5 fixes a word-typed slot's kind at the frame's making; which
 /// word sits under it here does not matter, `acvus_mir::ir::InstKind::Undef`
 /// being UB to read as a concrete value.
 pub struct Undef<const WORD: bool> {
@@ -994,12 +994,12 @@ impl Op for UndefWide {
     }
 }
 
-/// Release whatever the register still owns (RFC-0041's drop instruction).
+/// Release whatever the register still owns (the drop instruction, RFC-0048 rule 6).
 ///
 /// `prepare` emits this only where the value's type owns a `Large`, which is
 /// why the take is `take::<true>`: `acvus_mir`'s drop insertion emits no drop
 /// for a storage it saw emptied, and a take of a flat option's payload is one
-/// such emptying — the payload is the option's whole value (RFC-0022). A drop
+/// such emptying — the payload is the option's whole value (RFC-0039 rule 6). A drop
 /// arriving at a slot the frame no longer marks is therefore a defect in the
 /// lowering, and `Regs::take`'s debug assert is where it surfaces.
 pub struct DropValue {

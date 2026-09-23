@@ -1,5 +1,5 @@
 //! A diamond of one pure node and a pass-through arm, as one operation
-//! (RFC-0052 §"a diamond of two pure arms is a select").
+//! (RFC-0074).
 //!
 //! Obligation across artifacts: the node runs whichever way the condition
 //! goes, and what makes that sound is the shape `prepare::select_shape`
@@ -60,7 +60,7 @@ where
 /// `opt-level = 3` with fat LTO and each produced the **byte-identical**
 /// `accum` bench binary, in which `Select::<i64, Slot, Slot, Add, true>::run`
 /// sinks the two operand loads into the two sides of a `jne` and joins them
-/// with a phi, where a `cmov` would need them hoisted. RFC-0052's measurement
+/// with a phi, where a `cmov` would need them hoisted. RFC-0074's measurement
 /// of this shape is against that code, so the gain it records is the region
 /// entry and the two arm-chain dispatches this operation removes, not a
 /// branch it does not.

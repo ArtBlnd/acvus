@@ -31,7 +31,7 @@ pub type Slot = u16;
 ///
 /// `prepare` multiplies once, when it builds the operation, so no `run`
 /// scales: `Add::<i64>::run`'s three `shl $4` are what this type removes
-/// (RFC-0052 §5). `Slot` and `Off` are different types so that the index and
+/// (RFC-0052 rule 5). `Slot` and `Off` are different types so that the index and
 /// the displacement cannot be handed to each other's reader.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct Off(u16);
@@ -69,8 +69,8 @@ impl Off {
     }
 
     /// The one `Off` that is not a displacement: the argument of a fused call
-    /// that reads the call before it rather than a register (RFC-0044, stage
-    /// 6). `ops::call::arg` matches it before anything reads it as one, and
+    /// that reads the call before it rather than a register (RFC-0044 rule
+    /// 7). `ops::call::arg` matches it before anything reads it as one, and
     /// `of` cannot produce it.
     pub const PREVIOUS: Off = Off(u16::MAX);
 
@@ -143,7 +143,7 @@ const _: () = assert!(
 );
 
 /// The two registers a slice occupies: `ptr` then `len`, adjacent
-/// (RFC-0047 amended, rule 1). Both are decided in `prepare`, so a `run`
+/// (RFC-0047 rule 6). Both are decided in `prepare`, so a `run`
 /// holds the second as a field and adds nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SlicePair {
@@ -176,7 +176,7 @@ pub enum Where {
 
 pub type BlockId = u32;
 
-/// The word a chain hands back when it ends (RFC-0052 §3).
+/// The word a chain hands back when it ends (RFC-0052 rule 3).
 ///
 /// A chain that ends at a joint hands back the block the machine enters
 /// next; a region's part ends in `ops::control::Yield` and hands the region
@@ -231,7 +231,7 @@ where
 /// Obligation across artifacts: that the call is a tail call is asserted by
 /// `acvus-interpreter-test/benches/asm_probe.rs` on the release machine, and
 /// that a `run` holds no `match`, no `let … else` and no `kind` test on a
-/// fact its own type carries is RFC-0052 §1.
+/// fact its own type carries is RFC-0052 rule 1.
 ///
 /// `r0` is the word the operation before it in the same chain produced
 /// (RFC-0052 rule 5, `Place::R0`).
@@ -245,7 +245,7 @@ pub trait Op: Named + Send + Sync {
 
     /// The registers a **bound-checked** indexed read names, so that a probe
     /// can put the unchecked form of the same read in its place (RFC-0047
-    /// §7). Nothing else answers it, and the unchecked form answers `None`,
+    /// rule 7). Nothing else answers it, and the unchecked form answers `None`,
     /// so a substitution cannot run twice.
     fn index_read(&self) -> Option<crate::ops::index::Read> {
         None
@@ -281,7 +281,7 @@ pub trait Op: Named + Send + Sync {
 }
 
 /// Put `make`'s node in `slot`'s place, carrying the successor the node
-/// there held (RFC-0047 §7's probe, now that a successor is a field).
+/// there held (RFC-0047 rule 7's probe, now that a successor is a field).
 #[cfg(any(debug_assertions, feature = "probe"))]
 pub fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
 where
@@ -418,7 +418,7 @@ impl Konst {
 
 /// Every distinct string literal of one module, copied once when it was
 /// prepared: a `&str` constant is the pointer and length of one of these
-/// runs (RFC-0062 Decision 2), and the `Body` holding that constant holds an
+/// runs (RFC-0062 rule 2), and the `Body` holding that constant holds an
 /// `Arc` of this table, so the bytes outlive every operation naming them
 /// whatever the module they were prepared from does.
 pub struct Literals {
@@ -454,7 +454,7 @@ impl Literals {
 }
 
 /// One part of a template's output, as the preparation read it from the
-/// part's type (RFC-0062 Decision 3).
+/// part's type (RFC-0062 rule 3).
 #[derive(Clone, Copy)]
 pub enum ConcatPart {
     /// A `String` in this register, moved into the output.
@@ -464,7 +464,7 @@ pub enum ConcatPart {
 }
 
 /// Text an operation reads without taking it: the two representations
-/// RFC-0062 Decision 3 admits, as the preparation read the operand's type.
+/// RFC-0062 rule 3 admits, as the preparation read the operand's type.
 #[derive(Clone, Copy)]
 pub enum LentText {
     /// A `String` the register holds itself.
@@ -480,7 +480,7 @@ pub type Deref = fn(&Value) -> Value;
 /// The MIR's `PathSeg::Payload` resolved to the shape the preparation read
 /// from the type at that point. An option's payload step survives only where
 /// the payload type is itself an option; anywhere else a `Some` is its
-/// payload's own value and the step is dropped (RFC-0022).
+/// payload's own value and the step is dropped (RFC-0039 rule 6).
 #[derive(Clone, Copy, Debug)]
 pub enum Step {
     Field(FieldAt),
@@ -606,7 +606,7 @@ pub type Entry = unsafe fn(
     arity: u16,
 ) -> Value;
 
-/// The head of a `Code` is the function that enters it (RFC-0069 D5): a call
+/// The head of a `Code` is the function that enters it (RFC-0069 rule 5): a call
 /// loads the word and calls it, with no test of the shape at the call.
 pub struct Code {
     /// Chosen once where the `Code` is made: `entry_expr` for a chain,
@@ -618,7 +618,7 @@ pub struct Code {
 
 /// `prepare` decides this once: a body that is exactly `params -> one chain
 /// -> return` after register selection is an `Expr`, and the machine runs one
-/// with no frame, no `Machine` and no dispatch loop (RFC-0044, stage 4).
+/// with no frame, no `Machine` and no dispatch loop (RFC-0044 rule 5).
 pub enum CodeBody {
     Body(Arc<Body>),
     Expr(Arc<Expr>),
@@ -647,7 +647,7 @@ impl CodeBody {
     }
 }
 
-/// A closure's code, named by address (RFC-0069 D2): one word, nothing
+/// A closure's code, named by address (RFC-0069 rule 2): one word, nothing
 /// counted.
 ///
 /// Obligation across artifacts: the `Code` is owned by a `Prepared`, which
@@ -801,7 +801,7 @@ pub struct EntryKonst {
     pub value: Value,
 }
 
-/// RFC-0052 §5: the frame writes this slot's kind once, when it is made, and
+/// RFC-0052 rule 5: the frame writes this slot's kind once, when it is made, and
 /// every operation that writes the slot afterwards writes the **word only**.
 pub struct SlotKind {
     pub slot: Off,
@@ -830,7 +830,7 @@ pub struct Body {
     pub literals: Arc<Literals>,
     pub slot_kinds: Box<[SlotKind]>,
     pub may_suspend: bool,
-    /// The result is the register pair of RFC-0062 Decision 1, which only a
+    /// The result is the register pair of RFC-0047 rule 6, which only a
     /// call's pair destination receives.
     pub returns_a_view: bool,
     pub params: Box<[Off]>,

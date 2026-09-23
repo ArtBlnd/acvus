@@ -175,7 +175,7 @@ fn assert_str(v: &Value, expected: &str) {
 
 fn strings_of(v: Value) -> Vec<String> {
     // SAFETY: `collect` returns a `Vec<T>`, whose store is the run of
-    // `Owned` the element type erases to (RFC-0048 §1).
+    // `Owned` the element type erases to (RFC-0048 rule 1).
     let list: Vec<Owned<AcvusRuntime>> = unsafe { v.materialize() };
     list.iter()
         .map(|item| {
@@ -427,7 +427,7 @@ async fn extern_cast_auto_coercion() {
 }
 
 // =======================================================================
-//  Objects across the boundary (RFC-0032)
+//  Objects across the boundary (RFC-0039 rule 4)
 // =======================================================================
 
 #[derive(acvus_extern::TyArg)]
@@ -967,7 +967,7 @@ async fn a_container_of_scalars_from_an_extern_fn_is_the_script_s_container() {
 }
 
 // =======================================================================
-// The handler ABI, one declaration per arity (RFC-0044, stage 2c)
+// The handler ABI, one declaration per arity (RFC-0044 rule 3)
 // =======================================================================
 
 #[extern_fn(effect = pure)]
@@ -1076,7 +1076,7 @@ async fn a_borrowed_argument_survives_the_call_at_each_arity() {
 }
 
 // =======================================================================
-//  An array crosses both ways (RFC-0048 §7)
+//  An array crosses both ways (RFC-0039 rule 5)
 // =======================================================================
 
 /// A handler body cannot ask whether what crossed is an array: the macro

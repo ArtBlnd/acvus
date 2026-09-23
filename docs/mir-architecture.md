@@ -58,7 +58,7 @@ A read of a variable is a `Take`, an assignment an `Assign`, `&place` a
 `Ref`, `a[i]` an `AsSlice` plus an `Index` (RFC-0047). A context is a
 variable of the body that names it (RFC-0025): `Fetch` at entry, `Commit`
 at every return, and a `Commit`/`Fetch` pair around each call whose summary
-(RFC-0017) touches it. Every call whose effect is not Pure takes the
+(RFC-0025 rule 4) touches it. Every call whose effect is not Pure takes the
 current `Order` and yields a new one. A `match` lowers to one
 `Switch` (RFC-0051).
 
@@ -84,7 +84,7 @@ covers what the optimizer produced as well as what the source wrote.
 
 A call's effect (`ty.rs`, `Effect`) has five parts.
 
-**Reissue** (RFC-0014) — `Pure < Idempotent < Opaque`. A Pure call stands
+**Reissue** (RFC-0013 rule 1) — `Pure < Idempotent < Opaque`. A Pure call stands
 nowhere in the order of a run. An Idempotent call keeps its order and may
 be issued twice. An Opaque call keeps its order and must not be.
 
@@ -96,7 +96,7 @@ independent: a `heavy` pure extern is `Pure` with `task = Heavy`.
 program in either order. A Pure call that writes nothing commutes; a call
 that writes a context never does.
 
-**Reads and writes** (RFC-0017) — the contexts the call may touch. A
+**Reads and writes** (RFC-0025 rule 4) — the contexts the call may touch. A
 function's summary is the union over its calls and its own accesses, closed
 over recursion within its SCC. An ExternFn's own summary is empty: a script
 reads a context and passes the value.
@@ -123,7 +123,7 @@ Whether two IO calls may be reordered is the author's intent, declared with
 An ExternFn is declared once, as a Rust function under `#[extern_fn]`; its
 type and its handler both come from that signature (RFC-0023). In the SSA
 it is a node like any other: arguments are uses, results are defs, and
-there is no marshalling step between. The runtime contract (RFC-0022) is
+there is no marshalling step between. The runtime contract (RFC-0039) is
 `erase` / `materialize` by Rust type, `deref` / `deref_mut` / `reference`
 for references, and `call_0/1/n` for closures.
 
@@ -180,7 +180,7 @@ that a write inside a branch is written back at the merge, because a
 context is external state.
 
 An aggregate that does not escape its body is replaced before SSA by one
-register per field, or by a `(tag, payload)` pair (`sroa`, RFC-0053), over
+register per field, or by a `(tag, payload)` pair (`sroa`, RFC-0050 rule 11), over
 the same phi builder under a wider key.
 
 ## Inlining

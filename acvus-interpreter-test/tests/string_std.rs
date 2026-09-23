@@ -337,7 +337,7 @@ fn the_char_conversions_are_rust_s() {
 // -- The refusals -------------------------------------------------------
 
 /// A `&str` parameter takes the view a literal already is, so the copy of
-/// RFC-0062 Decision 3 is not on the path to a parse.
+/// RFC-0062 rule 3 is not on the path to a parse.
 #[test]
 fn a_view_parameter_refuses_an_owned_string() {
     let refused = refusal(r#"i64::from_str("42".to_string())"#, Ty::I64);

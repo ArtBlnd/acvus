@@ -80,7 +80,7 @@ Two groups sit on an axis by a placement rule rather than by obvious fit.
 Ownership at the boundary (`Owned`, `Release`, `lend_run`) is on
 **crossing**: the ABI passes `Rt::Value` and owes nothing, and the
 conversion to the holder that owes a release happens at the glue's crossing
-and nowhere else (RFC-0048 §1). The journaling surface (`Journaled` and its
+and nowhere else (RFC-0048 rule 1). The journaling surface (`Journaled` and its
 seven neighbours) is on **registry**: a space never sees a type, it sees
 the hooks a registry contributed for it (`Contribution::space`,
 `ExternTypeDecl::space`, RFC-0033).
@@ -93,7 +93,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 |---|---|---|
 | `Cross` | what a type occupies at the boundary: a run of the runtime's values | atom — the storage is `Rt::Value`, never a Rust `T`, and the width is the run's |
 | `OneValue` | a crossing that is exactly one of the runtime's values | atom — `erase`/`materialize` are one value's, and `deref` reads a `Self` through a reference, which only a type stored as itself can answer |
-| `Uniform` | the representation every slot takes unless a member says otherwise (RFC-0040) | atom — the tag that picks the crossing |
+| `Uniform` | the representation every slot takes unless a member says otherwise (RFC-0041) | atom — the tag that picks the crossing |
 | `Specialized` | the representation of a `Monomorphize` member's slot | atom — the other representation; the run is the value at every impl |
 | `Stored` | a type the runtime keeps as itself | atom — the runtime's box holds the Rust value, which is what makes `value_as_ref::<T>` sound |
 | `TransparentOver` | a name for the runtime's value with its layout | atom — the unsafe promise that a run of values is a run of `Self` in place |
@@ -109,7 +109,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Erased` | a runtime value with the Rust type it was erased from remembered | derived from `Stored` — named because it reads and edits that type in place, which a bare value cannot |
 | `expect_type` | the refusal when a value was erased from another type | derived from `Runtime::type_of` — the panic names both types |
 | `materialize_checked` | a materialize that checks first | derived from `expect_type` + `Runtime::materialize` |
-| `lend_run` | the runtime's values behind a run of holders | derived from `Owned`'s `repr(transparent)` — for a caller filling a destination it owns (RFC-0050 rule 6) |
+| `lend_run` | the runtime's values behind a run of holders | derived from `Owned`'s `repr(transparent)` — for a caller filling a destination it owns (RFC-0050 rule 5) |
 
 ## Axis 2 — borrowing
 
@@ -386,7 +386,7 @@ repository root at `0d308c5e`.
 7. **`core::to_string` at `str` waits on a two-word receiver.** A receiver
    is one word in the context — `Ctx::recv` is a `*mut Rt::Value`
    (`acvus-extern/src/ctx.rs:12`) — and the language's `&str` is the pair
-   a view occupies (RFC-0047 §3, `acvus-extern/src/str.rs`), so
+   a view occupies (RFC-0047 rule 6, `acvus-extern/src/str.rs`), so
    `#[extern_fn]` writes no mono glue for a declaration with a `&str`
    parameter (`acvus-extern-macro/src/lib.rs:555`). That instance is the
    one exception `acvus-interpreter-test/tests/instance_entry.rs:66` names,

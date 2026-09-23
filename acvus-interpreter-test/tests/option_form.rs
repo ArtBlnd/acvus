@@ -1,5 +1,5 @@
 //! The form of an `Option` value: `None` is a word that counts the `Some`s
-//! around it, and `Some(v)` for any other `v` is `v` itself (RFC-0022).
+//! around it, and `Some(v)` for any other `v` is `v` itself (RFC-0039 rule 6).
 //! Every case here crosses the extern boundary, a pattern, or both.
 
 use acvus_extern::{OneValue, Registry, Runtime, extern_fn, extern_registry};

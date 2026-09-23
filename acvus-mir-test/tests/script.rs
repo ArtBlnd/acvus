@@ -365,7 +365,7 @@ fn an_assignment_in_a_loop_body_is_the_outer_binding() {
     );
 }
 
-// -- RFC-0069 D2: a closure does not leave the run it was made in ----------
+// -- RFC-0069 rule 1: a closure does not leave the run it was made in ----------
 
 #[test]
 fn a_program_whose_result_is_a_closure_is_refused() {

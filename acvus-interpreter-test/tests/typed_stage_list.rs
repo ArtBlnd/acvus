@@ -1,4 +1,4 @@
-//! RFC-0065 §3 at the contract that decides the design: an extension type
+//! RFC-0067 at the contract that decides the design: an extension type
 //! whose payload is the stage tuple its element-type list names, crossed the
 //! boundary and read back at each length, with the closure called typed.
 //!

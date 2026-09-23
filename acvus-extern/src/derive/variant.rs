@@ -1,4 +1,4 @@
-//! The variant a derived enum crosses as (RFC-0048 §7).
+//! The variant a derived enum crosses as (RFC-0039 rule 4, RFC-0048 rule 7).
 //!
 //! As in `object`, the layout — RFC-0050 rule 8's flat `[tag, payload]` — lives
 //! in this file alone.

@@ -1,5 +1,5 @@
 //! Each call form reaches its declaration's Rust body and brings back what
-//! that body returned (RFC-0059 rule 3 amended).
+//! that body returned (RFC-0059 rule 4).
 //!
 //! These run the language rather than calling a handler directly: the
 //! handler is the operation's type parameter, so the form is chosen where
@@ -73,7 +73,7 @@ fn form_string(s: String) -> String {
 
 /// A result two values wide, at one value of arguments and then at two,
 /// three, four and past them. Each body hands back a run of bytes its own
-/// argument lent, which is the only thing a view may be (RFC-0047 §3).
+/// argument lent, which is the only thing a view may be (RFC-0047 rule 3).
 #[extern_fn(effect = pure)]
 fn view1(s: &String) -> &str {
     &s[..]
@@ -348,7 +348,7 @@ async fn a_large_value_crosses_the_one_argument_form() {
 }
 
 /// The fusion rule matches this run, and each of its nodes holds a handler
-/// of its own type (RFC-0044 stage 6).
+/// of its own type (RFC-0044 rule 7).
 #[tokio::test]
 async fn a_fused_run_returns_what_its_last_call_returned() {
     assert_eq!(answer("form1(form2(form1(1), 2))").await, 1020);

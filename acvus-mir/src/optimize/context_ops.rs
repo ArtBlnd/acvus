@@ -1,5 +1,5 @@
 //! The context a page op (RFC-0025) names, for passes that order calls
-//! against a run's own page ops by their summary (RFC-0017).
+//! against a run's own page ops by their summary (RFC-0025 rule 10).
 
 use crate::graph::QualifiedRef;
 use crate::ir::InstKind;

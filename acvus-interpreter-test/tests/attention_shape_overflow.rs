@@ -3,7 +3,7 @@
 //! because the compile of this script must end in a report, not abort the
 //! test process.
 //!
-//! The capture is admitted now (RFC-0064 Decision 2), and the refusal that
+//! The capture is admitted now (RFC-0064 rule 5), and the refusal that
 //! remains is one signature short of the program: no `max` takes an iterator
 //! of references — neither `iter::max`, whose element crosses by value, nor
 //! `vec::max`, which takes the container. Closing that is RFC-0047's

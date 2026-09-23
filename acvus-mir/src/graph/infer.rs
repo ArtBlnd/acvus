@@ -1112,13 +1112,13 @@ mod tests {
     };
     use acvus_utils::{Freeze, Interner};
 
-    /// A string literal's type (RFC-0062 Decision 2).
+    /// A string literal's type (RFC-0062 rule 2).
     fn str_view() -> Ty {
         Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
     }
 
     /// `core::to_string` at `T = Str`: the copy that turns a literal into
-    /// the owned text (RFC-0062 Decision 3). These graphs are built by hand
+    /// the owned text (RFC-0062 rule 2). These graphs are built by hand
     /// rather than from the standard registries, and a script has no other
     /// way to write a `String`.
     fn to_string_extern(interner: &Interner) -> Function {

@@ -199,7 +199,7 @@ impl CfgBody {
 
 // -- Promote: MirBody -> CfgBody -----------------------------------
 
-/// RFC-0063 Decision 1 admits a `Diamond` only where the arms rejoin, so a
+/// RFC-0063 rule 1 admits a `Diamond` only where the arms rejoin, so a
 /// pass that dissolves the join calls this: what is left is a `JumpIf`.
 pub fn demote_diamond(cfg: &mut CfgBody, at: BlockIdx) {
     let block = &mut cfg.blocks[at.0];

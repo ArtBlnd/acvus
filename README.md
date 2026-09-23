@@ -196,9 +196,8 @@ acvus-mir           types, inference, SSA lowering, optimization, validation
 acvus-interpreter   the register machine
 acvus-extern        the Rust-side ABI: values, ownership, registries
 acvus-ext           the standard library
-acvus-ext-llm       OpenAI, Anthropic, Google providers
 acvus-ext-net       HTTP
-acvus-orchestration TOML specs compiled into the same graph
+pomollu-core        TOML specs compiled into the same graph
 acvus-lsp           language server
 acvus-cli           `acvus run | check | mir | ops | space`
 ```

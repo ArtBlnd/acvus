@@ -16,7 +16,7 @@
 //!
 //! There is no `pchain`. Its parameter is a `Vec` of pipelines, and a
 //! declaration requiring an instance of `I` takes a parameter standing at
-//! `I` itself, which a `Vec<I>` is not (RFC-0067 Decision 1).
+//! `I` itself, which a `Vec<I>` is not (RFC-0067 rule 1).
 //! - Consumers: `collect`, `join`, `contains`, `find`, `reduce`,
 //!   `fold`, `any`, `all`, `count`, `last`, `nth`, `position`, `min_by_key`,
 //!   `max_by_key` (the key is `i64`), and the numeric aggregates `sum`,

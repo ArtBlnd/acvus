@@ -2,7 +2,7 @@
 //!
 //! A call settles on a signature through a decision's join. That join read
 //! the call's effect as a value flowing into the declared position - at
-//! most what the position allows, which is RFC-0017's demotion - and so a
+//! most what the position allows, which is RFC-0046 rule 7's demotion - and so a
 //! call to an *overloaded* name took none of its callee's effect: `find`,
 //! `last` and `contains` share their bare name with `str::find`,
 //! `vec::last` and `str::contains`, and over a suspending pipeline the

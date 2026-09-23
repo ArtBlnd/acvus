@@ -3,7 +3,6 @@
 mod compile;
 mod context;
 mod json;
-mod llm;
 mod oplist;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -32,11 +31,11 @@ const EXIT_RUN: u8 = 2;
 const EXIT_USAGE: u8 = 64;
 
 const USAGE: &str = "\
-usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--commit] [--llm] [--parallel] [--opt L] [--time]
-       acvus run   -e <expr>              [--context ctx.json] [--bind n=v] [--llm] [--parallel] [--opt L] [--time]
+usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--commit] [--parallel] [--opt L] [--time]
+       acvus run   -e <expr>              [--context ctx.json] [--bind n=v] [--parallel] [--opt L] [--time]
        acvus check <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
        acvus mir   <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
-       acvus ops   <file>                 [--context ctx.json] [--bind n=v] [--llm] [--json] [--opt L] [--time]
+       acvus ops   <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
        acvus space <dir>
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
@@ -50,7 +49,6 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--c
   --json     stdout is JSON: the diagnostics as an array of
              {severity, message, path, line, col, span}, and, where `ops`
              has a listing to print, the listing
-  --llm      register the LLM providers (keys from the environment)
   --parallel run spawned calls on the tokio executor
   --opt      full (the default) runs every optimization; none runs only what
              a program needs to reach the machine, and both refuse the same
@@ -76,7 +74,6 @@ struct Args {
     bindings: Vec<Binding>,
     commit: bool,
     json: bool,
-    llm: bool,
     parallel: bool,
     time: bool,
     opt: Opt,
@@ -112,7 +109,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut commit = false;
     let mut json = false;
-    let mut llm = false;
     let mut parallel = false;
     let mut time = false;
     let mut opt = Opt::Full;
@@ -133,7 +129,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             }
             "--commit" => commit = true,
             "--json" => json = true,
-            "--llm" => llm = true,
             "--parallel" => parallel = true,
             "--time" => time = true,
             "--opt" => {
@@ -174,7 +169,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             bindings: Vec::new(),
             commit: false,
             json: false,
-            llm: false,
             parallel: false,
             time: false,
             opt: Opt::Full,
@@ -192,7 +186,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         bindings,
         commit,
         json,
-        llm,
         parallel,
         time,
         opt,
@@ -470,10 +463,9 @@ impl Timings {
     }
 }
 
-/// What a script run by this CLI can call without a flag. `std_registries`
-/// is the language's own surface; the four beside it are the resources this
-/// host decides to hand a script. The `--llm` providers are not here
-/// because they are the one set a flag guards.
+/// What a script run by this CLI can call. `std_registries` and the four
+/// beside it are the registries this runner host chooses to hand a script;
+/// the language has none of its own (RFC-0031 rule 8).
 ///
 /// `acvus-cli` is a binary, so `tests/cli.rs` cannot call this and rebuilds
 /// the same list to compare `ops` against the interpreter's own walk. The
@@ -594,13 +586,7 @@ async fn cli() -> ExitCode {
             }
         }
     }
-    let registries = {
-        let mut r = cli_registries();
-        if args.llm {
-            r.extend(llm::registries());
-        }
-        r
-    };
+    let registries = cli_registries();
     let rendering = Rendering::of(args.json);
     let bindings = match bound_literals(&interner, &args.bindings) {
         Ok(bound) => bound,

@@ -8,7 +8,7 @@
 //!
 //! `prepare` reads a handler's `Width` once, picks the operation by the form
 //! it names, and moves the handler in as a field; a `run` here calls through
-//! it with no decision in between (RFC-0052 §6, RFC-0059 rule 7).
+//! it with no decision in between (RFC-0052 rule 6, RFC-0059 rule 7).
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ pub type Sited = Box<dyn acvus_extern::AtSite<AcvusRuntime>>;
 
 /// Where a synchronous call site's result goes, where its arguments are, and
 /// what runs after it — everything `prepare` settles before the handler's
-/// type is known (RFC-0059 rule 4 amended).
+/// type is known (RFC-0059 rule 4).
 pub enum CallShape {
     Registers0 {
         dst: Marked,
@@ -206,7 +206,7 @@ pub enum AsyncShape {
     },
 }
 
-/// Where one call of a fused run reads its arguments (RFC-0044 stage 6).
+/// Where one call of a fused run reads its arguments (RFC-0044 rule 7).
 pub enum FusedShape {
     Nullary,
     Unary { a: Off },
@@ -220,7 +220,7 @@ fn not_this_form(form: &str) -> ! {
 }
 
 /// The operation a call of `H`'s form is, by the two types its `Handler`
-/// impl names (RFC-0044 stage 2c, RFC-0047 amended rule 2): its arguments in
+/// impl names (RFC-0044 rule 3, RFC-0047 rule 6): its arguments in
 /// registers where the register forms cover them, else lent its window; its
 /// result one value, the pair a view is, or the run an aggregate's
 /// components fill. Both runs are types of `H`, so each instantiation is the
@@ -283,7 +283,7 @@ impl CallForms<AcvusRuntime> for Shaped {
 }
 
 /// One call of a fused run: at most two of the runtime's values in, one out
-/// (RFC-0044 stage 4). Any other form is refused by `prepare`'s recognizer
+/// (RFC-0044 rule 7). Any other form is refused by `prepare`'s recognizer
 /// (`fusable_call`) before it reaches here.
 pub fn fused_call<H>(f: H, shape: FusedShape) -> Call
 where
@@ -459,7 +459,7 @@ where
 /// The two tasks that leave this thread. Neither depends on the argument
 /// form — both own the window — so every register form and the window form
 /// end here, and both hold the handler behind a `dyn`: the value is sent, not
-/// called (RFC-0059 rule 3 amended).
+/// called (RFC-0059 rule 4).
 fn sent_to_another_thread<H>(f: H, shape: CallShape) -> Box<dyn Op>
 where
     H: acvus_extern::Handler<AcvusRuntime, Ret: OneRegister>,
@@ -596,7 +596,7 @@ impl RetForms<AcvusRuntime> for Registers0 {
     /// A declaration of no parameter returns a view of nothing, and the macro
     /// refuses it where the declaration is written: a result that borrows has
     /// no parameter to be a borrow of, which is the
-    /// `view_returned_without_a_loan` compile-fail case (RFC-0047 §3).
+    /// `view_returned_without_a_loan` compile-fail case (RFC-0047 rule 3).
     /// `prepare::call_into_pair` states the same refusal at its own
     /// `Registers(0)` arm, so no `CallPair0` exists for this to build.
     fn pair<H>(self, _: H) -> Box<dyn Op>
@@ -606,7 +606,7 @@ impl RetForms<AcvusRuntime> for Registers0 {
         panic!(
             "a declaration of no parameter returns a view of nothing: a result that borrows \
              has no parameter it can be a borrow of, and `#[extern_fn]` refuses the \
-             declaration ahead of this (RFC-0047 §3)"
+             declaration ahead of this (RFC-0047 rule 3)"
         )
     }
 
@@ -1088,7 +1088,7 @@ where
 
 /// A handler whose call crosses a thread: the value is sent to the pool and
 /// called there, so a `Heavy` call and a spawn keep the `dyn` a `Sync` call
-/// no longer has (RFC-0059 rule 4 amended).
+/// no longer has (RFC-0059 rule 4).
 pub trait SentCall: Send + Sync {
     /// # Safety
     /// `run` is the call's whole argument run, owned by the caller of this
@@ -1140,7 +1140,7 @@ impl Op for LayArg {
 }
 
 /// A slice argument of the same call: two adjacent registers (RFC-0047
-/// amended, rule 4).
+/// rule 6).
 pub struct LayPair {
     pub at: SlicePair,
     pub src: SlicePair,
@@ -1174,8 +1174,8 @@ pub struct ArgWindow {
 
 impl ArgWindow {
     /// The registers themselves, lent to a handler that runs before this
-    /// frame moves on, with the window it calls a closure in (RFC-0044,
-    /// stage 2b; RFC-0050 rule 6).
+    /// frame moves on, with the window it calls a closure in (RFC-0044
+    /// rule 2; RFC-0050 rule 6).
     #[inline]
     fn lend<'r, 'c>(&self, m: &'r mut Machine<'c>) -> Lent<'r, 'c> {
         m.regs().take_mask(self.takes);
@@ -1370,7 +1370,7 @@ where
     }
 }
 
-/// The pair forms (RFC-0047 amended rule 2, RFC-0062 Decision 4): the
+/// The pair forms (RFC-0047 rule 6, RFC-0062 rule 4): the
 /// handler's result is two of the runtime's values and this stores their
 /// words to the two adjacent registers `prepare::assign_slots` gave the
 /// call's result. Neither register holds a `Value`, so there is no `LARGE`
@@ -1802,7 +1802,7 @@ where
 }
 
 /// The argument of a fused call that reads what the call before it produced
-/// rather than a register (RFC-0044, stage 6).
+/// rather than a register (RFC-0044 rule 7).
 pub const PREVIOUS: Off = Off::PREVIOUS;
 
 /// One call of a fused run, at the shapes `prepare::FusableCall` admits:
@@ -1812,7 +1812,7 @@ pub const PREVIOUS: Off = Off::PREVIOUS;
 ///
 /// A run of one handler type is not built: the calls of a run reach
 /// different declarations, so the run holds nodes and the `dyn` is over the
-/// node rather than over the handler (RFC-0059 rule 4 amended).
+/// node rather than over the handler (RFC-0059 rule 4).
 pub type Call = Box<dyn Invoke>;
 
 pub trait Invoke: Send + Sync {
@@ -1879,7 +1879,7 @@ fn arg(m: &mut Machine<'_>, held: Value, at: Off) -> Value {
     }
 }
 
-/// RFC-0044, stage 6.
+/// RFC-0044 rule 7.
 ///
 /// `CALLS` and `TAIL` are the run's shape, which `prepare` resolved like every
 /// other static fact: a body of this instance holds no loop bound.

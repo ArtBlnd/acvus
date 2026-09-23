@@ -1,4 +1,4 @@
-//! RFC-0064 step 2 on the machine: a lambda that captured a reference is
+//! RFC-0064 rule 5 on the machine: a lambda that captured a reference is
 //! compiled and run, and the number it reads through the capture is the
 //! number the program names.
 //!
@@ -160,7 +160,7 @@ fn a_lambda_returning_a_reference_into_its_own_capture_is_refused() {
 }
 
 /// The counterfactual for the test below, one variable apart: the lambda a
-/// named body returns captures nothing, so nothing RFC-0064 step 2 changed
+/// named body returns captures nothing, so nothing RFC-0064 rule 5 changed
 /// is in it.
 #[test]
 fn a_lambda_returned_from_a_body_capturing_nothing_is_called_by_the_caller() {
@@ -200,7 +200,7 @@ fn a_lambda_returned_from_a_body_keeps_the_parameter_it_captured() {
 
 // -- The refusals ------------------------------------------------------
 
-/// RFC-0064 "What it costs": the two places the refusal names are the
+/// RFC-0064 rule 5: the two places the refusal names are the
 /// capture and the write.
 #[test]
 fn writing_the_borrowed_storage_while_the_lambda_is_live_is_refused() {
@@ -261,7 +261,7 @@ fn a_capturing_lambda_is_not_stored_in_a_list() {
     );
 }
 
-/// A view is the register pair of RFC-0062 Decision 1 and a capture is one
+/// A view is the register pair of RFC-0047 rule 6 and a capture is one
 /// word, so this capture stays refused where a bare reference is admitted.
 #[test]
 fn a_lambda_capturing_a_view_is_refused() {

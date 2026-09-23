@@ -1,4 +1,4 @@
-//! Ownership at the boundary (RFC-0048 §1, §7).
+//! Ownership at the boundary (RFC-0048 rules 1 and 7).
 //!
 //! The ABI — handler signatures, `Ref`, `Elements`, the glue's window —
 //! passes `R::Value` and owes nothing. `Owned<R>` is the only holder that
@@ -29,7 +29,7 @@ where
     R: Runtime,
 {
     /// The runtime's and the glue's: a handler never names an `Owned`
-    /// (RFC-0068 D4).
+    /// (RFC-0068 rule 4).
     #[doc(hidden)]
     #[inline(always)]
     pub fn from_value(value: R::Value) -> Self {
@@ -147,7 +147,7 @@ where
 
 #[doc(hidden)]
 /// The runtime's values behind a run of `Owned`s, for a caller that fills a
-/// destination it owns (RFC-0050 rule 6). `Owned<R>` is `#[repr(transparent)]`
+/// destination it owns (RFC-0050 rule 5). `Owned<R>` is `#[repr(transparent)]`
 /// over `R::Value`, so the two slices have one layout.
 ///
 /// # Safety

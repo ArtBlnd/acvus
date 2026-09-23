@@ -105,7 +105,7 @@ fn advance_fn(i: &Interner) -> Function {
 }
 
 /// `drain: Fn(T) -> T` requiring an instance of `probe::advance` at `T`
-/// (RFC-0068 D1): the requirement's pattern is `advance`'s type at `T`.
+/// (RFC-0068 rule 5): the requirement's pattern is `advance`'s type at `T`.
 fn drain_fn(i: &Interner) -> Function {
     let mut pb = PolyBuilder::new();
     let t = pb.fresh_ty_var();

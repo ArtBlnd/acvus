@@ -1,4 +1,4 @@
-error[E0277]: a parameter of form `Pair` does not survive the caller suspending, so a declaration above `Task::Sync` cannot take one: it borrows the frame the call laid its arguments on, and that frame is gone when the call resumes (RFC-0047 §3)
+error[E0277]: a parameter of form `Pair` does not survive the caller suspending, so a declaration above `Task::Sync` cannot take one: it borrows the frame the call laid its arguments on, and that frame is gone when the call resumes (RFC-0047 rule 6)
  --> tests/compile_fail/slice_param_on_heavy.rs:6:1
   |
 6 | #[extern_fn(effect = pure, heavy)]

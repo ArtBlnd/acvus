@@ -1,4 +1,4 @@
-//! RFC-0009 at its contract: one Rust signature yields the acvus type and
+//! RFC-0023 rule 1 at its contract: one Rust signature yields the acvus type and
 //! a handler for any runtime. `Tiny` is a runtime written for this test
 //! alone, so nothing here depends on an interpreter.
 
@@ -25,7 +25,7 @@ enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
-    /// The language's `Option` (RFC-0022), held as a host pleases.
+    /// The language's `Option` (RFC-0039 rule 6), held as a host pleases.
     None,
     /// RFC-0050 rule 8's two variant registers, held as a host pleases.
     Undef,
@@ -329,7 +329,7 @@ impl Runtime for Tiny {
     }
 
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [V]) {
-        // A slice is two of the machine's registers (RFC-0047 amended); this
+        // A slice is two of the machine's registers (RFC-0047 rule 6); this
         // runtime has no registers, so each word is its own value.
         out[0] = erased(words.ptr);
         out[1] = erased(words.len);
@@ -568,7 +568,7 @@ fn bump(n: &mut i64, by: i64) -> i64 {
     *n
 }
 
-/// A returned borrow (RFC-0068 D4): the slice is Rust's `&[T]` of the
+/// A returned borrow (RFC-0068 rule 4): the slice is Rust's `&[T]` of the
 /// parameter, and the crossing writes the pair.
 #[extern_fn(effect = pure)]
 fn as_slice<T, Rt>(c: &Vec<T>) -> &[T]
@@ -646,7 +646,7 @@ extern_signature! {
 }
 
 /// A holder of `i64`s at the language's own storage, whose `front` yields a
-/// borrow of its first element (RFC-0068 D6).
+/// borrow of its first element (RFC-0068 rule 6).
 #[derive(ExternType)]
 #[repr(transparent)]
 #[extern_type(name = "Held")]
@@ -707,7 +707,7 @@ where
     step_at.call(ctx, it, ())
 }
 
-/// A requirer that holds its receiver by shared borrow alone (RFC-0070 D4).
+/// A requirer that holds its receiver by shared borrow alone (RFC-0070 rule 4).
 #[extern_fn(effect = pure)]
 fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: &T, b: &T, eq_at: Instance<eq<T, Rt>, T, Rt>) -> bool
 where
@@ -720,7 +720,7 @@ where
 extern_signature! { ns: "t", fn advance<I>(it: &mut I) -> i64 where I: Var<kind::Type>; }
 
 /// An instance that takes an `Instance` parameter, which `#[extern_fn]`
-/// refused until RFC-0070 D1. It requires `t::step` rather than `t::advance`
+/// refused until RFC-0070 rule 1. It requires `t::step` rather than `t::advance`
 /// because an instance that requires its own signature reaches only itself
 /// here: a requirement stands at a type variable, so a requiring instance
 /// is generic, and a signature admits one generic instance.
@@ -1121,7 +1121,7 @@ fn a_required_instance_resolves_from_a_reference_parameters_target() {
 }
 
 /// A requirer holding a shared borrow calls the instance it requires
-/// (RFC-0070 D4).
+/// (RFC-0070 rule 4).
 #[test]
 fn a_shared_receiver_reaches_the_instance_it_requires() {
     let (i, reg) = combined::<Tiny>();
@@ -1150,7 +1150,7 @@ fn a_shared_receiver_reaches_the_instance_it_requires() {
 }
 
 /// An instance states what it requires on its own candidate, which is
-/// where the checker reads it (RFC-0070 D1).
+/// where the checker reads it (RFC-0070 rule 1).
 #[test]
 fn an_instance_carries_its_own_requirements_and_keeps_its_mono_glue() {
     let (i, reg) = combined::<Tiny>();
@@ -1242,7 +1242,7 @@ fn a_point(x: i64) -> V {
 
 /// `t::eq` at `Point` is declared and has a mono glue, and no caller can
 /// reach it: an object converts at the boundary, so a `&Point` argument
-/// names no storage shaped like a `Point` (RFC-0032). This holds of the
+/// names no storage shaped like a `Point` (RFC-0039 rule 4). This holds of the
 /// mono glue too, so a handler requiring `t::eq` meets it for the same
 /// reason a call site does, and the requirement adds nothing to it.
 #[test]
@@ -1318,12 +1318,12 @@ fn a_borrowed_parameter_is_a_reference_type_and_writes_through() {
 
 /// The entry hands its run back as the two words the machine keeps a slice
 /// in, and those words name the container's own elements in place
-/// (RFC-0047 amended, rule 2).
+/// (RFC-0047 rule 6).
 #[test]
 fn a_slice_entry_hands_back_two_words_naming_the_container() {
     let (i, reg) = combined::<Tiny>();
     let ExternHandler::Sync(entry) = handler(&reg, &i, "as_slice") else {
-        panic!("a declaration returning a slice has a synchronous handler (RFC-0047 §3)")
+        panic!("a declaration returning a slice has a synchronous handler (RFC-0023 rule 6)")
     };
     assert_eq!(
         entry.width(),
@@ -1511,7 +1511,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
         .collect();
     assert_eq!(doubled, vec![2, 4]);
 
-    // An object crosses as its fields (RFC-0032): the handler receives
+    // An object crosses as its fields (RFC-0039 rule 4): the handler receives
     // `Obj<Owned<Tiny>>` and returns one.
     // The fields are in rule 8's order: `label` before `x`, whatever order the
     // struct declares them in.
@@ -1537,7 +1537,7 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     assert_eq!(open::<String>(label.into_value()), "p");
 }
 
-/// A lent result (RFC-0068 D4): `at` returns Rust's `Option<&T>` of the
+/// A lent result (RFC-0068 rule 4): `at` returns Rust's `Option<&T>` of the
 /// container the caller lent, and the crossing writes a reference into
 /// that container's own storage, or `None`.
 #[test]
@@ -1565,7 +1565,7 @@ fn a_lent_element_names_the_containers_own_storage() {
 
 /// A signature whose instance yields a borrow of its receiver: the glue
 /// crosses the `&Erased<Rt, i64>` as a reference word, and the requirer
-/// reads it back as a Rust borrow of the receiver it lent (RFC-0068 D6).
+/// reads it back as a Rust borrow of the receiver it lent (RFC-0068 rule 6).
 #[test]
 fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
     let (i, reg) = combined::<Tiny>();
@@ -2102,7 +2102,7 @@ fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
     assert_eq!(open::<i64>(r), 3);
 }
 
-// -- Polymorphic instances (RFC-0027) ---------------------------------
+// -- Polymorphic instances (RFC-0019) ---------------------------------
 
 extern_signature! { ns: "t", fn first<C, T>(c: C) -> T where C: Var<kind::Type>, T: Var<kind::Type>; }
 
@@ -2224,7 +2224,7 @@ fn two_instances_whose_types_unify_are_refused() {
     );
 }
 
-// -- A signature declares its effect (RFC-0065) ------------------------
+// -- A signature declares its effect (RFC-0067 rule 2) ------------------------
 
 extern_signature! {
     ns: "t",
@@ -2378,7 +2378,7 @@ fn a_pure_signature_refuses_an_effect_variable_instance() {
     );
 }
 
-// -- A signature names its argument (RFC-0065) -------------------------
+// -- A signature names its argument (RFC-0067 rule 2) -------------------------
 
 extern_signature! {
     ns: "t",

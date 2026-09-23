@@ -10,7 +10,7 @@
 //! Nothing lowers `a[i]` yet, so each shape is a body built by hand. The
 //! last shape runs a handler `prepare` never emits: the probe substitutes
 //! it into the prepared body, which is the only way to reach it until the
-//! interval pass carries its own proof (RFC-0047 §7).
+//! interval pass carries its own proof (RFC-0047 rule 7).
 //!
 //! These timings hold only under one pinned core and a fixed load base;
 //! `benches/README.md` states the protocol.
@@ -57,7 +57,7 @@ impl Shape {
 }
 
 /// The type the loop counts at: an `Index` takes `u64` and nothing else
-/// (RFC-0047 §4).
+/// (RFC-0047 rule 4).
 const INDEX_TY: Ty = Ty::U64;
 
 const QUERY: &str = "q";
@@ -379,7 +379,7 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
 // -- Running one shape -----------------------------------------------
 
 /// Every `Index` handler in a prepared body, swapped for the unchecked
-/// form of the same mode (RFC-0047 §7).
+/// form of the same mode (RFC-0047 rule 7).
 fn drop_the_bound_check(body: &mut Body) {
     let swapped: usize = body.heads.iter_mut().map(swap_in_chain).sum();
     assert_eq!(swapped, 2, "both element reads lost their bound check");

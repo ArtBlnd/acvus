@@ -56,7 +56,7 @@ pub struct Lowerer<'a> {
     holds: Vec<Held>,
     /// The loops enclosing the statement being lowered, innermost last: a
     /// `break` jumps to the last one's exit and a `continue` to its header
-    /// (RFC-0057 Decision 4).
+    /// (RFC-0057 rule 4).
     loops: Vec<Loop>,
 }
 
@@ -226,7 +226,7 @@ fn short_circuit_of(op: BinOp) -> Option<ShortCircuit> {
 /// already required every key an object pattern names to exist on the
 /// source type, so the pattern cannot fail at run time.
 /// A `match` whose arms are one dispatch: every arm is a variant pattern
-/// whose payload asks nothing (RFC-0051 §5 -- a nested refutable payload is
+/// whose payload asks nothing (RFC-0051 rule 3 -- a nested refutable payload is
 /// more than a tag test) or a literal pattern that is a [`SwitchKey`], with
 /// at most one catch-all, last, and every key of one kind. `keys` runs in
 /// arm order and skips the catch-all; `catch_all` is that arm's index.
@@ -242,7 +242,7 @@ impl Dispatch {
 
     /// Whether the arms can hold one dispatch at all: an arm that is a
     /// catch-all answers yes on its own, because `_` is always the way
-    /// through (RFC-0051 §3).
+    /// through (RFC-0051 rule 3).
     pub(crate) fn is_decidable(arms: &[MatchExprArm], interner: &Interner) -> bool {
         Self::plan(arms, interner).is_some() || arms.iter().any(Self::is_catch_all)
     }
@@ -305,7 +305,7 @@ impl Dispatch {
 }
 
 /// `String` or `str`, or a reference to either: what `StringConcat` and
-/// `StringEq` read (RFC-0062 Decision 3).
+/// `StringEq` read (RFC-0062 rule 3).
 fn holds_text(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
@@ -486,7 +486,7 @@ impl<'a> Lowerer<'a> {
         self.emit_inst(span, InstKind::Commit { context, value });
     }
 
-    /// The summary of a call (RFC-0017): the callee's, joined with that of
+    /// The summary of a call (RFC-0025 rule 5): the callee's, joined with that of
     /// every function value it is passed.
     fn touched_contexts(&self, callee_ty: &Ty, args: &[ValueId]) -> TouchedContexts {
         let mut touched = BTreeSet::new();
@@ -906,7 +906,7 @@ impl<'a> Lowerer<'a> {
     /// scrutinee is read once into the value whose tag the `Switch` reads,
     /// and each arm is its own block. `Terminator::Switch` is the shape
     /// that names a `match` and nothing else, which is what
-    /// `validate::exhaustive` reads (RFC-0051 §3-§5).
+    /// `validate::exhaustive` reads (RFC-0051 rules 3, 4 and 5).
     fn lower_match_switch(
         &mut self,
         dispatch: &Dispatch,
@@ -1190,7 +1190,7 @@ impl<'a> Lowerer<'a> {
             .unwrap_or_else(|| panic!("type checking settles every `for` head"))
     }
 
-    /// `break` and `continue` name the innermost loop (RFC-0057 Decision 4):
+    /// `break` and `continue` name the innermost loop (RFC-0057 rule 4):
     /// the jump to its exit and the jump to its header, which is its latch.
     /// What the source wrote after one lands in a block no jump reaches, as
     /// it does after an expression typed `!`. The drops of the scopes the
@@ -1802,7 +1802,7 @@ impl<'a> Lowerer<'a> {
     /// storage through that reference (RFC-0024).
     fn storage_through(&mut self, root: &Expr) -> Option<RefTarget> {
         // `a[i]` names the element the `Index` leaves a reference into
-        // (RFC-0047 §3): the place is that reference, as `*r`'s is.
+        // (RFC-0047 rule 5): the place is that reference, as `*r`'s is.
         if let Expr::Index {
             id,
             callee_id,
@@ -2180,7 +2180,7 @@ impl<'a> Lowerer<'a> {
         PendingDiamond { at, labels }
     }
 
-    /// RFC-0063 Decision 1 admits a `Diamond` only where both arms rejoin. An
+    /// RFC-0063 rule 1 admits a `Diamond` only where both arms rejoin. An
     /// arm that `break`s, `continue`s or ends in a call typed `!` leaves
     /// through an edge of its own, and the branch is a `JumpIf`. The arms are
     /// the instructions between the branch and here and nothing else, so that

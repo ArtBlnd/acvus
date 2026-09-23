@@ -283,7 +283,7 @@ fn direct_target<'a>(
         return None;
     }
     // A `$` the callee reads is an input the host injects rather than an
-    // argument the call carries (RFC-0071 Decision 4), so this call supplies
+    // argument the call carries (RFC-0071 rule 4), so this call supplies
     // no value for it and the callee is left standing.
     if callee.main.params.len() > args.len() {
         return None;
@@ -303,7 +303,7 @@ fn direct_target<'a>(
 /// Inline a closure only when it is really small and pure. The bound is the
 /// owner's, and it is a count rather than a measurement: what the inlined
 /// call costs is a `Code::call` through the code's head word and the operand
-/// space the chain entry builds (RFC-0052 §7 Consequences, RFC-0060).
+/// space the chain entry builds (RFC-0052 rule 7, RFC-0060).
 const INLINE_MAX_INSTS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

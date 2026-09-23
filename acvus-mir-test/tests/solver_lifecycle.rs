@@ -1,4 +1,4 @@
-//! The solver separates equality from decision (scratchpad/tobe/solver.md):
+//! The solver separates equality from decision (RFC-0042):
 //! unification is the join of the type lattice, a decision is a set of
 //! admissible answers that settles when one remains, and a body is
 //! checked, then queried, then solved once.
@@ -349,7 +349,7 @@ fn s4_a_conversion_that_does_not_exist_names_both_types_at_the_argument() {
     );
 }
 
-// -- S5: RFC-0027 without a mid-body settlement -----------------------------
+// -- S5: RFC-0019 without a mid-body settlement -----------------------------
 
 #[test]
 fn s5_a_lambda_after_the_argument_sees_the_element_type_the_instance_fixed() {

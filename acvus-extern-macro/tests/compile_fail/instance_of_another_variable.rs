@@ -1,5 +1,5 @@
 //! `Instance<S, I, Rt>` is paired with the variable it was declared for,
-//! and Rust is what checks the pairing (RFC-0067 Decision 4): a receiver
+//! and Rust is what checks the pairing (RFC-0067 rule 4): a receiver
 //! of another variable does not compile, and the refusal is the type
 //! error, not a sentence the macro writes.
 use std::ops::DerefMut;

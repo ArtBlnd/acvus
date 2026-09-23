@@ -88,7 +88,7 @@ struct BoundSite {
     var: crate::ty::TypeBoundId,
     span: Span,
     /// The instance decision that chooses among the shapes the bound is the
-    /// union of (RFC-0027). Its refusal already names the type outside, so a
+    /// union of (RFC-0011 rule 2). Its refusal already names the type outside, so a
     /// violation of the bound is not reported after it.
     instance: Option<DecisionId>,
 }
@@ -280,7 +280,7 @@ impl PlaceDemand {
     }
 
     /// A mutable projection demands its object mutably (RFC-0018); every
-    /// other read borrows the object of `a.f` shared (RFC-0047 §3).
+    /// other read borrows the object of `a.f` shared (RFC-0047 rule 3).
     fn through_a_field(self) -> Self {
         match self {
             Self::Borrow(Mutability::Mut) => Self::Borrow(Mutability::Mut),
@@ -527,7 +527,7 @@ fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
     }
 }
 
-/// A lambda that holds a loan: RFC-0064 Decision 5 makes it a holder like a
+/// A lambda that holds a loan: RFC-0064 rule 5 makes it a holder like a
 /// reference, so it is refused where a reference is. `reference_in_result`
 /// stops at a function type because a signature is not storage; a capture
 /// list is, and this is where it is walked.
@@ -543,7 +543,7 @@ fn holds_a_loan(ty: &InferTy) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResultCrossing {
     /// Into the registers `control::Return` writes: one word, or the two
-    /// adjacent words a view occupies (RFC-0062 Decision 1).
+    /// adjacent words a view occupies (RFC-0047 rule 6).
     Registers,
     /// Into one `Value` read by kind: a lambda's result, which
     /// `acvus_extern::Runtime::call_now` hands a handler and
@@ -551,7 +551,7 @@ pub enum ResultCrossing {
     OneValue,
     /// Into one `Value` the host reads by kind (RFC-0054): the graph's
     /// entry. The value outlives the run, which a closure does not
-    /// (RFC-0014, RFC-0069 D2).
+    /// (RFC-0014, RFC-0069 rule 1).
     Host,
 }
 
@@ -567,7 +567,7 @@ impl ResultCrossing {
             (Self::Registers, _) if is_pair(ty) => None,
             (_, TyTerm::Ref(_, target)) => is_view(&target.ty).then_some(ty),
             // The crossing governs the top level only: below it a reference
-            // inside data is RFC-0062 Decision 5's refusal whatever its
+            // inside data is RFC-0062 rule 5's refusal whatever its
             // shape, so no branch separates the two here.
             _ => reference_in_result(ty),
         };
@@ -606,15 +606,15 @@ fn closure_in_result(ty: &InferTy) -> Option<&InferTy> {
 /// Obligation across artifacts: the same predicate as
 /// `acvus_interpreter::prepare::is_slice` on a frozen `Ty` — one level of
 /// reference over `Str` or `Slice`, and the two adjacent registers
-/// `assign_slots` lays for it (RFC-0062 Decision 1). `is_view` recurses
+/// `assign_slots` lays for it (RFC-0062 rule 1). `is_view` recurses
 /// through a reference and this does not: a reference *to* a view is the one
 /// `Kind::Ref` word, which reaches half a pair.
 fn is_pair(ty: &InferTy) -> bool {
     matches!(ty, TyTerm::Ref(_, target) if matches!(target.ty, TyTerm::Str | TyTerm::Slice(_)))
 }
 
-/// The two adjacent word registers a run occupies (RFC-0047 amended rule 1,
-/// RFC-0062 Decision 1). `acvus_interpreter::prepare::is_slice` is the same
+/// The two adjacent word registers a run occupies (RFC-0047 rule 6,
+/// RFC-0062 rule 1). `acvus_interpreter::prepare::is_slice` is the same
 /// predicate on a frozen `Ty`, and the two must name the same types: this
 /// one decides what a body may return, that one lays the registers out, and
 /// a type admitted here that it calls a pair returns into one register and
@@ -950,7 +950,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     for_kinds: FxHashMap<AstId, ForKind>,
     /// The loops enclosing the statement under check, innermost last:
     /// `break` and `continue` name the last one and are refused where there
-    /// is none (RFC-0057 Decision 4). A `Some` carries the element type of a
+    /// is none (RFC-0057 rule 4). A `Some` carries the element type of a
     /// `for x in a` whose array owns what it holds, and leaving such a loop
     /// early would leave the elements it has not taken without a release.
     loops: Vec<Option<Ty>>,
@@ -968,7 +968,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     errors: Vec<MirError>,
     /// What the expression under check is read for. One field, so
     /// "borrowed" and "at which mutability" cannot disagree: `a[i]`
-    /// settles `as_slice` or `as_slice_mut` on it (RFC-0047 §3).
+    /// settles `as_slice` or `as_slice_mut` on it (RFC-0047 rule 3).
     demand: PlaceDemand,
     /// Every context the program names, at the span of its first use. A
     /// context's type must be data (RFC-0014); the check runs once the
@@ -998,7 +998,7 @@ pub struct TypeChecker<'a, 's, 'src> {
     /// a type is written out only once its identities are minted.
     refused_in_body: Vec<Unsettled>,
     /// Every `a[i]`, kept for the refusals that can only name their type
-    /// once the body is solved (RFC-0047 §2, §5).
+    /// once the body is solved (RFC-0047 rules 3 and 5).
     index_uses: Vec<IndexUse>,
     /// The `as_slice` calls that are an index: a refusal of one is the
     /// index's, `CannotIndex`, and not a refusal of `as_slice`.
@@ -1090,7 +1090,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// A context access of the body: joined into its effect (RFC-0017).
+    /// A context access of the body: joined into its effect (RFC-0025 rule 5).
     fn note_access(&mut self, access: Effect, span: Span) {
         self.note_call_effect(&EffectTerm::Known(access), span);
     }
@@ -1345,8 +1345,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         )))
     }
 
-    /// A value flows into a position that must have its type (solver.md
-    /// R1): the two join at a value position. A join whose one
+    /// A value flows into a position that must have its type (RFC-0042
+    /// rule 1): the two join at a value position. A join whose one
     /// disagreement is a signature's open representation is the conversion
     /// decision at the site (R4, hash-types.md), answered when that
     /// representation is decided; every other mismatch is the caller's to
@@ -1371,7 +1371,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// A value meets a type it may need converting to (solver.md R4): the
+    /// A value meets a type it may need converting to (RFC-0042 rule 4): the
     /// conversion is a decision the body's solve answers, reported at the
     /// site if none exists.
     fn convert_at(&mut self, value_ty: &InferTy, expected_ty: &InferTy, site: ConversionSite) {
@@ -1432,7 +1432,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// An argument meets its parameter (solver.md R1, R4). A `&place`
+    /// An argument meets its parameter (RFC-0042 rules 1 and 4). A `&place`
     /// argument's conversion consumes the place (RFC-0041): the place holds
     /// the parameter's referent type until the call ends, and a later lend
     /// of it inside the call is a conversion decision from the held
@@ -1554,7 +1554,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// `&v` at a `&[T]` parameter is the container's own `as_slice` of it,
     /// and `&s` at a `&str` parameter is the `String`'s own `as_str`,
-    /// recorded at the argument (RFC-0047 rule 6, RFC-0062 Decision 3). The
+    /// recorded at the argument (RFC-0047 rule 6, RFC-0062 rule 3). The
     /// two mutabilities must agree, so `&v` at a `&mut [T]` parameter is
     /// refused where every other argument mismatch is; so is a container
     /// that declares no `as_slice`, and an argument already of the
@@ -1931,8 +1931,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         candidates
     }
 
-    /// The coercions of `TypeEnv::machine` (RFC-0047 §5, RFC-0062
-    /// Decision 3), offered to a script's own call as candidates alongside
+    /// The coercions of `TypeEnv::machine` (RFC-0047 rule 3, RFC-0062
+    /// rule 3), offered to a script's own call as candidates alongside
     /// `resolve_fn`'s, so that `v.as_slice()` and `s.as_str()` resolve as
     /// they do in Rust.
     ///
@@ -1999,7 +1999,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// (RFC-0018) when that is known; otherwise they are inference variables.
     /// A lambda, at the function type the position expects where there is
     /// one: its parameters are the expected ones and its body's value
-    /// converts into the expected return (solver.md R4), else fresh.
+    /// converts into the expected return (RFC-0042 rule 4), else fresh.
     fn check_lambda(&mut self, expr: &Expr, expected: Option<&InferTy>) -> InferTy {
         let Expr::Lambda {
             id, params, body, ..
@@ -2170,7 +2170,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A reference is never data (RFC-0018), and neither is a lambda that
-    /// holds one (RFC-0064 Decision 5).
+    /// holds one (RFC-0064 rule 5).
     fn reference_in_data(&self, ty: &InferTy, shape: DataShape) -> Option<MirErrorKind> {
         match self.solver.resolve_ty(ty) {
             TyTerm::Ref(_, inner) if matches!(inner.ty, TyTerm::Str) => {
@@ -2196,7 +2196,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// Returns the leaf type, or an error type if any step fails.
     /// The type stored at `base.path`: each step joins the object with a
     /// partial one naming the field, so a store to a field the object did
-    /// not have grows the object (solver.md R1). A base that is not an
+    /// not have grows the object (RFC-0042 rule 1). A base that is not an
     /// object is a type error at the store.
     fn field_path_for_store(&mut self, base: &InferTy, path: &[Astr], span: Span) -> InferTy {
         let mut current = base.clone();
@@ -2765,7 +2765,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         })
     }
 
-    /// Solve the body once it is checked (solver.md): every decision
+    /// Solve the body once it is checked (RFC-0042): every decision
     /// settles or is reported at its site, casts the conversions settled on
     /// become coercions, and every bounded variable and literal is verified.
     fn solve_body(&mut self) {
@@ -2834,7 +2834,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.settle_int_literals();
     }
 
-    /// A literal takes a width here or is refused here (solver.md R3).
+    /// A literal takes a width here or is refused here (RFC-0042 rule 3).
     ///
     /// The refusal is here because of what its absence did. `freeze_ty`
     /// answers `UnresolvedType` for a literal whose admitted widths have no
@@ -3597,7 +3597,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .collect();
 
         let first = self.receiver_arg(object, ReceiverMode::Lent(mutability), span);
-        // The index is a `u64` and nothing else (RFC-0047 §4), so it is the
+        // The index is a `u64` and nothing else (RFC-0047 rule 4), so it is the
         // expected type here.
         let position = TyTerm::Int(IntTy::U64);
         let index_ty = self.check_arg(index, Some(&position));
@@ -3689,7 +3689,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     mutability: demand.slice_mutability(),
                     mode: match moves {
                         // A word is the element itself; anything else is a
-                        // reference into the slice (RFC-0047 §4).
+                        // reference into the slice (RFC-0047 rule 4).
                         false => IndexMode::Copy,
                         true => IndexMode::Ref,
                     },
@@ -4885,7 +4885,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// One traversal (RFC-0057 Decision 1). The head decides the source and
+    /// One traversal (RFC-0057 rule 1). The head decides the source and
     /// the element: `&v` and `&mut v` through the container's own `as_slice`,
     /// which the index expressions settle the same way, an array by value,
     /// and a range of one integer width.
@@ -4942,7 +4942,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// `lo..hi`: one integer width at both bounds, which is the element's
-    /// type (RFC-0057 Decision 1).
+    /// type (RFC-0057 rule 1).
     fn check_range(&mut self, lo: &Expr, hi: &Expr, span: Span) -> InferTy {
         let lo_ty = self.check_expr(lo);
         let hi_ty = self.check_expr(hi);
@@ -5029,7 +5029,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// An array by value: the loop takes its elements out, and the element
-    /// is the array's own (RFC-0057 Decision 1). Every other value held by
+    /// is the array's own (RFC-0057 rule 1). Every other value held by
     /// value is refused here, a container by value with the message that
     /// names the borrow it wanted.
     fn check_for_array(&mut self, array: &Expr) -> InferTy {
@@ -5054,7 +5054,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// `break` and `continue` name the innermost loop, so outside every loop
-    /// they name none (RFC-0057 Decision 4). A `break` out of a `for x in a`
+    /// they name none (RFC-0057 rule 4). A `break` out of a `for x in a`
     /// whose element owns something is refused: the elements the loop has
     /// not taken would have no release.
     fn check_loop_jump(&mut self, keyword: &'static str, span: Span) {
@@ -5086,7 +5086,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// A template's append reads a `String` or a `&str`; nothing is
-    /// converted to text implicitly (RFC-0071 Decision 3).
+    /// converted to text implicitly (RFC-0071 rule 3).
     fn check_append(&mut self, expr: &Expr, span: Span) {
         let ty = self.check_expr(expr);
         let resolved = self.solver.resolve_ty(&ty);
@@ -5274,7 +5274,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 // `+` on text is the concatenation, and `==` on text is the
                 // byte comparison: both read their operands and neither needs
                 // the two sides to be the same representation of text
-                // (RFC-0062 Decision 3).
+                // (RFC-0062 rule 3).
                 let both_text =
                     is_text(&self.solver.resolve_ty(&lt)) && is_text(&self.solver.resolve_ty(&rt));
                 let ty = match op {
@@ -6059,7 +6059,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         joined.map_or(TyTerm::Unit, |b| b.ty)
     }
 
-    /// RFC-0051 §2: an arm contributes no variant. A pattern naming a tag
+    /// RFC-0051 rule 2: an arm contributes no variant. A pattern naming a tag
     /// the scrutinee's enum does not carry can never be taken, and the
     /// language has no warning axis, so it is refused. The question is
     /// asked only where the answer is written down: a scrutinee whose head
@@ -6453,7 +6453,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // `lower.rs` emits `InstKind::TestLiteral`, which holds the text
             // as an immediate and compares the scrutinee's bytes, so the two
             // representations of one text are one comparison (RFC-0062
-            // Decision 2).
+            // rule 3).
             Pattern::Literal {
                 value: Literal::String(_),
                 ..
@@ -7048,7 +7048,7 @@ mod tests {
     }
 
     #[test]
-    /// A field the object did not have grows the object (solver.md R1);
+    /// A field the object did not have grows the object (RFC-0042 rule 1);
     /// whether it is initialized where it is read is the
     /// definite-assignment check's question, not the type checker's.
     fn field_access_grows_the_object() {
@@ -7114,7 +7114,7 @@ mod tests {
 
     // -- Named extern functions --
 
-    /// A string literal's type (RFC-0062 Decision 2).
+    /// A string literal's type (RFC-0062 rule 2).
     fn str_view() -> Ty {
         Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
     }
@@ -7332,7 +7332,7 @@ mod tests {
 }
 
 /// Where a lent argument points: a local, a context, or an extern
-/// parameter, and the field path below it (RFC-0015).
+/// parameter, and the field path below it (RFC-0018 rule 7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Place {
     root: PlaceRoot,
@@ -7387,7 +7387,7 @@ fn place_of(expr: &Expr) -> Option<Place> {
         }
         // `a[i]` is the place `a` with the index left off: two elements of
         // one container are one loan, which is what the slice holds
-        // (RFC-0047 §3).
+        // (RFC-0047 rule 2).
         Expr::Index { object, .. } => place_of(object),
         Expr::Paren { inner, .. } => place_of(inner),
         _ => None,

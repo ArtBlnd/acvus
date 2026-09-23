@@ -124,7 +124,7 @@ pub struct RunArm {
 /// cache misses: a second data-dependent indirect branch beside the machine's
 /// own dispatch costs more than three compares save. `ops::switch` records the
 /// same effect at seven arms. The ordinal that table needed is withdrawn for a
-/// second reason in RFC-0050's Consequences: a heap construction does not hold
+/// second reason in RFC-0050: a heap construction does not hold
 /// the type it would be a position in.
 pub struct SwitchRun {
     pub src: Off,

@@ -5,7 +5,7 @@ asks the key's hash and equality. There are two constructors, and the
 difference between them is where those two come from.
 
 `hash_map()` and `hash_set()` take no argument and require the key type's
-own `core::hash` and `core::eq` (RFC-0070 D5). The checker settles the key
+own `core::hash` and `core::eq` (RFC-0070 rule 5). The checker settles the key
 type at the call — in `let m = hash_map(); insert(&mut m, 1, 10);` the
 first `insert` settles it — and decides the two instances there; the map
 stores what it was handed and holds no closure. Both instances are pure, so
@@ -144,7 +144,7 @@ let v = get_mut(&mut m, &q).unwrap(); *v = 99; let r = 1; *get(&m, &r).unwrap()
 and `let v = get_mut(&mut m, &q).unwrap(); *v` reads the value through the
 same binding. `unwrap` is declared over `Option` and over `Result`, so a
 call of it is a `Signature` decision that waits on its argument's head
-(`docs/solver.md` R2); in the one-expression form that head is another
+(RFC-0042 rule 2); in the one-expression form that head is another
 call's open decision, and a binding settles the decisions open before it, so
 `v` is a `&mut i64` where the store and the read are checked.
 

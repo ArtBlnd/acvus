@@ -171,7 +171,7 @@ fn build_dependency_graph(
         }
     }
 
-    // Storage order (RFC-0015): a touch of a slot follows its last write,
+    // Storage order (RFC-0018): a touch of a slot follows its last write,
     // and a write follows every touch since the previous write.
     let mut last_write: FxHashMap<ValueId, usize> = FxHashMap::default();
     let mut reads_since: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();

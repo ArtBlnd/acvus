@@ -20,7 +20,7 @@ use crate::value::{Kind, Value, VariantValue};
 
 /// The place a variant test reads. A `Some` whose payload is a `None` has
 /// no storage to point at, so a reference to it is the depth word itself
-/// (RFC-0022) and `THROUGH` does not reach a target.
+/// (RFC-0039 rule 6) and `THROUGH` does not reach a target.
 #[inline(always)]
 pub(crate) fn scrutinee<const THROUGH: bool>(value: &Value) -> &Value {
     if !THROUGH || value.kind() == Kind::None {
@@ -31,7 +31,7 @@ pub(crate) fn scrutinee<const THROUGH: bool>(value: &Value) -> &Value {
 }
 
 /// `LARGE` is what the preparation read from the payload's type: an option
-/// is its payload's own value (RFC-0022), so the option owns a `Large`
+/// is its payload's own value (RFC-0039 rule 6), so the option owns a `Large`
 /// exactly when its payload does.
 pub struct MakeSome<const LARGE: bool> {
     pub slots: Unary,

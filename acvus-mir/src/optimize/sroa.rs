@@ -1,5 +1,5 @@
 //! Scalar replacement: an aggregate that does not escape never exists
-//! (RFC-0053).
+//! (RFC-0050).
 //!
 //! A storage slot holding an object or an enum, which nothing outside the
 //! body ever reaches ([`crate::analysis::escape`]) and whose every use one
@@ -262,7 +262,7 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
 /// for the ones it accepts.
 ///
 /// The only terminator that names a slot is `Terminator::Switch`, whose tag
-/// is one (RFC-0051 §5); the only value any other lets out is the one a
+/// is one (RFC-0051 rule 5); the only value any other lets out is the one a
 /// `Return` carries, and [`escaped_storages`] has already refused that.
 fn classify(cfg: &CfgBody, aliases: &FxHashMap<ValueId, ValueId>, plan: &mut Plan) -> Vec<ValueId> {
     let mut refused = Vec::new();

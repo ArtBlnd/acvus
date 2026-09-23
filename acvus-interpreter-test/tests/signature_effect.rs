@@ -1,4 +1,4 @@
-//! RFC-0065: a shared signature declares its effect, so a consumer generic
+//! RFC-0067 rule 2: a shared signature declares its effect, so a consumer generic
 //! in its effect can be one signature with an instance per input length.
 //!
 //! `Pipe` stands in for `Iter`, its first parameter for the list of element

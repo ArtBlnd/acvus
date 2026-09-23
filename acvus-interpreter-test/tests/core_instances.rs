@@ -1,5 +1,5 @@
 //! The standard registry's instances of the core signatures at the script
-//! contract (RFC-0070 D5): one per word type, pinned to the meaning of the
+//! contract (RFC-0070 rule 5): one per word type, pinned to the meaning of the
 //! instruction the compiler emits for that type; `Vec<T>`'s four, each over
 //! the same signature at `T`; and the refusal where a type has none.
 

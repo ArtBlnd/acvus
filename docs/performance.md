@@ -109,10 +109,9 @@ Eight rows' acvus cells moved beyond the ±7 % that
 difference between two builds can be said to mean. Four moved down.
 `while let vec` reads 4316 µs against 8112: the loop's `next` is now a `Source`
 of the `For` operation rather than a call the body makes, the form
-`acvus-interpreter/src/ops/control.rs` carries as `Call<H, LARGE, WORD>` and
-RFC-0069's step 4 names. `map id | sum` reads 2759 against 3482 and
+`acvus-interpreter/src/ops/control.rs` carries as `Call<H, LARGE, WORD>`. `map id | sum` reads 2759 against 3482 and
 `map add | sum` 5090 against 6021: a closure is now a code word beside its
-captures in one block, RFC-0069 D1–D5, which `FnValue` in
+captures in one block, RFC-0069, which `FnValue` in
 `acvus-interpreter/src/value.rs` carries. `range | sum` reads 1113 against
 1659, and it no longer draws the two modes the README records for it; it now
 reads within one microsecond of `for range`'s 1112, which the two rows did not

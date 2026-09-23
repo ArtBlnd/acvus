@@ -47,7 +47,7 @@ impl ValidationError {
 }
 
 /// A set of values no list of arms can name in full, so a `match` over one
-/// closes only through a catch-all (RFC-0051 §3).
+/// closes only through a catch-all (RFC-0051 rule 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenSpace {
     /// The scrutinee's type names no variants at all.
@@ -98,22 +98,22 @@ pub enum ValidationErrorKind {
         got: usize,
     },
     /// A `match` with no catch-all whose arms do not close what the
-    /// scrutinee can hold (RFC-0051 §3).
+    /// scrutinee can hold (RFC-0051 rule 3).
     NonExhaustiveMatch {
         over: OpenSpace,
     },
     /// The two bounds of a `for i in lo..hi` are not one integer width
-    /// (RFC-0057 Decision 1).
+    /// (RFC-0057 rule 1).
     ForRangeWidths {
         at: Ty,
         hi: Ty,
     },
-    /// RFC-0063 Decision 1.
+    /// RFC-0063 rule 1.
     DiamondArmMissesJoin {
         side: &'static str,
         join: Label,
     },
-    /// RFC-0063 Decision 1: the arms of a branch `cfg::demote_diamond`
+    /// RFC-0063 rule 5: the arms of a branch `cfg::demote_diamond`
     /// demoted meet again, and the terminator was not restored.
     DemotedDiamondMeetsAgain {
         join: Label,
@@ -163,7 +163,7 @@ pub enum ValidationErrorKind {
         context: Astr,
     },
     /// The body's result holds a loan on a local, whose storage the run is
-    /// about to leave (RFC-0064 Decision 2).
+    /// about to leave (RFC-0064 rule 5).
     ReferenceToLocalLeavesBody {
         storage: Option<ValOrigin>,
     },

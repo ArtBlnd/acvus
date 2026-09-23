@@ -1,7 +1,7 @@
 //! A captured name of word type is a copy of a value the closure owns and
 //! a captured name of any other type is a borrow of one (RFC-0018), at the
 //! checker's contract and at the IR the lowering writes. A captured
-//! reference is a word — the `Kind::Ref` word itself (RFC-0064 Decision 2).
+//! reference is a word — the `Kind::Ref` word itself (RFC-0064 rule 5).
 //! A test that fails is a finding, kept as it fails.
 
 use acvus_extern::{Externs, TypesOnly};

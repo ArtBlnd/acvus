@@ -154,7 +154,7 @@ pub enum SlotRepr {
     Member,
 }
 
-/// The one `ρ` of a signature (RFC-0040).
+/// The one `ρ` of a signature (RFC-0041).
 const SIGNATURE_RHO: u32 = 0;
 
 impl SlotRepr {

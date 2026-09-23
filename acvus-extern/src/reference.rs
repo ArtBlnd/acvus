@@ -10,7 +10,7 @@
 //! constructor a handler can call. A constructor from `Rt::Value` — a `new`,
 //! a `lend` over a handler's own storage — would put a `T` on a word that
 //! nothing checked, and a `Ref<T>` made over a `U` reads a `U` as a `T` at
-//! the first `with` (RFC-0068 D1). A reference a handler makes to its own
+//! the first `with` (RFC-0068 rule 1). A reference a handler makes to its own
 //! value is Rust's `&T`, with Rust's lifetime; it is not this type.
 //!
 //! `with` is the one operation, and Rust proves it safe: the borrow it
@@ -163,7 +163,7 @@ where
 }
 
 /// A result declared `&T` / `&mut T` is returned as Rust's borrow of a
-/// parameter the caller lent (RFC-0047 §3), and crosses as one reference
+/// parameter the caller lent (RFC-0047 rule 3), and crosses as one reference
 /// word.
 impl<T, Rt> crate::LentBack<Rt> for Ref<T, Shared, Rt>
 where

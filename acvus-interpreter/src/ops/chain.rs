@@ -1,4 +1,4 @@
-//! An arithmetic chain as one operation (RFC-0044, stage 4; RFC-0052).
+//! An arithmetic chain as one operation (RFC-0044 rule 5; RFC-0052).
 //!
 //! An instance is named by its operand type and by one `Node` per operator
 //! it fixed in the type. Its shape is a field, not a parameter.
@@ -248,7 +248,7 @@ pub enum LeafRead {
 /// type, and it is a variant rather than an array of `LeafRead::Own`
 /// because it is the one a chain that absorbed no cast runs: the test is
 /// one branch for the whole chain instead of one per leaf, which is what
-/// `range | sum` measured (RFC-0049, "What it costs").
+/// `range | sum` measured (RFC-0049).
 #[derive(Clone, Copy)]
 pub enum Reads {
     Own,
@@ -326,8 +326,8 @@ where
 /// `chain_eval` chooses once at preparation — the reads compile to what
 /// they were before `as` existed. Where it does not, the chain reads
 /// `plan.reads` at one branch for the whole chain rather than one per
-/// leaf; RFC-0049's "What it costs" carries the measurement that decided
-/// between those two.
+/// leaf; a `range | sum` measurement decided between those two
+/// (RFC-0049).
 #[inline(always)]
 fn pair<T, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> (T, T)
 where
@@ -475,7 +475,7 @@ macro_rules! instances {
 
         /// The destination slot's kind was written when the frame was made,
         /// so the caller stores these eight bytes and nothing else
-        /// (RFC-0052 §5).
+        /// (RFC-0052 rule 5).
         #[inline(always)]
         fn finish<T, const R: u8>(root: Root, left: T, right: T) -> u64
         where
@@ -800,7 +800,7 @@ unsafe fn chain_of(code: &Code, arity: u16) -> &ExprChain {
     unsafe { expr.chain_unchecked() }
 }
 
-/// The three entries of a body that is one chain (RFC-0069 D5). Each reads
+/// The three entries of a body that is one chain (RFC-0069 rule 5). Each reads
 /// the argument run the caller laid, builds the operand space over it and
 /// evaluates the chain in one body, so a closure call reaches the arithmetic
 /// through the one indirect call at the code's head and none inside.
@@ -1085,8 +1085,8 @@ pub fn chain_op(ty: ChainTy, dst: Where, plan: Plan, next: Box<dyn Op>) -> Box<d
     }
 }
 
-/// The entry a frameless chain body is called through (RFC-0044, stage 4;
-/// RFC-0069 D5).
+/// The entry a frameless chain body is called through (RFC-0044 rule 5;
+/// RFC-0069 rule 5).
 pub fn chain_eval(ty: ChainTy, plan: &Plan) -> Entry {
     let nodes = Nodes::of(plan);
     let shape = plan.shape;

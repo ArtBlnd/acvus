@@ -12,7 +12,7 @@ use crate::value::Value;
 pub struct Elements {
     pub slots: Box<[Off]>,
     /// Bit `i` is "slot `i` of `slots` owns a `Large`", which this operation
-    /// takes over in one mask store (RFC-0048 §5).
+    /// takes over in one mask store (RFC-0048 rule 5).
     pub owns_large: u64,
 }
 

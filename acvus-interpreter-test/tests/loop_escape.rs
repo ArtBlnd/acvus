@@ -1,5 +1,5 @@
 //! A loop a `break`, a `continue` or a `?` leaves is still one region
-//! (RFC-0057 amended).
+//! (RFC-0057 rule 4).
 //!
 //! The contract is the value the script returns, at both optimization levels,
 //! and then the shape the machine runs it as: one `For` or `Loop` operation

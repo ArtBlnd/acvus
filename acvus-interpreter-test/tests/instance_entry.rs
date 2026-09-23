@@ -1,4 +1,4 @@
-//! Which declared instances a requirement can reach (RFC-0067 Decision 1).
+//! Which declared instances a requirement can reach (RFC-0067 rule 1).
 
 use acvus_extern::{Externs, Interner, QualifiedRef};
 use acvus_interpreter::AcvusRuntime;

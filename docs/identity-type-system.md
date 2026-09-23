@@ -3,7 +3,7 @@
 Identity says which source a value came from. It is a **parameter of a
 user-defined type** — a fourth kind of parameter beside type, effect and
 length — and nothing else in the type language carries one. The ruling is
-[RFC-0012](rfcs/0012-identity-parameters.md); this document is how it works
+[RFC-0012](rfcs/identity.md); this document is how it works
 and why it exists.
 
 ## Why the type system needs it

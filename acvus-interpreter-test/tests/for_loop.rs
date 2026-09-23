@@ -1,5 +1,5 @@
 //! A `for` is a region, and a `break` or a `continue` in its body is an
-//! operation of that region (RFC-0057 Decision 3 and Decision 4 amended):
+//! operation of that region (RFC-0057 rules 3 and 4):
 //! the value each head produces, and what the machine runs each as. The one
 //! traversal still on the joints path is the one whose exit edge carries a
 //! drop, which puts a block between the terminator and the body.

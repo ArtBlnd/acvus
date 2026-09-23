@@ -1,5 +1,5 @@
 //! A `match` is exhaustive, and it is decided by the scrutinee's type
-//! (RFC-0051 §3-§4).
+//! (RFC-0051 rules 3 and 4).
 //!
 //! The language's enums are structural and unify by union, so a value's
 //! variant set grows everywhere the value flows — and that union is what
@@ -52,7 +52,7 @@ pub enum Known {
     /// and so names no tag itself; the count is what it checks against.
     ClosedBuiltin(Builtin),
     /// The type names no variant set. `typeck` refuses an arm naming a
-    /// variant the scrutinee's type does not have (RFC-0051 §2), so no
+    /// variant the scrutinee's type does not have (RFC-0051 rule 2), so no
     /// script reaches this answer; what reaches it is a `Switch` a pass or a
     /// test builds over a tag of some other type, and it is refused rather
     /// than assumed closed.
@@ -164,7 +164,7 @@ fn enum_name_of(body: &MirBody, value: ValueId) -> Option<Astr> {
 }
 
 /// The variants the value a `Switch` reads its tag from can hold
-/// (RFC-0051 §4). The value's type is the answer: a structural enum's type
+/// (RFC-0051 rule 4). The value's type is the answer: a structural enum's type
 /// is the union of every construction the value can flow from, so its
 /// variant list is closed for this value wherever the value came from.
 pub fn known_variants(body: &MirBody, value: ValueId) -> Known {

@@ -1,5 +1,5 @@
 //! An object a body never lets out is never built, and each of its
-//! move-only fields is released exactly once (RFC-0053).
+//! move-only fields is released exactly once (RFC-0050).
 //!
 //! `Tracked` is an extension type over a `Vec<Counted>`, so the value the
 //! script moves around is a `Large` whose release the counter observes; an

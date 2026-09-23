@@ -1236,7 +1236,7 @@ fn compile_multi_fn_at(
 }
 
 /// `inputs` is read off the code that survived the passes, which is what
-/// makes it the set RFC-0071 Decision 5 calls required.
+/// makes it the set RFC-0071 rule 5 calls required.
 #[derive(Debug)]
 pub struct BoundTemplate {
     pub ir: String,

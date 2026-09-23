@@ -56,7 +56,7 @@ pub(crate) fn make_graph(
 }
 
 /// `core::to_string` at `T = Str`: the copy that turns a string literal into
-/// the owned text (RFC-0062 Decision 3). These helpers build their graph by
+/// the owned text (RFC-0062 rule 2). These helpers build their graph by
 /// hand rather than from the standard registries, so a script compiled
 /// through them reaches no declaration it did not name; this one it names,
 /// because a `String` is otherwise unwritable in a script.

@@ -4,7 +4,7 @@ use crate::code::{Exit, Konst, Marked, Off, Op, successor};
 use crate::machine::Machine;
 
 /// The word of an integer, a float, a bool or unit. The slot's kind was
-/// written when the frame was made (RFC-0052 §5), so the literal's type is
+/// written when the frame was made (RFC-0052 rule 5), so the literal's type is
 /// not in this operation at all.
 pub struct Const {
     pub dst: Off,

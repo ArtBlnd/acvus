@@ -1,4 +1,4 @@
-error: a declaration returning a borrow has no parameter it can be a borrow of: every parameter is taken by value, so what the result names belongs to no storage the caller kept (RFC-0047 §3). Take one parameter by reference, or return an owned value.
+error: a declaration returning a borrow has no parameter it can be a borrow of: every parameter is taken by value, so what the result names belongs to no storage the caller kept (RFC-0047 rule 3). Take one parameter by reference, or return an owned value.
  --> tests/compile_fail/view_returned_without_a_loan.rs:7:20
   |
 7 | fn sign(n: i64) -> &'static str {

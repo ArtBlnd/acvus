@@ -17,7 +17,7 @@ use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_ext::vec_registry;
+use acvus_ext::{Deque, vec_registry};
 use acvus_extern::{
     Arr, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, OneValue, Owned, QualifiedRef,
     Registry, Release, Runtime, extern_fn, extern_registry,
@@ -36,7 +36,7 @@ enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
-    /// The language's `Option` (RFC-0022), held as a host pleases.
+    /// The language's `Option` (RFC-0039 rule 6), held as a host pleases.
     None,
     Some(*mut V),
     Boxed(*mut (dyn Any + Send + Sync)),

@@ -2,7 +2,7 @@
 //! the type a lambda's lent parameter is checked at, and the error where
 //! the place already holds a reference. A borrow of a reference is a
 //! reborrow of what it names (RFC-0029); a lambda captures one as the
-//! word it is (RFC-0064 Decision 2). A test that fails is a finding, kept
+//! word it is (RFC-0064 rule 5). A test that fails is a finding, kept
 //! as it fails.
 
 use acvus_extern::{Externs, TypesOnly};
@@ -124,7 +124,7 @@ fn a_lent_parameter_passed_to_a_bare_call_is_reborrowed_not_doubled() {
     );
 }
 
-/// RFC-0064 Decision 2 admits the capture, and RFC-0029 still holds of it:
+/// RFC-0064 rule 5 admits the capture, and RFC-0029 still holds of it:
 /// the inner lambda's capture type is the reference `a` already is, not a
 /// reference to it.
 #[test]

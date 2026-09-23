@@ -1,5 +1,5 @@
 //! A diamond of one pure node and a pass-through arm as one `Select`
-//! (RFC-0052 §"a diamond of two pure arms is a select").
+//! (RFC-0074).
 //!
 //! A `Select` evaluates its node whichever way the condition goes, so every
 //! test here that ends in a `Diamond` is a soundness test: the shapes below

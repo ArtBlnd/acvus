@@ -1,7 +1,7 @@
 //! The vtable a `Large` value carries in its allocation header: how to
 //! drop and print the payload behind the pointer.
 //!
-//! A vtable is a constant of the type it describes (RFC-0048 §7), so the
+//! A vtable is a constant of the type it describes (RFC-0048 rule 2), so the
 //! address a header holds is a promoted constant, and a promoted constant
 //! may have more than one address across codegen units.
 

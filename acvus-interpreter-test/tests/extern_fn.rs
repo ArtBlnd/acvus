@@ -263,7 +263,7 @@ fn draw_b() -> i64 {
     7
 }
 
-/// Adds `by` to the lent place and returns the new value (RFC-0015).
+/// Adds `by` to the lent place and returns the new value (RFC-0018).
 #[extern_fn(effect = pure)]
 fn bump(n: &mut i64, by: i64) -> i64 {
     *n += by;
@@ -570,7 +570,7 @@ fn io_two_independent_chains_mir() {
     assert_source_order(&spawns, &evals);
 }
 
-// -- Lent places (RFC-0015) -----------------------------------------
+// -- Lent places (RFC-0018) -----------------------------------------
 //
 // `f(&mut place)` loads the place, the callee changes what it received,
 // and the value it left is stored back. A context, a local, and a field

@@ -109,7 +109,7 @@ fn filled_slot(kind: &InstKind) -> Option<ValueId> {
 }
 
 /// Whether a slot's type has a release: a word owns nothing, so a store
-/// into it releases nothing whatever the slot held (RFC-0048 §4). A type
+/// into it releases nothing whatever the slot held (RFC-0048 rule 4). A type
 /// the classification cannot read is taken to have one.
 fn releases(slot: ValueId, cfg: &CfgBody) -> bool {
     cfg.val_types.get(&slot).and_then(is_move_only) != Some(false)
@@ -303,7 +303,7 @@ fn is_root(kind: &InstKind, loans: &Loans) -> bool {
             true
         }
         // A Pure call that writes no context has no effect (RFC-0007,
-        // RFC-0017): dead if its result is unused. A call whose effect is
+        // RFC-0025 rule 4): dead if its result is unused. A call whose effect is
         // unknown stays.
         InstKind::FunctionCall { callee_ty, .. } => !callee_ty
             .effect()

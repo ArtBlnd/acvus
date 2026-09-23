@@ -30,7 +30,7 @@ enum V {
     /// The value a handler took out of its argument slot.
     #[default]
     Taken,
-    /// The language's `Option` (RFC-0022), held as a host pleases.
+    /// The language's `Option` (RFC-0039 rule 6), held as a host pleases.
     None,
     Some(*mut V),
     Word(*mut (dyn Any + Send + Sync)),

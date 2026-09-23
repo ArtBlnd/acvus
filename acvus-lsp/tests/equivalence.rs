@@ -304,7 +304,7 @@ fn completion_updates_with_source() {
     );
 }
 
-/// RFC-0071 Decision 5, at the surface the editor reads.
+/// RFC-0071 rule 5, at the surface the editor reads.
 mod required_inputs {
     use acvus_lsp::LspSession;
     use acvus_utils::Interner;

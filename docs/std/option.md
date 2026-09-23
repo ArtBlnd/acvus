@@ -14,7 +14,7 @@ stored as the runtime's value and not as a Rust `Option<T>`, and
 **A closure parameter carries the handler's effect.** Every method that
 takes a closure is declared `effect = E` over that closure's effect, so a
 pure closure keeps the call pure and an effectful one propagates
-(RFC-0050 rule 6).
+(RFC-0023 rule 8).
 
 A zero-parameter closure is written `| |`, with a space: `||` lexes as the
 or operator.

@@ -53,7 +53,7 @@ fn attention_loops() -> Vec<LoopShape> {
         .collect()
 }
 
-/// A region is an operation of the list it sits in (RFC-0052 §3), so each
+/// A region is an operation of the list it sits in (RFC-0052 rule 3), so each
 /// outer body that holds a nested `while` counts that `Loop` among its own
 /// operations.
 ///
@@ -62,7 +62,7 @@ fn attention_loops() -> Vec<LoopShape> {
 /// its container, and `@values[t]` is indexed by the *inner* variable, so
 /// its row is taken inside the inner loop. Each of those bodies holds one
 /// `AsSlice` and no drop — a slice is a register pair the frame never owns
-/// (RFC-0047 amended, rules 1 and 2).
+/// (RFC-0047 rule 6).
 ///
 /// The last loop's back edge carries one move: its body's `CallExtern2`
 /// writes the accumulator the head reads.

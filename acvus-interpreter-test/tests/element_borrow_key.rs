@@ -1,5 +1,5 @@
 //! Two shared slices of two different elements of one container are two
-//! borrows, and each index reads the element it names (RFC-0047 §8).
+//! borrows, and each index reads the element it names (RFC-0047 rule 8).
 
 use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::{Context, run_script_mode_with_externs};

@@ -146,7 +146,7 @@ fn a_move_out_of_a_capture_labels_the_lambda_that_captured_it() {
     );
 }
 
-/// RFC-0064 "What it costs": a lambda called after the storage it borrows
+/// RFC-0064 rule 5: a lambda called after the storage it borrows
 /// was written is the one case worth its own words, and the two places it
 /// names are the capture and the call.
 #[test]

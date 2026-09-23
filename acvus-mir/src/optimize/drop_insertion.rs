@@ -675,7 +675,7 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
         } => then_args.contains(&val) || else_args.contains(&val),
         // A `For`'s edge args are transferred, and an `Array` source is
         // moved into the terminator: the loop takes its elements out
-        // (RFC-0057 Decision 2). A slice or a range is read-only.
+        // (RFC-0057 rule 2). A slice or a range is read-only.
         Terminator::For {
             source,
             body_args,

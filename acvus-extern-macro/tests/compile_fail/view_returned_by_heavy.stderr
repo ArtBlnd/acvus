@@ -1,4 +1,4 @@
-error: a declaration returning a borrow runs at `Task::Sync`: the borrow names the frame the call laid its arguments on, and that frame is gone by the time an awaited or offloaded call resumes (RFC-0047 §3). Return an owned value, or declare this at `Sync`.
+error: a declaration returning a borrow runs at `Task::Sync`: the borrow names the frame the call laid its arguments on, and that frame is gone by the time an awaited or offloaded call resumes (RFC-0023 rule 6). Return an owned value, or declare this at `Sync`.
  --> tests/compile_fail/view_returned_by_heavy.rs:6:4
   |
 6 | fn head(s: &str) -> &str {

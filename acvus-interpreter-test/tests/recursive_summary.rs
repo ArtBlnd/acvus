@@ -1,4 +1,4 @@
-//! RFC-0064 step 3 on the machine: a body in a cycle of the call graph
+//! RFC-0064 rule 4 on the machine: a body in a cycle of the call graph
 //! returns a reference to its parameter, and the number the caller reads
 //! through it is the number the program names.
 

@@ -37,7 +37,7 @@ fn even_of(i: i64) -> bool {
 
 /// One variable apart: the same body, the same argument, the same work,
 /// and the result crossing back as the two registers a view occupies or as
-/// the one a `String` does (RFC-0062 Decision 4). The owned side pays the
+/// the one a `String` does (RFC-0062 rule 4). The owned side pays the
 /// copy and the `as_str` a later `&str` parameter then needs; that pair is
 /// what a script paid for `string::trim` before the view return landed.
 #[extern_fn(effect = pure)]
@@ -60,7 +60,7 @@ fn owned_cut(s: &str, from: u64, to: u64) -> String {
     s[from as usize..to as usize].to_owned()
 }
 
-/// The `nit::` arm of RFC-0067 step 4, duplicated from
+/// The `nit::` arm of RFC-0067, duplicated from
 /// `acvus-interpreter-test/tests/iter_next.rs` because a bench target
 /// cannot depend on a test target. The two copies are one declaration
 /// split across two artifacts: change a signature there and change it
@@ -322,7 +322,7 @@ const N_MAP_ADD_FIL_SUM: &str =
 /// The three traversals RFC-0057 replaces a pipeline with: one `For` region
 /// per loop, and no `Iter` extern per element.
 const FOR_RANGE: &str = "let acc = 0; for i in 0..@n { acc = acc + i; } acc";
-/// The joints path of RFC-0057 Decision 4 beside the region: the `break` is
+/// The joints path of RFC-0057 rule 7 beside the region: the `break` is
 /// never taken, so the two rows run the same traversal and the difference is
 /// what a terminator-shaped header costs over a region.
 const FOR_RANGE_BREAK: &str =
@@ -355,7 +355,7 @@ const WHILE_LET_VEC: &str = "let v = range(0, @n) | collect; let it = as_iter(&v
 /// The same head over a lazy pipeline of synchronous stages.
 const WHILE_LET_MAP: &str = "let it = range(0, @n) | map(|x| -> x + 1); let acc = 0; while let Some(x) = next(&mut it) { acc = acc + x; } acc";
 
-/// The measurement RFC-0052 §"a synchronous call is an operation" is judged
+/// The measurement RFC-0052 rule 4 is judged
 /// against: a `Sync` call to a user function, once per iteration.
 const CALL_WHILE: &str = "let step = |x| -> x + 1; let i = 0; while i < @n { i = step(i); } i";
 /// A value diamond in the body: the collatz step, both arms non-empty and

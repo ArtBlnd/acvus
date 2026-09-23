@@ -1,4 +1,4 @@
-//! Indexing a slice (RFC-0047 amended): the one element access the machine
+//! Indexing a slice (RFC-0047 rule 6): the one element access the machine
 //! does without knowing a container.
 //!
 //! A slice is a register pair — `ptr` then `len`, adjacent by
@@ -90,7 +90,7 @@ fn position<const CHECKED: bool>(run: &Run, index: u64) -> usize {
     if CHECKED && index >= run.len() as u64 {
         panic!("{}", out_of_bounds(run.len(), index));
     }
-    // The bound above, or the interval pass's proof (RFC-0047 §7), puts
+    // The bound above, or the interval pass's proof (RFC-0047 rule 7), puts
     // `index` below a length, which is a `usize`.
     index as usize
 }
@@ -209,7 +209,7 @@ pub fn checked(mode: IndexMode, read: Read, next: Box<dyn Op>) -> Box<dyn Op> {
     }
 }
 
-/// The same operation without the bound check (RFC-0047 §7). Nothing in
+/// The same operation without the bound check (RFC-0047 rule 7). Nothing in
 /// `prepare` reaches it: the MIR holds no unchecked instruction, and until
 /// the interval pass carries its own proof the only way to run one is for a
 /// probe to substitute it into a prepared body.

@@ -18,7 +18,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
         + Copy
         + Default;
     /// The frame a handler calls a closure on: the cells above the calling
-    /// frame (RFC-0050 rule 6). This is the state **itself**, not a borrow of
+    /// frame (RFC-0052 rule 7). This is the state **itself**, not a borrow of
     /// it: a `Ctx` owns one, and every crossing hands out `&mut Ctx` from the
     /// owner of that `Ctx`. Nothing returns a frame by value, so the state
     /// never moves out of the frame below and `Regs::take_window`'s "one
@@ -66,14 +66,14 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 
     /// The operation one extern call site runs as. `H::WIDTH` says which
     /// form the call takes — how many of the runtime's values its arguments
-    /// are and where its result goes (RFC-0044 stage 2c, RFC-0047 amended
-    /// rule 2) — and a runtime that lays registers by form reads it there;
+    /// are and where its result goes (RFC-0044 rule 3, RFC-0047 rule 6)
+    /// — and a runtime that lays registers by form reads it there;
     /// one that runs every call where it stands ignores it.
     fn op<H>(handler: H, shape: Self::CallShape) -> Self::Op
     where
         H: crate::handler::Handler<Self>;
 
-    /// One call of a run the host fused (RFC-0044 stage 4): a call whose
+    /// One call of a run the host fused (RFC-0044 rule 7): a call whose
     /// arguments are at most two of the runtime's values and whose result
     /// is one. A runtime that fuses refuses any other form here.
     fn fused<H>(handler: H, shape: Self::FusedShape) -> Self::FusedCall
@@ -147,7 +147,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     where
         T: Send + Sync + 'static;
 
-    /// The language's `Option` (RFC-0022).
+    /// The language's `Option` (RFC-0039 rule 6).
     fn none(&self) -> Self::Value;
     fn some(&self, payload: Self::Value) -> Self::Value;
     fn is_none(&self, value: &Self::Value) -> bool;
@@ -168,11 +168,11 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// As `some_at`, and the storage is exclusively named for `'a`.
     unsafe fn some_at_mut<'a>(&self, value: &'a mut Self::Value) -> Option<&'a mut Self::Value>;
 
-    /// The name a field key is at run time (RFC-0032).
+    /// The name a field key is at run time (RFC-0050 rule 8).
     fn symbol(&self, name: &str) -> acvus_utils::Astr;
 
-    /// How a tag lies in a register is the runtime's contract (RFC-0050 rule
-    /// 6), so `acvus-extern-macro`'s derived enum crossing calls these two and
+    /// How a tag lies in a register is the runtime's contract (RFC-0059),
+    /// so `acvus-extern-macro`'s derived enum crossing calls these two and
     /// never reads the word itself.
     fn variant_tag(&self, name: &str) -> Self::Value;
 
@@ -189,7 +189,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 
     /// A slice written into the run its result is: two of the runtime's
     /// values, one per register of the pair the machine keeps a slice in
-    /// (RFC-0047 amended). A runtime whose value cannot carry a bare word
+    /// (RFC-0047 rule 6). A runtime whose value cannot carry a bare word
     /// holds no slice and says so here.
     fn slice_into_run(&self, words: crate::slice::Words, out: &mut [Self::Value]);
 
@@ -218,7 +218,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
 
     /// Run `f` to its result now, reached only where `call_is_sync`
     /// answered true for this same value. Each argument crosses straight into
-    /// the parameter register `frame` holds for it (RFC-0052 §7). A runtime
+    /// the parameter register `frame` holds for it (RFC-0052 rule 7). A runtime
     /// that answers `false` above is never asked, and keeps the default.
     ///
     /// # Safety

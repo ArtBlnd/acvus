@@ -127,7 +127,7 @@ impl Checked {
         &self.mir
     }
 
-    /// A `$` a binding fixed is not among these (RFC-0071 Decision 5).
+    /// A `$` a binding fixed is not among these (RFC-0071 rule 5).
     pub fn inputs(&self) -> &[ContextInfo] {
         &self.inputs
     }
@@ -188,7 +188,7 @@ impl Compiled {
     }
 }
 
-/// One host injects the `$` names of the whole graph (RFC-0071 Decision 4),
+/// One host injects the `$` names of the whole graph (RFC-0071 rule 4),
 /// so a run requires the union over its functions.
 fn required_inputs(by_function: &FxHashMap<QualifiedRef, Vec<ContextInfo>>) -> Vec<ContextInfo> {
     let mut inputs: Vec<ContextInfo> = Vec::new();

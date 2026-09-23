@@ -1,5 +1,5 @@
 //! The instances of the core signatures at the word types: `Int`, `Float`,
-//! `Bool`, `Byte`, `Char` and `String` (RFC-0070 D5).
+//! `Bool`, `Byte`, `Char` and `String` (RFC-0070 rule 5).
 
 use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};

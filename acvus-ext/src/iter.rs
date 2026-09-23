@@ -112,7 +112,7 @@ where
 }
 
 /// The `next` of `Items<#T>`, for a declaration that builds an `Items` at a
-/// Rust type of its own (RFC-0068 D8).
+/// Rust type of its own (RFC-0068 rule 8).
 macro_rules! next_items_of {
     (element: $t:ty, next: $next:ident) => {
         #[::acvus_extern::extern_fn(instance_of = $crate::iter::sig::next, effect = pure)]

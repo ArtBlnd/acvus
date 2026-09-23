@@ -1,5 +1,5 @@
 //! A run of extern calls that feed each other, and the deref that may close
-//! it, is one operation (RFC-0044, stage 6).
+//! it, is one operation (RFC-0044 rule 7).
 //!
 //! Every fusing case asserts a value as well as a shape. A run that hands
 //! the wrong intermediate to the wrong call prepares the same number of
@@ -171,7 +171,7 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
     found
 }
 
-/// `Fused<CALLS, TAIL, LARGE>` carries its own shape in its type: RFC-0052
+/// `Fused<CALLS, TAIL, LARGE>` carries its own shape in its type: RFC-0044 rule 7
 /// made the call count and the tail const parameters, so the instance name
 /// is the shape and nothing has to be read out of a payload.
 fn fused_shape(op: &str) -> Option<RunShape> {
@@ -227,7 +227,7 @@ async fn every_index_of_a_run_reaches_the_call_the_source_gave_it() {
 
 /// An element access is no longer a run: `a[i]` is one `AsSlice` per index
 /// expression, and nothing reads an `AsSlice`'s result but the `Index`
-/// beside it, which is an operation and not a call (RFC-0047 §3).
+/// beside it, which is an operation and not a call (RFC-0047 rule 3).
 #[tokio::test]
 async fn an_index_expression_is_no_run_at_all() {
     assert_eq!(run_shapes("@m[1][0]"), []);

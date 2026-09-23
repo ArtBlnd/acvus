@@ -321,7 +321,7 @@ fn a_parameter_the_body_leaves_open_takes_one_width_for_every_call() {
     assert!(err.contains("type mismatch: expected u8, got i64"), "{err}");
 }
 
-// -- A comparison on an extension type is `core::cmp` (RFC-0070 D5) -------
+// -- A comparison on an extension type is `core::cmp` (RFC-0070 rule 5) -------
 
 mod fx_ord {
     use acvus_extern::{ExternType, Registry, TypesOnly, extern_fn, extern_registry};

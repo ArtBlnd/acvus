@@ -349,7 +349,7 @@ fn glob_match<Rt>(pat: &[Erased<Rt, i64>], line: &[Erased<Rt, i64>]) -> bool
 where
     Rt: acvus_extern::Runtime,
 {
-    // The elements are the script's own (RFC-0047 rule 6, RFC-0068 D4), and
+    // The elements are the script's own (RFC-0047 rule 6, RFC-0068 rule 4), and
     // an `Erased<Rt, i64>` is read in place through its deref, so the
     // accessors still index the container the script lent.
     glob_over(pat.len(), |at| *pat[at], line.len(), |at| *line[at])
@@ -437,7 +437,7 @@ alive = false; \
 }
 
 /// The same matcher with `break` in place of the `alive` flag (RFC-0057
-/// Decision 4). The flag was the exit the language had; the two exits are
+/// rule 4). The flag was the exit the language had; the two exits are
 /// `break` now, and the `Mov` per iteration that carried the flag through
 /// the loop's back edge goes with it --
 /// `acvus-interpreter-test/tests/loop_exit_moves.rs` counts them.

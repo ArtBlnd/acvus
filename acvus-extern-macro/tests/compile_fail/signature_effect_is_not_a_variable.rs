@@ -1,4 +1,4 @@
-//! A signature's effect is one of its own effect variables (RFC-0065 §2).
+//! A signature's effect is one of its own effect variables (RFC-0067 rule 2).
 use acvus_extern::extern_signature;
 
 extern_signature! {

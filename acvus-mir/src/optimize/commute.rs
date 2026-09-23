@@ -16,7 +16,7 @@
 //! axis.
 //!
 //! A call is ordered against the run's own context accesses by its effect's
-//! read and write sets (RFC-0017): it joins a run only if no `Commit`
+//! read and write sets (RFC-0025 rule 10): it joins a run only if no `Commit`
 //! between the run's first call and itself names a context it touches, and
 //! no `Fetch` names one it writes; a call that touches any context is never moved
 //! across blocks.

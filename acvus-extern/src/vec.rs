@@ -1,6 +1,6 @@
 //! `Vec<T>`: the dynamic-length sequence is the language's `Vec<T>` and
 //! Rust's `Vec<T>` alike. In a uniform slot it crosses the boundary as the
-//! runtime's `Vec<Owned<Rt>>` (RFC-0022): as the whole buffer when the element
+//! runtime's `Vec<Owned<Rt>>` (RFC-0039 rule 5): as the whole buffer when the element
 //! is a value in place, element by element when the element converts. In a
 //! `#` slot it crosses as one box holding the Rust `Vec<T>` itself.
 
@@ -57,8 +57,8 @@ where
                 .map(|v| Owned::from_value(v.erase(rt)))
                 .collect()
         };
-        // SAFETY: `Vec<T>` is stored as `Vec<Owned<Rt>>` (RFC-0022,
-        // RFC-0048 §7).
+        // SAFETY: `Vec<T>` is stored as `Vec<Owned<Rt>>` (RFC-0039 rule 5,
+        // RFC-0048 rule 7).
         unsafe { rt.erase::<Vec<Owned<Rt>>>(items) }
     }
 

@@ -83,7 +83,7 @@ fn every_lambda_of_a_script_is_checked() {
 
 /// RFC-0054: the host declared what `main` returns, so a `main` leaving with
 /// something else is refused at `validate` the way a lambda's body is. This
-/// is RFC-0047 T2's sabotage, made permanent.
+/// is a sabotage probe, made permanent (RFC-0054).
 #[test]
 fn a_main_is_checked_against_what_the_host_declared() {
     let i = Interner::new();

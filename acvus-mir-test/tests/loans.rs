@@ -1,6 +1,6 @@
 //! Intent tests for `analysis::loans`: a call that is lent a place reads
 //! or writes it, and every pass that moves, removes, or allocates around
-//! storage sees that (RFC-0015, RFC-0018).
+//! storage sees that (RFC-0018).
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{Effect, Mutability, ParamTerm, Poly, Ty, TyTerm, TypeArg, lift_to_poly};

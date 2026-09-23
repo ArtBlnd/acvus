@@ -64,7 +64,7 @@ fn a_while_let_test_stays_a_jump_if() {
     assert!(ir.contains(JUMP_IF), "{ir}");
 }
 
-/// RFC-0063's Consequences records the correction this test pins: Decision 1
+/// RFC-0063 rule 2 states the correction this test pins: rule 1
 /// had listed `?` among the branches that rejoin by construction.
 #[test]
 fn a_try_stays_a_jump_if_because_its_failure_arm_returns() {

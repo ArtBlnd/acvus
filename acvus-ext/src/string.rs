@@ -7,7 +7,7 @@
 //! Every function that reads takes a `&str`. A function whose result is a
 //! run of its argument's own bytes returns `&str` and the caller holds the
 //! argument's loan for as long as the result; a function that builds new
-//! bytes returns `String` (RFC-0062 Decisions 2 and 3). Two units coexist
+//! bytes returns `String` (RFC-0062 rules 2 and 3). Two units coexist
 //! here and each function states its own: `len`, `find`, `rfind`,
 //! `substring`, `is_char_boundary`, `char_indices` and `match_indices` are
 //! in bytes, `char_at`, `chars` and the `pad_*` width in Unicode scalar
@@ -188,7 +188,7 @@ fn is_char_boundary(s: &str, i: u64) -> bool {
 /// caller holds `s`'s loan for as long as the result. Both offsets are byte
 /// offsets and both must be on a character boundary; `start` past `end`, an
 /// offset past the length, or an offset inside a character is refused
-/// (RFC-0062 Decision 2).
+/// (RFC-0062 rule 2).
 #[extern_fn(effect = pure)]
 fn substring(s: &str, start: u64, end: u64) -> &str {
     let (Ok(from), Ok(to)) = (usize::try_from(start), usize::try_from(end)) else {

@@ -1,4 +1,4 @@
-//! A slice is the one thing the machine indexes (RFC-0047, T1).
+//! A slice is the one thing the machine indexes (RFC-0047).
 //!
 //! Nothing lowers `a[i]` yet, so every body here is built by hand, as
 //! `prepare`'s and `code_motion`'s own tests build theirs.
@@ -357,7 +357,7 @@ async fn an_index_at_the_length_panics_with_rusts_text() {
 // -- Writing an element ----------------------------------------------
 
 /// An element whose drop is counted: `IndexSet` assigns, so the element it
-/// replaces is released there and not at the end of the run (RFC-0041).
+/// replaces is released there and not at the end of the run (RFC-0047 rule 4).
 struct Counted;
 
 static ELEMENTS_DROPPED: AtomicUsize = AtomicUsize::new(0);

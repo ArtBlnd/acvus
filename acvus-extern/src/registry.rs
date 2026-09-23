@@ -30,7 +30,7 @@ pub struct FnDecl {
     pub coercion: Option<Coercion>,
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
-    /// The instances this declaration requires (RFC-0068 D1), in the order
+    /// The instances this declaration requires (RFC-0067 rule 1), in the order
     /// `#[extern_fn]` read its `Instance` parameters.
     pub requires: Vec<Requirement>,
 }
@@ -40,8 +40,8 @@ pub enum Coercion {
     /// A rule from the parameter's type to the return type (RFC-0023),
     /// registered alongside the function.
     Cast,
-    /// The machine's reading of the storage behind a reference (RFC-0047
-    /// §5, RFC-0062 Decision 3): `&Vec<T>` as `&[T]`, `&String` as `&str`.
+    /// The machine's reading of the storage behind a reference (RFC-0047 rule 3,
+    /// RFC-0062 rule 3): `&Vec<T>` as `&[T]`, `&String` as `&str`.
     ///
     /// This is not written as a `Cast` because a `CastRule` is indexed by
     /// a user-defined head and both sides of a view are references, so
@@ -244,7 +244,7 @@ impl FamilyPatterns {
     }
 }
 
-/// A cast a declaration wrote from `X<#T>` to `X<T>` (RFC-0068 D8) is one
+/// A cast a declaration wrote from `X<#T>` to `X<T>` (RFC-0068 rule 8) is one
 /// instance of the family's `X::erase`, the form `family_casts` declares, so
 /// that every element type's cast is one rule and one name.
 fn as_family_erase<R>(i: &Interner, declared: ExternFn<R>) -> ExternFn<R>
@@ -416,7 +416,7 @@ pub enum CombineError {
         instance: QualifiedRef,
         signature: QualifiedRef,
     },
-    /// Two instances of one signature whose types unify (RFC-0027).
+    /// Two instances of one signature whose types unify (RFC-0019).
     DuplicateInstance {
         signature: QualifiedRef,
         ty: PolyTy,
@@ -430,7 +430,7 @@ pub enum CombineError {
         function: QualifiedRef,
     },
     /// A declaration requiring a signature no registry declares
-    /// (RFC-0067 Decision 1).
+    /// (RFC-0067 rule 1).
     RequiredSignatureUnknown {
         function: QualifiedRef,
         signature: QualifiedRef,
@@ -438,7 +438,7 @@ pub enum CombineError {
     /// A requirement on a signature one of whose instances has no mono
     /// glue: the requirement resolves to a plain `fn` at whichever type the
     /// call settles on, and for that instance there is none (RFC-0067
-    /// Decision 1).
+    /// rule 8).
     RequiredInstanceWithoutGlue {
         signature: String,
         instance: String,
@@ -579,7 +579,7 @@ pub struct Externs<R: Runtime> {
 /// The mono glue of every instance of every required signature, numbered
 /// as the compiler numbers that signature's instances (`Instances`): this
 /// is what `prepare` asks to build an entry for a settled requirement
-/// (RFC-0070 D2).
+/// (RFC-0070 rule 2).
 ///
 /// A row is dense: a signature one of whose instances has no glue is not a
 /// row, and `Externs::combine` refuses a requirement on such a signature

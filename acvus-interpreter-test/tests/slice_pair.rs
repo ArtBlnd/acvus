@@ -1,4 +1,4 @@
-//! RFC-0047 amended, rule 1: a slice-typed value is two adjacent word
+//! RFC-0047 rule 6: a slice-typed value is two adjacent word
 //! registers, and `Index` reads the second of them as the length.
 //!
 //! `Body::slot_kinds` is what `machine::open_frame` writes, so it is where

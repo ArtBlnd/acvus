@@ -64,7 +64,7 @@ whitespace rule:
 - A line beginning with `%%` is appended with one `%` in its place.
 - A line ending in `\` is appended without its newline.
 
-`{{ expr }}` inside a text line is the format string of RFC-0062. The
+`{{ expr }}` inside a text line is the format string of RFC-0058 rule 6. The
 expression is a `String` or a `&str`; nothing is converted to text
 implicitly, so a number takes `| to_string` or `.to_string()`. The tag's
 content is tokenized as an expression, so a string literal inside it may
@@ -79,7 +79,7 @@ Inline branching is the expression grammar's, not a template form, because
 `$name` is a value the host injects, shared by every function of the graph
 and typed by its use; `@name` is a context, as in a script. A call passes
 nothing, `{{ rules() }}`, and the inputs a template requires are the `$`
-names its reachable code reads (RFC-0071 Decisions 4 and 5). There is no
+names its reachable code reads (RFC-0071 rules 4 and 5). There is no
 include and no parameter declaration.
 
 ### Example
@@ -499,7 +499,7 @@ Variant      = "Some" "(" Pattern ")"      ← Some variant
 **Wildcard `_` scope**: `_` stands in a tuple pattern and as a `match` arm's
 pattern, `% _ =>` in a template included. It is not an expression.
 
-**ContextBind in destructure**: a `@name` sub-pattern stores the matched value into the context `@name`. No two names ever denote one storage (RFC-0015): `{ @x, } = @a { body }` copies `@a.x` into `@x`, and `@x` inside the body is the context `@x`.
+**ContextBind in destructure**: a `@name` sub-pattern stores the matched value into the context `@name`. No two names ever denote one storage (RFC-0018): `{ @x, } = @a { body }` copies `@a.x` into `@x`, and `@x` inside the body is the context `@x`.
 
 ---
 

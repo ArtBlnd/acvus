@@ -1,5 +1,5 @@
 //! A frame the stage owns is reused across elements, and the sweep still
-//! runs per call (RFC-0052 §6).
+//! runs per call (RFC-0052 rule 7).
 //!
 //! `map`'s stage makes one `Store` when it is built and lends it to every
 //! call. Nothing about the frame's lifetime changes what the frame owes: a

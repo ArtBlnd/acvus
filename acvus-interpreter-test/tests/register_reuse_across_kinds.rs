@@ -1,4 +1,4 @@
-//! RFC-0052 §5: a word-typed slot's kind is written once, when the frame is
+//! RFC-0052 rule 5: a word-typed slot's kind is written once, when the frame is
 //! made, and a word operation stores the word only.
 //!
 //! That is only sound while the register selector keeps a slot in one kind

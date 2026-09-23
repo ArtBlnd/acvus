@@ -1,4 +1,4 @@
-//! RFC-0067 step 4, spike: an iterator is a type with a `next`.
+//! RFC-0067, spike: an iterator is a type with a `next`.
 //!
 //! A source, two adaptors standing at a pattern and a consumer over one
 //! shared signature `nit::next` — no `Iterator` type and no `Box<dyn>`
@@ -220,7 +220,7 @@ where
 
 /// The file's async stage: it suspends once per element and reaches its
 /// inner stage through `into_async` — the sync instance `nslowed` was
-/// handed, called at the async task (RFC-0067 Decision 5).
+/// handed, called at the async task (RFC-0067 rule 5).
 #[extern_fn(instance_of = sig::next, effect = pure)]
 async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<I, Rt>) -> Option<i64>
 where
@@ -407,7 +407,7 @@ fn a_sync_consumer_given_an_async_instance_is_refused() {
 
 /// `nmap` is generic in its element types: what `x` is inside the closure
 /// comes from the instance of `nit::next` at the source's type, decided
-/// where `nmap`'s requirement is (RFC-0068 D1).
+/// where `nmap`'s requirement is (RFC-0068 rule 1).
 #[tokio::test]
 async fn a_requirement_binds_the_signatures_other_variables() {
     assert_eq!(

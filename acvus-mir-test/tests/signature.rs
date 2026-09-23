@@ -1,5 +1,5 @@
 //! A shared signature with polymorphic instances, at the contract
-//! (RFC-0027): the instance the argument's shape picks fixes the variables
+//! (RFC-0019): the instance the argument's shape picks fixes the variables
 //! the signature left open, a call no instance matches is an error at the
 //! call, and a call whose argument is still open stays open.
 

@@ -175,7 +175,7 @@ fn segment_mut<'v>(value: &'v mut Value, step: &Step) -> PlaceMut<'v> {
     }
 }
 
-/// A step under a `None`: the depth word it stands for (RFC-0022).
+/// A step under a `None`: the depth word it stands for (RFC-0039 rule 6).
 fn depth_step(value: &Value, step: &Step) -> Value {
     debug_assert!(
         matches!(step, Step::OptionPayload),
@@ -185,14 +185,14 @@ fn depth_step(value: &Value, step: &Step) -> Value {
     match depth_payload(value) {
         Some(v) => v,
         None => {
-            debug_assert!(false, "a depth step lands on a depth (RFC-0022)");
+            debug_assert!(false, "a depth step lands on a depth (RFC-0039 rule 6)");
             *value
         }
     }
 }
 
 /// `None` where the payload has a place of its own; the depth word where it
-/// has not (RFC-0022).
+/// has not (RFC-0039 rule 6).
 fn depth_payload(value: &Value) -> Option<Value> {
     match value.option_payload() {
         Some(Place::Depth(v)) => Some(v),
@@ -203,7 +203,7 @@ fn depth_payload(value: &Value) -> Option<Value> {
 
 // -- Reading and writing a place --------------------------------------
 
-/// RFC-0026: a `String` is cloned out of the storage it is read from, and
+/// RFC-0018 rule 2: a `String` is cloned out of the storage it is read from, and
 /// every other value is copied.
 #[inline]
 fn read<const CLONE: bool>(at: &Value) -> Value {
@@ -220,7 +220,7 @@ fn read<const CLONE: bool>(at: &Value) -> Value {
 }
 
 /// A `Some` whose payload is a `None` has no storage of its own, and the
-/// depth word the walk built is then the whole of what is read (RFC-0022).
+/// depth word the walk built is then the whole of what is read (RFC-0039 rule 6).
 #[inline]
 fn read_place<const CLONE: bool>(place: Place<'_>) -> Value {
     match place {
@@ -249,7 +249,7 @@ pub fn deref_word<const CLONE: bool>(reference: &Value) -> Value {
 
 // -- How a read leaves the place it read ------------------------------
 //
-// Decision (RFC-0052 §2): moving a part out through a borrow was not built.
+// Decision (RFC-0018): moving a part out through a borrow was not built.
 // A borrow does not own what it names, so `Moved` carries no `THROUGH`
 // parameter and that fourth combination has no name.
 
@@ -290,7 +290,7 @@ impl<const THROUGH: bool> Reads for Copied<THROUGH> {
     }
 }
 
-/// RFC-0026: a `String` read out of a place is cloned, and the place keeps
+/// RFC-0018 rule 2: a `String` read out of a place is cloned, and the place keeps
 /// its own.
 pub struct Cloned<const THROUGH: bool>;
 

@@ -530,7 +530,7 @@ fn a_result_releases_its_err_payload_once() {
     assert_eq!(drops.count(), 1, "the err payload was released once");
 }
 
-// -- `Option`: the language's option (RFC-0022) --------------------------
+// -- `Option`: the language's option (RFC-0039 rule 6) --------------------------
 
 #[test]
 fn an_option_releases_its_payload_once() {

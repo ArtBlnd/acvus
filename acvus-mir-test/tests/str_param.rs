@@ -1,4 +1,4 @@
-//! A `&str` parameter takes `&s` by coercion (RFC-0062 Decision 3): where
+//! A `&str` parameter takes `&s` by coercion (RFC-0062 rule 3): where
 //! the `String`'s `as_str` ends up, what a referent that is no `String` is
 //! refused with, and that a referent the solve names only after checking
 //! answers both the same way.
