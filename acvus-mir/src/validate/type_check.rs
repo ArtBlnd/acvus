@@ -183,6 +183,11 @@ pub enum ValidationErrorKind {
     NotAParameter {
         value_id: u32,
     },
+    /// A `MakeClosure` names a body its module does not hold in
+    /// `MirModule::closures`, the only place `prepare` looks it up.
+    UnheldClosure {
+        body: Label,
+    },
 }
 
 /// What the conflicting instruction does to the storage, in the word the
@@ -215,12 +220,12 @@ pub fn check_types(module: &MirModule) -> Vec<ValidationError> {
     let declared = declared_closure_returns(module);
 
     let mut ctx = CheckCtx::new("main".to_string(), Some(module.ret.clone()));
-    ctx.check_body(&module.main, &mut errors);
+    ctx.check_body(&module.main, &module.closures, &mut errors);
 
     for (label, closure) in &module.closures {
         let name = format!("closure({:?})", label);
         let mut ctx = CheckCtx::new(name, declared.get(label).cloned());
-        ctx.check_body(closure, &mut errors);
+        ctx.check_body(closure, &module.closures, &mut errors);
     }
 
     errors
@@ -402,7 +407,12 @@ impl CheckCtx {
         }
     }
 
-    fn check_body(&mut self, body: &MirBody, errors: &mut Vec<ValidationError>) {
+    fn check_body(
+        &mut self,
+        body: &MirBody,
+        closures: &FxHashMap<Label, MirBody>,
+        errors: &mut Vec<ValidationError>,
+    ) {
         // Build label map
         self.label_map.clear();
         for (i, inst) in body.insts.iter().enumerate() {
@@ -433,6 +443,16 @@ impl CheckCtx {
                     kind: ValidationErrorKind::NotAParameter {
                         value_id: slot.to_raw() as u32,
                     },
+                });
+            }
+            if let InstKind::MakeClosure { body: made, .. } = &inst.kind
+                && !closures.contains_key(made)
+            {
+                errors.push(ValidationError {
+                    scope: self.scope_name.clone(),
+                    inst_index: pc,
+                    span: inst.span,
+                    kind: ValidationErrorKind::UnheldClosure { body: *made },
                 });
             }
             for value in crate::analysis::inst_info::defs(&inst.kind) {
@@ -2326,6 +2346,27 @@ mod tests {
         assert_eq!(inst_name, "Return");
         assert_eq!(*expected, array_of_i64());
         assert!(matches!(actual, Ty::Ref(..)), "{actual:?}");
+    }
+
+    #[test]
+    fn a_closure_made_from_a_body_the_module_does_not_hold_is_refused() {
+        let mut module = make_closure_module(Ty::I64, Ty::I64);
+        let body = module
+            .closures
+            .remove(&Label(0))
+            .expect("the module holds the closure it makes");
+        module.closures.insert(Label(1), body);
+        let errors = check_types(&module);
+        let [
+            ValidationError {
+                kind: ValidationErrorKind::UnheldClosure { body: Label(0) },
+                inst_index: 0,
+                ..
+            },
+        ] = errors.as_slice()
+        else {
+            panic!("expected one UnheldClosure at the MakeClosure, got {errors:?}");
+        };
     }
 
     #[test]

@@ -3,10 +3,16 @@
 //! runs while the level above is already executing as a closure, so the
 //! closure bodies a running `FnValue` can reach are what these measure.
 
+use std::time::Duration;
+
 use acvus_interpreter::Value;
+use acvus_interpreter_test::corpus::{self, Outcome, Stage};
 use acvus_interpreter_test::*;
+use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
+
+const LIMIT: Duration = Duration::from_secs(30);
 
 async fn run(source: &str, ret: Ty) -> Value {
     let i = Interner::new();
@@ -99,4 +105,60 @@ async fn a_closure_returned_from_a_closure_is_called_at_the_top_level() {
     )
     .await;
     assert_close(&v, 12.0);
+}
+
+/// A run that crashes the process is an outcome here, not the end of the
+/// test binary, so each program runs in a process of its own.
+fn outcome(source: &str, opt: Opt) -> Outcome {
+    acvus_interpreter_test::attempt_within!(source, opt, Stage::Run, LIMIT)
+        .unwrap_or_else(|lapse| panic!("at {opt:?}, {lapse:?}: {source}"))
+}
+
+fn runs_to(source: &str, value: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        match outcome(source, opt) {
+            Outcome::Value(got) => assert_eq!(got, value, "at {opt:?}: {source}"),
+            other => panic!("at {opt:?}, expected {value}, got {other:?}: {source}"),
+        }
+    }
+}
+
+#[test]
+fn corpus_child() {
+    corpus::child();
+}
+
+/// A lambda that makes and calls a lambda of its own, called where the
+/// caller's body already has blocks: splicing it there keeps the inner
+/// `MakeClosure` naming the body the module holds, which is not one of the
+/// caller's blocks.
+const TWO_DEEP: &str = "let f = | | -> { let g = | | -> 2; g() };";
+const THREE_DEEP: &str =
+    "let n = 3; let f = | | -> { let g = | | -> { let h = | | -> n; h() }; g() };";
+
+#[test]
+fn a_lambda_making_a_lambda_runs_under_an_if() {
+    runs_to(&format!("{TWO_DEEP} if true {{ f() }} else {{ 0 }}"), "2");
+    runs_to(&format!("{THREE_DEEP} if true {{ f() }} else {{ 0 }}"), "3");
+}
+
+#[test]
+fn a_lambda_making_a_lambda_runs_under_a_match() {
+    runs_to(&format!("{TWO_DEEP} match f() {{ 2 => 7, _ => 0, }}"), "7");
+    runs_to(
+        &format!("{THREE_DEEP} match f() {{ 3 => 7, _ => 0, }}"),
+        "7",
+    );
+}
+
+#[test]
+fn a_lambda_making_a_lambda_runs_in_a_loop() {
+    runs_to(
+        &format!("{TWO_DEEP} let s = 0; for i in 0..3 {{ s = s + f(); }} s"),
+        "6",
+    );
+    runs_to(
+        &format!("{THREE_DEEP} let s = 0; for i in 0..3 {{ s = s + f(); }} s"),
+        "9",
+    );
 }

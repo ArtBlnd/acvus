@@ -178,6 +178,11 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 f,
                 "Val({value_id}) is named as a parameter's storage and is not a parameter of the body"
             ),
+            ValidationErrorKind::UnheldClosure { body } => write!(
+                f,
+                "a closure is made from body L{}, which the module does not hold",
+                body.0
+            ),
             ValidationErrorKind::LentToCall { storage, touch, .. } => {
                 let named = written_as(self.interner, storage.as_ref())
                     .unwrap_or_else(|| "the storage".to_string());

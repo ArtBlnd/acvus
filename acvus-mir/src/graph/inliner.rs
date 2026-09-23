@@ -1089,13 +1089,19 @@ fn remap_inst(
         },
 
         // Closures
+        //
+        // `body` is a key of `MirModule::closures`, not a block of the body
+        // being spliced, so the label offset does not apply to it. The only
+        // callee that reaches here making a closure is a [`ClosurePlan`]'s,
+        // whose closures the caller's module holds under the same keys
+        // ([`makes_a_closure`] keeps every other one out).
         InstKind::MakeClosure {
             dst,
             body,
             captures,
         } => InstKind::MakeClosure {
             dst: r(*dst),
-            body: rl(*body),
+            body: *body,
             captures: rv(captures),
         },
 
