@@ -48,7 +48,7 @@ fn a_qualified_name_no_namespace_declares_is_a_structural_variant() {
     assert!(ir.contains("variant Circle"), "{ir}");
     let err = check("Shape::Circle(1, 2)").expect_err("a variant has one payload");
     assert!(err.contains("Shape::Circle"), "{err}");
-    let ir = check("let xs = [1]; let v = nope::len(&xs); 0")
+    let ir = check("let xs = [1]; let v = nope::len(xs); 0")
         .expect("`nope` is no namespace: a variant");
     assert!(ir.contains("nope{len("), "{ir}");
 }

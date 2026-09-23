@@ -16,7 +16,7 @@ use crate::place::{
     Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
 };
 use crate::solver::{
-    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead, CapturedShape,
+    Admission, Answer, CallShape, Candidate, CaptureOutcome, CaptureRead,
     CompilerInstances, Conversion, ConvertedArgument, Decision, DecisionId, EffectRelation,
     ComponentOffer, Handed, InstanceChoice, InstanceKind, Kept, LendOutcome, MatchBinding,
     MatchMode, MatchOutcome, Mismatch, MismatchReason, ReceiverMode, ReferencePair,
@@ -719,11 +719,10 @@ pub type CallMap = FxHashMap<AstId, CallTarget>;
 
 /// The reference a body's result names, itself or inside the data it holds.
 ///
-/// A reference inside data is already refused where the data is built
-/// (`MirErrorKind::ReferenceInData`), and a variant payload is the one data
-/// constructor that check does not reach; `nope::len(&xs)` builds one whose
-/// referent the body releases before it returns, and reading the result then
-/// reads freed storage. A function type is not searched: its parameters and
+/// A reference inside data built here is refused where the data is built
+/// (`MirErrorKind::ReferenceInData`); data an extern returns has no such
+/// site, and `nope::len(&xs)` builds one whose referent the body releases
+/// before it returns, so reading the result then reads freed storage. A function type is not searched: its parameters and
 /// return are a signature, not storage this run holds.
 fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
     match ty {
@@ -1122,6 +1121,23 @@ struct ListPatternLength {
     span: Span,
 }
 
+/// A value stored in data, returned from a body, or captured, read once the
+/// solve has settled its type: a type still open where the value was written
+/// is held to RFC-0062 rules 5 and 6 and RFC-0064 rule 5 as a known one is.
+struct ValueSite {
+    at: ValuePosition,
+    span: Span,
+}
+
+enum ValuePosition {
+    /// A component of data built here.
+    Data(InferTy, DataShape),
+    /// A body's or a lambda's result.
+    Result(InferTy, ResultCrossing),
+    /// What a lambda captures, one word each.
+    Captures(Vec<InferTy>),
+}
+
 /// What an open head was read by: a field reads a value or through a
 /// reference, and `*` only through one.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1234,6 +1250,8 @@ pub struct TypeChecker<'a, 's, 'src> {
     context_binds_under_open_head: Vec<DeferredContextBind>,
     reads_under_open_head: Vec<ReadUnderOpenHead>,
     list_pattern_lengths: Vec<ListPatternLength>,
+    /// Drained by `check_value_sites`.
+    value_sites: Vec<ValueSite>,
     /// Accumulated errors.
     errors: Vec<MirError>,
     /// What the expression under check is read for. One field, so
@@ -1330,6 +1348,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             context_binds_under_open_head: Vec::new(),
             reads_under_open_head: Vec::new(),
             list_pattern_lengths: Vec::new(),
+            value_sites: Vec::new(),
             demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
             effect_bound_sites: Vec::new(),
@@ -1537,6 +1556,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     tail.span(),
                 );
             }
+            self.value_sites.push(ValueSite {
+                at: ValuePosition::Result(ty.clone(), crossing),
+                span: tail.span(),
+            });
             ty
         } else {
             // No tail: the body returns unit, and a declaration says whether
@@ -1555,20 +1578,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             TyTerm::Unit
         };
         self.solve_body();
-        if let Some(tail) = &script.tail {
-            let resolved = self.solver.resolve_ty(&tail_ty);
-            match crossing.unreturnable(&resolved) {
-                Some(Unreturnable::Reference(reference)) => {
-                    let ty = self.type_as_written(reference);
-                    self.error(MirErrorKind::ReferenceReturnedFromBody(ty), tail.span());
-                }
-                Some(Unreturnable::ClosureToTheHost(closure)) => {
-                    let ty = self.type_as_written(closure);
-                    self.error(MirErrorKind::ClosureReturnedToTheHost(ty), tail.span());
-                }
-                None => {}
-            }
-        }
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
@@ -2391,10 +2400,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             Some(recorded) => (recorded.read, recorded.seen.clone()),
             None => match self.solver.capture_read(ty) {
                 CaptureOutcome::Reads { read, seen } => (CaptureSource::Read(read), seen),
-                // The refusal is raised where the lambda closes; the body
-                // still reads the name at the type it has, so that one
-                // refusal is the only thing the program is told.
-                CaptureOutcome::Refused => (CaptureSource::Read(CaptureRead::Word), ty.clone()),
                 CaptureOutcome::HeadOpen => {
                     let seen = self.solver.fresh_ty_var();
                     let decision = self.solver.decide(Decision::Capture {
@@ -2579,21 +2584,14 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             .iter()
             .map(|c| self.solver.resolve_ty(&c.ty))
             .collect();
-        let captured_a_view = capture_types.iter().zip(&ls.captures).any(|(t, c)| {
-            matches!(t, TyTerm::Ref(_, target)
-                if self.solver.captured_shape(&target.ty()) == CapturedShape::Pair)
-                && !matches!(c.read, CaptureSource::Decided(_))
+        self.value_sites.push(ValueSite {
+            at: ValuePosition::Result(ret.clone(), ResultCrossing::OneValue),
+            span: body.span(),
         });
-        if captured_a_view {
-            self.error(MirErrorKind::ViewCaptured, body.span());
-        }
-        let resolved_ret = self.solver.resolve_ty(&ret);
-        if let Some(Unreturnable::Reference(reference)) =
-            ResultCrossing::OneValue.unreturnable(&resolved_ret)
-        {
-            let ty = self.type_as_written(reference);
-            self.error(MirErrorKind::ReferenceReturnedFromBody(ty), body.span());
-        }
+        self.value_sites.push(ValueSite {
+            at: ValuePosition::Captures(capture_types.clone()),
+            span: body.span(),
+        });
 
         self.pop_scope();
         let ty = TyTerm::Fn {
@@ -2630,22 +2628,23 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         }
     }
 
-    /// A refused component is poison, so the aggregate does not carry the
-    /// reference on to a second refusal at the body's result.
+    /// A component of data, held to `reference_in_data` once its type is
+    /// settled.
     fn as_data(&mut self, ty: InferTy, span: Span, shape: DataShape) -> InferTy {
-        let Some(kind) = self.reference_in_data(&ty, shape) else {
-            return ty;
-        };
-        self.error(kind, span);
-        Self::infer_error()
+        self.value_sites.push(ValueSite {
+            at: ValuePosition::Data(ty.clone(), shape),
+            span,
+        });
+        ty
     }
 
     /// Walk a field path on a type, resolving each step.
     /// Returns the leaf type, or an error type if any step fails.
     /// The type stored at `base.path`: each step joins the object with a
     /// partial one naming the field, so a store to a field the object did
-    /// not have grows the object (RFC-0042 rule 1). A base that is not an
-    /// object is a type error at the store.
+    /// not have grows the object (RFC-0042 rule 1), and each field it
+    /// reaches is a component of data. A base that is not an object is a
+    /// type error at the store.
     fn field_path_for_store(&mut self, base: &InferTy, path: &[Astr], span: Span) -> InferTy {
         let mut current = base.clone();
         for field in path {
@@ -2664,7 +2663,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 self.error(kind, span);
                 return Self::infer_error();
             }
-            current = field_ty;
+            current = self.as_data(field_ty, span, DataShape::Aggregate);
         }
         current
     }
@@ -3594,6 +3593,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.resolve_conversions();
         self.settle_slice_args();
         self.settle_index_uses();
+        self.check_value_sites();
         let (settled, settled_effects) = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
         self.effect_bound_sites.extend(settled_effects);
@@ -4213,7 +4213,6 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     name: self.interner.resolve(name).to_string(),
                     candidates: self.shown_candidates(name, candidates.iter().copied()),
                 },
-                Unsettled::ViewCaptured { .. } => MirErrorKind::ViewCaptured,
                 Unsettled::MutableBorrowOfShared { .. } => MirErrorKind::MutableBorrowOfShared {
                     subject: ShownValue::Anonymous,
                 },
@@ -5583,6 +5582,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             );
             return Self::infer_error();
         };
+        let payload_span = args.first().map_or(span, Expr::span);
+        let payload_ty = self.as_data(payload_ty, payload_span, DataShape::Variant);
         let mut variants = FxHashMap::default();
         variants.insert(tag, Some(Box::new(payload_ty)));
         self.calls.insert(callee_id, CallChoice::StructuralVariant);
@@ -7081,6 +7082,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 let payload_ty = match payload {
                     Some(expr) => {
                         let ty = self.check_expr(expr);
+                        let ty = self.as_data(ty, expr.span(), DataShape::Variant);
                         Some(Box::new(ty))
                     }
                     None => None,
@@ -7562,6 +7564,59 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     }
                 }
                 LenTerm::Var(_) => self.error(MirErrorKind::ArrayLengthUnknown, span),
+            }
+        }
+    }
+
+    /// Every value stored in data, returned from a body, or captured, at
+    /// the type the solve settled (RFC-0062 rules 5 and 6, RFC-0064 rule 5).
+    fn check_value_sites(&mut self) {
+        let sites = std::mem::take(&mut self.value_sites);
+        let mut refused_in_data = false;
+        for ValueSite { at, span } in &sites {
+            let ValuePosition::Data(ty, shape) = at else {
+                continue;
+            };
+            if let Some(kind) = self.reference_in_data(ty, *shape) {
+                self.error(kind, *span);
+                refused_in_data = true;
+            }
+        }
+        for ValueSite { at, span } in sites {
+            match at {
+                ValuePosition::Data(..) => {}
+                ValuePosition::Result(ty, crossing) => {
+                    let resolved = self.solver.resolve_ty(&ty);
+                    match crossing.unreturnable(&resolved) {
+                        // A reference inside the result's data, where a
+                        // component of data was refused, is that refusal's
+                        // consequence (RFC-0011 rule 5).
+                        Some(Unreturnable::Reference(_))
+                            if refused_in_data && !matches!(resolved, TyTerm::Ref(..)) => {}
+                        Some(Unreturnable::Reference(reference)) => {
+                            let ty = self.type_as_written(reference);
+                            self.error(MirErrorKind::ReferenceReturnedFromBody(ty), span);
+                        }
+                        Some(Unreturnable::ClosureToTheHost(closure)) => {
+                            let ty = self.type_as_written(closure);
+                            self.error(MirErrorKind::ClosureReturnedToTheHost(ty), span);
+                        }
+                        None => {}
+                    }
+                }
+                // `MakeClosure` writes one word per capture and
+                // `machine::bind_captures` hands the body one reference to
+                // that word, so a view — the two adjacent registers of
+                // RFC-0047 rule 6 — has nowhere to put its length.
+                ValuePosition::Captures(captures) => {
+                    let captured_a_view = captures.iter().any(|c| {
+                        matches!(self.solver.resolve_ty(c), TyTerm::Ref(_, target)
+                            if is_view(&target.ty()))
+                    });
+                    if captured_a_view {
+                        self.error(MirErrorKind::ViewCaptured, span);
+                    }
+                }
             }
         }
     }

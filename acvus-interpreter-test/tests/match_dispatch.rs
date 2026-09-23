@@ -207,7 +207,7 @@ async fn a_match_with_no_context_still_runs() {
 /// two arms cover it and no `_` is written. The two payload types differ, so
 /// the union is what carries the set -- neither construction alone does.
 const MIXED_LIST: &str = "\
-let v = [E::A(1), E::B(\"xyz\"), E::A(4)]; \
+let v = [E::A(1), E::B(\"xyz\".to_string()), E::A(4)]; \
 let len = len(&v); let one = len / len; let i = len - len; let acc = @n; \
 while i < len { ";
 

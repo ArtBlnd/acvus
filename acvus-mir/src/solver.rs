@@ -1950,17 +1950,7 @@ pub enum CaptureRead {
 #[derive(Debug, Clone)]
 pub enum CaptureOutcome {
     HeadOpen,
-    Refused,
     Reads { read: CaptureRead, seen: InferTy },
-}
-
-/// What a capture of a reference to a type occupies in a closure's capture
-/// list, where the type is known well enough to say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapturedShape {
-    Word,
-    Pair,
-    Open,
 }
 
 #[derive(Debug, Clone)]
@@ -2300,11 +2290,6 @@ pub enum Unsettled {
         decision: DecisionId,
         conflict: EffectConflict,
     },
-    /// RFC-0018, narrowed by RFC-0064 rule 5 to the view a capture
-    /// register has no room for.
-    ViewCaptured {
-        decision: DecisionId,
-    },
     MutableBorrowOfShared {
         decision: DecisionId,
     },
@@ -2341,7 +2326,6 @@ impl Unsettled {
             | Unsettled::NoSignature { .. }
             | Unsettled::AmbiguousSignature { .. }
             | Unsettled::EffectExceeded { .. }
-            | Unsettled::ViewCaptured { .. }
             | Unsettled::MutableBorrowOfShared { .. } => Vec::new(),
         }
     }
@@ -2358,7 +2342,6 @@ impl Unsettled {
             | Unsettled::NoSignature { decision, .. }
             | Unsettled::AmbiguousSignature { decision, .. }
             | Unsettled::EffectExceeded { decision, .. }
-            | Unsettled::ViewCaptured { decision }
             | Unsettled::MutableBorrowOfShared { decision }
             | Unsettled::LendMismatch { decision, .. }
             | Unsettled::MatchMismatch { decision, .. } => *decision,
@@ -3115,13 +3098,9 @@ impl<'src> Solver<'src> {
     pub fn capture_read(&self, of: &InferTy) -> CaptureOutcome {
         match self.terms.shallow_resolve_ty(of) {
             TyTerm::Var(_) => CaptureOutcome::HeadOpen,
-            TyTerm::Ref(_, target) => match self.captured_shape(&target.ty()) {
-                CapturedShape::Pair => CaptureOutcome::Refused,
-                CapturedShape::Open => CaptureOutcome::HeadOpen,
-                CapturedShape::Word => CaptureOutcome::Reads {
-                    read: CaptureRead::Word,
-                    seen: of.clone(),
-                },
+            TyTerm::Ref(..) => CaptureOutcome::Reads {
+                read: CaptureRead::Word,
+                seen: of.clone(),
             },
             _ => match self.resolve_ty(of).is_word() {
                 Some(true) => CaptureOutcome::Reads {
@@ -3137,26 +3116,9 @@ impl<'src> Solver<'src> {
         }
     }
 
-    /// `MakeClosure` writes one word per capture and `machine::bind_captures`
-    /// hands the body one reference to that word, so a view — the two
-    /// adjacent registers of RFC-0047 rule 6 — has nowhere to put its
-    /// length. `typeck::is_view` is the same predicate over a closed type,
-    /// and the two must name the same types.
-    pub fn captured_shape(&self, target: &InferTy) -> CapturedShape {
-        match self.terms.shallow_resolve_ty(target) {
-            TyTerm::Slice(_) | TyTerm::Str => CapturedShape::Pair,
-            TyTerm::Var(_) => CapturedShape::Open,
-            TyTerm::Ref(_, inner) => self.captured_shape(&inner.ty()),
-            _ => CapturedShape::Word,
-        }
-    }
-
     fn step_capture(&mut self, id: DecisionId, of: &InferTy, seen: &InferTy) -> Progress {
         let (read, reads) = match self.capture_read(of) {
             CaptureOutcome::HeadOpen => return Progress::Unchanged,
-            CaptureOutcome::Refused => {
-                return Progress::Failed(Unsettled::ViewCaptured { decision: id });
-            }
             CaptureOutcome::Reads { read, seen } => (read, seen),
         };
         match self.capture_flows(&reads, seen) {

@@ -998,7 +998,7 @@ fn what_the_machine_cannot_run_the_checker_refuses() {
         (
             "namespace.acvus",
             "let xs = [1];\nnope::len(&xs)\n",
-            "a body does not return a reference",
+            "a reference cannot be stored in an enum's payload",
         ),
         (
             "field.acvus",

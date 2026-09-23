@@ -249,6 +249,8 @@ fn edit_distance(a: &str, b: &str) -> usize {
 pub enum DataShape {
     Aggregate,
     Payload,
+    /// A structural enum's variant payload.
+    Variant,
 }
 
 impl fmt::Display for DataShape {
@@ -256,6 +258,7 @@ impl fmt::Display for DataShape {
         f.write_str(match self {
             DataShape::Aggregate => "a list, object, or tuple",
             DataShape::Payload => "an Option or a Result",
+            DataShape::Variant => "an enum's payload",
         })
     }
 }

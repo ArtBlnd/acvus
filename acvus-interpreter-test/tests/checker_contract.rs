@@ -40,6 +40,19 @@ fn refused_with(source: &str, reason: &str) {
     }
 }
 
+/// A refusal that is the program's only one, at both levels. The program
+/// is the body `main`, which names the refusal.
+fn refused_only_with(source: &str, refusal: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        match outcome(source, opt) {
+            Outcome::Refused(why) => {
+                assert_eq!(why, format!("[main] {refusal}"), "at {opt:?}: {source}")
+            }
+            other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
+        }
+    }
+}
+
 #[test]
 fn corpus_child() {
     corpus::child();
@@ -233,5 +246,131 @@ fn deref_of_a_loop_element_reference_reads_only_a_word() {
     refused_with(
         "let xs = [{ a: 1, }]; let r = { a: 0, }; for x in &xs { r = *x; } r.a",
         "`*` reads only a word",
+    );
+}
+
+const VIEW_RETURNED: &str =
+    "a body does not return a reference; write `.to_string()` for the owned text";
+const VIEW_IN_AGGREGATE: &str = "a reference cannot be stored in a list, object, or tuple; \
+     write `.to_string()` to store the text";
+const VIEW_IN_PAYLOAD: &str = "a reference cannot be stored in an Option or a Result; \
+     write `.to_string()` to store the text";
+
+/// RFC-0062 rule 6: a lambda's result crosses as one value, which a view
+/// is not, whether the result's type was known at the lambda or settled by
+/// a later call.
+#[test]
+fn a_lambda_returning_a_view_is_refused_at_a_known_and_a_settled_type() {
+    refused_only_with("let f = |k| -> \"ab\"; f(1).len()", VIEW_RETURNED);
+    refused_only_with("let f = |s| -> s; f(\"ab\").len()", VIEW_RETURNED);
+    refused_only_with(
+        "let f = |s| -> { let y = s; y }; f(\"abc\").len()",
+        VIEW_RETURNED,
+    );
+    refused_only_with(
+        "let f = |s| -> s; let v = vec([1, 2]); f(v.as_slice()).len()",
+        "a body does not return a reference",
+    );
+}
+
+/// RFC-0062 rule 5: a list element holds no view, whether its type was
+/// known at the list or settled by a later call.
+#[test]
+fn a_view_stored_in_a_list_is_refused_at_a_known_and_a_settled_type() {
+    refused_only_with("let a = [\"ab\", \"cd\"]; a.len()", VIEW_IN_AGGREGATE);
+    refused_only_with(
+        "let f = |s| -> [s, s]; let t = \"hello\".to_string(); let a = f(t.trim()); \
+         a[0u64].len() + a[1u64].len()",
+        VIEW_IN_AGGREGATE,
+    );
+    refused_only_with(
+        "let f = |s| -> vec([s]); let o = f(\"hello\"); o[0u64].len()",
+        VIEW_IN_AGGREGATE,
+    );
+}
+
+/// RFC-0062 rule 5: an object or tuple field holds no view, whether its
+/// type was known at the construction or the store, or settled by a later
+/// call.
+#[test]
+fn a_view_stored_in_a_field_is_refused_at_a_known_and_a_settled_type() {
+    refused_only_with("let o = { k: \"ab\", n: 1, }; o.n", VIEW_IN_AGGREGATE);
+    refused_only_with(
+        "let f = |s| -> { k: s, n: 1, }; let o = f(\"hello\"); o.k.len() + o.n",
+        VIEW_IN_AGGREGATE,
+    );
+    refused_only_with("let o = { n: 1, }; o.k = \"ab\"; o.n", VIEW_IN_AGGREGATE);
+    refused_only_with(
+        "let f = |s| -> { let o = { n: 1, }; o.k = s; o.n }; f(\"ab\")",
+        VIEW_IN_AGGREGATE,
+    );
+    refused_only_with("let t = (\"ab\", 1); 1", VIEW_IN_AGGREGATE);
+    refused_only_with(
+        "let f = |s| -> (s, 1); let t = f(\"ab\"); 1",
+        VIEW_IN_AGGREGATE,
+    );
+}
+
+/// RFC-0062 rule 5: a variant payload holds no view, whether its type was
+/// known at the construction or settled by a later call.
+#[test]
+fn a_view_stored_in_a_payload_is_refused_at_a_known_and_a_settled_type() {
+    refused_only_with("let x = Some(\"ab\"); 1", VIEW_IN_PAYLOAD);
+    refused_only_with(
+        "let f = |s| -> Some(s); let x = f(\"ab\"); 1",
+        VIEW_IN_PAYLOAD,
+    );
+}
+
+/// RFC-0064 rule 5: a structural enum's payload is data like any other, in
+/// either construction form, at a known and a settled type.
+#[test]
+fn a_view_stored_in_an_enum_payload_is_refused_at_a_known_and_a_settled_type() {
+    const VIEW_IN_VARIANT: &str =
+        "a reference cannot be stored in an enum's payload; write `.to_string()` to store the text";
+    refused_only_with(
+        "let e = E::B(\"ab\"); match e { E::B(x) => x.len(), }",
+        VIEW_IN_VARIANT,
+    );
+    refused_only_with(
+        "let f = |s| -> E::B(s); match f(\"ab\") { E::B(x) => x.len(), }",
+        VIEW_IN_VARIANT,
+    );
+}
+
+/// RFC-0064 rule 5: a capture is one word, so a lambda captures no view,
+/// whether the captured name's type was known at the lambda or settled by
+/// a later call.
+#[test]
+fn a_captured_view_is_refused_at_a_known_and_a_settled_type() {
+    const VIEW_CAPTURED: &str =
+        "a lambda cannot capture a string or slice view; write `.to_string()` for the owned text";
+    refused_only_with(
+        "let s = \"ab\"; let f = |k| -> s.len() + k; f(1)",
+        VIEW_CAPTURED,
+    );
+    refused_only_with(
+        "let f = |s| -> { let g = |k| -> s.len() + k; g(1) }; f(\"ab\")",
+        VIEW_CAPTURED,
+    );
+}
+
+/// The control: a view that flows only into a parameter that takes a view
+/// is admitted wherever the parameter's type settles, and a `String` is
+/// stored where a view is not.
+#[test]
+fn a_view_that_flows_only_to_a_view_parameter_runs() {
+    runs_to("let f = |s| -> s.len(); f(\"ab\")", "2");
+    runs_to(
+        "let f = |s| -> s.len(); let t = \" abc \".to_string(); f(t.trim())",
+        "3",
+    );
+    runs_to(
+        "let f = |s| -> [s, s]; let a = f(\"ab\".to_string()); a[0u64].len() + a[1u64].len()",
+        "4",
+    );
+    runs_to(
+        "let o = { n: 1, }; o.k = \"ab\".to_string(); o.n = 3; o.k.len() + o.n",
+        "5",
     );
 }

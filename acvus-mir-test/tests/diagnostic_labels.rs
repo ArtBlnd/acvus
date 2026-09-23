@@ -379,10 +379,12 @@ mod reference_returned_from_body {
         );
     }
 
+    /// The payload is refused where the variant is built (RFC-0064 rule 5),
+    /// and the result that holds it is that refusal's consequence.
     #[test]
     fn a_reference_inside_a_variant_payload_is_refused() {
         let (message, _) = only("let xs = [1]; nope::len(&xs)", &nothing);
-        assert_eq!(message, WORDS);
+        assert_eq!(message, "a reference cannot be stored in an enum's payload");
     }
 
     #[test]

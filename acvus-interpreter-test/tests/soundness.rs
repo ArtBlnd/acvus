@@ -33,9 +33,6 @@ const KNOWN: &[Known] = &[
     Known { program: "attack-control-2/d34.acvus", shows: "run failed: " },
     Known { program: "attack-control-2/d35.acvus", shows: "run failed: " },
     Known { program: "attack-control-2/d36.acvus", shows: "run failed: " },
-    // The same copy through an inlined lambda: `Opt::None` runs to 5, and
-    // `Opt::Full` reads a released payload, as a crash or an assertion.
-    Known { program: "attack-control-2/d37.acvus", shows: "run failed: " },
     // A pattern on `&Option<&T>` binds its payload at the wrong depth
     // (RFC-0024 rule 3, RFC-0029 rule 3): the validator refuses it at a
     // word payload, the machine asserts at a `String` one.
@@ -45,38 +42,6 @@ const KNOWN: &[Known] = &[
     // not the elements', the lender is dropped before the loop, and each
     // payload is read after its release, as a crash or an assertion.
     Known { program: "attack-control-2/d39.acvus", shows: "run failed: " },
-    Known {
-        program: "attack-admission-2/111.acvus",
-        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
-    },
-    Known {
-        program: "attack-admission-2/112.acvus",
-        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
-    },
-    Known {
-        program: "attack-admission-2/113.acvus",
-        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
-    },
-    Known {
-        program: "attack-admission-2/114.acvus",
-        shows: "admitted a program it should refuse, which ran to 0",
-    },
-    Known {
-        program: "attack-admission-2/115.acvus",
-        shows: "admitted a program it should refuse, which ran to 0",
-    },
-    Known {
-        program: "attack-admission-2/116.acvus",
-        shows: "admitted a program it should refuse, which ran to 6",
-    },
-    Known {
-        program: "attack-admission-2/120.acvus",
-        shows: "prepare panicked: a closure's result crosses as one value, which a view is not",
-    },
-    Known {
-        program: "attack-admission-2/127.acvus",
-        shows: "admitted a program it should refuse, which ran to \"\"",
-    },
 ];
 
 const LIMIT: Duration = Duration::from_secs(30);

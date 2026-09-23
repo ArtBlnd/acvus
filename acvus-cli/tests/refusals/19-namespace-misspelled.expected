@@ -1,5 +1,5 @@
-error: a body does not return a reference; write `.to_string()` for the owned text
-  --> 19-namespace-misspelled.acvus:1:1
+error: a reference cannot be stored in an enum's payload; write `.to_string()` to store the text
+  --> 19-namespace-misspelled.acvus:1:12
   |
 1 | strng::len("a")
-  | ^^^^^^^^^^^^^^^
+  |            ^^^
