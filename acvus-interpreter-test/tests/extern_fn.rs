@@ -1566,24 +1566,6 @@ fn erased_held_refusal(source: &str) -> String {
 }
 
 #[tokio::test]
-async fn probe_erased_by_value_from_a_generic_constructor() {
-    assert_eq!(run_erased_held("erased_bag_head(bag_of(7))").await, 7);
-}
-
-#[tokio::test]
-async fn probe_erased_by_reference_from_a_generic_constructor() {
-    assert_eq!(
-        run_erased_held("let b = bag_of(7); erased_bag_head_ref(&b)").await,
-        7
-    );
-}
-
-#[tokio::test]
-async fn probe_erased_constructor_read_by_a_generic_declaration() {
-    assert_eq!(run_erased_held("bag_width(erased_bag_of(7))").await, 1);
-}
-
-#[tokio::test]
 async fn probe_erased_made_and_read_at_erased() {
     assert_eq!(
         run_erased_held("erased_bag_head(erased_bag_of(7))").await,

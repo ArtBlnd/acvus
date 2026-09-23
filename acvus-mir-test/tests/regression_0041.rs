@@ -434,16 +434,14 @@ fn a_place_lent_to_a_call_and_again_inside_a_nested_argument_is_cast_in_place_on
 
 // -- R15: one place, two representations demanded by one call -----------------
 
+/// The first argument takes `x` out for the call to lend it as
+/// `Vec<#Float>`; the second then reads `x` itself, a place the call has
+/// taken out, which the move check refuses (RFC-0041).
 #[test]
-fn one_place_lent_twice_to_a_call_that_demands_two_representations_is_a_type_mismatch() {
+fn one_place_lent_twice_to_a_call_that_demands_two_representations_is_refused() {
     let i = Interner::new();
-    let errors = check(&i, "let x = vec([1.0, 2.0]); mixed(&x, &x)")
+    let refusal = lowered(&i, "let x = vec([1.0, 2.0]); mixed(&x, &x)")
         .err()
-        .expect("the held place cannot be both Vec<#Float> and Vec<Float>");
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("Vec<#Float>") && e.contains("Vec<Float>")),
-        "{errors:?}"
-    );
+        .expect("a place taken out for a call is not lent again inside it");
+    assert_eq!(refusal, "`x` is read here while it is lent to a call");
 }
