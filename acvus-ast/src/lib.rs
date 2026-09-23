@@ -3,6 +3,7 @@ pub mod error;
 pub mod lexer;
 pub mod list;
 pub mod literal;
+pub mod locate;
 pub mod parser;
 pub mod report;
 pub mod span;

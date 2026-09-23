@@ -11,8 +11,8 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 use crate::session::{
-    CompletionItem, DocId, Document, LspError, LspErrorCategory, LspSession, Mode,
-    parse_error_to_lsp,
+    CompletionItem, Definition, DocId, Document, Hover, LspError, LspErrorCategory, LspSession,
+    Mode, parse_error_to_lsp,
 };
 
 pub trait Host {
@@ -51,6 +51,12 @@ pub struct Environment<C> {
 pub struct DocumentSpec {
     pub path: PathBuf,
     pub document: Document,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    pub path: PathBuf,
+    pub span: (usize, usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,12 +389,44 @@ where
     /// From the first compilation, in id order, that holds the document
     /// open; `None` when none does.
     pub fn completions(&self, path: &Path, cursor: usize) -> Option<Vec<CompletionItem>> {
+        let (loaded, id) = self.open_in_first(path)?;
+        Some(loaded.session.completions(id, cursor))
+    }
+
+    /// From the first compilation, in id order, that holds the document
+    /// open, as `completions`.
+    pub fn hover(&self, path: &Path, offset: usize) -> Option<Hover> {
+        let (loaded, id) = self.open_in_first(path)?;
+        loaded.session.hover(id, offset)
+    }
+
+    /// A function resolves to the document of the same compilation that
+    /// defines it, at its start.
+    pub fn definition(&self, path: &Path, offset: usize) -> Option<Location> {
+        let (loaded, id) = self.open_in_first(path)?;
+        match loaded.session.definition(id, offset)? {
+            Definition::Local { span } => Some(Location {
+                path: path.to_path_buf(),
+                span,
+            }),
+            Definition::Function(qref) => loaded
+                .specs
+                .iter()
+                .find(|(_, document)| document.qref == qref)
+                .map(|(defining, _)| Location {
+                    path: defining.clone(),
+                    span: (0, 0),
+                }),
+        }
+    }
+
+    fn open_in_first(&self, path: &Path) -> Option<(&Loaded<H::Compilation>, DocId)> {
         self.compilations.iter().find_map(|compilation| {
             let State::Loaded(loaded) = &compilation.state else {
                 return None;
             };
             match loaded.documents.get(path)? {
-                Held::Open(id) => Some(loaded.session.completions(*id, cursor)),
+                Held::Open(id) => Some((loaded, *id)),
                 Held::Unreadable(_) => None,
             }
         })

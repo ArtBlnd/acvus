@@ -16,6 +16,7 @@ use crate::ty::{
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::types::*;
+use crate::typeck::{BodyView, Checked};
 
 // -- Phase 1 output --------------------------------------------------
 
@@ -38,11 +39,15 @@ pub enum FnInferOutcome {
         resolution: Freeze<crate::typeck::TypeResolution>,
         tail_ty: Ty,
         meta: FunctionMeta,
+        view: Freeze<BodyView>,
     },
     /// Type incomplete. Cannot lower.
     Incomplete {
         meta: FunctionMeta,
         errors: Vec<crate::error::MirError>,
+        /// `None` where no body was checked: the function has no parsed
+        /// source.
+        view: Option<Freeze<BodyView>>,
     },
 }
 
@@ -68,6 +73,13 @@ impl FnInferOutcome {
         match self {
             FnInferOutcome::Complete { tail_ty, .. } => Some(tail_ty),
             FnInferOutcome::Incomplete { .. } => None,
+        }
+    }
+
+    pub fn view(&self) -> Option<Freeze<BodyView>> {
+        match self {
+            FnInferOutcome::Complete { view, .. } => Some(view.clone()),
+            FnInferOutcome::Incomplete { view, .. } => view.clone(),
         }
     }
 
@@ -654,10 +666,7 @@ pub fn infer_scc(
         FxHashMap::default();
     let mut fn_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
     let mut fn_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
-    let mut fn_checked: FxHashMap<
-        QualifiedRef,
-        Result<Freeze<crate::typeck::TypeResolution>, Vec<crate::error::MirError>>,
-    > = FxHashMap::default();
+    let mut fn_checked: FxHashMap<QualifiedRef, Checked> = FxHashMap::default();
 
     // Build PolyTy::Fn templates for functions in this SCC.
     // Solver ret vars are kept separately for unification.
@@ -733,43 +742,38 @@ pub fn infer_scc(
             .with_declared_params(fn_declared_params[&fid].clone())
             .with_bound_inputs(bound_inputs(bindings))
             .with_body_effect(fn_effect_vars[&fid].clone());
-        let result = match parsed {
+        let checked = match parsed {
             ParsedSource::Script(script) => {
                 checker.check_script(script, expected_tail_ty.as_ref(), crossing_of(entry, fid))
             }
             ParsedSource::Template(template) => checker.check_template(template),
         };
 
-        match result {
-            Ok(unchecked) => {
-                // Unify ret var with tail ty (for inferred return types).
-                if expected_tail_ty.is_none() {
-                    if let Some(ret_var) = fn_ret_vars.get(&fid) {
-                        let tail_infer = lift_ty(&unchecked.tail_ty);
-                        let _ = solver.unify(ret_var, &tail_infer);
-                    }
+        if let Ok(unchecked) = &checked.resolution {
+            // Unify ret var with tail ty (for inferred return types).
+            if expected_tail_ty.is_none() {
+                if let Some(ret_var) = fn_ret_vars.get(&fid) {
+                    let tail_infer = lift_ty(&unchecked.tail_ty);
+                    let _ = solver.unify(ret_var, &tail_infer);
                 }
-                let closed = EffectTerm::Known(unchecked.effect.clone());
-                solver
-                    .unify_effect(
-                        &fn_effect_vars[&fid],
-                        &closed,
-                        crate::solver::EffectRelation::Equal,
-                    )
-                    .expect("the closed effect is the variable's own lower bound");
+            }
+            let closed = EffectTerm::Known(unchecked.effect.clone());
+            solver
+                .unify_effect(
+                    &fn_effect_vars[&fid],
+                    &closed,
+                    crate::solver::EffectRelation::Equal,
+                )
+                .expect("the closed effect is the variable's own lower bound");
 
-                let bind: Vec<Param> = unchecked
-                    .extern_params
-                    .iter()
-                    .map(|(name, ty)| Param::new(*name, ty.clone()))
-                    .collect();
-                fn_bind_params.insert(fid, bind);
-                fn_checked.insert(fid, Ok(unchecked));
-            }
-            Err(errors) => {
-                fn_checked.insert(fid, Err(errors));
-            }
+            let bind: Vec<Param> = unchecked
+                .extern_params
+                .iter()
+                .map(|(name, ty)| Param::new(*name, ty.clone()))
+                .collect();
+            fn_bind_params.insert(fid, bind);
         }
+        fn_checked.insert(fid, checked);
     }
 
     // Resolve all functions in this SCC - freeze InferTy -> Ty at the boundary.
@@ -801,15 +805,27 @@ pub fn infer_scc(
             params: bind,
         };
         let outcome = match fn_checked.remove(&fid) {
-            Some(Ok(resolution)) => FnInferOutcome::Complete {
+            Some(Checked {
+                resolution: Ok(resolution),
+                view,
+            }) => FnInferOutcome::Complete {
                 tail_ty: resolution.tail_ty.clone(),
                 resolution,
                 meta,
+                view,
             },
-            Some(Err(errors)) => FnInferOutcome::Incomplete { meta, errors },
+            Some(Checked {
+                resolution: Err(errors),
+                view,
+            }) => FnInferOutcome::Incomplete {
+                meta,
+                errors,
+                view: Some(view),
+            },
             None => FnInferOutcome::Incomplete {
                 meta,
                 errors: Vec::new(),
+                view: None,
             },
         };
         outcomes.insert(fid, outcome);
@@ -843,10 +859,7 @@ pub fn infer(
 
     // Per-function state accumulated across SCCs.
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
-    let mut fn_unchecked: FxHashMap<QualifiedRef, Freeze<crate::typeck::TypeResolution>> =
-        FxHashMap::default();
-    let mut fn_typeck_errors: FxHashMap<QualifiedRef, Vec<crate::error::MirError>> =
-        FxHashMap::default();
+    let mut fn_checked: FxHashMap<QualifiedRef, Checked> = FxHashMap::default();
     let mut resolved_fn_types: FxHashMap<QualifiedRef, PolyTy> = Default::default();
     let mut fn_metas: FxHashMap<QualifiedRef, FunctionMeta> = FxHashMap::default();
 
@@ -968,7 +981,7 @@ pub fn infer(
                 .with_declared_params(scc_declared_params[&fid].clone())
                 .with_bound_inputs(bound_inputs(&graph.bindings))
                 .with_body_effect(scc_effect_vars[&fid].clone());
-            let result = match parsed {
+            let checked = match parsed {
                 ParsedSource::Script(script) => checker.check_script(
                     script,
                     expected_tail_ty.as_ref(),
@@ -977,36 +990,31 @@ pub fn infer(
                 ParsedSource::Template(template) => checker.check_template(template),
             };
 
-            match result {
-                Ok(unchecked) => {
-                    // Unify ret var with tail ty (for inferred return types).
-                    if expected_tail_ty.is_none() {
-                        if let Some(ret_var) = scc_ret_vars.get(&fid) {
-                            let tail_infer = lift_ty(&unchecked.tail_ty);
-                            let _ = solver.unify(ret_var, &tail_infer);
-                        }
+            if let Ok(unchecked) = &checked.resolution {
+                // Unify ret var with tail ty (for inferred return types).
+                if expected_tail_ty.is_none() {
+                    if let Some(ret_var) = scc_ret_vars.get(&fid) {
+                        let tail_infer = lift_ty(&unchecked.tail_ty);
+                        let _ = solver.unify(ret_var, &tail_infer);
                     }
-                    let closed = EffectTerm::Known(unchecked.effect.clone());
-                    solver
-                        .unify_effect(
-                            &scc_effect_vars[&fid],
-                            &closed,
-                            crate::solver::EffectRelation::Equal,
-                        )
-                        .expect("the closed effect is the variable's own lower bound");
+                }
+                let closed = EffectTerm::Known(unchecked.effect.clone());
+                solver
+                    .unify_effect(
+                        &scc_effect_vars[&fid],
+                        &closed,
+                        crate::solver::EffectRelation::Equal,
+                    )
+                    .expect("the closed effect is the variable's own lower bound");
 
-                    let bind: Vec<Param> = unchecked
-                        .extern_params
-                        .iter()
-                        .map(|(name, ty)| Param::new(*name, ty.clone()))
-                        .collect();
-                    fn_bind_params.insert(fid, bind);
-                    fn_unchecked.insert(fid, unchecked);
-                }
-                Err(errors) => {
-                    fn_typeck_errors.insert(fid, errors);
-                }
+                let bind: Vec<Param> = unchecked
+                    .extern_params
+                    .iter()
+                    .map(|(name, ty)| Param::new(*name, ty.clone()))
+                    .collect();
+                fn_bind_params.insert(fid, bind);
             }
+            fn_checked.insert(fid, checked);
         }
 
         // 2c. Resolve SCC: freeze InferTy -> Ty, build resolved fn types + fn_metas.
@@ -1049,32 +1057,33 @@ pub fn infer(
             params: vec![],
         });
 
-        // If typeck failed, this function is Incomplete.
-        if let Some(errors) = fn_typeck_errors.remove(&fid) {
-            outcomes.insert(fid, FnInferOutcome::Incomplete { meta, errors });
-            continue;
-        }
-
-        // If no unchecked resolution (e.g., skipped function), Incomplete.
-        let Some(checked) = fn_unchecked.remove(&fid) else {
-            outcomes.insert(
-                fid,
-                FnInferOutcome::Incomplete {
-                    meta,
-                    errors: vec![],
-                },
-            );
-            continue;
-        };
-
-        outcomes.insert(
-            fid,
-            FnInferOutcome::Complete {
-                tail_ty: checked.tail_ty.clone(),
-                resolution: checked,
+        let outcome = match fn_checked.remove(&fid) {
+            Some(Checked {
+                resolution: Ok(resolution),
+                view,
+            }) => FnInferOutcome::Complete {
+                tail_ty: resolution.tail_ty.clone(),
+                resolution,
                 meta,
+                view,
             },
-        );
+            // If typeck failed, this function is Incomplete.
+            Some(Checked {
+                resolution: Err(errors),
+                view,
+            }) => FnInferOutcome::Incomplete {
+                meta,
+                errors,
+                view: Some(view),
+            },
+            // If no unchecked resolution (e.g., skipped function), Incomplete.
+            None => FnInferOutcome::Incomplete {
+                meta,
+                errors: vec![],
+                view: None,
+            },
+        };
+        outcomes.insert(fid, outcome);
     }
 
     // -- STEP 5: Build result ----------------------------------------

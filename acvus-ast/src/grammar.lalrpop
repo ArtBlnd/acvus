@@ -222,11 +222,11 @@ ElseBranch: ElseBranch = {
 
 Stmt: Stmt = {
     // let x = expr;
-    <l:@L> "let" <name:"ident"> "=" <expr:Expr> ";" <r:@R> =>
-        Stmt::LetBind { id: AstId::alloc(), name, expr, span: Span::new(l, r) },
+    <l:@L> "let" <binder:Binder> "=" <expr:Expr> ";" <r:@R> =>
+        Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, r) },
     // let x;
-    <l:@L> "let" <name:"ident"> ";" <r:@R> =>
-        Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
+    <l:@L> "let" <binder:Binder> ";" <r:@R> =>
+        Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, r) },
     // while cond { body }
     <l:@L> "while" <cond:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed(BlockStatement::While, semicolon)?;
@@ -244,9 +244,9 @@ Stmt: Stmt = {
         })
     },
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
-    <l:@L> "for" <binding:"ident"> "in" <head:ForHead> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+    <l:@L> "for" <binder:Binder> "in" <head:ForHead> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed(BlockStatement::For, semicolon)?;
-        Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binding, head, body, span: Span::new(l, r) })
+        Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binder, head, body, span: Span::new(l, r) })
     },
     // break; | continue;  -- the innermost loop, no labels (RFC-0057 rule 4)
     <l:@L> "break" ";" <r:@R> =>
@@ -287,10 +287,10 @@ pub ForHead: ForHead = {
 
 // A `%` line that opens no block.
 pub TemplateStmt: Stmt = {
-    <l:@L> "let" <name:"ident"> "=" <expr:Expr> <r:@R> =>
-        Stmt::LetBind { id: AstId::alloc(), name, expr, span: Span::new(l, r) },
-    <l:@L> "let" <name:"ident"> <r:@R> =>
-        Stmt::LetUninit { id: AstId::alloc(), name, span: Span::new(l, r) },
+    <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> =>
+        Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, r) },
+    <l:@L> "let" <binder:Binder> <r:@R> =>
+        Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, r) },
     <l:@L> "break" <r:@R> =>
         Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
     <l:@L> "continue" <r:@R> =>
@@ -301,7 +301,7 @@ pub TemplateStmt: Stmt = {
 
 // `x in head`, what follows the `for` of a `% for` line.
 pub ForLine: ForLine = {
-    <binding:"ident"> "in" <head:ForHead> => ForLine { binding, head },
+    <binder:Binder> "in" <head:ForHead> => ForLine { binder, head },
 };
 
 // `pattern = source`, what follows the `let` of a `% if let` or
@@ -333,7 +333,7 @@ StmtExpr: Expr = {
 
 ExprFrom<Lead>: Expr = {
     // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
-    <l:@L> "|" <params:CommaSep<LambdaParamRule>> "|" "->" <body:Expr> <r:@R> =>
+    <l:@L> "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>
         Expr::Lambda {
             id: AstId::alloc(),
             params,
@@ -360,8 +360,8 @@ PipeExpr<Lead>: Expr = {
     OrExpr<Lead>,
 };
 
-LambdaParamRule: LambdaParam = {
-    <l:@L> <name:"ident"> <r:@R> => LambdaParam { id: AstId::alloc(), name, span: Span::new(l, r) },
+Binder: Binder = {
+    <l:@L> <name:"ident"> <r:@R> => Binder { id: AstId::alloc(), name, span: Span::new(l, r) },
 };
 
 // Logical Or: left-associative

@@ -1,4 +1,4 @@
-use acvus_utils::{Astr, Interner, QualifiedRef};
+use acvus_utils::{Interner, QualifiedRef};
 use lalrpop_util::ParseError as LalrpopError;
 
 use crate::ast::*;
@@ -12,7 +12,7 @@ use crate::token::Token;
 
 /// `x in head`: what the `for` of a `% for` line is followed by.
 pub struct ForLine {
-    pub binding: Astr,
+    pub binder: Binder,
     pub head: ForHead,
 }
 
@@ -73,7 +73,7 @@ enum Open {
     For {
         id: AstId,
         callee_id: AstId,
-        binding: Astr,
+        binder: Binder,
         head: ForHead,
         body: Vec<Stmt>,
         span: Span,
@@ -237,7 +237,7 @@ impl Builder<'_> {
                 Ok(Head::Open(Open::For {
                     id: AstId::alloc(),
                     callee_id: AstId::alloc(),
-                    binding: line.binding,
+                    binder: line.binder,
                     head: line.head,
                     body: Vec::new(),
                     span,
@@ -455,12 +455,7 @@ impl Rest<'_> {
     }
 }
 
-fn parse_slice<T, F>(
-    interner: &Interner,
-    text: &str,
-    at: usize,
-    parse: F,
-) -> Result<T, ParseError>
+fn parse_slice<T, F>(interner: &Interner, text: &str, at: usize, parse: F) -> Result<T, ParseError>
 where
     F: FnOnce(ExprTokenizer<'_>) -> Result<T, LalrpopError<usize, Token, ParseError>>,
 {
@@ -518,14 +513,14 @@ fn closed(open: Open, end: Span) -> Stmt {
         Open::For {
             id,
             callee_id,
-            binding,
+            binder,
             head,
             body,
             span,
         } => Stmt::For {
             id,
             callee_id,
-            binding,
+            binder,
             head,
             body,
             span: span.merge(end),
@@ -1050,7 +1045,10 @@ mod tests {
     #[test]
     fn each_block_structure_fault_is_its_own_refusal() {
         assert_eq!(refusal("% end\n"), ParseErrorKind::UnmatchedEnd);
-        assert_eq!(refusal("% for x in &$v\na\n"), ParseErrorKind::UnclosedBlock);
+        assert_eq!(
+            refusal("% for x in &$v\na\n"),
+            ParseErrorKind::UnclosedBlock
+        );
         assert_eq!(refusal("% else\n"), ParseErrorKind::ElseOutsideIf);
         assert_eq!(
             refusal("% if $c\na\n% else\nb\n% else\nc\n% end\n"),
@@ -1075,10 +1073,7 @@ mod tests {
 
         let err = parse_template(&interner, "% if $c { 1 } else { 2 }\n")
             .expect_err("an inline `if` on a `%` line");
-        assert_eq!(
-            err.kind.to_string(),
-            "found `{` after the end of the input"
-        );
+        assert_eq!(err.kind.to_string(), "found `{` after the end of the input");
     }
 
     // -- Script parsing tests ------------------------------------------
@@ -1100,7 +1095,7 @@ mod tests {
         let s = parse_script(&interner, "let x = @data; x").unwrap();
         assert_eq!(s.stmts.len(), 1);
         assert!(
-            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x")
+            matches!(&s.stmts[0], Stmt::LetBind { binder, .. } if interner.resolve(binder.name) == "x")
         );
         assert!(matches!(
             s.tail.as_deref(),
@@ -1143,10 +1138,10 @@ mod tests {
         let s = parse_script(&interner, "let x = @data; let y = x; y").unwrap();
         assert_eq!(s.stmts.len(), 2);
         assert!(
-            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x")
+            matches!(&s.stmts[0], Stmt::LetBind { binder, .. } if interner.resolve(binder.name) == "x")
         );
         assert!(
-            matches!(&s.stmts[1], Stmt::LetBind { name, .. } if interner.resolve(*name) == "y")
+            matches!(&s.stmts[1], Stmt::LetBind { binder, .. } if interner.resolve(binder.name) == "y")
         );
         assert!(s.tail.is_some());
     }
@@ -1183,7 +1178,7 @@ mod tests {
         let s = parse_script(&interner, source).unwrap();
         assert_eq!(s.stmts.len(), 1);
         assert!(
-            matches!(&s.stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x")
+            matches!(&s.stmts[0], Stmt::LetBind { binder, .. } if interner.resolve(binder.name) == "x")
         );
         let tail = s.tail.as_deref().expect("the tail is the last line");
         let at = source.rfind('x').expect("the tail's own byte");
@@ -1256,7 +1251,9 @@ mod tests {
         let Expr::Block { stmts, .. } = body.as_ref() else {
             panic!("expected a block body");
         };
-        assert!(matches!(&stmts[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "x"));
+        assert!(
+            matches!(&stmts[0], Stmt::LetBind { binder, .. } if interner.resolve(binder.name) == "x")
+        );
     }
 
     /// A bare `x = e;` in a lambda body parses as an assignment, not a
@@ -1399,7 +1396,10 @@ mod tests {
                 ),
                 "{src}"
             );
-            assert!(matches!(s.tail.as_deref(), Some(Expr::Ident { .. })), "{src}");
+            assert!(
+                matches!(s.tail.as_deref(), Some(Expr::Ident { .. })),
+                "{src}"
+            );
         }
 
         // Last in a body, it is the tail, and a `;` makes it a statement.
@@ -1411,7 +1411,11 @@ mod tests {
         assert!(s.tail.is_none());
 
         // In a loop body, which has no tail, it is a statement.
-        let s = parse_script(&interner, "for x in &mut v { if x.a == 1 { x.a = 2; } } v.len()").unwrap();
+        let s = parse_script(
+            &interner,
+            "for x in &mut v { if x.a == 1 { x.a = 2; } } v.len()",
+        )
+        .unwrap();
         let Stmt::For { body, .. } = &s.stmts[0] else {
             panic!("expected a for");
         };
@@ -1419,7 +1423,13 @@ mod tests {
 
         // No operator continues it: what follows begins the next statement.
         let s = parse_script(&interner, "if c { f(); } -x").unwrap();
-        assert!(matches!(s.tail.as_deref(), Some(Expr::UnaryOp { op: UnaryOp::Neg, .. })));
+        assert!(matches!(
+            s.tail.as_deref(),
+            Some(Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                ..
+            })
+        ));
         let s = parse_script(&interner, "if c { f(); } *r = 1;").unwrap();
         assert!(matches!(&s.stmts[1], Stmt::DerefStore { .. }));
         let src = "if c { 1 } else { 2 } + 1";
@@ -1433,7 +1443,10 @@ mod tests {
         assert!(matches!(s.tail.as_deref(), Some(Expr::Index { .. })));
         // Anywhere else an `if` is an operand.
         assert!(matches!(
-            parse_script(&interner, "(if c { 1 } else { 2 }) + 1").unwrap().tail.as_deref(),
+            parse_script(&interner, "(if c { 1 } else { 2 }) + 1")
+                .unwrap()
+                .tail
+                .as_deref(),
             Some(Expr::BinaryOp { .. })
         ));
     }
@@ -1504,7 +1517,9 @@ mod tests {
         let Stmt::While { body, .. } = &s.stmts[1] else {
             panic!("expected While");
         };
-        assert!(matches!(&body[0], Stmt::LetBind { name, .. } if interner.resolve(*name) == "j"));
+        assert!(
+            matches!(&body[0], Stmt::LetBind { binder, .. } if interner.resolve(binder.name) == "j")
+        );
         assert!(matches!(&body[1], Stmt::Assign { name, .. } if interner.resolve(*name) == "i"));
     }
 
@@ -1856,6 +1871,48 @@ mod tests {
         let interner = Interner::new();
         for source in ["{{ '\"' }}", "{{ '}' }}"] {
             parse_template(&interner, source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_binder_spans_its_name_alone() {
+        let interner = Interner::new();
+        let source = "let a = 1; let b; for c in 0..2 { } let f = |d| -> d; a";
+        let script = parse_script(&interner, source).expect(source);
+        let [
+            Stmt::LetBind { binder: a, .. },
+            Stmt::LetUninit { binder: b, .. },
+            Stmt::For { binder: c, .. },
+            Stmt::LetBind {
+                binder: f,
+                expr: Expr::Lambda { params, .. },
+                ..
+            },
+        ] = script.stmts.as_slice()
+        else {
+            panic!("unexpected statements: {:?}", script.stmts);
+        };
+        let [d] = params.as_slice() else {
+            panic!("one parameter: {params:?}");
+        };
+        for (binder, name) in [(a, "a"), (b, "b"), (c, "c"), (f, "f"), (d, "d")] {
+            assert_eq!(interner.resolve(binder.name), name);
+            assert_eq!(&source[binder.span.start..binder.span.end], name);
+        }
+
+        let source = "% let t = 1\n% let u\n% for v in 0..2\n% end\n";
+        let template = parse_template(&interner, source).expect(source);
+        let [
+            Stmt::LetBind { binder: t, .. },
+            Stmt::LetUninit { binder: u, .. },
+            Stmt::For { binder: v, .. },
+        ] = template.body.as_slice()
+        else {
+            panic!("unexpected statements: {:?}", template.body);
+        };
+        for (binder, name) in [(t, "t"), (u, "u"), (v, "v")] {
+            assert_eq!(interner.resolve(binder.name), name);
+            assert_eq!(&source[binder.span.start..binder.span.end], name);
         }
     }
 }

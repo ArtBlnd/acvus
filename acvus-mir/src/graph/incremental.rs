@@ -248,6 +248,10 @@ impl IncrementalGraph {
         self.outcome(qref)?.resolution()
     }
 
+    pub fn view(&self, qref: QualifiedRef) -> Option<Freeze<crate::typeck::BodyView>> {
+        self.outcome(qref)?.view()
+    }
+
     pub fn function(&self, qref: QualifiedRef) -> Option<&Function> {
         self.functions.get(&qref)
     }

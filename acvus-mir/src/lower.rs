@@ -16,8 +16,8 @@ use crate::ir::{
 };
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
 use crate::solver::{CaptureRead, MatchMode};
-use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
 use crate::structural::StructuralSignature;
+use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
 use crate::typeck::{CallTarget, CapturedName, Passing, StructuralCall, TypeResolution};
 
 /// The name of a template's accumulator. A source name cannot collide with
@@ -774,7 +774,7 @@ impl<'a> Lowerer<'a> {
 
             // -- Script mode statements ------------------------------
             Stmt::LetBind {
-                name, expr, span, ..
+                binder, expr, span, ..
             } => {
                 let val = self.lower_expr(expr);
                 let ty = self
@@ -783,13 +783,13 @@ impl<'a> Lowerer<'a> {
                     .get(&val)
                     .cloned()
                     .unwrap_or(Ty::error());
-                let slot = self.define_var(*name, ty);
+                let slot = self.define_var(binder.name, ty);
                 self.emit_assign(*span, RefTarget::Var(slot), vec![], val);
             }
-            Stmt::LetUninit { id, name, .. } => {
+            Stmt::LetUninit { id, binder, .. } => {
                 // Type from typeck (fresh variable, unified later).
                 let ty = self.type_of_id(*id);
-                let slot = self.define_var(*name, ty.clone());
+                let slot = self.define_var(binder.name, ty.clone());
                 self.set_val_type(slot, ty);
                 // No store - init_check tracks this as uninit.
             }
@@ -822,12 +822,12 @@ impl<'a> Lowerer<'a> {
             Stmt::For {
                 id,
                 callee_id,
-                binding,
+                binder,
                 head,
                 body,
                 span,
             } => {
-                self.lower_for(*id, *callee_id, *binding, head, body, *span);
+                self.lower_for(*id, *callee_id, binder.name, head, body, *span);
             }
             Stmt::Break { span, .. } => self.leave_loop(Leave::Break, *span),
             Stmt::Continue { span, .. } => self.leave_loop(Leave::Continue, *span),
@@ -2474,7 +2474,9 @@ impl<'a> Lowerer<'a> {
                         leaves,
                     } = call
                     else {
-                        panic!("an operator offers the structural instance of `eq` alone, got {call:?}")
+                        panic!(
+                            "an operator offers the structural instance of `eq` alone, got {call:?}"
+                        )
                     };
                     let eq = match op {
                         BinOp::Neq => {
@@ -3265,13 +3267,8 @@ impl<'a> Lowerer<'a> {
                     path: Vec::new(),
                     ty,
                 };
-                let reference = self.emit_ref(
-                    span,
-                    lent.target,
-                    Vec::new(),
-                    mutability,
-                    lent.ty.clone(),
-                );
+                let reference =
+                    self.emit_ref(span, lent.target, Vec::new(), mutability, lent.ty.clone());
                 match from {
                     LentFrom::Place => self.taken_out.push(PlaceRestore {
                         span,

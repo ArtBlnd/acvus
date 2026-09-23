@@ -7,13 +7,15 @@
 //! - MirError -> LspError conversion
 //! - Completion logic (context, pipe, keyword)
 
+use acvus_ast::locate::Nodes;
 use acvus_ast::report::Label;
 use acvus_mir::error::Refusal;
 use acvus_mir::graph::ContextInfo;
 use acvus_mir::graph::incremental::IncrementalGraph;
 use acvus_mir::graph::types::*;
 use acvus_mir::ty::PolyTy;
-use acvus_utils::{Astr, Interner};
+use acvus_mir::typeck::BodyView;
+use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
 
 // -- Public types ----------------------------------------------------
@@ -38,7 +40,11 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub(crate) fn parse(self, interner: &Interner, source: &str) -> Result<ParsedAst, acvus_ast::ParseError> {
+    pub(crate) fn parse(
+        self,
+        interner: &Interner,
+        source: &str,
+    ) -> Result<ParsedAst, acvus_ast::ParseError> {
         match self {
             Mode::Script => acvus_ast::parse_script(interner, source).map(ParsedAst::Script),
             Mode::Template => acvus_ast::parse(interner, source).map(ParsedAst::Template),
@@ -86,6 +92,21 @@ pub enum CompletionKind {
     Context,
     Function,
     Keyword,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hover {
+    pub span: (usize, usize),
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Definition {
+    Local {
+        span: (usize, usize),
+    },
+    /// A function whose body is in the graph.
+    Function(QualifiedRef),
 }
 
 // -- LspSession ------------------------------------------------------
@@ -233,6 +254,58 @@ impl LspSession {
             Trigger::Keyword { prefix } => keyword_completions(&prefix),
             Trigger::None => vec![],
         }
+    }
+
+    /// The type of the innermost node at `offset` that has one.
+    pub fn hover(&self, id: DocId, offset: usize) -> Option<Hover> {
+        let (nodes, view) = self.checked_body(id)?;
+        let interner = self.graph.interner();
+        nodes.at(offset).into_iter().find_map(|node| {
+            let ty = view.types.get(&node.id)?;
+            Some(Hover {
+                span: (node.span.start, node.span.end),
+                ty: ty.display(interner).to_string(),
+            })
+        })
+    }
+
+    /// Where the name at `offset` is defined: the binder of a local name,
+    /// or the function a call settled on. Only the innermost node at
+    /// `offset` is read, so an offset inside a call's argument does not
+    /// answer with the call's callee.
+    pub fn definition(&self, id: DocId, offset: usize) -> Option<Definition> {
+        let (nodes, view) = self.checked_body(id)?;
+        let node = *nodes.at(offset).first()?;
+        let keys = std::iter::once(node.id).chain(node.callee_id);
+        if let Some(binder) = keys.clone().find_map(|key| view.binder_of.get(&key)) {
+            let span = nodes
+                .spans()
+                .get(binder)
+                .copied()
+                .expect("a binder is a node of the body its uses are in");
+            return Some(Definition::Local {
+                span: (span.start, span.end),
+            });
+        }
+        let qref = *keys
+            .into_iter()
+            .find_map(|key| view.declaration_of.get(&key))?;
+        match self.graph.function(qref)?.kind {
+            FnKind::Local(_) => Some(Definition::Function(qref)),
+            FnKind::Extern { .. } => None,
+        }
+    }
+
+    fn checked_body(&self, id: DocId) -> Option<(Nodes, Freeze<BodyView>)> {
+        let qref = self.function_ref(id)?;
+        let FnKind::Local(ast) = &self.graph.function(qref)?.kind else {
+            return None;
+        };
+        let nodes = match ast {
+            ParsedAst::Script(script) => Nodes::of_script(script),
+            ParsedAst::Template(template) => Nodes::of_template(template),
+        };
+        Some((nodes, self.graph.view(qref)?))
     }
 
     // -- Completion helpers ------------------------------------------

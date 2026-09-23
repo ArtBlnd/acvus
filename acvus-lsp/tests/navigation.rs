@@ -1,0 +1,498 @@
+//! Hover and go-to-definition through the session's and the workspace's
+//! public API.
+
+use std::path::PathBuf;
+
+use acvus_extern::{Externs, TypesOnly};
+use acvus_lsp::{
+    Checked, CompilationId, CompilationSpec, Definition, Document, DocumentSpec, Environment, Host,
+    HostDiagnostic, Hover, Listing, Location, LspSession, Mode, Vfs, Workspace,
+};
+use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
+use acvus_mir::ty::{
+    Effect, Mutability, PolyBuilder, Ty, TyTerm, TypeArg, TypeRegistry, lift_to_poly,
+};
+use acvus_utils::{Freeze, Interner};
+
+fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
+    ctx.iter()
+        .map(|(name, ty)| Context {
+            qref: QualifiedRef::root(interner.intern(name)),
+            ty: lift_to_poly(ty),
+        })
+        .collect()
+}
+
+fn environment(
+    contexts: Vec<Context>,
+    functions: Vec<Function>,
+    types: TypeRegistry,
+) -> CompilationGraph {
+    CompilationGraph {
+        functions: Freeze::new(functions),
+        contexts: Freeze::new(contexts),
+        types: Freeze::new(types),
+        bindings: Bindings::default(),
+        entry: None,
+    }
+}
+
+fn bare(contexts: Vec<Context>) -> CompilationGraph {
+    environment(contexts, vec![], TypeRegistry::default())
+}
+
+fn with_std(interner: &Interner, contexts: Vec<Context>) -> CompilationGraph {
+    let Externs {
+        functions, types, ..
+    } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), interner)
+        .expect("standard registries combine");
+    environment(contexts, functions, types)
+}
+
+fn document(interner: &Interner, name: &str, mode: Mode) -> Document {
+    let mut pb = PolyBuilder::new();
+    Document {
+        qref: QualifiedRef::root(interner.intern(name)),
+        mode,
+        ty: TyTerm::Fn {
+            params: vec![],
+            ret: Box::new(pb.fresh_ty_var()),
+            captures: vec![],
+            effect: Effect::OPAQUE.into(),
+        },
+    }
+}
+
+/// The offset of the `nth` occurrence of `needle` in `source`.
+fn nth(source: &str, needle: &str, n: usize) -> usize {
+    source
+        .match_indices(needle)
+        .nth(n)
+        .map(|(at, _)| at)
+        .unwrap_or_else(|| panic!("`{needle}` occurs {} times in {source:?}", n + 1))
+}
+
+fn string_display(interner: &Interner) -> String {
+    Ty::String.display(interner).to_string()
+}
+
+fn open(
+    interner: &Interner,
+    environment: CompilationGraph,
+    mode: Mode,
+    source: &str,
+) -> (LspSession, acvus_lsp::DocId) {
+    let mut session = LspSession::new(interner, environment);
+    let id = session.open(document(interner, "test", mode), source);
+    (session, id)
+}
+
+#[test]
+fn hover_on_a_use_shows_its_type() {
+    let i = Interner::new();
+    let source = "let s = @name; s";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let at = nth(source, "s", 1);
+    let hover = session.hover(doc, at).expect("the use has a type");
+    assert_eq!(hover.span, (at, at + 1));
+    assert_eq!(hover.ty, string_display(&i));
+}
+
+#[test]
+fn hover_works_on_a_refused_body() {
+    let i = Interner::new();
+    let source = "let s = @name; s + 1";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    assert!(
+        !session.diagnostics(doc).is_empty(),
+        "String + Int is refused"
+    );
+    let at = nth(source, "s", 1);
+    let hover = session.hover(doc, at).expect("the use has a type");
+    assert_eq!(hover.span, (at, at + 1));
+    assert_eq!(hover.ty, string_display(&i));
+    // `+` beside text is the concatenation whatever the other operand is,
+    // so the checker records `String` for the refused sum.
+    let plus = session
+        .hover(doc, nth(source, "+", 0))
+        .expect("the refused expression has a recorded type");
+    assert_eq!(plus.span, (at, source.len()));
+    assert_eq!(plus.ty, string_display(&i));
+}
+
+#[test]
+fn a_poisoned_expression_shows_error() {
+    let i = Interner::new();
+    let source = "let s = @name; s * 2";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    assert!(
+        !session.diagnostics(doc).is_empty(),
+        "String * Int is refused"
+    );
+    let at = nth(source, "s", 1);
+    assert_eq!(
+        session.hover(doc, at).map(|hover| hover.ty),
+        Some(string_display(&i))
+    );
+    let times = session
+        .hover(doc, nth(source, "*", 0))
+        .expect("the refused expression has a recorded type");
+    assert_eq!(times.span, (at, source.len()));
+    assert_eq!(times.ty, "<error>");
+}
+
+#[test]
+fn a_use_goes_to_its_let() {
+    let i = Interner::new();
+    let source = "let s = 1; s";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    let binder = nth(source, "s", 0);
+    assert_eq!(
+        session.definition(doc, nth(source, "s", 1)),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+}
+
+#[test]
+fn a_shadowed_name_goes_to_the_later_binder() {
+    let i = Interner::new();
+    let source = "let s = 1; let s = @name; s";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    let definition = session.definition(doc, nth(source, "s", 2));
+    let Some(Definition::Local { span }) = definition else {
+        panic!("expected a local definition, got {definition:?}");
+    };
+    let binder = nth(source, "s", 1);
+    assert_eq!(span, (binder, binder + 1));
+}
+
+#[test]
+fn a_lambda_parameter_and_a_capture() {
+    let i = Interner::new();
+    let source = "let n = 1; let f = |x| -> x + n; f(2)";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let param = nth(source, "x", 0);
+    assert_eq!(
+        session.definition(doc, nth(source, "x", 1)),
+        Some(Definition::Local {
+            span: (param, param + 1)
+        })
+    );
+    let outer = nth(source, "n", 0);
+    assert_eq!(
+        session.definition(doc, nth(source, "n", 1)),
+        Some(Definition::Local {
+            span: (outer, outer + 1)
+        })
+    );
+}
+
+#[test]
+fn a_call_of_a_local_lambda_goes_to_its_let() {
+    let i = Interner::new();
+    let source = "let f = |x| -> x + 1; f(2)";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    let definition = session.definition(doc, nth(source, "f", 1));
+    let binder = nth(source, "f", 0);
+    assert_eq!(
+        definition,
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+}
+
+#[test]
+fn a_match_arm_binder() {
+    let i = Interner::new();
+    let source = "let o = Some(1); match o { Some(v) => v, None => 0, }";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let binder = nth(source, "v", 0);
+    assert_eq!(
+        session.definition(doc, nth(source, "v", 1)),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+}
+
+#[test]
+fn template_context_hover_and_statement_binding() {
+    let i = Interner::new();
+    let source = "% let x = @name\n{{ x }}{{ @name }}";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Template,
+        source,
+    );
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let context = nth(source, "@name", 1);
+    let hover = session
+        .hover(doc, context + 1)
+        .expect("the context has a type");
+    assert_eq!(hover.span, (context, context + "@name".len()));
+    assert_eq!(hover.ty, string_display(&i));
+    let definition = session.definition(doc, nth(source, "x", 1));
+    let Some(Definition::Local { span }) = definition else {
+        panic!("expected a local definition, got {definition:?}");
+    };
+    let binder = nth(source, "x", 0);
+    assert_eq!(span, (binder, binder + 1));
+}
+
+#[test]
+fn a_context_and_an_extern_call_have_no_definition() {
+    let i = Interner::new();
+    let source = "{{ @count.to_string() }}";
+    let (session, doc) = open(
+        &i,
+        with_std(&i, root_contexts(&i, &[("count", Ty::I64)])),
+        Mode::Template,
+        source,
+    );
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    assert_eq!(session.definition(doc, nth(source, "count", 0)), None);
+    assert_eq!(session.definition(doc, nth(source, "to_string", 0)), None);
+}
+
+#[test]
+fn a_source_that_does_not_parse_has_neither() {
+    let i = Interner::new();
+    let source = "let s = ; s";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(!session.diagnostics(doc).is_empty());
+    assert_eq!(session.hover(doc, nth(source, "s", 1)), None);
+    assert_eq!(session.definition(doc, nth(source, "s", 1)), None);
+}
+
+// -- Workspace -------------------------------------------------------
+
+struct TwoDocuments {
+    root: PathBuf,
+}
+
+impl Host for TwoDocuments {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+        let spec = |name: &str| DocumentSpec {
+            path: self.root.join(format!("{name}.acvt")),
+            document: document(interner, name, Mode::Template),
+        };
+        Listing {
+            compilations: vec![CompilationSpec {
+                id: CompilationId(self.root.join("main.id")),
+                environment: Ok(Environment {
+                    graph: bare(vec![]),
+                    host: (),
+                }),
+                documents: vec![spec("greet"), spec("caller")],
+            }],
+            refusals: Vec::new(),
+        }
+    }
+
+    fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn a_call_goes_to_the_document_that_defines_the_function() {
+    let i = Interner::new();
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let root = dir.path().to_path_buf();
+    let greet = root.join("greet.acvt");
+    let caller = root.join("caller.acvt");
+    std::fs::write(&greet, "hello").expect("write greet");
+    let source = "{{ greet() }}";
+    std::fs::write(&caller, source).expect("write caller");
+    let workspace = Workspace::new(&i, TwoDocuments { root });
+    let diagnostics = workspace.diagnostics();
+    assert!(diagnostics.values().all(Vec::is_empty), "{diagnostics:?}");
+    assert_eq!(
+        workspace.definition(&caller, nth(source, "greet", 0)),
+        Some(Location {
+            path: greet,
+            span: (0, 0),
+        })
+    );
+    let hover = workspace
+        .hover(&caller, nth(source, "greet", 0))
+        .expect("the callee has a type");
+    assert!(hover.ty.contains("String"), "{}", hover.ty);
+}
+
+#[test]
+fn a_string_literal_binding_is_a_str_reference() {
+    let i = Interner::new();
+    let source = "let s = \"a\"; s";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let str_ref: Ty = TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)));
+    for at in [nth(source, "s", 0), nth(source, "s", 1)] {
+        assert_eq!(
+            session.hover(doc, at),
+            Some(Hover {
+                span: (at, at + 1),
+                ty: str_ref.display(&i).to_string(),
+            })
+        );
+    }
+}
+
+#[test]
+fn a_for_binding_use_goes_to_the_binding() {
+    let i = Interner::new();
+    let source = "let t = 0; for k in 0..3 { t = t + k; } t";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let binder = nth(source, "k", 0);
+    assert_eq!(
+        session.definition(doc, nth(source, "k", 1)),
+        Some(Definition::Local {
+            span: (binder, binder + 1)
+        })
+    );
+    assert_eq!(
+        session.hover(doc, binder),
+        Some(Hover {
+            span: (binder, binder + 1),
+            ty: Ty::I64.display(&i).to_string(),
+        })
+    );
+}
+
+#[test]
+fn hover_on_a_let_binder_shows_the_bound_type() {
+    let i = Interner::new();
+    let source = "let s = @name; s";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let binder = nth(source, "s", 0);
+    assert_eq!(
+        session.hover(doc, binder),
+        Some(Hover {
+            span: (binder, binder + 1),
+            ty: string_display(&i),
+        })
+    );
+
+    let source = "let s = \"a\"; s";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    let binder = nth(source, "s", 0);
+    let str_ref: Ty = TyTerm::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)));
+    assert_eq!(
+        session.hover(doc, binder),
+        Some(Hover {
+            span: (binder, binder + 1),
+            ty: str_ref.display(&i).to_string(),
+        })
+    );
+}
+
+#[test]
+fn hover_on_a_binder_in_a_refused_body() {
+    let i = Interner::new();
+    let source = "let s = @name; s + 1";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Script,
+        source,
+    );
+    assert!(
+        !session.diagnostics(doc).is_empty(),
+        "String + Int is refused"
+    );
+    let binder = nth(source, "s", 0);
+    assert_eq!(
+        session.hover(doc, binder),
+        Some(Hover {
+            span: (binder, binder + 1),
+            ty: string_display(&i),
+        })
+    );
+}
+
+#[test]
+fn hover_on_a_match_arm_binder() {
+    let i = Interner::new();
+    let source = "let o = Some(1); match o { Some(v) => v, None => 0, }";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(
+        session.diagnostics(doc).is_empty(),
+        "{:?}",
+        session.diagnostics(doc)
+    );
+    let binder = nth(source, "v", 0);
+    let at_binder = session.hover(doc, binder).expect("the binder has a type");
+    assert_eq!(at_binder.span, (binder, binder + 1));
+    let at_use = session
+        .hover(doc, nth(source, "v", 1))
+        .expect("the use has a type");
+    assert_eq!(at_binder.ty, at_use.ty);
+}

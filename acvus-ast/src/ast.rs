@@ -48,14 +48,14 @@ pub enum Stmt {
     /// `let x = expr;` - new binding (Script mode).
     LetBind {
         id: AstId,
-        name: Astr,
+        binder: Binder,
         expr: Expr,
         span: Span,
     },
     /// `let x;` - uninitialized binding (Script mode).
     LetUninit {
         id: AstId,
-        name: Astr,
+        binder: Binder,
         span: Span,
     },
     /// `x = expr;` - reassignment to existing binding (Script mode).
@@ -78,7 +78,7 @@ pub enum Stmt {
         /// Where the head's `as_slice` instance is recorded, as an index
         /// expression records its own (RFC-0047 rule 3).
         callee_id: AstId,
-        binding: Astr,
+        binder: Binder,
         head: ForHead,
         body: Vec<Stmt>,
         span: Span,
@@ -362,7 +362,7 @@ pub enum Expr {
     /// Lambda: `|x| -> expr` or `|x, y| -> expr`.
     Lambda {
         id: AstId,
-        params: Vec<LambdaParam>,
+        params: Vec<Binder>,
         body: Box<Expr>,
         span: Span,
     },
@@ -578,9 +578,8 @@ impl Expr {
     }
 }
 
-/// A lambda parameter.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LambdaParam {
+pub struct Binder {
     pub id: AstId,
     pub name: Astr,
     pub span: Span,

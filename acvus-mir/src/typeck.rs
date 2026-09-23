@@ -979,12 +979,40 @@ pub struct CapturedName {
     pub read: CaptureRead,
 }
 
+#[derive(Debug, Clone)]
+pub struct BodyView {
+    /// An accepted body's `types` is its resolution's `type_map`, the map
+    /// the lowering reads, and beside it the type each binder is bound at.
+    /// A refused body's are the types as written, as its refusals show
+    /// them, so a poisoned position is `Ty::Error`.
+    pub types: FxHashMap<AstId, Ty>,
+    pub binder_of: FxHashMap<AstId, AstId>,
+    /// Keyed by the id the call's callee is recorded under, which for a
+    /// method call or an index is the AST's `callee_id` and not the call.
+    pub declaration_of: FxHashMap<AstId, QualifiedRef>,
+}
+
+enum SettledCallee {
+    Declared(QualifiedRef),
+    Binding,
+}
+
+pub struct Checked {
+    pub resolution: Result<Freeze<TypeResolution>, Vec<MirError>>,
+    pub view: Freeze<BodyView>,
+}
+
+struct Bound {
+    ty: InferTy,
+    binder: AstId,
+}
+
 /// What `x = e;` found for `x`.
 enum AssignTarget {
-    /// A binding of the body that carries the statement: its type.
-    Bound(InferTy),
+    /// A binding of the body that carries the statement.
+    Bound { ty: InferTy, binder: AstId },
     /// Bound outside the innermost lambda, so the lambda sees a copy.
-    Captured,
+    Captured { binder: AstId },
     /// No binding of that name anywhere in scope.
     Unbound,
 }
@@ -1216,8 +1244,10 @@ pub struct TypeChecker<'a, 's, 'src> {
     env: &'a TypeEnv,
     /// Namespace this function belongs to.
     namespace: Option<Astr>,
-    /// Stack of scopes: each scope maps variable names to types.
-    scopes: Vec<FxHashMap<Astr, InferTy>>,
+    scopes: Vec<FxHashMap<Astr, Bound>>,
+    binder_of: FxHashMap<AstId, AstId>,
+    candidate_binder_of: FxHashMap<AstId, AstId>,
+    binder_types: FxHashMap<AstId, InferTy>,
     /// Extern parameters in Signature order, which is the order iteration
     /// must keep.
     param_types: smallvec::SmallVec<[ExternParam; 4]>,
@@ -1332,6 +1362,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
+            binder_of: FxHashMap::default(),
+            candidate_binder_of: FxHashMap::default(),
+            binder_types: FxHashMap::default(),
             env,
             namespace: None,
             param_types: smallvec::smallvec![],
@@ -1502,10 +1535,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
 
     /// Type check a template. Consumes self, returns TypeResolution.
     /// Template tail type is always String (templates emit text).
-    pub fn check_template(
-        mut self,
-        template: &Template,
-    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
+    pub fn check_template(mut self, template: &Template) -> Checked {
         for stmt in &template.body {
             self.check_stmt(stmt);
         }
@@ -1514,7 +1544,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
-            return Err(self.reported());
+            return self.refused();
         }
         self.into_resolution(template.span, Ty::String)
     }
@@ -1526,7 +1556,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         script: &acvus_ast::Script,
         expected_tail: Option<&Ty>,
         crossing: ResultCrossing,
-    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
+    ) -> Checked {
         // A declared `ret` is the body's return type itself, so every
         // `return` joins against it exactly as the tail does; undeclared, it
         // is the fresh variable the tail resolves.
@@ -1582,7 +1612,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
         if !self.errors.is_empty() {
-            return Err(self.reported());
+            return self.refused();
         }
         let tail_at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
         let frozen_tail = self.closed_or_refused(&self.solver.resolve_ty(&tail_ty), tail_at);
@@ -1590,19 +1620,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// What the lowering reads of a checked body.
-    fn into_resolution(
-        mut self,
-        body: Span,
-        tail_ty: Ty,
-    ) -> Result<Freeze<TypeResolution>, Vec<MirError>> {
+    fn into_resolution(mut self, body: Span, tail_ty: Ty) -> Checked {
         // A `$` input nothing typed is refused here, in its own words, so it
         // is refused before the freezes below take every type as closed.
         let extern_params = self.frozen_extern_params(body);
         if !self.errors.is_empty() {
-            return Err(self.reported());
-        }
-        if !self.errors.is_empty() {
-            return Err(self.reported());
+            return self.refused();
         }
         let type_map = self.freeze_type_map();
         let try_returns = self.frozen_try_returns();
@@ -1620,9 +1643,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         // solve left open is found only where it is closed, and every such
         // type is closed above.
         if !self.errors.is_empty() {
-            return Err(self.reported());
+            return self.refused();
         }
-        Ok(Freeze::new(TypeResolution {
+        let view = self.view(type_map.clone(), |ty| self.closed(ty));
+        let resolution = Freeze::new(TypeResolution {
             type_map,
             coercion_map,
             calls,
@@ -1637,7 +1661,78 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             lambda_captures,
             effect,
             context_types,
-        }))
+        });
+        Checked {
+            resolution: Ok(resolution),
+            view,
+        }
+    }
+
+    fn refused(mut self) -> Checked {
+        let written = self
+            .type_map
+            .iter()
+            .map(|(id, ty)| (*id, self.type_as_written(ty)))
+            .collect();
+        let view = self.view(written, |ty| self.type_as_written(ty));
+        Checked {
+            resolution: Err(self.reported()),
+            view,
+        }
+    }
+
+    fn view<F>(&self, mut types: FxHashMap<AstId, Ty>, bound: F) -> Freeze<BodyView>
+    where
+        F: Fn(&InferTy) -> Ty,
+    {
+        for (&binder, ty) in &self.binder_types {
+            types.entry(binder).or_insert_with(|| bound(ty));
+        }
+        let mut binder_of = self.binder_of.clone();
+        let mut declaration_of = FxHashMap::default();
+        for (&callee, choice) in &self.calls {
+            let settled = match choice {
+                CallChoice::Resolved(resolved) => Some(SettledCallee::Declared(resolved.qref)),
+                CallChoice::Decided(decision) => match self.solver.answer(*decision) {
+                    Some(Answer::Signature {
+                        settled: SettledSignature::Named { qref, .. },
+                        ..
+                    }) => Some(SettledCallee::Declared(qref)),
+                    Some(Answer::Signature {
+                        settled: SettledSignature::Local,
+                        ..
+                    }) => Some(SettledCallee::Binding),
+                    None => None,
+                    Some(
+                        Answer::Instance(_)
+                        | Answer::Conversion(_)
+                        | Answer::Lend(_)
+                        | Answer::Capture(_)
+                        | Answer::Match(_),
+                    ) => unreachable!("a signature decision answers with a signature"),
+                },
+                CallChoice::Binding => Some(SettledCallee::Binding),
+                CallChoice::StructuralVariant | CallChoice::Operator(_) => None,
+            };
+            match settled {
+                Some(SettledCallee::Declared(qref)) => {
+                    declaration_of.insert(callee, qref);
+                }
+                Some(SettledCallee::Binding) => {
+                    let binder = self
+                        .candidate_binder_of
+                        .get(&callee)
+                        .expect("a call settles on a binding only among the candidates it found");
+                    binder_of.insert(callee, *binder);
+                }
+                None => {}
+            }
+        }
+        Freeze::new(BodyView {
+            types,
+            binder_of,
+            declaration_of,
+        })
     }
 
     fn frozen_place_bases(&self, type_map: &TypeMap) -> FxHashMap<AstId, PlaceBase> {
@@ -1677,11 +1772,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// must be one that does (RFC-0018 rules 2 and 4). Checked here, where
     /// a place's base is the one the lowering reads, so a type or a base
     /// still open where the read was written is checked as it settled.
-    fn check_value_reads(
-        &mut self,
-        type_map: &TypeMap,
-        place_bases: &FxHashMap<AstId, PlaceBase>,
-    ) {
+    fn check_value_reads(&mut self, type_map: &TypeMap, place_bases: &FxHashMap<AstId, PlaceBase>) {
         for (read, value_read) in std::mem::take(&mut self.value_reads) {
             let (through, span) = match value_read {
                 ValueRead::Deref { span } => (ReadThrough::Deref, span),
@@ -2069,8 +2160,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let takes_referent = |takes: &crate::ty::PolyTy| {
             open || match view {
                 View::Str => matches!((takes, referent), (TyTerm::String, TyTerm::String)),
-                View::Slice => sliceable_head(referent)
-                    .is_some_and(|head| sliceable_head(takes) == Some(head)),
+                View::Slice => {
+                    sliceable_head(referent).is_some_and(|head| sliceable_head(takes) == Some(head))
+                }
             }
         };
         let takers: Vec<(QualifiedRef, crate::ty::Scheme)> = self
@@ -2303,16 +2395,22 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         let Some(depth) = self.scopes.iter().rposition(|s| s.contains_key(&name)) else {
             return AssignTarget::Unbound;
         };
+        let bound = &self.scopes[depth][&name];
         if self.lambda_stack.iter().any(|ls| depth < ls.depth) {
-            return AssignTarget::Captured;
+            return AssignTarget::Captured {
+                binder: bound.binder,
+            };
         }
-        AssignTarget::Bound(self.scopes[depth][&name].clone())
+        AssignTarget::Bound {
+            ty: bound.ty.clone(),
+            binder: bound.binder,
+        }
     }
 
     /// A name for a value: its type is a variable of the solver, so what
     /// the value grows to (a field stored, a variant added) is seen by
     /// every use of the name.
-    fn define_var(&mut self, name: Astr, ty: InferTy) {
+    fn define_var(&mut self, name: Astr, ty: InferTy, binder: AstId) {
         let ty = match ty {
             TyTerm::Var(_) => ty,
             term => {
@@ -2331,25 +2429,29 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         for id in held {
             self.solver.name_source(id, name);
         }
+        self.binder_types.insert(binder, ty.clone());
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, ty);
+            scope.insert(name, Bound { ty, binder });
         }
     }
 
-    /// The type a name has where it is used. A name a lambda captured is
-    /// seen in its body as the word it is, copied at each use, and as a
-    /// shared reference into the closure at every other type (RFC-0018).
-    fn lookup_var(&mut self, name: Astr) -> Option<InferTy> {
+    /// The type a name has where it is used, and the node that binds it. A
+    /// name a lambda captured is seen in its body as the word it is, copied
+    /// at each use, and as a shared reference into the closure at every
+    /// other type (RFC-0018).
+    fn lookup_var(&mut self, name: Astr) -> Option<(InferTy, AstId)> {
         for (depth, scope) in self.scopes.iter().enumerate().rev() {
-            let Some(ty) = scope.get(&name) else { continue };
-            let ty = ty.clone();
+            let Some(bound) = scope.get(&name) else {
+                continue;
+            };
+            let (ty, binder) = (bound.ty.clone(), bound.binder);
             let capturing_lambdas = self
                 .lambda_stack
                 .iter()
                 .filter(|ls| depth < ls.depth)
                 .count();
             if capturing_lambdas == 0 {
-                return Some(ty);
+                return Some((ty, binder));
             }
             let capturing: Vec<usize> = self
                 .lambda_stack
@@ -2380,7 +2482,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     });
                 }
             }
-            return Some(seen);
+            return Some((seen, binder));
         }
         None
     }
@@ -2418,7 +2520,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     }
 
     /// RFC-0043.
-    fn signature_set(&mut self, name: QualifiedRef) -> Vec<SignatureCandidate> {
+    fn signature_set(&mut self, name: QualifiedRef, callee: AstId) -> Vec<SignatureCandidate> {
         let mut candidates: Vec<SignatureCandidate> = match self.env.resolve_fn(name) {
             crate::ty::FnLookup::Found(qref, scheme) => vec![SignatureCandidate::Named {
                 qref,
@@ -2435,7 +2537,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         candidates.extend(self.view_signatures(name));
         if name.namespace.is_none()
-            && let Some(ty) = self.local_signature(name.name)
+            && let Some(ty) = self.local_signature(name.name, callee)
         {
             candidates.push(SignatureCandidate::Local { ty });
         }
@@ -2468,8 +2570,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
     /// A callable is never a word, so a call of a capture whose type is
     /// still open is a call through the reference the body reads it as
     /// (RFC-0018).
-    fn local_signature(&mut self, name: Astr) -> Option<InferTy> {
-        let seen = self.lookup_var(name)?;
+    fn local_signature(&mut self, name: Astr, callee: AstId) -> Option<InferTy> {
+        let (seen, binder) = self.lookup_var(name)?;
+        self.candidate_binder_of.insert(callee, binder);
         if self.is_an_open_capture(name, &seen) {
             let lent = self.solver.fresh_ty_var();
             let reference =
@@ -2518,7 +2621,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 Some(t) => t.clone(),
                 None => self.solver.fresh_ty_var(),
             };
-            self.define_var(p.name, pt.clone());
+            self.define_var(p.name, pt.clone(), p.id);
             self.record(p.id, pt.clone());
             param_types.push(ParamTerm::new(p.name, pt));
         }
@@ -2722,7 +2825,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 ..
             }) => {
                 let var_ty = match self.lookup_var(*name) {
-                    Some(ty) => ty,
+                    Some((ty, binder)) => {
+                        self.binder_of.insert(*id, binder);
+                        ty
+                    }
                     None => {
                         let near = self.near_bindings(*name);
                         self.error(
@@ -4661,7 +4767,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         args: &[Expr],
         call_span: Span,
     ) -> InferTy {
-        let candidates = self.signature_set(QualifiedRef::root(name));
+        let candidates = self.signature_set(QualifiedRef::root(name), callee_id);
         if candidates.is_empty() {
             return self.undefined_function(QualifiedRef::root(name), call_span);
         }
@@ -5908,17 +6014,21 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             // -- Script mode statements ------------------------------
             acvus_ast::Stmt::LetBind {
                 id,
-                name,
+                binder,
                 expr,
                 span: _,
             } => {
                 let ty = self.check_expr(expr);
-                self.define_var(*name, ty.clone());
+                self.define_var(binder.name, ty.clone(), binder.id);
                 self.record(*id, ty);
             }
-            acvus_ast::Stmt::LetUninit { id, name, span: _ } => {
+            acvus_ast::Stmt::LetUninit {
+                id,
+                binder,
+                span: _,
+            } => {
                 let ty = self.solver.fresh_ty_var();
-                self.define_var(*name, ty.clone());
+                self.define_var(binder.name, ty.clone(), binder.id);
                 self.record(*id, ty);
             }
             acvus_ast::Stmt::Assign {
@@ -5929,8 +6039,12 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             } => {
                 let ty = self.check_expr(expr);
                 let var_ty = match self.assign_target(*name) {
-                    AssignTarget::Bound(var_ty) => var_ty,
-                    AssignTarget::Captured => {
+                    AssignTarget::Bound { ty, binder } => {
+                        self.binder_of.insert(*id, binder);
+                        ty
+                    }
+                    AssignTarget::Captured { binder } => {
+                        self.binder_of.insert(*id, binder);
                         let at_the_lambda = self
                             .lambda_stack
                             .last()
@@ -6017,11 +6131,11 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             acvus_ast::Stmt::For {
                 id,
                 callee_id,
-                binding,
+                binder,
                 head,
                 body,
                 span,
-            } => self.check_for(*id, *callee_id, *binding, head, body, *span),
+            } => self.check_for(*id, *callee_id, binder, head, body, *span),
             acvus_ast::Stmt::Break { span, .. } => self.check_loop_jump("break", *span),
             acvus_ast::Stmt::Continue { span, .. } => self.check_loop_jump("continue", *span),
         }
@@ -6035,7 +6149,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         &mut self,
         id: AstId,
         callee_id: AstId,
-        binding: Astr,
+        binder: &acvus_ast::Binder,
         head: &acvus_ast::ForHead,
         body: &[acvus_ast::Stmt],
         span: Span,
@@ -6069,7 +6183,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
         };
         self.push_scope();
         self.loop_depth += 1;
-        self.define_var(binding, binding_ty);
+        self.define_var(binder.name, binding_ty, binder.id);
         for s in body {
             self.check_stmt(s);
         }
@@ -6324,7 +6438,10 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                         ty
                     }
                     RefKind::Value => match self.lookup_var(name.name) {
-                        Some(ty) => ty,
+                        Some((ty, binder)) => {
+                            self.binder_of.insert(*id, binder);
+                            ty
+                        }
                         None => {
                             let near = self.near_bindings(name.name);
                             self.error(
@@ -6595,7 +6712,8 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                 }
 
                 if let acvus_ast::UnaryOp::Deref = op {
-                    self.value_reads.insert(*id, ValueRead::Deref { span: *span });
+                    self.value_reads
+                        .insert(*id, ValueRead::Deref { span: *span });
                 }
                 let ty = match op {
                     acvus_ast::UnaryOp::Deref => match &ot {
@@ -7355,7 +7473,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
             let resolved = self.solver.shallow_resolve_ty(&ft);
             return self.check_callable(&resolved, first.as_ref(), args, call_span);
         };
-        let candidates = self.signature_set(*name);
+        let candidates = self.signature_set(*name, func.id());
         if candidates.is_empty() {
             if let Some(ns) = name.namespace {
                 return self.check_structural_variant(
@@ -7681,7 +7799,9 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                     );
                 }
             }
-            Pattern::Binding { name, ref_kind, .. } => match ref_kind {
+            Pattern::Binding {
+                id, name, ref_kind, ..
+            } => match ref_kind {
                 RefKind::ExternParam => {
                     self.error(
                         MirErrorKind::ExternParamAssign(self.interner.resolve(*name).to_string()),
@@ -7704,7 +7824,7 @@ impl<'a, 's, 'src> TypeChecker<'a, 's, 'src> {
                             binding
                         }
                     };
-                    self.define_var(*name, ty);
+                    self.define_var(*name, ty, *id);
                 }
             },
 
@@ -8227,20 +8347,73 @@ mod tests {
             machine: FxHashMap::default(),
         };
         let checker = TypeChecker::new(interner, &env, &mut solver);
-        let resolution = checker.check_template(&template).map_err(|errs| {
-            errs.iter()
-                .map(|e| {
-                    format!(
-                        "[typeck] [{}..{}] {}",
-                        e.span.start,
-                        e.span.end,
-                        e.display(interner)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+        let resolution = checker
+            .check_template(&template)
+            .resolution
+            .map_err(|errs| {
+                errs.iter()
+                    .map(|e| {
+                        format!(
+                            "[typeck] [{}..{}] {}",
+                            e.span.start,
+                            e.span.end,
+                            e.display(interner)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })?;
         Ok(resolution.type_map.clone())
+    }
+
+    /// On an accepted body the view keeps every type the resolution
+    /// holds and adds each binder's, which the resolution does not carry.
+    #[test]
+    fn an_accepted_view_extends_the_type_map_with_binders() {
+        let interner = Interner::new();
+        let source = "let a = 1; let b; b = a; for c in 0..2 { } \
+                      let d = match Some(a) { Some(e) => e, None => 0, }; \
+                      let f = |g| -> g + d; f(b)";
+        let script = acvus_ast::parse_script(&interner, source).expect("the source parses");
+        let mut sources = crate::ty::Sources::new();
+        let registry = TypeRegistry::default();
+        let signatures = FxHashMap::default();
+        let mut solver = Solver::new(&mut sources, &registry, &signatures);
+        let env = crate::ty::TypeEnv {
+            contexts: FxHashMap::default(),
+            functions: FxHashMap::default(),
+            machine: FxHashMap::default(),
+        };
+        let checked = TypeChecker::new(&interner, &env, &mut solver).check_script(
+            &script,
+            None,
+            ResultCrossing::Registers,
+        );
+        let Ok(resolution) = &checked.resolution else {
+            panic!("the body is accepted: {:?}", checked.resolution.err());
+        };
+        for (id, ty) in &resolution.type_map {
+            assert_eq!(checked.view.types.get(id), Some(ty), "{id:?}");
+        }
+        let nodes = acvus_ast::locate::Nodes::of_script(&script);
+        let spans = nodes.spans();
+        let binder_type = |introduced: &str| {
+            let found = source
+                .find(introduced)
+                .expect("the binder is in the source");
+            let at = found + introduced.len() - 1;
+            let binder = nodes.at(at)[0];
+            assert_eq!(spans[&binder.id], acvus_ast::Span::new(at, at + 1));
+            checked.view.types.get(&binder.id).cloned()
+        };
+        for introduced in ["let a", "let b", "for c", "let d", "Some(e", "|g"] {
+            assert_eq!(binder_type(introduced), Some(Ty::I64), "{introduced}");
+        }
+        assert!(
+            matches!(binder_type("let f"), Some(TyTerm::Fn { .. })),
+            "{:?}",
+            binder_type("let f")
+        );
     }
 
     #[test]
