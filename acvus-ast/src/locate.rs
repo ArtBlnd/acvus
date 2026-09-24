@@ -112,15 +112,8 @@ impl Nodes {
         &self.names
     }
 
-    /// Names do not overlap, so each `find` meets at most one.
     pub fn name_at(&self, offset: usize) -> Option<Name> {
-        let touching = |touch: Touch| {
-            self.names
-                .iter()
-                .find(|name| Touch::of(name.span, offset) == Some(touch))
-                .copied()
-        };
-        touching(Touch::Holds).or_else(|| touching(Touch::EndsAt))
+        on_cursor(self.names.iter().copied(), offset, |name| name.span)
     }
 
     fn name(&mut self, id: AstId, span: Span) {
@@ -598,6 +591,26 @@ impl Nodes {
             Pattern::Error(node) => self.error(node),
         }
     }
+}
+
+/// The candidate a cursor at `offset` is on: one whose span holds the
+/// offset, the narrowest where such spans nest, else a non-empty one that
+/// ends at it. A name at the cursor and a host's link are chosen by this one
+/// rule (RFC-0086 rule 8).
+pub fn on_cursor<I, T, F>(candidates: I, offset: usize, span_of: F) -> Option<T>
+where
+    I: IntoIterator<Item = T>,
+    F: Fn(&T) -> Span,
+{
+    candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let span = span_of(&candidate);
+            let touch = Touch::of(span, offset)?;
+            Some(((touch, span.end - span.start), candidate))
+        })
+        .min_by_key(|(placed, _)| *placed)
+        .map(|(_, candidate)| candidate)
 }
 
 /// Ordered so that of two nodes of one width, the one holding the offset

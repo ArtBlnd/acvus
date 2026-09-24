@@ -1,10 +1,11 @@
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
+use acvus_ast::Span;
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Document, DocumentSpec, EntryKind, Environment, Host,
-    HostDiagnostic, Listing, LspError, LspErrorKind, LspSession, Mode, RecordingReader, Sites,
-    TextError, Vfs, Workspace,
+    HostDiagnostic, Link, Listing, Location, LspError, LspErrorKind, LspSession, Mode,
+    RecordingReader, Sites, TextError, Vfs, Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, QualifiedRef};
 use acvus_mir::ty::{Effect, PolyBuilder, Ty, TyTerm, lift_to_poly};
@@ -129,6 +130,7 @@ impl Host for TestHost {
                 },
             ],
             refusals,
+            links: Vec::new(),
         }
     }
 
@@ -527,6 +529,7 @@ impl Host for DerivingHost {
                 },
             ],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -645,6 +648,7 @@ impl Host for DirectoryHost {
                 documents,
             }],
             refusals,
+            links: Vec::new(),
         }
     }
 
@@ -802,6 +806,7 @@ impl Host for TailHost {
                 ],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -862,4 +867,250 @@ fn a_host_reads_the_type_of_the_value_a_body_returns() {
             (absent, None),
         ]
     );
+}
+
+/// Links every spelling of a document's file name in `manifest.txt` to that
+/// document's start, and every `@x` there to the site of the context `x`.
+struct LinkHost {
+    root: PathBuf,
+    link_from_a: bool,
+}
+
+const LINKED: [&str; 2] = ["a", "ba"];
+
+impl LinkHost {
+    fn manifest(&self) -> PathBuf {
+        self.root.join("manifest.txt")
+    }
+
+    fn x_site(&self) -> Location {
+        Location {
+            path: self.root.join("ctx.txt"),
+            span: Span::new(0, 1),
+        }
+    }
+
+    fn links_in(&self, manifest: &str) -> Vec<Link> {
+        let from = |start: usize, spelled: &str| Location {
+            path: self.manifest(),
+            span: Span::new(start, start + spelled.len()),
+        };
+        let to_documents = LINKED.iter().flat_map(|name| {
+            let file = format!("{name}.acvt");
+            manifest
+                .match_indices(&file)
+                .map(|(start, spelled)| Link {
+                    from: from(start, spelled),
+                    to: Location {
+                        path: self.root.join(&file),
+                        span: Span::new(0, 0),
+                    },
+                })
+                .collect::<Vec<_>>()
+        });
+        let to_x = manifest.match_indices("@x").map(|(start, spelled)| Link {
+            from: from(start, spelled),
+            to: self.x_site(),
+        });
+        to_documents.chain(to_x).collect()
+    }
+}
+
+impl Host for LinkHost {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, reader: &RecordingReader<'_>) -> Listing<()> {
+        let mut refusals = Vec::new();
+        let mut links = match reader.read(&self.manifest()) {
+            Ok(manifest) => self.links_in(&manifest),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                refusals.push(HostDiagnostic {
+                    path: self.manifest(),
+                    span: None,
+                    message: error.to_string(),
+                });
+                Vec::new()
+            }
+        };
+        if self.link_from_a {
+            links.push(Link {
+                from: Location {
+                    path: self.root.join("a.acvt"),
+                    span: Span::new(3, 5),
+                },
+                to: Location {
+                    path: self.manifest(),
+                    span: Span::new(0, 0),
+                },
+            });
+        }
+        let mut sites = Sites::default();
+        sites
+            .contexts
+            .insert(QualifiedRef::root(interner.intern("x")), self.x_site());
+        Listing {
+            compilations: vec![CompilationSpec {
+                id: CompilationId(self.root.join("linked.id")),
+                environment: Ok(Environment {
+                    graph: environment(interner, Ty::String),
+                    host: (),
+                    sites,
+                }),
+                documents: LINKED
+                    .iter()
+                    .map(|name| DocumentSpec {
+                        path: self.root.join(format!("{name}.acvt")),
+                        document: document(interner, name),
+                    })
+                    .collect(),
+            }],
+            refusals,
+            links,
+        }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
+    }
+
+    fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        Vec::new()
+    }
+}
+
+struct Linked {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+    workspace: Workspace<LinkHost>,
+}
+
+fn linked(manifest: &str, link_from_a: bool) -> Linked {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let root = dir.path().to_path_buf();
+    for name in LINKED {
+        std::fs::write(root.join(format!("{name}.acvt")), "{{ @x }}").expect("write a document");
+    }
+    std::fs::write(root.join("ctx.txt"), "x").expect("write ctx.txt");
+    std::fs::write(root.join("manifest.txt"), manifest).expect("write manifest.txt");
+    let workspace = Workspace::new(
+        &Interner::new(),
+        LinkHost {
+            root: root.clone(),
+            link_from_a,
+        },
+    );
+    Linked {
+        _dir: dir,
+        root,
+        workspace,
+    }
+}
+
+impl Linked {
+    fn manifest(&self) -> PathBuf {
+        self.root.join("manifest.txt")
+    }
+
+    fn start_of(&self, name: &str) -> Option<Location> {
+        Some(Location {
+            path: self.root.join(name),
+            span: Span::new(0, 0),
+        })
+    }
+
+    fn in_manifest(&self, start: usize, end: usize) -> Location {
+        Location {
+            path: self.manifest(),
+            span: Span::new(start, end),
+        }
+    }
+}
+
+#[test]
+fn definition_in_a_host_file_answers_the_link_whose_span_holds_the_offset() {
+    let l = linked("use a.acvt;", false);
+    let manifest = l.manifest();
+    assert_eq!(l.workspace.definition(&manifest, 4), l.start_of("a.acvt"));
+    assert_eq!(l.workspace.definition(&manifest, 7), l.start_of("a.acvt"));
+}
+
+#[test]
+fn definition_in_a_host_file_outside_every_link_answers_nothing() {
+    let l = linked("use a.acvt;", false);
+    let manifest = l.manifest();
+    assert_eq!(l.workspace.definition(&manifest, 0), None);
+    assert_eq!(l.workspace.definition(&manifest, 3), None);
+    assert_eq!(l.workspace.definition(&l.root.join("notes.txt"), 0), None);
+}
+
+#[test]
+fn a_link_moves_with_the_buffer_of_the_file_it_is_read_from() {
+    let mut l = linked("use a.acvt;", false);
+    let manifest = l.manifest();
+    l.workspace
+        .set_buffer(manifest.clone(), "use it later: a.acvt;".to_string());
+    assert_eq!(l.workspace.definition(&manifest, 5), None);
+    assert_eq!(l.workspace.definition(&manifest, 15), l.start_of("a.acvt"));
+}
+
+#[test]
+fn of_nested_links_the_narrowest_answers() {
+    let l = linked("ba.acvt", false);
+    let manifest = l.manifest();
+    assert_eq!(l.workspace.definition(&manifest, 0), l.start_of("ba.acvt"));
+    assert_eq!(l.workspace.definition(&manifest, 3), l.start_of("a.acvt"));
+    assert_eq!(l.workspace.definition(&manifest, 7), l.start_of("a.acvt"));
+}
+
+#[test]
+fn a_cursor_right_after_a_link_is_on_it() {
+    let l = linked("a.acvt next", false);
+    assert_eq!(
+        l.workspace.definition(&l.manifest(), 6),
+        l.start_of("a.acvt")
+    );
+}
+
+#[test]
+fn a_link_from_a_document_is_refused_and_the_checker_answers_there() {
+    let l = linked("", true);
+    let a = l.root.join("a.acvt");
+    let [refusal] = l.workspace.diagnostics()[&a]
+        .clone()
+        .try_into()
+        .unwrap_or_else(|errors: Vec<LspError>| panic!("one refusal on a.acvt: {errors:?}"));
+    assert_eq!(refusal.kind, LspErrorKind::Host(Some(Span::new(3, 5))));
+    assert!(
+        refusal
+            .message
+            .ends_with("is a document, and a document's names are the checker's"),
+        "{}",
+        refusal.message
+    );
+    assert_eq!(
+        l.workspace.definition(&a, 4),
+        Some(l.workspace.host().x_site())
+    );
+}
+
+#[test]
+fn the_references_of_a_context_hold_the_links_to_its_site() {
+    let l = linked("@x and @x, not a.acvt", false);
+    let at = |name: &str| Location {
+        path: l.root.join(name),
+        span: Span::new(3, 5),
+    };
+    let uses = vec![
+        at("a.acvt"),
+        at("ba.acvt"),
+        l.in_manifest(0, 2),
+        l.in_manifest(7, 9),
+    ];
+    let a = l.root.join("a.acvt");
+    assert_eq!(l.workspace.references(&a, 4, false), Some(uses.clone()));
+
+    let mut declared = uses;
+    declared.insert(2, l.workspace.host().x_site());
+    assert_eq!(l.workspace.references(&a, 4, true), Some(declared));
 }

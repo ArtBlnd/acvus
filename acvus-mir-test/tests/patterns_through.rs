@@ -327,11 +327,14 @@ fn if_let_with_no_else_is_still_a_test_and_a_branch() {
     // RFC-0051 removed the tag form, which shared this lowering. `if let`
     // is unchanged: two arms, always exhaustive, and never a `switch`.
     let i = Interner::new();
-    let out = FxHashMap::from_iter([(i.intern("out"), Ty::Float)]);
+    let contexts = FxHashMap::from_iter([
+        (i.intern("out"), Ty::Float),
+        (i.intern("maybe"), Ty::Option(Box::new(Ty::Float))),
+    ]);
     let if_let = compile_script_mode_optimized(
         &i,
-        "let o = Some(1.5); if let Some(v) = o { @out = v; }; 0",
-        &out,
+        "let o = @maybe; if let Some(v) = o { @out = v; }; 0",
+        &contexts,
     )
     .unwrap();
     let listing = instructions(&if_let);

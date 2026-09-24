@@ -484,7 +484,7 @@ pub enum MirErrorKind {
     InputTypeUndecided(String),
     BindingTypeMismatch {
         name: String,
-        value: acvus_ast::Literal,
+        value: crate::graph::BoundValue,
         ty: Ty,
     },
     SourceNotIterable {
@@ -1165,7 +1165,8 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::BindingTypeMismatch { name, value, ty } => {
                 write!(
                     f,
-                    "`${name}` is bound to {value:?}, which is not a value of {}, the type its uses require",
+                    "`${name}` is bound to {}, which is not a value of {}, the type its uses require",
+                    value.display(interner),
                     ty.shown(interner)
                 )
             }

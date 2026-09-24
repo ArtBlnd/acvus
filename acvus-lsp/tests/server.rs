@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use acvus_ast::Span;
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Listing, Mode, RecordingReader, RenameRefusal, ServeError, Sites, Vfs, serve,
+    HostDiagnostic, Link, Listing, Location, Mode, RecordingReader, RenameRefusal, ServeError,
+    Sites, Vfs, serve,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, FnKind, Function, QualifiedRef};
 use acvus_mir::ty::{Effect, ParamTerm, PolyBuilder, Ty, TyTerm, lift_to_poly};
@@ -88,6 +90,7 @@ impl Host for TestHost {
         };
         let graph = match reader.read(&env) {
             Ok(text) if text.trim() == "string" => Ok(environment(interner, Ty::String)),
+            Ok(text) if text.trim() == "int" => Ok(environment(interner, Ty::I64)),
             Ok(text) => Err(refused(format!("unknown environment `{}`", text.trim()))),
             Err(error) => Err(refused(error.to_string())),
         };
@@ -99,6 +102,41 @@ impl Host for TestHost {
             path: self.root.join(format!("{SCRIPT}.acvus")),
             document: document(interner, SCRIPT, Mode::Script),
         };
+        let mut refusals = Vec::new();
+        let extra = self.root.join("extra.txt");
+        let extras: Vec<DocumentSpec> = match reader.read(&extra) {
+            Ok(text) => text
+                .lines()
+                .enumerate()
+                .map(|(at, relative)| DocumentSpec {
+                    path: self.root.join(relative),
+                    document: document(interner, &format!("extra{at}"), Mode::Template),
+                })
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                refusals.push(HostDiagnostic {
+                    path: extra,
+                    span: None,
+                    message: error.to_string(),
+                });
+                Vec::new()
+            }
+        };
+        let documents: Vec<DocumentSpec> = templates.chain([script]).chain(extras).collect();
+        let manifest = self.root.join("manifest.txt");
+        let links = match reader.read(&manifest) {
+            Ok(text) => links_to_documents(&manifest, &text, &documents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                refusals.push(HostDiagnostic {
+                    path: manifest,
+                    span: None,
+                    message: error.to_string(),
+                });
+                Vec::new()
+            }
+        };
         Listing {
             compilations: vec![CompilationSpec {
                 id: CompilationId(self.root.join("test.id")),
@@ -107,9 +145,10 @@ impl Host for TestHost {
                     host: (),
                     sites: Sites::default(),
                 }),
-                documents: templates.chain([script]).collect(),
+                documents,
             }],
-            refusals: Vec::new(),
+            refusals,
+            links,
         }
     }
 
@@ -122,12 +161,44 @@ impl Host for TestHost {
     }
 }
 
+/// Every spelling of a document's file name in `text` links to that
+/// document's start.
+fn links_to_documents(manifest: &Path, text: &str, documents: &[DocumentSpec]) -> Vec<Link> {
+    documents
+        .iter()
+        .flat_map(|spec| {
+            let name = spec
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a document's file name is UTF-8");
+            text.match_indices(name).map(|(start, spelled)| Link {
+                from: Location {
+                    path: manifest.to_path_buf(),
+                    span: Span::new(start, start + spelled.len()),
+                },
+                to: Location {
+                    path: spec.path.clone(),
+                    span: Span::new(0, 0),
+                },
+            })
+        })
+        .collect()
+}
+
 fn uri(path: &Path) -> lsp::Uri {
     url::Url::from_file_path(path)
         .expect("a temporary path is absolute")
         .as_str()
         .parse()
         .expect("a file URL is a URI")
+}
+
+fn folders(roots: &[&Path]) -> serde_json::Value {
+    roots
+        .iter()
+        .map(|root| json!({ "uri": uri(root), "name": root.display().to_string() }))
+        .collect()
 }
 
 fn at(line: u32, character: u32) -> lsp::Position {
@@ -163,13 +234,25 @@ fn offset_in(text: &str, position: lsp::Position, encoding: &str) -> usize {
 }
 
 struct Fixture {
-    dir: tempfile::TempDir,
+    _dir: Option<tempfile::TempDir>,
+    root: PathBuf,
 }
 
 impl Fixture {
     fn new(env: &str) -> Self {
         let dir = tempfile::tempdir().expect("a temp dir");
-        let fixture = Fixture { dir };
+        let root = dir.path().to_path_buf();
+        Fixture::written(Some(dir), root, env)
+    }
+
+    fn nested(&self, name: &str, env: &str) -> Self {
+        let root = self.path(name);
+        std::fs::create_dir(&root).expect("create the nested project");
+        Fixture::written(None, root, env)
+    }
+
+    fn written(dir: Option<tempfile::TempDir>, root: PathBuf, env: &str) -> Self {
+        let fixture = Fixture { _dir: dir, root };
         fixture.write("env.txt", env);
         fixture.write("main.acvt", "{{ @x }}");
         fixture.write("greet.acvt", "hello");
@@ -178,7 +261,7 @@ impl Fixture {
     }
 
     fn root(&self) -> &Path {
-        self.dir.path()
+        &self.root
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -202,7 +285,7 @@ struct Client {
 
 struct Offer<'a> {
     root: Option<&'a Path>,
-    folder: Option<&'a Path>,
+    folders: &'a [&'a Path],
     encodings: Option<&'a [&'a str]>,
     watches: bool,
 }
@@ -221,8 +304,8 @@ impl Offer<'_> {
         if let Some(root) = self.root {
             params["rootUri"] = json!(uri(root));
         }
-        if let Some(folder) = self.folder {
-            params["workspaceFolders"] = json!([{ "uri": uri(folder), "name": "folder" }]);
+        if !self.folders.is_empty() {
+            params["workspaceFolders"] = folders(self.folders);
         }
         params
     }
@@ -339,6 +422,13 @@ impl Client {
         );
     }
 
+    fn folders_changed(&self, added: &[&Path], removed: &[&Path]) {
+        self.notify(
+            lsp::notification::DidChangeWorkspaceFolders::METHOD,
+            json!({ "event": { "added": folders(added), "removed": folders(removed) } }),
+        );
+    }
+
     fn watched(&self, uri: &lsp::Uri) {
         self.notify(
             lsp::notification::DidChangeWatchedFiles::METHOD,
@@ -376,7 +466,7 @@ fn published(messages: Vec<Message>) -> Vec<lsp::PublishDiagnosticsParams> {
 fn offer(root: &Path) -> Offer<'_> {
     Offer {
         root: Some(root),
-        folder: None,
+        folders: &[],
         encodings: Some(&["utf-8", "utf-16"]),
         watches: false,
     }
@@ -411,7 +501,7 @@ fn a_client_offering_no_encoding_is_answered_in_utf16_under_its_first_folder() {
     let f = Fixture::new("bogus");
     let (mut client, response) = Client::start(&Offer {
         root: None,
-        folder: Some(f.root()),
+        folders: &[f.root()],
         encodings: None,
         watches: false,
     });
@@ -429,7 +519,7 @@ fn a_client_offering_no_encoding_is_answered_in_utf16_under_its_first_folder() {
 fn an_initialize_without_a_root_is_refused_and_ends_the_server() {
     let (client, response) = Client::start(&Offer {
         root: None,
-        folder: None,
+        folders: &[],
         encodings: Some(&["utf-8"]),
         watches: false,
     });
@@ -806,5 +896,245 @@ fn a_request_on_a_uri_that_is_no_file_is_an_error() {
         })
         .expect_err("an untitled buffer has no path");
     assert_eq!(refused.code, lsp_server::ErrorCode::InvalidParams as i32);
+    client.shut_down();
+}
+
+#[test]
+fn definition_in_a_host_file_answers_the_linked_uri() {
+    let f = Fixture::new("string");
+    f.write("manifest.txt", "see greet.acvt");
+    let (mut client, sent) = Client::initialized(&offer(f.root()));
+    assert_eq!(published(sent), []);
+
+    let definition = client
+        .request::<lsp::request::GotoDefinition>(lsp::GotoDefinitionParams {
+            text_document_position_params: position_params(&f.uri("manifest.txt"), at(0, 6)),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .expect("definition answers");
+    assert_eq!(
+        definition,
+        Some(lsp::GotoDefinitionResponse::Scalar(lsp::Location {
+            uri: f.uri("greet.acvt"),
+            range: range(at(0, 0), at(0, 0)),
+        }))
+    );
+    client.shut_down();
+}
+
+fn definition_at(
+    client: &mut Client,
+    uri: &lsp::Uri,
+    position: lsp::Position,
+) -> Option<lsp::GotoDefinitionResponse> {
+    client
+        .request::<lsp::request::GotoDefinition>(lsp::GotoDefinitionParams {
+            text_document_position_params: position_params(uri, position),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .expect("definition answers")
+}
+
+fn start_of(uri: lsp::Uri) -> Option<lsp::GotoDefinitionResponse> {
+    Some(lsp::GotoDefinitionResponse::Scalar(lsp::Location {
+        uri,
+        range: range(at(0, 0), at(0, 0)),
+    }))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Published {
+    uri: lsp::Uri,
+    diagnostics: usize,
+}
+
+fn counted(published: Vec<lsp::PublishDiagnosticsParams>) -> Vec<Published> {
+    let mut counted: Vec<Published> = published
+        .into_iter()
+        .map(|p| Published {
+            uri: p.uri,
+            diagnostics: p.diagnostics.len(),
+        })
+        .collect();
+    counted.sort_by(|a, b| a.uri.as_str().cmp(b.uri.as_str()));
+    counted
+}
+
+fn two_projects_with_a_type_error() -> [Fixture; 2] {
+    let projects = [Fixture::new("string"), Fixture::new("string")];
+    for project in &projects {
+        project.write("s.acvus", "@x + 1");
+    }
+    projects
+}
+
+fn folders_offer<'a>(folders: &'a [&'a Path]) -> Offer<'a> {
+    Offer {
+        root: None,
+        folders,
+        encodings: Some(&["utf-8"]),
+        watches: false,
+    }
+}
+
+#[test]
+fn every_folder_is_served_and_answers_in_its_own_workspace() {
+    let [a, b] = two_projects_with_a_type_error();
+    for project in [&a, &b] {
+        project.write("main.acvt", "{{ greet() }}");
+    }
+    let (mut client, sent) = Client::initialized(&folders_offer(&[a.root(), b.root()]));
+    let published = counted(published(sent));
+    let uris: Vec<&lsp::Uri> = published.iter().map(|p| &p.uri).collect();
+    let mut expected = [a.uri("s.acvus"), b.uri("s.acvus")];
+    expected.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    assert_eq!(uris, expected.iter().collect::<Vec<_>>());
+    assert!(published.iter().all(|p| p.diagnostics > 0), "{published:?}");
+
+    for project in [&a, &b] {
+        assert_eq!(
+            definition_at(&mut client, &project.uri("main.acvt"), at(0, 4)),
+            start_of(project.uri("greet.acvt"))
+        );
+    }
+    client.shut_down();
+}
+
+#[test]
+fn a_removed_folder_has_its_paths_published_empty_and_answers_nothing() {
+    let [a, b] = two_projects_with_a_type_error();
+    let (mut client, sent) = Client::initialized(&folders_offer(&[a.root(), b.root()]));
+    assert_eq!(counted(published(sent)).len(), 2);
+    let a_s = a.uri("s.acvus");
+    assert!(hover_at(&mut client, &a_s, at(0, 1)).is_some());
+
+    client.folders_changed(&[], &[b.root()]);
+    assert_eq!(
+        counted(client.publications()),
+        [Published {
+            uri: b.uri("s.acvus"),
+            diagnostics: 0,
+        }]
+    );
+    assert_eq!(hover_at(&mut client, &b.uri("s.acvus"), at(0, 1)), None);
+    assert!(hover_at(&mut client, &a_s, at(0, 1)).is_some());
+    client.shut_down();
+}
+
+#[test]
+fn an_added_folder_is_seeded_with_the_buffers_open_under_it() {
+    let a = Fixture::new("string");
+    let b = Fixture::new("string");
+    let (mut client, sent) = Client::initialized(&folders_offer(&[a.root()]));
+    assert_eq!(published(sent), []);
+
+    let s = b.uri("s.acvus");
+    client.open(&s, "@x + 1");
+    assert_eq!(client.publications(), [], "b is under no root yet");
+
+    client.folders_changed(&[b.root()], &[]);
+    assert_eq!(
+        counted(client.publications()),
+        [Published {
+            uri: s,
+            diagnostics: 1,
+        }]
+    );
+    client.shut_down();
+}
+
+#[test]
+fn a_path_under_no_root_is_answered_with_nothing() {
+    let a = Fixture::new("string");
+    let elsewhere = Fixture::new("string");
+    let (mut client, sent) = Client::initialized(&folders_offer(&[a.root()]));
+    assert_eq!(published(sent), []);
+
+    let s = elsewhere.uri("s.acvus");
+    assert_eq!(hover_at(&mut client, &s, at(0, 1)), None);
+    assert_eq!(definition_at(&mut client, &s, at(0, 1)), None);
+    client.shut_down();
+}
+
+fn hovered_type(client: &mut Client, uri: &lsp::Uri, position: lsp::Position) -> String {
+    let hover = hover_at(client, uri, position).expect("the name is hovered");
+    let lsp::HoverContents::Markup(contents) = hover.contents else {
+        panic!("a hover is markup");
+    };
+    contents.value
+}
+
+#[test]
+fn the_innermost_root_answers_and_a_diagnostic_both_report_is_published_once() {
+    let outer = Fixture::new("int");
+    outer.write("main.acvt", "hello");
+    let inner = outer.nested("inner", "string");
+    outer.write("extra.txt", "inner/main.acvt");
+    let source = "% let v = @x\n{{ nope }}";
+    inner.write("main.acvt", source);
+    let (mut client, sent) = Client::initialized(&folders_offer(&[outer.root(), inner.root()]));
+    assert_eq!(
+        counted(published(sent)),
+        [Published {
+            uri: inner.uri("main.acvt"),
+            diagnostics: 1,
+        }]
+    );
+
+    let main = inner.uri("main.acvt");
+    let x = at(0, 11);
+    let in_inner = hovered_type(&mut client, &main, x);
+    assert!(in_inner.contains("String"), "{in_inner}");
+
+    client.folders_changed(&[], &[inner.root()]);
+    assert_eq!(
+        client.publications(),
+        [],
+        "the outer folder reports the same error"
+    );
+    let in_outer = hovered_type(&mut client, &main, x);
+    assert!(in_outer.contains("i64"), "{in_outer}");
+    client.shut_down();
+}
+
+#[test]
+fn workspace_folders_are_preferred_over_the_root_uri_and_their_changes_advertised() {
+    let rooted = Fixture::new("string");
+    let folder = Fixture::new("bogus");
+    let (mut client, response) = Client::start(&Offer {
+        root: Some(rooted.root()),
+        ..folders_offer(&[folder.root()])
+    });
+    let result: lsp::InitializeResult = serde_json::from_value(
+        response
+            .response_result
+            .expect("the server accepts the initialize request"),
+    )
+    .expect("an InitializeResult");
+    assert_eq!(
+        result.capabilities.workspace,
+        Some(lsp::WorkspaceServerCapabilities {
+            workspace_folders: Some(lsp::WorkspaceFoldersServerCapabilities {
+                supported: Some(true),
+                change_notifications: Some(lsp::OneOf::Left(true)),
+            }),
+            file_operations: None,
+        })
+    );
+
+    client.notify(lsp::notification::Initialized::METHOD, json!({}));
+    assert_eq!(
+        counted(client.publications()),
+        [Published {
+            uri: folder.uri("env.txt"),
+            diagnostics: 1,
+        }]
+    );
+    assert_eq!(
+        hover_at(&mut client, &rooted.uri("main.acvt"), at(0, 4)),
+        None
+    );
     client.shut_down();
 }

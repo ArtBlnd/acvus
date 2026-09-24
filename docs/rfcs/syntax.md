@@ -315,3 +315,61 @@ is the format string a script already writes.
   string.
 - Inline template forms (`{{ pattern = expr }}`, `{{_}}`, `{{/}}`,
   `{-{ }-}`) — `%` lines replace them.
+
+## RFC-0087: A bound `$` holds any value a literal writes, and its uses decide its enums
+
+Status: Proposed
+
+1. **A binding's value is a literal's value**: an integer, `i64` or the width
+   its suffix names (RFC-0058 rule 1), a float, a `bool`, a `char`, text, a
+   byte string, `()`, and an array, a tuple, an object, a structural enum's
+   variant, `Some` or `None`, `Ok` or `Err` holding any of these. An object
+   holds each field once.
+2. **Its type is the type its literal expression gets, with two
+   differences.** Text is `&str` as the input itself, where it stands in
+   place of `"…"`, and `String` inside a value, where a script writes
+   `.to_string()`, since data holds no reference (RFC-0062 rule 5). Every
+   structural enum in it is a variable while the body is checked, as the type
+   of an unbound `$` is; after the body is checked, the variant the value
+   holds joins that variable.
+3. **A value with no type is refused when it is bound**, before any body is
+   checked: array elements that have no one type, an object wider than an
+   object type admits, a suffixed integer that does not fit its width. The
+   bound value is typed in every body that reads it, and never fails there.
+4. **A use the value cannot meet is refused at the body.** Where the uses
+   typed an enum position while the body was checked — a branch it meets, a
+   variable it is stored in — a variant or payload type the value contradicts
+   is refused at the input's first read, naming the input and its value. A
+   use the solve settles — a pattern's literal, an operator, a call — meets
+   the value's type and is refused at that use, in the use's own words. A
+   field the body reads and the object lacks is refused where the constant
+   is written (RFC-0071 rule 5).
+5. **The constant is the value's constructors**: arrays, tuples, objects and
+   variants are built from the constants of their parts, at the types the body
+   closed them to, as the lowering builds a literal.
+
+**Why.** A literal `M::R` is the whole enum a script writes, but a bound `M::R`
+is one value of an enum only the host knows. An arm naming a variant a known
+enum lacks is refused (RFC-0051 rule 2), so giving the input the literal's
+enum refuses the `% M::D =>` arm of the very dispatch the binding decides;
+binding would widen what is refused, where it only narrows what is required
+(RFC-0071 rule 5). Left to the uses, the enum is the type the unbound input
+has, and the value is one value of it. Every other head comes from the value,
+because a method, an index or a `for` needs the head while the body is
+checked. A refusal at the binding reaches the host that built the value, once,
+at the call.
+
+**Cost.** Binding types the value once on its own, apart from any body. A
+field read the object lacks is refused at the constant, after the body checked,
+not at the read.
+
+**Rejected.**
+- `acvus_ast::Literal` extended with objects and variants — a constant
+  instruction and every pass that reads one would take values no single
+  instruction writes.
+- The literal's own enum as the input's — its dispatch's other arms are
+  refused rather than decided.
+- Every position left to the uses — a method, an index or a `for` on the
+  input is refused while its head is open.
+- A value with no type refused in each body — one refusal per body that
+  reads the input, at no span.

@@ -11,5 +11,5 @@ pub use session::{
 };
 pub use workspace::{
     Checked, CompilationId, CompilationSpec, DocumentSpec, Entry, EntryKind, Environment, Host,
-    HostDiagnostic, Listing, Location, RecordingReader, Sites, TextError, Vfs, Workspace,
+    HostDiagnostic, Link, Listing, Location, RecordingReader, Sites, TextError, Vfs, Workspace,
 };

@@ -461,17 +461,19 @@ fn completion_updates_with_source() {
 /// RFC-0071 rule 5, at the surface the editor reads.
 mod required_inputs {
     use acvus_lsp::LspSession;
-    use acvus_mir::graph::{Bindings, CompilationGraph};
+    use acvus_mir::graph::{Bindings, BoundValue, CompilationGraph};
     use acvus_mir::ty::TypeRegistry;
     use acvus_utils::Interner;
 
-    fn text(value: &str) -> acvus_ast::Literal {
-        acvus_ast::Literal::String(value.to_string())
+    fn text(value: &str) -> BoundValue {
+        BoundValue::String(value.to_string())
     }
 
-    fn bound(interner: &Interner, name: &str, value: acvus_ast::Literal) -> CompilationGraph {
+    fn bound(interner: &Interner, name: &str, value: BoundValue) -> CompilationGraph {
         let mut bindings = Bindings::default();
-        bindings.bind(interner.intern(name), value);
+        bindings
+            .bind(interner.intern(name), value)
+            .expect("text types on its own");
         super::environment(vec![], vec![], TypeRegistry::default(), bindings)
     }
 

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::{fmt, io};
 
 use acvus_ast::Span;
+use acvus_ast::locate::on_cursor;
 use acvus_mir::graph::{CompilationGraph, ContextInfo, QualifiedRef};
 use acvus_mir::ty::Ty;
 use acvus_mir::typeck::Resolved;
@@ -46,6 +47,13 @@ pub trait Host {
 pub struct Listing<C> {
     pub compilations: Vec<CompilationSpec<C>>,
     pub refusals: Vec<HostDiagnostic>,
+    pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub from: Location,
+    pub to: Location,
 }
 
 /// The file a compilation is read from.
@@ -124,12 +132,6 @@ pub struct Vfs {
 }
 
 impl Vfs {
-    fn new() -> Self {
-        Vfs {
-            buffers: FxHashMap::default(),
-        }
-    }
-
     pub fn read(&self, path: &Path) -> io::Result<String> {
         match self.buffers.get(path) {
             Some(text) => Ok(text.clone()),
@@ -591,6 +593,20 @@ impl<C> Compilation<C> {
     }
 }
 
+/// Enforces RFC-0086 rule 8 for a link from a document.
+fn refused_link(link: Link) -> HostDiagnostic {
+    let Span { start, end } = link.from.span;
+    HostDiagnostic {
+        message: format!(
+            "the link from bytes {start}..{end} of {} is refused: it is a document, \
+             and a document's names are the checker's",
+            link.from.path.display()
+        ),
+        path: link.from.path,
+        span: Some(link.from.span),
+    }
+}
+
 fn extend_unique(into: &mut BTreeMap<PathBuf, Vec<LspError>>, path: &Path, errors: Vec<LspError>) {
     for error in errors {
         let held = into.entry(path.to_path_buf()).or_default();
@@ -609,6 +625,7 @@ where
     vfs: Vfs,
     compilations: Vec<Compilation<H::Compilation>>,
     refusals: Vec<HostDiagnostic>,
+    links: Vec<Link>,
     dependencies: ListingDependencies,
     texts: DocumentTexts,
 }
@@ -618,12 +635,22 @@ where
     H: Host,
 {
     pub fn new(interner: &Interner, host: H) -> Self {
+        Self::with_buffers(interner, host, [])
+    }
+
+    pub fn with_buffers<B>(interner: &Interner, host: H, buffers: B) -> Self
+    where
+        B: IntoIterator<Item = (PathBuf, String)>,
+    {
         let mut workspace = Workspace {
             host,
             interner: interner.clone(),
-            vfs: Vfs::new(),
+            vfs: Vfs {
+                buffers: buffers.into_iter().collect(),
+            },
             compilations: Vec::new(),
             refusals: Vec::new(),
+            links: Vec::new(),
             dependencies: ListingDependencies::default(),
             texts: DocumentTexts::default(),
         };
@@ -693,6 +720,10 @@ where
     /// defines it, at its start; a context or an input to the site its
     /// host gave it.
     pub fn definition(&self, path: &Path, offset: usize) -> Option<Location> {
+        if !self.texts.contains_key(path) {
+            let links = self.links.iter().filter(|link| link.from.path == path);
+            return on_cursor(links, offset, |link| link.from.span).map(|link| link.to.clone());
+        }
         let (loaded, id) = self.open_in_first(path)?;
         match loaded.session.definition(id, offset)? {
             Definition::Local { span } => Some(Location {
@@ -717,8 +748,10 @@ where
     /// input's in the document, a context's or a function's in every
     /// document of the compilation. A function's declaration is the start
     /// of the document that defines it; a context's or an input's is the
-    /// site the compilation's host gave it, where it gave one. `None` where
-    /// no name at `offset` resolved in any of them.
+    /// site the compilation's host gave it, where it gave one. A host's
+    /// link to that site is a use of it, held whatever
+    /// `include_declaration` says (RFC-0086 rule 8). `None` where no name
+    /// at `offset` resolved in any of them.
     pub fn references(
         &self,
         path: &Path,
@@ -759,8 +792,17 @@ where
                 Resolved::Input(name) => loaded.sites.inputs.get(&name),
                 Resolved::Local(_) | Resolved::Function(_) => None,
             };
+            let Some(site) = site else {
+                continue;
+            };
+            locations.extend(
+                self.links
+                    .iter()
+                    .filter(|link| link.to == *site)
+                    .map(|link| link.from.clone()),
+            );
             if include_declaration {
-                locations.extend(site.cloned());
+                locations.insert(site.clone());
             }
         }
         found.map(|locations| locations.into_iter().collect())
@@ -831,16 +873,22 @@ where
         let reader = RecordingReader::new(&self.vfs);
         let Listing {
             compilations: mut specs,
-            refusals,
+            mut refusals,
+            links,
         } = self.host.compilations(&self.interner, &reader);
         self.dependencies = reader.into_dependencies();
         specs.sort_by(|a, b| a.id.cmp(&b.id));
-        self.refusals = refusals;
         let paths: BTreeSet<&Path> = specs
             .iter()
             .flat_map(|spec| &spec.documents)
             .map(|document| document.path.as_path())
             .collect();
+        let (from_documents, links): (Vec<Link>, Vec<Link>) = links
+            .into_iter()
+            .partition(|link| paths.contains(link.from.path.as_path()));
+        refusals.extend(from_documents.into_iter().map(refused_link));
+        self.refusals = refusals;
+        self.links = links;
         self.texts = paths
             .into_iter()
             .map(|path| {

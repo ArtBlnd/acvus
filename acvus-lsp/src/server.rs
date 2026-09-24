@@ -2,6 +2,7 @@
 //! host (RFC-0086).
 
 use std::borrow::Cow;
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -109,14 +110,16 @@ fn uri_of(path: &Path) -> Result<lsp::Uri, NoUri> {
         .map_err(|error| NoUri::Unparsed(path.to_path_buf(), error))
 }
 
-pub fn serve<H, F>(connection: Connection, make_host: F) -> Result<(), ServeError>
+/// `make_host` makes the host of each root the client serves (RFC-0086
+/// rule 1).
+pub fn serve<H, F>(connection: Connection, mut make_host: F) -> Result<(), ServeError>
 where
     H: Host,
-    F: FnOnce(PathBuf) -> H,
+    F: FnMut(PathBuf) -> H,
 {
     let (id, params) = initialize_request(&connection)?;
-    let root = match root_of(&params) {
-        Ok(root) => root,
+    let roots = match roots_of(&params) {
+        Ok(roots) => roots,
         Err(error) => {
             send(
                 &connection,
@@ -139,7 +142,14 @@ where
         .and_then(|workspace| workspace.did_change_watched_files)
         .and_then(|watched| watched.dynamic_registration)
         == Some(true);
-    let workspace = Workspace::new(&Interner::new(), make_host(root));
+    let interner = Interner::new();
+    let workspaces = roots
+        .into_iter()
+        .map(|root| {
+            let workspace = Workspace::new(&interner, make_host(root.clone()));
+            (root, workspace)
+        })
+        .collect();
     send(
         &connection,
         Response::new_ok(
@@ -155,7 +165,10 @@ where
     )?;
     Server {
         connection: &connection,
-        workspace,
+        make_host,
+        interner,
+        workspaces,
+        open_buffers: BTreeMap::new(),
         encoding,
         watches_files,
         published: BTreeMap::new(),
@@ -205,13 +218,16 @@ fn initialize_request(
     }
 }
 
-fn root_of(params: &lsp::InitializeParams) -> Result<PathBuf, ServeError> {
+fn roots_of(params: &lsp::InitializeParams) -> Result<Vec<PathBuf>, ServeError> {
     #[allow(deprecated)]
     let root_uri = params.root_uri.as_ref();
-    let uri = root_uri
-        .or_else(|| Some(&params.workspace_folders.as_ref()?.first()?.uri))
-        .ok_or(ServeError::NoRoot)?;
-    path_of(uri).map_err(ServeError::RootNotAFilePath)
+    let uris: Vec<&lsp::Uri> = match params.workspace_folders.as_deref() {
+        Some(folders) if !folders.is_empty() => folders.iter().map(|folder| &folder.uri).collect(),
+        Some(_) | None => vec![root_uri.ok_or(ServeError::NoRoot)?],
+    };
+    uris.into_iter()
+        .map(|uri| path_of(uri).map_err(ServeError::RootNotAFilePath))
+        .collect()
 }
 
 fn capabilities(encoding: Encoding) -> lsp::ServerCapabilities {
@@ -231,6 +247,13 @@ fn capabilities(encoding: Encoding) -> lsp::ServerCapabilities {
             prepare_provider: Some(true),
             work_done_progress_options: lsp::WorkDoneProgressOptions::default(),
         })),
+        workspace: Some(lsp::WorkspaceServerCapabilities {
+            workspace_folders: Some(lsp::WorkspaceFoldersServerCapabilities {
+                supported: Some(true),
+                change_notifications: Some(lsp::OneOf::Left(true)),
+            }),
+            file_operations: None,
+        }),
         completion_provider: Some(lsp::CompletionOptions {
             trigger_characters: Some(["$", "@", ".", ":"].map(String::from).to_vec()),
             ..lsp::CompletionOptions::default()
@@ -281,28 +304,45 @@ const START_OF_FILE: lsp::Range = lsp::Range {
 
 const WATCH_REGISTRATION: &str = "acvus/watched-files";
 
-struct Server<'c, H>
+struct Server<'c, H, F>
 where
     H: Host,
+    F: FnMut(PathBuf) -> H,
 {
     connection: &'c Connection,
-    workspace: Workspace<H>,
+    make_host: F,
+    interner: Interner,
+    workspaces: BTreeMap<PathBuf, Workspace<H>>,
+    open_buffers: BTreeMap<PathBuf, String>,
     encoding: Encoding,
     watches_files: bool,
     published: BTreeMap<PathBuf, (lsp::Uri, Vec<lsp::Diagnostic>)>,
     shut_down: bool,
 }
 
+struct Reported<'w, H>
+where
+    H: Host,
+{
+    error: LspError,
+    by: &'w Workspace<H>,
+}
+
 type Answer<T> = Result<T, lsp_server::ResponseError>;
 
-struct RequestedDocument<'w> {
+struct RequestedDocument<'w, H>
+where
+    H: Host,
+{
+    workspace: &'w Workspace<H>,
     path: PathBuf,
     text: Cow<'w, str>,
 }
 
-impl<H> Server<'_, H>
+impl<H, F> Server<'_, H, F>
 where
     H: Host,
+    F: FnMut(PathBuf) -> H,
 {
     fn run(mut self) -> Result<(), ServeError> {
         loop {
@@ -387,25 +427,39 @@ where
         }
     }
 
-    fn document(&self, uri: &lsp::Uri) -> Answer<RequestedDocument<'_>> {
+    fn document(&self, uri: &lsp::Uri) -> Answer<Option<RequestedDocument<'_, H>>> {
         let path = path_of(uri).map_err(|error| failed(ErrorCode::InvalidParams, error))?;
-        let text = self.text(&path)?;
-        Ok(RequestedDocument { path, text })
+        let Some(workspace) = self.serving(&path) else {
+            return Ok(None);
+        };
+        let text = text(workspace, &path)?;
+        Ok(Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }))
     }
 
-    fn text(&self, path: &Path) -> Answer<Cow<'_, str>> {
-        self.workspace.text(path).map_err(|error| {
-            failed(
-                ErrorCode::RequestFailed,
-                format!("{} does not read: {error}", path.display()),
-            )
-        })
+    /// Enforces RFC-0086 rule 7.
+    fn serving(&self, path: &Path) -> Option<&Workspace<H>> {
+        self.workspaces
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, workspace)| workspace)
     }
 
-    fn location(&self, location: &Location) -> Answer<lsp::Location> {
+    fn holding<'s>(&'s mut self, path: &'s Path) -> impl Iterator<Item = &'s mut Workspace<H>> {
+        self.workspaces
+            .iter_mut()
+            .filter(move |(root, _)| path.starts_with(root))
+            .map(|(_, workspace)| workspace)
+    }
+
+    fn location(&self, workspace: &Workspace<H>, location: &Location) -> Answer<lsp::Location> {
         let uri =
             uri_of(&location.path).map_err(|error| failed(ErrorCode::RequestFailed, error))?;
-        let text = self.text(&location.path)?;
+        let text = text(workspace, &location.path)?;
         Ok(lsp::Location {
             uri,
             range: placed_location(
@@ -418,10 +472,16 @@ where
 
     fn hover(&self, params: lsp::HoverParams) -> Answer<Option<lsp::Hover>> {
         let at = params.text_document_position_params;
-        let RequestedDocument { path, text } = self.document(&at.text_document.uri)?;
+        let Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }) = self.document(&at.text_document.uri)?
+        else {
+            return Ok(None);
+        };
         let index = LineIndex::new(&text, self.encoding);
-        Ok(self
-            .workspace
+        Ok(workspace
             .hover(&path, index.offset(at.position))
             .map(|hover| lsp::Hover {
                 contents: lsp::HoverContents::Markup(lsp::MarkupContent {
@@ -437,12 +497,19 @@ where
         params: lsp::GotoDefinitionParams,
     ) -> Answer<Option<lsp::GotoDefinitionResponse>> {
         let at = params.text_document_position_params;
-        let RequestedDocument { path, text } = self.document(&at.text_document.uri)?;
+        let Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }) = self.document(&at.text_document.uri)?
+        else {
+            return Ok(None);
+        };
         let offset = LineIndex::new(&text, self.encoding).offset(at.position);
-        self.workspace
+        workspace
             .definition(&path, offset)
             .map(|location| {
-                self.location(&location)
+                self.location(workspace, &location)
                     .map(lsp::GotoDefinitionResponse::Scalar)
             })
             .transpose()
@@ -450,14 +517,21 @@ where
 
     fn references(&self, params: lsp::ReferenceParams) -> Answer<Option<Vec<lsp::Location>>> {
         let at = params.text_document_position;
-        let RequestedDocument { path, text } = self.document(&at.text_document.uri)?;
+        let Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }) = self.document(&at.text_document.uri)?
+        else {
+            return Ok(None);
+        };
         let offset = LineIndex::new(&text, self.encoding).offset(at.position);
-        self.workspace
+        workspace
             .references(&path, offset, params.context.include_declaration)
             .map(|locations| {
                 locations
                     .iter()
-                    .map(|location| self.location(location))
+                    .map(|location| self.location(workspace, location))
                     .collect()
             })
             .transpose()
@@ -467,10 +541,16 @@ where
         &self,
         at: lsp::TextDocumentPositionParams,
     ) -> Answer<Option<lsp::PrepareRenameResponse>> {
-        let RequestedDocument { path, text } = self.document(&at.text_document.uri)?;
+        let Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }) = self.document(&at.text_document.uri)?
+        else {
+            return Ok(None);
+        };
         let index = LineIndex::new(&text, self.encoding);
-        let target = self
-            .workspace
+        let target = workspace
             .rename_target(&path, index.offset(at.position))
             .map_err(|refusal| failed(ErrorCode::RequestFailed, refusal))?;
         Ok(Some(lsp::PrepareRenameResponse::Range(placed_in_document(
@@ -480,10 +560,16 @@ where
 
     fn rename(&self, params: lsp::RenameParams) -> Answer<Option<lsp::WorkspaceEdit>> {
         let at = params.text_document_position;
-        let RequestedDocument { path, text } = self.document(&at.text_document.uri)?;
+        let Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }) = self.document(&at.text_document.uri)?
+        else {
+            return Ok(None);
+        };
         let index = LineIndex::new(&text, self.encoding);
-        let edits = self
-            .workspace
+        let edits = workspace
             .rename(&path, index.offset(at.position), &params.new_name)
             .map_err(|refusal| failed(ErrorCode::RequestFailed, refusal))?;
         let uri = uri_of(&path).map_err(|error| failed(ErrorCode::RequestFailed, error))?;
@@ -502,10 +588,17 @@ where
 
     fn completion(&self, params: lsp::CompletionParams) -> Answer<Option<lsp::CompletionResponse>> {
         let at = params.text_document_position;
-        let RequestedDocument { path, text } = self.document(&at.text_document.uri)?;
+        let Some(RequestedDocument {
+            workspace,
+            path,
+            text,
+        }) = self.document(&at.text_document.uri)?
+        else {
+            return Ok(None);
+        };
         let index = LineIndex::new(&text, self.encoding);
         let Some(Completions { replaces, items }) =
-            self.workspace.completions(&path, index.offset(at.position))
+            workspace.completions(&path, index.offset(at.position))
         else {
             return Ok(None);
         };
@@ -553,7 +646,7 @@ where
                 let Some(path) = self.path_or_log(&params.text_document.uri)? else {
                     return Ok(());
                 };
-                self.workspace.set_buffer(path, params.text_document.text);
+                self.set_buffer(path, params.text_document.text);
             }
             DidChangeTextDocument::METHOD => {
                 let Some(params) = self.params_or_log::<DidChangeTextDocument>(notification)?
@@ -572,7 +665,7 @@ where
                         path.display()
                     ));
                 }
-                self.workspace.set_buffer(path, change.text);
+                self.set_buffer(path, change.text);
             }
             DidCloseTextDocument::METHOD => {
                 let Some(params) = self.params_or_log::<DidCloseTextDocument>(notification)? else {
@@ -581,7 +674,10 @@ where
                 let Some(path) = self.path_or_log(&params.text_document.uri)? else {
                     return Ok(());
                 };
-                self.workspace.drop_buffer(&path);
+                self.open_buffers.remove(&path);
+                for workspace in self.holding(&path) {
+                    workspace.drop_buffer(&path);
+                }
             }
             DidChangeWatchedFiles::METHOD => {
                 let Some(params) = self.params_or_log::<DidChangeWatchedFiles>(notification)?
@@ -589,14 +685,58 @@ where
                     return Ok(());
                 };
                 for change in params.changes {
-                    if let Some(path) = self.path_or_log(&change.uri)? {
-                        self.workspace.file_changed(&path);
+                    let Some(path) = self.path_or_log(&change.uri)? else {
+                        continue;
+                    };
+                    for workspace in self.holding(&path) {
+                        workspace.file_changed(&path);
                     }
+                }
+            }
+            DidChangeWorkspaceFolders::METHOD => {
+                let Some(params) = self.params_or_log::<DidChangeWorkspaceFolders>(notification)?
+                else {
+                    return Ok(());
+                };
+                for folder in params.event.removed {
+                    let Some(root) = self.path_or_log(&folder.uri)? else {
+                        continue;
+                    };
+                    self.workspaces.remove(&root);
+                }
+                for folder in params.event.added {
+                    let Some(root) = self.path_or_log(&folder.uri)? else {
+                        continue;
+                    };
+                    self.serve_root(root);
                 }
             }
             _ => return Ok(()),
         }
         self.publish()
+    }
+
+    /// Follows RFC-0086 rule 7.
+    fn set_buffer(&mut self, path: PathBuf, text: String) {
+        self.open_buffers.insert(path.clone(), text.clone());
+        for workspace in self.holding(&path) {
+            workspace.set_buffer(path.clone(), text.clone());
+        }
+    }
+
+    fn serve_root(&mut self, root: PathBuf) {
+        if self.workspaces.contains_key(&root) {
+            return;
+        }
+        let buffers: Vec<(PathBuf, String)> = self
+            .open_buffers
+            .iter()
+            .filter(|(path, _)| path.starts_with(&root))
+            .map(|(path, text)| (path.clone(), text.clone()))
+            .collect();
+        let host = (self.make_host)(root.clone());
+        let workspace = Workspace::with_buffers(&self.interner, host, buffers);
+        self.workspaces.insert(root, workspace);
     }
 
     fn params_or_log<N>(&self, notification: Notification) -> Result<Option<N::Params>, ServeError>
@@ -672,16 +812,42 @@ where
         )
     }
 
+    /// Enforces RFC-0086 rule 7.
     fn publish(&mut self) -> Result<(), ServeError> {
-        let mut now = BTreeMap::new();
-        for (path, errors) in self.workspace.diagnostics() {
-            match uri_of(&path) {
-                Ok(uri) => {
-                    let diagnostics = self.diagnostics(&path, &uri, &errors)?;
-                    now.insert(path, (uri, diagnostics));
+        let mut deepest_first: Vec<(&PathBuf, &Workspace<H>)> = self.workspaces.iter().collect();
+        deepest_first.sort_by_key(|(root, _)| Reverse(root.components().count()));
+        let mut reported: BTreeMap<PathBuf, Vec<Reported<'_, H>>> = BTreeMap::new();
+        for (_, workspace) in deepest_first {
+            for (path, errors) in workspace.diagnostics() {
+                let held = reported.entry(path).or_default();
+                for error in errors {
+                    if !held.iter().any(|reported| reported.error == error) {
+                        held.push(Reported {
+                            error,
+                            by: workspace,
+                        });
+                    }
                 }
-                Err(error) => self.log(format!("diagnostics are not published: {error}"))?,
             }
+        }
+        let mut now = BTreeMap::new();
+        for (path, errors) in reported {
+            let uri = match uri_of(&path) {
+                Ok(uri) => uri,
+                Err(error) => {
+                    self.log(format!("diagnostics are not published: {error}"))?;
+                    continue;
+                }
+            };
+            let mut diagnostics = Vec::new();
+            for by_one in errors.chunk_by(|a, b| std::ptr::eq(a.by, b.by)) {
+                let errors: Vec<LspError> = by_one
+                    .iter()
+                    .map(|reported| reported.error.clone())
+                    .collect();
+                diagnostics.extend(self.diagnostics(by_one[0].by, &path, &uri, &errors)?);
+            }
+            now.insert(path, (uri, diagnostics));
         }
         for (path, (uri, diagnostics)) in &now {
             let published = self.published.get(path).map(|(_, published)| published);
@@ -718,11 +884,12 @@ where
 
     fn diagnostics(
         &self,
+        workspace: &Workspace<H>,
         path: &Path,
         uri: &lsp::Uri,
         errors: &[LspError],
     ) -> Result<Vec<lsp::Diagnostic>, ServeError> {
-        let text = self.workspace.text(path);
+        let text = workspace.text(path);
         let index = match &text {
             Ok(text) => Some(LineIndex::new(text, self.encoding)),
             Err(error) => {
@@ -782,6 +949,18 @@ where
         }
         Ok(diagnostics)
     }
+}
+
+fn text<'w, H>(workspace: &'w Workspace<H>, path: &Path) -> Answer<Cow<'w, str>>
+where
+    H: Host,
+{
+    workspace.text(path).map_err(|error| {
+        failed(
+            ErrorCode::RequestFailed,
+            format!("{} does not read: {error}", path.display()),
+        )
+    })
 }
 
 fn message_with_notes(error: &LspError) -> String {

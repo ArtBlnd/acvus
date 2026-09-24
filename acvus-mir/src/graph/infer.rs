@@ -644,7 +644,7 @@ struct BodyCheck<'c> {
     interner: &'c Interner,
     env: &'c crate::ty::TypeEnv,
     declared_params: Vec<ParamTerm<Infer>>,
-    bound_inputs: Vec<(Astr, InferTy)>,
+    bindings: &'c Bindings,
     effect: EffectTerm<Infer>,
     probe: Option<acvus_ast::AstId>,
     expected_tail: Option<&'c Ty>,
@@ -675,7 +675,7 @@ impl BodyCheck<'_> {
     {
         let checker = TypeChecker::new(self.interner, self.env, solver)
             .with_declared_params(self.declared_params.clone())
-            .with_bound_inputs(self.bound_inputs.clone())
+            .with_bound_inputs(self.bindings)
             .with_body_effect(self.effect.clone());
         match self.probe {
             Some(marker) => checker.with_probe(marker),
@@ -697,16 +697,6 @@ fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck
         true => crate::typeck::ResultCrossing::Host,
         false => crate::typeck::ResultCrossing::Registers,
     }
-}
-
-/// The bound `$` names as the checker takes them. A literal that is no
-/// scalar has no input type and is left out; lowering refuses it there,
-/// where the body that reads the name is at hand.
-fn bound_inputs(bindings: &Bindings) -> Vec<(Astr, InferTy)> {
-    bindings
-        .iter()
-        .filter_map(|(name, value)| Some((name, lift_ty(&bound_input_ty(value)?))))
-        .collect()
 }
 
 pub fn infer_scc(
@@ -813,7 +803,7 @@ pub fn infer_scc(
             interner,
             env: &env,
             declared_params: fn_declared_params[&fid].clone(),
-            bound_inputs: bound_inputs(bindings),
+            bindings,
             effect: fn_effect_vars[&fid].clone(),
             probe: probe
                 .filter(|probe| probe.body == fid)
@@ -1061,7 +1051,7 @@ pub fn infer(
                 interner,
                 env: &env,
                 declared_params: scc_declared_params[&fid].clone(),
-                bound_inputs: bound_inputs(&graph.bindings),
+                bindings: &graph.bindings,
                 effect: scc_effect_vars[&fid].clone(),
                 probe: None,
                 expected_tail: expected_tail_ty.as_ref(),

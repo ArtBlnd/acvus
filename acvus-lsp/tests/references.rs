@@ -440,6 +440,7 @@ impl Host for Documents {
                 documents,
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
     }
 

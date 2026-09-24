@@ -126,6 +126,7 @@ impl IncrementalGraph {
         let qref = func.qref;
         self.functions.insert(qref, func);
         self.run_extract(qref);
+        self.redraw_call_edges();
         self.rebuild_graph();
     }
 
@@ -137,6 +138,7 @@ impl IncrementalGraph {
             self.lower_cache.remove(&qref);
             self.optimized.remove(&qref);
             self.remove_reverse_edges(qref);
+            self.redraw_call_edges();
             self.rebuild_graph();
         }
     }
@@ -410,6 +412,25 @@ impl IncrementalGraph {
             .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(_)))
             .map(|(&q, _)| (q.name, q))
             .collect()
+    }
+
+    /// Every function's call edges against the functions the graph holds
+    /// now, since a name a body calls reaches a function added after it,
+    /// and stops reaching one removed.
+    fn redraw_call_edges(&mut self) {
+        let names = self.root_fn_names();
+        let call_edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = self
+            .extract_cache
+            .iter()
+            .map(|(&caller, entry)| (caller, extract_call_edges(&entry.parsed, &names, caller)))
+            .collect();
+        self.reverse_edges.clear();
+        for (&caller, callees) in &call_edges {
+            for &callee in callees {
+                self.reverse_edges.entry(callee).or_default().push(caller);
+            }
+        }
+        self.call_edges = call_edges;
     }
 
     fn remove_reverse_edges(&mut self, qref: QualifiedRef) {

@@ -373,6 +373,7 @@ impl Host for CliHost {
         Listing {
             compilations,
             refusals,
+            links: Vec::new(),
         }
     }
 

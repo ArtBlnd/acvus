@@ -23,7 +23,7 @@ use acvus_interpreter::{
 use acvus_utils::Interner;
 
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::graph::{Bindings, ContextInfo};
+use acvus_mir::graph::{Bindings, BoundValue, ContextInfo, NotABoundValue};
 
 use crate::compile::{CompileTimes, Compiled, Diagnostic, Mode, Stopwatch, Timed};
 
@@ -45,7 +45,7 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--c
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
   lsp        serve the Language Server Protocol on stdin and stdout, over the
-             sources under the client's root
+             sources under each folder the client serves
   --context  a JSON object: each key is a context, its type the value's type
   --bind     `$name=<json scalar>`, repeatable: the input is that constant,
              the code it decides against is gone, and the inputs it alone
@@ -142,7 +142,7 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
                 context = Some(PathBuf::from(path));
             }
             "--bind" => {
-                let held = it.next().ok_or("--bind takes `name=<json>`")?;
+                let held = it.next().ok_or("--bind takes `name=<literal>`")?;
                 bindings.push(binding(held)?);
             }
             "--commit" => commit = true,
@@ -213,45 +213,42 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
 
 struct Binding {
     name: String,
-    value: serde_json::Value,
+    text: String,
 }
 
 fn binding(held: &str) -> Result<Binding, String> {
     let Some((name, text)) = held.split_once('=') else {
-        return Err(format!("--bind takes `name=<json>`, not `{held}`"));
+        return Err(format!("--bind takes `name=<literal>`, not `{held}`"));
     };
-    let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| format!("--bind {name}: the value is not JSON: {e}"))?;
-    match value {
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(format!(
-            "--bind {name}: a binding is a scalar, not an array or an object"
-        )),
-        serde_json::Value::Null => Err(format!("--bind {name}: null is no value")),
-        scalar => Ok(Binding {
-            name: name.to_string(),
-            value: scalar,
-        }),
-    }
+    Ok(Binding {
+        name: name.to_string(),
+        text: text.to_string(),
+    })
 }
 
-/// A JSON number is an integer where it is one, as `context::typed` reads
-/// the numbers of a context file (RFC-0031).
+/// Each `name=<literal>` read in the script's own syntax (RFC-0031 rule 4),
+/// and a value `Bindings::bind` refuses is a usage error as a form outside
+/// that syntax is.
 fn bound_literals(interner: &Interner, bindings: &[Binding]) -> Result<Bindings, String> {
     let mut bound = Bindings::default();
-    for Binding { name, value } in bindings {
-        let literal = match value {
-            serde_json::Value::String(s) => acvus_ast::Literal::String(s.clone()),
-            serde_json::Value::Bool(b) => acvus_ast::Literal::Bool(*b),
-            serde_json::Value::Number(n) => match (n.as_i64(), n.as_f64()) {
-                (Some(i), _) => acvus_ast::Literal::Int(i128::from(i)),
-                (None, Some(f)) => acvus_ast::Literal::Float(f),
-                (None, None) => {
-                    return Err(format!("--bind {name}: {n} is neither an Int nor a Float"));
-                }
-            },
-            other => return Err(format!("--bind {name}: {other} is no scalar")),
-        };
-        bound.bind(interner.intern(name), literal);
+    for Binding { name, text } in bindings {
+        let expr = acvus_ast::parse_expr(interner, text)
+            .map_err(|e| format!("--bind {name}: `{text}` does not parse: {e:?}"))?;
+        let written = |span: Span| &text[span.start..span.end];
+        let value = BoundValue::from_expr(interner, &expr).map_err(|e| match e {
+            NotABoundValue::NotALiteral { form } => format!(
+                "--bind {name}: `{}` is not a value a literal writes",
+                written(form)
+            ),
+            NotABoundValue::RepeatedField { key, second } => format!(
+                "--bind {name}: `{}` in `{}` is a field an object holds once",
+                interner.resolve(key),
+                written(second)
+            ),
+        })?;
+        bound
+            .bind(interner.intern(name), value)
+            .map_err(|refused| format!("--bind {name}: {refused}"))?;
     }
     Ok(bound)
 }

@@ -510,6 +510,7 @@ impl Host for TwoDocuments {
                 documents: vec![spec("greet"), spec("caller")],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -572,6 +573,7 @@ impl Host for OneFunctionTwice {
                 documents: vec![spec("first.acvt"), spec("second.acvt")],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -678,6 +680,7 @@ impl Host for SitedHost {
                 }],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -902,4 +905,25 @@ fn hover_on_a_match_arm_binder() {
         .hover(doc, nth(source, "v", 1))
         .expect("the use has a type");
     assert_eq!(at_binder.ty, at_use.ty);
+}
+
+// NOTE: twenty pairs, since which of two functions without an edge is
+// checked first follows the graph's hash order.
+#[test]
+fn a_caller_opened_before_its_callee_is_checked_after_it() {
+    for pair in 0..20 {
+        let i = Interner::new();
+        let mut session = LspSession::new(&i, bare(vec![]));
+        let caller = session
+            .open(
+                document(&i, &format!("caller{pair}"), Mode::Template),
+                &format!("{{{{ callee{pair}() }}}}"),
+            )
+            .expect("the caller is the first document of its function");
+        let callee = session
+            .open(document(&i, &format!("callee{pair}"), Mode::Template), "hi")
+            .expect("the callee is the first document of its function");
+        assert_eq!(session.diagnostics(callee), [], "pair {pair}");
+        assert_eq!(session.diagnostics(caller), [], "pair {pair}");
+    }
 }
