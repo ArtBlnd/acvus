@@ -1136,8 +1136,23 @@ pub struct TypeResolution {
 /// that the lowering emits that reading rather than deciding one.
 #[derive(Debug, Clone, Copy)]
 pub struct CapturedName {
-    pub name: Astr,
+    pub of: Captured,
     pub read: CaptureRead,
+}
+
+/// A body may name both `n` and `$n`, and they are two storages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Captured {
+    Local(Astr),
+    Input(Astr),
+}
+
+impl Captured {
+    pub fn name(self) -> Astr {
+        match self {
+            Captured::Local(name) | Captured::Input(name) => name,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1423,7 +1438,7 @@ struct LambdaScope {
 /// One name a lambda reads from outside its body: the type the name
 /// binds, how the body reads it, and the type it reads it at.
 struct Capture {
-    name: Astr,
+    of: Captured,
     ty: InferTy,
     read: CaptureSource,
     seen: InferTy,
@@ -1438,12 +1453,12 @@ enum CaptureSource {
 }
 
 impl LambdaScope {
-    fn capture(&mut self, name: Astr, ty: &InferTy, read: CaptureSource, seen: &InferTy) {
-        if self.captures.iter().any(|c| c.name == name) {
+    fn capture(&mut self, of: Captured, ty: &InferTy, read: CaptureSource, seen: &InferTy) {
+        if self.captures.iter().any(|c| c.of == of) {
             return;
         }
         self.captures.push(Capture {
-            name,
+            of,
             ty: ty.clone(),
             read,
             seen: seen.clone(),
@@ -1751,7 +1766,7 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     source_begins_by_decision: FxHashMap<DecisionId, Span>,
     inputs: Inputs,
     lambda_stack: Vec<LambdaScope>,
-    lambda_captures: FxHashMap<AstId, Vec<(Astr, CaptureSource)>>,
+    lambda_captures: FxHashMap<AstId, Vec<(Captured, CaptureSource)>>,
     capture_moves: Vec<CaptureMove>,
     /// Maps lambda expression AstId -> body expression AstId.
     /// Effect variable of the body being checked; every call raises its lower bound.
@@ -3379,7 +3394,7 @@ where
                 .filter(|(_, ls)| depth < ls.depth)
                 .map(|(i, _)| i)
                 .collect();
-            let seen = self.captured_by(name, &ty, &capturing);
+            let seen = self.captured_by(Captured::Local(name), &ty, &capturing);
             let taken_from_an_enclosing_capture = capturing_lambdas >= 2;
             if taken_from_an_enclosing_capture {
                 let captured_at = capturing
@@ -3406,18 +3421,18 @@ where
         None
     }
 
-    /// Records a name of type `ty` as a capture of each lambda in
-    /// `capturing`, innermost last, and answers the type the innermost
+    /// Records a local or an input of type `ty` as a capture of each lambda
+    /// in `capturing`, innermost last, and answers the type the innermost
     /// one's body reads it at. The reading is the solver's answer where
     /// the type's head was open at the first use and the checker's own
     /// where it was not; a second use takes the first use's.
-    fn captured_by(&mut self, name: Astr, ty: &InferTy, capturing: &[usize]) -> InferTy {
+    fn captured_by(&mut self, of: Captured, ty: &InferTy, capturing: &[usize]) -> InferTy {
         let Some(&innermost) = capturing.last() else {
             return ty.clone();
         };
         let inner = &self.lambda_stack[innermost];
         let body_span = inner.body_span;
-        let (read, seen) = match inner.captures.iter().find(|c| c.name == name) {
+        let (read, seen) = match inner.captures.iter().find(|c| c.of == of) {
             Some(recorded) => (recorded.read, recorded.seen.clone()),
             None => match self.solver.capture_read(ty) {
                 CaptureOutcome::Reads { read, seen } => (CaptureSource::Read(read), seen),
@@ -3433,7 +3448,7 @@ where
             },
         };
         for lambda in capturing {
-            self.lambda_stack[*lambda].capture(name, ty, read, &seen);
+            self.lambda_stack[*lambda].capture(of, ty, read, &seen);
         }
         seen
     }
@@ -3512,9 +3527,9 @@ where
     fn is_an_open_capture(&self, name: Astr, seen: &InferTy) -> bool {
         matches!(self.solver.shallow_resolve_ty(seen), TyTerm::Var(_))
             && self.lambda_stack.last().is_some_and(|ls| {
-                ls.captures
-                    .iter()
-                    .any(|c| c.name == name && matches!(c.read, CaptureSource::Decided(_)))
+                ls.captures.iter().any(|c| {
+                    c.of == Captured::Local(name) && matches!(c.read, CaptureSource::Decided(_))
+                })
             })
     }
 
@@ -3605,7 +3620,7 @@ where
         let mut ls = self.lambda_stack.pop().expect("this lambda's scope");
         self.capture_moves.append(&mut ls.moves_out_of_capture);
         self.lambda_captures
-            .insert(*id, ls.captures.iter().map(|c| (c.name, c.read)).collect());
+            .insert(*id, ls.captures.iter().map(|c| (c.of, c.read)).collect());
         let capture_types: Vec<InferTy> = ls
             .captures
             .iter()
@@ -4797,8 +4812,8 @@ where
             .map(|(id, names)| {
                 let names = names
                     .into_iter()
-                    .map(|(name, source)| CapturedName {
-                        name,
+                    .map(|(of, source)| CapturedName {
+                        of,
                         read: match source {
                             CaptureSource::Read(read) => read,
                             CaptureSource::Decided(decision) => {
@@ -5459,7 +5474,7 @@ where
             },
         };
         let capturing: Vec<usize> = (0..self.lambda_stack.len()).collect();
-        self.captured_by(name, &read.ty, &capturing);
+        self.captured_by(Captured::Input(name), &read.ty, &capturing);
         read
     }
 

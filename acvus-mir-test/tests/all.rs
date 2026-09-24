@@ -4,6 +4,7 @@ mod array;
 mod bce;
 mod body_summary;
 mod bound;
+mod bound_capture;
 mod bound_input;
 mod captures;
 mod cast;
