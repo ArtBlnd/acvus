@@ -1,0 +1,11 @@
+// id: K01
+// family: keyed
+// desc: word count into a hash map, `*or_insert(&mut m, w, 0) += 1`
+// expect: 3|2|1
+let words = vec(["a".to_string(), "b".to_string(), "a".to_string(), "c".to_string(), "b".to_string(), "a".to_string()]);
+let m = hash_map();
+for w in &words {
+    let n = or_insert(&mut m, w.to_string(), 0);
+    *n = *n + 1;
+}
+(*get(&m, &"a".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"b".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"c".to_string()).unwrap()).to_string()

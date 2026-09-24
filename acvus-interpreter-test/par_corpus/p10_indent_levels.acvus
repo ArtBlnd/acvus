@@ -1,0 +1,12 @@
+// id: P10
+// family: state-machine
+// desc: per line, the indentation count; the line split is a `while let`, the count per line independent
+// expect: 0,2,4,0
+let text = "a\n  b\n    c\nd";
+let ls = text.lines();
+let out = vec([]);
+while let Some(l) = ls.next() {
+    let t = l.trim_start();
+    out.push(l.len() - t.len());
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

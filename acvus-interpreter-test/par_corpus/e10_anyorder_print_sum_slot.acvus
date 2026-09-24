@@ -1,0 +1,13 @@
+// id: E10
+// family: effects
+// desc: anyorder print of the element's square, the text a `let` slot reused across two prints
+// expect: 25\n25\n9\n9\n2
+let xs = vec([5, 3]);
+anyorder {
+    for x in &xs {
+        let s = (*x * *x).to_string();
+        io::print(&s);
+        io::print(&s);
+    }
+}
+xs.len()

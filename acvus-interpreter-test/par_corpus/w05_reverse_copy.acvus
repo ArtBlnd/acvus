@@ -1,0 +1,11 @@
+// id: W05
+// family: mut-write
+// desc: reverse copy `out[n-1-i] = xs[i]`
+// expect: 1,8,3,5
+let xs = vec([5, 3, 8, 1]);
+let n = xs.len();
+let out = vec([0, 0, 0, 0]);
+for i in 0u64..n {
+    out[n - 1u64 - i] = xs[i];
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

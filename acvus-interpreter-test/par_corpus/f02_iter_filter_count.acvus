@@ -1,0 +1,6 @@
+// id: F02
+// family: iterators
+// desc: `.filter(p).count()` over a vec's references
+// expect: 2
+let xs = vec([5, 3, 8, 1]);
+xs.as_iter().filter(|x| -> **x > 4).count()

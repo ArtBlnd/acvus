@@ -1,0 +1,9 @@
+// id: Z23
+// family: negative
+// desc: `v[i+1] = v[i]*v[i] + 1`: each iteration writes the slot the next reads
+// expect: 3,10,101,10202,104080805
+let v = vec([3, 0, 0, 0, 0]);
+for i in 0u64..(v.len() - 1u64) {
+    v[i + 1u64] = v[i] * v[i] + 1;
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

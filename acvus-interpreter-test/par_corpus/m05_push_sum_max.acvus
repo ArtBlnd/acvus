@@ -1,0 +1,14 @@
+// id: M05
+// family: map-filter
+// desc: three independent targets in one body: a push, a sum and a max by `if`; the sum and the max are read by reference after the loop, so they are slots
+// expect: 10,6,16,2|13|8
+let xs = vec([5, 3, 8, 1]);
+let out = vec([]);
+let s = 0;
+let hi = i64::MIN();
+for x in &xs {
+    out.push(*x * 2);
+    s = s + *x - 1;
+    if *x > hi { hi = *x; };
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string()) + "|" + s.to_string() + "|" + hi.to_string()

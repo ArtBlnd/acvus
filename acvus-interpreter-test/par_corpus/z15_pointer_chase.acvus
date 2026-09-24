@@ -1,0 +1,12 @@
+// id: Z15
+// family: negative
+// desc: follow next-links from 0: each index is read from the previous step's slot
+// expect: 0,3,1,4
+let next = vec([3u64, 4u64, 0u64, 1u64, 99u64]);
+let at = 0u64;
+let out = vec([]);
+while at < next.len() {
+    out.push(at);
+    at = next[at];
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

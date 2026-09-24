@@ -1,0 +1,11 @@
+// id: L12
+// family: while
+// desc: map chars to uppercase into a string by `while let` over `chars()`
+// expect: ABC
+let text = "abc".to_string();
+let cs = text.chars();
+let out = "".to_string();
+while let Some(c) = cs.next() {
+    out = out + c.to_ascii_uppercase().to_string();
+}
+out

@@ -1,0 +1,11 @@
+// id: L10
+// family: while
+// desc: parse and sum comma-separated numbers over `split` by `while let`
+// expect: 60
+let text = "10,20,30".to_string();
+let parts = text.split(",");
+let s = 0;
+while let Some(p) = parts.next() {
+    s = s + i64::from_str(&p).unwrap();
+}
+s

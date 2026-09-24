@@ -1,0 +1,12 @@
+// id: L05
+// family: while
+// desc: `while i < v.len()`, the bound a call through a reference the header makes
+// expect: 17
+let xs = vec([5, 3, 8, 1]);
+let i = 0u64;
+let s = 0;
+while i < xs.len() {
+    s = s + xs[i];
+    i = i + 1u64;
+}
+s

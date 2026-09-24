@@ -1,0 +1,12 @@
+// id: S09
+// family: search
+// desc: last index of a target, no exit: `if p { at = i }`, a law keeping the later
+// expect: 4
+let xs = vec([5, 3, 9, 1, 9]);
+let at = 99u64;
+for i in 0u64..xs.len() {
+    if xs[i] == 9 {
+        at = i;
+    };
+}
+at

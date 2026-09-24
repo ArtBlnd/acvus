@@ -1,0 +1,10 @@
+// id: R05
+// family: reduction
+// desc: maximum written as an if-expression `m = if x > m { x } else { m }`
+// expect: 9
+let xs = vec([5, 3, 8, 1, 9]);
+let m = i64::MIN();
+for x in &xs {
+    m = if *x > m { *x } else { m };
+}
+m

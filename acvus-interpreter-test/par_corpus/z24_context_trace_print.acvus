@@ -1,0 +1,11 @@
+// id: Z24
+// family: negative
+// desc: a print whose text includes a counter the loop advances, outside `anyorder`
+// expect: 0:a\n1:b\n2
+let xs = vec(["a".to_string(), "b".to_string()]);
+let k = 0;
+for x in &xs {
+    io::print(&"{{ &k.to_string() }}:{{ x }}");
+    k = k + 1;
+}
+k

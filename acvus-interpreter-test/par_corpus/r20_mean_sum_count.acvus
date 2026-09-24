@@ -1,0 +1,14 @@
+// id: R20
+// family: reduction
+// desc: sum and count of the valid (non-negative) elements, mean after the loop
+// expect: 5
+let xs = vec([5, -3, 8, 2, -1]);
+let s = 0;
+let n = 0;
+for x in &xs {
+    if *x >= 0 {
+        s = s + *x;
+        n = n + 1;
+    };
+}
+s / n

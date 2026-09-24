@@ -1,0 +1,14 @@
+// id: K10
+// family: keyed
+// desc: two-key histogram stored in an object's fields chosen by a branch
+// expect: [2,3]
+let xs = vec([5, 8, 3, 2, 1]);
+let h = { even: 0, odd: 0, };
+for x in &xs {
+    if *x % 2 == 0 {
+        h.even = h.even + 1;
+    } else {
+        h.odd = h.odd + 1;
+    };
+}
+(h.even, h.odd)

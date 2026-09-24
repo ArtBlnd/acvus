@@ -1,0 +1,6 @@
+// id: F05
+// family: iterators
+// desc: `.fold(0, |a, x| -> a + x * 2)`; the lambda is a sum of a free map
+// expect: 34
+let xs = vec([5, 3, 8, 1]);
+xs.into_iter().fold(0, |a, x| -> a + x * 2)

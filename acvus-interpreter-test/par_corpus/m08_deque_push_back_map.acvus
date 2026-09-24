@@ -1,0 +1,10 @@
+// id: M08
+// family: map-filter
+// desc: map into a deque by `push_back`, which declares no fold law
+// expect: 3
+let xs = vec([5, 3, 8]);
+let d = deque();
+for x in &xs {
+    d.push_back(*x + 1);
+}
+d.len()

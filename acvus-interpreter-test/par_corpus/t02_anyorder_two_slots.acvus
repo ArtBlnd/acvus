@@ -1,0 +1,13 @@
+// id: T02
+// family: temporaries
+// desc: anyorder print through two chained `let` slots and a format string
+// expect: item 1 = 1\nitem 2 = 4\nitem 3 = 9\n3
+let xs = vec([1, 2, 3]);
+anyorder {
+    for x in &xs {
+        let sq = *x * *x;
+        let line = "item {{ &(*x).to_string() }} = {{ &sq.to_string() }}";
+        io::print(&line);
+    }
+}
+xs.len()

@@ -1,0 +1,14 @@
+// id: T04
+// family: temporaries
+// desc: anyorder two prints per iteration from two `let` slots
+// expect: a1\nb1\na2\nb2\n2
+let xs = vec([1, 2]);
+anyorder {
+    for x in &xs {
+        let a = "a{{ &(*x).to_string() }}";
+        let b = "b{{ &(*x).to_string() }}";
+        io::print(&a);
+        io::print(&b);
+    }
+}
+xs.len()

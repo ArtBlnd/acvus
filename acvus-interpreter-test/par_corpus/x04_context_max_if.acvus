@@ -1,0 +1,12 @@
+// id: X04
+// family: contexts
+// desc: a context holding the running maximum, updated under `if`
+// contexts: best xs
+// expect: 8
+@best = i64::MIN();
+for x in &@xs {
+    if *x > @best {
+        @best = *x;
+    };
+}
+@best

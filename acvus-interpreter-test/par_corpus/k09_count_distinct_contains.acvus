@@ -1,0 +1,14 @@
+// id: K09
+// family: keyed
+// desc: count distinct by testing `contains` before `insert`; the count equals the final set size
+// expect: 3
+let xs = vec([4, 1, 4, 3, 1, 4]);
+let s = hash_set();
+let distinct = 0;
+for x in &xs {
+    if !s.contains(x) {
+        s.insert(*x);
+        distinct = distinct + 1;
+    };
+}
+distinct

@@ -1,0 +1,11 @@
+// id: Z19
+// family: negative
+// desc: each key's value is the previous key's value plus one: a chain through the map
+// expect: 4
+let m = hash_map();
+insert(&mut m, 0, 1);
+for k in 1..4 {
+    let prev = *get(&m, &(k - 1)).unwrap();
+    insert(&mut m, k, prev * prev + 1 - prev);
+}
+*get(&m, &3).unwrap() + 3

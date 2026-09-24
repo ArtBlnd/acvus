@@ -1,0 +1,13 @@
+// id: E06
+// family: effects
+// desc: anyorder print of each line after a regex replace; the replace is heavy pure work
+// expect: id=#\nno digits\nid=#-#\n3
+let re = regex("[0-9]+").unwrap();
+let lines = vec(["id=42".to_string(), "no digits".to_string(), "id=7-99".to_string()]);
+anyorder {
+    for l in &lines {
+        let r = re.replace_all(l, "#");
+        io::print(&r);
+    }
+}
+lines.len()

@@ -1,0 +1,17 @@
+// id: P01
+// family: state-machine
+// desc: bracket balance: depth by +1/-1 and the minimum depth seen; each chunk composes as (net, min prefix)
+// expect: [0,0]
+let text = "(()(()))()";
+let bs = text.to_string().to_bytes();
+let depth = 0;
+let low = 0;
+for b in &bs {
+    if *b == b'(' {
+        depth = depth + 1;
+    } else {
+        depth = depth - 1;
+    };
+    low = min(low, depth);
+}
+(depth, low)

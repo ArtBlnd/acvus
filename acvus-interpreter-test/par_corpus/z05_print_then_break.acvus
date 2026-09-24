@@ -1,0 +1,15 @@
+// id: Z05
+// family: negative
+// desc: print each element until the first negative; no print may be issued past the exit
+// expect: 5\n3\n2
+let xs = vec([5, 3, -1, 8]);
+let n = 0;
+for x in &xs {
+    if *x < 0 {
+        break;
+    };
+    let s = (*x).to_string();
+    io::print(&s);
+    n = n + 1;
+}
+n

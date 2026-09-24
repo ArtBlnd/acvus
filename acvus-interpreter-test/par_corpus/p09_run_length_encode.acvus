@@ -1,0 +1,17 @@
+// id: P09
+// family: state-machine
+// desc: run-length encode into text, flushing a run when the value changes; the flush reads the carried run
+// expect: 7x3;4x1;9x2;
+let xs = vec([7, 7, 7, 4, 9, 9]);
+let out = "".to_string();
+let cur = 0;
+let n = 0;
+for x in &xs {
+    if n > 0 && *x != cur {
+        out = out + cur.to_string() + "x" + n.to_string() + ";";
+        n = 0;
+    };
+    cur = *x;
+    n = n + 1;
+}
+out + cur.to_string() + "x" + n.to_string() + ";"

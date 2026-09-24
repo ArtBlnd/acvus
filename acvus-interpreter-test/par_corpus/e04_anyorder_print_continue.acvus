@@ -1,0 +1,15 @@
+// id: E04
+// family: effects
+// desc: anyorder print skipping negatives by `continue`
+// expect: 5\n8\n4
+let xs = vec([5, -3, 8, -1]);
+anyorder {
+    for x in &xs {
+        if *x < 0 {
+            continue;
+        };
+        let s = (*x).to_string();
+        io::print(&s);
+    }
+}
+xs.len()

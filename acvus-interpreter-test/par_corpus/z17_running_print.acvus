@@ -1,0 +1,12 @@
+// id: Z17
+// family: negative
+// desc: print the running total each step with no `anyorder`
+// expect: 5\n8\n16\n16
+let xs = vec([5, 3, 8]);
+let s = 0;
+for x in &xs {
+    s = s + *x;
+    let t = s.to_string();
+    io::print(&t);
+}
+s

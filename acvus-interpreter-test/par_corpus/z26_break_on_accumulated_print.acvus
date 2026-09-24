@@ -1,0 +1,14 @@
+// id: Z26
+// family: negative
+// desc: print each element and stop once the printed total passes 10: effects before a data-dependent exit
+// expect: 5\n3\n8\n16
+let xs = vec([5, 3, 8, 1]);
+let s = 0;
+for x in &xs {
+    io::print(&(*x).to_string());
+    s = s + *x;
+    if s > 10 {
+        break;
+    };
+}
+s

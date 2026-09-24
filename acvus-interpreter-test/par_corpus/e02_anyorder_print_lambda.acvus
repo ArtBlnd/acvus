@@ -1,0 +1,15 @@
+// id: E02
+// family: effects
+// desc: anyorder print through a local effectful lambda that takes the order
+// expect: <5>\n<3>\n2
+let show = |x| -> {
+    let s = "<{{ &x.to_string() }}>";
+    io::print(&s)
+};
+let xs = vec([5, 3]);
+anyorder {
+    for x in &xs {
+        show(*x);
+    }
+}
+xs.len()

@@ -1,0 +1,12 @@
+// id: R16
+// family: reduction
+// desc: lexicographically greatest string via `string::cmp`
+// expect: pear
+let xs = vec(["fig".to_string(), "pear".to_string(), "apple".to_string()]);
+let best = "".to_string();
+for x in &xs {
+    if string::cmp(x, &best) > 0 {
+        best = x.to_string();
+    };
+}
+best

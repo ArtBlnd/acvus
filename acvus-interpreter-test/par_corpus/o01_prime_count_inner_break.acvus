@@ -1,0 +1,20 @@
+// id: O01
+// family: other
+// desc: count primes below 30 by trial division; the inner loop exits at the first divisor, the outer count is conditional
+// expect: 10
+let c = 0;
+for n in 2..30 {
+    let prime = true;
+    let d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            prime = false;
+            break;
+        };
+        d = d + 1;
+    }
+    if prime {
+        c = c + 1;
+    };
+}
+c

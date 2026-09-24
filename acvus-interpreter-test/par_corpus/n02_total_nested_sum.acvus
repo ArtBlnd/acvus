@@ -1,0 +1,12 @@
+// id: N02
+// family: nested
+// desc: one total over a nested loop, `total = total + x` in the inner body
+// expect: 21
+let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]);
+let total = 0;
+for row in &m {
+    for x in &row {
+        total = total + *x;
+    }
+}
+total

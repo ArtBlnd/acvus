@@ -1,0 +1,10 @@
+// id: L08
+// family: while
+// desc: drain a vec from the back with `pop`, summing
+// expect: 17
+let v = vec([5, 3, 8, 1]);
+let s = 0;
+while let Some(x) = v.pop() {
+    s = s + x;
+}
+s

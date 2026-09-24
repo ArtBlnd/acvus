@@ -1,0 +1,14 @@
+// id: E01
+// family: effects
+// desc: anyorder around a nested loop printing each cell
+// expect: 1\n2\n3\n4\n2
+let m = vec([vec([1, 2]), vec([3, 4])]);
+anyorder {
+    for row in &m {
+        for x in &row {
+            let s = (*x).to_string();
+            io::print(&s);
+        }
+    }
+}
+m.len()

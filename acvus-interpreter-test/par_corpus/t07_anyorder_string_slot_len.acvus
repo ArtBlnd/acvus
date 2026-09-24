@@ -1,0 +1,13 @@
+// id: T07
+// family: temporaries
+// desc: anyorder print of a repeated string built from the element; the heavy text work is free
+// expect: ab\nabab\nababab\n3
+let xs = vec([1u64, 2u64, 3u64]);
+anyorder {
+    for x in &xs {
+        let s = "ab".repeat(*x);
+        let t = s.to_string();
+        io::print(&t);
+    }
+}
+xs.len()

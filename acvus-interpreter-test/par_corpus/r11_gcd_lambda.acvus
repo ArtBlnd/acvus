@@ -1,0 +1,20 @@
+// id: R11
+// family: reduction
+// desc: gcd through a local recursive-free lambda loop; gcd is associative and commutative but nothing declares it
+// expect: 6
+let gcd = |a, b| -> {
+    let x = a;
+    let y = b;
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+};
+let xs = vec([12, 18, 24, 30]);
+let g = 0;
+for x in &xs {
+    g = gcd(g, *x);
+}
+g

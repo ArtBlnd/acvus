@@ -1,0 +1,15 @@
+// id: S11
+// family: search
+// desc: search by `while i < n && !found`, a counted walk with an exit condition in the header
+// expect: 3
+let xs = vec([5, 3, 9, -1, 9]);
+let i = 0u64;
+let found = false;
+while i < xs.len() && !found {
+    if xs[i] < 0 {
+        found = true;
+    } else {
+        i = i + 1u64;
+    };
+}
+i

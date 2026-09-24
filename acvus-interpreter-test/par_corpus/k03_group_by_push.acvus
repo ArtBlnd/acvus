@@ -1,0 +1,12 @@
+// id: K03
+// family: keyed
+// desc: group-by: push each word into the vec of its first letter, preserving input order within a group
+// expect: apple,avocado|banana,blueberry
+let words = vec(["apple".to_string(), "banana".to_string(), "avocado".to_string(), "blueberry".to_string()]);
+let g = hash_map();
+for w in &words {
+    let k = w.substring(0u64, 1u64).to_string();
+    let bucket = or_insert(&mut g, k, vec([]));
+    bucket.push(w.to_string());
+}
+get(&g, &"a".to_string()).unwrap().as_iter().map(|s| -> s.to_string()).join(",".to_string()) + "|" + get(&g, &"b".to_string()).unwrap().as_iter().map(|s| -> s.to_string()).join(",".to_string())

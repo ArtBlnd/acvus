@@ -1,0 +1,10 @@
+// id: Z01
+// family: negative
+// desc: `io::print` in a loop with no `anyorder`: the lines' order is the program's output
+// expect: 5\n3\n8\n3
+let xs = vec([5, 3, 8]);
+for x in &xs {
+    let s = (*x).to_string();
+    io::print(&s);
+}
+xs.len()

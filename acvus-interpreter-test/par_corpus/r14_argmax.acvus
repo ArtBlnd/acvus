@@ -1,0 +1,14 @@
+// id: R14
+// family: reduction
+// desc: argmax: `if x > best { best = x; at = i }`, a lexicographic law over (value, first index)
+// expect: [9,2]
+let xs = vec([5, 3, 9, 1, 9]);
+let best = i64::MIN();
+let at = 0u64;
+for i in 0u64..xs.len() {
+    if xs[i] > best {
+        best = xs[i];
+        at = i;
+    };
+}
+(best, at)

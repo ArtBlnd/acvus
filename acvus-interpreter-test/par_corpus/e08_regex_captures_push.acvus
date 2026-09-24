@@ -1,0 +1,14 @@
+// id: E08
+// family: effects
+// desc: regex captures per line into a keyed count, the capture heavy pure work, the count keyed
+// expect: 2|1
+let re = regex("^(?<lvl>[A-Z]+) ").unwrap();
+let lines = vec(["WARN a".to_string(), "INFO b".to_string(), "WARN c".to_string()]);
+let m = hash_map();
+for l in &lines {
+    let caps = re.captures(l).unwrap();
+    let lvl = caps.named("lvl").unwrap().text;
+    let n = or_insert(&mut m, lvl, 0);
+    *n = *n + 1;
+}
+(*get(&m, &"WARN".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"INFO".to_string()).unwrap()).to_string()

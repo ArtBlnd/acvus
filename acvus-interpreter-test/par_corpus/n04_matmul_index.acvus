@@ -1,0 +1,17 @@
+// id: N04
+// family: nested
+// desc: matrix multiply into a preallocated result, `c[i][j] = sum_k a[i][k]*b[k][j]`
+// expect: 19,22|43,50
+let a = vec([vec([1, 2]), vec([3, 4])]);
+let b = vec([vec([5, 6]), vec([7, 8])]);
+let c = vec([vec([0, 0]), vec([0, 0])]);
+for i in 0u64..2u64 {
+    for j in 0u64..2u64 {
+        let s = 0;
+        for k in 0u64..2u64 {
+            s = s + a[i][k] * b[k][j];
+        }
+        c[i][j] = s;
+    }
+}
+c[0u64].as_iter().map(|x| -> (*x).to_string()).join(",".to_string()) + "|" + c[1u64].as_iter().map(|x| -> (*x).to_string()).join(",".to_string())

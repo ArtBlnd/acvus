@@ -1,0 +1,15 @@
+// id: Z10
+// family: negative
+// desc: a vec traversed by index while it grows: which elements exist depends on earlier iterations
+// expect: 8,4,4,2,2,2,2
+let v = vec([8]);
+let i = 0u64;
+while i < v.len() {
+    if v[i] > 2 {
+        let h = v[i] / 2;
+        v.push(h);
+        v.push(h);
+    };
+    i = i + 1u64;
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

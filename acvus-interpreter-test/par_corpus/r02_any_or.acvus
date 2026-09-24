@@ -1,0 +1,10 @@
+// id: R02
+// family: reduction
+// desc: `any` as `found = found || p(x)` over all elements, no exit
+// expect: true
+let xs = vec([5, 3, 8, 1, 9]);
+let found = false;
+for x in &xs {
+    found = found || *x > 8;
+}
+found

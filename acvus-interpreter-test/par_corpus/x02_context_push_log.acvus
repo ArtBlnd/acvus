@@ -1,0 +1,10 @@
+// id: X02
+// family: contexts
+// desc: a text log in a context, appended per element, `@log = @log + ..`
+// contexts: log xs
+// expect: 5;3;8;1;
+@log = "".to_string();
+for x in &@xs {
+    @log = @log + (*x).to_string() + ";";
+}
+@log.to_string()

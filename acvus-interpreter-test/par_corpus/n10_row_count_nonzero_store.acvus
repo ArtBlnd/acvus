@@ -1,0 +1,16 @@
+// id: N10
+// family: nested
+// desc: per-row count of nonzero cells written at the row's own index `out[i]`
+// expect: 2,0,3
+let m = vec([vec([1, 0, 3]), vec([0, 0]), vec([4, 5, 6])]);
+let out = vec([0, 0, 0]);
+for i in 0u64..m.len() {
+    let c = 0;
+    for x in &m[i] {
+        if *x != 0 {
+            c = c + 1;
+        };
+    }
+    out[i] = c;
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

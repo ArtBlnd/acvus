@@ -1,0 +1,13 @@
+// id: P08
+// family: state-machine
+// desc: a flag toggled at each marker, `on = !on`, which is xor-reduction
+// expect: true
+let text = "x..x.x";
+let bs = text.to_string().to_bytes();
+let on = false;
+for b in &bs {
+    if *b == b'x' {
+        on = !on;
+    };
+}
+on

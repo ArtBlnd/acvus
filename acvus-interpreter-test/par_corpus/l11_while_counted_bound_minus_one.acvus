@@ -1,0 +1,13 @@
+// id: L11
+// family: while
+// desc: `while i + 1 < n` pairwise sum of neighbours pushed; the condition is not `i < n`
+// expect: 8,11,9
+let xs = vec([5, 3, 8, 1]);
+let n = xs.len();
+let i = 0u64;
+let out = vec([]);
+while i + 1u64 < n {
+    out.push(xs[i] + xs[i + 1u64]);
+    i = i + 1u64;
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

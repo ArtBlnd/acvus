@@ -1,0 +1,9 @@
+// id: Z03
+// family: negative
+// desc: each iteration writes `v[i]` from `v[i-1]` written by the previous one, through a nonlinear step
+// expect: 3,10,101,10202
+let v = vec([3, 0, 0, 0]);
+for i in 1u64..v.len() {
+    v[i] = v[i - 1u64] * v[i - 1u64] + 1;
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

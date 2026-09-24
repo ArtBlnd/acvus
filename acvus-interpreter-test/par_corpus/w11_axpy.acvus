@@ -1,0 +1,11 @@
+// id: W11
+// family: mut-write
+// desc: axpy `y[i] = a * x[i] + y[i]`
+// expect: 11,7,17
+let a = 2;
+let x = vec([5, 3, 8]);
+let y = vec([1, 1, 1]);
+for i in 0u64..x.len() {
+    y[i] = a * x[i] + y[i];
+}
+y.into_iter().map(|x| -> x.to_string()).join(",".to_string())

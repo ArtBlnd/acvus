@@ -1,0 +1,13 @@
+// id: S08
+// family: search
+// desc: `contains` over strings with `break`, the predicate a substring test
+// expect: true
+let xs = vec(["alpha".to_string(), "beta".to_string(), "gamma".to_string()]);
+let hit = false;
+for s in &xs {
+    if s.contains("mm") {
+        hit = true;
+        break;
+    };
+}
+hit

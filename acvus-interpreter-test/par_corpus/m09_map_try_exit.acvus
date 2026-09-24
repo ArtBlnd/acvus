@@ -1,0 +1,13 @@
+// id: M09
+// family: map-filter
+// desc: map with `?`: parse each text, leaving the script with the error at the first failure
+// expect: 12,7,40
+let parse_all = |xs| -> {
+    let out = vec([]);
+    for s in &xs {
+        out.push(i64::from_str(s)?);
+    }
+    Ok(out)
+};
+let xs = vec(["12".to_string(), "7".to_string(), "40".to_string()]);
+parse_all(xs).unwrap().into_iter().map(|x| -> x.to_string()).join(",".to_string())

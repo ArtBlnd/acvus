@@ -1,0 +1,14 @@
+// id: X07
+// family: contexts
+// desc: a context counter bumped under a branch, a local sum beside it
+// contexts: big xs
+// expect: [17,2]
+@big = 0;
+let s = 0;
+for x in &@xs {
+    s = s + *x;
+    if *x > 4 {
+        @big = @big + 1;
+    };
+}
+(s, @big)

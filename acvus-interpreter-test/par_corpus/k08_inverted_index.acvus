@@ -1,0 +1,14 @@
+// id: K08
+// family: keyed
+// desc: inverted index word -> line numbers, lines in order within a key
+// expect: 0,2|1,2
+let lines = vec(["x y".to_string(), "z".to_string(), "x z".to_string()]);
+let idx = hash_map();
+for i in 0u64..lines.len() {
+    let ws = lines[i].split_whitespace();
+    while let Some(w) = ws.next() {
+        let at = or_insert(&mut idx, w.to_string(), vec([]));
+        at.push(i);
+    }
+}
+get(&idx, &"x".to_string()).unwrap().as_iter().map(|n| -> (*n).to_string()).join(",".to_string()) + "|" + get(&idx, &"z".to_string()).unwrap().as_iter().map(|n| -> (*n).to_string()).join(",".to_string())

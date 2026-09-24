@@ -1,0 +1,10 @@
+// id: Z02
+// family: negative
+// desc: `s = s*s + x` (wrapping i64): a degree-doubling map of the carried value over the whole word, no law
+// expect: 211312137973
+let xs = vec([1, 2, 3, 4]);
+let s = 5;
+for x in &xs {
+    s = s * s + *x;
+}
+s

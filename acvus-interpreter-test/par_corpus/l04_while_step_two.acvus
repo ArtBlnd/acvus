@@ -1,0 +1,12 @@
+// id: L04
+// family: while
+// desc: `while i < n` with step 2, sum of the even indices' elements
+// expect: 14
+let xs = vec([5, 3, 8, 1, 1, 9]);
+let i = 0u64;
+let s = 0;
+while i < xs.len() {
+    s = s + xs[i];
+    i = i + 2u64;
+}
+s

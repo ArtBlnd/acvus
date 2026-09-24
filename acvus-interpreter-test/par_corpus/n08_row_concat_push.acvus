@@ -1,0 +1,14 @@
+// id: N08
+// family: nested
+// desc: per-row string built by an inner concatenation, pushed per row
+// expect: ab|cde|
+let m = vec([vec(["a".to_string(), "b".to_string()]), vec(["c".to_string(), "d".to_string(), "e".to_string()]), vec([])]);
+let out = vec([]);
+for row in &m {
+    let s = "".to_string();
+    for w in &row {
+        s = s + w;
+    }
+    out.push(s);
+}
+out.into_iter().join("|".to_string())

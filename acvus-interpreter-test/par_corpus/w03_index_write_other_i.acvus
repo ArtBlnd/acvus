@@ -1,0 +1,10 @@
+// id: W03
+// family: mut-write
+// desc: `out[i] = f(xs[i])` into a separate, preallocated vec
+// expect: 25,9,64,1
+let xs = vec([5, 3, 8, 1]);
+let out = vec([0, 0, 0, 0]);
+for i in 0u64..xs.len() {
+    out[i] = xs[i] * xs[i];
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

@@ -1,0 +1,18 @@
+// id: S07
+// family: search
+// desc: first text whose digit sum exceeds 20, the predicate an inner loop over chars
+// expect: 1
+let xs = vec(["12345".to_string(), "99999".to_string(), "88888".to_string()]);
+let at = 99u64;
+for i in 0u64..xs.len() {
+    let s = 0u32;
+    let cs = xs[i].chars();
+    while let Some(c) = cs.next() {
+        s = s + c.to_digit(10u32).unwrap();
+    }
+    if s > 20u32 {
+        at = i;
+        break;
+    };
+}
+at

@@ -1,0 +1,7 @@
+// id: F03
+// family: iterators
+// desc: `.map(f).collect()` into a vec, rendered after
+// expect: 10,6,16,2
+let xs = vec([5, 3, 8, 1]);
+let ys = xs.into_iter().map(|x| -> x * 2).collect();
+ys.into_iter().map(|x| -> x.to_string()).join(",".to_string())

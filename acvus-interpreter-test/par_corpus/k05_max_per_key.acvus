@@ -1,0 +1,11 @@
+// id: K05
+// family: keyed
+// desc: max value per key, read-modify-write of the key's slot by `max`
+// expect: 9|7
+let rows = vec([{ k: "a".to_string(), v: 3, }, { k: "b".to_string(), v: 7, }, { k: "a".to_string(), v: 9, }, { k: "b".to_string(), v: 2, }]);
+let m = hash_map();
+for r in &rows {
+    let slot = or_insert(&mut m, r.k.to_string(), i64::MIN());
+    *slot = max(*slot, r.v);
+}
+(*get(&m, &"a".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"b".to_string()).unwrap()).to_string()

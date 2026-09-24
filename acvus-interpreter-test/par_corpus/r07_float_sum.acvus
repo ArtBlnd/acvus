@@ -1,0 +1,10 @@
+// id: R07
+// family: reduction
+// desc: float sum; parallel only by reassociation, which changes rounding
+// expect: 6.5
+let xs = vec([1.5, 2.0, 3.0]);
+let s = 0.0;
+for x in &xs {
+    s = s + *x;
+}
+s
