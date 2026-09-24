@@ -107,7 +107,7 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             s(value);
         }
         InstKind::Commit { value, .. } => s(value),
-        InstKind::BinOp { left, right, .. } => {
+        InstKind::BinOp { left, right, .. } | InstKind::Check { left, right, .. } => {
             s(left);
             s(right);
         }

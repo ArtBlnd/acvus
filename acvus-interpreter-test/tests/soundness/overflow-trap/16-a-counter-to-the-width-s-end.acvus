@@ -1,0 +1,2 @@
+// expect 255
+let i = 250u8; while i < 255u8 { i = i + 1u8; } i

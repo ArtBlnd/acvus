@@ -1,0 +1,2 @@
+// expect 765
+let x = 255u8; let s = 0; for i in 0..3 { let y = if i > 5 { x + 1u8 } else { x }; s = s + (y as i64); } s

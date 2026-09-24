@@ -1,0 +1,2 @@
+// expect attempt to multiply with overflow
+((@y * -1i8) * -1i8) as i64

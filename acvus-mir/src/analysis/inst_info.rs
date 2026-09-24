@@ -9,7 +9,8 @@ use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Callee, InstKind, RefTarget, ValueId};
+use crate::ir::{Callee, InstKind, Overflow, RefTarget, UnaryOp, ValueId};
+use crate::ty::Ty;
 
 /// ValueIds defined by this instruction.
 pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
@@ -66,6 +67,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 
         InstKind::Commit { .. }
         | InstKind::Drop { .. }
+        | InstKind::Check { .. }
         | InstKind::IndexSet { .. }
         | InstKind::StringAppend { .. }
         | InstKind::Jump { .. }
@@ -76,6 +78,25 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Return { .. }
         | InstKind::Diverge
         | InstKind::Nop => smallvec![],
+    }
+}
+
+/// Whether `kind` cannot end the run. An effect is not asked about: a trap
+/// is not ordered with effects (RFC-0048 rule 8). Every kind not named here
+/// is taken to end it.
+pub fn cannot_end_run(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> bool {
+    let on_integers = |value: &ValueId| matches!(val_types[value], Ty::Int(_));
+    match kind {
+        InstKind::Const { .. }
+        | InstKind::Ref { .. }
+        | InstKind::Cast { .. }
+        | InstKind::Merge { .. } => true,
+        InstKind::BinOp { op, left, .. } => !(op.can_trap_on_integers() && on_integers(left)),
+        InstKind::UnaryOp { op, operand, .. } => match op {
+            UnaryOp::Neg(Overflow::Trap) => !on_integers(operand),
+            UnaryOp::Neg(Overflow::Wrap) | UnaryOp::Not => true,
+        },
+        _ => false,
     }
 }
 
@@ -124,7 +145,9 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::ObjectGet { object, .. } => smallvec![*object],
 
         // Two uses
-        InstKind::BinOp { left, right, .. } => smallvec![*left, *right],
+        InstKind::BinOp { left, right, .. } | InstKind::Check { left, right, .. } => {
+            smallvec![*left, *right]
+        }
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
         InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
 

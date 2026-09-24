@@ -1,0 +1,2 @@
+// expect -128
+let j = -123i8; for i in 0..5 { j = j + -1i8; } j

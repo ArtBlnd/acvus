@@ -34,13 +34,6 @@ pub fn run(cfg: &mut CfgBody) {
 }
 
 /// Whether two constants under `op` at one integer width join.
-///
-/// A trapping `+` or `*` joins as well: the joined constant is folded only
-/// where it fits the width, and then `x + (a + b)` is the integer
-/// `(x + a) + b` on every run where neither of the two traps, and fits
-/// wherever that does. The join drops the inner operation's trap, as
-/// RFC-0037 rule 3 lets a pass drop one. Two operations join only at one
-/// kind.
 fn associative(op: BinOp) -> bool {
     match op {
         BinOp::Add(_) | BinOp::Mul(_) | BinOp::BitAnd | BinOp::BitOr | BinOp::Xor => true,
@@ -397,6 +390,13 @@ fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     let Some(value) = int_result(op, k, a, b) else {
         return false;
     };
+    let traps = op.can_trap_on_integers();
+    if traps && !traps_alike(op, k.read(register_word(b)), k.read(register_word(a))) {
+        return false;
+    }
+    if traps && !nothing_ends_the_run_between(cfg, inner_site, site) {
+        return false;
+    }
     *kind_mut(cfg, inner_site) = InstKind::Const {
         dst: outer.variable,
         value,
@@ -408,6 +408,42 @@ fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
         right: outer.variable,
     };
     true
+}
+
+/// A negative factor or a zero is not joined: at `i8`, `(-128 * -1) * -1`
+/// traps where `-128 * 1` does not.
+fn traps_alike(op: BinOp, inner: i128, outer: i128) -> bool {
+    match op {
+        BinOp::Add(Overflow::Trap) => (inner >= 0 && outer >= 0) || (inner <= 0 && outer <= 0),
+        BinOp::Mul(Overflow::Trap) => inner >= 1 && outer >= 1,
+        BinOp::Add(Overflow::Wrap)
+        | BinOp::Mul(Overflow::Wrap)
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Xor
+        | BinOp::Sub(_)
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Shl(_)
+        | BinOp::Shr(_)
+        | BinOp::Eq
+        | BinOp::Neq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte
+        | BinOp::And
+        | BinOp::Or
+        | BinOp::Min
+        | BinOp::Max => false,
+    }
+}
+
+fn nothing_ends_the_run_between(cfg: &CfgBody, inner: Site, outer: Site) -> bool {
+    inner.block == outer.block
+        && cfg.blocks[outer.block.0].insts[inner.at + 1..outer.at]
+            .iter()
+            .all(|inst| inst_info::cannot_end_run(&inst.kind, &cfg.val_types))
 }
 
 fn kind_at(cfg: &CfgBody, site: Site) -> InstKind {

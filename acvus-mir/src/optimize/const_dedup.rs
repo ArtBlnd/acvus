@@ -186,7 +186,7 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
         InstKind::ObjectGet { object, .. } => remap_val(object, remap),
 
         // Two uses
-        InstKind::BinOp { left, right, .. } => {
+        InstKind::BinOp { left, right, .. } | InstKind::Check { left, right, .. } => {
             remap_val(left, remap);
             remap_val(right, remap);
         }

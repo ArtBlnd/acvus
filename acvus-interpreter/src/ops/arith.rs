@@ -12,10 +12,10 @@
 
 use std::marker::PhantomData;
 
-use acvus_mir::ir::{BinOp, Overflow, UnaryOp};
+use acvus_mir::ir::{BinOp, Checked, Overflow, UnaryOp};
 use acvus_mir::ty::IntTy;
 
-use crate::code::{Exit, Marked, Op, successor};
+use crate::code::{Exit, Marked, Off, Op, successor};
 use crate::machine::Machine;
 use crate::ops::place::{self, BinaryAt, Place, UnaryAt, at_binary, at_unary};
 
@@ -910,6 +910,63 @@ pub fn int_unaryop(op: UnaryOp, k: IntTy, places: place::Unary, next: Box<dyn Op
         Overflow::Wrap => Box::new(WrappingNeg::<T, S, D>::new(at, next)) as Box<dyn Op>,
     }))
 }
+
+/// Reads both operands from the frame: `reads_place` in `prepare` names no
+/// check, so no operand of one rides.
+pub fn int_check(op: Checked, k: IntTy, l: Off, r: Off, next: Box<dyn Op>) -> Box<dyn Op> {
+    for_int_ty!(k, |T| match op {
+        Checked::Add => Box::new(CheckAdd::<T> {
+            l,
+            r,
+            next,
+            at: PhantomData,
+        }) as Box<dyn Op>,
+        Checked::Sub => Box::new(CheckSub::<T> {
+            l,
+            r,
+            next,
+            at: PhantomData,
+        }) as Box<dyn Op>,
+        Checked::Mul => Box::new(CheckMul::<T> {
+            l,
+            r,
+            next,
+            at: PhantomData,
+        }) as Box<dyn Op>,
+    })
+}
+
+macro_rules! int_checks {
+    ($( $op:ident = $f:ident ),* $(,)?) => {
+        $(
+            pub struct $op<T>
+            where
+                T: Int,
+            {
+                l: Off,
+                r: Off,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> T>,
+            }
+
+            impl<T> Op for $op<T>
+            where
+                T: Int,
+            {
+                successor!();
+
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+                    let regs = m.regs();
+                    trapping::$f(T::read(regs.word(self.l)), T::read(regs.word(self.r)));
+                    self.next.run(m, r0)
+                }
+            }
+        )*
+    };
+}
+
+int_checks!(CheckAdd = add, CheckSub = sub, CheckMul = mul);
 
 /// The operation a unary operator at `Float` prepares to. Both `Overflow`s
 /// are the IEEE negation.

@@ -2,7 +2,10 @@
 //! declines. The pass reduces only a counter expression that one `InOrder`
 //! join reads (RFC-0066 rule 7), so every loop here that is meant to be
 //! reduced carries a recurrence: `acc * 2 + …` reads the accumulator outside
-//! a merge, and its join, which reads the expression, is `InOrder`.
+//! a merge, and its join, which reads the expression, is `InOrder`. It
+//! reduces the program's trapping `i * k + x` only where word bounds, `k`
+//! and `x` keep both operations inside the width, so those loops count to a
+//! word and multiply by words.
 //!
 //! `acvus-interpreter-test/tests/strength_reduction.rs` runs the same two
 //! loops and reads their values; this file is what says the two loops are
@@ -129,14 +132,14 @@ fn ctx(i: &Interner, names: &[&str]) -> FxHashMap<Astr, Ty> {
 const BOTH_FORMS: &str = "\
 let reduced = 0; \
 let i = 0; \
-while i < @n { \
-    reduced = reduced * 2 + (i * @k + @x); \
+while i < 40 { \
+    reduced = reduced * 2 + (i * 5 + 7); \
     i = i + 1; \
 } \
 let unreduced = 0; \
 let j = 0; \
-while j < @n { \
-    if j + 1 > j { unreduced = unreduced * 2 + (j * @k + @x); }; \
+while j < 40 { \
+    if j + 1 > j { unreduced = unreduced * 2 + (j * 5 + 7); }; \
     j = j + 1; \
 } \
 reduced - unreduced";
@@ -152,9 +155,33 @@ fn the_reduced_body_multiplies_and_the_unreduced_one_still_does() {
         where_it_multiplies(&listing),
         ["L1: 1".to_string(), "L6: 2".to_string()],
         "the first loop's body keeps only `reduced * 2`, and the reduction \
-         steps by `@k` and starts at `@x`, the start `0 * @k + @x` written \
+         steps by `5` and starts at `7`, the start `0 * 5 + 7` written \
          folded, so nothing multiplies above the header; under the `if`, \
-         `j * @k` stays beside `unreduced * 2`:\n{listing}"
+         `j * 5` stays beside `unreduced * 2`:\n{listing}"
+    );
+}
+
+/// The same recurrence with a factor from the page: `i * @k` can leave the
+/// width, and a check of it would cost what the reduction sheds.
+const A_PRODUCT_THAT_CAN_OVERFLOW: &str = "\
+let acc = 0; \
+let i = 0; \
+while i < 40 { \
+    acc = acc * 2 + (i * @k + @x); \
+    i = i + 1; \
+} \
+acc";
+
+#[test]
+fn a_product_that_can_overflow_keeps_its_multiplication() {
+    let i = Interner::new();
+    let listing = compile_script_optimized(&i, A_PRODUCT_THAT_CAN_OVERFLOW, &ctx(&i, &["k", "x"]))
+        .expect("it compiles");
+    assert_eq!(
+        where_it_multiplies_by_context(&listing, "@k"),
+        ["L1: 1".to_string()],
+        "the program's `i * @k` traps where it overflows, and the reduction \
+         would drop that trap, so it stays in the body (RFC-0037 rule 3):\n{listing}"
     );
 }
 
@@ -173,14 +200,13 @@ fn arithmetic_operands(block: &BlockBody) -> Vec<(String, [String; 2])> {
         .collect()
 }
 
-/// A range from 0 by one: the reduced counter's start is `0 * @k + @x`, and
+/// A range from 0 by one: the reduced counter's start is `0 * 5 + 7`, and
 /// `lsr` is the last pass to touch it, since no value numbering follows the
 /// stages (RFC-0056). What stands above the header is the folded start.
 #[test]
 fn a_reduced_counter_s_setup_multiplies_by_no_zero_and_adds_no_zero() {
     let i = Interner::new();
-    let listing =
-        compile_script_optimized(&i, RECURRENCE, &ctx(&i, &["n", "k", "x"])).expect("it compiles");
+    let listing = compile_script_optimized(&i, RECURRENCE, &ctx(&i, &[])).expect("it compiles");
     let preheader = blocks(&listing)
         .into_iter()
         .next()
@@ -194,20 +220,18 @@ fn a_reduced_counter_s_setup_multiplies_by_no_zero_and_adds_no_zero() {
         Vec::new(),
         "the preheader computes no `0 * k` and no `+ 0`:\n{listing}"
     );
-    let x = listing
-        .lines()
-        .find_map(|line| line.split_once('|')?.1.trim().strip_suffix(" = fetch @x"))
-        .unwrap_or_else(|| panic!("`@x` is fetched:\n{listing}"));
     let entered_with = preheader
         .insts
         .last()
         .and_then(|jump| jump.strip_prefix("jump L0("))
         .and_then(|args| args.strip_suffix(')'))
         .unwrap_or_else(|| panic!("the preheader jumps to the header:\n{listing}"));
-    assert_eq!(
-        entered_with.rsplit(", ").next(),
-        Some(x),
-        "the derived counter enters the loop at `@x` itself:\n{listing}"
+    assert!(
+        entered_with
+            .rsplit(", ")
+            .next()
+            .is_some_and(|start| start.starts_with("7 (")),
+        "the derived counter enters the loop at `7` itself:\n{listing}"
     );
 }
 
@@ -273,8 +297,8 @@ fn a_float_product_keeps_its_multiplication() {
 const MERGED: &str = "\
 let acc = 0; \
 let i = 0; \
-while i < @n { \
-    acc = acc + (i * @k + @x); \
+while i < 40 { \
+    acc = acc + (i * 5 + 7); \
     i = i + 1; \
 } \
 acc";
@@ -282,8 +306,8 @@ acc";
 const RECURRENCE: &str = "\
 let acc = 0; \
 let i = 0; \
-while i < @n { \
-    acc = acc * 2 + (i * @k + @x); \
+while i < 40 { \
+    acc = acc * 2 + (i * 5 + 7); \
     i = i + 1; \
 } \
 acc";
@@ -291,14 +315,14 @@ acc";
 #[test]
 fn a_merge_is_left_as_written_and_a_recurrence_is_reduced() {
     let i = Interner::new();
-    let names = ctx(&i, &["n", "k", "x"]);
+    let names = ctx(&i, &[]);
     let merged = compile_script_optimized(&i, MERGED, &names).expect("it compiles");
     let recurrence = compile_script_optimized(&i, RECURRENCE, &names).expect("it compiles");
     assert_eq!(
-        where_it_multiplies_by_context(&merged, "@k"),
+        where_it_multiplies(&merged),
         ["L1: 1".to_string()],
         "the accumulator is a merge, joined `AnyOrder`, so the loop keeps \
-         `i * @k` in its body, computed from the counter IV canonicalization \
+         `i * 5` in its body, computed from the counter IV canonicalization \
          puts in `i`'s place, with no start or step above it (RFC-0066 \
          rule 7):\n{merged}"
     );
@@ -306,9 +330,9 @@ fn a_merge_is_left_as_written_and_a_recurrence_is_reduced() {
         where_it_multiplies(&recurrence),
         ["L1: 1".to_string()],
         "`acc * 2` is a recurrence, joined `InOrder`, and the join reads \
-         `i * @k + @x`, so the body keeps only `acc * 2`. The counter steps \
-         by 1, so the reduction steps by `@k`, and its start `0 * @k + @x` \
-         is written folded as `@x`, so nothing multiplies above the \
+         `i * 5 + 7`, so the body keeps only `acc * 2`. The counter steps \
+         by 1, so the reduction steps by `5`, and its start `0 * 5 + 7` \
+         is written folded as `7`, so nothing multiplies above the \
          header:\n{recurrence}"
     );
 }
@@ -320,8 +344,8 @@ fn a_merge_is_left_as_written_and_a_recurrence_is_reduced() {
 const MERGED_BY_LAW: &str = "\
 let acc = 0; \
 let i = 0; \
-while i < @n { \
-    acc = max(acc, i * @k + @x); \
+while i < 40 { \
+    acc = max(acc, i * 5 + 7); \
     i = i + 1; \
 } \
 acc";
@@ -329,8 +353,8 @@ acc";
 const MERGED_WITHOUT_LAW: &str = "\
 let acc = 0; \
 let i = 0; \
-while i < @n { \
-    acc = saturating_add(acc, i * @k + @x); \
+while i < 40 { \
+    acc = saturating_add(acc, i * 5 + 7); \
     i = i + 1; \
 } \
 acc";
@@ -338,21 +362,21 @@ acc";
 #[test]
 fn a_loop_merging_through_a_lawful_extern_is_left_as_written() {
     let i = Interner::new();
-    let names = ctx(&i, &["n", "k", "x"]);
+    let names = ctx(&i, &[]);
     let lawful = compile_script_optimized(&i, MERGED_BY_LAW, &names).expect("it compiles");
     let lawless = compile_script_optimized(&i, MERGED_WITHOUT_LAW, &names).expect("it compiles");
     assert_eq!(
-        where_it_multiplies_by_context(&lawful, "@k"),
+        where_it_multiplies(&lawful),
         ["L1: 1".to_string()],
         "`max` is a declared merge, joined `AnyOrder`, so the loop keeps \
-         `i * @k` in its body:\n{lawful}"
+         `i * 5` in its body:\n{lawful}"
     );
     assert_eq!(
         where_it_multiplies(&lawless),
         Vec::<String>::new(),
         "`saturating_add` declares no law, so its join is `InOrder` and the \
-         expression it reads is reduced: the body keeps no `i * @k`, and the \
-         reduction steps by `@k` from `@x`, the start `0 * @k + @x` written \
+         expression it reads is reduced: the body keeps no `i * 5`, and the \
+         reduction steps by `5` from `7`, the start `0 * 5 + 7` written \
          folded:\n{lawless}"
     );
 }

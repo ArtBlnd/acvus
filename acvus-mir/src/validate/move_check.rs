@@ -1082,6 +1082,7 @@ fn process_inst(
         InstKind::Cast { dst, src: _, .. } => {
             state.set_value(*dst, Liveness::Alive);
         }
+        InstKind::Check { .. } => {}
 
         // Spawn - consumes args (and indirect callee), defines dst
         InstKind::Spawn {

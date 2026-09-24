@@ -1,0 +1,2 @@
+// expect 3039
+let j = 0; let s = 0; for i in 0..10 { s = s * 2 + j; j = j + 3; } s

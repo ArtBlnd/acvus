@@ -2287,6 +2287,7 @@ impl<'a> Prepare<'a> {
             | InstKind::FieldSet { .. }
             | InstKind::BinOp { .. }
             | InstKind::UnaryOp { .. }
+            | InstKind::Check { .. }
             | InstKind::Cast { .. }
             | InstKind::Spawn { .. }
             | InstKind::Merge { .. }
@@ -3542,9 +3543,10 @@ impl<'a> Prepare<'a> {
     /// a join of one word parameter.
     ///
     /// Every refusal below is a soundness statement, because the node runs on
-    /// both paths once this answers `Some`. `/` and `%` are refused because
-    /// RFC-0037 names them as the only integer operations that can raise, and
-    /// an arm of more than one operation is refused because its intermediate
+    /// both paths once this answers `Some`. An integer operation that can
+    /// trap is refused, since its trap would end a run on the path the
+    /// program does not take (RFC-0048 rule 8). An arm of more than one
+    /// operation is refused because its intermediate
     /// value would reach a register on a path the program does not take, and
     /// `assign_slots` — which runs before this recognizer — may have given
     /// that register to a value live outside the arm.
@@ -3608,6 +3610,9 @@ impl<'a> Prepare<'a> {
             return None;
         };
         if computed != handed || self.use_count(*computed) != 1 {
+            return None;
+        }
+        if op.can_trap_on_integers() && matches!(self.ty(*left), Ty::Int(_)) {
             return None;
         }
         let root = match (arith_of(*op), compare_of(*op)) {
@@ -4322,6 +4327,13 @@ impl<'a> Prepare<'a> {
                     Ty::Bool => arith::bool_binop(op, places, next),
                     other => panic!("binop {op:?} on {other:?}"),
                 })
+            }
+            InstKind::Check { op, left, right } => {
+                let Ty::Int(k) = *self.ty(*left) else {
+                    panic!("a check reads integers, not {:?}", self.ty(*left))
+                };
+                let (op, l, r) = (*op, self.off(*left), self.off(*right));
+                made(move |next| arith::int_check(op, k, l, r, next))
             }
             InstKind::UnaryOp { dst, op, operand } => {
                 let places = place::Unary {

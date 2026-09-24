@@ -24,25 +24,7 @@ struct Known {
     shows: &'static str,
 }
 
-/// Each of these overflows a carried variable's `+` inside a `for`. At
-/// `Opt::None` the `+` traps; at `Opt::Full` IV canonicalization computes the
-/// variable from the counter with the wrapping arithmetic it writes and
-/// drops the program's `+` with its trap, which RFC-0037 rule 3 lets a pass
-/// do, so the run gives the wrapped value.
-const KNOWN: &[Known] = &[
-    Known {
-        program: "b17/n21.acvus",
-        shows: "none RunPanicked(\"attempt to add with overflow\"), full Value(\"196\")",
-    },
-    Known {
-        program: "gvn/11-narrow-counter-wraps.acvus",
-        shows: "none RunPanicked(\"attempt to add with overflow\"), full Value(\"4\")",
-    },
-    Known {
-        program: "iv-canon/16-wrapping-width.acvus",
-        shows: "none RunPanicked(\"attempt to add with overflow\"), full Value(\"442100\")",
-    },
-];
+const KNOWN: &[Known] = &[];
 
 const LIMIT: Duration = Duration::from_secs(30);
 

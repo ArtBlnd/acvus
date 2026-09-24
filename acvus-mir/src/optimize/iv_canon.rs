@@ -31,11 +31,15 @@
 //! program's, and their operands are right only modulo `2^w`: a `u8`
 //! counter at 150 is `-106` as an `i8`, so an `i8` variable that starts at
 //! `-100` and steps by one holds `50` there while `-100 + (-106)` leaves
-//! the width. A trapping `+` would end a run the program defines. `p`'s
-//! own step, the program's trapping `+`, gives `base + k·step` over the
-//! integers on every run that goes past it, which is the same word modulo
-//! `2^w`; the pass drops that step, and with it its trap, as RFC-0037 rule
-//! 3 lets a pass drop one.
+//! the width. A trapping `+` would end a run the program defines.
+//!
+//! `p`'s own step, the program's trapping `+`, is what ends a run whose
+//! variable leaves the width. Once `p` is rewritten the step's value reaches
+//! no later iteration, and `dce` would sweep it with its trap, so the pass
+//! writes a `Check` of the step at its place, over the rewritten `p`
+//! (RFC-0037 rule 3). A step that cannot trap needs none: the range's own
+//! counter, and a variable whose entry, step and trip count are words that
+//! keep it inside the width.
 //!
 //! A read of `p` outside the loop takes the value it has there. A block the
 //! body block dominates is reached from inside an iteration, by a `break` or
@@ -57,7 +61,7 @@
 //! runs after the stages, and reduces only what an `InOrder` stage reads
 //! (RFC-0056).
 
-use acvus_ast::Span;
+use acvus_ast::{Literal, Span};
 use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::{AffineValues, Derivation, for_body};
@@ -65,9 +69,11 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId};
+use crate::ir::{
+    BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId,
+};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::{CastTy, IntTy, Ty};
+use crate::ty::{CastTy, IntTy, LenTerm, Ty};
 
 pub fn run(cfg: &mut CfgBody) {
     let domtree = DomTree::build(cfg);
@@ -89,6 +95,17 @@ pub fn run(cfg: &mut CfgBody) {
             .collect();
         if ivs.is_empty() {
             continue;
+        }
+        let invariants = Invariants::of(cfg);
+        let can_trap: Vec<&Iv> = ivs
+            .iter()
+            .filter(|iv| {
+                !iv.is_the_counter(cfg, &shape, &invariants)
+                    && !iv.fits_on_every_iteration(cfg, &shape, &invariants)
+            })
+            .collect();
+        for iv in can_trap {
+            keep_step_trap(cfg, loop_, iv);
         }
         let replacements = Replacements {
             inside: rewrite_inside(cfg, &shape, &ivs),
@@ -138,6 +155,7 @@ impl Shape {
 struct Iv {
     header_index: usize,
     param: ValueId,
+    next: ValueId,
     width: IntTy,
     init: ValueId,
     step: Invariant,
@@ -200,11 +218,75 @@ impl Iv {
         Some(Iv {
             header_index,
             param,
+            next,
             width,
             init: *init,
             step: step.invariant.clone(),
             read_after,
         })
+    }
+}
+
+impl Iv {
+    /// Whether the variable is the range's own counter, entered with `at`
+    /// and stepped by one at the range's width: then its step is at most
+    /// `hi`, which the width holds, and cannot trap (RFC-0081 rule 4).
+    fn is_the_counter(&self, cfg: &CfgBody, shape: &Shape, invariants: &Invariants) -> bool {
+        let ForSource::Range { at, .. } = shape.source else {
+            return false;
+        };
+        let one = match &self.step {
+            Invariant::Word(literal) => Some(literal),
+            Invariant::Outside(value) => invariants.word(*value),
+        };
+        let entered_at = self.init == at
+            || invariants
+                .word(self.init)
+                .zip(invariants.word(at))
+                .is_some_and(|(init, at)| init.desugared() == at.desugared());
+        entered_at
+            && cfg.val_types[&at] == Ty::Int(self.width)
+            && one.is_some_and(|literal| literal.desugared() == Literal::Int(1))
+    }
+
+    /// Whether the entry, the step and the trip count are words and every
+    /// value the step computes, `base + (k + 1)·step` for `k` below the
+    /// count, fits the width: the step cannot trap.
+    fn fits_on_every_iteration(
+        &self,
+        cfg: &CfgBody,
+        shape: &Shape,
+        invariants: &Invariants,
+    ) -> bool {
+        let int = |value: ValueId| match (invariants.word(value), &cfg.val_types[&value]) {
+            (Some(literal), Ty::Int(width)) => match literal.desugared() {
+                Literal::Int(n) => Some(width.read(n as u64)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let step = match &self.step {
+            Invariant::Outside(value) => int(*value),
+            Invariant::Word(literal) => match literal.desugared() {
+                Literal::Int(n) => Some(self.width.read(n as u64)),
+                _ => None,
+            },
+        };
+        let trip = match shape.source {
+            ForSource::Range { at, hi } => int(at).zip(int(hi)).map(|(at, hi)| (hi - at).max(0)),
+            ForSource::Array(array) => match &cfg.val_types[&array] {
+                Ty::Array(_, LenTerm::Known(len)) => i128::try_from(*len).ok(),
+                _ => None,
+            },
+            ForSource::Slice(_) | ForSource::SliceMut(_) => None,
+        };
+        let (Some(base), Some(step), Some(trip)) = (int(self.init), step, trip) else {
+            return false;
+        };
+        trip == 0
+            || [base + step, base + trip * step]
+                .into_iter()
+                .all(|value| self.width.holds(value))
     }
 }
 
@@ -229,6 +311,41 @@ impl Reading {
 }
 
 // -- The rewrite -----------------------------------------------------
+
+fn keep_step_trap(cfg: &mut CfgBody, loop_: &Loop, iv: &Iv) {
+    let (block, at) = loop_
+        .natural
+        .blocks()
+        .find_map(|block| {
+            cfg.blocks[block.0]
+                .insts
+                .iter()
+                .position(|inst| inst_info::defs(&inst.kind).contains(&iv.next))
+                .map(|at| (block, at))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "{:?} is an `Iv`'s step, which `analysis::affine` read off an instruction of \
+                 the loop",
+                iv.next
+            )
+        });
+    let step = &cfg.blocks[block.0].insts[at];
+    let InstKind::BinOp {
+        op, left, right, ..
+    } = step.kind
+    else {
+        panic!("an `Iv`'s step is the `BinOp` `analysis::affine` read, not {step:?}")
+    };
+    let Some(op) = Checked::of_trapping(op) else {
+        return;
+    };
+    let check = Inst {
+        span: step.span,
+        kind: InstKind::Check { op, left, right },
+    };
+    cfg.blocks[block.0].insts.insert(at, check);
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Converted {

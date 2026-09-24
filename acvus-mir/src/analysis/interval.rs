@@ -569,6 +569,7 @@ impl<'a> Domain<'a> {
             | InstKind::FieldSet { .. }
             | InstKind::BinOp { .. }
             | InstKind::UnaryOp { .. }
+            | InstKind::Check { .. }
             | InstKind::Cast { .. }
             | InstKind::LoadFunction { .. }
             | InstKind::MakeArray { .. }

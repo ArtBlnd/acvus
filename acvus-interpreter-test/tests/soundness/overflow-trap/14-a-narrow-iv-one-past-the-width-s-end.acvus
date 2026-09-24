@@ -1,0 +1,2 @@
+// expect attempt to add with overflow
+let j = 250u8; for i in 0..6 { j = j + 1u8; } j

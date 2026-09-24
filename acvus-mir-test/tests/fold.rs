@@ -24,8 +24,9 @@ fn optimized(source: &str, context: fn(&Interner) -> FxHashMap<Astr, Ty>) -> Str
 /// IV canonicalization computes `acc`, an induction variable of the promoted
 /// `for`, after the loop as its step times the trip count, so the folded
 /// constant is found as that step, in the wrapping `*%` the pass writes.
-/// This test looks where RFC-0066 rule 7 writes it, and moves with that
-/// pass.
+/// The loop stays, holding the `Check` of `acc`'s step over `@n`
+/// iterations. This test looks where RFC-0066 rule 7 writes it, and moves
+/// with that pass.
 #[test]
 fn two_constants_under_one_add_are_one_constant() {
     let listing = optimized(
@@ -101,4 +102,40 @@ fn a_cast_of_a_value_the_pass_cannot_read_stands() {
     let listing = optimized("let x = @n as f64; (x / 0.0) as i64", signed_n);
     assert!(listing.contains(" as f64"), "the cast moved: {listing}");
     assert!(listing.contains(" as i64"), "the cast moved: {listing}");
+}
+
+fn x_y_and_c(i: &Interner) -> FxHashMap<Astr, Ty> {
+    FxHashMap::from_iter([
+        (i.intern("x"), Ty::I64),
+        (i.intern("y"), Ty::Int(acvus_mir::ty::IntTy::I8)),
+        (i.intern("c"), Ty::Bool),
+    ])
+}
+
+/// Two trapping constants join only where the joined operation traps on
+/// the same `x` as the two did (RFC-0037 rule 3).
+#[test]
+fn a_trapping_join_keeps_the_trap_it_joins() {
+    let one_sign = optimized("(@x + 1) + 2", x_y_and_c);
+    assert!(one_sign.contains(" + 3 ("), "{one_sign}");
+
+    let across_signs = optimized("(@x + 3) + -4", x_y_and_c);
+    assert!(
+        across_signs.contains(" + 3 (") && across_signs.contains(" + -4 ("),
+        "`x + -1` does not trap at `x = i64::MAX - 2`, where `x + 3` does: \
+         {across_signs}"
+    );
+
+    let through_minus_one = optimized("((@y * -1i8) * -1i8) as i64", x_y_and_c);
+    assert_eq!(
+        through_minus_one.matches(" * -1 (").count(),
+        2,
+        "`y * 1` does not trap at `y = -128`, where `y * -1` does: {through_minus_one}"
+    );
+
+    let across_blocks = optimized("let t = @x + 1; if @c { t + 2 } else { 0 }", x_y_and_c);
+    assert!(
+        across_blocks.contains(" + 1 (") && across_blocks.contains(" + 2 ("),
+        "`x + 1` runs on the path that skips the arm too: {across_blocks}"
+    );
 }

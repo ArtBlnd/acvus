@@ -42,7 +42,7 @@
 
 use acvus_ast::{Literal, Span, SuffixedInt};
 
-use crate::ir::{BinOp, Overflow, UnaryOp};
+use crate::ir::{BinOp, Overflow};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -355,28 +355,7 @@ impl Recognizer<'_> {
             .iter()
             .enumerate()
             .filter(|(position, _)| !steps.iter().any(|step| step.header_position == *position))
-            .all(|(_, inst)| self.cannot_trap(&inst.kind))
-    }
-
-    /// Whether `kind` cannot end the run. An effect does not enter: a trap
-    /// is not ordered with effects (RFC-0048 rule 8). Every kind not named
-    /// here is taken to trap.
-    fn cannot_trap(&self, kind: &InstKind) -> bool {
-        let on_integers = |value: &ValueId| matches!(self.cfg.val_types[value], Ty::Int(_));
-        match kind {
-            InstKind::Const { .. }
-            | InstKind::Ref { .. }
-            | InstKind::Cast { .. }
-            | InstKind::Merge { .. } => true,
-            InstKind::BinOp { op, left, .. } => {
-                !(op.can_trap_on_integers() && on_integers(left))
-            }
-            InstKind::UnaryOp { op, operand, .. } => match op {
-                UnaryOp::Neg(Overflow::Trap) => !on_integers(operand),
-                UnaryOp::Neg(Overflow::Wrap) | UnaryOp::Not => true,
-            },
-            _ => false,
-        }
+            .all(|(_, inst)| inst_info::cannot_end_run(&inst.kind, &self.cfg.val_types))
     }
 
     fn only_enters_the_header(&self, block: BlockIdx) -> bool {

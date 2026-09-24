@@ -962,6 +962,11 @@ fn remap_inst(
             op: *op,
             operand: r(*operand),
         },
+        InstKind::Check { op, left, right } => InstKind::Check {
+            op: *op,
+            left: r(*left),
+            right: r(*right),
+        },
         InstKind::Cast { dst, src, to } => InstKind::Cast {
             dst: r(*dst),
             src: r(*src),

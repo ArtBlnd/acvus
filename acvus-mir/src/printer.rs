@@ -249,6 +249,7 @@ fn mnemonic(kind: &InstKind, ctx: &PrintCtx<'_>) -> String {
             };
         }
         InstKind::UnaryOp { op, .. } => return fmt_unaryop(*op).to_string(),
+        InstKind::Check { .. } => "check",
         InstKind::FunctionCall { callee, .. } => return format!("call {}", callee_name(callee)),
         InstKind::Spawn { callee, .. } => return format!("spawn {}", callee_name(callee)),
         InstKind::Const { .. } => "const",
@@ -690,6 +691,17 @@ fn write_body(
                 fmt_unaryop(*op),
                 vn.fmt_use(*operand, &consts, &texts)
             )?,
+            InstKind::Check { op, left, right } => {
+                let Spelling::Infix(spelled) = fmt_binop(op.trapping_op()) else {
+                    panic!("{op:?}'s operation is spelled infix")
+                };
+                writeln!(
+                    f,
+                    "check {} {spelled} {}",
+                    vn.fmt_use(*left, &consts, &texts),
+                    vn.fmt_use(*right, &consts, &texts)
+                )?
+            }
             InstKind::Cast { dst, src, to } => writeln!(
                 f,
                 "{} = {} as {}",

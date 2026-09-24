@@ -678,13 +678,29 @@ impl Compiled {
     }
 }
 
+/// Word bounds keep `s` inside the width, so its step cannot trap and needs
+/// no `Check`, and the body holds nothing.
 #[test]
 fn a_range_whose_accumulator_is_its_count_loses_its_loop() {
-    let compiled = Compiled::of("let s = 0; for i in 0..@n { s = s + 3; } s");
+    let compiled = Compiled::of("let s = 0; for i in 0..1000 { s = s + 3; } s");
     let listing = &compiled.listing;
     assert_eq!(fors(&compiled.cfg), 0, "{listing}");
     assert_eq!(compiled.binops(BinOp::Max), 1, "{listing}");
     assert!(listing.contains("= max("), "{listing}");
+}
+
+/// Over `0..@n` the accumulator's step can overflow, and the `Check` that
+/// keeps its trap is work the body does (RFC-0037 rule 3).
+#[test]
+fn a_range_whose_accumulator_can_overflow_keeps_its_loop() {
+    let compiled = Compiled::of("let s = 0; for i in 0..@n { s = s + 3; } s");
+    let listing = &compiled.listing;
+    assert_eq!(fors(&compiled.cfg), 1, "{listing}");
+    let checks = compiled
+        .insts()
+        .filter(|kind| matches!(kind, InstKind::Check { .. }))
+        .count();
+    assert_eq!(checks, 1, "{listing}");
 }
 
 #[test]

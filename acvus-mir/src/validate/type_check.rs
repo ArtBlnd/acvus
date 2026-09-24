@@ -1383,6 +1383,23 @@ impl CheckCtx {
                 }
             }
 
+            InstKind::Check { left, right, .. } => {
+                let left_ty = ty!(*left);
+                let right_ty = ty!(*right);
+                if !matches!(left_ty, Ty::Int(_)) {
+                    self.invalid(pc, span, "Check", "Int", left_ty, errors);
+                }
+                self.assert_match(
+                    pc,
+                    span,
+                    "Check",
+                    "left == right",
+                    left_ty,
+                    right_ty,
+                    errors,
+                );
+            }
+
             // === UnaryOp ===
             InstKind::UnaryOp { dst, op, operand } => {
                 let operand_ty = ty!(*operand);

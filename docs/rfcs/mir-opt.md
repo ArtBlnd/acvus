@@ -244,10 +244,14 @@ Two constants that are not adjacent still join when one associative and
 commutative operator of one kind at one integer width separates them and
 the intermediate has exactly one use: `(x + 1) + 2` becomes `x + 3`. The
 intermediate becomes the joined constant where it stood, so no new
-definition is placed. At a trapping `+` or `*` the joined constant is
-folded only where it fits, and then `x + 3` is `(x + 1) + 2` on every run
-where neither traps; the join drops the inner trap, as RFC-0037 rule 3
-lets a pass drop one.
+definition is placed. A trapping join keeps the trap (RFC-0037 rule 3):
+it happens only where the joined constant fits, where `(x op a) op b`
+and `x op (a op b)` trap on the same `x` with the same text, which is a
+`+` of two constants of one sign and a `*` of two at least one, and where
+the two stand in one block with nothing between them that can end the
+run, so the trap moves to the outer operation's place on exactly the runs
+that reached the inner one. `(x + 3) + -4` and `(x * -1) * -1` are left
+as written.
 
 **The optimizer introduces no operator the chain recognizer does not
 claim.** A fold replaces an operation with its constant, or moves a constant
@@ -326,16 +330,17 @@ four operations to three, counting `i`'s own increment. A bare `i * k` goes
 from three to three plus a carried parameter, so it is not reduced. What
 decides this is the count, not the syntax.
 
-**Only integer arithmetic is reduced.** Modulo `2^width`, multiplication
-distributes over addition exactly. The reduced `i * k + x` is the program's
-trapping arithmetic (RFC-0037 rule 3), whose result on every run that goes
-past it is the integer one, the same word modulo `2^width`, so the derived
-counter holds the value it held. The start, the step and the latch's
-advance are the pass's own operations, so they wrap: the start runs before
-the first iteration and the advance after the last one, on values the
-program never computed, and a trap there would end a run the program
-defines. The pass drops the program's two operations and their traps, as
-that rule lets a pass drop one, and moves none. In floating point the
+**Only wrapping integer arithmetic is reduced.** Modulo `2^width`,
+multiplication distributes over addition exactly. The start, the step and
+the latch's advance are the pass's own operations, so they wrap: the start
+runs before the first iteration and the advance after the last one, on
+values the program never computed, and a trap there would end a run the
+program defines. The program's `i * k + x` traps where either operation
+overflows, and a reduction keeps those traps (RFC-0037 rule 3): a check of
+each at its place costs what the reduction sheds, so by the count rule a
+trapping product is reduced only where word bounds, `k` and `x` put both
+operations inside the width on every iteration. A pass's own wrapping
+`i * k + x` is reduced as well. In floating point the
 accumulated form is a different number, and on mandelbrot's grid 34 of 20000
 pixels reach a different escape count. A multiplication that does not run
 on every iteration is not reduced.
@@ -523,9 +528,12 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    into `base + k·step` in the body, `k` read off the counter, and
    `base + trip·step` where it is read after the loop, from the count the
    exit edge defines (RFC-0057 rule 9). Its arithmetic wraps (RFC-0037
-   rule 3): its operands are right only modulo `2^width`. A rewritten `Iv`
+   rule 3): its operands are right only modulo `2^width`. Its trapping
+   step stays a `Check` over the rewritten value, carrying nothing; a
+   step that cannot trap, a range's own counter or one word bounds keep
+   in the width, needs none. A rewritten `Iv`
    is carried no longer, so it is no target and orders nothing. The choice is per
-   variable, not per loop, and reads nothing the stage pass decides. After
+   variable and reads nothing the stage pass decides. After
    the stages are written, strength reduction (RFC-0056) reduces a counter
    expression whose readers all sit in one `InOrder` join, and its step
    joins that join. A `while` is declined, since it states no count; a later

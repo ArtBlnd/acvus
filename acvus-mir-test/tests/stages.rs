@@ -563,7 +563,8 @@ fn every_stage_entry_is_a_block_and_the_first_is_the_body() {
 
 /// `i` is read by `*x * i`, a pure computation, so IV canonicalization
 /// computes it from the counter: the header carries `s` alone, and no
-/// cycle is over `i`.
+/// cycle is over `i`. The `Check` that keeps `i`'s step's trap reads the
+/// counter alone, so it is free work, cut after `s`'s cycle.
 #[test]
 fn a_counter_a_pure_computation_reads_is_not_carried_and_has_no_cycle() {
     let c = Compiled::of(
@@ -585,7 +586,8 @@ fn a_counter_a_pure_computation_reads_is_not_carried_and_has_no_cycle() {
                 vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Op(LawOp::Add))
-            )
+            ),
+            Shape::Free
         ],
         "{}",
         c.for_lines()

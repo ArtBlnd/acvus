@@ -1,0 +1,2 @@
+// expect 57
+let i = 0; let s = 0; while i < 6 { s = s * 2 + i; i = i + 1; } s

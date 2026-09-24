@@ -27,8 +27,15 @@ use acvus_utils::Interner;
 
 /// A `while` whose body holds an `if` and nothing after it that reads an arm.
 /// Both loops here test with `<=` because RFC-0081 turns `n < 6` into a range
-/// `for`, which has no head part.
-const TAIL_ABOVE_THE_BRANCH: &str =
+/// `for`, which has no head part. The arm adds floats, which cannot trap, so
+/// running it on both paths is a `Select`.
+const TAIL_ABOVE_THE_BRANCH: &str = "let acc = 0.0; let n = 0; \
+     while n <= 5 { if n % 2 == 0 { acc = acc + 1.5; }; n = n + 1; } acc";
+
+/// The same shape with the program's integer `+` in the arm, which traps
+/// where it overflows, so it runs only on the path the program takes
+/// (RFC-0048 rule 8).
+const TRAPPING_ARM: &str =
     "let acc = 0; let n = 0; while n <= 5 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";
 
 /// The same loop with a tail that reads what both arms wrote.
@@ -45,9 +52,9 @@ fn part_of<'r>(region: &'r RegionListing, part: &str) -> &'r PartListing {
         .unwrap_or_else(|| panic!("the region holds no {part} part"))
 }
 
-fn loop_of(source: &str) -> Vec<BlockListing> {
+fn loop_of(source: &str, ty: Ty) -> Vec<BlockListing> {
     let interner = Interner::new();
-    let blocks = script_listing(&interner, source, Context::default(), Ty::I64);
+    let blocks = script_listing(&interner, source, Context::default(), ty);
     assert_eq!(
         ends(&blocks),
         ["Goto", "Return<true, false>"],
@@ -65,7 +72,7 @@ fn one_loop(blocks: &[BlockListing]) -> &RegionListing {
 
 #[tokio::test]
 async fn a_regions_head_is_one_operation_list() {
-    let blocks = loop_of(TAIL_ABOVE_THE_BRANCH);
+    let blocks = loop_of(TAIL_ABOVE_THE_BRANCH, Ty::Float);
     assert_eq!(
         part_of(one_loop(&blocks), "head").ops,
         ["Lte<i64, Slot, Slot, R0>"],
@@ -78,30 +85,45 @@ async fn a_regions_head_is_one_operation_list() {
 
 #[tokio::test]
 async fn a_tail_that_reads_neither_arm_sits_before_the_select() {
-    let blocks = loop_of(TAIL_ABOVE_THE_BRANCH);
+    let blocks = loop_of(TAIL_ABOVE_THE_BRANCH, Ty::Float);
     let body = part_of(one_loop(&blocks), "body");
     assert_eq!(
         body.ops,
         [
             "Chain2<i64, Slot, 0, 0>",
             "Add<i64, Slot, Slot, Slot>",
-            "Select<i64, Slot, Slot, 1, true>",
-            "Mov<false, true>"
+            "Select<f64, Slot, Slot, 1, true>"
         ],
-        "`n = n + 1` reads neither arm, so code_motion put it above the branch; \
-         the branch follows in the same list, and the loop's back edge is the \
-         `Mov` after it"
+        "`n = n + 1` reads neither arm, so code_motion put it above the branch, \
+         and the branch follows in the same list"
     );
     assert!(
         body.regions.is_empty(),
-        "one arm is `acc + n` and the other passes `acc` through, so the branch \
+        "one arm is `acc + 1.5` and the other passes `acc` through, so the branch \
          is a `Select` holding a chain plan and not a region holding two arms"
     );
 }
 
 #[tokio::test]
+async fn an_arm_that_can_trap_stays_a_diamond() {
+    let blocks = loop_of(TRAPPING_ARM, Ty::I64);
+    let body = part_of(one_loop(&blocks), "body");
+    assert_eq!(
+        body.ops,
+        [
+            "Chain2<i64, Slot, 0, 0>",
+            "Add<i64, Slot, Slot, Slot>",
+            "Diamond<Slot, Rejoins>",
+            "Mov<false, true>"
+        ],
+        "`acc + n` traps where it overflows, and a `Select` would run it on the \
+         path that skips the arm"
+    );
+}
+
+#[tokio::test]
 async fn a_tail_that_reads_an_arm_sits_after_the_diamond() {
-    let blocks = loop_of(TAIL_BELOW_THE_JOIN);
+    let blocks = loop_of(TAIL_BELOW_THE_JOIN, Ty::I64);
     let body = part_of(one_loop(&blocks), "body");
     assert_eq!(
         body.ops,
@@ -164,11 +186,17 @@ async fn the_blocks_that_splitting_states_run_to_their_values() {
         &interner,
         TAIL_ABOVE_THE_BRANCH,
         Context::default(),
-        Ty::I64,
+        Ty::Float,
     )
     .await;
     assert_eq!(
-        above.as_int(),
+        above.as_float(),
+        1.5 * 3.0,
+        "the three even n below 6, each adding by the arm inside the loop's body"
+    );
+    let trapping = run_script_mode(&interner, TRAPPING_ARM, Context::default(), Ty::I64).await;
+    assert_eq!(
+        trapping.as_int(),
         0 + 2 + 4,
         "the even n below 6, summed by the arm inside the loop's body"
     );

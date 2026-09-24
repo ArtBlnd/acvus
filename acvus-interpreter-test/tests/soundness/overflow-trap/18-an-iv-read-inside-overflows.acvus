@@ -1,0 +1,2 @@
+// expect attempt to add with overflow
+let j = 125i8; let t = 0; for i in 0..10 { t = t + (j as i64); j = j + 1i8; } t

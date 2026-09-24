@@ -440,8 +440,11 @@ pub struct Select<T: Num, C: Place, D: Place, const R: u8, const COMPUTES_ON_TRU
    parameter owning no `Large`, and the computed value's one use is the join
    edge. `prepare::select_shape` holds the list; nothing is tested at run time.
 2. **Every other diamond stays a `Diamond`.** Refused:
-   - `/` and `%` — the node runs on both paths, and these are the integer
-     operations that can raise (RFC-0037).
+   - An integer operation that can raise — `/`, `%`, and the program's `+`,
+     `-` and `*`, which trap where they overflow (RFC-0037 rules 2 and 3):
+     the node runs on both paths, and its trap would end a run on the path
+     the program does not take (RFC-0048 rule 8). A float `/` and `%` are
+     refused too. A `+`, `-` or `*` a pass wrote wraps and is admitted.
    - An arm of more than one operation — its intermediate would reach a
      register on the path not taken, and `assign_slots`, which runs first, may
      have given that register to a value live outside the arm.

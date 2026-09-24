@@ -1,0 +1,2 @@
+// expect attempt to add with overflow
+let v = vec([]); let s = 0; let j = 125i8; for i in 0..10 { v.push(i); s = s + opaque(i); j = j + 1i8; } (j as i64) + s + (len(&v) as i64)

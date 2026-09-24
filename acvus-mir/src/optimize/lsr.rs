@@ -53,19 +53,23 @@
 //! hoist that puts `k` and `x` above the header. It needs the preheader a
 //! block of its own that jumps to the header, and one latch.
 //!
-//! # Why this is not a rounding change, and introduces no trap
+//! # Only a pass's wrapping arithmetic
 //!
 //! `(i0 + n*c) * k` and `i0*k + n*(c*k)` are the same integer modulo
 //! `2^width`, where multiplication distributes over addition exactly. The
-//! reduced `i * k + x` is the program's own, trapping operations
-//! (RFC-0037 rule 3): on every run that goes past them their result is the
-//! integer one, the same word modulo `2^width`, so the derived counter
-//! holds it. The start, the step and the latch's advance are operations
-//! this pass writes, and they wrap: the start is computed before the first
-//! iteration and the advance after the last one, on values the program
-//! never computed, so a trapping one could end a run the program defines.
-//! The pass drops the program's two operations and with them their traps,
-//! as that rule lets a pass drop one; it moves none.
+//! start, the step and the latch's advance are operations this pass writes,
+//! and they wrap: the start is computed before the first iteration and the
+//! advance after the last one, on values the program never computed, so a
+//! trapping one could end a run the program defines.
+//!
+//! The program's `i * k + x` is reduced only where the counter's bounds, `k`
+//! and `x` are words that put both operations inside the width on every
+//! iteration, a decision and not an omission. Its `*` and `+` trap where
+//! they overflow, and a rewrite keeps those traps on exactly the runs and
+//! iterations where they trapped (RFC-0037 rule 3). A check of each at its
+//! place costs what the reduction sheds, so the body's count does not fall
+//! and the count rule above declines it; where neither can trap there is
+//! nothing to keep. A pass's own wrapping `i * k + x` is reduced as well.
 //!
 //! In floating point the two are *not* the same number: the accumulated
 //! form carries the rounding error of every earlier step. The measurement
@@ -98,7 +102,7 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::apply_subst;
-use crate::ty::Ty;
+use crate::ty::{LenTerm, Ty};
 
 pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
@@ -294,6 +298,7 @@ struct Site {
 struct Sum {
     site: Site,
     dst: ValueId,
+    kind: Overflow,
     offset: Operand,
 }
 
@@ -393,7 +398,7 @@ impl Scope<'_> {
             for (inst, item) in self.cfg.blocks[block.0].insts.iter().enumerate() {
                 let InstKind::BinOp {
                     dst,
-                    op: BinOp::Mul(_),
+                    op: BinOp::Mul(product_kind),
                     ..
                 } = &item.kind
                 else {
@@ -411,6 +416,17 @@ impl Scope<'_> {
                 let Some(join) = self.read_in_one_join(sum.dst) else {
                     continue;
                 };
+                let traps = *product_kind == Overflow::Trap || sum.kind == Overflow::Trap;
+                if traps
+                    && !self.fits_on_every_iteration(
+                        &counted,
+                        &factor.invariant,
+                        &sum.offset.invariant,
+                        *dst,
+                    )
+                {
+                    continue;
+                }
                 let key = DerivedKey {
                     iv: *iv,
                     factor: factor.value,
@@ -435,6 +451,52 @@ impl Scope<'_> {
         found
     }
 
+    /// Whether the counter's every value `i` is a word range and `i * k` and
+    /// `i * k + x` fit the width over all of it, so neither of the program's
+    /// operations can trap and the reduction keeps their traps, which are
+    /// none. Both are monotone in `i`, so the two ends decide.
+    fn fits_on_every_iteration(
+        &self,
+        counted: &Counted,
+        factor: &Invariant,
+        offset: &Invariant,
+        product: ValueId,
+    ) -> bool {
+        let Ty::Int(width) = self.cfg.val_types[&product] else {
+            return false;
+        };
+        let invariants = Invariants::of(self.cfg);
+        let int = |invariant: &Invariant| {
+            let literal = match invariant {
+                Invariant::Outside(value) => invariants.word(*value)?.desugared(),
+                Invariant::Word(literal) => literal.desugared(),
+            };
+            match literal {
+                Literal::Int(n) => Some(width.read(n as u64)),
+                _ => None,
+            }
+        };
+        let ends = match (counted, self.chain.source) {
+            (Counted::Range { at }, ForSource::Range { hi, .. }) => int(&Invariant::Outside(*at))
+                .zip(int(&Invariant::Outside(hi)))
+                .map(|(at, hi)| (at, hi - 1)),
+            (Counted::Index, ForSource::Array(array)) => match &self.cfg.val_types[&array] {
+                Ty::Array(_, LenTerm::Known(len)) => {
+                    i128::try_from(*len).ok().map(|len| (0, len - 1))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let (Some((first, last)), Some(k), Some(x)) = (ends, int(factor), int(offset)) else {
+            return false;
+        };
+        last < first
+            || [first, last]
+                .into_iter()
+                .all(|i| width.holds(i * k) && width.holds(i * k + x))
+    }
+
     fn sole_invariant_sum(&self, product: ValueId) -> Option<Sum> {
         if self.use_count(product) != 1 {
             return None;
@@ -446,7 +508,7 @@ impl Scope<'_> {
             for (inst, item) in self.cfg.blocks[block.0].insts.iter().enumerate() {
                 let InstKind::BinOp {
                     dst,
-                    op: BinOp::Add(_),
+                    op: BinOp::Add(kind),
                     ..
                 } = &item.kind
                 else {
@@ -461,6 +523,7 @@ impl Scope<'_> {
                 return Some(Sum {
                     site: Site { block, inst },
                     dst: *dst,
+                    kind: *kind,
                     offset: offset.clone(),
                 });
             }

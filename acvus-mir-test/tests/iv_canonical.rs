@@ -15,7 +15,7 @@ use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::{BinOp, Overflow};
+use acvus_mir::ir::{BinOp, Checked, Overflow};
 use acvus_mir::ir::{
     ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
 };
@@ -327,14 +327,15 @@ fn a_merge_is_still_carried_and_an_iv_read_only_inside_asks_for_no_count() {
 }
 
 const RECURRENCE: &str = "let acc = 0; let j = 0; \
-     for i in 0..6 { acc = acc * 2 + (j * @base + 1); j = j + 1; } acc";
+     for i in 0..6 { acc = acc * 2 + (j * 3 + 1); j = j + 1; } acc";
 
 const BREAK: &str = "let j = 0; let s = 0; \
      for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j";
 
-/// `j` is read by `j * @base + 1`, so it is computed from the counter; that
-/// sum is read only by `acc`'s update, its `InOrder` join, so `lsr` then
-/// carries it as a counter of its own (RFC-0066 rule 7, RFC-0056).
+/// `j` is read by `j * 3 + 1`, so it is computed from the counter; that
+/// sum is read only by `acc`'s update, its `InOrder` join, and the word
+/// bounds keep it inside the width, so `lsr` then carries it as a counter
+/// of its own (RFC-0066 rule 7, RFC-0056).
 #[test]
 fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_iv() {
     let none = Compiled::of(RECURRENCE, Opt::None);
@@ -349,7 +350,7 @@ fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_i
     assert_eq!(
         full.ivs(loop_),
         1,
-        "`j` is the counter, and `lsr` carries `j·base + 1` in the join \
+        "`j` is the counter, and `lsr` carries `j·3 + 1` in the join \
          that reads it:\n{}",
         full.listing
     );
@@ -388,13 +389,15 @@ fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_i
 
 const BOTH: &str = "let j = 0; let s = 0; for i in 0..@n { s = s + j; j = j + 2; } \
      let acc = 0; let q = 0; \
-     for i in 0..@n { acc = acc * 2 + (q * @base + 1); q = q + 1; } \
+     for i in 0..6 { acc = acc * 2 + (q * 3 + 1); q = q + 1; } \
      s + j + acc";
 
 /// The first loop's `j` is read by the merge and after the loop, and is
 /// computed from the counter and the trip count. The second's `q` is read
-/// only by `q * @base + 1`, which `acc`'s `InOrder` join reads, and that sum
-/// is reduced to a counter of its own, the one `Iv` the loop carries.
+/// only by `q * 3 + 1`, which `acc`'s `InOrder` join reads, and that sum
+/// is reduced to a counter of its own, the one `Iv` the loop carries. The
+/// first loop's `j` keeps its step's trap in a `Check`, which carries
+/// nothing.
 #[test]
 fn each_loop_computes_its_ivs_from_its_counter_and_reduces_only_in_an_in_order_join() {
     let none = Compiled::of(BOTH, Opt::None);
@@ -419,6 +422,54 @@ fn each_loop_computes_its_ivs_from_its_counter_and_reduces_only_in_an_in_order_j
         full.listing
     );
     assert_eq!(full.exit_trip(second), ExitTrip::Absent);
+}
+
+impl Compiled {
+    fn checks(&self, loop_: &Loop) -> Vec<Checked> {
+        loop_
+            .natural
+            .blocks()
+            .flat_map(|block| self.insts(block))
+            .filter_map(|inst| match inst.kind {
+                InstKind::Check { op, .. } => Some(op),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+const STEP_CAN_OVERFLOW: &str = "let j = 250u8; for i in 0..@n { j = j + 1u8; } j";
+
+/// `j`'s step can leave `u8`, so after `j` is computed from the counter the
+/// step's trap stays as one `Check`, and the loop still carries nothing.
+#[test]
+fn a_step_that_can_overflow_keeps_its_trap_in_a_check() {
+    let full = Compiled::of(STEP_CAN_OVERFLOW, Opt::Full);
+    let [loop_] = full.loops_by_header()[..] else {
+        panic!("one loop:\n{}", full.listing);
+    };
+    assert_eq!(full.ivs(loop_), 0, "{}", full.listing);
+    assert_eq!(full.checks(loop_), [Checked::Add], "{}", full.listing);
+}
+
+const THE_COUNTER_ITSELF: &str =
+    "let i = 0; let s = 0; while i < @n { s = s * 2 + i; i = i + 1; } s";
+
+const WORD_BOUNDS: &str = "let j = 0; let s = 0; for i in 0..10 { s = s * 2 + j; j = j + 3; } s";
+
+/// A step that cannot trap needs no `Check`: the variable a `while`
+/// counted with, which RFC-0081 made the range's counter, never passes
+/// `hi`, and word bounds that keep `j` below `30` keep its step inside the
+/// width.
+#[test]
+fn a_step_that_cannot_overflow_needs_no_check() {
+    for source in [THE_COUNTER_ITSELF, WORD_BOUNDS] {
+        let full = Compiled::of(source, Opt::Full);
+        let [loop_] = full.loops_by_header()[..] else {
+            panic!("one loop:\n{}", full.listing);
+        };
+        assert_eq!(full.checks(loop_), [], "{}", full.listing);
+    }
 }
 
 // -- Nests -----------------------------------------------------------

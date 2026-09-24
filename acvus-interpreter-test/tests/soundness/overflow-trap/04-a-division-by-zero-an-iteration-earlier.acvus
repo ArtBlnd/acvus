@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let t = 0; let j = 120i8; for i in 0..10 { t = t + 10 / (3 - i); j = j + 1i8; } t + (j as i64)

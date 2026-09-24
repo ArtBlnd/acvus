@@ -17,7 +17,7 @@ use acvus_interpreter_test::corpus::{self, Init, Outcome, Stage};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{
-    BinOp, DebugInfo, Inst, InstKind, MirBody, MirModule, Overflow, UnaryOp, ValueId,
+    BinOp, Checked, DebugInfo, Inst, InstKind, MirBody, MirModule, Overflow, UnaryOp, ValueId,
 };
 use acvus_mir::ty::{IntTy, Task, Ty};
 use acvus_utils::{Interner, LocalFactory};
@@ -416,5 +416,56 @@ async fn a_prepared_trapping_operation_traps_and_a_wrapping_one_wraps() {
     assert_eq!(
         prepared_negation(UnaryOp::Neg(WRAP), IntTy::I8, -128).await,
         Ok(-128)
+    );
+}
+
+/// `check left op right` over two constants, then the left operand
+/// returned: the check traps where the operation would, and otherwise the
+/// run goes on with nothing written.
+async fn prepared_check(op: Checked, ty: IntTy, left: i128, right: i128) -> Result<i128, Trapped> {
+    let mut factory = LocalFactory::<ValueId>::new();
+    let [l, r] = [factory.next(), factory.next()];
+    let body = OneOperation {
+        insts: vec![
+            constant(l, left),
+            constant(r, right),
+            at_zero(InstKind::Check {
+                op,
+                left: l,
+                right: r,
+            }),
+            returned(l),
+        ],
+        values: vec![l, r],
+        factory,
+    };
+    run(body, ty).await
+}
+
+#[tokio::test]
+async fn a_check_traps_where_its_operation_would_and_otherwise_runs_on() {
+    assert_eq!(
+        prepared_check(Checked::Add, IntTy::U8, 255, 1).await,
+        trapped(ADD)
+    );
+    assert_eq!(
+        prepared_check(Checked::Add, IntTy::U8, 254, 1).await,
+        Ok(254)
+    );
+    assert_eq!(
+        prepared_check(Checked::Sub, IntTy::I64, i128::from(i64::MIN), 1).await,
+        trapped(SUB)
+    );
+    assert_eq!(
+        prepared_check(Checked::Sub, IntTy::I64, i128::from(i64::MIN), -1).await,
+        Ok(i128::from(i64::MIN))
+    );
+    assert_eq!(
+        prepared_check(Checked::Mul, IntTy::I8, -128, -1).await,
+        trapped(MUL)
+    );
+    assert_eq!(
+        prepared_check(Checked::Mul, IntTy::I8, -64, 2).await,
+        Ok(-64)
     );
 }

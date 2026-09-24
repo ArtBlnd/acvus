@@ -127,6 +127,51 @@ impl From<acvus_ast::BinOp> for BinOp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Checked {
+    Add,
+    Sub,
+    Mul,
+}
+
+impl Checked {
+    pub fn trapping_op(self) -> BinOp {
+        match self {
+            Checked::Add => BinOp::Add(Overflow::Trap),
+            Checked::Sub => BinOp::Sub(Overflow::Trap),
+            Checked::Mul => BinOp::Mul(Overflow::Trap),
+        }
+    }
+
+    pub fn of_trapping(op: BinOp) -> Option<Checked> {
+        match op {
+            BinOp::Add(Overflow::Trap) => Some(Checked::Add),
+            BinOp::Sub(Overflow::Trap) => Some(Checked::Sub),
+            BinOp::Mul(Overflow::Trap) => Some(Checked::Mul),
+            BinOp::Add(Overflow::Wrap)
+            | BinOp::Sub(Overflow::Wrap)
+            | BinOp::Mul(Overflow::Wrap)
+            | BinOp::Div
+            | BinOp::Eq
+            | BinOp::Neq
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Lte
+            | BinOp::Gte
+            | BinOp::And
+            | BinOp::Or
+            | BinOp::Xor
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Shl(_)
+            | BinOp::Shr(_)
+            | BinOp::Mod
+            | BinOp::Min
+            | BinOp::Max => None,
+        }
+    }
+}
+
 /// A one-operand operation of the MIR.
 ///
 /// It is its own enum, and not `acvus_ast::UnaryOp`, for the reason
@@ -673,6 +718,15 @@ pub enum InstKind {
         dst: ValueId,
         op: UnaryOp,
         operand: ValueId,
+    },
+    /// Ends the run with `op`'s trap where `left op right` does not fit the
+    /// operands' width. A pass that rewrites a trapping operation's value
+    /// into a computation that wraps writes one at the operation's place, so
+    /// the operation's trap stays where it was (RFC-0037 rule 3).
+    Check {
+        op: Checked,
+        left: ValueId,
+        right: ValueId,
     },
     /// `src as to` (RFC-0049), total, with Rust's `as` values.
     ///
