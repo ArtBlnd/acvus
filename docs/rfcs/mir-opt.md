@@ -1020,3 +1020,7 @@ runs its iterations.
   shows.
 - The count in a wider type — the MIR has no integer wider than 64 bits, and
   no 64-bit type holds every difference of two `i64` or two `u64` values.
+- Assuming a loop with no effect ends, so any such loop may go — the
+  analysis that finds "no effect" is the one that errs, and a wrong answer
+  deletes a loop that does not end; such loops are rare, so it gains little.
+  Only a `for`, which states its count, is removed.
