@@ -333,6 +333,11 @@ impl Value {
         self.word
     }
 
+    #[cfg(test)]
+    pub(crate) fn word_of_any_kind(&self) -> u64 {
+        self.word
+    }
+
     /// As `bits`, in place.
     #[inline]
     pub fn bits_ref(&self) -> &u64 {

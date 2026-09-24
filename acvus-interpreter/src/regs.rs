@@ -513,6 +513,11 @@ impl<'f> Regs<'f> {
         unsafe { *self.mark_ptr(word_byte) = bits }
     }
 
+    #[cfg(test)]
+    pub(crate) fn mark_word(&self, word: usize) -> u64 {
+        self.marked(word * size_of::<u64>())
+    }
+
     /// The mark words above word 0, cleared. `Regs::of` does not clear them: it
     /// runs on every bind, and a frame of one mark word — every frame in the
     /// bench set — would pay for words it does not have on the one path a
