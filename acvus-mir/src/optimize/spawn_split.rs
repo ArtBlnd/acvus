@@ -1,9 +1,9 @@
 //! Spawn-split pass: a `FunctionCall` whose effect `runs_apart` becomes a
-//! `Spawn` and an `Eval`, unless an argument has a position (RFC-0079
-//! rule 9): a spawned task can outlive a run that is dropped before its
-//! `Eval`, and a loan an argument holds would then name storage that is
-//! gone. Such a call stays a `FunctionCall`, awaited in the run's own
-//! future.
+//! `Spawn` and an `Eval`, whether or not an argument holds a loan
+//! (RFC-0046 rule 3, RFC-0079 rule 9). The loan is held in the `Handle`'s
+//! in-flight position until the `Eval`, and a run that ends before the
+//! `Eval` keeps its storage until the task has finished (the interpreter's
+//! `flight`).
 //!
 //! This pass does not reorder. Moving independent instructions between a
 //! `Spawn` and its `Eval` is `optimize::reorder`'s job.
@@ -30,7 +30,7 @@ pub fn run(cfg: &mut CfgBody) {
                     ref callee_ty,
                     ref args,
                     order,
-                } if runs_apart(callee_ty) && !lends(&cfg.val_types, args) => {
+                } if runs_apart(callee_ty) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
 
@@ -75,16 +75,6 @@ pub fn run(cfg: &mut CfgBody) {
 
 fn runs_apart(callee_ty: &Ty) -> bool {
     matches!(callee_ty.effect(), Some(e) if e.runs_apart())
-}
-
-/// Whether an argument may hold a loan: its type has a position, or the
-/// body does not type it, so nothing shows it holds none.
-fn lends(val_types: &rustc_hash::FxHashMap<ValueId, Ty>, args: &[ValueId]) -> bool {
-    args.iter().any(|arg| {
-        val_types
-            .get(arg)
-            .is_none_or(|ty| crate::analysis::loans::positions(ty) > 0)
-    })
 }
 
 #[cfg(test)]
@@ -132,10 +122,10 @@ mod tests {
         cfg.blocks.iter().flat_map(|b| b.insts.iter()).collect()
     }
 
-    /// RFC-0079 rule 9: a call handed a reference is not spawned, so no
-    /// task holds the loan past a run dropped before its `Eval`.
+    /// RFC-0079 rule 9: a call handed a reference is spawned like any
+    /// other; the `Handle` holds the loan until its `Eval`.
     #[test]
-    fn a_call_handed_a_reference_is_not_spawned() {
+    fn a_call_handed_a_reference_is_spawned() {
         let i = Interner::new();
         let print_id = QualifiedRef::root(i.intern("print"));
         let taken = Ty::Ref(
@@ -171,10 +161,11 @@ mod tests {
 
         let insts = all_insts(&cfg);
         assert!(
-            matches!(insts[0].kind, InstKind::FunctionCall { .. }),
-            "a call whose argument holds a loan stays a call"
+            matches!(&insts[0].kind, InstKind::Spawn { args, .. } if *args == vec![v(0)]),
+            "a call whose argument holds a loan is spawned with that argument"
         );
-        assert!(!insts.iter().any(|inst| matches!(inst.kind, InstKind::Spawn { .. })));
+        assert!(matches!(insts[1].kind, InstKind::Eval { dst, .. } if dst == v(1)));
+        assert_eq!(cfg.task, Task::Async);
     }
 
     #[test]

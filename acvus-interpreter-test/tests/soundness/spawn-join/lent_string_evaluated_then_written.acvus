@@ -1,0 +1,3 @@
+// expect 4
+// `len_later` is spawned lent `&s`, and its `Eval` comes before `s` is written.
+let s = "lent".to_string(); let n = len_later(&s); s = "x".to_string(); n

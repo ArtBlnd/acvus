@@ -10,6 +10,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::code::Prepared;
+use crate::flight::{Flight, Flying};
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
@@ -81,6 +82,7 @@ impl InterpreterContext {
         AcvusRuntime::new(
             Arc::new(self.clone()),
             Arc::new(crate::journal::InMemoryContext::empty()),
+            Flight::new(),
         )
     }
 }
@@ -106,7 +108,9 @@ pub struct Interpreter {
     shared: Arc<InterpreterContext>,
     entry: QualifiedRef,
     page: Arc<dyn RuntimeContext>,
+    flight: Arc<Flight>,
     spawn_args: Vec<Value>,
+    _flying: Option<Flying>,
 }
 
 impl Interpreter {
@@ -125,29 +129,32 @@ impl Interpreter {
             shared: Arc::new(shared),
             entry,
             page,
+            flight: Flight::new(),
             spawn_args: Vec::new(),
+            _flying: None,
         }
     }
 
     /// The deferred run a `Spawn` of a module issues: the spawning run's
-    /// page, and the arguments it passed.
-    pub(crate) fn spawned(
-        shared: Arc<InterpreterContext>,
-        entry: QualifiedRef,
-        page: Arc<dyn RuntimeContext>,
-        args: Vec<Value>,
-    ) -> Self {
+    /// runtime, and the arguments it passed.
+    pub(crate) fn spawned(rt: &AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> Self {
         Self {
-            shared,
+            shared: Arc::clone(&rt.shared),
             entry,
-            page,
+            page: Arc::clone(&rt.page),
+            flight: Arc::clone(&rt.flight),
             spawn_args: args,
+            _flying: Some(rt.flight.start()),
         }
     }
 
     /// The run as a `Runtime`, for a host that commits the page afterwards.
     pub fn runtime(&self) -> AcvusRuntime {
-        AcvusRuntime::new(Arc::clone(&self.shared), Arc::clone(&self.page))
+        AcvusRuntime::new(
+            Arc::clone(&self.shared),
+            Arc::clone(&self.page),
+            Arc::clone(&self.flight),
+        )
     }
 
     /// Execute the entry module and return its value. The page keeps every
@@ -167,13 +174,7 @@ impl Interpreter {
              typeck refuses this at `CompilationGraph::entry`, so the checker was bypassed"
         );
         let args = std::mem::take(&mut self.spawn_args);
-        call_module(
-            Arc::clone(&self.shared),
-            Arc::clone(&self.page),
-            self.entry,
-            args,
-        )
-        .await
+        call_module(self.runtime(), self.entry, args).await
     }
 
     pub fn take_writes(&self) -> Vec<ContextWrite> {

@@ -704,6 +704,15 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
 /// writes this call.
 #[macro_export]
 macro_rules! attempt_within {
+    ($source:expr, contexts = $contexts:expr, attempt = $attempt:expr, $limit:expr $(,)?) => {
+        $crate::corpus::attempt_within_as(
+            $source,
+            $contexts,
+            $attempt,
+            $limit,
+            $crate::corpus::Caller(::core::module_path!()),
+        )
+    };
     ($source:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
         $crate::corpus::attempt_within(
             $source,
@@ -743,8 +752,8 @@ pub mod corpus {
     use std::time::Duration;
 
     use acvus_interpreter::{
-        Composite, Executable, InMemoryContext, Interpreter, InterpreterContext, Kind, PrepareCtx,
-        SequentialExecutor, Value, prepare_module,
+        Composite, Executable, Executor, InMemoryContext, Interpreter, InterpreterContext, Kind,
+        PrepareCtx, SequentialExecutor, TokioExecutor, Value, prepare_module,
     };
     use acvus_mir::graph::{ParsedAst, QualifiedRef};
     use acvus_mir::ty::{IntTy, Ty};
@@ -761,9 +770,38 @@ pub mod corpus {
         let mut registries = acvus_ext::std_registries();
         registries.push(acvus_extern::extern_registry! {
             ns: "corpus",
-            fns: [opaque, opaque_async, pass],
+            fns: [opaque, opaque_async, pass, read_later, len_later, pass_later],
         });
         registries
+    }
+
+    /// Long enough that a spawned call is still running when the run that
+    /// spawned it reaches a trap two operations later.
+    const LATER: Duration = Duration::from_millis(5);
+
+    /// Reads the cell it was lent after `LATER`, at effect `opaque`, so the
+    /// optimizer spawns it.
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn read_later(n: &i64) -> i64 {
+        std::thread::sleep(LATER);
+        *n
+    }
+
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn len_later(s: &String) -> u64 {
+        std::thread::sleep(LATER);
+        u64::try_from(s.len()).expect("a length fits in 64 bits")
+    }
+
+    /// `pass` at effect `opaque`: spawned, and its result holds what its
+    /// argument does.
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn pass_later<T>(x: T) -> T
+    where
+        T: acvus_extern::Var<acvus_extern::kind::Type>,
+    {
+        std::thread::sleep(LATER);
+        x
     }
 
     #[acvus_extern::extern_fn(effect = opaque)]
@@ -1335,6 +1373,23 @@ pub mod corpus {
         Crashed,
     }
 
+    /// The executor a run's spawns go to.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Scheduler {
+        /// `SequentialExecutor` on a current-thread runtime.
+        Sequential,
+        /// `TokioExecutor` on a runtime of two worker threads.
+        Tokio,
+    }
+
+    /// One attempt's level, how far it goes, and where its spawns run.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Attempt {
+        pub opt: Opt,
+        pub stage: Stage,
+        pub scheduler: Scheduler,
+    }
+
     /// Compile `source` at `opt`, the way `acvus run` compiles a file: no
     /// context declarations, the standard registries, `!` as the return type.
     pub fn attempt(source: &str, opt: Opt, stage: Stage) -> Outcome {
@@ -1349,6 +1404,25 @@ pub mod corpus {
         opt: Opt,
         stage: Stage,
     ) -> Outcome {
+        let attempt = Attempt {
+            opt,
+            stage,
+            scheduler: Scheduler::Sequential,
+        };
+        attempt_as(source, contexts, attempt)
+    }
+
+    /// [`attempt_in`] with its spawns on `attempt.scheduler`.
+    pub fn attempt_as(
+        source: &str,
+        contexts: &serde_json::Map<String, serde_json::Value>,
+        attempt: Attempt,
+    ) -> Outcome {
+        let Attempt {
+            opt,
+            stage,
+            scheduler,
+        } = attempt;
         let interner = Interner::new();
         let context: crate::Context = contexts
             .iter()
@@ -1426,13 +1500,26 @@ pub mod corpus {
         }
 
         functions.extend(prepared);
-        let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor))
+        let (executor, runtime): (Arc<dyn Executor>, _) = match scheduler {
+            Scheduler::Sequential => (
+                Arc::new(SequentialExecutor),
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .expect("a current-thread runtime"),
+            ),
+            Scheduler::Tokio => (
+                Arc::new(TokioExecutor),
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_time()
+                    .build()
+                    .expect("a multi-thread runtime"),
+            ),
+        };
+        let shared = InterpreterContext::new(&interner, functions, executor)
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
         let mut interp = Interpreter::new(shared, cr.entry_qref, InMemoryContext::new(snapshot));
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("a current-thread runtime");
         match catch_unwind(AssertUnwindSafe(|| runtime.block_on(interp.execute()))) {
             Ok(value) => Outcome::Value(render(&interner, &value).to_string()),
             Err(panic) => Outcome::RunPanicked(message(panic.as_ref())),
@@ -1443,6 +1530,7 @@ pub mod corpus {
     const CONTEXTS: &str = "ACVUS_CORPUS_CONTEXTS";
     const LEVEL: &str = "ACVUS_CORPUS_OPT";
     const UNTIL: &str = "ACVUS_CORPUS_STAGE";
+    const SCHEDULER: &str = "ACVUS_CORPUS_SCHEDULER";
     const MARK: &str = "acvus-corpus-outcome ";
 
     /// The child half of [`attempt_within`]: a test binary asked for one
@@ -1461,11 +1549,21 @@ pub mod corpus {
             Ok("prepare") => Stage::Prepare,
             _ => Stage::Run,
         };
+        let scheduler = match std::env::var(SCHEDULER).as_deref() {
+            Ok("sequential") => Scheduler::Sequential,
+            Ok("tokio") => Scheduler::Tokio,
+            other => panic!("the parent names the scheduler, and it named {other:?}"),
+        };
         let contexts = match std::env::var(CONTEXTS) {
             Ok(json) => serde_json::from_str(&json).expect("the parent wrote a JSON object"),
             Err(_) => serde_json::Map::new(),
         };
-        let outcome = attempt_in(&source, &contexts, opt, stage);
+        let attempt = Attempt {
+            opt,
+            stage,
+            scheduler,
+        };
+        let outcome = attempt_as(&source, &contexts, attempt);
         println!("{MARK}{}", encode(&outcome));
         use std::io::Write;
         std::io::stdout()
@@ -1541,6 +1639,27 @@ pub mod corpus {
         limit: Duration,
         caller: Caller,
     ) -> Result<Outcome, Lapse> {
+        let attempt = Attempt {
+            opt,
+            stage,
+            scheduler: Scheduler::Sequential,
+        };
+        attempt_within_as(source, contexts, attempt, limit, caller)
+    }
+
+    /// [`attempt_within_in`] with its spawns on `attempt.scheduler`.
+    pub fn attempt_within_as(
+        source: &str,
+        contexts: &serde_json::Map<String, serde_json::Value>,
+        attempt: Attempt,
+        limit: Duration,
+        caller: Caller,
+    ) -> Result<Outcome, Lapse> {
+        let Attempt {
+            opt,
+            stage,
+            scheduler,
+        } = attempt;
         let child_test = caller.child_test();
         let exe = std::env::current_exe().expect("the test binary knows its own path");
         let mut child = std::process::Command::new(exe)
@@ -1567,6 +1686,13 @@ pub mod corpus {
                 match stage {
                     Stage::Prepare => "prepare",
                     Stage::Run => "run",
+                },
+            )
+            .env(
+                SCHEDULER,
+                match scheduler {
+                    Scheduler::Sequential => "sequential",
+                    Scheduler::Tokio => "tokio",
                 },
             )
             .env("RUST_BACKTRACE", "0")

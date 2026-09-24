@@ -22,13 +22,14 @@ acvus-extern = { path = "../acvus-extern" }
 acvus-ext = { path = "../acvus-ext" }
 rustc-hash = { workspace = true }
 serde_json = "1.0"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
 libtest-mimic = "0.8"
 glob = "0.3"
+futures = "0.3"
 
 # A process has one global allocator, and these three count through it:
 # a run's allocations are what they assert. Sharing a binary with tests
@@ -44,6 +45,12 @@ path = "tests/run_allocations.rs"
 [[test]]
 name = "view_allocates_nothing"
 path = "tests/view_allocates_nothing.rs"
+
+# Its allocator overwrites every freed block, so a read of released cells
+# answers the fill pattern; no other test should pay for that.
+[[test]]
+name = "run_dropped_in_flight"
+path = "tests/run_dropped_in_flight.rs"
 
 [[test]]
 name = "fixtures"
