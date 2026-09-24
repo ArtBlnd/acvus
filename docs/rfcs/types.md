@@ -227,11 +227,12 @@ Status: Accepted
    (RFC-0039 rule 4).
 2. Arithmetic, comparison and the bit operators take two operands of one
    width and produce it; nothing widens or narrows by itself (conversion is
-   `as`, RFC-0049). A shift takes its amount modulo the width, and `/` and
-   `%` panic on a zero divisor and at `MIN / -1` with Rust's texts.
+   `as`, RFC-0049). `/` and `%` panic on a zero divisor and at `MIN / -1`
+   with Rust's texts.
    Negation takes a signed integer or `f64`.
 3. **Overflow is undefined.** A `+`, `-`, `*` or negation whose exact
-   result does not fit the width gives a program no meaning, and every
+   result does not fit the width, or a shift by the width or more, gives a
+   program no meaning, and every
    analysis and pass assumes it does not happen. This implementation traps
    at the operation that overflows (RFC-0048 rule 8), so an overflowing run
    ends before its value reaches anything; a pass may move, merge or drop
