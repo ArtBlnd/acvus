@@ -65,9 +65,11 @@ fn blocks(listing: &str) -> Vec<BlockBody> {
                     .unwrap_or(header)
                     .trim_end_matches(':')
                     .to_string();
-                let before = found.last_mut().expect("a listing opens with the entry block");
-                let stepped = before.insts.last() == Some(&format!("jump {label}"))
-                    && !header.contains('(');
+                let before = found
+                    .last_mut()
+                    .expect("a listing opens with the entry block");
+                let stepped =
+                    before.insts.last() == Some(&format!("jump {label}")) && !header.contains('(');
                 match stepped {
                     true => {
                         before.insts.pop();
@@ -148,10 +150,64 @@ fn the_reduced_body_multiplies_and_the_unreduced_one_still_does() {
 
     assert_eq!(
         where_it_multiplies(&listing),
-        ["ENTRY: 1".to_string(), "L1: 1".to_string(), "L6: 2".to_string()],
+        ["L1: 1".to_string(), "L6: 2".to_string()],
         "the first loop's body keeps only `reduced * 2`, and the reduction \
-         steps by `@k` and starts at `0 * @k + @x`, computed once above the \
-         header; under the `if`, `j * @k` stays beside `unreduced * 2`:\n{listing}"
+         steps by `@k` and starts at `@x`, the start `0 * @k + @x` written \
+         folded, so nothing multiplies above the header; under the `if`, \
+         `j * @k` stays beside `unreduced * 2`:\n{listing}"
+    );
+}
+
+fn arithmetic_operands(block: &BlockBody) -> Vec<(String, [String; 2])> {
+    block
+        .insts
+        .iter()
+        .filter_map(|inst| inst.split_once(" = "))
+        .filter_map(|(_, computed)| {
+            [" * ", " + "].into_iter().find_map(|op| {
+                let (left, right) = computed.split_once(op)?;
+                let operand = |written: &str| written.split(' ').next().unwrap_or("").to_string();
+                Some((op.trim().to_string(), [operand(left), operand(right)]))
+            })
+        })
+        .collect()
+}
+
+/// A range from 0 by one: the reduced counter's start is `0 * @k + @x`, and
+/// `lsr` is the last pass to touch it, since no value numbering follows the
+/// stages (RFC-0056). What stands above the header is the folded start.
+#[test]
+fn a_reduced_counter_s_setup_multiplies_by_no_zero_and_adds_no_zero() {
+    let i = Interner::new();
+    let listing =
+        compile_script_optimized(&i, RECURRENCE, &ctx(&i, &["n", "k", "x"])).expect("it compiles");
+    let preheader = blocks(&listing)
+        .into_iter()
+        .next()
+        .expect("a listing opens with the entry block");
+    let on_zero: Vec<(String, [String; 2])> = arithmetic_operands(&preheader)
+        .into_iter()
+        .filter(|(_, operands)| operands.iter().any(|operand| operand == "0"))
+        .collect();
+    assert_eq!(
+        on_zero,
+        Vec::new(),
+        "the preheader computes no `0 * k` and no `+ 0`:\n{listing}"
+    );
+    let x = listing
+        .lines()
+        .find_map(|line| line.split_once('|')?.1.trim().strip_suffix(" = fetch @x"))
+        .unwrap_or_else(|| panic!("`@x` is fetched:\n{listing}"));
+    let entered_with = preheader
+        .insts
+        .last()
+        .and_then(|jump| jump.strip_prefix("jump L0("))
+        .and_then(|args| args.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("the preheader jumps to the header:\n{listing}"));
+    assert_eq!(
+        entered_with.rsplit(", ").next(),
+        Some(x),
+        "the derived counter enters the loop at `@x` itself:\n{listing}"
     );
 }
 
@@ -248,11 +304,12 @@ fn a_merge_is_left_as_written_and_a_recurrence_is_reduced() {
     );
     assert_eq!(
         where_it_multiplies(&recurrence),
-        ["ENTRY: 1".to_string(), "L1: 1".to_string()],
+        ["L1: 1".to_string()],
         "`acc * 2` is a recurrence, joined `InOrder`, and the join reads \
          `i * @k + @x`, so the body keeps only `acc * 2`. The counter steps \
          by 1, so the reduction steps by `@k`, and its start `0 * @k + @x` \
-         is the one product above the header:\n{recurrence}"
+         is written folded as `@x`, so nothing multiplies above the \
+         header:\n{recurrence}"
     );
 }
 
@@ -292,10 +349,10 @@ fn a_loop_merging_through_a_lawful_extern_is_left_as_written() {
     );
     assert_eq!(
         where_it_multiplies(&lawless),
-        ["ENTRY: 1".to_string()],
+        Vec::<String>::new(),
         "`saturating_add` declares no law, so its join is `InOrder` and the \
          expression it reads is reduced: the body keeps no `i * @k`, and the \
-         reduction steps by `@k` from `0 * @k + @x`, computed above the \
-         header:\n{lawless}"
+         reduction steps by `@k` from `@x`, the start `0 * @k + @x` written \
+         folded:\n{lawless}"
     );
 }

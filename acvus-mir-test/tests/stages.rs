@@ -3,30 +3,49 @@
 
 use acvus_mir::analysis::affine::{AffineValues, Derivation};
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loops::{Invariants, LoopNest};
-use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
+use acvus_mir::analysis::inst_info;
+use acvus_mir::analysis::loans::Loans;
+use acvus_mir::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
+use acvus_mir::analysis::stages::{StageMembership, loop_blocks_of};
+use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
+use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, demote, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ir::{BinOp, InstKind, Law, LawOp, Order, Stage, Stages, Target, Targets, ValueId};
+use acvus_mir::ir::{
+    BinOp, InstKind, Law, LawOp, MirModule, Order, Stage, Stages, Target, Targets, ValueId,
+};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{Effect, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir::validate::ValidationErrorKind;
+use acvus_mir::validate::stages::PureEffect;
 use acvus_mir_test::{compile_script_at, optimized_script_module};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 struct Compiled {
     listing: String,
+    module: MirModule,
     cfg: CfgBody,
 }
 
 impl Compiled {
     fn of(source: &str) -> Self {
+        Self::reading(source, &[])
+    }
+
+    /// `source` reading each of `contexts` as an `i64` context.
+    fn reading(source: &str, contexts: &[&str]) -> Self {
         let interner = Interner::new();
-        let compiled = compile_script_at(&interner, source, &FxHashMap::default(), Opt::Full)
+        let context: FxHashMap<_, _> = contexts
+            .iter()
+            .map(|name| (interner.intern(name), Ty::I64))
+            .collect();
+        let compiled = compile_script_at(&interner, source, &context, Opt::Full)
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
         Self {
             listing: dump_with(&interner, &compiled.module),
-            cfg: promote(compiled.module.main),
+            cfg: promote(compiled.module.main.clone()),
+            module: compiled.module,
         }
     }
 
@@ -36,7 +55,8 @@ impl Compiled {
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
         Self {
             listing: dump_with(&interner, &module),
-            cfg: promote(module.main),
+            cfg: promote(module.main.clone()),
+            module,
         }
     }
 
@@ -72,34 +92,69 @@ impl Compiled {
             .collect()
     }
 
-    /// The blocks of each stage, as `validate::stages` reads them: what the
-    /// entry reaches before the next stage's entry or the header.
-    fn stage_blocks(&self) -> Vec<Vec<BlockIdx>> {
+    fn membership(&self) -> StageMembership {
         let header = self.only_header();
-        let entries: Vec<BlockIdx> = self
-            .only_loop()
-            .entries()
-            .map(|entry| self.cfg.label_to_block[&entry])
-            .collect();
-        entries
+        let loops = natural_loops_innermost_first(&self.cfg, &DomTree::build(&self.cfg));
+        StageMembership::of(
+            &self.cfg,
+            header,
+            self.only_loop(),
+            &loop_blocks_of(&loops, header),
+        )
+        .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing))
+    }
+
+    fn stage_blocks(&self) -> Vec<Vec<BlockIdx>> {
+        self.membership()
+            .stages()
             .iter()
-            .enumerate()
-            .map(|(index, &entry)| {
-                let next = entries.get(index + 1).copied();
-                let mut blocks = vec![entry];
-                let mut at = 0;
-                while let Some(&block) = blocks.get(at) {
-                    at += 1;
-                    for succ in self.cfg.successors(block) {
-                        let stops = Some(succ) == next || succ == header;
-                        if !stops && !blocks.contains(&succ) {
-                            blocks.push(succ);
-                        }
-                    }
+            .map(|stage| stage.blocks.clone())
+            .collect()
+    }
+
+    fn refusals_with_every_stage_pure(&self) -> Vec<ValidationErrorKind> {
+        let mut cfg = self.cfg.clone();
+        let header = self.only_header();
+        let Terminator::For { stages, .. } = &mut cfg.blocks[header.0].terminator else {
+            panic!("the header ends in `For`:\n{}", self.listing)
+        };
+        for stage in stages.iter_mut() {
+            *stage = Stage::Pure {
+                entry: stage.entry(),
+            };
+        }
+        let module = MirModule {
+            main: demote(cfg),
+            ..self.module.clone()
+        };
+        acvus_mir::validate::stages::check(&module)
+            .into_iter()
+            .map(|error| error.kind)
+            .collect()
+    }
+
+    fn stages_refused_pure_for(&self, wanted: impl Fn(&PureEffect) -> bool) -> Vec<usize> {
+        self.refusals_with_every_stage_pure()
+            .into_iter()
+            .filter_map(|kind| match kind {
+                ValidationErrorKind::PureStageEffect { stage, effect, .. } if wanted(&effect) => {
+                    Some(stage)
                 }
-                blocks
+                _ => None,
             })
             .collect()
+    }
+
+    fn stages_where(&self, holds: impl Fn(&CfgBody, BlockIdx) -> bool) -> Vec<usize> {
+        let membership = self.membership();
+        let mut stages: Vec<usize> = (0..self.cfg.blocks.len())
+            .map(BlockIdx)
+            .filter(|block| holds(&self.cfg, *block))
+            .filter_map(|block| membership.stage_of(block))
+            .collect();
+        stages.sort_unstable();
+        stages.dedup();
+        stages
     }
 
     /// The stages whose instructions multiply by the word `factor`.
@@ -526,7 +581,12 @@ fn a_counter_expression_an_in_order_join_alone_reads_is_reduced_inside_that_join
          for k in 0..10 { acc = acc * acc + (i * 4 + 7); i = i + 1; } acc",
     );
     let shapes = c.shapes();
-    let Some(Shape::Join { targets, order, law }) = shapes.last() else {
+    let Some(Shape::Join {
+        targets,
+        order,
+        law,
+    }) = shapes.last()
+    else {
         panic!("the chain ends in `acc`'s join: {}", c.for_line());
     };
     assert_eq!(
@@ -540,7 +600,9 @@ fn a_counter_expression_an_in_order_join_alone_reads_is_reduced_inside_that_join
         c.listing
     );
     assert!(
-        shapes[..shapes.len() - 1].iter().all(|shape| *shape == Shape::Pure),
+        shapes[..shapes.len() - 1]
+            .iter()
+            .all(|shape| *shape == Shape::Pure),
         "{}",
         c.for_line()
     );
@@ -551,7 +613,10 @@ fn a_counter_expression_an_in_order_join_alone_reads_is_reduced_inside_that_join
         c.listing
     );
     let [derived] = c.carried_ivs()[..] else {
-        panic!("one carried induction variable, the reduced counter:\n{}", c.listing);
+        panic!(
+            "one carried induction variable, the reduced counter:\n{}",
+            c.listing
+        );
     };
     let join = c.stage_blocks().len() - 1;
     let advanced_in_join = c.stage_blocks()[join].iter().any(|block| {
@@ -598,7 +663,10 @@ fn emit(i: &Interner) -> Vec<Function> {
             requires: vec![],
         },
         ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(i.intern("x"), lift_to_poly(&Ty::I64))],
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
@@ -618,12 +686,12 @@ fn an_ordered_effect_sits_in_an_in_order_join() {
         .enumerate()
         .filter(|(_, blocks)| {
             blocks.iter().any(|block| {
-                c.cfg.blocks[block.0]
-                    .insts
-                    .iter()
-                    .any(|inst| {
-                        matches!(inst.kind, InstKind::FunctionCall { .. } | InstKind::Spawn { .. })
-                    })
+                c.cfg.blocks[block.0].insts.iter().any(|inst| {
+                    matches!(
+                        inst.kind,
+                        InstKind::FunctionCall { .. } | InstKind::Spawn { .. }
+                    )
+                })
             })
         })
         .map(|(index, _)| index)
@@ -662,4 +730,194 @@ fn a_write_elsewhere_than_the_element_is_an_in_order_join_over_its_storage() {
         "{}",
         c.for_line()
     );
+}
+
+// -- One membership, three readers (RFC-0089 rule 1) ---------------------
+//
+// `validate::stages`, `optimize::drop_insertion` and `optimize::lsr` each
+// act on a stage's blocks; each test below reads one stage kind through a
+// reader and holds what it did against `analysis::stages`.
+
+const BREAK: &str = "let j = 0; let s = 0; \
+     for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j";
+
+/// A loop that leaves early is one `InOrder` join and keeps its carried
+/// induction variable; restated pure, the stage that reads it is refused
+/// with `ReadsCarriedIv`, and that is the stage membership puts the reader
+/// in.
+#[test]
+fn a_pure_stage_is_refused_for_a_carried_iv_where_membership_puts_its_reader() {
+    let c = Compiled::reading(BREAK, &["n"]);
+    let [iv] = c.carried_ivs()[..] else {
+        panic!("one carried induction variable:\n{}", c.listing);
+    };
+    let reading = c.stages_where(|cfg, block| {
+        let block = &cfg.blocks[block.0];
+        block
+            .insts
+            .iter()
+            .any(|inst| inst_info::uses(&inst.kind).contains(&iv))
+            || inst_info::terminator_uses(&block.terminator).contains(&iv)
+    });
+    assert!(!reading.is_empty(), "the body reads {iv:?}:\n{}", c.listing);
+    assert_eq!(
+        c.stages_refused_pure_for(|effect| *effect == PureEffect::ReadsCarriedIv(iv)),
+        reading,
+        "{}",
+        c.listing
+    );
+}
+
+/// `lsr` advances the reduced counter at the end of the `InOrder` join that
+/// reads it, which is the block membership ends that join with.
+#[test]
+fn an_in_order_join_s_reduced_counter_advances_at_the_end_membership_gives_it() {
+    let c = Compiled::of(
+        "let i = 0; let acc = 1; for k in 0..10 { acc = acc * acc + (i * 4 + 7); i = i + 1; } acc",
+    );
+    let [derived] = c.carried_ivs()[..] else {
+        panic!(
+            "one carried induction variable, the reduced counter:\n{}",
+            c.listing
+        );
+    };
+    let advances = |cfg: &CfgBody, block: BlockIdx| {
+        cfg.blocks[block.0].insts.iter().any(|inst| {
+            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, .. } if *left == derived)
+        })
+    };
+    let join = c.shapes().len() - 1;
+    assert!(
+        matches!(
+            c.only_loop().iter().nth(join),
+            Some(Stage::Join {
+                order: Order::InOrder,
+                law: None,
+                ..
+            })
+        ),
+        "{}",
+        c.for_line()
+    );
+    assert_eq!(c.stages_where(advances), [join], "{}", c.listing);
+    let end = c.membership().stages()[join]
+        .sole_end()
+        .unwrap_or_else(|| panic!("the join ends in one block:\n{}", c.listing));
+    assert!(advances(&c.cfg, end), "{}", c.listing);
+}
+
+/// A carried value no stage reads dies on the body edge, and
+/// `drop_insertion` releases it at the entry of the join that targets it,
+/// the entry membership gives that join.
+#[test]
+fn an_overwritten_carried_value_is_dropped_at_the_entry_membership_gives_its_join() {
+    let c = Compiled::reading(
+        "let last = \"\".to_string(); for x in 0..@n { last = x.to_string(); } last",
+        &["n"],
+    );
+    let header = c.only_header();
+    let targeted: Vec<(usize, ValueId)> = c
+        .only_loop()
+        .iter()
+        .enumerate()
+        .flat_map(|(index, stage)| match stage {
+            Stage::Join {
+                targets: Targets::Listed(listed),
+                ..
+            } => listed
+                .iter()
+                .filter_map(|target| match target {
+                    Target::Carried(param) => Some((index, *param)),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let [(join, last)] = targeted[..] else {
+        panic!("one join targets one carried value:\n{}", c.listing);
+    };
+    assert!(
+        c.cfg.blocks[header.0].params.contains(&last),
+        "{}",
+        c.listing
+    );
+    let dropped_at: Vec<BlockIdx> = (0..c.cfg.blocks.len())
+        .map(BlockIdx)
+        .filter(|block| {
+            c.cfg.blocks[block.0]
+                .insts
+                .iter()
+                .any(|inst| matches!(&inst.kind, InstKind::Drop { src } if *src == last))
+        })
+        .collect();
+    assert_eq!(
+        dropped_at,
+        [c.membership().stages()[join].blocks[0]],
+        "{}",
+        c.listing
+    );
+}
+
+/// Restated pure, the `AnyOrder` join is refused for holding its target's
+/// update, at the stage membership puts that update in.
+#[test]
+fn an_any_order_join_s_update_is_refused_pure_where_membership_puts_it() {
+    let c = Compiled::of("let v = [1, 2, 3, 4]; let s = 0; for x in &v { s = s + *x; } s");
+    let header = c.only_header();
+    let [s] = c.cfg.blocks[header.0].params[..] else {
+        panic!("the header carries `s` alone:\n{}", c.listing);
+    };
+    assert!(
+        matches!(
+            c.only_loop().iter().last(),
+            Some(Stage::Join {
+                order: Order::AnyOrder,
+                ..
+            })
+        ),
+        "{}",
+        c.for_line()
+    );
+    let updating = c.stages_where(|cfg, block| {
+        cfg.blocks[block.0].insts.iter().any(|inst| {
+            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, right, .. }
+                if *left == s || *right == s)
+        })
+    });
+    assert_eq!(updating, [c.shapes().len() - 1], "{}", c.listing);
+    assert_eq!(
+        c.stages_refused_pure_for(|effect| *effect == PureEffect::ChangesCarried(s)),
+        updating,
+        "{}",
+        c.listing
+    );
+}
+
+/// Restated pure, the `Disjoint` join is refused for its store through the
+/// element, at the stage membership puts that store in.
+#[test]
+fn a_disjoint_join_s_store_is_refused_pure_where_membership_puts_it() {
+    let c = Compiled::of("let v = [1, 2, 3, 4]; for x in &mut v { *x = min(*x, 2); } v[3]");
+    assert_eq!(
+        c.shapes().last(),
+        Some(&join(vec![TargetKind::Element], Order::Disjoint, None)),
+        "{}",
+        c.for_line()
+    );
+    let loans = Loans::build(&c.cfg);
+    let writing = c.stages_where(|cfg, block| {
+        cfg.blocks[block.0].insts.iter().any(|inst| {
+            !effect(&loans, &inst.kind).writes.is_empty()
+                || !slots_lent_mutably(&loans, &inst.kind).is_empty()
+        })
+    });
+    assert_eq!(writing, [c.shapes().len() - 1], "{}", c.listing);
+    let refused = c.stages_refused_pure_for(|effect| {
+        matches!(
+            effect,
+            PureEffect::WritesTarget(_) | PureEffect::LendsTargetMutably(_)
+        )
+    });
+    assert_eq!(refused, writing, "{}", c.listing);
 }

@@ -29,8 +29,8 @@ use acvus_interpreter::{
     SequentialExecutor, Value, prepare_module,
 };
 use acvus_mir::ir::{
-    DebugInfo, ExternInstance, IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, RefTarget,
-    ValueId,
+    DebugInfo, ExternInstance, IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule,
+    RefTarget, ValueId,
 };
 use acvus_mir::ty::{Mutability, Task, Ty, TypeArg};
 use acvus_utils::{Astr, Interner, LocalFactory, LocalIdOps, QualifiedRef};
@@ -427,7 +427,14 @@ fn page(interner: &Interner, n: usize) -> HashMap<String, (Ty, Owned<AcvusRuntim
     ]
     .into_iter()
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    .map(|(name, ty, value)| (name, (ty, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) })))
+    .map(|(name, ty, value)| {
+        (
+            name,
+            (ty, unsafe {
+                Owned::from_value(acvus_extern::Holding::new(), value)
+            }),
+        )
+    })
     .collect()
 }
 
@@ -489,8 +496,10 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
         .map(|name| root(&interner, name))
         .map(|qref| (qref, qref.name))
         .collect();
+    let main = body_of(&interner, shape);
     let module = MirModule {
-        main: body_of(&interner, shape),
+        declared_params: main.params.len(),
+        main,
         closures: FxHashMap::default(),
         ret: Ty::Float,
         flows: acvus_mir::ty::Flows::Every,
@@ -520,7 +529,9 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
         .build()
         .expect("a current-thread tokio runtime");
     let start = Instant::now();
-    let value = runtime.block_on(interpreter.execute()).expect("the page holds every context the run fetches first");
+    let value = runtime
+        .block_on(interpreter.execute())
+        .expect("the page holds every context the run fetches first");
     Timing {
         elapsed: start.elapsed(),
         value: black_box(value.as_float()),

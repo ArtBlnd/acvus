@@ -9,7 +9,9 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Held, HeldInput, Loan, Loans, RegionsAt, Via, held_positions, positions};
+use crate::analysis::loans::{
+    Held, HeldInput, Loan, Loans, RegionsAt, Via, held_positions, positions,
+};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
@@ -64,7 +66,10 @@ fn closure_flows(module: &MirModule) -> FxHashMap<ClosureLabel, Vec<Flows>> {
     let mut made: FxHashMap<ClosureLabel, Vec<Flows>> = FxHashMap::default();
     for body in std::iter::once(&module.main).chain(module.closures.values()) {
         for inst in &body.insts {
-            let InstKind::MakeClosure { dst, body: label, .. } = &inst.kind else {
+            let InstKind::MakeClosure {
+                dst, body: label, ..
+            } = &inst.kind
+            else {
                 continue;
             };
             let flows = match body.val_types.get(dst) {
@@ -198,7 +203,12 @@ impl<'cfg> Checking<'cfg> {
             .iter()
             .enumerate()
             .map(|(index, (_, value))| (FlowEnd::Param(index), *value))
-            .chain(self.cfg().captures.iter().map(|(_, value)| (FlowEnd::Captures, *value)));
+            .chain(
+                self.cfg()
+                    .captures
+                    .iter()
+                    .map(|(_, value)| (FlowEnd::Captures, *value)),
+            );
         for (end, entry) in entries {
             for loan in self.loans.written_into(entry) {
                 outputs.push(Output {
@@ -362,8 +372,13 @@ fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched,
     match kind {
         InstKind::Ref {
             target, mutability, ..
-        } => vec![(Touched::Place(target.clone()), Touch::Reference(*mutability))],
-        InstKind::Take { dst, target, path, .. } => {
+        } => vec![(
+            Touched::Place(target.clone()),
+            Touch::Reference(*mutability),
+        )],
+        InstKind::Take {
+            dst, target, path, ..
+        } => {
             let mut touches = vec![(
                 Touched::Place(target.clone()),
                 Touch::Take {
@@ -375,7 +390,10 @@ fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched,
             {
                 touches.extend(held_positions(slot_ty, path, taken).into_iter().map(
                     |(position, mutability)| {
-                        (Touched::Held { slot, position }, Touch::Reference(mutability))
+                        (
+                            Touched::Held { slot, position },
+                            Touch::Reference(mutability),
+                        )
                     },
                 ));
             }
@@ -468,7 +486,10 @@ fn called_by(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {
     let mut names = vec![callee];
     let mut at = 0;
     while at < names.len() {
-        for slot in loans.holds(names[at]).filter_map(|loan| loan.storage.slot()) {
+        for slot in loans
+            .holds(names[at])
+            .filter_map(|loan| loan.storage.slot())
+        {
             if !names.contains(&slot) {
                 names.push(slot);
             }
@@ -826,6 +847,7 @@ mod tests {
 
     fn module(main: MirBody) -> MirModule {
         MirModule {
+            declared_params: main.params.len(),
             main,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,

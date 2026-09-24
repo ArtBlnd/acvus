@@ -133,7 +133,7 @@ pub enum ValidationErrorKind {
     /// rule 1's.
     StageShape {
         header: Label,
-        fault: crate::validate::stages::ShapeFault,
+        fault: crate::analysis::stages::ShapeFault,
     },
     /// Pure stage `stage` changes a target (RFC-0089 rule 3).
     PureStageEffect {
@@ -2399,6 +2399,7 @@ mod tests {
 
     fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>) -> MirModule {
         MirModule {
+            declared_params: 0,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 insts,

@@ -219,7 +219,13 @@ what the host declared `main` returns (RFC-0054), lifted through the same
 are the `$` inputs the host declared, and `Inputs::Declared` refuses a `$`
 outside them and the bindings (RFC-0054 rule 6). `Inputs::FromReads` makes each
 further `$` the body reads one more parameter, for an analysis that reports
-what a body requires.
+what a body requires. A `$` is one value shared by the graph (RFC-0071 rule 4):
+`FunctionMeta::inputs` lists the ones a function's reachable code reads, an
+entry's declared parameters among them, and a call passes the caller's own `$`
+of each after its positional arguments. After the folds, `graph::optimize`
+removes an input no body reads any more from its module and from every call
+to it (RFC-0071 rule 5), so a module runs with exactly one argument per
+parameter.
 
 ## The pipeline
 

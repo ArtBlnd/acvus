@@ -25,10 +25,15 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::domtree::DomTree;
 use crate::analysis::loans::Loans;
+use crate::analysis::loops::natural_loops_innermost_first;
+use crate::analysis::stages::{StageMembership, loop_blocks_of};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{ExitTrip, Inst, InstKind, Label, Stage, Target, Targets, ValueId};
+use crate::ir::{
+    ExitTrip, ForSource, Inst, InstKind, Label, Stage, Stages, Target, Targets, ValueId,
+};
 use crate::ty::Ty;
 use crate::validate::move_check::{emptied_by, is_move_only};
 
@@ -224,18 +229,34 @@ fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>) -> StageEntries {
     let mut carried_entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut shared: FxHashSet<ValueId> = FxHashSet::default();
-    for (at, block) in cfg.blocks.iter().enumerate() {
-        let Terminator::For { source, stages, .. } = &block.terminator else {
+    let fors: Vec<(BlockIdx, ForSource, &Stages)> = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(at, block)| match &block.terminator {
+            Terminator::For { source, stages, .. } => Some((BlockIdx(at), *source, stages)),
+            _ => None,
+        })
+        .collect();
+    if fors.is_empty() {
+        return StageEntries {
+            targeted: carried_entries,
+            touched: entries,
+        };
+    }
+    let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+    for (header, source, stages) in fors {
+        // A chain with no membership is refused by `validate::stages`, which
+        // reads this pass's output; its values are dropped where the body
+        // begins.
+        let Ok(membership) =
+            StageMembership::of(cfg, header, stages, &loop_blocks_of(&loops, header))
+        else {
             continue;
         };
-        let header = BlockIdx(at);
         let body_params = &cfg.blocks[cfg.label_to_block[&stages.body()].0].params;
-        let stage_entries: Vec<BlockIdx> = stages
-            .entries()
-            .map(|entry| cfg.label_to_block[&entry])
-            .collect();
-        for (index, stage) in stages.iter().enumerate() {
-            let entry = stage_entries[index];
+        for (stage, blocks) in stages.iter().zip(membership.stages()) {
+            let entry = blocks.blocks[0];
             if let Stage::Join {
                 targets: Targets::Listed(targets),
                 ..
@@ -247,10 +268,7 @@ fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>) -> StageEntries {
                     }
                 }
             }
-            let next = stage_entries.get(index + 1).copied().unwrap_or(header);
-            let mut seen: FxHashSet<BlockIdx> = FxHashSet::from_iter([entry]);
-            let mut work = vec![entry];
-            while let Some(held) = work.pop() {
+            for held in &blocks.blocks {
                 for inst in &cfg.blocks[held.0].insts {
                     let effect = loans.storage_effect(&inst.kind);
                     let touched = loans
@@ -269,11 +287,6 @@ fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>) -> StageEntries {
                                 entries.insert(value, entry);
                             }
                         }
-                    }
-                }
-                for succ in cfg.successors(held) {
-                    if succ != next && succ != header && seen.insert(succ) {
-                        work.push(succ);
                     }
                 }
             }

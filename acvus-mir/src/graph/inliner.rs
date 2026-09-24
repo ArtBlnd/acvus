@@ -62,6 +62,7 @@ fn inline_module(
     }
 
     MirModule {
+        declared_params: module.declared_params,
         main: body,
         closures,
         ret: module.ret.clone(),
@@ -304,12 +305,12 @@ fn direct_target<'a>(
     if makes_a_closure(&callee.main) {
         return None;
     }
-    // A `$` the callee reads is an input the host injects rather than an
-    // argument the call carries (RFC-0071 rule 4), so this call supplies
-    // no value for it and the callee is left standing.
-    if callee.main.params.len() > args.len() {
-        return None;
-    }
+    assert_eq!(
+        callee.main.params.len(),
+        args.len(),
+        "a call to {callee_id:?} passes one argument per parameter, its inputs included \
+         (RFC-0071 rule 4)"
+    );
     Some(InlineTarget {
         dst: *dst,
         callee_body: &callee.main,
@@ -1253,6 +1254,7 @@ mod tests {
 
     fn make_module(body: MirBody) -> MirModule {
         MirModule {
+            declared_params: body.params.len(),
             main: body,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
@@ -1580,6 +1582,7 @@ mod tests {
         );
 
         MirModule {
+            declared_params: main.params.len(),
             main,
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: crate::ty::Ty::Unit,

@@ -12,14 +12,16 @@ use crate::error::OperatorSignature;
 use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, ExitTrip, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess,
-    IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, Stages, SwitchKey,
-    ValOrigin, ValueId, reaches,
+    IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg,
+    RefTarget, Stages, SwitchKey, ValOrigin, ValueId, reaches,
 };
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
 use crate::solver::{CaptureRead, MatchMode};
 use crate::structural::StructuralSignature;
-use crate::ty::{CastTy, Effect, Mutability, Task, Ty, TypeArg};
-use crate::typeck::{CallTarget, CapturedName, Passing, StructuralCall, TypeResolution};
+use crate::ty::{CastTy, Effect, InputParam, Mutability, Param, Task, Ty, TypeArg};
+use crate::typeck::{
+    CallTarget, CapturedName, ParamOrigin, Passing, StructuralCall, TypeResolution,
+};
 
 /// The name of a template's accumulator. A source name cannot collide with
 /// it: the lexer admits no `<` in an identifier.
@@ -64,6 +66,7 @@ pub struct Lowerer<'a> {
     /// `break` jumps to the last one's exit and a `continue` to its header
     /// (RFC-0057 rule 4).
     loops: Vec<Loop>,
+    callee_inputs: &'a FxHashMap<QualifiedRef, Vec<InputParam>>,
 }
 
 /// Where the innermost loop's two jumps go.
@@ -403,7 +406,12 @@ fn test_reads_a_part(pattern: &Pattern) -> bool {
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(interner: &'a Interner, resolution: Freeze<TypeResolution>, ret: Ty) -> Self {
+    pub fn new(
+        interner: &'a Interner,
+        resolution: Freeze<TypeResolution>,
+        ret: Ty,
+        callee_inputs: &'a FxHashMap<QualifiedRef, Vec<InputParam>>,
+    ) -> Self {
         let coercion_lookup: FxHashMap<AstId, CastKind> =
             resolution.coercion_map.iter().cloned().collect();
         let initial_scope = FxHashMap::default();
@@ -412,10 +420,10 @@ impl<'a> Lowerer<'a> {
         // Allocate param_regs for extern params (LLVM-style: params are SSA values).
         // param_regs[i] holds the initial value of extern_params[i].
         // SSA will use these as entry definitions instead of Ref+Load.
-        for (name, ty) in &resolution.extern_params {
+        for param in &resolution.extern_params {
             let reg = body.val_factory.next();
-            body.val_types.insert(reg, ty.clone());
-            body.params.push((*name, reg));
+            body.val_types.insert(reg, param.ty.clone());
+            body.params.push((param.name, reg));
         }
         body.task = resolution.effect.task;
 
@@ -436,6 +444,7 @@ impl<'a> Lowerer<'a> {
             main_fetches: Vec::new(),
             taken_out: Vec::new(),
             loops: Vec::new(),
+            callee_inputs,
         }
     }
 
@@ -1593,7 +1602,14 @@ impl<'a> Lowerer<'a> {
     }
 
     fn build_module(self) -> MirModule {
+        let declared_params = self
+            .resolution
+            .extern_params
+            .iter()
+            .take_while(|param| param.origin == ParamOrigin::Declared)
+            .count();
         MirModule {
+            declared_params,
             main: self.body,
             closures: self.closures,
             ret: self.ret,
@@ -1984,6 +2000,60 @@ impl<'a> Lowerer<'a> {
     fn var_slot(&mut self, name: Astr) -> ValueId {
         self.lookup_var_slot(name)
             .unwrap_or_else(|| panic!("variable {:?} used before it is bound", name))
+    }
+
+    /// `$name` at `ty`: the body's parameter, or inside a lambda the capture
+    /// the checker recorded for it.
+    fn read_input(&mut self, name: Astr, ty: Ty, span: Span) -> ValueId {
+        if let Some(param_reg) = self.try_param_slot(name) {
+            let dst = self.emit_take(span, RefTarget::Param(param_reg), vec![], ty);
+            self.set_origin(dst, ValOrigin::ExternParam(name));
+            return dst;
+        }
+        let slot = self.var_slot(name);
+        let dst = self.emit_take(span, RefTarget::Var(slot), vec![], ty);
+        self.set_origin(dst, ValOrigin::Named(name));
+        dst
+    }
+
+    /// A call to a local function passes, after its arguments, the caller's
+    /// own `$` of each input the callee's final signature lists
+    /// (RFC-0071 rule 4); the checker read each one at the call.
+    fn pass_inputs(
+        &mut self,
+        callee: &Callee,
+        callee_ty: Ty,
+        call: &mut CallArgs,
+        span: Span,
+    ) -> Ty {
+        let Callee::Direct(qref) = callee else {
+            return callee_ty;
+        };
+        let inputs = self.callee_inputs.get(qref).unwrap_or_else(|| {
+            panic!("the local function {qref:?} a call settled on was inferred")
+        });
+        let Ty::Fn {
+            mut params,
+            ret,
+            captures,
+            effect,
+            flows,
+        } = callee_ty
+        else {
+            panic!("a call to {qref:?} is typed by its function type, not {callee_ty:?}")
+        };
+        for input in inputs {
+            let passed = self.read_input(input.name, input.ty.clone(), span);
+            call.values.push(passed);
+            params.push(Param::new(input.name, input.ty.clone()));
+        }
+        Ty::Fn {
+            params,
+            ret,
+            captures,
+            effect,
+            flows,
+        }
     }
 
     /// Look up the param_reg for an extern parameter by name.
@@ -2405,25 +2475,7 @@ impl<'a> Lowerer<'a> {
             } => match ref_kind {
                 RefKind::ExternParam => {
                     let ty = self.type_of_id(*id);
-                    // Try current body's params first. If not found (e.g., inside a
-                    // lambda that captured this param as a regular variable), fall
-                    // through to local variable lookup.
-                    if let Some(param_reg) = self.try_param_slot(name.name) {
-                        let dst = self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
-                        self.set_origin(dst, ValOrigin::ExternParam(name.name));
-                        dst
-                    } else if self.is_defined(name.name) {
-                        let slot = self.var_slot(name.name);
-                        let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], ty);
-                        self.set_origin(dst, ValOrigin::Named(name.name));
-                        dst
-                    } else {
-                        // Not found - emit poison (should be caught by typeck).
-                        let dst = self.alloc_val();
-                        self.set_val_type(dst, ty);
-                        self.emit_inst(*span, InstKind::Poison { dst });
-                        dst
-                    }
+                    self.read_input(name.name, ty, *span)
                 }
                 RefKind::Value => {
                     if !self.is_defined(name.name) {
@@ -3429,6 +3481,7 @@ impl<'a> Lowerer<'a> {
         match target {
             Some(CallTarget::Declared(callee)) => {
                 self.set_origin(dst, ValOrigin::Call(callee.id().name));
+                let callee_ty = self.pass_inputs(&callee, callee_ty, &mut call, call_span);
                 self.emit_call_with(call_span, dst, callee, callee_ty, call);
             }
             Some(CallTarget::Binding) => {
@@ -3513,7 +3566,7 @@ impl<'a> Lowerer<'a> {
             );
             return dst;
         }
-        let call = self.lower_call_args(written.iter().copied());
+        let mut call = self.lower_call_args(written.iter().copied());
         let dst = self.alloc_typed(call_id);
 
         // Named function call (Ident).
@@ -3532,6 +3585,8 @@ impl<'a> Lowerer<'a> {
                     match target {
                         Some(CallTarget::Declared(callee)) => {
                             let callee_ty = self.type_of_id(func.id());
+                            let callee_ty =
+                                self.pass_inputs(&callee, callee_ty, &mut call, call_span);
                             self.emit_call_with(call_span, dst, callee, callee_ty, call);
                         }
                         Some(CallTarget::Binding) => {
@@ -3754,7 +3809,13 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
-    fn project_payload(&mut self, src: &PatSrc, tag: Astr, payload: &Pattern, span: Span) -> PatSrc {
+    fn project_payload(
+        &mut self,
+        src: &PatSrc,
+        tag: Astr,
+        payload: &Pattern,
+        span: Span,
+    ) -> PatSrc {
         let ty = self.payload_type(src.ty(), tag);
         match src {
             PatSrc::Placed(placed) => {
@@ -3793,7 +3854,14 @@ impl<'a> Lowerer<'a> {
     /// The part at `seg` of `src`, as the member `pattern` reads it. A
     /// member the checker read through is a reference, which is read out
     /// of its storage, so no `&&T` is formed (RFC-0029 rule 3).
-    fn project_member(&mut self, src: &Placed, seg: PathSeg, ty: Ty, pattern: &Pattern, span: Span) -> Placed {
+    fn project_member(
+        &mut self,
+        src: &Placed,
+        seg: PathSeg,
+        ty: Ty,
+        pattern: &Pattern,
+        span: Span,
+    ) -> Placed {
         match self.member_mode(pattern) {
             MatchMode::Value => self.project(src, seg, ty, span),
             MatchMode::Through => {

@@ -77,7 +77,7 @@
 //! rewritten through memory are all outside the pattern and stay as they
 //! are.
 
-use acvus_ast::Span;
+use acvus_ast::{Literal, Span};
 
 use crate::ir::BinOp;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -86,6 +86,7 @@ use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loops::{Invariant, Invariants, LoopNest, NaturalLoop, edge_args};
+use crate::analysis::stages::StageMembership;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
     ForSource, Inst, InstKind, Label, Order, Stage, Target, Targets, ValOrigin, ValueId,
@@ -117,7 +118,7 @@ pub fn run(cfg: &mut CfgBody) {
         }
         .candidates();
         for reduction in reductions {
-            apply(cfg, &frame, &chain, &reduction);
+            apply(cfg, &invariants, &frame, &chain, &reduction);
         }
     }
 }
@@ -156,80 +157,47 @@ impl Frame {
 
 // -- The stages ------------------------------------------------------
 
-/// A `for`'s stages as blocks: each stage's blocks, and the block that
-/// ends it, which jumps to the next stage's entry or, for the last, is the
-/// latch.
 struct Chain {
     source: ForSource,
-    stages: Vec<StageBlocks>,
-}
-
-struct StageBlocks {
-    /// An `InOrder` join with no law: the only stage a reduction's readers
-    /// may sit in.
-    reducible: bool,
-    blocks: Vec<BlockIdx>,
-    last: BlockIdx,
+    membership: StageMembership,
+    ends: Vec<BlockIdx>,
+    reducible: Vec<bool>,
 }
 
 impl Chain {
     fn of(cfg: &CfgBody, loop_: &NaturalLoop, frame: &Frame) -> Option<Chain> {
-        let Terminator::For { source, stages, .. } = &cfg.blocks[frame.header.0].terminator
-        else {
+        let Terminator::For { source, stages, .. } = &cfg.blocks[frame.header.0].terminator else {
             return None;
         };
-        let entries: Vec<BlockIdx> = stages
-            .entries()
-            .map(|entry| cfg.label_to_block.get(&entry).copied())
-            .collect::<Option<_>>()?;
-        let mut found = Vec::with_capacity(entries.len());
-        for (index, stage) in stages.iter().enumerate() {
-            let entry = entries[index];
-            let next = entries.get(index + 1).copied();
-            let mut blocks = vec![entry];
-            let mut work = vec![entry];
-            let mut seen: FxHashSet<BlockIdx> = FxHashSet::from_iter([entry]);
-            let mut ends: Vec<BlockIdx> = Vec::new();
-            while let Some(block) = work.pop() {
-                for succ in cfg.successors(block) {
-                    if Some(succ) == next || (next.is_none() && succ == frame.header) {
-                        ends.push(block);
-                        continue;
-                    }
-                    let within = loop_.contains(succ) && succ != frame.header;
-                    if within && !entries.contains(&succ) && seen.insert(succ) {
-                        blocks.push(succ);
-                        work.push(succ);
-                    }
-                }
-            }
-            let [last] = ends[..] else {
-                return None;
-            };
-            let reducible = matches!(
-                stage,
-                Stage::Join {
-                    order: Order::InOrder,
-                    law: None,
-                    ..
-                }
-            );
-            found.push(StageBlocks {
-                reducible,
-                blocks,
-                last,
-            });
-        }
-        (found.last()?.last == frame.latch).then_some(Chain {
-            source: *source,
-            stages: found,
-        })
-    }
-
-    fn stage_of(&self, block: BlockIdx) -> Option<usize> {
-        self.stages
+        let loop_blocks: Vec<BlockIdx> = loop_.blocks().collect();
+        let membership = StageMembership::of(cfg, frame.header, stages, &loop_blocks).ok()?;
+        let ends: Vec<BlockIdx> = membership
+            .stages()
             .iter()
-            .position(|stage| stage.blocks.contains(&block))
+            .map(|stage| stage.sole_end())
+            .collect::<Option<_>>()?;
+        if ends.last() != Some(&frame.latch) {
+            return None;
+        }
+        let reducible = stages
+            .iter()
+            .map(|stage| {
+                matches!(
+                    stage,
+                    Stage::Join {
+                        order: Order::InOrder,
+                        law: None,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        Some(Chain {
+            source: *source,
+            membership,
+            ends,
+            reducible,
+        })
     }
 }
 
@@ -374,10 +342,10 @@ impl Scope<'_> {
             .get(&value)
             .into_iter()
             .flatten()
-            .map(|block| self.chain.stage_of(*block));
+            .map(|block| self.chain.membership.stage_of(*block));
         let join = stages.next()??;
         let one = stages.all(|stage| stage == Some(join));
-        (one && self.chain.stages[join].reducible).then_some(join)
+        (one && self.chain.reducible[join]).then_some(join)
     }
 
     fn counted(&self, iv: ValueId) -> Option<Counted> {
@@ -495,13 +463,31 @@ impl Scope<'_> {
 
 // -- Applying one reduction ------------------------------------------
 
-/// The fresh values one reduction adds, and the instructions that give a
-/// re-emitted word a register above the header.
+#[derive(Clone)]
+enum SetupOperand {
+    Value(ValueId),
+    Int {
+        value: i128,
+        literal: Literal,
+        held: Option<ValueId>,
+    },
+}
+
+impl SetupOperand {
+    fn is(&self, int: i128) -> bool {
+        matches!(self, SetupOperand::Int { value, .. } if *value == int)
+    }
+}
+
+/// No value numbering runs after this pass (RFC-0056), so the start and the
+/// step are written folded where an operand is the integer 0 or 1.
 struct Emit<'a> {
     cfg: &'a mut CfgBody,
+    invariants: &'a Invariants,
     ty: Ty,
     span: Span,
-    preamble: Vec<Inst>,
+    words: Vec<Inst>,
+    setup: Vec<Inst>,
 }
 
 impl Emit<'_> {
@@ -516,16 +502,57 @@ impl Emit<'_> {
         value
     }
 
-    fn read(&mut self, invariant: &Invariant) -> ValueId {
+    fn held(&self, value: ValueId) -> SetupOperand {
+        match self
+            .invariants
+            .word(value)
+            .map(|literal| (literal.desugared(), literal))
+        {
+            Some((Literal::Int(int), literal)) => SetupOperand::Int {
+                value: int,
+                literal: literal.clone(),
+                held: Some(value),
+            },
+            _ => SetupOperand::Value(value),
+        }
+    }
+
+    fn term(&self, invariant: &Invariant) -> SetupOperand {
         match invariant {
-            Invariant::Outside(value) => *value,
-            Invariant::Word(literal) => {
+            Invariant::Outside(value) => self.held(*value),
+            Invariant::Word(literal) => match literal.desugared() {
+                Literal::Int(int) => SetupOperand::Int {
+                    value: int,
+                    literal: literal.clone(),
+                    held: None,
+                },
+                _ => panic!(
+                    "a reduced counter's operand is an integer word (`exact_under_wrapping`), \
+                     not {literal:?}"
+                ),
+            },
+        }
+    }
+
+    fn value(&mut self, term: SetupOperand) -> ValueId {
+        match term {
+            SetupOperand::Value(value)
+            | SetupOperand::Int {
+                held: Some(value), ..
+            } => value,
+            SetupOperand::Int {
+                literal,
+                held: None,
+                ..
+            } => {
                 let dst = self.fresh();
-                let value = literal.clone();
                 let span = self.span;
-                self.preamble.push(Inst {
+                self.words.push(Inst {
                     span,
-                    kind: InstKind::Const { dst, value },
+                    kind: InstKind::Const {
+                        dst,
+                        value: literal,
+                    },
                 });
                 dst
             }
@@ -547,37 +574,68 @@ impl Emit<'_> {
             },
         )
     }
+
+    fn setup(&mut self, op: BinOp, left: SetupOperand, right: SetupOperand) -> SetupOperand {
+        let left = self.value(left);
+        let right = self.value(right);
+        let (dst, inst) = self.arith(op, left, right);
+        self.setup.push(inst);
+        SetupOperand::Value(dst)
+    }
+
+    fn mul(&mut self, left: SetupOperand, right: SetupOperand) -> SetupOperand {
+        match (left, right) {
+            (zero, _) | (_, zero) if zero.is(0) => zero,
+            (one, other) | (other, one) if one.is(1) => other,
+            (left, right) => self.setup(BinOp::Mul, left, right),
+        }
+    }
+
+    fn add(&mut self, left: SetupOperand, right: SetupOperand) -> SetupOperand {
+        match (left, right) {
+            (zero, other) | (other, zero) if zero.is(0) => other,
+            (left, right) => self.setup(BinOp::Add, left, right),
+        }
+    }
 }
 
-fn apply(cfg: &mut CfgBody, frame: &Frame, chain: &Chain, reduction: &Reduction) {
+fn apply(
+    cfg: &mut CfgBody,
+    invariants: &Invariants,
+    frame: &Frame,
+    chain: &Chain,
+    reduction: &Reduction,
+) {
     let mut emit = Emit {
         cfg,
+        invariants,
         ty: reduction.ty.clone(),
         span: reduction.span,
-        preamble: Vec::new(),
+        words: Vec::new(),
+        setup: Vec::new(),
     };
     let derived = emit.fresh();
-    let factor = emit.read(&reduction.factor);
-    let offset = emit.read(&reduction.offset);
-    let mut preheader_insts: Vec<Inst> = Vec::new();
+    let factor = emit.term(&reduction.factor);
+    let offset = emit.term(&reduction.offset);
     let (step, start) = match &reduction.counted {
         Counted::Carried { init, step } => {
-            let iv_step = emit.read(step);
-            let (step, step_inst) = emit.arith(BinOp::Mul, iv_step, factor);
-            let (start_product, start_product_inst) = emit.arith(BinOp::Mul, *init, factor);
-            let (start, start_inst) = emit.arith(BinOp::Add, start_product, offset);
-            preheader_insts.extend([step_inst, start_product_inst, start_inst]);
-            (step, start)
+            let iv_step = emit.term(step);
+            let step = emit.mul(iv_step, factor.clone());
+            let init = emit.held(*init);
+            let start_product = emit.mul(init, factor);
+            (step, emit.add(start_product, offset))
         }
         Counted::Range { at } => {
-            let (start_product, start_product_inst) = emit.arith(BinOp::Mul, *at, factor);
-            let (start, start_inst) = emit.arith(BinOp::Add, start_product, offset);
-            preheader_insts.extend([start_product_inst, start_inst]);
-            (factor, start)
+            let at = emit.held(*at);
+            let start_product = emit.mul(at, factor.clone());
+            (factor, emit.add(start_product, offset))
         }
         Counted::Index => (factor, offset),
     };
-    preheader_insts.splice(0..0, std::mem::take(&mut emit.preamble));
+    let step = emit.value(step);
+    let start = emit.value(start);
+    let mut preheader_insts = std::mem::take(&mut emit.words);
+    preheader_insts.append(&mut emit.setup);
     let (advanced, advanced_inst) = emit.arith(BinOp::Add, derived, step);
 
     let preheader = &mut cfg.blocks[frame.preheader.0];
@@ -586,17 +644,23 @@ fn apply(cfg: &mut CfgBody, frame: &Frame, chain: &Chain, reduction: &Reduction)
 
     cfg.blocks[frame.header.0].params.push(derived);
     let Terminator::For { stages, .. } = &mut cfg.blocks[frame.header.0].terminator else {
-        panic!("block {} is a `for` header and does not end in `For`", frame.header.0)
+        panic!(
+            "block {} is a `for` header and does not end in `For`",
+            frame.header.0
+        )
     };
     let Some(Stage::Join { targets, .. }) = stages.iter_mut().nth(reduction.join) else {
-        panic!("stage {} of the chain is the join the reduction reads in", reduction.join)
+        panic!(
+            "stage {} of the chain is the join the reduction reads in",
+            reduction.join
+        )
     };
     match targets {
         Targets::Everything => {}
         Targets::Listed(listed) => listed.push(Target::Carried(derived)),
     }
 
-    let ends_join = chain.stages[reduction.join].last;
+    let ends_join = chain.ends[reduction.join];
     cfg.blocks[ends_join.0].insts.push(advanced_inst);
     let latch = &mut cfg.blocks[frame.latch.0];
     sole_edge_args_mut(&mut latch.terminator, frame.header_label).push(advanced);

@@ -14,6 +14,9 @@ use acvus_interpreter::listing::{BlockListing, RegionListing, ops_of_anywhere, r
 use acvus_interpreter_test::corpus::{self, Outcome, Stage};
 use acvus_interpreter_test::listing::{script_listing, script_listing_with_externs};
 use acvus_interpreter_test::*;
+use acvus_mir::analysis::domtree::DomTree;
+use acvus_mir::analysis::loops::natural_loops_innermost_first;
+use acvus_mir::analysis::stages::{StageMembership, loop_blocks_of};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
@@ -732,41 +735,41 @@ async fn an_owned_element_one_part_reads_is_released_once_in_that_part() {
     let module = &compiled.modules[&compiled.entry_qref];
     let mir = acvus_mir::printer::dump_with(&i, module);
     let cfg = acvus_mir::cfg::promote(module.main.clone());
-    let Some((header, stages)) = cfg.blocks.iter().find_map(|block| match &block.terminator {
-        acvus_mir::cfg::Terminator::For { stages, .. } => Some((block.label, stages)),
-        _ => None,
-    }) else {
+    let Some((header, stages)) = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(at, block)| match &block.terminator {
+            acvus_mir::cfg::Terminator::For { stages, .. } => {
+                Some((acvus_mir::cfg::BlockIdx(at), stages))
+            }
+            _ => None,
+        })
+    else {
         panic!("the loop states its stages:\n{mir}")
     };
-    let entries: Vec<usize> = stages
-        .entries()
-        .map(|entry| cfg.label_to_block[&entry].0)
-        .collect();
-    let reads_the_element: Vec<usize> = (0..entries.len())
-        .filter(|&stage| {
-            let end = entries.get(stage + 1).copied().unwrap_or(cfg.blocks.len());
-            (entries[stage]..end).any(|at| {
-                cfg.blocks[at].insts.iter().any(|inst| {
-                    matches!(&inst.kind, acvus_mir::ir::InstKind::FunctionCall { .. })
+    let loops = natural_loops_innermost_first(&cfg, &DomTree::build(&cfg));
+    let membership = StageMembership::of(&cfg, header, stages, &loop_blocks_of(&loops, header))
+        .unwrap_or_else(|fault| panic!("{}:\n{mir}", fault.shown()));
+    let stages_holding = |holds: fn(&acvus_mir::ir::InstKind) -> bool| -> Vec<usize> {
+        membership
+            .stages()
+            .iter()
+            .enumerate()
+            .filter(|(_, stage)| {
+                stage.blocks.iter().any(|block| {
+                    cfg.blocks[block.0]
+                        .insts
+                        .iter()
+                        .any(|inst| holds(&inst.kind))
                 })
             })
-        })
-        .collect();
-    let latch = (entries[0]..cfg.blocks.len())
-        .find(|at| {
-            matches!(&cfg.blocks[*at].terminator,
-                acvus_mir::cfg::Terminator::Jump { label, .. } if *label == header)
-        })
-        .expect("the last stage jumps back to the header");
-    let dropped_in: Vec<usize> = (entries[0]..=latch)
-        .filter(|at| {
-            cfg.blocks[*at]
-                .insts
-                .iter()
-                .any(|inst| matches!(inst.kind, acvus_mir::ir::InstKind::Drop { .. }))
-        })
-        .map(|at| entries.iter().rposition(|entry| *entry <= at).unwrap_or(0))
-        .collect();
+            .map(|(index, _)| index)
+            .collect()
+    };
+    let reads_the_element =
+        stages_holding(|kind| matches!(kind, acvus_mir::ir::InstKind::FunctionCall { .. }));
+    let dropped_in = stages_holding(|kind| matches!(kind, acvus_mir::ir::InstKind::Drop { .. }));
     assert_eq!(dropped_in, reads_the_element, "{mir}");
 }
 

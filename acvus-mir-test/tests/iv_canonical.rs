@@ -7,7 +7,6 @@
 //! level gives it; that corpus says the shape computes the same number.
 
 use acvus_ast::{Literal, Span};
-use acvus_mir::ir::BinOp;
 use acvus_mir::analysis::affine::{AffineValues, for_body};
 use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp};
 use acvus_mir::analysis::domtree::DomTree;
@@ -16,13 +15,14 @@ use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
+use acvus_mir::ir::BinOp;
 use acvus_mir::ir::{
     ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
 };
+use acvus_mir::laws::LawTable;
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{CastTy, IntTy, Ty};
 use acvus_mir::validate::type_check::{ValidationErrorKind, check_types};
-use acvus_mir::laws::LawTable;
 use acvus_mir_test::compile_script_at;
 use acvus_utils::{Astr, Interner, LocalFactory};
 use rustc_hash::FxHashMap;
@@ -223,7 +223,12 @@ fn a_second_counter_is_computed_from_the_first() {
     let body = for_body(&full.cfg, loop_.natural.header);
     let counter = full.cfg.blocks[body.0].params[0];
     let insts = full.insts(body);
-    assert_eq!(full.word(at), Some(0), "the range starts at 0:\n{}", full.listing);
+    assert_eq!(
+        full.word(at),
+        Some(0),
+        "the range starts at 0:\n{}",
+        full.listing
+    );
     let subtracts = insts
         .iter()
         .any(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Sub, .. }));
@@ -358,7 +363,12 @@ fn each_loop_computes_its_ivs_from_its_counter_and_reduces_only_in_an_in_order_j
     let [first, second] = after[..] else {
         panic!("two loops:\n{}", full.listing);
     };
-    assert_eq!(full.ivs(first), 0, "the first loop carries only its sum:\n{}", full.listing);
+    assert_eq!(
+        full.ivs(first),
+        0,
+        "the first loop carries only its sum:\n{}",
+        full.listing
+    );
     assert_eq!(full.exit_trip(first), ExitTrip::Defined);
     assert_eq!(
         full.ivs(second),
@@ -435,7 +445,13 @@ fn a_while_is_untouched() {
 
 #[test]
 fn no_level_below_full_asks_for_a_count() {
-    for source in [SECOND_COUNTER, MERGE, BOTH, SUM_INSIDE_AN_ELEMENT_LOOP, SUM_INSIDE_A_RECURRENCE] {
+    for source in [
+        SECOND_COUNTER,
+        MERGE,
+        BOTH,
+        SUM_INSIDE_AN_ELEMENT_LOOP,
+        SUM_INSIDE_A_RECURRENCE,
+    ] {
         let none = Compiled::of(source, Opt::None);
         for loop_ in none.loops_by_header() {
             if matches!(loop_.kind, LoopKind::For { .. }) {
@@ -537,6 +553,7 @@ fn hand_built(trip_ty: Ty, entries: ExitEntries) -> MirModule {
         }),
     ]);
     MirModule {
+        declared_params: 0,
         main: MirBody {
             insts,
             val_types,

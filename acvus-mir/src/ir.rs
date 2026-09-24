@@ -1272,6 +1272,12 @@ impl MirBody {
 
 #[derive(Debug, Clone)]
 pub struct MirModule {
+    /// How many of `main.params`, first, the function's declaration names:
+    /// a call or a run passes them whether or not the body reads them. The
+    /// rest are inputs the body reads (RFC-0071 rule 4), and one it no longer
+    /// reads after the folds is not required and is no parameter
+    /// (RFC-0071 rule 5).
+    pub declared_params: usize,
     pub main: MirBody,
     pub closures: FxHashMap<Label, MirBody>,
     /// The `ret` of the graph `Function` this module is the body of; for the

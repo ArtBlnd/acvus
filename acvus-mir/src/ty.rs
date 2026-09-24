@@ -2645,6 +2645,16 @@ pub struct TypeEnv {
     /// resolves over `functions` alone, and the only way one of these
     /// reaches a script is `signature_set` offering it back deliberately.
     pub machine: FxHashMap<QualifiedRef, MachineCoercion>,
+    /// Each local function's inputs, which a call passes from the caller's
+    /// own `$` of each name (RFC-0071 rule 4).
+    pub inputs: FxHashMap<QualifiedRef, Vec<InputParam>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputParam {
+    pub name: Astr,
+    pub ty: Ty,
+    pub reader: QualifiedRef,
 }
 
 #[derive(Debug, Clone)]
@@ -2818,6 +2828,7 @@ impl TypeEnv {
             contexts: FxHashMap::default(),
             functions: FxHashMap::default(),
             machine: FxHashMap::default(),
+            inputs: FxHashMap::default(),
         }
     }
 }

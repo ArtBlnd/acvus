@@ -626,7 +626,9 @@ states. How either runs is the lowerer's (RFC-0066 rule 10).
    the loop. It reads the element, the counter, values from outside the
    loop and values earlier stages defined, through shared borrows.
    `validate` refuses a pure stage that breaks this, from stage membership
-   and `analysis::loans`; nothing else about purity is assumed.
+   and `analysis::loans`; nothing else about purity is assumed. Membership is
+   one analysis, `analysis::stages`, which `validate`, the drops and
+   strength reduction read.
 
 4. **A join is the smallest slice that touches a target.** It starts at
    each instruction that reads a target's state, such as a `pop`, and holds

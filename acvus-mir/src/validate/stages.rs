@@ -20,7 +20,8 @@ use crate::analysis::carried::carries_order;
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::{Invariants, LoopNest, NaturalLoop, natural_loops_innermost_first};
+use crate::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
+use crate::analysis::stages::{ShapeFault, StageMembership, loop_blocks_of};
 use crate::analysis::targets::{TargetSlots, effect, slots_lent_mutably};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{
@@ -29,37 +30,6 @@ use crate::ir::{
 };
 use crate::ty::{Mutability, Ty};
 use crate::validate::{ValidationError, ValidationErrorKind};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShapeFault {
-    EntryNamesNoBlock,
-    BodyParams,
-    StageEntryEnteredElsewhere,
-    StagesOverlap,
-    StageDoesNotReachNext,
-    EverythingInAChain,
-    CarriedTargetIsNoHeaderParam,
-}
-
-impl ShapeFault {
-    pub fn shown(self) -> &'static str {
-        match self {
-            Self::EntryNamesNoBlock => "a stage's entry names no block",
-            Self::BodyParams => "its body block's parameters are not the element and the counter",
-            Self::StageEntryEnteredElsewhere => {
-                "a stage's entry is entered other than from the stage before it"
-            }
-            Self::StagesOverlap => "a block lies in two stages",
-            Self::StageDoesNotReachNext => {
-                "a stage does not end in one jump to the next stage's entry"
-            }
-            Self::EverythingInAChain => {
-                "a join over everything the body touches is not its one `InOrder` stage"
-            }
-            Self::CarriedTargetIsNoHeaderParam => "a carried target is not a header parameter",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PureEffect {
@@ -198,15 +168,6 @@ fn check_body(scope: &str, body: &MirBody) -> Vec<ValidationError> {
     errors
 }
 
-/// The blocks of the loop `header` heads. A header no back edge reaches is
-/// a loop of its own block alone: its body never runs twice.
-fn loop_blocks_of(loops: &[NaturalLoop], header: BlockIdx) -> Vec<BlockIdx> {
-    match loops.iter().find(|loop_| loop_.header == header) {
-        Some(loop_) => loop_.blocks().collect(),
-        None => vec![header],
-    }
-}
-
 /// One edge of a terminator: its target, the arguments it passes, and how
 /// many of the target's leading parameters the terminator fills itself.
 struct Edge<'a> {
@@ -283,10 +244,10 @@ struct Chain<'a> {
     carried_ivs: Vec<ValueId>,
 }
 
-/// The stage chain once its shape holds: each stage's blocks, entry first.
+/// The stage chain once its shape holds.
 struct Form<'a> {
     chain: &'a Chain<'a>,
-    regions: Vec<Vec<BlockIdx>>,
+    membership: StageMembership,
     slots: TargetSlots,
     back_edges: Vec<Vec<ValueId>>,
     cycles: Vec<CarriedCycle>,
@@ -321,10 +282,12 @@ impl<'a> Chain<'a> {
         if self.cfg.blocks[body.0].params.len() != self.source.supplied_params() {
             return vec![shape(ShapeFault::BodyParams)];
         }
-        let regions = match self.regions() {
-            Ok(regions) => regions,
-            Err(fault) => return vec![shape(fault)],
-        };
+        let membership =
+            match StageMembership::of(self.cfg, self.header, self.stages, &self.loop_blocks) {
+                Ok(membership) => membership,
+                Err(fault) => return vec![shape(fault)],
+            };
+
         let back_edges: Vec<Vec<ValueId>> = self
             .loop_blocks
             .iter()
@@ -337,7 +300,7 @@ impl<'a> Chain<'a> {
             slots: TargetSlots::of(self.loans, self.source, &self.loop_blocks),
             cycles: self.carried_cycles(&back_edges),
             back_edges,
-            regions,
+            membership,
         };
         let mut refusals = form.leaves();
         refusals.extend(form.pure_effects());
@@ -368,75 +331,6 @@ impl<'a> Chain<'a> {
             }
         }
         None
-    }
-
-    /// Each stage's blocks, entry first and its last block last: what its
-    /// entry reaches inside the loop before the next stage's entry or the
-    /// header.
-    fn regions(&self) -> Result<Vec<Vec<BlockIdx>>, ShapeFault> {
-        let entries: Vec<BlockIdx> = self
-            .stages
-            .entries()
-            .map(|entry| {
-                self.cfg
-                    .label_to_block
-                    .get(&entry)
-                    .copied()
-                    .ok_or(ShapeFault::EntryNamesNoBlock)
-            })
-            .collect::<Result<_, _>>()?;
-        let preds = self.cfg.predecessors();
-        let inside = |block: BlockIdx| self.loop_blocks.contains(&block);
-        let mut claimed: FxHashSet<BlockIdx> = FxHashSet::default();
-        let mut regions = Vec::with_capacity(entries.len());
-        for (index, &entry) in entries.iter().enumerate() {
-            let next = entries.get(index + 1).copied();
-            let mut region = vec![entry];
-            let mut work = vec![entry];
-            let mut seen: FxHashSet<BlockIdx> = FxHashSet::from_iter([entry]);
-            let mut reaching_next: Vec<BlockIdx> = Vec::new();
-            while let Some(block) = work.pop() {
-                for succ in self.cfg.successors(block) {
-                    if Some(succ) == next {
-                        reaching_next.push(block);
-                        continue;
-                    }
-                    let within = inside(succ) && succ != self.header;
-                    if !within || entries.contains(&succ) || !seen.insert(succ) {
-                        continue;
-                    }
-                    region.push(succ);
-                    work.push(succ);
-                }
-            }
-            if let Some(next) = next {
-                let [last] = reaching_next[..] else {
-                    return Err(ShapeFault::StageDoesNotReachNext);
-                };
-                let jumps_on = matches!(&self.cfg.blocks[last.0].terminator,
-                    Terminator::Jump { args, .. } if args.is_empty());
-                if !jumps_on {
-                    return Err(ShapeFault::StageDoesNotReachNext);
-                }
-                let entered_alone =
-                    preds.get(&next).map(|from| from.as_slice()) == Some(&[last][..]);
-                if !entered_alone || !self.cfg.blocks[next.0].params.is_empty() {
-                    return Err(ShapeFault::StageEntryEnteredElsewhere);
-                }
-                region.retain(|block| *block != last);
-                region.push(last);
-            }
-            for block in &region {
-                if !claimed.insert(*block) {
-                    return Err(ShapeFault::StagesOverlap);
-                }
-            }
-            regions.push(region);
-        }
-        if preds.get(&entries[0]).map(|from| from.as_slice()) != Some(&[self.header][..]) {
-            return Err(ShapeFault::StageEntryEnteredElsewhere);
-        }
-        Ok(regions)
     }
 
     fn carried_cycles(&self, back_edges: &[Vec<ValueId>]) -> Vec<CarriedCycle> {
@@ -547,17 +441,21 @@ impl<'a> Chain<'a> {
 impl Form<'_> {
     fn insts_of(&self, stage: usize) -> impl Iterator<Item = (InstAt, &InstKind)> + '_ {
         let cfg = self.chain.cfg;
-        self.regions[stage].iter().flat_map(move |&block| {
-            cfg.blocks[block.0]
-                .insts
-                .iter()
-                .enumerate()
-                .map(move |(at, inst)| (InstAt { block, at }, &inst.kind))
-        })
+        self.membership.stages()[stage]
+            .blocks
+            .iter()
+            .flat_map(move |&block| {
+                cfg.blocks[block.0]
+                    .insts
+                    .iter()
+                    .enumerate()
+                    .map(move |(at, inst)| (InstAt { block, at }, &inst.kind))
+            })
     }
 
     fn all_insts(&self) -> impl Iterator<Item = &InstKind> + '_ {
-        (0..self.regions.len()).flat_map(|stage| self.insts_of(stage).map(|(_, kind)| kind))
+        (0..self.membership.stages().len())
+            .flat_map(|stage| self.insts_of(stage).map(|(_, kind)| kind))
     }
 
     fn header_label(&self) -> Label {
@@ -578,7 +476,7 @@ impl Form<'_> {
             ) {
                 continue;
             }
-            for &block in &self.regions[index] {
+            for &block in &self.membership.stages()[index].blocks {
                 let returns = matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. });
                 let escapes = cfg.successors(block).into_iter().any(|succ| {
                     succ != self.chain.header && !self.chain.loop_blocks.contains(&succ)
@@ -642,7 +540,7 @@ impl Form<'_> {
                     }
                 }
             }
-            for &block in &self.regions[index] {
+            for &block in &self.membership.stages()[index].blocks {
                 let terminator = &self.chain.cfg.blocks[block.0].terminator;
                 for used in inst_info::terminator_uses(terminator) {
                     if self.chain.carried_ivs.contains(&used) {
@@ -824,9 +722,10 @@ impl Form<'_> {
     fn read_by_terminators(&self, value: ValueId) -> usize {
         let header_label = self.header_label();
         let cfg = self.chain.cfg;
-        self.regions
+        self.membership
+            .stages()
             .iter()
-            .flatten()
+            .flat_map(|stage| &stage.blocks)
             .map(|block| &cfg.blocks[block.0].terminator)
             .filter(|term| !edges(term).iter().any(|edge| edge.target == header_label))
             .map(|term| {
@@ -1211,6 +1110,7 @@ mod tests {
             factory.next();
         }
         MirModule {
+            declared_params: 0,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 insts: insts

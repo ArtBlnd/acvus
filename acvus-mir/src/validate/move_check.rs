@@ -1144,6 +1144,7 @@ mod tests {
 
     fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>) -> MirModule {
         MirModule {
+            declared_params: 0,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 insts,

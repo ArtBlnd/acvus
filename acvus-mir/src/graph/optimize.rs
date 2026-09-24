@@ -9,7 +9,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
-use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::laws::LawTable;
 use crate::optimize;
 use crate::ty::Ty;
@@ -90,11 +90,17 @@ pub fn optimize(
     let mut result_modules = FxHashMap::default();
     let mut inputs = FxHashMap::default();
 
-    for (qref, mut module) in inlined.modules {
-        run_pass2_body(interner, laws, &mut module.main, opt);
-        for closure in module.closures.values_mut() {
-            run_pass2_body(interner, laws, closure, opt);
-        }
+    let mut undropped: Vec<Undropped> = inlined
+        .modules
+        .into_iter()
+        .map(|(qref, module)| Undropped::optimized(interner, laws, qref, module, opt))
+        .collect();
+    settle_inputs(&mut undropped);
+    assert_arity(&undropped);
+
+    for module in undropped {
+        let qref = module.qref;
+        let module = module.finished();
         inputs.insert(qref, required_inputs(&module.main));
 
         let mut errors = validate::type_check::check_types(&module);
@@ -223,14 +229,198 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-fn run_pass2_body(interner: &Interner, laws: &LawTable, body: &mut crate::ir::MirBody, opt: Opt) {
-    let mut cfg = cfg::promote(std::mem::take(body));
-    match opt {
-        Opt::None => run_pass2_required(interner, &mut cfg),
-        Opt::Full => run_pass2(interner, laws, &mut cfg),
+/// Inputs settle across modules before any value is dropped, so the value
+/// of an argument a call no longer passes is released by its caller's own
+/// drops.
+struct Undropped {
+    qref: QualifiedRef,
+    shell: MirModule,
+    main: CfgBody,
+    closures: Vec<(Label, CfgBody)>,
+}
+
+impl Undropped {
+    fn optimized(
+        interner: &Interner,
+        laws: &LawTable,
+        qref: QualifiedRef,
+        mut module: MirModule,
+        opt: Opt,
+    ) -> Undropped {
+        let optimized = |body: MirBody| {
+            let mut cfg = cfg::promote(body);
+            match opt {
+                Opt::None => run_pass2_required(interner, &mut cfg),
+                Opt::Full => run_pass2(interner, laws, &mut cfg),
+            }
+            cfg
+        };
+        let main = optimized(std::mem::take(&mut module.main));
+        let closures = std::mem::take(&mut module.closures)
+            .into_iter()
+            .map(|(label, closure)| (label, optimized(closure)))
+            .collect();
+        Undropped {
+            qref,
+            shell: module,
+            main,
+            closures,
+        }
     }
-    *body = cfg::demote(cfg);
-    optimize::rejoin::run(body);
+
+    fn bodies(&self) -> impl Iterator<Item = &CfgBody> {
+        std::iter::once(&self.main).chain(self.closures.iter().map(|(_, body)| body))
+    }
+
+    fn bodies_mut(&mut self) -> impl Iterator<Item = &mut CfgBody> {
+        std::iter::once(&mut self.main).chain(self.closures.iter_mut().map(|(_, body)| body))
+    }
+
+    fn finished(self) -> MirModule {
+        let finish = |mut cfg: CfgBody| {
+            debug_validate(&cfg);
+            let val_types = cfg.val_types.clone();
+            optimize::drop_insertion::insert_drops(&mut cfg, &val_types);
+            let mut body = cfg::demote(cfg);
+            optimize::rejoin::run(&mut body);
+            body
+        };
+        let Undropped {
+            shell,
+            main,
+            closures,
+            ..
+        } = self;
+        MirModule {
+            main: finish(main),
+            closures: closures
+                .into_iter()
+                .map(|(label, closure)| (label, finish(closure)))
+                .collect(),
+            ..shell
+        }
+    }
+}
+
+/// An input a module's body no longer reads after the folds is not required
+/// and is no parameter (RFC-0071 rule 5). A call passes its callee's inputs,
+/// so a parameter removed here is removed from every call to the module, and
+/// a value a caller read only to pass it is unread in turn: the removal
+/// repeats until no module loses one.
+fn settle_inputs(undropped: &mut [Undropped]) {
+    loop {
+        let mut removed: FxHashMap<QualifiedRef, Vec<usize>> = FxHashMap::default();
+        for module in undropped.iter_mut() {
+            let read = values_read(&module.main);
+            let unread: Vec<usize> = (module.shell.declared_params..module.main.params.len())
+                .filter(|at| !read.contains(&module.main.params[*at].1))
+                .collect();
+            for at in unread.iter().rev() {
+                module.main.params.remove(*at);
+            }
+            if !unread.is_empty() {
+                removed.insert(module.qref, unread);
+            }
+        }
+        if removed.is_empty() {
+            return;
+        }
+        for module in undropped.iter_mut() {
+            for body in module.bodies_mut() {
+                if strip_arguments(body, &removed) {
+                    optimize::dce::run(body);
+                }
+            }
+        }
+    }
+}
+
+fn values_read(cfg: &CfgBody) -> FxHashSet<ValueId> {
+    let mut read: FxHashSet<ValueId> = FxHashSet::default();
+    for block in &cfg.blocks {
+        for inst in &block.insts {
+            read.extend(inst_info::uses(&inst.kind));
+            if let InstKind::Ref { target, .. } | InstKind::Take { target, .. } = &inst.kind {
+                read.extend(inst_info::storage(target));
+            }
+        }
+        read.extend(inst_info::terminator_uses(&block.terminator));
+    }
+    read
+}
+
+fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usize>>) -> bool {
+    let mut stripped = false;
+    for inst in cfg.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        let (InstKind::FunctionCall {
+            callee: Callee::Direct(callee),
+            callee_ty,
+            args,
+            ..
+        }
+        | InstKind::Spawn {
+            callee: Callee::Direct(callee),
+            callee_ty,
+            args,
+            ..
+        }) = &mut inst.kind
+        else {
+            continue;
+        };
+        let Some(unread) = removed.get(callee) else {
+            continue;
+        };
+        let Ty::Fn { params, .. } = callee_ty else {
+            panic!("a call to {callee:?} is typed by its function type, not {callee_ty:?}")
+        };
+        for at in unread.iter().rev() {
+            args.remove(*at);
+            params.remove(*at);
+        }
+        stripped = true;
+    }
+    stripped
+}
+
+/// The machine's synchronous call binds the argument run without counting
+/// it against the callee's parameters, so the count is held here, where
+/// every call and every callee are in view.
+fn assert_arity(undropped: &[Undropped]) {
+    let taken: FxHashMap<QualifiedRef, usize> = undropped
+        .iter()
+        .map(|module| (module.qref, module.main.params.len()))
+        .collect();
+    for module in undropped {
+        let insts = module
+            .bodies()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.insts);
+        for inst in insts {
+            let (InstKind::FunctionCall {
+                callee: Callee::Direct(callee),
+                args,
+                ..
+            }
+            | InstKind::Spawn {
+                callee: Callee::Direct(callee),
+                args,
+                ..
+            }) = &inst.kind
+            else {
+                continue;
+            };
+            let Some(&params) = taken.get(callee) else {
+                continue;
+            };
+            assert_eq!(
+                args.len(),
+                params,
+                "{:?} calls {callee:?} with {} arguments, and it takes {params}",
+                module.qref,
+                args.len()
+            );
+        }
+    }
 }
 
 /// Which inputs a body requires is a fact about the language and not an
@@ -246,8 +436,6 @@ fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::fold::run(cfg);
     optimize::branch::run(interner, cfg);
     optimize::dce::run(cfg);
-    debug_validate(cfg);
-    optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
 fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
@@ -314,8 +502,6 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // order this pass read; what follows adds only `Drop`s, which the
     // interval domain does not read as a write.
     optimize::bce::run(cfg, laws);
-    debug_validate(cfg);
-    optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
 /// Until this assertion replaced it, pass 2 reported these two rules to the

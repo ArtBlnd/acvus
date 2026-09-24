@@ -228,6 +228,10 @@ impl Invariants {
             .unwrap_or_else(|| panic!("{value:?} is used but never defined"))
     }
 
+    pub fn word(&self, value: ValueId) -> Option<&Literal> {
+        self.words.get(&value)
+    }
+
     pub fn at(&self, loop_: &NaturalLoop, value: ValueId) -> Option<Invariant> {
         if !loop_.contains(self.def_block(value)) {
             return Some(Invariant::Outside(value));

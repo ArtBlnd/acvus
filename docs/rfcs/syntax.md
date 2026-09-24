@@ -280,8 +280,9 @@ accumulated text, a `String`.
    implicitly, and `{{ "{{" }}` writes a literal `{{`.
 4. **`$name` is an input the host injects, shared by the whole graph.** It is
    not a parameter of the template: `{{ rules() }}` passes nothing, and `$lang`
-   inside `rules` is the same injected value as in its caller. `@name` is a
-   context, as in a script. There is no include and no parameter declaration:
+   inside `rules` is the same injected value as in its caller: a call to a
+   body whose reachable code reads `$lang` passes the caller's `$lang`, after
+   the call's own arguments. `@name` is a context, as in a script. There is no include and no parameter declaration:
    the inputs a template requires are the `$` names its reachable code reads,
    and the analysis reports them at their types. Binding a `$` is a graph
    update that re-infers only the functions that read it.
