@@ -4,7 +4,5 @@ mod freeze;
 pub use freeze::Freeze;
 mod astr;
 pub use astr::*;
-mod template;
-pub use template::*;
 mod qualified_ref;
 pub use qualified_ref::QualifiedRef;

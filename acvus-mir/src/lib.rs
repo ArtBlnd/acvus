@@ -21,24 +21,6 @@ pub mod variant;
 #[cfg(test)]
 pub(crate) mod test;
 
-use acvus_utils::Astr;
-use rustc_hash::FxHashMap;
-
-use crate::graph::QualifiedRef;
-use crate::ty::Ty;
-
-/// Build a QualifiedRef->Ty mapping from a simple name->Ty context map.
-pub fn build_context_ids(
-    context: &FxHashMap<Astr, Ty>,
-) -> acvus_utils::Freeze<FxHashMap<QualifiedRef, Ty>> {
-    acvus_utils::Freeze::new(
-        context
-            .iter()
-            .map(|(&name, ty)| (QualifiedRef::root(name), ty.clone()))
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use crate::ir::{InstKind, MirModule, RefTarget};

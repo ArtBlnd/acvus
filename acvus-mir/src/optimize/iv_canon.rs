@@ -51,7 +51,7 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::{AffineValues, Derivation, for_body};
 use crate::analysis::domtree::DomTree;
-use crate::analysis::inst_info;
+use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
@@ -66,7 +66,7 @@ pub fn run(cfg: &mut CfgBody) {
             continue;
         };
         let affine = AffineValues::of(cfg, loop_, &Invariants::of(cfg));
-        let reads = Reads::of(cfg);
+        let reads = Reads::in_body(cfg);
         let ivs: Vec<Iv> = cfg.blocks[shape.header.0]
             .params
             .clone()
@@ -119,32 +119,6 @@ impl Shape {
             body,
             exit: entered_by_header_alone(exit).then_some(exit),
         })
-    }
-}
-
-/// How many times each value is read, by instructions and terminators, in
-/// the whole body.
-struct Reads {
-    by_value: FxHashMap<ValueId, usize>,
-}
-
-impl Reads {
-    fn of(cfg: &CfgBody) -> Self {
-        let mut by_value: FxHashMap<ValueId, usize> = FxHashMap::default();
-        for block in &cfg.blocks {
-            let insts = block
-                .insts
-                .iter()
-                .flat_map(|inst| inst_info::uses(&inst.kind));
-            for value in insts.chain(inst_info::terminator_uses(&block.terminator)) {
-                *by_value.entry(value).or_default() += 1;
-            }
-        }
-        Self { by_value }
-    }
-
-    fn count(&self, value: ValueId) -> usize {
-        self.by_value.get(&value).copied().unwrap_or(0)
     }
 }
 

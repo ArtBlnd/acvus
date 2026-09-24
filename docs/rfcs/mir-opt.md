@@ -31,11 +31,11 @@ instances of this rule.
    value and is consumed by `while let Some(x) = next(&mut it)`.
 
 2. **MIR: the loop is one terminator.** The header block ends in
-   `Terminator::For { source, body, body_args, exit, exit_trip, exit_args }`, with
+   `Terminator::For { source, stages, exit, exit_trip, exit_args }`, with
    `source` one of `Slice(s)`, `SliceMut(s)`, `Array(a)` or `Range { at, hi }`.
    The terminator is the condition. No instruction writes `index < len`,
-   `i = i + 1` or the element read. The terminator fills the body block's
-   leading parameters (`elem`, `index`; for a `Range` the element is the
+   `i = i + 1` or the element read. The terminator fills the leading
+   parameters of the body block, the first of `stages`, (`elem`, `index`; for a `Range` the element is the
    counter, so there is one) and advances. The latch is
    `jump header(carried…)`, and `continue` is that jump. `break` jumps to
    `exit` with the carried values. A `Slice` source is the `AsSlice` of the

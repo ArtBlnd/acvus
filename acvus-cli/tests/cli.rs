@@ -169,6 +169,27 @@ fn check_and_mir_compile_without_running() {
     assert_eq!(out.status.code(), Some(64));
 }
 
+#[test]
+fn mir_prints_the_stage_facts_under_each_for() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "sum.acvus", "let s = 0;\nfor x in [1, 2, 3] { s = s + x; }\ns\n");
+    let out = acvus(dir.path(), &["mir", "sum.acvus"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let dump = text(&out.stdout);
+    let facts: Vec<&str> = dump
+        .lines()
+        .filter_map(|line| line.split_once("// ").map(|(_, fact)| fact))
+        .collect();
+    assert_eq!(
+        facts,
+        [
+            "L1: cycle Carried(r5) any_order law(Op(Add) exact commutative) {+}",
+            "control upfront",
+        ],
+        "{dump}"
+    );
+}
+
 /// The listing `ops` prints is the interpreter's own walk: the same source
 /// through `acvus-interpreter-test`'s compile path, with the registries and
 /// the `!` return declaration the CLI compiles with, renders the same text.

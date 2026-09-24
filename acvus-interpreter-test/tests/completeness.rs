@@ -25,18 +25,6 @@ fn runs_to(source: &str, value: &str) {
     }
 }
 
-fn refused(source: &str) {
-    for opt in [Opt::None, Opt::Full] {
-        match outcome(source, opt) {
-            Outcome::Refused(why) => assert!(
-                !why.contains("[validate:"),
-                "at {opt:?}, the MIR validator refused what the checker admitted: {why}"
-            ),
-            other => panic!("at {opt:?}, expected a refusal, got {other:?}: {source}"),
-        }
-    }
-}
-
 #[test]
 fn corpus_child() {
     corpus::child();

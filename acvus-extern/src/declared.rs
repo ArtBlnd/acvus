@@ -7,7 +7,8 @@ use crate::ty_arg::{PolyVars, TyArg};
 /// An extension type named at `()` for an identity parameter is declared at
 /// that parameter's own variable, because `acvus-mir`'s `lift_declaration`
 /// makes every identity a host declares a variable the compilation mints a
-/// source for. The two must stay in step.
+/// source for. `acvus-extern/tests/decl.rs`
+/// (`an_identity_parameter_is_declared_at_a_variable`) holds the two in step.
 ///
 /// The language's `!` (`Bottom`) has no impl, and that is a decision: a host
 /// that states no type is the runtime's own tooling (RFC-0090 rule 6).

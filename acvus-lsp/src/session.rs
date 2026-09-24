@@ -173,7 +173,7 @@ pub enum RenameRefusal {
     NotAName,
     /// A function is named by the path of the file that defines it.
     Function,
-    /// A context is declared by the host's context file.
+    /// A context is a key of the host's storage.
     Context,
     /// An input is bound by the host.
     Input,
@@ -194,7 +194,7 @@ impl fmt::Display for RenameRefusal {
             ),
             RenameRefusal::Context => write!(
                 f,
-                "a context is declared by the host's context file, which a rename here does not change"
+                "a context is a key of the host's storage, which a rename here does not change"
             ),
             RenameRefusal::Input => write!(
                 f,

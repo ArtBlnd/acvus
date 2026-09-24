@@ -65,7 +65,7 @@ struct Counted {
 
 /// A latency is at most `MAX_LATENCY`, so the sum over the largest size this
 /// bench runs is at most `MAX_LATENCY * 100 000 = 99 900 000`; the scale is
-/// the next power of ten above it, and `packed` asserts the gap.
+/// the next power of ten above it.
 const SCALE: i64 = 1_000_000_000;
 
 impl Counted {
@@ -76,15 +76,6 @@ impl Counted {
             count: self.count + other.count,
             total: self.total + other.total,
         }
-    }
-
-    fn packed(self) -> i64 {
-        assert!(
-            self.total < SCALE,
-            "the latency sum {} reached the scale {SCALE} that separates it from the count",
-            self.total
-        );
-        self.count * SCALE + self.total
     }
 
     fn unpack(packed: i64) -> Counted {

@@ -1821,13 +1821,28 @@ impl<'a, 's, 'src, S> TypeChecker<'a, 's, 'src, S>
 where
     S: Slot,
 {
+    /// `declared` are the parameters the function's declaration names: a
+    /// `$name` in the body names the declared parameter of that name, and
+    /// the declared order is the order the call passes its arguments in.
+    /// They are the first parameters of the body, ahead of every bound or
+    /// read input, which is what lets lowering count them from the front.
     pub fn new(
         interner: &'a Interner,
         env: &'a TypeEnv,
         solver: &'s mut Solver<'src>,
         inputs: Inputs,
+        declared: Vec<ParamTerm<Infer>>,
     ) -> Self {
         let body_effect = solver.fresh_effect_var();
+        let param_types = declared
+            .into_iter()
+            .map(|param| ExternParam {
+                name: param.name,
+                ty: param.ty,
+                first_read: None,
+                origin: ParamOrigin::Declared,
+            })
+            .collect();
         Self {
             interner,
             scopes: vec![FxHashMap::default()],
@@ -1836,7 +1851,7 @@ where
             binder_types: FxHashMap::default(),
             env,
             namespace: None,
-            param_types: smallvec::smallvec![],
+            param_types,
             bound_inputs: Vec::new(),
             solver,
             type_map: FxHashMap::default(),
@@ -1937,20 +1952,6 @@ where
     /// Set the namespace for context lookups.
     pub fn with_namespace(mut self, namespace: Option<Astr>) -> Self {
         self.namespace = namespace;
-        self
-    }
-
-    /// Bind the parameters the function's declaration names: a `$name` in the
-    /// body names the declared parameter of that name, and the declared order
-    /// is the order the call passes its arguments in.
-    pub fn with_declared_params(mut self, declared: Vec<ParamTerm<Infer>>) -> Self {
-        self.param_types
-            .extend(declared.into_iter().map(|param| ExternParam {
-                name: param.name,
-                ty: param.ty,
-                first_read: None,
-                origin: ParamOrigin::Declared,
-            }));
         self
     }
 
@@ -2464,8 +2465,9 @@ where
     {
         self.solver.trial(|solver| {
             let opened = solver.decisions_opened();
-            let mut trial = TypeChecker::new(self.interner, self.env, solver, self.inputs)
-                .with_namespace(self.namespace);
+            let mut trial =
+                TypeChecker::new(self.interner, self.env, solver, self.inputs, Vec::new())
+                    .with_namespace(self.namespace);
             trial.type_map = self.type_map.clone();
             admit(&mut trial)
                 && trial.errors.is_empty()
@@ -9507,7 +9509,7 @@ mod tests {
             inputs: FxHashMap::default(),
             access: crate::graph::Access::Sync,
         };
-        let checker = TypeChecker::new(interner, &env, &mut solver, Inputs::Declared);
+        let checker = TypeChecker::new(interner, &env, &mut solver, Inputs::Declared, Vec::new());
         let resolution = checker
             .check_template(&template)
             .resolution
@@ -9547,7 +9549,7 @@ mod tests {
             inputs: FxHashMap::default(),
             access: crate::graph::Access::Sync,
         };
-        let checked = TypeChecker::new(&interner, &env, &mut solver, Inputs::Declared)
+        let checked = TypeChecker::new(&interner, &env, &mut solver, Inputs::Declared, Vec::new())
             .check_script(&script, None, ResultCrossing::Registers);
         let Ok(resolution) = &checked.resolution else {
             panic!("the body is accepted: {:?}", checked.resolution.err());

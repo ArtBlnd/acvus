@@ -48,10 +48,9 @@
 //! chain of `Merge`s over it: a [`MergeOp::Order`].
 
 use crate::ir::BinOp;
-use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::{AffineValues, Arithmetic, Derivation, exact_under_wrapping};
-use crate::analysis::inst_info;
+use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Loop, LoopKind};
 use crate::cfg::CfgBody;
@@ -111,7 +110,7 @@ impl CarriedState {
             loans,
             loop_,
             laws,
-            reads: Reads::in_loop(cfg, loop_),
+            reads: Reads::of(cfg, loop_.natural.blocks()),
             arithmetic: Arithmetic::in_loop(cfg, loop_),
         };
         let params: Vec<CarriedParam> = cfg.blocks[natural.header.0]
@@ -356,35 +355,6 @@ impl<'cfg> Body<'_, 'cfg> {
 struct FoldCall {
     lender: ValueId,
     merge: StorageMerge,
-}
-
-/// How many times the loop's instructions and terminators read each value.
-struct Reads {
-    by_value: FxHashMap<ValueId, usize>,
-}
-
-impl Reads {
-    fn in_loop(cfg: &CfgBody, loop_: &Loop) -> Self {
-        let mut by_value: FxHashMap<ValueId, usize> = FxHashMap::default();
-        for block in loop_.natural.blocks() {
-            let block = &cfg.blocks[block.0];
-            let insts = block
-                .insts
-                .iter()
-                .flat_map(|inst| inst_info::uses(&inst.kind));
-            for value in insts.chain(inst_info::terminator_uses(&block.terminator)) {
-                *by_value.entry(value).or_default() += 1;
-            }
-        }
-        Self { by_value }
-    }
-
-    fn count(&self, value: ValueId) -> usize {
-        match self.by_value.get(&value) {
-            Some(count) => *count,
-            None => 0,
-        }
-    }
 }
 
 /// The storages a `SliceMut` source lends the loop mutably.

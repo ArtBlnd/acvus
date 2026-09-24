@@ -1168,12 +1168,8 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
     }
 
     let started = Instant::now();
-    let optimized = optimize::optimize(
-        interner,
-        &acvus_mir::laws::LawTable::of(graph.functions.iter()),
-        lowered.modules,
-        opt,
-    );
+    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter());
+    let optimized = optimize::optimize(interner, &laws, lowered.modules, opt);
     let optimize = started.elapsed();
     refusals.extend(optimized.errors.into_iter().flat_map(|(qref, errs)| {
         let origin = origin_of(&qref);
@@ -1285,6 +1281,8 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         rt,
         shared,
         entries: compiled_entries,
+        #[cfg(feature = "tooling")]
+        listing_laws: laws,
         times: CompileTimes {
             opt,
             parse,
@@ -1358,6 +1356,8 @@ struct Compiled {
     rt: AcvusRuntime,
     entries: HashMap<String, CompiledEntry>,
     solved: BTreeMap<String, Arc<Ty>>,
+    #[cfg(feature = "tooling")]
+    listing_laws: acvus_mir::laws::LawTable,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     times: CompileTimes,
 }
@@ -1434,7 +1434,7 @@ where
 }
 
 /// A listing of one entry for the runtime's tooling.
-#[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+#[cfg(feature = "tooling")]
 pub struct Listing<'p> {
     /// The `$` inputs the entry still requires, in name order; a binding's
     /// input is not among them (RFC-0071 rule 5).
@@ -1443,7 +1443,7 @@ pub struct Listing<'p> {
     pub prepared: &'p crate::code::Prepared,
 }
 
-#[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+#[cfg(feature = "tooling")]
 pub struct InputListing {
     pub name: String,
     pub ty: String,
@@ -1463,30 +1463,36 @@ macro_rules! program_tooling {
             $v fn times(&self) -> &CompileTimes {
                 &self.compiled.times
             }
-
-            $v fn listing(&self, name: &str) -> Result<Listing<'_>, HostError> {
-                let program = &self.compiled;
-                let compiled = program.compiled(name)?;
-                let interner = program.interner();
-                let mut required: Vec<&ContextInfo> = compiled.required.iter().collect();
-                required.sort_by_key(|input| input.name.name.bits());
-                let inputs = required
-                    .into_iter()
-                    .map(|input| InputListing {
-                        name: interner.resolve(input.name.name).to_owned(),
-                        ty: input.ty.display(interner).to_string(),
-                    })
-                    .collect();
-                Ok(Listing {
-                    inputs,
-                    mir: acvus_mir::printer::dump(interner, &compiled.module),
-                    prepared: lookup_module(&program.shared, &compiled.qref),
-                })
-            }
         }
     };
 }
 tooling_vis!(program_tooling);
+
+#[cfg(feature = "tooling")]
+impl<A> Program<A>
+where
+    A: Access,
+{
+    pub fn listing(&self, name: &str) -> Result<Listing<'_>, HostError> {
+        let program = &self.compiled;
+        let compiled = program.compiled(name)?;
+        let interner = program.interner();
+        let mut required: Vec<&ContextInfo> = compiled.required.iter().collect();
+        required.sort_by_key(|input| input.name.name.bits());
+        let inputs = required
+            .into_iter()
+            .map(|input| InputListing {
+                name: interner.resolve(input.name.name).to_owned(),
+                ty: input.ty.display(interner).to_string(),
+            })
+            .collect();
+        Ok(Listing {
+            inputs,
+            mir: acvus_mir::printer::dump_with_facts(interner, &compiled.module, &program.listing_laws),
+            prepared: lookup_module(&program.shared, &compiled.qref),
+        })
+    }
+}
 
 // -- Scope ---------------------------------------------------------------
 

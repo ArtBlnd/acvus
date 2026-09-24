@@ -5,9 +5,10 @@
 //!
 //! These are the building blocks for use-def analysis, DCE, reordering, etc.
 
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 
-use crate::cfg::Terminator;
+use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, InstKind, RefTarget, ValueId};
 
 /// ValueIds defined by this instruction.
@@ -410,5 +411,36 @@ mod tests {
         let u = uses(&inst);
         assert!(u.contains(&v(0)), "indirect callee must be in uses");
         assert!(u.contains(&v(1)));
+    }
+}
+
+/// How many times the instructions and terminators of some blocks read each
+/// value.
+pub(crate) struct Reads {
+    by_value: FxHashMap<ValueId, usize>,
+}
+
+impl Reads {
+    pub(crate) fn of<I>(cfg: &CfgBody, blocks: I) -> Self
+    where
+        I: IntoIterator<Item = BlockIdx>,
+    {
+        let mut by_value: FxHashMap<ValueId, usize> = FxHashMap::default();
+        for block in blocks {
+            let block = &cfg.blocks[block.0];
+            let insts = block.insts.iter().flat_map(|inst| uses(&inst.kind));
+            for value in insts.chain(terminator_uses(&block.terminator)) {
+                *by_value.entry(value).or_default() += 1;
+            }
+        }
+        Self { by_value }
+    }
+
+    pub(crate) fn in_body(cfg: &CfgBody) -> Self {
+        Self::of(cfg, (0..cfg.blocks.len()).map(BlockIdx))
+    }
+
+    pub(crate) fn count(&self, value: ValueId) -> usize {
+        self.by_value.get(&value).copied().unwrap_or(0)
     }
 }

@@ -165,7 +165,7 @@ among: IntTy::ALL }` (`fresh_int_var`). Every use narrows that bound by the
 `TyVarBound` meet: a second `Integer` leaves the widths in both, and a
 `OneOf` — which is what a shared signature's instances come to (RFC-0019) —
 leaves the integer widths the `OneOf` lists. A negation drops the unsigned
-widths (`require_signed`).
+widths.
 
 `integer_default` answers the width: `i64` where the narrowed set still
 admits it, the only member where one remains, and otherwise **none**. None

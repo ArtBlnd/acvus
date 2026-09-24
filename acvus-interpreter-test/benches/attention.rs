@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Erased, Owned, Registry, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
+use acvus_interpreter::{AcvusRuntime, SequentialExecutor};
 use acvus_interpreter_test::listing::{regions_named, script_listing_with_externs};
 use acvus_interpreter_test::scripts::{ATTENTION, ATTENTION_VEC};
 use acvus_interpreter_test::{

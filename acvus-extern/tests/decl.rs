@@ -493,6 +493,21 @@ struct Token<I>(i64, PhantomData<I>)
 where
     I: acvus_extern::Var<acvus_extern::kind::Identity>;
 
+/// The other half is `acvus_mir::ty::lift_declaration`, which lifts every
+/// identity a host declares to a fresh variable.
+#[test]
+fn an_identity_parameter_is_declared_at_a_variable() {
+    let i = Interner::new();
+    let declared = <Token<()> as acvus_extern::Declared>::declared(&i);
+    let PolyTy::UserDefined { identity_args, .. } = &declared else {
+        panic!("`Token` is declared as an extension type, not {declared:?}");
+    };
+    assert!(
+        matches!(identity_args.as_slice(), [acvus_extern::IdentityTerm::Var(_)]),
+        "`Token`'s one identity is declared at a variable, not {identity_args:?}"
+    );
+}
+
 #[derive(TyArg, Debug, PartialEq)]
 struct Point {
     x: i64,

@@ -59,7 +59,7 @@ fn a_bound_and_a_factor_no_loop_assigns_are_not_block_params() {
          `for` fills, and the inner loop's exit the trip count, nothing else. \
          Both `while`s are range `for`s (RFC-0081), nothing reads `t` or `i` \
          once the comparisons are gone, and the accumulator is an induction \
-         variable of the weak inner loop, computed at its exit from the trip \
+         variable of the inner loop, computed at its exit from the trip \
          count (RFC-0066 rule 7). The inner loop then does nothing and is a \
          jump to that exit, with the count computed above it (RFC-0088):\n{listing}"
     );

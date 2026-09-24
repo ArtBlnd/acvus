@@ -293,8 +293,6 @@ where
 
 #[derive(Clone, Debug)]
 pub struct Run {
-    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-    pub var: ValueId,
     pub base: Slot,
     pub layout: Layout,
     pub members: Vec<ValueId>,
@@ -307,9 +305,6 @@ pub struct RunPlan {
     pub runs: Vec<Run>,
     /// The registers all of the runs together take above the scalar ones.
     pub total: u16,
-    /// The aggregates that did not fit, realized on the heap instead (rule 4).
-    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-    pub heaped: Vec<ValueId>,
 }
 
 impl RunPlan {
@@ -359,7 +354,6 @@ pub(crate) fn plan(
     written_by_a_call: &FxHashSet<ValueId>,
 ) -> RunPlan {
     let mut candidates = candidates(body, labels, ranges, interner, written_by_a_call);
-    let mut heaped = Vec::new();
     loop {
         if let Some(runs) = place(&candidates, base) {
             let total = runs
@@ -367,13 +361,10 @@ pub(crate) fn plan(
                 .map(|run| run.base + run.layout.len() - base)
                 .max()
                 .unwrap_or(0);
-            return RunPlan {
-                runs,
-                total,
-                heaped,
-            };
+            return RunPlan { runs, total };
         }
-        heaped.extend(candidates.remove(spill_first(&candidates)).members);
+        // What did not fit is realized on the heap instead (rule 4).
+        candidates.remove(spill_first(&candidates));
     }
 }
 
@@ -833,7 +824,6 @@ fn place(candidates: &[Candidate], base: Slot) -> Option<Vec<Run>> {
             len,
         });
         runs.push(Run {
-            var: candidate.var,
             base: base + at,
             layout: candidate.layout.clone(),
             members: candidate.members.clone(),
@@ -1094,7 +1084,7 @@ mod tests {
 
     fn base_of(runs: &[Run], var: usize) -> Slot {
         runs.iter()
-            .find(|run| run.var == ValueId::from_raw(var))
+            .find(|run| run.members.contains(&ValueId::from_raw(var)))
             .expect("every candidate that placed has a run")
             .base
     }

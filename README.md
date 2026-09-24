@@ -82,8 +82,9 @@ time: run     42.907 ms
 `check` and `mir` report `compile` alone, `ops` adds `prepare`, `run` all
 three. `compile` is the whole of `check`, of which parse, typechecking,
 lowering and optimization are the named parts; `run` is the machine and
-nothing around it, so a script's own `print` is inside it and reading or
-committing the context file is not. The lines go to stderr; under `--json`
+nothing around it, so a script's own `print` is inside it, and so are the
+loads, stores and inits its fetches and commits make; the space's commit
+after the run is not. The lines go to stderr; under `--json`
 they are a trailing `{"time": …}` object on stdout instead, the same
 milliseconds as numbers. Without the flag no clock is read.
 

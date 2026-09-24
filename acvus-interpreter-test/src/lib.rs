@@ -70,6 +70,7 @@ pub struct CompileResult {
     pub instances: acvus_extern::InstanceTable,
     /// The `$` inputs the entry still reads, which the host supplies.
     pub required_inputs: Vec<acvus_mir::graph::ContextInfo>,
+    pub settled_tail: Ty,
 }
 
 fn compile(
@@ -309,6 +310,11 @@ where
         }
     }
 
+    let tail = inf
+        .outcomes
+        .get(&entry_qref)
+        .and_then(|outcome| outcome.tail_ty())
+        .cloned();
     let result = graph_lower::lower(interner, &graph, &ext.view(), &inf);
 
     // Report lower-level errors.
@@ -347,6 +353,7 @@ where
     let required_inputs = inputs
         .remove(&entry_qref)
         .expect("the optimizer lists the inputs of every module it returns");
+    let tail = tail.expect("inference refused nothing, so it completed the entry it was given");
     let modules = opt_result.modules;
 
     // Build context qref -> name mapping.
@@ -364,6 +371,7 @@ where
         extern_executables,
         instances,
         required_inputs,
+        settled_tail: tail,
     })
 }
 
@@ -667,6 +675,31 @@ pub fn items_context(interner: &Interner, items: Vec<i64>) -> Context {
     )])
 }
 
+// -- Inits --------------------------------------------------------
+
+/// The value a context's init gives it (RFC-0090 rule 1).
+pub async fn init_value(interner: &Interner, source: &str) -> TypedValue {
+    let ast = ParsedAst::Script(
+        acvus_ast::parse_script(interner, source)
+            .unwrap_or_else(|e| panic!("the init `{source}` does not parse: {e:?}")),
+    );
+    let cr = compile_source_with_externs(
+        interner,
+        ast,
+        &FxHashMap::default(),
+        acvus_ext::std_registries::<AcvusRuntime>(),
+        Ty::Never,
+    );
+    let ty = cr.settled_tail.clone();
+    let (_, mut interp) =
+        execute_compiled(interner, cr, HashMap::new(), Arc::new(SequentialExecutor));
+    let value = interp
+        .execute()
+        .await
+        .unwrap_or_else(|e| panic!("the init `{source}` does not run: {e:?}"));
+    typed(ty, value)
+}
+
 // -- Fixture runner -----------------------------------------------
 
 /// Run a single `.json` fixture file.
@@ -708,10 +741,10 @@ pub async fn run_fixture(path: &std::path::Path) -> Result<(), String> {
 /// writes this call.
 #[macro_export]
 macro_rules! attempt_within {
-    ($source:expr, contexts = $contexts:expr, attempt = $attempt:expr, $limit:expr $(,)?) => {
+    ($source:expr, inits = $inits:expr, attempt = $attempt:expr, $limit:expr $(,)?) => {
         $crate::corpus::attempt_within_as(
             $source,
-            $contexts,
+            $inits,
             $attempt,
             $limit,
             $crate::corpus::Caller(::core::module_path!()),
@@ -726,10 +759,10 @@ macro_rules! attempt_within {
             $crate::corpus::Caller(::core::module_path!()),
         )
     };
-    ($source:expr, contexts = $contexts:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
+    ($source:expr, inits = $inits:expr, $opt:expr, $stage:expr, $limit:expr $(,)?) => {
         $crate::corpus::attempt_within_in(
             $source,
-            $contexts,
+            $inits,
             $opt,
             $stage,
             $limit,
@@ -1397,44 +1430,55 @@ pub mod corpus {
     /// Compile `source` at `opt`, the way `acvus run` compiles a file: no
     /// context declarations, the standard registries, `!` as the return type.
     pub fn attempt(source: &str, opt: Opt, stage: Stage) -> Outcome {
-        attempt_in(source, &serde_json::Map::new(), opt, stage)
+        attempt_in(source, &[], opt, stage)
     }
 
-    /// [`attempt`] with the contexts a JSON object declares: each key is a
-    /// context, its type the value's type, holding the value.
-    pub fn attempt_in(
-        source: &str,
-        contexts: &serde_json::Map<String, serde_json::Value>,
-        opt: Opt,
-        stage: Stage,
-    ) -> Outcome {
+    /// Seeds `key` with [`crate::init_value`] of `source`.
+    #[derive(Clone, Debug)]
+    pub struct Init {
+        pub key: String,
+        pub source: String,
+    }
+
+    /// [`attempt`] with a context for each of `inits`.
+    pub fn attempt_in(source: &str, inits: &[Init], opt: Opt, stage: Stage) -> Outcome {
         let attempt = Attempt {
             opt,
             stage,
             scheduler: Scheduler::Sequential,
         };
-        attempt_as(source, contexts, attempt)
+        attempt_as(source, inits, attempt)
     }
 
     /// [`attempt_in`] with its spawns on `attempt.scheduler`.
-    pub fn attempt_as(
-        source: &str,
-        contexts: &serde_json::Map<String, serde_json::Value>,
-        attempt: Attempt,
-    ) -> Outcome {
+    pub fn attempt_as(source: &str, inits: &[Init], attempt: Attempt) -> Outcome {
         let Attempt {
             opt,
             stage,
             scheduler,
         } = attempt;
         let interner = Interner::new();
-        let context: crate::Context = contexts
+        let (executor, runtime): (Arc<dyn Executor>, _) = match scheduler {
+            Scheduler::Sequential => (
+                Arc::new(SequentialExecutor),
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .expect("a current-thread runtime"),
+            ),
+            Scheduler::Tokio => (
+                Arc::new(TokioExecutor),
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_time()
+                    .build()
+                    .expect("a multi-thread runtime"),
+            ),
+        };
+        let context: crate::Context = inits
             .iter()
-            .map(|(name, value)| {
-                (
-                    interner.intern(name),
-                    crate::value_from_json(&interner, value),
-                )
+            .map(|init| {
+                let value = runtime.block_on(crate::init_value(&interner, &init.source));
+                (interner.intern(&init.key), value)
             })
             .collect();
         let (context_types, snapshot) = crate::split_context(&interner, context);
@@ -1505,22 +1549,6 @@ pub mod corpus {
         }
 
         functions.extend(prepared);
-        let (executor, runtime): (Arc<dyn Executor>, _) = match scheduler {
-            Scheduler::Sequential => (
-                Arc::new(SequentialExecutor),
-                tokio::runtime::Builder::new_current_thread()
-                    .build()
-                    .expect("a current-thread runtime"),
-            ),
-            Scheduler::Tokio => (
-                Arc::new(TokioExecutor),
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .enable_time()
-                    .build()
-                    .expect("a multi-thread runtime"),
-            ),
-        };
         let shared = InterpreterContext::new(&interner, functions, executor)
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
@@ -1536,7 +1564,7 @@ pub mod corpus {
     }
 
     const SOURCE: &str = "ACVUS_CORPUS_SOURCE";
-    const CONTEXTS: &str = "ACVUS_CORPUS_CONTEXTS";
+    const INIT_PREFIX: &str = "ACVUS_CORPUS_INIT_";
     const LEVEL: &str = "ACVUS_CORPUS_OPT";
     const UNTIL: &str = "ACVUS_CORPUS_STAGE";
     const SCHEDULER: &str = "ACVUS_CORPUS_SCHEDULER";
@@ -1563,16 +1591,19 @@ pub mod corpus {
             Ok("tokio") => Scheduler::Tokio,
             other => panic!("the parent names the scheduler, and it named {other:?}"),
         };
-        let contexts = match std::env::var(CONTEXTS) {
-            Ok(json) => serde_json::from_str(&json).expect("the parent wrote a JSON object"),
-            Err(_) => serde_json::Map::new(),
-        };
+        let mut inits: Vec<Init> = std::env::vars()
+            .filter_map(|(name, source)| {
+                let key = name.strip_prefix(INIT_PREFIX)?.to_owned();
+                Some(Init { key, source })
+            })
+            .collect();
+        inits.sort_by(|a, b| a.key.cmp(&b.key));
         let attempt = Attempt {
             opt,
             stage,
             scheduler,
         };
-        let outcome = attempt_as(&source, &contexts, attempt);
+        let outcome = attempt_as(&source, &inits, attempt);
         println!("{MARK}{}", encode(&outcome));
         use std::io::Write;
         std::io::stdout()
@@ -1636,13 +1667,13 @@ pub mod corpus {
         limit: Duration,
         caller: Caller,
     ) -> Result<Outcome, Lapse> {
-        attempt_within_in(source, &serde_json::Map::new(), opt, stage, limit, caller)
+        attempt_within_in(source, &[], opt, stage, limit, caller)
     }
 
     /// [`attempt_within`] with the contexts of [`attempt_in`].
     pub fn attempt_within_in(
         source: &str,
-        contexts: &serde_json::Map<String, serde_json::Value>,
+        inits: &[Init],
         opt: Opt,
         stage: Stage,
         limit: Duration,
@@ -1653,13 +1684,13 @@ pub mod corpus {
             stage,
             scheduler: Scheduler::Sequential,
         };
-        attempt_within_as(source, contexts, attempt, limit, caller)
+        attempt_within_as(source, inits, attempt, limit, caller)
     }
 
     /// [`attempt_within_in`] with its spawns on `attempt.scheduler`.
     pub fn attempt_within_as(
         source: &str,
-        contexts: &serde_json::Map<String, serde_json::Value>,
+        inits: &[Init],
         attempt: Attempt,
         limit: Duration,
         caller: Caller,
@@ -1671,18 +1702,19 @@ pub mod corpus {
         } = attempt;
         let child_test = caller.child_test();
         let exe = std::env::current_exe().expect("the test binary knows its own path");
-        let mut child = std::process::Command::new(exe)
+        let mut command = std::process::Command::new(exe);
+        command
             .args([
                 child_test.as_str(),
                 "--exact",
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env(SOURCE, source)
-            .env(
-                CONTEXTS,
-                serde_json::Value::Object(contexts.clone()).to_string(),
-            )
+            .env(SOURCE, source);
+        for init in inits {
+            command.env(format!("{INIT_PREFIX}{}", init.key), &init.source);
+        }
+        let mut child = command
             .env(
                 LEVEL,
                 match opt {

@@ -99,17 +99,6 @@ fn named_through(names: &FxHashMap<ValueId, ValueId>, value: ValueId) -> ValueId
     at
 }
 
-/// Every escape a body writes, over its whole instruction list. `CfgBody`
-/// keeps `Return` as a terminator, so its caller adds those with
-/// [`EscapeScan::observe_returned`].
-pub fn of_insts<'a>(kinds: impl Iterator<Item = &'a InstKind>) -> Escaped {
-    let mut scan = EscapeScan::default();
-    for kind in kinds {
-        scan.observe(kind);
-    }
-    scan.finish()
-}
-
 /// The values this instruction lets outlive it.
 fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
     match kind {

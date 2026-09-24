@@ -143,11 +143,6 @@ impl<I: LocalIdOps> LocalFactory<I> {
             _phantom: PhantomData,
         }
     }
-
-    /// Produce a `LocalVec` initialized with `V::default()`.
-    pub fn build_default<V: Default>(&self) -> LocalVec<I, V> {
-        self.build_vec(V::default)
-    }
 }
 
 /// Vec-like container indexed exclusively by a local id type.

@@ -304,12 +304,6 @@ fn direct_target<'a>(
     if makes_a_closure(&callee.main) {
         return None;
     }
-    assert_eq!(
-        callee.main.params.len(),
-        args.len(),
-        "a call to {callee_id:?} passes one argument per parameter, its inputs included \
-         (RFC-0071 rule 4)"
-    );
     Some(InlineTarget {
         dst: *dst,
         callee_body: &callee.main,

@@ -10,11 +10,12 @@ chain-alphabet-add-sub-mul = []
 # The unchecked index handler, which no MIR instruction produces: a probe
 # substitutes it into a prepared body to price the bound check (RFC-0047).
 probe = []
-# The runtime's own tooling route (RFC-0090 rule 6): the raw values a run
-# assigned, drained by key (`Interpreter::take_writes`, `ContextWrite`). The
-# tooling reads them by the settled type: the CLI, which declares `!`, and
-# this workspace's tests. A host does not turn it on; it reads a run's
-# writes through its page's typed methods.
+# The runtime's own tooling route (RFC-0090 rule 6): the value word, and
+# what is read by the settled type rather than a declared one: an untyped
+# entry's result (the CLI, which declares `!`) and the raw values a run
+# assigned (`Interpreter::take_writes`, `ContextWrite`; this workspace's
+# tests). A host does not turn it on; it reads a run's writes through its
+# page's typed methods.
 tooling = []
 
 [dependencies]

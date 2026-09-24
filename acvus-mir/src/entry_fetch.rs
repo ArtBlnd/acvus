@@ -110,39 +110,12 @@ pub(crate) fn decide_writes(body: &mut MirBody, ops: &PageOps) {
         }
     };
 
-    let mut block_in: Vec<Option<Vec<bool>>> = vec![None; cfg.blocks.len()];
-    block_in[0] = Some(vec![false; n]);
     let mut commits: FxHashMap<ValueId, bool> = FxHashMap::default();
-    let mut worklist = vec![BlockIdx(0)];
-    while let Some(at) = worklist.pop() {
-        let mut written = block_in[at.0]
-            .clone()
-            .expect("a block on the worklist has an entry state");
+    forward_or(&cfg, vec![false; n], |at, written| {
         for inst in &cfg.blocks[at.0].insts {
-            step(inst, &mut written, &mut commits);
+            step(inst, written, &mut commits);
         }
-        for succ in cfg.successors(at) {
-            let changed = match &mut block_in[succ.0] {
-                unreached @ None => {
-                    *unreached = Some(written.clone());
-                    true
-                }
-                Some(into) => {
-                    let mut changed = false;
-                    for (into, from) in into.iter_mut().zip(&written) {
-                        if *from && !*into {
-                            *into = true;
-                            changed = true;
-                        }
-                    }
-                    changed
-                }
-            };
-            if changed {
-                worklist.push(succ);
-            }
-        }
-    }
+    });
     // A commit no path reaches never runs; a store there loses no write.
     for inst in &mut body.insts {
         if let InstKind::Commit { value, wrote, .. } = &mut inst.kind {
@@ -199,58 +172,63 @@ fn touched_unset(cfg: &CfgBody, ops: &PageOps) -> Vec<bool> {
     let n = ops.entry.len();
     let mut touched = vec![false; n];
 
-    let mut block_in: Vec<Option<Vec<bool>>> = vec![None; cfg.blocks.len()];
-    block_in[0] = Some(vec![true; n]);
+    forward_or(cfg, vec![true; n], |at, maybe_unset| {
+    for inst in &cfg.blocks[at.0].insts {
+        match &inst.kind {
+            InstKind::Assign {
+                target,
+                path,
+                value,
+                ..
+            } => {
+                let Some(i) = tracked(target) else { continue };
+                let written_by_source =
+                    !entry_fetched.contains(value) && !ops.refetched.contains(value);
+                if !path.is_empty() {
+                    touched[i] |= maybe_unset[i];
+                } else if written_by_source {
+                    maybe_unset[i] = false;
+                }
+            }
+            InstKind::Take { target, .. } | InstKind::Ref { target, .. } => {
+                let Some(i) = tracked(target) else { continue };
+                touched[i] |= maybe_unset[i];
+            }
+            _ => {}
+        }
+    }
+    });
+    touched
+}
+
+/// A forward may-analysis over `cfg` whose state is one flag per tracked
+/// variable, joined by `or`: `transfer` turns the state at a block's entry
+/// into the state at its exit, and runs again on a block whenever its entry
+/// state grows. `entry` is the state at the body's first block.
+fn forward_or<F>(cfg: &CfgBody, entry: Vec<bool>, mut transfer: F)
+where
+    F: FnMut(BlockIdx, &mut Vec<bool>),
+{
+    let bottom = vec![false; entry.len()];
+    let mut block_in: Vec<Vec<bool>> = vec![bottom; cfg.blocks.len()];
+    let mut reached = vec![false; cfg.blocks.len()];
+    block_in[0] = entry;
+    reached[0] = true;
     let mut worklist = vec![BlockIdx(0)];
     while let Some(at) = worklist.pop() {
-        let mut maybe_unset = block_in[at.0]
-            .clone()
-            .expect("a block on the worklist has an entry state");
-        for inst in &cfg.blocks[at.0].insts {
-            match &inst.kind {
-                InstKind::Assign {
-                    target,
-                    path,
-                    value,
-                    ..
-                } => {
-                    let Some(i) = tracked(target) else { continue };
-                    let written_by_source =
-                        !entry_fetched.contains(value) && !ops.refetched.contains(value);
-                    if !path.is_empty() {
-                        touched[i] |= maybe_unset[i];
-                    } else if written_by_source {
-                        maybe_unset[i] = false;
-                    }
-                }
-                InstKind::Take { target, .. } | InstKind::Ref { target, .. } => {
-                    let Some(i) = tracked(target) else { continue };
-                    touched[i] |= maybe_unset[i];
-                }
-                _ => {}
-            }
-        }
+        let mut state = block_in[at.0].clone();
+        transfer(at, &mut state);
         for succ in cfg.successors(at) {
-            let changed = match &mut block_in[succ.0] {
-                unreached @ None => {
-                    *unreached = Some(maybe_unset.clone());
-                    true
+            let mut changed = !std::mem::replace(&mut reached[succ.0], true);
+            for (into, from) in block_in[succ.0].iter_mut().zip(&state) {
+                if *from && !*into {
+                    *into = true;
+                    changed = true;
                 }
-                Some(into) => {
-                    let mut changed = false;
-                    for (into, from) in into.iter_mut().zip(&maybe_unset) {
-                        if *from && !*into {
-                            *into = true;
-                            changed = true;
-                        }
-                    }
-                    changed
-                }
-            };
+            }
             if changed {
                 worklist.push(succ);
             }
         }
     }
-    touched
 }

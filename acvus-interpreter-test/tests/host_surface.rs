@@ -1368,6 +1368,21 @@ fn a_second_init_for_one_key_is_refused() {
     assert_eq!(refusal.message, "`@a` is given two inits");
 }
 
+/// An init is run with no argument by the fetch that finds its key absent.
+#[test]
+fn an_init_that_reads_an_input_is_refused_at_compile() {
+    let refusals = refused(
+        host()
+            .init("a", Source::Expr("$n + 1"))
+            .entry::<(), i64>("main", Source::Script("@a")),
+    );
+    let [refusal] = refusals.as_slice() else {
+        panic!("one refusal, the init's: {refusals:?}")
+    };
+    assert_eq!(refusal.origin, Some(Origin::Init("a".to_owned())));
+    assert_eq!(refusal.message, "undefined variable `$n`");
+}
+
 /// A declared type names no source (RFC-0012 rule 7): the source the init
 /// makes becomes the context's, and a turn that stores another source is
 /// refused, as it is against any declared context.
