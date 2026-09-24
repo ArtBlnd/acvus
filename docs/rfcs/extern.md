@@ -1099,8 +1099,7 @@ glue at the type the checker settled.
      extern's return is.
    - A compilation takes the entry's return type as a Rust type `R`. Its
      `Ty` is read by the derive an extern's parameter uses, and it is the
-     entry's declaration (RFC-0054 rule 1). The declaration and `R` cannot
-     differ.
+     entry's declaration (RFC-0054 rule 1).
    - A host that names no type declares `!` (RFC-0054 rule 5), and rule 6
      covers it.
 
@@ -1131,9 +1130,8 @@ glue at the type the checker settled.
      `with(|p| …)` and `with_mut(|p| …)`; no value leaves it except through
      a closure.
    - A page offers `with(key, |p| …)`, `with_mut(key, |p| …)`, and
-     `insert::<T>(key, value: T)`, which moves `value` in through the glue
-     an extern's return uses, and `commit`, which hands what the runs left
-     to the storage.
+     `insert::<T>(key, value: T)`, and `commit`, which hands what the runs
+     left to the storage.
    - A type a handler parameter cannot take, a host cannot take either, and
      the gap is closed on the extern side.
 
@@ -1155,6 +1153,8 @@ glue at the type the checker settled.
    - The borrow is the closure's, as a handler's is the call's
      (`Within<'s>`, RFC-0079 rule 6), and `with_mut` holds the value
      exclusively. Nothing the closure is lent outlives it.
+   - A closure's panic `restore`s its holder as the closure left it and
+     continues, even where that `restore` fails.
    - A value the host keeps is a copy the host makes in Rust inside the
      closure, as `&str` to `String`.
    - No lent value holds a loan into a run: the checker refuses an entry

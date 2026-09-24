@@ -113,6 +113,7 @@ mod sync_call_is_an_operation;
 mod task_instances;
 mod temporary_borrow;
 mod try_op;
+mod tuple_crossing;
 mod typed_stage_list;
 mod undeclared_context;
 mod unordered;

@@ -519,7 +519,9 @@ pub enum PlaceMut<'a> {
 /// Rust type. Spell one of them `Rt::Value` and both crates still compile
 /// while every array that crosses the boundary misses this vtable.
 pub type Array = acvus_extern::Arr<Owned<AcvusRuntime>, ()>;
-pub struct Tuple(pub Vec<Owned<AcvusRuntime>>);
+/// The language's tuple is the extern contract's `Tup` at
+/// `V = Owned<AcvusRuntime>`, under the same obligation as `Array`.
+pub type Tuple = acvus_extern::Tup<Owned<AcvusRuntime>>;
 /// The language's object is the extern contract's `Obj` at
 /// `V = Owned<AcvusRuntime>` (RFC-0039 rule 4), under the same obligation as
 /// `Array`.
@@ -758,7 +760,7 @@ macro_rules! value_constructors {
             where
                 F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
             {
-                large(&TUPLE, || Tuple(items()))
+                large(&TUPLE, || acvus_extern::Tup(items()))
             }
             /// A heap object: the shape its type fixes and one value per field of it,
             /// in that order (RFC-0050 rules 4 and 8).

@@ -182,6 +182,10 @@ where
         self.positions.clear();
     }
 
+    fn in_insertion_order(&self) -> impl Iterator<Item = &Binding<K, V>> {
+        self.entries.iter().map(|entry| &entry.binding)
+    }
+
     /// The entries whose key hashes to `hash`. A hash no entry has is a
     /// hash with no candidates, so the empty list is the answer.
     fn candidates(&self, hash: u64) -> Vec<usize> {
@@ -492,6 +496,20 @@ where
     Rt: Runtime;
 
 stored_extern_type!(HashMap<K, V>, name: "HashMap");
+
+impl<K, V, E, Rt> HashMap<'_, K, V, E, Rt>
+where
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.0
+            .in_insertion_order()
+            .map(|binding| (&binding.key, &binding.value))
+    }
+}
 
 impl<K, V, E, Rt> acvus_extern::ensures::Length for HashMap<'_, K, V, E, Rt>
 where
@@ -1020,6 +1038,10 @@ where
 
     fn table_mut(&mut self) -> &mut SetTable<'a, K, E, Rt> {
         &mut self.0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &K> {
+        self.0.in_insertion_order().map(|binding| &binding.key)
     }
 }
 

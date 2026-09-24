@@ -983,6 +983,97 @@ fn what_the_machine_cannot_run_the_checker_refuses() {
 /// A literal arm over a place behind a reference tests what the reference
 /// names, at both optimization levels.
 #[test]
+fn a_vec_and_a_deque_print_as_the_json_array_of_their_items() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("let v = vec::new(); push(&mut v, 1); push(&mut v, 2); v", "[1,2]\n"),
+        (
+            "let v = vec::new(); push(&mut v, \"a\".to_string()); push(&mut v, \"b\".to_string()); v",
+            "[\"a\",\"b\"]\n",
+        ),
+        (
+            "let v = vec::new(); let w = vec::new(); push(&mut w, 1); push(&mut w, 2); push(&mut v, w); push(&mut v, vec([3])); v",
+            "[[1,2],[3]]\n",
+        ),
+        ("let v = vec([1]); pop(&mut v); v", "[]\n"),
+        ("vec([{ x: 1, }, { x: 2, }])", "[{\"x\":1},{\"x\":2}]\n"),
+        ("let d = deque(); push_back(&mut d, 1); push_front(&mut d, 0); d", "[0,1]\n"),
+        ("let d = deque(); push_back(&mut d, 1); pop_back(&mut d); d", "[]\n"),
+    ];
+    for (source, expected) in cases {
+        for level in ["full", "none"] {
+            let out = acvus(dir.path(), &["run", "-e", source, "--opt", level]);
+            assert_eq!(out.status.code(), Some(0), "{source}: {}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), expected, "{source} at opt {level}");
+        }
+    }
+}
+
+#[test]
+fn a_map_prints_as_its_key_value_pairs_and_a_set_as_its_keys_in_insertion_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "let m = hash_map(); insert(&mut m, \"b\".to_string(), 2); insert(&mut m, \"a\".to_string(), 1); \
+             insert(&mut m, \"c\".to_string(), 3); retain(&mut m, |k, v| -> *v != 2); \
+             insert(&mut m, \"b\".to_string(), 4); m",
+            "[[\"a\",1],[\"c\",3],[\"b\",4]]\n",
+        ),
+        (
+            "let m = hash_map(); insert(&mut m, 2, vec([20])); insert(&mut m, 1, vec([10, 11])); \
+             insert(&mut m, 3, vec([30])); insert(&mut m, 3, vec([31])); \
+             retain(&mut m, |k, v| -> *k != 2); insert(&mut m, 2, vec([21])); m",
+            "[[1,[10,11]],[3,[31]],[2,[21]]]\n",
+        ),
+        (
+            "let m = hash_map(); insert(&mut m, 1, 10); retain(&mut m, |k, v| -> false); m",
+            "[]\n",
+        ),
+        (
+            "let s = hash_set(); insert(&mut s, \"b\".to_string()); insert(&mut s, \"a\".to_string()); \
+             insert(&mut s, \"c\".to_string()); insert(&mut s, \"a\".to_string()); \
+             let gone = hash_set(); insert(&mut gone, \"b\".to_string()); \
+             let s = difference(s, gone); insert(&mut s, \"b\".to_string()); s",
+            "[\"a\",\"c\",\"b\"]\n",
+        ),
+        (
+            "let s = hash_set(); insert(&mut s, 1); let gone = hash_set(); insert(&mut gone, 1); difference(s, gone)",
+            "[]\n",
+        ),
+    ];
+    for (source, expected) in cases {
+        for level in ["full", "none"] {
+            let out = acvus(dir.path(), &["run", "-e", source, "--opt", level]);
+            assert_eq!(out.status.code(), Some(0), "{source}: {}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), expected, "{source} at opt {level}");
+        }
+    }
+}
+
+#[test]
+fn a_value_with_no_data_view_prints_its_name_and_a_closure_never_reaches_the_printer() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(
+        dir.path(),
+        &["run", "-e", "match regex(\"a+\") { Ok(r) => r, Err(e) => panic(\"no\".to_string()), }"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let printed = text(&out.stdout);
+    assert!(
+        printed.starts_with("\"<") && printed.ends_with(">\"\n") && printed.contains("Regex"),
+        "{printed}"
+    );
+    let out = acvus(dir.path(), &["run", "-e", "(1, |x| -> x + 1)"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("a closure does not leave the run it was made in"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(text(&out.stdout), "");
+}
+
+#[test]
 fn a_literal_arm_through_a_reference_runs() {
     let dir = tempfile::tempdir().unwrap();
     write(

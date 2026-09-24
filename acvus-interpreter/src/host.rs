@@ -1911,28 +1911,54 @@ where
         F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
         let program = self.program;
-        let lent = held
-            .lend(&program.rt, program.interner(), f)
-            .map_err(|asked| program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked));
-        AsyncStorage::restore(&mut *self.storage, key, held).await?;
-        lent
+        self.lent_back(key, held, Back::Restore, |held| {
+            held.lend(&program.rt, program.interner(), f)
+        })
+        .await
     }
 
-    async fn lent_mut<Q, F, O>(&mut self, key: &str, mut held: Held, f: F) -> Result<O, HostError>
+    async fn lent_mut<Q, F, O>(&mut self, key: &str, held: Held, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
     {
         let program = self.program;
-        match held.lend_mut(&program.rt, program.interner(), f) {
-            Ok(lent) => {
-                AsyncStorage::store(&mut *self.storage, key, held).await?;
-                Ok(lent)
+        self.lent_back(key, held, Back::Store, |held| {
+            held.lend_mut(&program.rt, program.interner(), f)
+        })
+        .await
+    }
+
+    /// Lend `held` through `lend` and hand it back on every path (RFC-0090
+    /// rule 5): by `lent` where the closure returned, by `restore` where the
+    /// types did not match or the closure panicked, and then the panic
+    /// resumes.
+    async fn lent_back<O>(
+        &mut self,
+        key: &str,
+        mut held: Held,
+        lent: Back,
+        lend: impl FnOnce(&mut Held) -> Result<O, PolyTy>,
+    ) -> Result<O, HostError> {
+        let program = self.program;
+        // `AssertUnwindSafe`: the panic is resumed below, so the caller
+        // observes it as if it had never been caught; the holder is the one
+        // thing read after it, and it is handed back as the closure left it.
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lend(&mut held)))
+            .map(|ended| ended.map_err(|asked| program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked)));
+        let back = match ended {
+            Ok(Ok(_)) => lent,
+            Ok(Err(_)) | Err(_) => Back::Restore,
+        };
+        let handed = match back {
+            Back::Store => AsyncStorage::store(&mut *self.storage, key, held).await,
+            Back::Restore => AsyncStorage::restore(&mut *self.storage, key, held).await,
+        };
+        match ended {
+            Ok(ended) => {
+                handed?;
+                ended
             }
-            Err(asked) => {
-                let refused = program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked);
-                AsyncStorage::restore(&mut *self.storage, key, held).await?;
-                Err(refused)
-            }
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
 
@@ -1963,6 +1989,12 @@ where
     pub fn storage(&self) -> &S {
         self.storage
     }
+}
+
+/// How a holder goes back to its storage after its closure returned.
+enum Back {
+    Store,
+    Restore,
 }
 
 /// Closes a run's gate when the run returns or is dropped, before the

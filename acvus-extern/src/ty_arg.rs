@@ -665,6 +665,10 @@ impl_tuple_ty_arg!(A);
 impl_tuple_ty_arg!(A, B);
 impl_tuple_ty_arg!(A, B, C);
 impl_tuple_ty_arg!(A, B, C, D);
+impl_tuple_ty_arg!(A, B, C, D, E);
+impl_tuple_ty_arg!(A, B, C, D, E, F);
+impl_tuple_ty_arg!(A, B, C, D, E, F, G);
+impl_tuple_ty_arg!(A, B, C, D, E, F, G, H);
 
 /// The bound of a type variable that ranges over a finite set of concrete
 /// types: `A: Monomorphize<(i64, f64)>`. The declaration carries the set;
