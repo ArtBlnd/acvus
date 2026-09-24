@@ -1028,14 +1028,14 @@ Status: Proposed
    `len` of something neither a slice nor a container fails the bound the
    evaluation names. Combining the registries refuses an identity or a
    combine that names no registered extern or one of the wrong type.
-6. **The readers.** `analysis::carried` reads a law through a call's
-   callee. A header parameter `p` whose back edges send `f(p, x)` for an
-   associative `f`, or `f(x, p)` when `f` also commutes, where the body
-   reads `p` only as that operand, is a `Merge` (RFC-0066 rule 5) on `f`,
-   exact. A storage `s` every write of which in the loop is a call of one
+6. **The readers.** `analysis::loop_deps` reads a law through a call's
+   callee (RFC-0089 rule 4). A cycle on a header parameter `p` whose back
+   edges send `f(p, x)` for an associative `f`, or `f(x, p)` when `f` also
+   commutes, where the body reads `p` only as that operand, has the `Call`
+   law on `f`. A storage `s` every write of which in the loop is a call of one
    instance of an extern with a `fold` law, lending `s` through its first
    argument and no other, and which the loop reads only to lend it to those
-   calls, is a merge through storage, and it is carried state. `analysis::interval` reads a postcondition
+   calls, has the `Fold` law on that instance. `analysis::interval` reads a postcondition
    through a call's callee (RFC-0047 rule 7). The merge names the extern
    instance, and its identity and `combine` are for the split of RFC-0066
    rule 10,

@@ -490,13 +490,10 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    deep.
 
 5. **Carried state.** Each header parameter is exactly one of `Iv`, affine
-   by rule 4; `Merge { op, exact }`, whose back edges send `p ⊕ x` where the
-   body reads `p` only as that operand and `p ⊕ x` only on the back edges;
-   or `Recurrence`, anything else. Integer `+` and `*` are exact merges.
-   Float `+` and `*` are inexact merges. A call of an extern that declares
-   itself associative is an exact merge (RFC-0082), which is how `min` and
-   `max` over integers are recognized. `&&` and `||` are exact operations,
-   but they reach MIR as a short-circuit `Diamond`, and their recognition
+   by rule 4, or state, anything else. A state's law, when it has one, is
+   what RFC-0089 rule 4 reads in `analysis::loop_deps`, the one reader of
+   laws; `analysis::carried` classifies and reads none. `&&` and `||`
+   reach MIR as a short-circuit `Diamond`, and reading a law through one
    is open.
 
 6. **Order is per target, not per loop.** What a loop changes and how the
@@ -647,9 +644,9 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
      law does not commute; a cycle without one still runs in its order.
    - A law is read from what the cycle computes, not from how it is
      spelled: through a branch whose other arm leaves the token as it was
-     (the law's identity stands in), through a compare and select that is
-     a declared `min` or `max`, and through a storage the cycle loads,
-     combines and stores whole.
+     (the law's identity stands in), through a compare and select of
+     integers, which is their `min` or `max` by the order's definition,
+     and through a storage the cycle loads, combines and stores whole.
 
 5. **Exits and effects.** An exit other than the header's is the control
    token's cycle: the stage it leaves from passes the control token to the
