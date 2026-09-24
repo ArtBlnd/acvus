@@ -1087,10 +1087,10 @@ glue at the type the checker settled.
      context's without a join of two sources; inside a script, a store of
      another source into the context stays refused.
    - A `Fetch` of a key the storage lacks runs that key's init at that
-     point and stores its result, then the run goes on; a key with neither a
+     point, stores its result and loads it (no value is cloned), then
+     the run goes on; a key with neither a
      value nor an init ends the run there with `Unfilled`, naming the key.
-     An init runs only where a load finds nothing, so no init replaces a
-     value.
+     No init replaces a value.
    - A context whose type the graph leaves open closes to `!` at the freeze
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
    - A value no script names is not a context. The host keeps it itself.
