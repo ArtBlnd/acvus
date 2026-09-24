@@ -1,9 +1,10 @@
-use std::cell::Cell;
-use std::path::PathBuf;
+use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
 
 use acvus_lsp::{
-    Checked, CompilationId, CompilationSpec, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Listing, LspErrorCategory, LspSession, Mode, Sites, Vfs, Workspace,
+    Checked, CompilationId, CompilationSpec, Document, DocumentSpec, EntryKind, Environment, Host,
+    HostDiagnostic, Listing, LspError, LspErrorKind, LspSession, Mode, RecordingReader, Sites,
+    TextError, Vfs, Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, QualifiedRef};
 use acvus_mir::ty::{Effect, PolyBuilder, Ty, TyTerm, lift_to_poly};
@@ -13,6 +14,7 @@ struct TestHost {
     root: PathBuf,
     loads: usize,
     checks: Cell<usize>,
+    reads: RefCell<Vec<PathBuf>>,
 }
 
 fn document(interner: &Interner, name: &str) -> Document {
@@ -50,7 +52,7 @@ impl TestHost {
     fn env_of_a(
         &self,
         interner: &Interner,
-        vfs: &Vfs,
+        reader: &RecordingReader<'_>,
     ) -> Result<CompilationGraph, Vec<HostDiagnostic>> {
         let path = self.path("env.txt");
         let refused = |message: String| {
@@ -60,7 +62,11 @@ impl TestHost {
                 message,
             }]
         };
-        match vfs.read(&path).map_err(|e| refused(e.to_string()))?.trim() {
+        match reader
+            .read(&path)
+            .map_err(|e| refused(e.to_string()))?
+            .trim()
+        {
             "string" => Ok(environment(interner, Ty::String)),
             "int" => Ok(environment(interner, Ty::I64)),
             other => Err(refused(format!("unknown environment `{other}`"))),
@@ -76,14 +82,18 @@ struct TestCompilation {
 impl Host for TestHost {
     type Compilation = TestCompilation;
 
-    fn compilations(&mut self, interner: &Interner, vfs: &Vfs) -> Listing<TestCompilation> {
+    fn compilations(
+        &mut self,
+        interner: &Interner,
+        reader: &RecordingReader<'_>,
+    ) -> Listing<TestCompilation> {
         self.loads += 1;
         let spec = |name: &str| DocumentSpec {
             path: self.path(&format!("{name}.acvt")),
             document: document(interner, name),
         };
         let listing = self.path("listing.txt");
-        let refusals = match vfs.read(&listing) {
+        let refusals = match reader.read(&listing) {
             Ok(text) if text.trim() == "broken" => vec![HostDiagnostic {
                 path: listing,
                 span: None,
@@ -95,7 +105,7 @@ impl Host for TestHost {
             compilations: vec![
                 CompilationSpec {
                     id: CompilationId(self.path("a.id")),
-                    environment: self.env_of_a(interner, vfs).map(|graph| Environment {
+                    environment: self.env_of_a(interner, reader).map(|graph| Environment {
                         graph,
                         host: TestCompilation {
                             name: "a.id",
@@ -120,6 +130,12 @@ impl Host for TestHost {
             ],
             refusals,
         }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        self.reads.borrow_mut().push(path.to_path_buf());
+        vfs.read(path)
+            .map_err(|error| format!("the test host cannot read {}: {error}", path.display()))
     }
 
     fn check(&self, compilation: &TestCompilation, checked: &Checked<'_>) -> Vec<HostDiagnostic> {
@@ -170,6 +186,7 @@ fn fixture(env: &str, a: Option<&str>, shared: &str) -> Fixture {
         root: root.clone(),
         loads: 0,
         checks: Cell::new(0),
+        reads: RefCell::new(Vec::new()),
     };
     Fixture {
         _dir: dir,
@@ -187,25 +204,34 @@ impl Fixture {
         self.workspace
             .diagnostics()
             .get(&self.at(name))
-            .unwrap_or_else(|| panic!("{name} has an entry"))
+            .unwrap_or_else(|| panic!("{name} has diagnostics"))
             .iter()
             .map(|error| error.message.clone())
             .collect()
     }
 
-    fn categories(&self, name: &str) -> Vec<LspErrorCategory> {
+    fn kinds(&self, name: &str) -> Vec<LspErrorKind> {
         self.workspace.diagnostics()[&self.at(name)]
             .iter()
-            .map(|error| error.category)
+            .map(|error| error.kind)
             .collect()
+    }
+
+    fn take_read_counts(&self, names: [&str; 2]) -> [usize; 2] {
+        let reads = self.workspace.host().reads.take();
+        names.map(|name| reads.iter().filter(|read| **read == self.at(name)).count())
+    }
+
+    fn accepted(&self, name: &str) -> bool {
+        !self.workspace.diagnostics().contains_key(&self.at(name))
     }
 }
 
 #[test]
-fn accepted_documents_have_empty_entries_and_every_compilation_is_checked() {
+fn accepted_documents_have_no_entries_and_every_compilation_is_checked() {
     let f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
-    assert!(f.messages("a.acvt").is_empty());
-    assert!(f.messages("shared.acvt").is_empty());
+    assert!(f.accepted("a.acvt"));
+    assert!(f.accepted("shared.acvt"));
     assert_eq!(
         f.messages("rules.txt"),
         [
@@ -249,19 +275,23 @@ fn host_rules_run_only_over_an_accepted_compilation() {
 fn a_failed_environment_is_reported_on_its_file_and_its_documents_are_parsed() {
     let mut f = fixture("bogus", Some("{{ @x + 1 }}"), "{{ @x }}");
     assert_eq!(f.messages("env.txt"), ["unknown environment `bogus`"]);
-    assert_eq!(f.categories("env.txt"), [LspErrorCategory::Host]);
-    assert!(f.messages("a.acvt").is_empty());
+    assert_eq!(f.kinds("env.txt"), [LspErrorKind::Host(None)]);
+    assert!(f.accepted("a.acvt"));
 
     let a = f.at("a.acvt");
     f.workspace.set_buffer(a, "{{ ".to_string());
-    assert_eq!(
-        f.categories("a.acvt"),
-        [LspErrorCategory::Parse, LspErrorCategory::Parse]
+    assert!(
+        matches!(
+            f.kinds("a.acvt").as_slice(),
+            [LspErrorKind::Parse(_), LspErrorKind::Parse(_)]
+        ),
+        "{:?}",
+        f.kinds("a.acvt")
     );
 }
 
 #[test]
-fn a_change_to_a_file_that_is_not_a_document_reloads() {
+fn a_change_to_a_file_the_listing_read_lists_again() {
     let mut f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
     assert_eq!(f.workspace.host().loads, 1);
 
@@ -272,7 +302,33 @@ fn a_change_to_a_file_that_is_not_a_document_reloads() {
 
     f.workspace.drop_buffer(&env);
     assert_eq!(f.workspace.host().loads, 3);
-    assert!(f.messages("a.acvt").is_empty());
+    assert!(f.accepted("a.acvt"));
+
+    std::fs::write(&env, "int").expect("rewrite env.txt");
+    f.workspace.file_changed(&env);
+    assert_eq!(f.workspace.host().loads, 4);
+    assert!(!f.messages("a.acvt").is_empty(), "an Int is not emitted");
+}
+
+#[test]
+fn a_change_to_a_path_neither_read_listed_nor_held_changes_nothing() {
+    let mut f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
+    let before = f.workspace.diagnostics();
+    assert_eq!(f.workspace.host().loads, 1);
+    assert_eq!(f.workspace.host().checks.get(), 2);
+
+    let readme = f.at("README.md");
+    f.workspace
+        .set_buffer(readme.clone(), "# notes".to_string());
+    assert_eq!(f.workspace.host().loads, 1);
+    assert_eq!(f.workspace.host().checks.get(), 2);
+
+    f.workspace.drop_buffer(&readme);
+    std::fs::write(&readme, "# notes").expect("write README.md");
+    f.workspace.file_changed(&readme);
+    assert_eq!(f.workspace.host().loads, 1);
+    assert_eq!(f.workspace.host().checks.get(), 2);
+    assert_eq!(f.workspace.diagnostics(), before);
 }
 
 #[test]
@@ -300,15 +356,45 @@ fn a_disk_change_under_an_open_buffer_moves_nothing() {
 #[test]
 fn an_unreadable_document_opens_when_its_buffer_arrives() {
     let mut f = fixture("string", None, "{{ @x }}");
-    assert_eq!(f.categories("a.acvt"), [LspErrorCategory::Unreadable]);
+    assert_eq!(f.kinds("a.acvt"), [LspErrorKind::Host(None)]);
     assert!(f.messages("rules.txt").iter().all(|m| !m.contains("a.id")));
 
     let a = f.at("a.acvt");
     f.workspace.set_buffer(a, "{{ @x }}".to_string());
-    assert!(f.messages("a.acvt").is_empty());
+    assert!(f.accepted("a.acvt"));
     assert!(
         f.messages("rules.txt")
             .contains(&"checked a.id, shared typed: true".to_string())
+    );
+}
+
+fn refused_by_the_test_host(path: &Path) -> LspError {
+    let error = std::fs::read_to_string(path).expect_err("the document was never written");
+    LspError {
+        kind: LspErrorKind::Host(None),
+        message: format!("the test host cannot read {}: {error}", path.display()),
+        related: Vec::new(),
+    }
+}
+
+#[test]
+fn a_document_the_host_cannot_read_is_refused_in_the_host_s_words() {
+    let f = fixture("string", None, "{{ @x }}");
+    let a = f.at("a.acvt");
+    assert_eq!(
+        f.workspace.diagnostics()[&a],
+        [refused_by_the_test_host(&a)]
+    );
+}
+
+#[test]
+fn a_document_of_a_refused_environment_is_read_through_the_host() {
+    let f = fixture("bogus", None, "{{ @x }}");
+    assert_eq!(f.messages("env.txt"), ["unknown environment `bogus`"]);
+    let a = f.at("a.acvt");
+    assert_eq!(
+        f.workspace.diagnostics()[&a],
+        [refused_by_the_test_host(&a)]
     );
 }
 
@@ -316,11 +402,11 @@ fn an_unreadable_document_opens_when_its_buffer_arrives() {
 fn completions_answer_for_a_document_alone() {
     let f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
     assert!(f.workspace.completions(&f.at("env.txt"), 0).is_none());
-    let items = f
+    let completions = f
         .workspace
         .completions(&f.at("a.acvt"), 5)
         .expect("a.acvt is open");
-    assert!(items.iter().any(|item| item.label == "@x"));
+    assert!(completions.items.iter().any(|item| item.label == "@x"));
 }
 
 #[test]
@@ -329,22 +415,451 @@ fn a_refusal_of_the_listing_belongs_to_no_compilation() {
     let listing = f.at("listing.txt");
     f.workspace.set_buffer(listing, "broken".to_string());
     assert_eq!(f.messages("listing.txt"), ["the listing does not parse"]);
-    assert_eq!(f.categories("listing.txt"), [LspErrorCategory::Host]);
-    assert!(f.messages("a.acvt").is_empty());
+    assert_eq!(f.kinds("listing.txt"), [LspErrorKind::Host(None)]);
+    assert!(f.accepted("a.acvt"));
     assert_eq!(f.messages("rules.txt").len(), 2);
 }
 
 #[test]
 fn a_host_reads_the_inputs_a_document_requires() {
     let f = fixture("string", Some("{{ $who }}"), "{{ @x }}");
-    assert!(f.messages("a.acvt").is_empty());
+    assert!(f.accepted("a.acvt"));
     let inputs = f.messages("inputs.txt");
     assert_eq!(inputs.len(), 1);
     assert!(inputs[0].split(',').any(|name| name == "who"), "{inputs:?}");
 }
 
 #[test]
+fn a_document_two_compilations_hold_is_read_once_per_change() {
+    let mut f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
+    let documents = ["shared.acvt", "a.acvt"];
+    assert_eq!(f.take_read_counts(documents), [1, 1]);
+
+    let shared = f.at("shared.acvt");
+    f.workspace
+        .set_buffer(shared, "{{ @x }}{{ @x }}".to_string());
+    assert_eq!(f.take_read_counts(documents), [1, 0]);
+
+    let env = f.at("env.txt");
+    f.workspace.set_buffer(env, "int".to_string());
+    assert_eq!(f.workspace.host().loads, 2);
+    assert_eq!(f.take_read_counts(documents), [1, 1]);
+}
+
+#[test]
+fn a_document_s_text_is_the_one_its_compilations_parsed() {
+    let mut f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
+    let a = f.at("a.acvt");
+    std::fs::write(&a, "{{ @x + 1 }}").expect("rewrite a.acvt");
+    assert_eq!(f.workspace.text(&a).expect("a.acvt reads"), "{{ @x }}");
+    assert!(f.accepted("a.acvt"));
+
+    f.workspace.file_changed(&a);
+    assert_eq!(f.workspace.text(&a).expect("a.acvt reads"), "{{ @x + 1 }}");
+    assert!(!f.accepted("a.acvt"));
+
+    let notes = f.at("notes.txt");
+    std::fs::write(&notes, "one").expect("write notes.txt");
+    assert_eq!(f.workspace.text(&notes).expect("notes.txt reads"), "one");
+    std::fs::write(&notes, "two").expect("rewrite notes.txt");
+    assert_eq!(f.workspace.text(&notes).expect("notes.txt reads"), "two");
+}
+
+#[test]
+fn an_unreadable_document_s_text_is_its_refusal() {
+    let f = fixture("string", None, "{{ @x }}");
+    let a = f.at("a.acvt");
+    let Err(TextError::DocumentRefused(message)) = f.workspace.text(&a) else {
+        panic!("a.acvt was never written, and the host refuses it");
+    };
+    assert_eq!(message, refused_by_the_test_host(&a).message);
+}
+
+#[test]
 fn checks_are_counted_per_accepted_compilation() {
     let f = fixture("string", Some("{{ @x }}"), "{{ @x }}");
     assert_eq!(f.workspace.host().checks.get(), 2);
+}
+
+struct DerivingHost {
+    root: PathBuf,
+    loads: usize,
+}
+
+fn unit_environment(interner: &Interner, x: Ty) -> Environment<()> {
+    Environment {
+        graph: environment(interner, x),
+        host: (),
+        sites: Sites::default(),
+    }
+}
+
+impl Host for DerivingHost {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, reader: &RecordingReader<'_>) -> Listing<()> {
+        self.loads += 1;
+        let d = self.root.join("d.acvt");
+        let derived = match reader.read(&d) {
+            Ok(text) if text.contains("int") => Ok(Ty::I64),
+            Ok(_) => Ok(Ty::String),
+            Err(error) => Err(vec![HostDiagnostic {
+                path: d.clone(),
+                span: None,
+                message: error.to_string(),
+            }]),
+        };
+        let spec = |name: &str| DocumentSpec {
+            path: self.root.join(format!("{name}.acvt")),
+            document: document(interner, name),
+        };
+        Listing {
+            compilations: vec![
+                CompilationSpec {
+                    id: CompilationId(self.root.join("one.id")),
+                    environment: Ok(unit_environment(interner, Ty::String)),
+                    documents: vec![spec("d")],
+                },
+                CompilationSpec {
+                    id: CompilationId(self.root.join("two.id")),
+                    environment: derived.map(|x| unit_environment(interner, x)),
+                    documents: vec![spec("e")],
+                },
+            ],
+            refusals: Vec::new(),
+        }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
+    }
+
+    fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn a_document_the_listing_read_lists_again_and_stays_a_document() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let root = dir.path().to_path_buf();
+    let d = root.join("d.acvt");
+    let e = root.join("e.acvt");
+    std::fs::write(&d, "{{ @x }}").expect("write d.acvt");
+    std::fs::write(&e, "{{ @x }}").expect("write e.acvt");
+    let mut workspace = Workspace::new(
+        &Interner::new(),
+        DerivingHost {
+            root: root.clone(),
+            loads: 0,
+        },
+    );
+    assert_eq!(workspace.host().loads, 1);
+    assert!(!workspace.diagnostics().contains_key(&e));
+
+    let text = "int {{ @x }}";
+    workspace.set_buffer(d.clone(), text.to_string());
+    assert_eq!(workspace.host().loads, 2);
+    assert!(!workspace.diagnostics().contains_key(&d));
+    assert!(
+        !workspace.diagnostics()[&e].is_empty(),
+        "an Int is not emitted"
+    );
+
+    let at = text.find("@x").expect("d.acvt reads `@x`");
+    let completions = workspace
+        .completions(&d, at + 2)
+        .expect("d.acvt is open in one.id");
+    assert!(completions.items.iter().any(|item| item.label == "@x"));
+    assert!(workspace.hover(&d, at + 1).is_some());
+
+    workspace.set_buffer(d, "{{ @x }}".to_string());
+    assert_eq!(workspace.host().loads, 3);
+    assert!(!workspace.diagnostics().contains_key(&e));
+}
+
+struct DirectoryHost {
+    src: PathBuf,
+    loads: usize,
+    checks: Cell<usize>,
+    listed: Vec<PathBuf>,
+}
+
+impl Host for DirectoryHost {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, reader: &RecordingReader<'_>) -> Listing<()> {
+        self.loads += 1;
+        let refused = |path: &Path, message: String| HostDiagnostic {
+            path: path.to_path_buf(),
+            span: None,
+            message,
+        };
+        let mut documents = Vec::new();
+        let mut refusals = Vec::new();
+        let entries = match reader.read_dir(&self.src) {
+            Ok(entries) => entries,
+            Err(error) => {
+                refusals.push(refused(&self.src, error.to_string()));
+                Vec::new()
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    refusals.push(refused(&self.src, error.to_string()));
+                    continue;
+                }
+            };
+            match entry.kind {
+                Ok(EntryKind::File) => {}
+                Ok(EntryKind::Directory | EntryKind::Symlink) => continue,
+                Err(error) => {
+                    refusals.push(refused(&entry.path, error.to_string()));
+                    continue;
+                }
+            }
+            if entry
+                .path
+                .extension()
+                .is_none_or(|extension| extension != "acvt")
+            {
+                continue;
+            }
+            let stem = entry
+                .path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("a listed template has a UTF-8 stem");
+            documents.push(DocumentSpec {
+                document: document(interner, stem),
+                path: entry.path,
+            });
+        }
+        self.listed = documents.iter().map(|spec| spec.path.clone()).collect();
+        Listing {
+            compilations: vec![CompilationSpec {
+                id: CompilationId(self.src.join("src.id")),
+                environment: Ok(unit_environment(interner, Ty::String)),
+                documents,
+            }],
+            refusals,
+        }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
+    }
+
+    fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        self.checks.set(self.checks.get() + 1);
+        Vec::new()
+    }
+}
+
+struct Listed {
+    _dir: tempfile::TempDir,
+    src: PathBuf,
+    workspace: Workspace<DirectoryHost>,
+}
+
+fn listed() -> Listed {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let src = dir.path().join("src");
+    std::fs::create_dir(&src).expect("create src");
+    std::fs::write(src.join("a.acvt"), "{{ @x }}").expect("write a.acvt");
+    std::fs::write(src.join("notes.txt"), "notes").expect("write notes.txt");
+    let workspace = Workspace::new(
+        &Interner::new(),
+        DirectoryHost {
+            src: src.clone(),
+            loads: 0,
+            checks: Cell::new(0),
+            listed: Vec::new(),
+        },
+    );
+    assert_eq!(workspace.host().loads, 1);
+    assert_eq!(workspace.host().checks.get(), 1);
+    Listed {
+        _dir: dir,
+        src,
+        workspace,
+    }
+}
+
+impl Listed {
+    fn last_listing(&self) -> Vec<PathBuf> {
+        let mut listed = self.workspace.host().listed.clone();
+        listed.sort();
+        listed
+    }
+}
+
+#[test]
+fn a_buffer_new_to_a_listed_directory_lists_again() {
+    let mut l = listed();
+    let new = l.src.join("new.acvt");
+    l.workspace.set_buffer(new.clone(), "{{ @x }}".to_string());
+    assert_eq!(l.workspace.host().loads, 2);
+    assert_eq!(l.last_listing(), [l.src.join("a.acvt"), new]);
+}
+
+#[test]
+fn a_file_created_on_disk_in_a_listed_directory_lists_again() {
+    let mut l = listed();
+    let new = l.src.join("new.acvt");
+    std::fs::write(&new, "{{ @x }}").expect("write new.acvt");
+    l.workspace.file_changed(&new);
+    assert_eq!(l.workspace.host().loads, 2);
+    assert_eq!(l.last_listing(), [l.src.join("a.acvt"), new]);
+}
+
+#[test]
+fn a_content_change_in_a_listed_directory_rechecks_without_listing_again() {
+    let mut l = listed();
+    let a = l.src.join("a.acvt");
+    l.workspace
+        .set_buffer(a.clone(), "{{ @x }}{{ @x }}".to_string());
+    assert_eq!(l.workspace.host().loads, 1);
+    assert_eq!(l.workspace.host().checks.get(), 2);
+
+    l.workspace.drop_buffer(&a);
+    assert_eq!(l.workspace.host().loads, 1);
+    assert_eq!(l.workspace.host().checks.get(), 3);
+
+    std::fs::write(&a, "{{ @x }}{{ @x }}").expect("rewrite a.acvt");
+    l.workspace.file_changed(&a);
+    assert_eq!(l.workspace.host().loads, 1);
+    assert_eq!(l.workspace.host().checks.get(), 4);
+
+    let notes = l.src.join("notes.txt");
+    std::fs::write(&notes, "more notes").expect("rewrite notes.txt");
+    l.workspace.file_changed(&notes);
+    assert_eq!(l.workspace.host().loads, 1);
+    assert_eq!(l.workspace.host().checks.get(), 4);
+}
+
+#[test]
+fn dropping_a_buffer_only_file_of_a_listed_directory_lists_again() {
+    let mut l = listed();
+    let new = l.src.join("new.acvt");
+    l.workspace.set_buffer(new.clone(), "{{ @x }}".to_string());
+    assert_eq!(l.workspace.host().loads, 2);
+
+    l.workspace.drop_buffer(&new);
+    assert_eq!(l.workspace.host().loads, 3);
+    assert_eq!(l.last_listing(), [l.src.join("a.acvt")]);
+}
+
+struct TailHost {
+    root: PathBuf,
+    tails: RefCell<Vec<(PathBuf, Option<Ty>)>>,
+    returns: RefCell<Vec<(PathBuf, Option<Ty>)>>,
+}
+
+impl TailHost {
+    fn script(&self) -> PathBuf {
+        self.root.join("s.acvus")
+    }
+
+    fn template(&self) -> PathBuf {
+        self.root.join("t.acvt")
+    }
+
+    fn absent(&self) -> PathBuf {
+        self.root.join("absent.acvus")
+    }
+}
+
+impl Host for TailHost {
+    type Compilation = ();
+
+    fn compilations(&mut self, interner: &Interner, _reader: &RecordingReader<'_>) -> Listing<()> {
+        let script = Document {
+            qref: QualifiedRef::root(interner.intern("s")),
+            mode: Mode::Script,
+            ty: TyTerm::Fn {
+                params: vec![],
+                ret: Box::new(TyTerm::Never),
+                captures: vec![],
+                effect: Effect::OPAQUE.into(),
+            },
+        };
+        Listing {
+            compilations: vec![CompilationSpec {
+                id: CompilationId(self.root.join("tail.id")),
+                environment: Ok(unit_environment(interner, Ty::String)),
+                documents: vec![
+                    DocumentSpec {
+                        path: self.script(),
+                        document: script,
+                    },
+                    DocumentSpec {
+                        path: self.template(),
+                        document: document(interner, "t"),
+                    },
+                ],
+            }],
+            refusals: Vec::new(),
+        }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
+    }
+
+    fn check(&self, _compilation: &(), checked: &Checked<'_>) -> Vec<HostDiagnostic> {
+        for path in [self.script(), self.template(), self.absent()] {
+            let returns = match checked.inferred_ty(&path) {
+                Some(Ty::Fn { ret, .. }) => Some((**ret).clone()),
+                Some(other) => panic!("a document's function is typed {other:?}"),
+                None => None,
+            };
+            self.returns.borrow_mut().push((path.clone(), returns));
+            self.tails
+                .borrow_mut()
+                .push((path.clone(), checked.tail_ty(&path)));
+        }
+        Vec::new()
+    }
+}
+
+/// An unsuffixed literal no use constrains takes `i64`, the width
+/// `TyVarBound::integer_default` gives while it remains among the admitted
+/// ones, and a declared `!` holds the tail to nothing.
+#[test]
+fn a_host_reads_the_type_of_the_value_a_body_returns() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let root = dir.path().to_path_buf();
+    std::fs::write(root.join("s.acvus"), "1").expect("write s.acvus");
+    std::fs::write(root.join("t.acvt"), "{{ @x }}").expect("write t.acvt");
+    let workspace = Workspace::new(
+        &Interner::new(),
+        TailHost {
+            root: root.clone(),
+            tails: RefCell::new(Vec::new()),
+            returns: RefCell::new(Vec::new()),
+        },
+    );
+    let host = workspace.host();
+    let (script, template, absent) = (host.script(), host.template(), host.absent());
+    assert!(workspace.diagnostics().is_empty());
+
+    assert_eq!(
+        *host.tails.borrow(),
+        [
+            (script.clone(), Some(Ty::I64)),
+            (template.clone(), Some(Ty::String)),
+            (absent.clone(), None),
+        ]
+    );
+    assert_eq!(
+        *host.returns.borrow(),
+        [
+            (script, Some(Ty::Never)),
+            (template, Some(Ty::String)),
+            (absent, None),
+        ]
+    );
 }

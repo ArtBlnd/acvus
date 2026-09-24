@@ -84,6 +84,13 @@ fn nth(source: &str, needle: &str, n: usize) -> usize {
         .unwrap_or_else(|| panic!("`{needle}` occurs {} times in {source:?}", n + 1))
 }
 
+fn completed(session: &LspSession, doc: DocId, cursor: usize) -> Vec<CompletionItem> {
+    session
+        .completions(doc, cursor)
+        .expect("the cursor is in code of an open document")
+        .items
+}
+
 fn of_kind(items: &[CompletionItem], kind: CompletionKind) -> Vec<&CompletionItem> {
     items.iter().filter(|item| item.kind == kind).collect()
 }
@@ -104,7 +111,7 @@ fn a_local_is_offered_at_the_type_the_checker_binds() {
     let i = Interner::new();
     let source = "let alpha = 1; let beta = \"b\"; al";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     let locals = of_kind(&items, CompletionKind::Local);
     assert_eq!(labels(&locals), ["alpha"]);
     assert_eq!(
@@ -120,13 +127,13 @@ fn a_name_bound_in_a_block_is_not_offered_after_it() {
     let i = Interner::new();
     let source = "let y = { let hidden = 2; hidden }; hid";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert!(
         of_kind(&items, CompletionKind::Local).is_empty(),
         "{items:?}"
     );
     let inside = nth(source, "hidden }", 0) + "hid".len();
-    let items = session.completions(doc, inside);
+    let items = completed(&session, doc, inside);
     assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["hidden"]);
 }
 
@@ -136,9 +143,9 @@ fn a_lambda_parameter_is_offered_only_in_its_body() {
     let source = "let f = |param| -> pa; pa";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
     let in_body = nth(source, "pa;", 0) + "pa".len();
-    let items = session.completions(doc, in_body);
+    let items = completed(&session, doc, in_body);
     assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["param"]);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert!(
         of_kind(&items, CompletionKind::Local).is_empty(),
         "{items:?}"
@@ -150,7 +157,7 @@ fn a_shadowed_name_is_offered_once_at_the_inner_binding() {
     let i = Interner::new();
     let source = "let v = 1; let v = \"s\"; v";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     let locals = of_kind(&items, CompletionKind::Local);
     assert_eq!(labels(&locals), ["v"]);
     assert_eq!(
@@ -169,7 +176,7 @@ fn a_context_is_offered_after_at_by_its_prefix() {
     let contexts = root_contexts(&i, &[("name", Ty::String), ("count", Ty::I64)]);
     let source = "@na";
     let (session, doc) = open(&i, bare(contexts), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert_eq!(
         items,
         [CompletionItem {
@@ -195,7 +202,7 @@ fn the_declared_inputs_are_offered_after_dollar() {
     let doc = session
         .open(document(&i, "test", Mode::Script, params), source)
         .expect("the session opens no other document");
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert_eq!(
         items,
         [
@@ -228,7 +235,7 @@ fn an_object_offers_its_fields_at_their_types() {
     let source = "let o = { alpha: 1, beta: true, }; o.zz";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
     let after_dot = nth(source, "o.", 0) + "o.".len();
-    let items = session.completions(doc, after_dot);
+    let items = completed(&session, doc, after_dot);
     let fields = of_kind(&items, CompletionKind::Field);
     assert_eq!(labels(&fields), ["alpha", "beta"]);
     assert_eq!(
@@ -243,7 +250,7 @@ fn an_object_offers_its_fields_at_their_types() {
     let typing = &source[..after_dot];
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, typing);
     assert!(!session.diagnostics(doc).is_empty(), "`o.` does not parse");
-    assert_eq!(session.completions(doc, typing.len()), items);
+    assert_eq!(completed(&session, doc, typing.len()), items);
 }
 
 /// `string::trim` takes `&str`, which a `&str` receiver reaches by a
@@ -253,7 +260,7 @@ fn a_string_receiver_is_offered_the_functions_that_take_it() {
     let i = Interner::new();
     let source = "let s = \"b\"; s.";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     let methods = labels(&of_kind(&items, CompletionKind::Method));
     assert!(methods.contains(&"trim".to_string()), "{methods:?}");
     assert!(!methods.contains(&"powi".to_string()), "{methods:?}");
@@ -262,7 +269,7 @@ fn a_string_receiver_is_offered_the_functions_that_take_it() {
     let named = "po";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, named);
     let functions = labels(&of_kind(
-        &session.completions(doc, named.len()),
+        &completed(&session, doc, named.len()),
         CompletionKind::Function,
     ));
     assert!(functions.contains(&"powi".to_string()), "{functions:?}");
@@ -275,7 +282,7 @@ fn a_string_context_receiver_reaches_a_view_taking_function() {
     let contexts = root_contexts(&i, &[("name", Ty::String)]);
     let source = "let s = @name; s.tr";
     let (session, doc) = open(&i, with_std(&i, contexts), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     let methods = labels(&of_kind(&items, CompletionKind::Method));
     assert!(methods.contains(&"trim".to_string()), "{methods:?}");
     assert!(
@@ -294,7 +301,7 @@ fn a_single_candidate_is_offered_only_where_the_checker_takes_the_receiver() {
     let options = "let v = [Some(1)]; v.";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, options);
     let methods = labels(&of_kind(
-        &session.completions(doc, options.len()),
+        &completed(&session, doc, options.len()),
         CompletionKind::Method,
     ));
     assert!(!methods.contains(&"sort".to_string()), "{methods:?}");
@@ -303,7 +310,7 @@ fn a_single_candidate_is_offered_only_where_the_checker_takes_the_receiver() {
     let integers = "let v = [2, 1]; v.";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, integers);
     let methods = labels(&of_kind(
-        &session.completions(doc, integers.len()),
+        &completed(&session, doc, integers.len()),
         CompletionKind::Method,
     ));
     assert!(methods.contains(&"sort".to_string()), "{methods:?}");
@@ -342,7 +349,7 @@ fn a_single_candidate_is_offered_only_within_its_declared_bound() {
         let typing = format!("{receiver}.");
         let (session, doc) = open(&i, graph(), Mode::Script, &typing);
         let methods = labels(&of_kind(
-            &session.completions(doc, typing.len()),
+            &completed(&session, doc, typing.len()),
             CompletionKind::Method,
         ));
         assert_eq!(
@@ -382,7 +389,7 @@ fn a_qualifier_offers_only_its_namespace() {
         .collect();
     let source = "string::";
     let (session, doc) = open(&i, environment, Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert!(!items.is_empty());
     assert!(
         items
@@ -401,14 +408,14 @@ fn a_template_completes_inside_code_only() {
     let (session, doc) = open(&i, bare(vec![]), Mode::Template, source);
 
     let in_text = nth(source, "al text", 0) + "al".len();
-    assert_eq!(session.completions(doc, in_text), []);
+    assert_eq!(session.completions(doc, in_text), None);
 
     let in_tag = nth(source, "al }}", 0) + "al".len();
-    let items = session.completions(doc, in_tag);
+    let items = completed(&session, doc, in_tag);
     assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["alpha"]);
 
     let on_line = nth(source, "al\n", 0) + "al".len();
-    let items = session.completions(doc, on_line);
+    let items = completed(&session, doc, on_line);
     assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["alpha"]);
 }
 
@@ -417,7 +424,7 @@ fn a_keyword_is_offered_by_its_prefix() {
     let i = Interner::new();
     let source = "ma";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert_eq!(
         items,
         [CompletionItem {
@@ -437,7 +444,7 @@ fn a_probe_that_does_not_parse_offers_what_needs_no_tree() {
     let contexts = root_contexts(&i, &[("name", Ty::String)]);
     let source = "let alpha = 1; ) ";
     let (session, doc) = open(&i, with_std(&i, contexts), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert!(!of_kind(&items, CompletionKind::Keyword).is_empty());
     assert!(!of_kind(&items, CompletionKind::Function).is_empty());
     assert!(
@@ -450,14 +457,14 @@ fn a_probe_that_does_not_parse_offers_what_needs_no_tree() {
 
     let member = "let s = \"b\"; ) s.";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, member);
-    assert_eq!(session.completions(doc, member.len()), []);
+    assert_eq!(completed(&session, doc, member.len()), []);
 
     let context = "let alpha = 1; ) @";
     let contexts = root_contexts(&i, &[("name", Ty::String)]);
     let (session, doc) = open(&i, bare(contexts), Mode::Script, context);
     assert_eq!(
         labels(&of_kind(
-            &session.completions(doc, context.len()),
+            &completed(&session, doc, context.len()),
             CompletionKind::Context
         )),
         ["@name"]
@@ -473,7 +480,7 @@ fn a_statement_being_written_completes_from_what_parsed() {
         !session.diagnostics(doc).is_empty(),
         "the `let` is unfinished"
     );
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert_eq!(
         labels(&of_kind(&items, CompletionKind::Field)),
         ["alpha", "beta"]
@@ -481,7 +488,7 @@ fn a_statement_being_written_completes_from_what_parsed() {
 
     let source = "let = 3;\nlet alpha = 1; al";
     let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert_eq!(labels(&of_kind(&items, CompletionKind::Local)), ["alpha"]);
 }
 
@@ -500,7 +507,7 @@ fn a_local_that_fits_the_expected_type_is_offered_first() {
     let source = "let n = 1; let s = \"s\"; range(, 3)";
     let cursor = nth(source, ", 3", 0);
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, cursor);
+    let items = completed(&session, doc, cursor);
     assert!(item(&items, "n").fits, "{items:?}");
     assert!(!item(&items, "s").fits, "{items:?}");
     let at = |label: &str| items.iter().position(|item| item.label == label);
@@ -519,7 +526,7 @@ fn a_function_fits_by_the_type_its_call_returns() {
     let source = "range(, 3)";
     let cursor = nth(source, ", 3", 0);
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, cursor);
+    let items = completed(&session, doc, cursor);
     assert!(item(&items, "cmp").fits, "{items:?}");
     assert!(!item(&items, "upper").fits, "{items:?}");
     assert!(
@@ -535,14 +542,14 @@ fn a_member_fits_by_its_type_or_the_type_its_call_returns() {
     let source = "let o = { a: 1, b: \"x\", }; range(o., 3)";
     let cursor = nth(source, "., 3", 0) + ".".len();
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, cursor);
+    let items = completed(&session, doc, cursor);
     assert!(item(&items, "a").fits, "{items:?}");
     assert!(!item(&items, "b").fits, "{items:?}");
 
     let source = "let s = \"s\"; range(s., 3)";
     let cursor = nth(source, "., 3", 0) + ".".len();
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, cursor);
+    let items = completed(&session, doc, cursor);
     assert!(item(&items, "cmp").fits, "{items:?}");
     assert!(!item(&items, "upper").fits, "{items:?}");
 }
@@ -554,7 +561,7 @@ fn a_position_without_an_expected_type_fits_nothing() {
     let i = Interner::new();
     let source = "let n = 1; let s = \"s\"; ";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert!(items.iter().all(|item| !item.fits), "{items:?}");
     let mut ordered = items.clone();
     ordered.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.label.cmp(&b.label)));
@@ -576,7 +583,7 @@ fn a_method_lists_the_arguments_after_its_receiver_per_declaration() {
     let i = Interner::new();
     let source = "let v = [1]; v.";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     let get = item(&items, "get");
     assert_eq!(get.kind, CompletionKind::Method);
     let at = CallShape {
@@ -595,7 +602,7 @@ fn a_function_lists_every_argument_of_each_declaration() {
     let i = Interner::new();
     let source = "rang";
     let (session, doc) = open(&i, with_std(&i, vec![]), Mode::Script, source);
-    let items = session.completions(doc, source.len());
+    let items = completed(&session, doc, source.len());
     assert_eq!(
         item(&items, "range").calls,
         [CallShape {

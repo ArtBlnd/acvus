@@ -149,6 +149,9 @@ alternative it rejects. A decision another section owns is pointed to with
 
 - RFC-0031: `acvus` runs one file as one function, the result alone on stdout
 - RFC-0078: A parse recovers past an error, and a tree that holds one cannot be lowered
+- RFC-0084: A workspace lists its compilations again exactly when a file its listing read changes (Proposed)
+- RFC-0085: In the editor a host answers as its batch path does (Proposed)
+- RFC-0086: `acvus_lsp::serve` speaks the Language Server Protocol for any host (Proposed)
 
 ### [types.md](types.md)
 

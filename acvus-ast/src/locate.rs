@@ -71,11 +71,33 @@ impl Nodes {
             .preorder
             .iter()
             .rev()
-            .filter(|node| node.span.start <= offset && offset < node.span.end)
+            .filter(|node| Touch::of(node.span, offset) == Some(Touch::Holds))
             .copied()
             .collect();
         holding.sort_by_key(|node| node.span.end - node.span.start);
         holding
+    }
+
+    /// The nodes a cursor at `offset` is on, innermost first: those whose
+    /// span holds it and those that end at it, where a cursor rests after
+    /// typing.
+    pub fn at_cursor(&self, offset: usize) -> Vec<Node> {
+        let mut touching: Vec<Touching> = self
+            .preorder
+            .iter()
+            .rev()
+            .filter_map(|node| {
+                Some(Touching {
+                    node: *node,
+                    touch: Touch::of(node.span, offset)?,
+                })
+            })
+            .collect();
+        touching.sort_by_key(|touching| {
+            let span = touching.node.span;
+            (span.end - span.start, touching.touch)
+        });
+        touching.into_iter().map(|touching| touching.node).collect()
     }
 
     pub fn spans(&self) -> FxHashMap<AstId, Span> {
@@ -90,13 +112,15 @@ impl Nodes {
         &self.names
     }
 
-    /// The name whose span holds `offset`, `start <= offset < end`, as
-    /// `at` reads a span. Names do not overlap, so there is at most one.
+    /// Names do not overlap, so each `find` meets at most one.
     pub fn name_at(&self, offset: usize) -> Option<Name> {
-        self.names
-            .iter()
-            .find(|name| name.span.start <= offset && offset < name.span.end)
-            .copied()
+        let touching = |touch: Touch| {
+            self.names
+                .iter()
+                .find(|name| Touch::of(name.span, offset) == Some(touch))
+                .copied()
+        };
+        touching(Touch::Holds).or_else(|| touching(Touch::EndsAt))
     }
 
     fn name(&mut self, id: AstId, span: Span) {
@@ -576,6 +600,33 @@ impl Nodes {
     }
 }
 
+/// Ordered so that of two nodes of one width, the one holding the offset
+/// is the one a cursor is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Touch {
+    Holds,
+    EndsAt,
+}
+
+struct Touching {
+    node: Node,
+    touch: Touch,
+}
+
+impl Touch {
+    fn of(span: Span, offset: usize) -> Option<Self> {
+        if span.start <= offset && offset < span.end {
+            Some(Touch::Holds)
+        // An empty span ends where it starts, and a cursor there is on
+        // nothing.
+        } else if span.start < offset && offset == span.end {
+            Some(Touch::EndsAt)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +650,68 @@ mod tests {
             .map(|node| node.id)
             .collect();
         assert_eq!(ids, vec![left.id(), tail.id(), script.id]);
+    }
+
+    fn names_at(source: &str, offsets: &[usize]) -> Vec<Option<Span>> {
+        let interner = Interner::new();
+        let script = crate::parse_script(&interner, source).expect("the source parses");
+        let nodes = Nodes::of_script(&script);
+        offsets
+            .iter()
+            .map(|offset| nodes.name_at(*offset).map(|name| name.span))
+            .collect()
+    }
+
+    #[test]
+    fn a_cursor_is_on_the_name_it_is_in_else_the_one_it_ends() {
+        let a = Some(Span::new(0, 1));
+        let b = Some(Span::new(2, 3));
+        assert_eq!(names_at("a+b", &[0, 1, 2, 3]), [a, a, b, b]);
+        let ab = Some(Span::new(0, 2));
+        assert_eq!(names_at("ab", &[0, 1, 2]), [ab, ab, ab]);
+        assert_eq!(names_at("a + b", &[2]), [None]);
+    }
+
+    #[test]
+    fn a_cursor_after_a_name_is_on_it_before_the_expression_holding_it() {
+        let interner = Interner::new();
+        let source = "let s = 1; s + 2";
+        let script = crate::parse_script(&interner, source).expect("the source parses");
+        let Some(tail) = &script.tail else {
+            panic!("the script has a tail");
+        };
+        let Expr::BinaryOp { left, right, .. } = tail.as_ref() else {
+            panic!("the tail is a binary operation");
+        };
+        let nodes = Nodes::of_script(&script);
+        let after_use = source.rfind('s').expect("the use is in the source") + 1;
+        let ids = |offset: usize| -> Vec<AstId> {
+            nodes.at_cursor(offset).iter().map(|node| node.id).collect()
+        };
+        assert_eq!(ids(after_use), vec![left.id(), tail.id(), script.id]);
+        assert_eq!(ids(source.len()), vec![right.id(), tail.id(), script.id]);
+        assert_eq!(nodes.at(source.len()), []);
+    }
+
+    #[test]
+    fn a_cursor_between_adjacent_nodes_of_one_width_is_on_the_later() {
+        let interner = Interner::new();
+        let source = "{{a}}{{b}}";
+        let template = crate::parse(&interner, source).expect("the source parses");
+        let between = source.find("{{b").expect("the second tag is in the source");
+        let spans: Vec<Span> = Nodes::of_template(&template)
+            .at_cursor(between)
+            .iter()
+            .map(|node| node.span)
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                Span::new(between, source.len()),
+                Span::new(0, between),
+                Span::new(0, source.len())
+            ]
+        );
     }
 
     #[test]

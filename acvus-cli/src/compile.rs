@@ -6,6 +6,8 @@
 use acvus_ast::Span;
 use acvus_ast::report::Label;
 use acvus_extern::{CombineError, Externs, Handlers, Registry};
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -234,6 +236,10 @@ pub fn combine_refusal(error: &CombineError) -> String {
     format!("the registries do not combine: {error}")
 }
 
+pub fn unreadable_source(path: &Path, error: &io::Error) -> String {
+    format!("{}: {error}", path.display())
+}
+
 pub fn environment(
     interner: &Interner,
     context_types: &FxHashMap<Astr, Ty>,
@@ -371,7 +377,12 @@ pub fn check(
     }
 
     let watch = Stopwatch::start(timed);
-    let optimized = optimize::optimize(interner, &acvus_mir::laws::LawTable::of(graph.functions.iter()), lowered.modules, opt);
+    let optimized = optimize::optimize(
+        interner,
+        &acvus_mir::laws::LawTable::of(graph.functions.iter()),
+        lowered.modules,
+        opt,
+    );
     stages.optimize = watch.stop();
 
     diagnostics.extend(

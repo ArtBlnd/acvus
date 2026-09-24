@@ -2,11 +2,18 @@
 //! as the batch compilation pipeline.
 
 use acvus_extern::{Externs, TypesOnly};
-use acvus_lsp::{CompletionKind, Document, LspErrorCategory, LspSession, Mode};
+use acvus_lsp::{CompletionItem, CompletionKind, DocId, Document, LspErrorKind, LspSession, Mode};
 use acvus_mir::graph::types::*;
 use acvus_mir::graph::{extract, infer, lower as graph_lower};
 use acvus_mir::ty::{PolyBuilder, Ty, TyTerm, TypeRegistry, lift_to_poly};
 use acvus_utils::{Freeze, Interner};
+
+fn completed(session: &LspSession, doc: DocId, cursor: usize) -> Vec<CompletionItem> {
+    session
+        .completions(doc, cursor)
+        .expect("the cursor is in code of an open document")
+        .items
+}
 
 fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
     ctx.iter()
@@ -136,18 +143,20 @@ fn a_broken_template_reports_every_parse_error_and_what_parsed() {
     let doc = session
         .open(template_document(&i, "test"), source)
         .expect("the session opens no other document");
-    let categories: Vec<LspErrorCategory> = session
+    let kinds: Vec<LspErrorKind> = session
         .diagnostics(doc)
         .iter()
-        .map(|error| error.category)
+        .map(|error| error.kind)
         .collect();
-    assert_eq!(
-        categories,
-        [
-            LspErrorCategory::Parse,
-            LspErrorCategory::Parse,
-            LspErrorCategory::Type
-        ],
+    assert!(
+        matches!(
+            kinds.as_slice(),
+            [
+                LspErrorKind::Parse(_),
+                LspErrorKind::Parse(_),
+                LspErrorKind::Type(_)
+            ]
+        ),
         "{:?}",
         session.diagnostics(doc)
     );
@@ -347,7 +356,7 @@ fn completion_offers_contexts_after_at() {
     let doc = session
         .open(template_document(&i, "test"), "{{ @n }}")
         .expect("the session opens no other document");
-    let items = session.completions(doc, "{{ @n".len());
+    let items = completed(&session, doc, "{{ @n".len());
     assert!(!items.is_empty(), "should get context completions");
     assert!(
         items.iter().any(|c| c.label == "@name"),
@@ -379,7 +388,7 @@ fn completion_offers_functions_at_a_pipe_stage() {
     let doc = session
         .open(template_document(&i, "test"), source)
         .expect("the session opens no other document");
-    let items = session.completions(doc, "{{ @name | he".len());
+    let items = completed(&session, doc, "{{ @name | he".len());
     assert!(
         items
             .iter()
@@ -397,7 +406,7 @@ fn completion_offers_keywords_by_prefix() {
     let doc = session
         .open(template_document(&i, "test"), "{{ tr }}")
         .expect("the session opens no other document");
-    let items = session.completions(doc, "{{ tr".len());
+    let items = completed(&session, doc, "{{ tr".len());
     assert!(
         items
             .iter()
@@ -416,8 +425,11 @@ fn completion_empty_after_close() {
         .open(template_document(&i, "test"), "{{ @n }}")
         .expect("the session opens no other document");
     session.close(doc);
-    let items = session.completions(doc, "{{ @n".len());
-    assert!(items.is_empty(), "closed doc should return no completions");
+    assert_eq!(
+        session.completions(doc, "{{ @n".len()),
+        None,
+        "closed doc should return no completions"
+    );
 }
 
 #[test]
@@ -431,14 +443,14 @@ fn completion_updates_with_source() {
     let doc = session
         .open(template_document(&i, "test"), "{{ @n }}")
         .expect("the session opens no other document");
-    let items = session.completions(doc, "{{ @n".len());
+    let items = completed(&session, doc, "{{ @n".len());
     assert!(
         items.iter().any(|c| c.label == "@name"),
         "should match @name"
     );
 
     session.update_source(doc, "{{ @a }}");
-    let items = session.completions(doc, "{{ @a".len());
+    let items = completed(&session, doc, "{{ @a".len());
     assert!(
         items.iter().any(|c| c.label == "@age"),
         "after update should match @age, got: {:?}",
@@ -569,9 +581,13 @@ Explain for {{ $who }}
 
         session.update_source(doc, "% if\nbroken\n");
         assert_eq!(session.diagnostics(doc).len(), 1);
-        assert_eq!(
-            session.diagnostics(doc)[0].category,
-            acvus_lsp::LspErrorCategory::Parse
+        assert!(
+            matches!(
+                session.diagnostics(doc)[0].kind,
+                acvus_lsp::LspErrorKind::Parse(_)
+            ),
+            "{:?}",
+            session.diagnostics(doc)
         );
         assert!(shown(&session, doc).is_empty());
 

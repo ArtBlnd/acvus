@@ -3,11 +3,12 @@
 
 use std::path::{Path, PathBuf};
 
+use acvus_ast::Span;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, DocId, Document, DocumentSpec, Edit, Environment,
-    Host, HostDiagnostic, Listing, Location, LspSession, Mode, RenameRefusal, Sites, Vfs,
-    Workspace,
+    Host, HostDiagnostic, Listing, Location, LspSession, Mode, RecordingReader, RenameRefusal,
+    Sites, Vfs, Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -87,15 +88,15 @@ fn nth(source: &str, needle: &str, n: usize) -> usize {
 }
 
 /// The span of the `nth` occurrence of `needle` in `source`.
-fn span(source: &str, needle: &str, n: usize) -> (usize, usize) {
+fn span(source: &str, needle: &str, n: usize) -> Span {
     let at = nth(source, needle, n);
-    (at, at + needle.len())
+    Span::new(at, at + needle.len())
 }
 
-fn texts<'s>(source: &'s str, spans: &[(usize, usize)]) -> Vec<&'s str> {
+fn texts<'s>(source: &'s str, spans: &[Span]) -> Vec<&'s str> {
     spans
         .iter()
-        .map(|&(start, end)| &source[start..end])
+        .map(|span| &source[span.start..span.end])
         .collect()
 }
 
@@ -419,7 +420,7 @@ struct Documents {
 impl Host for Documents {
     type Compilation = ();
 
-    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+    fn compilations(&mut self, interner: &Interner, _reader: &RecordingReader<'_>) -> Listing<()> {
         let documents = self
             .names
             .iter()
@@ -440,6 +441,10 @@ impl Host for Documents {
             }],
             refusals: Vec::new(),
         }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
     }
 
     fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
@@ -466,7 +471,7 @@ fn workspace(interner: &Interner, root: &Path, files: &[DocumentFile<'_>]) -> Wo
         },
     );
     let diagnostics = workspace.diagnostics();
-    assert!(diagnostics.values().all(Vec::is_empty), "{diagnostics:?}");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
     workspace
 }
 
@@ -522,20 +527,14 @@ fn a_context_is_referred_to_in_every_document_of_the_compilation() {
     assert_eq!(
         workspace.rename(&other, at, "shown"),
         Ok(vec![
-            (
-                other.clone(),
-                Edit {
-                    span: span(other_source, "x", 0),
-                    text: "shown".to_string(),
-                }
-            ),
-            (
-                other.clone(),
-                Edit {
-                    span: span(other_source, "x", 1),
-                    text: "shown".to_string(),
-                }
-            ),
+            Edit {
+                span: span(other_source, "x", 0),
+                text: "shown".to_string(),
+            },
+            Edit {
+                span: span(other_source, "x", 1),
+                text: "shown".to_string(),
+            },
         ])
     );
     assert_eq!(
@@ -582,7 +581,7 @@ fn a_function_is_referred_to_at_its_calls_and_declared_at_its_document() {
     let mut with_declaration = calls;
     with_declaration.push(Location {
         path: greet,
-        span: (0, 0),
+        span: Span::new(0, 0),
     });
     with_declaration.sort();
     assert_eq!(

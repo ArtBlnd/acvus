@@ -30,6 +30,9 @@ use crate::compile::{CompileTimes, Compiled, Diagnostic, Mode, Stopwatch, Timed}
 const EXIT_COMPILE: u8 = 1;
 const EXIT_RUN: u8 = 2;
 const EXIT_USAGE: u8 = 64;
+/// The Language Server Protocol has a server that exits without a prior
+/// `shutdown` exit with 1; `acvus lsp` ends every other failure the same way.
+const EXIT_LSP_FAILED: u8 = 1;
 
 const USAGE: &str = "\
 usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--commit] [--parallel] [--opt L] [--time]
@@ -38,8 +41,11 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--c
        acvus mir   <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
        acvus ops   <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
        acvus space <dir>
+       acvus lsp
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
+  lsp        serve the Language Server Protocol on stdin and stdout, over the
+             sources under the client's root
   --context  a JSON object: each key is a context, its type the value's type
   --bind     `$name=<json scalar>`, repeatable: the input is that constant,
              the code it decides against is gone, and the inputs it alone
@@ -94,9 +100,20 @@ enum Source {
     Expr(String),
 }
 
-fn parse_args(argv: &[String]) -> Result<Args, String> {
+enum Invocation {
+    Lsp,
+    Compile(Args),
+}
+
+fn parse_args(argv: &[String]) -> Result<Invocation, String> {
     let mut it = argv.iter();
     let command = match it.next().map(String::as_str) {
+        Some("lsp") => {
+            return match it.next() {
+                Some(extra) => Err(format!("lsp takes no arguments, not `{extra}`")),
+                None => Ok(Invocation::Lsp),
+            };
+        }
         Some("run") => Command::Run,
         Some("check") => Command::Check,
         Some("mir") => Command::Mir,
@@ -163,7 +180,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         let Some(Source::File(dir)) = source else {
             return Err("space takes a directory".to_string());
         };
-        return Ok(Args {
+        return Ok(Invocation::Compile(Args {
             command,
             source: Source::Expr(String::new()),
             context: None,
@@ -174,13 +191,13 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             time: false,
             opt: Opt::Full,
             space: Some(dir),
-        });
+        }));
     }
     let source = source.ok_or("no source")?;
     if commit && context.is_none() {
         return Err("--commit needs --context".to_string());
     }
-    Ok(Args {
+    Ok(Invocation::Compile(Args {
         command,
         source,
         context,
@@ -191,7 +208,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         time,
         opt,
         space,
-    })
+    }))
 }
 
 struct Binding {
@@ -522,7 +539,8 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
 async fn cli() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&argv) {
-        Ok(args) => args,
+        Ok(Invocation::Compile(args)) => args,
+        Ok(Invocation::Lsp) => return lsp(),
         Err(e) => {
             eprintln!("error: {e}\n{USAGE}");
             return ExitCode::from(EXIT_USAGE);
@@ -547,7 +565,7 @@ async fn cli() -> ExitCode {
             match std::fs::read_to_string(p) {
                 Ok(s) => (p.display().to_string(), s, mode),
                 Err(e) => {
-                    eprintln!("error: {}: {e}", p.display());
+                    eprintln!("error: {}", compile::unreadable_source(p, &e));
                     return ExitCode::from(EXIT_USAGE);
                 }
             }
@@ -682,6 +700,23 @@ async fn cli() -> ExitCode {
             .await
         }
         Command::Space => unreachable!("handled before compiling"),
+    }
+}
+
+/// A failed `serve` exits without joining the stdio threads: the reader
+/// waits on a stdin the client may keep open, and joining it would hang.
+fn lsp() -> ExitCode {
+    let (connection, io_threads) = lsp_server::Connection::stdio();
+    if let Err(error) = acvus_lsp::serve(connection, lsp_host::CliHost::new) {
+        eprintln!("error: {error}");
+        return ExitCode::from(EXIT_LSP_FAILED);
+    }
+    match io_threads.join() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: the stdio transport failed: {error}");
+            ExitCode::from(EXIT_LSP_FAILED)
+        }
     }
 }
 

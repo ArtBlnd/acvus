@@ -5,9 +5,10 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use acvus_ast::Span;
 use acvus_lsp::{
-    Checked, CompilationId, CompilationSpec, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Listing, Location, Mode, Sites, Vfs,
+    Checked, CompilationId, CompilationSpec, Document, DocumentSpec, EntryKind, Environment, Host,
+    HostDiagnostic, Listing, Location, Mode, RecordingReader, Sites, Vfs,
 };
 use acvus_mir::graph::{Bindings, QualifiedRef};
 use acvus_utils::Interner;
@@ -45,8 +46,13 @@ fn skipped(name: &std::ffi::OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b".") || name == "target"
 }
 
-fn sources_under(dir: &Path, sources: &mut Vec<Source>, refusals: &mut Vec<HostDiagnostic>) {
-    let entries = match std::fs::read_dir(dir) {
+fn sources_under(
+    reader: &RecordingReader<'_>,
+    dir: &Path,
+    sources: &mut Vec<Source>,
+    refusals: &mut Vec<HostDiagnostic>,
+) {
+    let entries = match reader.read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
             refusals.extend(refused(dir, error.to_string()));
@@ -61,19 +67,22 @@ fn sources_under(dir: &Path, sources: &mut Vec<Source>, refusals: &mut Vec<HostD
                 continue;
             }
         };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
+        let path = entry.path;
+        let kind = match entry.kind {
+            Ok(kind) => kind,
             Err(error) => {
                 refusals.extend(refused(&path, error.to_string()));
                 continue;
             }
         };
-        if file_type.is_dir() {
-            if !skipped(&entry.file_name()) {
-                sources_under(&path, sources, refusals);
+        match kind {
+            EntryKind::Directory => {
+                if !skipped(&entry.name) {
+                    sources_under(reader, &path, sources, refusals);
+                }
+                continue;
             }
-            continue;
+            EntryKind::File | EntryKind::Symlink => {}
         }
         if let Some(mode) = mode_of(&path) {
             sources.push(Source {
@@ -300,7 +309,7 @@ fn load_with_sites(
                 .expect("a key literal serde_json accepted decodes");
             let site = Location {
                 path: path.to_path_buf(),
-                span: (start, end),
+                span: Span::new(start, end),
             };
             (QualifiedRef::root(interner.intern(&name)), site)
         })
@@ -314,10 +323,10 @@ fn load_with_sites(
 
 fn environment_of(
     interner: &Interner,
-    vfs: &Vfs,
+    reader: &RecordingReader<'_>,
     source: &Source,
 ) -> Result<Environment<()>, Vec<HostDiagnostic>> {
-    let (loaded, sites) = match vfs.read(&source.context) {
+    let (loaded, sites) = match reader.read(&source.context) {
         Ok(text) => load_with_sites(interner, &source.context, &text)
             .map_err(|message| refused(&source.context, message))?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -342,15 +351,15 @@ fn environment_of(
 impl Host for CliHost {
     type Compilation = ();
 
-    fn compilations(&mut self, interner: &Interner, vfs: &Vfs) -> Listing<()> {
+    fn compilations(&mut self, interner: &Interner, reader: &RecordingReader<'_>) -> Listing<()> {
         let mut sources = Vec::new();
         let mut refusals = Vec::new();
-        sources_under(&self.root, &mut sources, &mut refusals);
+        sources_under(reader, &self.root, &mut sources, &mut refusals);
         let compilations = sources
             .into_iter()
             .map(|source| CompilationSpec {
                 id: CompilationId(source.path.clone()),
-                environment: environment_of(interner, vfs, &source),
+                environment: environment_of(interner, reader, &source),
                 documents: vec![DocumentSpec {
                     path: source.path,
                     document: Document {
@@ -367,6 +376,11 @@ impl Host for CliHost {
         }
     }
 
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path)
+            .map_err(|error| compile::unreadable_source(path, &error))
+    }
+
     fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
         Vec::new()
     }
@@ -376,7 +390,7 @@ impl Host for CliHost {
 mod tests {
     use std::collections::BTreeMap;
 
-    use acvus_lsp::{Location, LspError, LspErrorCategory, Workspace};
+    use acvus_lsp::{Location, LspError, LspErrorKind, Workspace};
     use acvus_mir::graph::optimize::Opt;
 
     use super::*;
@@ -414,8 +428,26 @@ mod tests {
         errors.iter().map(|error| error.message.clone()).collect()
     }
 
-    fn categories(errors: &[LspError]) -> Vec<LspErrorCategory> {
-        errors.iter().map(|error| error.category).collect()
+    fn is_type(error: &LspError) -> bool {
+        matches!(error.kind, LspErrorKind::Type(_))
+    }
+
+    fn is_host(error: &LspError) -> bool {
+        matches!(error.kind, LspErrorKind::Host(_))
+    }
+
+    fn held_open(workspace: &Workspace<CliHost>, path: &Path) -> bool {
+        let text = std::fs::read_to_string(path).expect("a source reads");
+        let in_code = match mode_of(path).expect("a source is a script or a template") {
+            Mode::Script => 0,
+            Mode::Template => {
+                let tag = text.find("{{").expect("the template has a tag");
+                tag + text[tag..]
+                    .find(char::is_alphanumeric)
+                    .expect("the tag names something")
+            }
+        };
+        workspace.completions(path, in_code).is_some()
     }
 
     #[test]
@@ -424,10 +456,8 @@ mod tests {
         tree.write("a/ctx.json", r#"{ "n": 1 }"#);
         let script = tree.write("a/main.acvus", ADDS_ONE);
         let workspace = tree.workspace(&Interner::new());
-        assert_eq!(
-            workspace.diagnostics(),
-            BTreeMap::from([(script, Vec::new())])
-        );
+        assert_eq!(workspace.diagnostics(), BTreeMap::new());
+        assert!(held_open(&workspace, &script));
     }
 
     #[test]
@@ -459,11 +489,7 @@ mod tests {
         let editor = &diagnostics[&script];
         assert!(!batch.is_empty());
         assert_eq!(messages(editor), batch);
-        assert!(
-            categories(editor)
-                .iter()
-                .all(|category| *category == LspErrorCategory::Type)
-        );
+        assert!(editor.iter().all(is_type));
     }
 
     #[test]
@@ -477,12 +503,15 @@ mod tests {
 
         for context in [&unparsed, &untyped] {
             let errors = &diagnostics[context];
-            assert_eq!(categories(errors), [LspErrorCategory::Host], "{context:?}");
-            assert_eq!(errors[0].span, None);
+            assert!(
+                matches!(errors.as_slice(), [error] if is_host(error)),
+                "{context:?}: {errors:?}"
+            );
+            assert_eq!(errors[0].span(), None);
         }
         assert_eq!(messages(&diagnostics[&untyped]), ["@n: null has no type"]);
-        assert_eq!(diagnostics[&unparsed_script], []);
-        assert_eq!(diagnostics[&untyped_script], []);
+        assert!(!diagnostics.contains_key(&unparsed_script));
+        assert!(!diagnostics.contains_key(&untyped_script));
     }
 
     #[test]
@@ -491,24 +520,20 @@ mod tests {
         let context = tree.write("a/ctx.json", r#"{ "n": 1 }"#);
         let script = tree.write("a/main.acvus", ADDS_ONE);
         let mut workspace = tree.workspace(&Interner::new());
-        assert_eq!(workspace.diagnostics()[&script], []);
+        assert!(!workspace.diagnostics().contains_key(&script));
 
         workspace.set_buffer(context.clone(), r#"{ "n": "one" }"#.to_string());
         let errors = &workspace.diagnostics()[&script];
         assert!(!errors.is_empty());
-        assert!(
-            categories(errors)
-                .iter()
-                .all(|category| *category == LspErrorCategory::Type)
-        );
+        assert!(errors.iter().all(is_type));
 
         workspace.set_buffer(context.clone(), r#"{ "n": 2 }"#.to_string());
-        assert_eq!(workspace.diagnostics()[&script], []);
+        assert!(!workspace.diagnostics().contains_key(&script));
 
         workspace.set_buffer(context.clone(), r#"{ "n": "one" }"#.to_string());
         assert!(!workspace.diagnostics()[&script].is_empty());
         workspace.drop_buffer(&context);
-        assert_eq!(workspace.diagnostics()[&script], []);
+        assert!(!workspace.diagnostics().contains_key(&script));
     }
 
     #[test]
@@ -516,16 +541,13 @@ mod tests {
         let tree = Tree::new();
         let pure = tree.write("a/pure.acvus", PURE);
         let reads = tree.write("a/reads.acvus", ADDS_ONE);
-        let diagnostics = tree.workspace(&Interner::new()).diagnostics();
+        let workspace = tree.workspace(&Interner::new());
+        let diagnostics = workspace.diagnostics();
 
-        assert_eq!(diagnostics.keys().collect::<Vec<_>>(), [&pure, &reads]);
-        assert_eq!(diagnostics[&pure], []);
+        assert_eq!(diagnostics.keys().collect::<Vec<_>>(), [&reads]);
+        assert!(held_open(&workspace, &pure));
         assert!(!diagnostics[&reads].is_empty());
-        assert!(
-            categories(&diagnostics[&reads])
-                .iter()
-                .all(|category| *category == LspErrorCategory::Type)
-        );
+        assert!(diagnostics[&reads].iter().all(is_type));
     }
 
     #[test]
@@ -535,8 +557,9 @@ mod tests {
         tree.write(".hidden/main.acvus", "let\n");
         tree.write("target/main.acvus", "let\n");
         tree.write("a/target/main.acvus", "let\n");
-        let diagnostics = tree.workspace(&Interner::new()).diagnostics();
-        assert_eq!(diagnostics, BTreeMap::from([(script, Vec::new())]));
+        let workspace = tree.workspace(&Interner::new());
+        assert_eq!(workspace.diagnostics(), BTreeMap::new());
+        assert!(held_open(&workspace, &script));
     }
 
     #[test]
@@ -544,8 +567,9 @@ mod tests {
         let tree = Tree::new();
         tree.write("a/ctx.json", r#"{ "name": "Ada" }"#);
         let template = tree.write("a/main.acvt", "Hello, {{ &@name }}.\n");
-        let diagnostics = tree.workspace(&Interner::new()).diagnostics();
-        assert_eq!(diagnostics, BTreeMap::from([(template, Vec::new())]));
+        let workspace = tree.workspace(&Interner::new());
+        assert_eq!(workspace.diagnostics(), BTreeMap::new());
+        assert!(held_open(&workspace, &template));
     }
 
     struct Locked(PathBuf);
@@ -554,7 +578,7 @@ mod tests {
         fn drop(&mut self) {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755))
-                .expect("restore the locked directory's permissions");
+                .expect("restore the locked path's permissions");
         }
     }
 
@@ -572,27 +596,54 @@ mod tests {
             .expect_err("a directory with mode 0o000 does not list")
             .to_string();
 
+        let workspace = tree.workspace(&Interner::new());
+        let diagnostics = workspace.diagnostics();
+
+        assert_eq!(diagnostics.keys().collect::<Vec<_>>(), [&locked.0]);
+        assert!(held_open(&workspace, &script));
+        let errors = &diagnostics[&locked.0];
+        assert!(
+            matches!(errors.as_slice(), [error] if is_host(error)),
+            "{errors:?}"
+        );
+        assert_eq!(messages(errors), [listing_error]);
+        assert_eq!(errors[0].span(), None);
+    }
+
+    #[test]
+    fn an_unreadable_source_is_refused_in_the_words_of_acvus_check() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tree = Tree::new();
+        let locked = Locked(tree.write("a/main.acvus", PURE));
+        std::fs::set_permissions(&locked.0, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the script");
+        let read_error =
+            std::fs::read_to_string(&locked.0).expect_err("a file with mode 0o000 does not read");
+
         let diagnostics = tree.workspace(&Interner::new()).diagnostics();
 
-        assert_eq!(diagnostics.keys().collect::<Vec<_>>(), [&script, &locked.0]);
-        assert_eq!(diagnostics[&script], []);
-        let errors = &diagnostics[&locked.0];
-        assert_eq!(categories(errors), [LspErrorCategory::Host]);
-        assert_eq!(messages(errors), [listing_error]);
-        assert_eq!(errors[0].span, None);
+        assert_eq!(
+            diagnostics[&locked.0],
+            [LspError {
+                kind: LspErrorKind::Host(None),
+                message: compile::unreadable_source(&locked.0, &read_error),
+                related: Vec::new(),
+            }]
+        );
     }
 
     fn definition_of_n(tree: &Tree, script: &str) -> Option<Location> {
         let main = tree.write("a/main.acvus", script);
         let workspace = tree.workspace(&Interner::new());
-        assert_eq!(workspace.diagnostics()[&main], []);
+        assert!(!workspace.diagnostics().contains_key(&main));
         let at = script.find("@n").expect("the script reads `@n`") + 1;
         workspace.definition(&main, at)
     }
 
     fn spelled(location: &Location) -> String {
         let text = std::fs::read_to_string(&location.path).expect("the site's file reads");
-        text[location.span.0..location.span.1].to_string()
+        text[location.span.start..location.span.end].to_string()
     }
 
     #[test]
@@ -606,7 +657,7 @@ mod tests {
             site,
             Location {
                 path: context,
-                span: (start, start + 3),
+                span: Span::new(start, start + 3),
             }
         );
         assert_eq!(spelled(&site), r#""n""#);
@@ -627,7 +678,7 @@ mod tests {
         tree.write("a/ctx.json", text);
         let site = definition_of_n(&tree, ADDS_ONE).expect("`@n` has a site");
         let start = text.rfind(r#""n""#).expect("the file spells the key");
-        assert_eq!(site.span, (start, start + 3));
+        assert_eq!(site.span, Span::new(start, start + 3));
     }
 
     #[test]
@@ -670,6 +721,38 @@ mod tests {
     }
 
     #[test]
+    fn a_script_written_under_the_root_appears_after_it_changes() {
+        let tree = Tree::new();
+        let first = tree.write("a/main.acvus", PURE);
+        let mut workspace = tree.workspace(&Interner::new());
+        assert!(held_open(&workspace, &first));
+
+        let second = tree.write("a/second.acvus", PURE);
+        assert!(!held_open(&workspace, &second));
+        workspace.file_changed(&second);
+        assert_eq!(workspace.diagnostics(), BTreeMap::new());
+        assert!(held_open(&workspace, &first));
+        assert!(held_open(&workspace, &second));
+
+        let nested = tree.write("b/c/third.acvus", PURE);
+        assert!(!held_open(&workspace, &nested));
+        workspace.file_changed(&tree.root.join("b"));
+        assert!(held_open(&workspace, &nested));
+    }
+
+    #[test]
+    fn a_context_file_created_where_none_was_types_the_script() {
+        let tree = Tree::new();
+        let script = tree.write("a/main.acvus", ADDS_ONE);
+        let mut workspace = tree.workspace(&Interner::new());
+        assert!(!workspace.diagnostics()[&script].is_empty());
+
+        let context = tree.write("a/ctx.json", r#"{ "n": 1 }"#);
+        workspace.file_changed(&context);
+        assert!(!workspace.diagnostics().contains_key(&script));
+    }
+
+    #[test]
     fn every_example_is_accepted() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
         let sources: Vec<PathBuf> = std::fs::read_dir(&examples)
@@ -678,11 +761,12 @@ mod tests {
             .flat_map(|dir| [dir.join("main.acvus"), dir.join("main.acvt")])
             .filter(|path| path.exists())
             .collect();
-        let diagnostics = Workspace::new(&Interner::new(), CliHost::new(examples)).diagnostics();
+        let workspace = Workspace::new(&Interner::new(), CliHost::new(examples));
 
-        assert_eq!(diagnostics.len(), sources.len());
+        assert_eq!(workspace.diagnostics(), BTreeMap::new());
+        assert!(!sources.is_empty());
         for source in &sources {
-            assert_eq!(diagnostics[source], [], "{source:?}");
+            assert!(held_open(&workspace, source), "{source:?}");
         }
     }
 }

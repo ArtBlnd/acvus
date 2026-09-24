@@ -1,11 +1,15 @@
+pub mod position;
+pub mod server;
 pub mod session;
 pub mod workspace;
 
+pub use position::{Encoding, LineIndex, Unplaceable};
+pub use server::{NotAFilePath, ServeError, serve};
 pub use session::{
-    CallShape, CompletionItem, CompletionKind, Definition, DocId, Document, Edit, Hover, LspError,
-    LspErrorCategory, LspSession, Mode, OpenRefusal, ParamHint, RenameRefusal,
+    CallShape, CompletionItem, CompletionKind, Completions, Definition, DocId, Document, Edit,
+    Hover, LspError, LspErrorKind, LspSession, Mode, OpenRefusal, ParamHint, RenameRefusal,
 };
 pub use workspace::{
-    Checked, CompilationId, CompilationSpec, DocumentSpec, Environment, Host, HostDiagnostic,
-    Listing, Location, Sites, Vfs, Workspace,
+    Checked, CompilationId, CompilationSpec, DocumentSpec, Entry, EntryKind, Environment, Host,
+    HostDiagnostic, Listing, Location, RecordingReader, Sites, TextError, Vfs, Workspace,
 };
