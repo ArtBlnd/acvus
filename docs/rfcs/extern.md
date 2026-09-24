@@ -1148,8 +1148,9 @@ glue at the type the checker settled.
      graph does not have, or a key no init fills and no run has stored yet
      is an error before any value is touched. Every error a host meets is
      one `HostError`, a storage's failure during a run among them: the run
-     ends there and releases nothing (RFC-0048 rule 8).
-   - It compares settled types and reads no tag on the value.
+     ends there and releases nothing (RFC-0048 rule 8). Page operations are
+     not ordered with effects (RFC-0025 rule 10), so the effects before
+     it are not stated: the host handles it.
    - A loaded holder whose type differs from the solved one, as after a
      script changed, is a mismatch at that load. What to do with it is the
      host's.
