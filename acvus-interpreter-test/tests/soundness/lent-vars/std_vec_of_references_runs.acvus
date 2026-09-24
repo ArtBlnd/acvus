@@ -1,3 +1,3 @@
 // expect 2
-// A vector's `T` is lent: `vec` and `push` take references to the strings, and `len` reads the vector.
+// A vector's `T` takes any type: `vec` and `push` take references to the strings, and `len` reads the vector.
 let s = "ab".to_string(); let t = "cd".to_string(); let v = vec([&s]); push(&mut v, &t); len(&v)

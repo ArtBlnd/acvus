@@ -28,9 +28,6 @@ pub struct UserDefinedDecl {
     /// argument, so the argument is a specializing position
     /// (hash-types.md, R1). One entry per `type_params` entry.
     pub specializable: Vec<bool>,
-    /// Each type parameter's lending (RFC-0079 rule 8): parameter `i` is
-    /// `vars[i]`, and one with no entry is opaque.
-    pub vars: Vec<DeclaredVar>,
 }
 
 /// A declaration under a name the registry already has a type for.
@@ -404,9 +401,6 @@ pub struct InstanceSig {
     /// that is no signature's instance states its bounds on its scheme, so
     /// its instances carry none.
     pub effect_bounds: Vec<EffectVarBound>,
-    /// Carried as `effect_bounds` is: a signature's instance states its own
-    /// variables' lending, any other declaration's instances `Elsewhere`.
-    pub vars: VarsStated,
     pub laws: crate::laws::Laws,
     pub ensures: Vec<crate::laws::Postcondition>,
 }
@@ -419,79 +413,8 @@ impl InstanceSig {
             task: Task::Sync,
             requires: Vec::new(),
             effect_bounds: Vec::new(),
-            vars: VarsStated::Elsewhere,
             laws: crate::laws::Laws::None,
             ensures: Vec::new(),
-        }
-    }
-}
-
-/// Whether a declaration's type variable may be filled by a type with a
-/// position (RFC-0079 rule 8). An opaque one may not, so no loan reaches
-/// the handler through it and the handler may keep its values; a lent one
-/// may, and is asserted with `unsafe` not to be kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lending {
-    Opaque,
-    Lent(NotKept),
-}
-
-/// The assertion a lent variable is declared with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NotKept(());
-
-impl NotKept {
-    /// # Safety
-    /// Every value of the variable the handler receives reaches, after the
-    /// call returns, only the outputs the signature's flows name for it —
-    /// never a static, a `#[state]`, a raw word kept past the call, or
-    /// another thread. The same holds of every part of an extension type
-    /// that a lent type parameter fills, for every piece of code the type
-    /// runs (RFC-0079 rule 8).
-    pub const unsafe fn asserted() -> Self {
-        NotKept(())
-    }
-}
-
-/// One type variable of a declaration, named for a refusal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeclaredVar {
-    pub name: Astr,
-    pub lending: Lending,
-}
-
-/// Where a declaration states its type variables' lending.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VarsStated {
-    /// Here: variable `i` is `vars[i]`, and a variable with no entry is
-    /// opaque (RFC-0079 rule 8).
-    Here(Vec<DeclaredVar>),
-    /// Elsewhere: no handler receives these variables here. A shared
-    /// signature's instances state their own where one is chosen, an
-    /// instance of any other declaration has its variables on the
-    /// declaration's scheme, a family cast's variables are its extension
-    /// type's parameters, stated on the type, and a body the compiler
-    /// checks has no handler.
-    Elsewhere,
-}
-
-impl VarsStated {
-    /// Whether variable `var` is opaque, and its name where an entry gives
-    /// one.
-    pub fn opaque_at(&self, var: u32) -> Option<Option<Astr>> {
-        let VarsStated::Here(vars) = self else {
-            return None;
-        };
-        match vars.get(var as usize) {
-            Some(DeclaredVar {
-                lending: Lending::Lent(_),
-                ..
-            }) => None,
-            Some(DeclaredVar {
-                name,
-                lending: Lending::Opaque,
-            }) => Some(Some(*name)),
-            None => Some(None),
         }
     }
 }
@@ -552,7 +475,6 @@ pub struct Scheme {
     pub effect_bounds: Vec<EffectVarBound>,
     pub instances: Option<Instances>,
     pub requires: Vec<Requirement>,
-    pub vars: VarsStated,
 }
 
 /// A `RequirementSig` with the instances of the signature it names, so
@@ -573,7 +495,6 @@ impl Scheme {
             effect_bounds: Vec::new(),
             instances: None,
             requires: Vec::new(),
-            vars: VarsStated::Elsewhere,
         }
     }
 
@@ -5530,7 +5451,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5551,7 +5471,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5575,7 +5494,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5602,7 +5520,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5644,7 +5561,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5668,7 +5584,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5692,7 +5607,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                vars: vec![],
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5724,7 +5638,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            vars: vec![],
         })
         .expect("one declaration per name");
         let decl = reg.get(id);
@@ -5743,7 +5656,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![],
-            vars: vec![],
         };
         reg.register(decl()).expect("one declaration per name");
         assert_eq!(reg.register(decl()), Err(DuplicateType(id)));
@@ -5792,7 +5704,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false; type_param_count],
-            vars: vec![],
         })
         .expect("one declaration per name");
         reg.register_cast(CastRule {
@@ -6001,7 +5912,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            vars: vec![],
         })
         .expect("one declaration per name");
         reg.from_rules.entry(id).or_default().push(rule_a);
@@ -6039,7 +5949,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            vars: vec![],
         })
         .expect("one declaration per name");
         reg.register_cast(CastRule {
@@ -6084,7 +5993,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            vars: vec![],
         })
         .expect("one declaration per name");
         let mut builder1 = PolyBuilder::new();

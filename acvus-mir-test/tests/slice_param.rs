@@ -36,7 +36,6 @@ fn takes_slice(i: &Interner, name: &str, mutability: Mutability) -> Function {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }
@@ -66,7 +65,6 @@ fn two_slices(i: &Interner, name: &str) -> Function {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }

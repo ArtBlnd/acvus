@@ -33,11 +33,6 @@
 //! `cloned` need a handler to require `core::clone` of its own type
 //! parameter, which a handler cannot state.
 
-// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
-// rule 8). Nothing here holds a static, a cell, a `#[state]` or a thread,
-// and a value of a lent variable leaves a call only through an output its
-// signature names.
-
 use acvus_extern::{
     Closure, ClosureFn, Cross, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
@@ -45,7 +40,7 @@ use acvus_extern::{
 use crate::iter::Items;
 use acvus_extern::Ctx;
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn unwrap<T>(val: Option<T>) -> T
 where
     T: Var<kind::Type>,
@@ -53,7 +48,7 @@ where
     val.expect("unwrap: called on None")
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn expect<T>(val: Option<T>, message: String) -> T
 where
     T: Var<kind::Type>,
@@ -64,7 +59,7 @@ where
     inner
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn unwrap_or<T>(val: Option<T>, default: T) -> T
 where
     T: Var<kind::Type>,
@@ -72,7 +67,7 @@ where
     val.unwrap_or(default)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn is_some<T>(val: Option<T>) -> bool
 where
     T: Var<kind::Type>,
@@ -80,7 +75,7 @@ where
     val.is_some()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn is_none<T>(val: Option<T>) -> bool
 where
     T: Var<kind::Type>,
@@ -88,7 +83,7 @@ where
     val.is_none()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T, U)))]
+#[extern_fn(effect = pure)]
 fn and<T, U>(val: Option<T>, other: Option<U>) -> Option<U>
 where
     T: Var<kind::Type>,
@@ -97,7 +92,7 @@ where
     val.and(other)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn or<T>(val: Option<T>, other: Option<T>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -105,7 +100,7 @@ where
     val.or(other)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn xor<T>(val: Option<T>, other: Option<T>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -113,7 +108,7 @@ where
     val.xor(other)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn flatten<T>(val: Option<Option<T>>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -121,7 +116,7 @@ where
     val.flatten()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T, Er)))]
+#[extern_fn(effect = pure)]
 fn ok_or<T, Er>(val: Option<T>, error: Er) -> Result<T, Er>
 where
     T: Var<kind::Type>,
@@ -130,7 +125,7 @@ where
     val.ok_or(error)
 }
 
-#[extern_fn(instance_of = crate::iter::sig::into_iter, effect = pure, unsafe(lent(T)))]
+#[extern_fn(instance_of = crate::iter::sig::into_iter, effect = pure)]
 fn into_iter_option<T, I, Rt>(val: Option<T>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + OneValue<Rt>,
@@ -156,7 +151,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = is_some_and_now, unsafe(lent(T)))]
+#[extern_fn(effect = E, sync = is_some_and_now)]
 async fn is_some_and<T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -189,7 +184,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = is_none_or_now, unsafe(lent(T)))]
+#[extern_fn(effect = E, sync = is_none_or_now)]
 async fn is_none_or<T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -222,7 +217,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = unwrap_or_else_now, unsafe(lent(T)))]
+#[extern_fn(effect = E, sync = unwrap_or_else_now)]
 async fn unwrap_or_else<T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -257,7 +252,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = map_or_now, unsafe(lent(T, U)))]
+#[extern_fn(effect = E, sync = map_or_now)]
 async fn map_or<T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -294,7 +289,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = map_or_else_now, unsafe(lent(T, U)))]
+#[extern_fn(effect = E, sync = map_or_else_now)]
 async fn map_or_else<T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -327,7 +322,7 @@ where
     val.and_then(|inner| f.call_now(ctx, (inner,)))
 }
 
-#[extern_fn(effect = E, sync = and_then_now, unsafe(lent(T, U)))]
+#[extern_fn(effect = E, sync = and_then_now)]
 async fn and_then<T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -361,7 +356,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = or_else_now, unsafe(lent(T)))]
+#[extern_fn(effect = E, sync = or_else_now)]
 async fn or_else<T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,
@@ -395,7 +390,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = ok_or_else_now, unsafe(lent(T, Er)))]
+#[extern_fn(effect = E, sync = ok_or_else_now)]
 async fn ok_or_else<T, Er, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     val: Option<T>,

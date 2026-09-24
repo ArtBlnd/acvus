@@ -35,11 +35,6 @@
 //! every parameter naming the member at its specialized representation,
 //! which `Closure` does not have.
 
-// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
-// rule 8) of a std container's or iterator stage's handler or type. Nothing
-// here holds a static, a cell, a `#[state]` or a thread, and a value of a
-// lent variable leaves a call only through an output its signature names.
-
 use std::ops::Deref;
 
 use acvus_extern::PassedByValue;
@@ -108,7 +103,7 @@ impl Num for f64 {
     }
 }
 
-#[extern_fn(instance_of = sig::into_iter, effect = pure, unsafe(lent(T)))]
+#[extern_fn(instance_of = sig::into_iter, effect = pure)]
 fn into_iter_vec<T, I, Rt>(items: Vec<T>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -118,7 +113,7 @@ where
     Items::of(items)
 }
 
-#[extern_fn(instance_of = sig::into_iter, effect = pure, unsafe(lent(T)))]
+#[extern_fn(instance_of = sig::into_iter, effect = pure)]
 fn into_iter_array<T, N, I, Rt>(items: Arr<T, N>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -129,7 +124,7 @@ where
     Items::of(items.0)
 }
 
-#[extern_fn(instance_of = sig::as_iter, effect = pure, unsafe(lent(T)))]
+#[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_vec<T, I, Rt>(items: Ref<'_, Vec<T>, Shared, Rt>) -> Refs<'_, Vec<T>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -139,7 +134,7 @@ where
     Refs::of(items)
 }
 
-#[extern_fn(instance_of = sig::as_iter, effect = pure, unsafe(lent(T)))]
+#[extern_fn(instance_of = sig::as_iter, effect = pure)]
 fn as_iter_array<T, N, I, Rt>(items: Ref<'_, Arr<T, N>, Shared, Rt>) -> Refs<'_, Arr<T, N>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -150,7 +145,7 @@ where
     Refs::of(items)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn rev_iter<T, I, Rt>(items: Vec<T>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -184,7 +179,7 @@ where
     Range::of(start, end, step)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T, U)))]
+#[extern_fn(effect = pure)]
 fn map<'a, I, T, U, E, Rt>(
     it: I,
     f: Closure<'a, (T,), U, E, Rt>,
@@ -204,7 +199,7 @@ where
 /// whole input and runs every call at once, and the results come out in
 /// input order (RFC-0075 rule 2). `E: Suspends` refuses a pipeline that
 /// cannot suspend (RFC-0011 rule 5).
-#[extern_fn(effect = pure, unsafe(lent(I, T, U)))]
+#[extern_fn(effect = pure)]
 fn unordered<I, T, U, E, Rt>(it: Map<'_, I, T, U, E, Rt>) -> Unordered<'_, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -222,7 +217,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn filter<'a, I, T, E, Rt>(
     it: I,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
@@ -237,7 +232,7 @@ where
     Filter(FilterBody { inner: it, next, f })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn take<'a, I, T, E, Rt>(
     it: I,
     n: u64,
@@ -256,7 +251,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn skip<'a, I, T, E, Rt>(
     it: I,
     n: u64,
@@ -275,7 +270,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn step_by<'a, I, T, E, Rt>(
     it: I,
     n: u64,
@@ -296,7 +291,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn take_while<'a, I, T, E, Rt>(
     it: I,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
@@ -316,7 +311,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn skip_while<'a, I, T, E, Rt>(
     it: I,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
@@ -336,7 +331,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn chunks<'a, I, T, E, Rt>(
     it: I,
     n: u64,
@@ -356,7 +351,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn dedup<'a, I, T, E, Rt>(
     it: I,
     next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -371,7 +366,7 @@ where
     Dedup::drawing(it, next, eq)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(A, B, T)))]
+#[extern_fn(effect = pure)]
 fn chain<'a, A, B, T, E, Rt>(
     a: A,
     b: B,
@@ -394,7 +389,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn flatten<'a, I, T, E, Rt>(
     it: I,
     next: Instance<'a, sig::next<I, Vec<T>, E, Rt>, I, Rt, Later>,
@@ -412,7 +407,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T)))]
+#[extern_fn(effect = pure)]
 fn flatten_arrays<'a, I, T, N, E, Rt>(
     it: I,
     next: Instance<'a, sig::next<I, Arr<T, N>, E, Rt>, I, Rt, Later>,
@@ -431,7 +426,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure, unsafe(lent(I, T, U)))]
+#[extern_fn(effect = pure)]
 fn flat_map<'a, I, T, U, E, Rt>(
     it: I,
     f: Closure<'a, (T,), Vec<U>, E, Rt>,
@@ -471,7 +466,7 @@ where
     items
 }
 
-#[extern_fn(effect = E, sync = collect_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = collect_now)]
 async fn collect<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -511,7 +506,7 @@ where
     parts.join(&sep)
 }
 
-#[extern_fn(effect = E, sync = join_now, unsafe(lent(I)))]
+#[extern_fn(effect = E, sync = join_now)]
 async fn join<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -554,7 +549,7 @@ where
     false
 }
 
-#[extern_fn(effect = E, sync = contains_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = contains_now)]
 async fn contains<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -598,7 +593,7 @@ where
     }
 }
 
-#[extern_fn(effect = E, sync = find_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = find_now)]
 async fn find<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -640,7 +635,7 @@ where
     Some(acc)
 }
 
-#[extern_fn(effect = E, sync = reduce_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = reduce_now)]
 async fn reduce<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -683,7 +678,7 @@ where
     acc
 }
 
-#[extern_fn(effect = E, sync = fold_now, unsafe(lent(I, T, U)))]
+#[extern_fn(effect = E, sync = fold_now)]
 async fn fold<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -727,7 +722,7 @@ where
     false
 }
 
-#[extern_fn(effect = E, sync = any_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = any_now)]
 async fn any<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -770,7 +765,7 @@ where
     true
 }
 
-#[extern_fn(effect = E, sync = all_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = all_now)]
 async fn all<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -811,7 +806,7 @@ where
     n
 }
 
-#[extern_fn(effect = E, sync = count_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = count_now)]
 async fn count<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -850,7 +845,7 @@ where
     last
 }
 
-#[extern_fn(effect = E, sync = last_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = last_now)]
 async fn last<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -889,7 +884,7 @@ where
     next.call(ctx, &mut it, ())
 }
 
-#[extern_fn(effect = E, sync = nth_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = nth_now)]
 async fn nth<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -932,7 +927,7 @@ where
     None
 }
 
-#[extern_fn(effect = E, sync = position_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = position_now)]
 async fn position<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -976,7 +971,7 @@ where
     acc
 }
 
-#[extern_fn(effect = E, sync = sum_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = sum_now)]
 async fn sum<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -1017,7 +1012,7 @@ where
     acc
 }
 
-#[extern_fn(effect = E, sync = product_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = product_now)]
 async fn product<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -1062,7 +1057,7 @@ where
     best
 }
 
-#[extern_fn(effect = E, sync = min_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = min_now)]
 async fn min<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -1111,7 +1106,7 @@ where
     best
 }
 
-#[extern_fn(effect = E, sync = max_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = max_now)]
 async fn max<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -1227,7 +1222,7 @@ where
     extreme_by_key_now(ctx, it, f, next, Extreme::Min)
 }
 
-#[extern_fn(effect = E, sync = min_by_key_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = min_by_key_now)]
 async fn min_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -1258,7 +1253,7 @@ where
     extreme_by_key_now(ctx, it, f, next, Extreme::Max)
 }
 
-#[extern_fn(effect = E, sync = max_by_key_now, unsafe(lent(I, T)))]
+#[extern_fn(effect = E, sync = max_by_key_now)]
 async fn max_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,

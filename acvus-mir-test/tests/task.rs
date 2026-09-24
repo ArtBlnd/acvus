@@ -33,7 +33,6 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy) -> Function {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }
@@ -194,7 +193,6 @@ fn sync_or_async(i: &Interner) -> Function {
                         effect_bounds: vec![],
                         laws: Default::default(),
                         ensures: Vec::new(),
-                        vars: acvus_mir::ty::VarsStated::Elsewhere,
                     },
                     InstanceSig {
                         ty: ty.clone(),
@@ -204,13 +202,11 @@ fn sync_or_async(i: &Interner) -> Function {
                         effect_bounds: vec![],
                         laws: Default::default(),
                         ensures: Vec::new(),
-                        vars: acvus_mir::ty::VarsStated::Elsewhere,
                     },
                 ],
                 generic: None,
             },
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }

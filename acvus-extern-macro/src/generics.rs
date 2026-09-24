@@ -447,44 +447,6 @@ impl Vars {
             .collect()
     }
 
-    /// The `DeclaredVar` of every type variable, by position: lent where
-    /// `unsafe(lent(..))` names it, opaque otherwise (RFC-0079 rule 8). A
-    /// name that is no type variable of the declaration is refused.
-    pub fn declared_var_exprs(&self, lent: &[Ident]) -> syn::Result<Vec<TokenStream>> {
-        if let Some(stray) = lent
-            .iter()
-            .find(|ident| !matches!(self.lookup(ident), Some((VarKind::Ty, _))))
-        {
-            return Err(syn::Error::new(
-                stray.span(),
-                format!(
-                    "`lent({stray})` names no `Var<kind::Type>` parameter of this declaration: \
-                     only a type variable is lent (RFC-0079 rule 8)"
-                ),
-            ));
-        }
-        Ok(self
-            .0
-            .iter()
-            .filter(|v| v.kind == VarKind::Ty)
-            .map(|v| {
-                let name = v.ident.to_string();
-                let lending = match lent.contains(&v.ident) {
-                    // SAFETY (emitted): the declaration wrote
-                    // `unsafe(lent(..))` naming this variable, which is the
-                    // assertion `NotKept::asserted` states.
-                    true => quote! {
-                        ::acvus_extern::Lending::Lent(unsafe { ::acvus_extern::NotKept::asserted() })
-                    },
-                    false => quote! { ::acvus_extern::Lending::Opaque },
-                };
-                quote! {
-                    ::acvus_extern::DeclaredVar { name: __i.intern(#name), lending: #lending }
-                }
-            })
-            .collect())
-    }
-
     /// `EffectVarBound` of every effect variable, by position.
     pub fn effect_bound_exprs(&self) -> Vec<TokenStream> {
         self.0

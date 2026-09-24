@@ -491,15 +491,6 @@ pub enum MirErrorKind {
         actual: Ty,
     },
 
-    /// An opaque type variable of a declaration, or an opaque type
-    /// parameter of an extension type, filled by a type with a position
-    /// (RFC-0079 rule 8).
-    OpaqueFilledWithPosition {
-        declaration: String,
-        var: String,
-        ty: Ty,
-    },
-
     /// A context's type is not data (RFC-0014).
     ContextNotData {
         name: String,
@@ -1198,19 +1189,6 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "extern param `${name}` is immutable and cannot be assigned"
-                )
-            }
-            MirErrorKind::OpaqueFilledWithPosition {
-                declaration,
-                var,
-                ty,
-            } => {
-                write!(
-                    f,
-                    "`{declaration}` takes `{var}` opaque, and `{var}` is {} here, which holds a position: \
-                     a loan would reach code that may keep it past the call; its declaration \
-                     asserts `{var}` lent with `unsafe(lent({var}))` or takes no such type (RFC-0079 rule 8)",
-                    ty.shown(interner)
                 )
             }
             MirErrorKind::ContextNotData { name, ty } => {

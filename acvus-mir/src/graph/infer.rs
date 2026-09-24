@@ -565,7 +565,6 @@ pub fn declared_bounds<'a>(
                 effect_bounds,
                 instances,
                 requires,
-                vars,
             } => Some((
                 f.qref,
                 Declared {
@@ -573,7 +572,6 @@ pub fn declared_bounds<'a>(
                     effect_bounds: effect_bounds.clone(),
                     instances: instances.clone(),
                     requires: requires.clone(),
-                    vars: vars.clone(),
                 },
             )),
             FnKind::Local(_) => None,
@@ -586,7 +584,6 @@ pub struct Declared {
     pub effect_bounds: Vec<crate::ty::EffectVarBound>,
     pub instances: crate::ty::Instances,
     pub requires: Vec<crate::ty::RequirementSig>,
-    pub vars: crate::ty::VarsStated,
 }
 
 pub fn declared_instances(
@@ -646,7 +643,6 @@ fn declared_scheme(
         effect_bounds: own.effect_bounds.clone(),
         instances: Some(own.instances.clone()),
         requires,
-        vars: own.vars.clone(),
     }
 }
 
@@ -1584,7 +1580,6 @@ mod tests {
                 effect_bounds: vec![],
                 instances: crate::ty::Instances::default(),
                 requires: vec![],
-                vars: crate::ty::VarsStated::Here(vec![]),
             },
             ty: TyTerm::Fn {
                 params: named_params,

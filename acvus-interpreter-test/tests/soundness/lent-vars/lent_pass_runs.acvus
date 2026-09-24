@@ -1,3 +1,3 @@
 // expect 2
-// pass's `T` is declared lent with `unsafe(lent(T))`: filled with a reference, its result borrows what its argument does.
+// pass's `T` takes any type: filled with a reference, its result borrows what its argument does.
 let s = "ab".to_string(); let r = pass(&s); len(r)

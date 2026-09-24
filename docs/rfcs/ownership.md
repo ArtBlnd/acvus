@@ -283,11 +283,11 @@ Status: Proposed
    its `Canon`, and is `'static`; no kind's `Var` is. A
    `Chosen` part keeps its Rust type in the key (RFC-0076 rule 2), so an
    extension type bounds its `Chosen` parameter `'static` at the key.
-8. **A type variable is opaque or lent.** An extern's type variable, and
-   an extension type's type parameter, is opaque unless declared lent. An opaque one is filled only by a type with no position, so the
-   handler may keep its values: the checker refuses a use where one
-   resolved to a type with a position. A lent one takes any type and is
-   asserted with `unsafe` not to be kept (RFC-0080 rule 3).
+8. **A type variable's value is not kept.** A type variable takes any
+   type, and its `Var` does not imply `'static` (rule 7), so a handler
+   keeping a value of one past the call, in a static, a thread, a
+   `Box<dyn Any>` or a `#[state]`, needs `T: 'static`, which Rust
+   refuses.
 9. **A value crossing out of the body holds no loan.** A body's result
    to the host and a context write are refused where any of their
    positions may hold a loan; a call whose argument has a position is not
@@ -319,17 +319,17 @@ constraint is solved.
 **Cost.** Every value's region becomes a vector; a function type carries
 its flows, meeting two function types joins them, and a component of the
 call graph that calls itself is checked once more per round its flows
-grow. A container extern
-declares its type variables lent, with `unsafe`. Extern authors write
-lifetimes where a result borrows from more than one parameter, and an
-extension that holds a carrier declares a region parameter.
+grow. Extern authors write lifetimes where a result borrows from more
+than one parameter, and an extension that holds a carrier declares a
+region parameter.
 **Rejected.**
 - Region variables solved by the type checker — loans exist per MIR slot
   and instruction; the checker would solve what the MIR check solves again.
 - Flows as written edges beside lifetimes — a type variable's flows would
   be a second rule; a label covers lifetimes and type variables alike.
-- Every type variable lent — every generic handler would carry a brand for
-  values that hold no loan.
+- A type variable opaque unless asserted lent with `unsafe` — two hundred
+  assertions nothing checks, where Rust refuses the keep once the variable
+  is not `'static`.
 - Flows from body summaries alone — a call through a function value has no
   body, and would fall back to the union of its arguments: a second rule.
 - One region with a transitive deref — a value read through `&o` would also

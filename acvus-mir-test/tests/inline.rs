@@ -449,7 +449,6 @@ fn inline_io_extern_inside() {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

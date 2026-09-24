@@ -42,7 +42,6 @@ fn extern_at(i: &Interner, qref: QualifiedRef, param: Ty, effect: Effect) -> Fun
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: fn_ty(
             i,
@@ -461,7 +460,6 @@ fn nullary(i: &Interner, name: &str, effect: Effect) -> Function {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: fn_ty(i, &[], lift_to_poly(&Ty::I64), effect.into()),
     }

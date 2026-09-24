@@ -1,13 +1,8 @@
-// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
-// rule 8) of a std container's or iterator stage's handler or type. Nothing
-// here holds a static, a cell, a `#[state]` or a thread, and a value of a
-// lent variable leaves a call only through an output its signature names.
-
 use acvus_extern::{
     Arr, Registry, Runtime, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 
-#[extern_fn(effect = pure, ensures(ret = len(c)), unsafe(lent(T)))]
+#[extern_fn(effect = pure, ensures(ret = len(c)))]
 fn len<T, N>(c: &Arr<T, N>) -> u64
 where
     T: Var<kind::Type>,
@@ -16,7 +11,7 @@ where
     c.0.len() as u64
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn is_empty<T, N>(c: &Arr<T, N>) -> bool
 where
     T: Var<kind::Type>,
@@ -25,7 +20,7 @@ where
     c.0.is_empty()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 #[extern_view]
 fn as_slice<T, N, Rt>(c: &Arr<T, N>) -> &[T]
 where
@@ -36,7 +31,7 @@ where
     &c.0
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 #[extern_view]
 fn as_slice_mut<T, N, Rt>(c: &mut Arr<T, N>) -> &mut [T]
 where
@@ -47,7 +42,7 @@ where
     &mut c.0
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn first<T, N, Rt>(c: &Arr<T, N>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -57,7 +52,7 @@ where
     c.0.first()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn last<T, N, Rt>(c: &Arr<T, N>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -67,7 +62,7 @@ where
     c.0.last()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn get<T, N, Rt>(c: &Arr<T, N>, at: u64) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

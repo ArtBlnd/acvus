@@ -322,7 +322,6 @@ fn half(interner: &Interner) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::new(interner.intern("x"), t.clone())],

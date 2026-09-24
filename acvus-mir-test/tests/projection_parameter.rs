@@ -40,7 +40,6 @@ fn extern_fn(i: &Interner, name: &str, param: Option<TyTerm<Poly>>, ret: TyTerm<
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: param

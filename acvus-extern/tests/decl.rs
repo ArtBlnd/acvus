@@ -2718,7 +2718,6 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     names: Vec::new(),
                     laws: acvus_extern::Laws::None,
                     ensures: Vec::new(),
-                    vars: acvus_extern::VarsStated::Here(Vec::new()),
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(

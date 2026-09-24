@@ -941,19 +941,12 @@ Status: Accepted
    `#[extern_fn]`, `extern_signature!` and the library's macros emit
    `unsafe impl` with the `SAFETY` that discharges it, so their users
    write no `unsafe`; a crossing written by hand says `unsafe impl`.
-3. **A lent type variable is asserted.** `unsafe(lent(T))` on
-   `#[extern_fn]` or `#[extern_type]`, or `NotKept::asserted()`, which is
-   `unsafe`, in a declaration written by hand, asserts `NotKept`'s
-   `# Safety`: every value of `T` the handler receives reaches, after the
-   call returns, only the outputs the signature's flows name for `T`,
-   never a static, a `#[state]`, a raw word kept past the call, or another
-   thread; for an extension type, the same of every part `T` fills, for
-   every piece of code the type runs. `lent(T)` without `unsafe` is
-   refused. A shared signature's variables reach no handler: each instance
-   states its own. The standard library's containers (`Vec`, `Deque`,
-   `HashMap`, `HashSet`, arrays, their slices, and `Option` and `Result`,
-   which hold at most one value) and iterator stages are lent. `Within` and `UniformPayload` state in their `# Safety` that no
-   part a region or type parameter reaches sits behind an `UnsafeCell`.
+3. **A keep is refused by Rust.** A type variable is not `'static` and a
+   carrier is `Within` the call (RFC-0079 rules 6 to 8), so a handler that
+   keeps either past the call does not compile, and no handler asserts it
+   keeps none. `Within` and `UniformPayload` state in their `# Safety`
+   that no part a region or type parameter reaches sits behind an
+   `UnsafeCell`.
 4. **Effect declarations are outside it.** `pure`, `idempotent` and
    `commutative` are the extern author's own promise, which the checker
    trusts (RFC-0013). An extension library is written for the users of its
@@ -966,17 +959,15 @@ with no `unsafe` in the author's code. One form of guarantee makes each
 such fact visible where it is made.
 **Cost.** A runtime writes `unsafe` where it builds a `Ctx` or a call site,
 and where it makes an `Owned` of a word, and says `unsafe impl` for its own
-value's crossing; an extern author writes `unsafe(lent(..))` for a variable
-the handler must be handed references in.
+value's crossing.
 **Rejected.**
 - `ctx_of` on a runtime-only trait — the glue calls it with `Rt: Runtime`
   alone, so the trait is `Runtime`'s supertrait and a handler reaches it
   through the same bound; `unsafe` is what keeps it from a handler.
 - Debug asserts on the trusted facts — they vanish in the build that runs.
-- A lent variable's values handed at the call's brand, as a carrier, so
-  Rust refuses keeping them — 131 of 191 generic handlers carry bounds
-  (`Stored`, `Cross`, `PassedByValue`) a branded filler fails; it is the
-  direction once those traits take a brand.
+- A lent variable asserted with `unsafe(lent(T))` — an assertion nothing
+  checks at each of two hundred declarations; a variable that is not
+  `'static` lets Rust refuse the keep.
 - Refusing a spawn of a loan — the spawn is the optimizer's split, so a
   refusal would differ between optimization levels.
 

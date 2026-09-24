@@ -14,11 +14,6 @@
 //! `poly_ty` is `T`'s), and the element is read in place through
 //! `Erased::as_ref`, the crossing's own read of a value it erased.
 
-// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
-// rule 8) of a std container's or iterator stage's handler or type. Nothing
-// here holds a static, a cell, a `#[state]` or a thread, and a value of a
-// lent variable leaves a call only through an output its signature names.
-
 use acvus_extern::{
     Ctx, Erased, Registry, Runtime, Stored, TransparentOver, Var, extern_fn, extern_registry,
     extern_signature, kind,
@@ -67,7 +62,7 @@ pub(crate) fn permute<T>(xs: &mut [T], sources: &[usize]) {
 
 // -- the moving half, generic in the element ----------------------------
 
-#[extern_fn(effect = pure, ensures(ret = len(s)), unsafe(lent(T)))]
+#[extern_fn(effect = pure, ensures(ret = len(s)))]
 fn len<T, Rt>(s: &[T]) -> u64
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -88,7 +83,7 @@ where
 // until either `vec::reverse` takes Rust's in-place shape or RFC-0043
 // settles the pair.
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn is_empty<T, Rt>(s: &[T]) -> bool
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -97,7 +92,7 @@ where
     s.is_empty()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn swap<T, Rt>(s: &mut [T], i: u64, j: u64)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -116,7 +111,7 @@ where
 // `v[i] = x`, which is the indexing instruction and keeps the exclusive
 // loan at the place (RFC-0047).
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn get<T, Rt>(s: &[T], at: u64) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -125,7 +120,7 @@ where
     s.get(usize::try_from(at).ok()?)
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn first<T, Rt>(s: &[T]) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -134,7 +129,7 @@ where
     s.first()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn last<T, Rt>(s: &[T]) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -143,7 +138,7 @@ where
     s.last()
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn rotate_left<T, Rt>(s: &mut [T], mid: u64)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -153,7 +148,7 @@ where
     s.rotate_left(mid);
 }
 
-#[extern_fn(effect = pure, unsafe(lent(T)))]
+#[extern_fn(effect = pure)]
 fn rotate_right<T, Rt>(s: &mut [T], k: u64)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

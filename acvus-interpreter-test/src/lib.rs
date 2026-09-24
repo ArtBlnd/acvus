@@ -755,8 +755,8 @@ pub mod corpus {
     /// The standard registries and the corpus's own: `opaque(x)` and
     /// `opaque_async(x)` answer `x` at effect `opaque`, which no standard
     /// function has, so a program can hand the checker an effectful
-    /// function (RFC-0014). `pass` hands its argument back through a lent
-    /// `T` (RFC-0079 rule 8).
+    /// function (RFC-0014). `pass` hands its argument back, so its result
+    /// holds what its argument does (RFC-0079 rule 6).
     fn registries() -> Vec<acvus_extern::Registry<acvus_interpreter::AcvusRuntime>> {
         let mut registries = acvus_ext::std_registries();
         registries.push(acvus_extern::extern_registry! {
@@ -776,7 +776,7 @@ pub mod corpus {
         x
     }
 
-    #[acvus_extern::extern_fn(effect = pure, unsafe(lent(T)))]
+    #[acvus_extern::extern_fn(effect = pure)]
     fn pass<T>(x: T) -> T
     where
         T: acvus_extern::Var<acvus_extern::kind::Type>,

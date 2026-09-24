@@ -33,8 +33,6 @@ pub enum FnKind {
         effect_bounds: Vec<crate::ty::EffectVarBound>,
         instances: crate::ty::Instances,
         requires: Vec<crate::ty::RequirementSig>,
-        /// Each type variable's lending (RFC-0079 rule 8).
-        vars: crate::ty::VarsStated,
     },
 }
 

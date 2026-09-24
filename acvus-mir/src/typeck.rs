@@ -88,15 +88,6 @@ struct ShownSource {
     begins: Option<Label>,
 }
 
-/// An opaque type variable of the declaration a use instantiated, and
-/// where it is refused if it froze to a type with a position (RFC-0079
-/// rule 8).
-struct OpaqueSite {
-    var: crate::solver::OpaqueVar,
-    declaration: QualifiedRef,
-    span: Span,
-}
-
 /// A bounded type variable and where a violation of its bound is reported.
 struct BoundSite {
     var: crate::ty::TypeBoundId,
@@ -1680,12 +1671,6 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     bound_sites: Vec<BoundSite>,
     /// Bounded effect variables instantiated so far, as `bound_sites`.
     effect_bound_sites: Vec<EffectBoundSite>,
-    /// Opaque type variables instantiated so far, as `bound_sites`.
-    opaque_sites: Vec<OpaqueSite>,
-    /// Each extern's instantiated type, where its declared type names an
-    /// extension type: its opaque type parameters are checked once it
-    /// freezes (RFC-0079 rule 8).
-    typed_uses: Vec<(InferTy, Span)>,
     /// Each `if` whose two branches did not join, held until `solve_body`
     /// has solved: the branch types name variables the instance decisions
     /// bind, and a type frozen before they settle prints `!` where the
@@ -1836,8 +1821,6 @@ where
             demand: PlaceDemand::Value,
             bound_sites: Vec::new(),
             effect_bound_sites: Vec::new(),
-            opaque_sites: Vec::new(),
-            typed_uses: Vec::new(),
             branch_mismatches: Vec::new(),
             return_ty: None,
             try_sites: FxHashMap::default(),
@@ -3222,17 +3205,6 @@ where
             let span = self.decision_span(decision);
             self.effect_bound_sites.push(EffectBoundSite { var, span });
         }
-        for crate::solver::InstanceOpaque { decision, var } in self.solver.take_instance_opaque() {
-            let span = self.decision_span(decision);
-            let Some(declaration) = self.decision_callees.get(&decision).copied() else {
-                unreachable!("every instance decision is opened for a named callee")
-            };
-            self.opaque_sites.push(OpaqueSite {
-                var,
-                declaration,
-                span,
-            });
-        }
     }
 
     fn place_begun_sources(&mut self) {
@@ -4005,15 +3977,6 @@ where
                 .into_iter()
                 .map(|var| EffectBoundSite { var, span: site.at }),
         );
-        self.opaque_sites
-            .extend(inst.opaque.into_iter().map(|var| OpaqueSite {
-                var,
-                declaration: qref,
-                span: site.at,
-            }));
-        if scheme.instances.is_some() && names_an_extension_type(&scheme.ty) {
-            self.typed_uses.push((inst.ty.clone(), site.at));
-        }
         if let Some(InstanceChoice::Decided(decision)) = inst.instance {
             self.decision_sites.insert(decision, site.at);
             self.decision_callees.insert(decision, qref);
@@ -4236,10 +4199,9 @@ where
     }
 
     /// Verified by `solve_body` as an instantiation's bounded variables are.
-    fn settled_signature_bounds(&self) -> (Vec<BoundSite>, Vec<EffectBoundSite>, Vec<OpaqueSite>) {
+    fn settled_signature_bounds(&self) -> (Vec<BoundSite>, Vec<EffectBoundSite>) {
         let mut types = Vec::new();
         let mut effects = Vec::new();
-        let mut opaque_sites = Vec::new();
         for choice in self.calls.values() {
             let CallChoice::Decided(decision) = choice else {
                 continue;
@@ -4251,10 +4213,8 @@ where
                 unreachable!("a signature decision answers with a signature")
             };
             let SettledSignature::Named {
-                qref,
                 bounded,
                 bounded_effects,
-                opaque,
                 ..
             } = settled
             else {
@@ -4267,13 +4227,8 @@ where
                     .into_iter()
                     .map(|var| EffectBoundSite { var, span }),
             );
-            opaque_sites.extend(opaque.into_iter().map(|var| OpaqueSite {
-                var,
-                declaration: qref,
-                span,
-            }));
         }
-        (types, effects, opaque_sites)
+        (types, effects)
     }
 
     /// An operator's `core` signature as `acvus_extern::core` declares it,
@@ -4321,7 +4276,6 @@ where
                 generic: None,
             }),
             requires: Vec::new(),
-            vars: crate::ty::VarsStated::Elsewhere,
         }
     }
 
@@ -4414,7 +4368,6 @@ where
                     },
                     admits: Task::Heavy,
                     effect_bounds: Vec::new(),
-                    vars: crate::ty::VarsStated::Elsewhere,
                 }
             })
             .collect()
@@ -4468,7 +4421,6 @@ where
                 admits: sig.admits,
                 requires: sig.requires.clone(),
                 effect_bounds: sig.effect_bounds.clone(),
-                vars: sig.vars.clone(),
             });
         ComponentOffer {
             signature,
@@ -4505,7 +4457,6 @@ where
                 },
                 admits: Task::Heavy,
                 effect_bounds: Vec::new(),
-                vars: crate::ty::VarsStated::Elsewhere,
             })
             .collect()
     }
@@ -4522,7 +4473,6 @@ where
             instance: InstanceKind::Intrinsic(Intrinsic::StringClone),
             requires: Vec::new(),
             effect_bounds: Vec::new(),
-            vars: crate::ty::VarsStated::Elsewhere,
             ty: TyTerm::Fn {
                 params: vec![ParamTerm::new(
                     self.interner.intern("a"),
@@ -4625,15 +4575,10 @@ where
         self.settle_slice_args();
         self.settle_index_uses();
         self.check_value_sites();
-        let (settled, settled_effects, settled_opaque) = self.settled_signature_bounds();
+        let (settled, settled_effects) = self.settled_signature_bounds();
         self.bound_sites.extend(settled);
         self.effect_bound_sites.extend(settled_effects);
-        self.opaque_sites.extend(settled_opaque);
         self.place_instance_bounds();
-        // As a bound below: a refused decision's types are that refusal's.
-        if refused.is_empty() {
-            self.check_opaque_fillers();
-        }
         let effect_sites = std::mem::take(&mut self.effect_bound_sites);
         // As a type variable's bound below: a violation where a decision
         // was refused is that refusal's consequence (RFC-0011 rule 5).
@@ -5444,55 +5389,6 @@ where
                 m.span,
                 at_the_enclosing_lambda,
             );
-        }
-    }
-
-    /// An opaque variable, or an opaque type parameter of an extension
-    /// type, filled by a type with a position is refused at the use that
-    /// instantiated its declaration (RFC-0079 rule 8).
-    fn check_opaque_fillers(&mut self) {
-        for OpaqueSite {
-            var,
-            declaration,
-            span,
-        } in std::mem::take(&mut self.opaque_sites)
-        {
-            let filler = self.solver.resolve_ty(&TyTerm::Var(var.var));
-            if crate::analysis::loans::positions(&filler) == 0 {
-                continue;
-            }
-            let var_name = match var.name {
-                Some(name) => self.interner.resolve(name).to_string(),
-                None => format!("type variable {}", var.index),
-            };
-            self.error(
-                MirErrorKind::OpaqueFilledWithPosition {
-                    declaration: self.interner.resolve(declaration.name).to_string(),
-                    var: var_name,
-                    ty: self.type_as_written(&filler),
-                },
-                span,
-            );
-        }
-        for (ty, span) in std::mem::take(&mut self.typed_uses) {
-            let resolved = self.solver.resolve_ty(&ty);
-            let mut filled = Vec::new();
-            opaque_params_filled(&resolved, self.solver.registry(), &mut filled);
-            for (declaration, var, arg) in filled {
-                let decl = self.solver.registry().get(declaration);
-                let var_name = match decl.vars.get(var) {
-                    Some(declared) => self.interner.resolve(declared.name).to_string(),
-                    None => format!("type parameter {var}"),
-                };
-                self.error(
-                    MirErrorKind::OpaqueFilledWithPosition {
-                        declaration: self.interner.resolve(declaration.name).to_string(),
-                        var: var_name,
-                        ty: self.type_as_written(&arg),
-                    },
-                    span,
-                );
-            }
         }
     }
 
@@ -9418,125 +9314,6 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::Shl => "<<",
         BinOp::Shr => ">>",
         BinOp::Mod => "%",
-    }
-}
-
-
-/// Whether `ty` names an extension type, whose opaque type parameters a
-/// use of it is checked for (RFC-0079 rule 8).
-fn names_an_extension_type<V>(ty: &TyTerm<V>) -> bool
-where
-    V: crate::ty::Phase,
-{
-    match ty {
-        TyTerm::UserDefined { .. } => true,
-        TyTerm::Ref(_, inner) => names_an_extension_type(&inner.ty()),
-        TyTerm::Array(inner, _)
-        | TyTerm::Option(inner)
-        | TyTerm::Slice(inner)
-        | TyTerm::Handle(inner) => names_an_extension_type(inner.as_ref()),
-        TyTerm::Result(ok, err) => {
-            names_an_extension_type(ok.as_ref()) || names_an_extension_type(err.as_ref())
-        }
-        TyTerm::Tuple(items) => items.iter().any(names_an_extension_type),
-        TyTerm::Object(fields) => fields.values().any(names_an_extension_type),
-        TyTerm::Enum { variants, .. } => variants
-            .values()
-            .flatten()
-            .any(|t| names_an_extension_type(t.as_ref())),
-        TyTerm::Fn {
-            params,
-            ret,
-            captures,
-            ..
-        } => {
-            params.iter().any(|p| names_an_extension_type(&p.ty))
-                || names_an_extension_type(ret.as_ref())
-                || captures.iter().any(names_an_extension_type)
-        }
-        TyTerm::Int(_)
-        | TyTerm::Float
-        | TyTerm::Char
-        | TyTerm::String
-        | TyTerm::Bool
-        | TyTerm::Unit
-        | TyTerm::Never
-        | TyTerm::Order
-        | TyTerm::Str
-        | TyTerm::Error(_)
-        | TyTerm::Var(_) => false,
-    }
-}
-
-/// Every extension type in `ty` whose opaque type parameter an argument
-/// with a position fills, as `(type, parameter, argument)`.
-fn opaque_params_filled(
-    ty: &InferTy,
-    registry: &crate::ty::TypeRegistry,
-    out: &mut Vec<(QualifiedRef, usize, InferTy)>,
-) {
-    match ty {
-        TyTerm::UserDefined { id, type_args, .. } => {
-            let decl = registry.get(*id);
-            for (i, arg) in type_args.iter().enumerate() {
-                let arg = arg.ty();
-                let opaque = !matches!(
-                    decl.vars.get(i),
-                    Some(crate::ty::DeclaredVar {
-                        lending: crate::ty::Lending::Lent(_),
-                        ..
-                    })
-                );
-                if opaque && crate::analysis::loans::positions(arg.as_ref()) > 0 {
-                    out.push((*id, i, arg.clone().into_owned()));
-                }
-                opaque_params_filled(&arg, registry, out);
-            }
-        }
-        TyTerm::Ref(_, inner) => opaque_params_filled(&inner.ty(), registry, out),
-        TyTerm::Array(inner, _)
-        | TyTerm::Option(inner)
-        | TyTerm::Slice(inner)
-        | TyTerm::Handle(inner) => opaque_params_filled(inner, registry, out),
-        TyTerm::Result(ok, err) => {
-            opaque_params_filled(ok, registry, out);
-            opaque_params_filled(err, registry, out);
-        }
-        TyTerm::Tuple(items) => items
-            .iter()
-            .for_each(|item| opaque_params_filled(item, registry, out)),
-        TyTerm::Object(fields) => fields
-            .values()
-            .for_each(|field| opaque_params_filled(field, registry, out)),
-        TyTerm::Enum { variants, .. } => variants
-            .values()
-            .flatten()
-            .for_each(|payload| opaque_params_filled(payload, registry, out)),
-        TyTerm::Fn {
-            params,
-            ret,
-            captures,
-            ..
-        } => {
-            for param in params {
-                opaque_params_filled(&param.ty, registry, out);
-            }
-            opaque_params_filled(ret, registry, out);
-            for capture in captures {
-                opaque_params_filled(capture, registry, out);
-            }
-        }
-        TyTerm::Int(_)
-        | TyTerm::Float
-        | TyTerm::Char
-        | TyTerm::String
-        | TyTerm::Bool
-        | TyTerm::Unit
-        | TyTerm::Never
-        | TyTerm::Order
-        | TyTerm::Str
-        | TyTerm::Error(_)
-        | TyTerm::Var(_) => {}
     }
 }
 

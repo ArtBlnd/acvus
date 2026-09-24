@@ -45,7 +45,7 @@ mod fx_a {
     }
 
     // SAFETY: a type-only fixture, never run, keeps nothing.
-    #[extern_fn(effect = pure, unsafe(lent(A)))]
+    #[extern_fn(effect = pure)]
     pub fn apply_any<A, E, Rt>(f: Closure<'_, (A,), bool, E, Rt>) -> bool
     where
         A: Var<kind::Type>,

@@ -50,7 +50,6 @@ fn pick_fn(i: &Interner) -> Function {
                 generic: None,
             },
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: fn_of(i, &[("c", c), ("f", f(&t))], t),
     }
@@ -65,7 +64,6 @@ fn text_fn(i: &Interner) -> Function {
             effect_bounds: vec![],
             instances: acvus_mir::ty::Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: fn_of(i, &[], TyTerm::String),
     }

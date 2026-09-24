@@ -18,7 +18,6 @@ fn extern_taking(i: &Interner, name: &str, param: TyTerm<Poly>) -> Function {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
-            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("v"), param)],

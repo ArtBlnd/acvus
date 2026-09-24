@@ -170,13 +170,6 @@ where
             identity_params: 0,
             region_params: Self::REGION_PARAMS,
             specializable: vec![true],
-            vars: vec![crate::DeclaredVar {
-                name: i.intern("T"),
-                // SAFETY: a `Vec` runs no code of its own on its elements
-                // but moving and releasing them, and every std handler over
-                // it keeps no element past its call (RFC-0079 rule 8).
-                lending: crate::Lending::Lent(unsafe { crate::NotKept::asserted() }),
-            }],
         }
     }
 }
