@@ -1082,11 +1082,11 @@ glue at the type the checker settled.
    - A context's first value is its init, one per key: an expression or a
      script that returns the value and names no context, compiled into the
      same graph with its result declared at the context's type, or a Rust
-     function returning a `T` whose declaration joins the solve as that
-     result would (`init_with::<T>`), its value crossing as `insert`'s does.
+     function returning a `T` whose declaration types the context in the
+     solve and must equal the solved type (`init_with`), its value crossing
+     as `insert`'s does.
      A declared type names no source (RFC-0012 rule 7), so an init's source
-     becomes the context's; a script's store of another source stays
-     refused.
+     becomes the context's.
    - A load of a key the storage lacks, a run's `Fetch` or a host's
      `with` or `with_mut`, runs that key's init at that point, stores its
      result and loads it, cloning nothing; a key with neither a value
