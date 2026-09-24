@@ -72,6 +72,13 @@ difference column carries behaviour only.
 | `wrapping_rem` | `wrapping_rem(a: T, b: T) -> T`, T ∈ int | `T::wrapping_rem` | none |
 | `wrapping_neg` | `wrapping_neg(a: T) -> T`, T ∈ int | `T::wrapping_neg` | none |
 | `wrapping_pow` | `wrapping_pow(base: T, exp: u32) -> T`, T ∈ int | `T::wrapping_pow` | none |
+| `overflowing_add` | `overflowing_add(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_add` | none |
+| `overflowing_sub` | `overflowing_sub(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_sub` | none |
+| `overflowing_mul` | `overflowing_mul(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_mul` | none |
+| `overflowing_div` | `overflowing_div(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_div` | none |
+| `overflowing_rem` | `overflowing_rem(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_rem` | none |
+| `overflowing_neg` | `overflowing_neg(a: T) -> (T, bool)`, T ∈ int | `T::overflowing_neg` | none |
+| `overflowing_pow` | `overflowing_pow(base: T, exp: u32) -> (T, bool)`, T ∈ int | `T::overflowing_pow` | none |
 | `saturating_add` | `saturating_add(a: T, b: T) -> T`, T ∈ int | `T::saturating_add` | none |
 | `saturating_sub` | `saturating_sub(a: T, b: T) -> T`, T ∈ int | `T::saturating_sub` | none |
 | `saturating_mul` | `saturating_mul(a: T, b: T) -> T`, T ∈ int | `T::saturating_mul` | none |

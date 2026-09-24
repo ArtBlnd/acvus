@@ -8,13 +8,11 @@
 //! Rust and the language has no such thing, so each is a zero-argument
 //! function under its type's namespace: `i64::MAX()`, `f64::NAN()`.
 //!
-//! Three `std` shapes do not reach here. `overflowing_*` returns
-//! `(T, bool)` and a Rust tuple does not cross the boundary, so it is not
-//! declared. `abs_diff` returns the unsigned counterpart of its argument,
-//! which one type variable cannot say, so its result is `u64` at every
-//! width — the same value Rust computes, widened. `next_power_of_two`
-//! panics on overflow here at every build profile, where Rust panics only
-//! in debug.
+//! Two `std` shapes do not reach here unchanged. `abs_diff` returns the
+//! unsigned counterpart of its argument, which one type variable cannot
+//! say, so its result is `u64` at every width — the same value Rust
+//! computes, widened. `next_power_of_two` panics on overflow here at every
+//! build profile, where Rust panics only in debug.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -114,6 +112,33 @@ pub mod sig {
         to_hex,
         to_binary,
         to_octal,
+    }
+
+    macro_rules! overflowing_sigs {
+        ($($name:ident($($arg:ident),+)),* $(,)?) => {$(
+            extern_signature! {
+                ns: "num",
+                fn $name<T>($($arg: T),+) -> (T, bool)
+                where
+                    T: Var<kind::Type>;
+            }
+        )*};
+    }
+
+    overflowing_sigs! {
+        overflowing_add(a, b),
+        overflowing_sub(a, b),
+        overflowing_mul(a, b),
+        overflowing_div(a, b),
+        overflowing_rem(a, b),
+        overflowing_neg(a),
+    }
+
+    extern_signature! {
+        ns: "num",
+        fn overflowing_pow<T>(base: T, exp: u32) -> (T, bool)
+        where
+            T: Var<kind::Type>;
     }
 
     extern_signature! {
@@ -283,6 +308,45 @@ macro_rules! int_common {
         #[extern_fn(instance_of = crate::num::sig::wrapping_pow, effect = pure)]
         pub fn wrapping_pow(base: $t, exp: u32) -> $t {
             base.wrapping_pow(exp)
+        }
+
+        // -- overflowing ------------------------------------------------
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_add, effect = pure)]
+        pub fn overflowing_add(a: $t, b: $t) -> ($t, bool) {
+            a.overflowing_add(b)
+        }
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_sub, effect = pure)]
+        pub fn overflowing_sub(a: $t, b: $t) -> ($t, bool) {
+            a.overflowing_sub(b)
+        }
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_mul, effect = pure)]
+        pub fn overflowing_mul(a: $t, b: $t) -> ($t, bool) {
+            a.overflowing_mul(b)
+        }
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_div, effect = pure)]
+        pub fn overflowing_div(a: $t, b: $t) -> ($t, bool) {
+            assert!(b != 0, "overflowing_div: divisor is zero");
+            a.overflowing_div(b)
+        }
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_rem, effect = pure)]
+        pub fn overflowing_rem(a: $t, b: $t) -> ($t, bool) {
+            assert!(b != 0, "overflowing_rem: divisor is zero");
+            a.overflowing_rem(b)
+        }
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_neg, effect = pure)]
+        pub fn overflowing_neg(a: $t) -> ($t, bool) {
+            a.overflowing_neg()
+        }
+
+        #[extern_fn(instance_of = crate::num::sig::overflowing_pow, effect = pure)]
+        pub fn overflowing_pow(base: $t, exp: u32) -> ($t, bool) {
+            base.overflowing_pow(exp)
         }
 
         // -- saturating -------------------------------------------------
@@ -560,6 +624,9 @@ macro_rules! signed_width {
                     checked_div, checked_rem, checked_neg, checked_pow,
                     wrapping_add, wrapping_sub, wrapping_mul,
                     wrapping_div, wrapping_rem, wrapping_neg, wrapping_pow,
+                    overflowing_add, overflowing_sub, overflowing_mul,
+                    overflowing_div, overflowing_rem, overflowing_neg,
+                    overflowing_pow,
                     saturating_add, saturating_sub, saturating_mul,
                     saturating_div, saturating_pow,
                     div_euclid, rem_euclid,
@@ -597,6 +664,9 @@ macro_rules! unsigned_width {
                     checked_div, checked_rem, checked_neg, checked_pow,
                     wrapping_add, wrapping_sub, wrapping_mul,
                     wrapping_div, wrapping_rem, wrapping_neg, wrapping_pow,
+                    overflowing_add, overflowing_sub, overflowing_mul,
+                    overflowing_div, overflowing_rem, overflowing_neg,
+                    overflowing_pow,
                     saturating_add, saturating_sub, saturating_mul,
                     saturating_div, saturating_pow,
                     div_euclid, rem_euclid,
@@ -833,6 +903,9 @@ where
             sig::checked_add, sig::checked_sub, sig::checked_mul,
             sig::checked_div, sig::checked_rem, sig::checked_neg,
             sig::checked_pow,
+            sig::overflowing_add, sig::overflowing_sub, sig::overflowing_mul,
+            sig::overflowing_div, sig::overflowing_rem, sig::overflowing_neg,
+            sig::overflowing_pow,
             sig::div_euclid, sig::rem_euclid,
             sig::leading_zeros, sig::trailing_zeros, sig::count_ones,
             sig::swap_bytes, sig::to_be, sig::to_le,
@@ -909,7 +982,7 @@ mod tests {
         let reg = Externs::combine(registries, &i).expect("registries combine");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
 
-        let shared_signatures = 41;
+        let shared_signatures = 48;
         let float_fns = 39;
         let int_constants = 8 * 3;
         let float_constants = 6 + 1;

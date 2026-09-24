@@ -127,6 +127,103 @@ fn wrapping_pow_wraps_at_the_width() {
     assert_eq!(value("3u8.wrapping_pow(5) as i64"), "243");
 }
 
+// -- overflowing_* ------------------------------------------------------
+// The result is the tuple Rust returns, rendered as a two-element array:
+// the wrapped value at its width, then whether the exact one left it.
+
+#[test]
+fn overflowing_add_wraps_and_says_so() {
+    assert_eq!(value("127i8.overflowing_add(1i8)"), "[-128,true]");
+    assert_eq!(value("1i8.overflowing_add(2i8)"), "[3,false]");
+    assert_eq!(value("255u8.overflowing_add(1u8)"), "[0,true]");
+    assert_eq!(value("1u8.overflowing_add(2u8)"), "[3,false]");
+}
+
+#[test]
+fn overflowing_sub_wraps_and_says_so() {
+    assert_eq!(
+        value("let a = -128i8; a.overflowing_sub(1i8)"),
+        "[127,true]"
+    );
+    assert_eq!(value("5i8.overflowing_sub(2i8)"), "[3,false]");
+    assert_eq!(value("0u8.overflowing_sub(1u8)"), "[255,true]");
+    assert_eq!(value("5u8.overflowing_sub(2u8)"), "[3,false]");
+}
+
+#[test]
+fn overflowing_mul_wraps_and_says_so() {
+    assert_eq!(
+        value("2147483647i32.overflowing_mul(2i32)"),
+        "[-2,true]"
+    );
+    assert_eq!(value("16i32.overflowing_mul(16i32)"), "[256,false]");
+    assert_eq!(value("200u8.overflowing_mul(2u8)"), "[144,true]");
+    assert_eq!(value("16u8.overflowing_mul(15u8)"), "[240,false]");
+}
+
+/// An unsigned quotient never leaves its width, so the unsigned case is
+/// the exact one alone.
+#[test]
+fn overflowing_div_wraps_at_min_over_minus_one() {
+    assert_eq!(
+        value("let a = -128i8; let b = -1i8; a.overflowing_div(b)"),
+        "[-128,true]"
+    );
+    assert_eq!(
+        value("let a = i64::MIN(); let b = -1; a.overflowing_div(b)"),
+        "[-9223372036854775808,true]"
+    );
+    assert_eq!(value("7i8.overflowing_div(2i8)"), "[3,false]");
+    assert_eq!(value("7u8.overflowing_div(2u8)"), "[3,false]");
+}
+
+/// As for the quotient, an unsigned remainder never overflows.
+#[test]
+fn overflowing_rem_is_zero_and_overflowed_at_min_over_minus_one() {
+    assert_eq!(
+        value("let a = -128i8; let b = -1i8; a.overflowing_rem(b)"),
+        "[0,true]"
+    );
+    assert_eq!(
+        value("let a = i64::MIN(); let b = -1; a.overflowing_rem(b)"),
+        "[0,true]"
+    );
+    assert_eq!(value("7i8.overflowing_rem(2i8)"), "[1,false]");
+    assert_eq!(value("7u8.overflowing_rem(2u8)"), "[1,false]");
+}
+
+#[test]
+fn overflowing_div_and_rem_trap_on_a_zero_divisor() {
+    assert!(trap("7.overflowing_div(0)").contains("overflowing_div: divisor is zero"));
+    assert!(trap("7.overflowing_rem(0)").contains("overflowing_rem: divisor is zero"));
+}
+
+#[test]
+fn overflowing_neg_wraps_and_says_so() {
+    assert_eq!(value("let a = -128i8; a.overflowing_neg()"), "[-128,true]");
+    assert_eq!(value("5i8.overflowing_neg()"), "[-5,false]");
+    assert_eq!(value("1u8.overflowing_neg()"), "[255,true]");
+    assert_eq!(value("0u8.overflowing_neg()"), "[0,false]");
+}
+
+#[test]
+fn overflowing_pow_wraps_and_says_so() {
+    assert_eq!(value("2i8.overflowing_pow(10)"), "[0,true]");
+    assert_eq!(value("2i8.overflowing_pow(6)"), "[64,false]");
+    assert_eq!(value("3u8.overflowing_pow(6)"), "[217,true]");
+    assert_eq!(value("3u8.overflowing_pow(5)"), "[243,false]");
+}
+
+/// Both halves reach a pattern: the tuple is a value the script takes
+/// apart, not only one it returns.
+#[test]
+fn overflowing_add_s_halves_bind_in_a_pattern() {
+    assert_eq!(
+        value("match 255u8.overflowing_add(3u8) { (v, true) => v as i64, (v, false) => -(v as i64), _ => 0 }"),
+        "2"
+    );
+}
+
 // -- saturating_* -------------------------------------------------------
 
 #[test]

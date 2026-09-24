@@ -239,8 +239,8 @@ Status: Accepted
    such an operation as if it could not trap. `/` and `%` are the only
    integer operations whose failure is defined, so RFC-0007's constraint on
    moving an operation that can raise binds them alone. A script that wants
-   another behaviour names it: `wrapping_*`, `checked_*`, `saturating_*`;
-   this rule stands on those being there.
+   another behaviour names it: `wrapping_*`, `checked_*`, `saturating_*`,
+   `overflowing_*`; this rule stands on those being there.
 4. An unsuffixed integer literal's type is a variable only an integer type
    fills; the use decides the width (`@b + 1` with `@b: u8` makes `1` a
    `u8`), and where nothing decides it is `i64` (RFC-0042 rule 3). A negated
