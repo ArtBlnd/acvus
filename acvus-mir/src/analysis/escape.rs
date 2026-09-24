@@ -187,9 +187,6 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
 
         // The source outlives the terminator: every iteration reads an
         // element through it (RFC-0057).
-        kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-            let traversal = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
-            traversal.source.uses().into_iter().for_each(out)
-        }
+        InstKind::For { source, .. } => source.uses().into_iter().for_each(out),
     }
 }

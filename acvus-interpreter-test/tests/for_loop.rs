@@ -204,13 +204,13 @@ fn every_head_prepares_to_one_for_region() {
     }
 }
 
-/// RFC-0089 rule 2: in place, a `ForParts` chain is the body of the region
-/// its `For` would be, so each loop `optimize::for_parts` partitions
-/// prepares to what the same loop prepares to without the form. Case h's
-/// body spawns its call and evaluates it, which no region part admits, so it
-/// runs on the joints path on master as well.
+/// RFC-0089 rule 1: in place, a stage chain is the body of the region the
+/// loop as written would be, so each loop `optimize::stages` writes as
+/// several stages prepares to what the same loop prepared to before stages.
+/// The `anyorder` case's body spawns its call and evaluates it, which no
+/// region part admits, so it ran on the joints path before stages as well.
 #[test]
-fn every_partitioned_loop_prepares_as_its_for_did() {
+fn every_staged_loop_prepares_as_the_loop_as_written_did() {
     struct Partitioned {
         source: &'static str,
         prepares_to: Expected,
@@ -272,7 +272,7 @@ fn every_partitioned_loop_prepares_as_its_for_did() {
             Ty::I64,
         );
         let mir = acvus_mir::printer::dump_with(&i, &compiled.modules[&compiled.entry_qref]);
-        assert!(mir.contains(" parts ["), "{}\n{mir}", case.source);
+        assert!(mir.contains(" stages ["), "{}\n{mir}", case.source);
         let found =
             script_listing_with_externs(&i, case.source, Context::default(), registries(), Ty::I64);
         let names: Vec<String> = found
@@ -704,17 +704,16 @@ fn a_traversal_of_owners_a_break_leaves_runs_as_joints_and_releases_nothing_itse
     );
 }
 
-/// RFC-0089 rule 8: an owned element's drop is placed in the part that last
-/// reads it. The element is bound to a storage one part alone reads, and the
-/// binding opens the body, so that part is the first: its release is that
-/// part's, the product's part holds none, and each element is released once.
+/// An owned element's drop is placed in the stage that reads it
+/// (`drop_insertion::stage_entries`). The element is bound to a storage one
+/// stage alone touches, so its release is that stage's, the product's join
+/// holds none, and each element is released once.
 const OWNER_READ_BY_ONE_PART: &str = "let a = [tracked(1), tracked(1), tracked(1)]; \
      let n = 0; let m = 1; for t in a { m = m * 2; n = n + rank(&t); } n * 100 + m";
 
 /// Two sums that each read the element: the element is bound to a storage
-/// that every iteration writes and both sums read, so rule 5 joins them into
-/// one part, and a part that writes a storage is `Sequential`, so the loop
-/// stays a `For`.
+/// the body defines and releases within an iteration, so it is no target, and
+/// the reads of it are pure work ahead of the two sums' joins, one per sum.
 const OWNER_READ_BY_TWO_SUMS: &str = "let a = [tracked(1), tracked(1), tracked(1)]; \
      let n = 0; let m = 0; for t in a { n = n + rank(&t); m = m + rank(&t) * 2; } n * 10 + m";
 
@@ -733,23 +732,32 @@ async fn an_owned_element_one_part_reads_is_released_once_in_that_part() {
     let module = &compiled.modules[&compiled.entry_qref];
     let mir = acvus_mir::printer::dump_with(&i, module);
     let cfg = acvus_mir::cfg::promote(module.main.clone());
-    let Some((header, parts)) = cfg.blocks.iter().find_map(|block| match &block.terminator {
-        acvus_mir::cfg::Terminator::ForParts { parts, .. } => Some((block.label, parts)),
+    let Some((header, stages)) = cfg.blocks.iter().find_map(|block| match &block.terminator {
+        acvus_mir::cfg::Terminator::For { stages, .. } => Some((block.label, stages)),
         _ => None,
     }) else {
-        panic!("the loop states its parts:\n{mir}")
+        panic!("the loop states its stages:\n{mir}")
     };
-    assert_eq!(parts.len(), 2, "{mir}");
-    let entries: Vec<usize> = parts
-        .iter()
-        .map(|part| cfg.label_to_block[&part.entry].0)
+    let entries: Vec<usize> = stages
+        .entries()
+        .map(|entry| cfg.label_to_block[&entry].0)
+        .collect();
+    let reads_the_element: Vec<usize> = (0..entries.len())
+        .filter(|&stage| {
+            let end = entries.get(stage + 1).copied().unwrap_or(cfg.blocks.len());
+            (entries[stage]..end).any(|at| {
+                cfg.blocks[at].insts.iter().any(|inst| {
+                    matches!(&inst.kind, acvus_mir::ir::InstKind::FunctionCall { .. })
+                })
+            })
+        })
         .collect();
     let latch = (entries[0]..cfg.blocks.len())
         .find(|at| {
             matches!(&cfg.blocks[*at].terminator,
                 acvus_mir::cfg::Terminator::Jump { label, .. } if *label == header)
         })
-        .expect("the last part jumps back to the header");
+        .expect("the last stage jumps back to the header");
     let dropped_in: Vec<usize> = (entries[0]..=latch)
         .filter(|at| {
             cfg.blocks[*at]
@@ -759,7 +767,7 @@ async fn an_owned_element_one_part_reads_is_released_once_in_that_part() {
         })
         .map(|at| entries.iter().rposition(|entry| *entry <= at).unwrap_or(0))
         .collect();
-    assert_eq!(dropped_in, [0], "{mir}");
+    assert_eq!(dropped_in, reads_the_element, "{mir}");
 }
 
 #[tokio::test]
@@ -774,8 +782,23 @@ async fn an_owned_element_two_sums_read_is_released_once() {
     );
     let compiled =
         compile_source_with_externs(&i, ast, &rustc_hash::FxHashMap::default(), regs(), Ty::I64);
-    let mir = acvus_mir::printer::dump_with(&i, &compiled.modules[&compiled.entry_qref]);
-    assert!(!mir.contains(" parts ["), "{mir}");
+    let module = &compiled.modules[&compiled.entry_qref];
+    let mir = acvus_mir::printer::dump_with(&i, module);
+    let cfg = acvus_mir::cfg::promote(module.main.clone());
+    let joins: Vec<usize> = cfg
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            acvus_mir::cfg::Terminator::For { stages, .. } => Some(
+                stages
+                    .iter()
+                    .filter(|stage| matches!(stage, acvus_mir::ir::Stage::Join { .. }))
+                    .count(),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(joins, [2], "{mir}");
 }
 
 // -- An element's reference outlives its iteration ----------------------

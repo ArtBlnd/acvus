@@ -284,10 +284,14 @@ pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
                 }
             }
         }
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            if traversal.exit_trip == ExitTrip::Absent && traversal.exit == label {
-                edges.push(traversal.exit_args);
+        Terminator::For {
+            exit,
+            exit_trip,
+            exit_args,
+            ..
+        } => {
+            if *exit_trip == ExitTrip::Absent && *exit == label {
+                edges.push(exit_args);
             }
         }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
@@ -368,9 +372,8 @@ pub fn for_headers(cfg: &CfgBody) -> FxHashMap<BlockIdx, ForSource> {
         .iter()
         .enumerate()
         .filter_map(|(bi, block)| match &block.terminator {
-            term => term
-                .traversal()
-                .map(|traversal| (BlockIdx(bi), traversal.source)),
+            Terminator::For { source, .. } => Some((BlockIdx(bi), *source)),
+            _ => None,
         })
         .collect()
 }

@@ -40,8 +40,7 @@ use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
-    BinOp, BodyArgsMut, ExitTrip, ForSource, Inst, InstKind, Label, Traversal, TraversalMut,
-    ValOrigin, ValueId,
+    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId,
 };
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
@@ -93,9 +92,12 @@ struct Shape {
 impl Shape {
     fn of(cfg: &CfgBody, loop_: &Loop) -> Option<Shape> {
         let header = loop_.natural.header;
-        let Traversal { source, exit, .. } = cfg.blocks[header.0].terminator.traversal()?;
+        let Terminator::For { source, exit, .. } = &cfg.blocks[header.0].terminator else {
+            return None;
+        };
+        let source = *source;
         let body = for_body(cfg, header);
-        let exit = *cfg.label_to_block.get(&exit)?;
+        let exit = *cfg.label_to_block.get(exit)?;
         let preds = cfg.predecessors();
         let entered_by_header_alone =
             |block: BlockIdx| preds.get(&block).is_some_and(|from| from[..] == [header]);
@@ -354,8 +356,7 @@ fn reads(block: &crate::cfg::Block, value: ValueId) -> bool {
 }
 
 fn trip_count_on_exit(cfg: &mut CfgBody, shape: &Shape) -> ValueId {
-    let Some(TraversalMut { exit_trip, .. }) = cfg.blocks[shape.header.0].terminator.traversal_mut()
-    else {
+    let Terminator::For { exit_trip, .. } = &mut cfg.blocks[shape.header.0].terminator else {
         panic!(
             "block {} is a `for` header and does not end in `For`",
             shape.header.0
@@ -385,7 +386,7 @@ fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) {
     let mut dropped: Vec<usize> = ivs.iter().map(|iv| iv.header_index).collect();
     dropped.sort_unstable_by(|a, b| b.cmp(a));
     for block in &mut cfg.blocks {
-        for mut edge in edges_into(&mut block.terminator, header_label) {
+        for edge in edges_into(&mut block.terminator, header_label) {
             for index in &dropped {
                 let at = index.checked_sub(edge.supplied_params).unwrap_or_else(|| {
                     panic!(
@@ -393,7 +394,7 @@ fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) {
                          and an `Iv` is a parameter every edge sends"
                     )
                 });
-                edge.args.remove_positions(&[at]);
+                edge.args.remove(at);
             }
         }
     }
@@ -405,13 +406,15 @@ fn drop_header_params(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) {
 
 struct EdgeInto<'a> {
     supplied_params: usize,
-    args: BodyArgsMut<'a>,
+    args: &'a mut Vec<ValueId>,
 }
 
+/// The edges of `term` into `label`. A `For`'s body edge passes nothing, so
+/// only its exit edge is one (RFC-0089 rule 1).
 fn edges_into(term: &mut Terminator, label: Label) -> Vec<EdgeInto<'_>> {
     let carried = |args| EdgeInto {
         supplied_params: 0,
-        args: BodyArgsMut::Listed(args),
+        args,
     };
     match term {
         Terminator::Jump { label: to, args } => {
@@ -447,30 +450,18 @@ fn edges_into(term: &mut Terminator, label: Label) -> Vec<EdgeInto<'_>> {
             .filter(|(to, _)| **to == label)
             .map(|(_, args)| carried(args))
             .collect(),
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let TraversalMut {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } = term.traversal_mut().expect("a `For` or a `ForParts`");
-            let mut edges = Vec::new();
-            if *body == label {
-                edges.push(EdgeInto {
-                    supplied_params: source.supplied_params(),
-                    args: body_args,
-                });
-            }
-            if *exit == label {
-                edges.push(EdgeInto {
-                    supplied_params: exit_trip.supplied_params(),
-                    args: BodyArgsMut::Listed(exit_args),
-                });
-            }
-            edges
-        }
+        Terminator::For {
+            exit,
+            exit_trip,
+            exit_args,
+            ..
+        } => (*exit == label)
+            .then(|| EdgeInto {
+                supplied_params: exit_trip.supplied_params(),
+                args: exit_args,
+            })
+            .into_iter()
+            .collect(),
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }
 }

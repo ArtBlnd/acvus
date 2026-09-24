@@ -129,38 +129,30 @@ pub enum ValidationErrorKind {
     DemotedDiamondMeetsAgain {
         join: Label,
     },
-    /// RFC-0089 rule 7: the parameters, parts or latch of the `ForParts`
-    /// ending `header` are not rule 1's.
-    ForPartsShape {
+    /// The stage chain of the `For` ending `header` is not RFC-0089
+    /// rule 1's.
+    StageShape {
         header: Label,
-        fault: crate::validate::for_parts::ShapeFault,
+        fault: crate::validate::stages::ShapeFault,
     },
-    /// RFC-0089 rule 7: part `part` reads a value, or touches a storage or
-    /// a context, that another part defines or writes (rule 2).
-    ForPartsCrossing {
+    /// Pure stage `stage` changes a target (RFC-0089 rule 3).
+    PureStageEffect {
         header: Label,
-        part: usize,
-        crossing: crate::validate::for_parts::Crossing,
+        stage: usize,
+        effect: crate::validate::stages::PureEffect,
     },
-    /// RFC-0089 rule 7: accumulator `acc` of part `part` is read other than
-    /// as its law's operand.
-    ForPartsAccumulatorRead {
+    /// Join `stage` is marked an order its operations' declarations do not
+    /// admit (RFC-0089 rule 5).
+    JoinOrder {
         header: Label,
-        part: usize,
-        acc: usize,
+        stage: usize,
+        fault: crate::validate::stages::OrderFault,
     },
-    /// RFC-0089 rule 7: `Law` part `part` holds an order-carrying
-    /// instruction rule 6 does not excuse, or writes a storage other than
-    /// the `SliceMut` source's or one it folds into.
-    ForPartsLawEffect {
+    /// Block `from` of stage `stage` leaves the loop, and the stage is not
+    /// an `InOrder` join (RFC-0089 rule 7).
+    StageLeaves {
         header: Label,
-        part: usize,
-        effect: crate::validate::for_parts::LawEffect,
-    },
-    /// RFC-0089 rule 7: block `from` of the body leaves it other than
-    /// through the header.
-    ForPartsLeaves {
-        header: Label,
+        stage: usize,
         from: Label,
     },
     /// A `match` over a locally closed enum leaves a variant untaken.
@@ -2015,17 +2007,14 @@ impl CheckCtx {
             // A `For` is the loop's condition (RFC-0057): the source decides
             // the element and the counter it hands the body, and the edges'
             // remaining arguments are checked the way a `Jump`'s are.
-            InstKind::For { .. } | InstKind::ForParts { .. } => {
-                let crate::ir::Traversal {
-                    source,
-                    body,
-                    body_args,
-                    exit,
-                    exit_trip,
-                    exit_args,
-                } = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
-                let (source, body, exit) = (&source, &body, &exit);
-                let body_args = &body_args[..];
+            InstKind::For {
+                source,
+                stages,
+                exit,
+                exit_trip,
+                exit_args,
+            } => {
+                let body = &stages.body();
                 let element = match source {
                     ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
                         let slice_ty = ty!(*slice);
@@ -2084,7 +2073,7 @@ impl CheckCtx {
                 };
                 if let Some(params) = self.block_params(body, insts) {
                     let supplied = source.supplied_params();
-                    if params.len() < supplied {
+                    if params.len() != supplied {
                         errors.push(ValidationError {
                             scope: self.scope_name.clone(),
                             inst_index: pc,
@@ -2111,15 +2100,6 @@ impl CheckCtx {
                             errors,
                         );
                     }
-                    self.check_edge_args(
-                        pc,
-                        span,
-                        "For(body)",
-                        &params[supplied..],
-                        body_args,
-                        vt,
-                        errors,
-                    );
                 }
                 if let Some(params) = self.block_params(exit, insts) {
                     let supplied = exit_trip.supplied_params();
@@ -2377,9 +2357,8 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
                 .chain(default.iter().map(|(to, _)| to))
                 .filter(|to| **to == label)
                 .count(),
-            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                let traversal = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
-                usize::from(traversal.body == label) + usize::from(traversal.exit == label)
+            InstKind::For { stages, exit, .. } => {
+                usize::from(stages.body() == label) + usize::from(*exit == label)
             }
             _ => 0,
         })
@@ -2395,7 +2374,6 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
                 | InstKind::Diamond { .. }
                 | InstKind::Switch { .. }
                 | InstKind::For { .. }
-                | InstKind::ForParts { .. }
                 | InstKind::Return { .. }
                 | InstKind::Diverge
         ),

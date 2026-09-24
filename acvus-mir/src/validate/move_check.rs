@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{
-    Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, Traversal, ValueId,
+    Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
 use crate::ty::Ty;
 
@@ -444,25 +444,23 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     }
                 }
             }
-            // A `For` leaves through two edges. The body's leading
-            // parameters are the terminator's own, so only what follows them
-            // takes an argument from that edge; the exit takes the loop's
-            // carried values, after the trip count where the edge defines
-            // one (RFC-0057 rules 2 and 9).
-            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-                let Traversal {
-                    source,
-                    body,
-                    body_args,
-                    exit,
-                    exit_trip,
-                    exit_args,
-                } = term.traversal().expect("a `For` or a `ForParts`");
-                for (label, args) in [(body, &body_args[..]), (exit, exit_args)] {
+            // A `For` leaves through two edges. The body's parameters are
+            // the terminator's own (RFC-0089 rule 1), so that edge passes no
+            // argument; the exit takes the loop's carried values, after the
+            // trip count where the edge defines one (RFC-0057 rule 9).
+            Terminator::For {
+                stages,
+                exit,
+                exit_trip,
+                exit_args,
+                ..
+            } => {
+                let body = stages.body();
+                for (label, args) in [(body, &[][..]), (*exit, &exit_args[..])] {
                     if let Some(&target_idx) = cfg.label_to_block.get(&label) {
                         let params = &cfg.blocks[target_idx.0].params;
                         let taking: &[ValueId] = match label == body {
-                            true => source.carried_params(params),
+                            true => &[],
                             false => exit_trip.carried_params(params),
                         };
                         propagate_args(
@@ -1114,8 +1112,7 @@ fn process_inst(
         | InstKind::JumpIf { .. }
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
-        | InstKind::For { .. }
-        | InstKind::ForParts { .. } => {}
+        | InstKind::For { .. } => {}
     }
 }
 

@@ -13,10 +13,12 @@ use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp, Strength};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
-use acvus_mir::cfg::{BlockIdx, CfgBody, promote};
+use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::{ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, ValueId};
+use acvus_mir::ir::{
+    ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
+};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{CastTy, IntTy, Ty};
 use acvus_mir::validate::type_check::{ValidationErrorKind, check_types};
@@ -85,17 +87,17 @@ impl Compiled {
 
     fn exit_trip(&self, loop_: &Loop) -> ExitTrip {
         let header = &self.cfg.blocks[loop_.natural.header.0].terminator;
-        match header.traversal() {
-            Some(traversal) => traversal.exit_trip,
-            None => panic!("a `for` header ends in {header:?}"),
+        match header {
+            Terminator::For { exit_trip, .. } => *exit_trip,
+            _ => panic!("a `for` header ends in {header:?}"),
         }
     }
 
     fn exit_block(&self, loop_: &Loop) -> BlockIdx {
         let header = &self.cfg.blocks[loop_.natural.header.0].terminator;
-        match header.traversal() {
-            Some(traversal) => self.cfg.label_to_block[&traversal.exit],
-            None => panic!("a `for` header ends in {header:?}"),
+        match header {
+            Terminator::For { exit, .. } => self.cfg.label_to_block[exit],
+            _ => panic!("a `for` header ends in {header:?}"),
         }
     }
 
@@ -312,10 +314,11 @@ fn a_strong_loop_is_left_to_lsr() {
          GVN sweeps both (RFC-0083):\n{}",
         full.listing
     );
-    let body = for_body(&full.cfg, loop_.natural.header);
-    let products = full
-        .insts(body)
-        .iter()
+    let products = loop_
+        .natural
+        .blocks()
+        .filter(|block| *block != loop_.natural.header)
+        .flat_map(|block| full.insts(block))
         .filter(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Mul, .. }))
         .count();
     assert_eq!(products, 1, "only `acc * 2` multiplies:\n{}", full.listing);
@@ -523,8 +526,7 @@ fn hand_built(trip_ty: Ty, entries: ExitEntries) -> MirModule {
         }),
         inst(InstKind::For {
             source: ForSource::Range { at, hi },
-            body,
-            body_args: vec![],
+            stages: Stages::lowered(body),
             exit,
             exit_trip: ExitTrip::Defined,
             exit_args: vec![],

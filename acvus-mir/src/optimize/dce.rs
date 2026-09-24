@@ -22,7 +22,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, Traversal, ValueId};
+use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
 
@@ -354,12 +354,7 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
         Terminator::Switch { tag, .. } => vec![*tag],
         // A `For` reads its source on every iteration, so the source is a
         // root of the traversal (RFC-0057).
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => term
-            .traversal()
-            .expect("a `For` or a `ForParts`")
-            .source
-            .uses()
-            .to_vec(),
+        Terminator::For { source, .. } => source.uses().to_vec(),
         Terminator::Jump { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
@@ -380,10 +375,7 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => values.extend(then_args.iter().chain(else_args)),
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            values.extend(traversal.body_args.iter().chain(traversal.exit_args))
-        }
+        Terminator::For { exit_args, .. } => values.extend(exit_args),
         Terminator::Switch { arms, default, .. } => {
             for (_, _, args) in arms {
                 values.extend(args);
@@ -499,24 +491,16 @@ pub fn run(cfg: &mut CfgBody) {
                                 .filter(|(label, _)| **label == block_label)
                                 .map(|(_, args)| (0, args.as_slice()))
                                 .collect(),
-                            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-                                let Traversal {
-                                    source,
-                                    body,
-                                    body_args,
-                                    exit,
-                                    exit_trip,
-                                    exit_args,
-                                } = term.traversal().expect("a `For` or a `ForParts`");
-                                [
-                                    (body, source.supplied_params(), body_args),
-                                    (exit, exit_trip.supplied_params(), exit_args),
-                                ]
+                            Terminator::For {
+                                exit,
+                                exit_trip,
+                                exit_args,
+                                ..
+                            } => [(*exit, exit_trip.supplied_params(), exit_args.as_slice())]
                                 .into_iter()
                                 .filter(|(label, _, _)| *label == block_label)
                                 .map(|(_, first, args)| (first, args))
-                                .collect()
-                            }
+                                .collect(),
                             _ => Vec::new(),
                         };
                         for (first, args) in pred_args {
@@ -569,10 +553,19 @@ pub fn run(cfg: &mut CfgBody) {
         .blocks
         .iter()
         .filter_map(|block| {
-            let traversal = block.terminator.traversal()?;
+            let Terminator::For {
+                source,
+                stages,
+                exit,
+                exit_trip,
+                ..
+            } = &block.terminator
+            else {
+                return None;
+            };
             Some([
-                (traversal.body, traversal.source.supplied_params()),
-                (traversal.exit, traversal.exit_trip.supplied_params()),
+                (stages.body(), source.supplied_params()),
+                (*exit, exit_trip.supplied_params()),
             ])
         })
         .flatten()
@@ -640,17 +633,16 @@ pub fn run(cfg: &mut CfgBody) {
                     prune(else_args, dead);
                 }
             }
-            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-                let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-                let first = traversal.source.supplied_params();
-                if let Some(dead) = dead_of(*traversal.body) {
+            Terminator::For {
+                exit,
+                exit_trip,
+                exit_args,
+                ..
+            } => {
+                if let Some(dead) = dead_of(*exit) {
+                    let first = exit_trip.supplied_params();
                     let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
-                    traversal.body_args.remove_positions(&shifted);
-                }
-                if let Some(dead) = dead_of(*traversal.exit) {
-                    let first = traversal.exit_trip.supplied_params();
-                    let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
-                    prune(traversal.exit_args, &shifted);
+                    prune(exit_args, &shifted);
                 }
             }
             Terminator::Switch { arms, default, .. } => {

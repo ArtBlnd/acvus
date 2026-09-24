@@ -1074,11 +1074,15 @@ fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) 
                 remap_val(order, remap);
             }
         }
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-            traversal.source.for_each_use(|v| remap_val(v, remap));
-            traversal.body_args.for_each(|v| remap_val(v, remap));
-            remap_vec(traversal.exit_args, remap);
+        Terminator::For {
+            source,
+            stages,
+            exit_args,
+            ..
+        } => {
+            source.for_each_use(|v| remap_val(v, remap));
+            stages.values_mut().for_each(|v| remap_val(v, remap));
+            remap_vec(exit_args, remap);
         }
         Terminator::Switch { tag, arms, default } => {
             remap_val(tag, remap);
@@ -1121,11 +1125,11 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
             v.extend_from_slice(else_args);
             v
         }
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            let mut v = traversal.source.uses().to_vec();
-            v.extend_from_slice(&traversal.body_args);
-            v.extend_from_slice(traversal.exit_args);
+        Terminator::For {
+            source, exit_args, ..
+        } => {
+            let mut v = source.uses().to_vec();
+            v.extend_from_slice(exit_args);
             v
         }
         Terminator::Switch { tag, arms, default } => {

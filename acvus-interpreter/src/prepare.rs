@@ -22,7 +22,7 @@ use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
     BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
-    RefTarget, SwitchKey, Traversal, TwoWay, ValueId, two_way,
+    RefTarget, SwitchKey, TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -55,17 +55,16 @@ macro_rules! for_head {
     ($prep:expr, $at:expr, |$src:ident, $head:ident, $counter:ident| $make:expr) => {{
         let prep: &Prepare<'_> = $prep;
         let terminator: usize = $at;
-        let Some(acvus_mir::ir::Traversal {
+        let InstKind::For {
             source,
-            body,
+            stages,
             exit_trip,
             ..
-        }) = acvus_mir::ir::traversal(&prep.body.insts[terminator].kind)
+        } = &prep.body.insts[terminator].kind
         else {
             panic!("instruction {terminator} is not a `For`")
         };
-        let (source, exit_trip) = (&source, &exit_trip);
-        let params: &[ValueId] = prep.block_params(&body);
+        let params: &[ValueId] = prep.block_params(&stages.body());
         let $counter: Off = prep.off(params[source.counter_param()]);
         // The count is laid in the counter's register, and the exit edge's
         // moves carry it to the exit block's first parameter (`exit_moves`).
@@ -458,15 +457,16 @@ fn noops(body: &MirBody, plan: &runs::RunPlan) -> FxHashSet<usize> {
     out
 }
 
-/// How a `ForParts` body is laid out, read as the body of the region the
-/// `For` would be (RFC-0089 rule 2, RFC-0057 rule 3): the jumps from one part
-/// to the next, and the block its back edges meet in where it has several.
-struct PartChains {
+/// How a `For` whose body is several stages is laid out, read as the body of
+/// the region the loop as written would be (RFC-0089 rule 1, RFC-0057 rule
+/// 3): the jumps from one stage to the next, and the block its back edges
+/// meet in where it has several.
+struct StageChains {
     steps: FxHashSet<usize>,
     latches_by_header: FxHashMap<Label, Latch>,
 }
 
-/// The one latch of a `ForParts` whose back edges are several: a block that
+/// The one latch of a stage chain whose back edges are several: a block that
 /// holds nothing and jumps to the header (RFC-0089 rule 1). Each jump into it
 /// is the back edge the `For` had, a `continue` or the fall at the body's
 /// end, with the header's arguments read through the latch's parameters.
@@ -490,7 +490,7 @@ impl Latch {
     }
 }
 
-impl PartChains {
+impl StageChains {
     fn of(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Self {
         let insts = body.insts.as_slice();
         let label_at = |label: &Label| labels.get(label).map(|at| *at as usize);
@@ -504,21 +504,24 @@ impl PartChains {
         let mut steps = FxHashSet::default();
         let mut latches_by_header = FxHashMap::default();
         for (terminator, inst) in insts.iter().enumerate() {
-            let InstKind::ForParts { parts, .. } = &inst.kind else {
+            let InstKind::For { stages, .. } = &inst.kind else {
                 continue;
             };
-            for part in parts.iter().skip(1) {
-                let Some(entry_at) = label_at(&part.entry) else {
+            if stages.len() == 1 {
+                continue;
+            }
+            for entry in stages.entries().skip(1) {
+                let Some(entry_at) = label_at(&entry) else {
                     continue;
                 };
                 let Some(jump_at) = entry_at.checked_sub(1) else {
                     continue;
                 };
                 let steps_on = matches!(&insts[jump_at].kind,
-                    InstKind::Jump { label, args } if *label == part.entry && args.is_empty())
+                    InstKind::Jump { label, args } if *label == entry && args.is_empty())
                     && matches!(&insts[entry_at].kind,
                         InstKind::BlockLabel { params, .. } if params.is_empty())
-                    && only_jumps_reach(part.entry) == Some(1);
+                    && only_jumps_reach(entry) == Some(1);
                 if steps_on {
                     steps.insert(jump_at);
                 }
@@ -615,7 +618,7 @@ struct Prepare<'a> {
     /// two of a slice's pair.
     scratch_used: u32,
     run_noops: FxHashSet<usize>,
-    part_chains: PartChains,
+    stage_chains: StageChains,
     may_suspend: bool,
     /// The block array being emitted. A region owns its blocks, so the
     /// array a jump's target names is the innermost one being built, and
@@ -704,7 +707,7 @@ struct Join(Label);
 struct Within {
     header: Label,
     exit: Label,
-    /// The latch a `ForParts` gathers its back edges in, where a jump to it
+    /// The latch a stage chain gathers its back edges in, where a jump to it
     /// is a `continue`; see `recognize_for`.
     continues_through: Option<Label>,
 }
@@ -1219,10 +1222,7 @@ fn targets(inst: &Inst, label: Label) -> bool {
             arms.iter().any(|(_, named, _)| *named == label)
                 || default.as_ref().is_some_and(|(named, _)| *named == label)
         }
-        kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-            let traversal = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
-            traversal.body == label || traversal.exit == label
-        }
+        InstKind::For { stages, exit, .. } => stages.body() == label || *exit == label,
         _ => false,
     }
 }
@@ -1244,7 +1244,7 @@ impl<'a> Prepare<'a> {
         labels: FxHashMap<Label, u32>,
     ) -> Self {
         let slots = assign_slots(body, ctx, &labels);
-        let part_chains = PartChains::of(body, &labels);
+        let stage_chains = StageChains::of(body, &labels);
         let values = body.val_factory.len();
         let mut def_inst: Vec<Option<usize>> = vec![None; values];
         let mut use_counts: Vec<u32> = vec![0; values];
@@ -1269,7 +1269,7 @@ impl<'a> Prepare<'a> {
             run_base: 0,
             scratch_used: 0,
             run_noops: FxHashSet::default(),
-            part_chains,
+            stage_chains,
             may_suspend: false,
             level: Level::default(),
             def_inst,
@@ -1759,7 +1759,7 @@ impl<'a> Prepare<'a> {
 
     fn back_moves(&mut self, label: &Label, args: &[ValueId]) -> Vec<Node> {
         let latch = self
-            .part_chains
+            .stage_chains
             .latches_by_header
             .iter()
             .find(|(_, latch)| latch.label == *label);
@@ -1826,20 +1826,19 @@ impl<'a> Prepare<'a> {
     /// none that an exit argument is read from.
     fn exit_moves(&mut self, terminator: usize) -> Vec<Node> {
         let body = self.body;
-        let Some(Traversal {
+        let InstKind::For {
             source,
-            body: body_label,
+            stages,
             exit,
             exit_trip,
             exit_args,
-            ..
-        }) = acvus_mir::ir::traversal(&body.insts[terminator].kind)
+        } = &body.insts[terminator].kind
         else {
             panic!("instruction {terminator} is not a `For`")
         };
-        let mut pairs = self.carried_pairs(&exit, exit_args, exit_trip.supplied_params());
-        if let Some(trip) = exit_trip.trip_param(self.block_params(&exit)) {
-            let counter = self.block_params(&body_label)[source.counter_param()];
+        let mut pairs = self.carried_pairs(exit, exit_args, exit_trip.supplied_params());
+        if let Some(trip) = exit_trip.trip_param(self.block_params(exit)) {
+            let counter = self.block_params(&stages.body())[source.counter_param()];
             pairs.push(Carried {
                 at: Pair {
                     from: self.slot(counter),
@@ -2260,7 +2259,6 @@ impl<'a> Prepare<'a> {
             // is one too (RFC-0057).
             | InstKind::Switch { .. }
             | InstKind::For { .. }
-            | InstKind::ForParts { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
             | InstKind::Eval { .. }
@@ -2326,7 +2324,7 @@ impl<'a> Prepare<'a> {
             {
                 at = region.end();
                 regions.push(region);
-            } else if self.is_straight_line(&insts[at]) || self.part_chains.is_step(at) {
+            } else if self.is_straight_line(&insts[at]) || self.stage_chains.is_step(at) {
                 at += 1;
             } else {
                 break;
@@ -2610,8 +2608,10 @@ impl<'a> Prepare<'a> {
         }
 
         let terminator = head + 1;
-        let Traversal { body, exit, .. } = acvus_mir::ir::traversal(&insts.get(terminator)?.kind)?;
-        let (body, exit) = (&body, &exit);
+        let InstKind::For { stages, exit, .. } = &insts.get(terminator)?.kind else {
+            return None;
+        };
+        let body = &stages.body();
         let reaching = self.references(header);
         let back = self.latch(&reaching, Some(at), head)?;
         if !matches!(insts[back].kind, InstKind::Jump { .. }) {
@@ -2628,19 +2628,19 @@ impl<'a> Prepare<'a> {
             return None;
         }
 
-        // A body whose back edges a `ForParts` gathers in one latch is read
-        // as the `For` it replaced, whose `continue`s jumped to the header:
-        // a jump to the latch is a `continue`, and the jump that falls into
-        // it is the body's end. That reading is asked only of a body that
-        // is no region as it stands, so a latch that is also a branch's join
-        // stays the join it is.
+        // A body whose back edges its stage chain gathers in one latch is
+        // read as the loop as written, whose `continue`s jumped to the
+        // header: a jump to the latch is a `continue`, and the jump that
+        // falls into it is the body's end. That reading is asked only of a
+        // body that is no region as it stands, so a latch that is also a
+        // branch's join stays the join it is.
         let within = Within {
             header,
             exit: *exit,
             continues_through: None,
         };
         let as_written = self.straight_run(body_label + 1, back, Some(within));
-        let (body_end, body_regions) = match (as_written, self.part_chains.latch_of(header)) {
+        let (body_end, body_regions) = match (as_written, self.stage_chains.latch_of(header)) {
             (StraightRun { stops_at, regions }, _) if stops_at == back => (back, regions),
             (_, Some(latch)) if latch.jump_at == back => {
                 let within = Within {
@@ -3040,7 +3040,7 @@ impl<'a> Prepare<'a> {
         let chains = self.chains_in(range.clone(), nested);
         let mut units = self.layout(range, nested, &runs, &chains);
         units.retain(
-            |unit| !matches!(unit, Unit::Inst(at) if self.part_chains.is_step_or_its_label(*at)),
+            |unit| !matches!(unit, Unit::Inst(at) if self.stage_chains.is_step_or_its_label(*at)),
         );
         let mut rides = self.rides_in(&units, None);
         // The part's last operation is the one whose word `Yield` hands
@@ -3421,15 +3421,6 @@ impl<'a> Prepare<'a> {
 
     fn for_op(&mut self, region: &ForRegion, ops: &mut Vec<Node>) {
         let body = self.body;
-        let Some(Traversal {
-            source,
-            body: body_label,
-            body_args,
-            ..
-        }) = acvus_mir::ir::traversal(&body.insts[region.terminator].kind)
-        else {
-            panic!("a recognized `for`'s terminator is not a `For`")
-        };
         let InstKind::Jump {
             label: back_to,
             args: back_args,
@@ -3448,7 +3439,6 @@ impl<'a> Prepare<'a> {
         let entering = self.move_ops(entered, entering);
         ops.extend(entering);
 
-        let into_body = self.moves_past(&body_label, body_args, source.supplied_params());
         let leaving = self.exit_moves(region.terminator);
         let (back_to, back_args) = (*back_to, back_args.clone());
         let back = self.back_moves(&back_to, &back_args);
@@ -3460,8 +3450,6 @@ impl<'a> Prepare<'a> {
             back,
             exits.node(),
         );
-        let ran = chain(into_body, ran);
-
         ops.push(self.for_node(region.terminator, ran, exits));
         ops.extend(leaving);
     }
@@ -3487,23 +3475,15 @@ impl<'a> Prepare<'a> {
 
     fn for_at(&mut self, at: usize) -> Box<dyn Op> {
         let insts = self.body.insts.as_slice();
-        let Some(Traversal {
-            source,
-            body,
-            body_args,
-            exit,
-            ..
-        }) = acvus_mir::ir::traversal(&insts[at].kind)
-        else {
+        let InstKind::For { stages, exit, .. } = &insts[at].kind else {
             panic!("`for_at` was handed instruction {at}, which is not a `For`")
         };
+        let (body, exit) = (stages.body(), *exit);
         self.header_edges_carry_the_counter(at);
 
-        let into_body = self.moves_past(&body, &body_args, source.supplied_params());
         let into_exit = self.exit_moves(at);
-        let body_target = self.target(&body);
+        let on_body = self.target(&body);
         let exit_target = self.target(&exit);
-        let on_body = self.edge(into_body, body_target);
         let on_exit = self.edge(into_exit, exit_target);
 
         for_head!(self, at, |src, _Head, counter| Box::new(control::ForAt {
@@ -3531,7 +3511,7 @@ impl<'a> Prepare<'a> {
 
     fn for_header(&self, label: &Label) -> Option<usize> {
         let at = self.label(label) as usize;
-        acvus_mir::ir::traversal(&self.body.insts.get(at + 1)?.kind).map(|_| at)
+        matches!(self.body.insts.get(at + 1)?.kind, InstKind::For { .. }).then_some(at)
     }
 
     /// `counter_op` is reached from the `Jump` arm alone, and it reads the
@@ -3920,7 +3900,7 @@ impl<'a> Prepare<'a> {
                 return Some(self.switch_op(*tag, arms, default.as_ref()));
             }
 
-            InstKind::For { .. } | InstKind::ForParts { .. } => return Some(self.for_at(at)),
+            InstKind::For { .. } => return Some(self.for_at(at)),
 
             InstKind::Jump { label, args } => {
                 let target = self.target(label);
@@ -6016,10 +5996,9 @@ impl Edges<'_> {
                     visit(self.target(label));
                 }
             }
-            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                let traversal = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
-                visit(self.target(&traversal.body));
-                visit(self.target(&traversal.exit));
+            InstKind::For { stages, exit, .. } => {
+                visit(self.target(&stages.body()));
+                visit(self.target(exit));
             }
             InstKind::Return { .. } | InstKind::Diverge => {}
             _ => {
@@ -6044,8 +6023,10 @@ impl Edges<'_> {
     /// reader. It is a real use, and liveness that does not carry it gives
     /// the counter's register to a value live across the loop.
     fn for_counter(&self, at: usize) -> Option<ValueId> {
-        let Traversal { source, body, .. } = acvus_mir::ir::traversal(&self.insts[at].kind)?;
-        Some(self.block_params(&body)[source.counter_param()])
+        let InstKind::For { source, stages, .. } = &self.insts[at].kind else {
+            return None;
+        };
+        Some(self.block_params(&stages.body())[source.counter_param()])
     }
 }
 
@@ -6206,26 +6187,16 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
                     edge(label, args);
                 }
             }
-            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                let Traversal {
-                    source,
-                    body,
-                    body_args,
-                    exit,
-                    exit_trip,
-                    exit_args,
-                } = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
-                carried_moves(
-                    &mut moves,
-                    exit_trip.carried_params(edges.block_params(&exit)),
-                    exit_args,
-                );
-                carried_moves(
-                    &mut moves,
-                    source.carried_params(edges.block_params(&body)),
-                    &body_args,
-                );
-            }
+            InstKind::For {
+                exit,
+                exit_trip,
+                exit_args,
+                ..
+            } => carried_moves(
+                &mut moves,
+                exit_trip.carried_params(edges.block_params(exit)),
+                exit_args,
+            ),
             _ => {}
         }
     }
@@ -8621,9 +8592,11 @@ impl<'a> Prepare<'a> {
             };
 
             let lowest = growing.absorbed.iter().copied().min().unwrap_or(root);
-            let gap = (lowest..root)
-                .rev()
-                .find(|at| !growing.absorbed.contains(at) && !self.konsts.holds_inst(*at));
+            let gap = (lowest..root).rev().find(|at| {
+                !growing.absorbed.contains(at)
+                    && !self.konsts.holds_inst(*at)
+                    && !self.stage_chains.is_step_or_its_label(*at)
+            });
             if let Some(at) = gap {
                 floor = at + 1;
                 continue;

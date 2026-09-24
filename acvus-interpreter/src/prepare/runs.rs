@@ -468,19 +468,14 @@ impl Edges<'_> {
                         self.edge(label, args, &mut out);
                     }
                 }
-                kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                    let acvus_mir::ir::Traversal {
-                        source,
-                        body,
-                        body_args,
-                        exit,
-                        exit_trip,
-                        exit_args,
-                    } = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
-                    let leaving = exit_trip.carried_params(self.params(&exit));
+                InstKind::For {
+                    exit,
+                    exit_trip,
+                    exit_args,
+                    ..
+                } => {
+                    let leaving = exit_trip.carried_params(self.params(exit));
                     self.carried(leaving, exit_args, &mut out);
-                    let carried = source.carried_params(self.params(&body));
-                    self.carried(carried, &body_args, &mut out);
                 }
                 _ => {}
             }
@@ -727,19 +722,17 @@ fn candidates(
     // is written as a heap value, so it has no run.
     let edges = Edges { body, labels };
     for inst in &body.insts {
-        if let Some(acvus_mir::ir::Traversal {
-            source,
-            body,
+        if let InstKind::For {
+            stages,
             exit,
             exit_trip,
             ..
-        }) = acvus_mir::ir::traversal(&inst.kind)
+        } = &inst.kind
         {
-            let params = edges.params(&body);
-            for supplied in &params[..params.len() - source.carried_params(params).len()] {
+            for supplied in edges.params(&stages.body()) {
                 sites.refuse(*supplied);
             }
-            if let Some(trip) = exit_trip.trip_param(edges.params(&exit)) {
+            if let Some(trip) = exit_trip.trip_param(edges.params(exit)) {
                 sites.refuse(trip);
             }
         }
@@ -867,10 +860,7 @@ fn loop_depths(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Vec<u32> {
                 .map(|(_, label, _)| *label)
                 .chain(default.iter().map(|(label, _)| *label))
                 .collect(),
-            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                let traversal = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
-                vec![traversal.body, traversal.exit]
-            }
+            InstKind::For { stages, exit, .. } => vec![stages.body(), *exit],
             InstKind::Diamond {
                 then_label,
                 else_label,

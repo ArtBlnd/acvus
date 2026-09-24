@@ -12,7 +12,7 @@ use crate::error::OperatorSignature;
 use crate::graph::QualifiedRef;
 use crate::ir::{
     Callee, CastKind, ExitTrip, ExternCast, ExternInstance, ForKind, ForSource, IndexAccess,
-    IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, SwitchKey,
+    IndexBound, IndexMode, Inst, InstKind, Label, MirBody, MirModule, OrderEdge, PathSeg, RefTarget, Stages, SwitchKey,
     ValOrigin, ValueId, reaches,
 };
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
@@ -1171,8 +1171,7 @@ impl<'a> Lowerer<'a> {
             span,
             InstKind::For {
                 source,
-                body: body_label,
-                body_args: vec![],
+                stages: Stages::lowered(body_label),
                 exit,
                 exit_trip: ExitTrip::Absent,
                 exit_args: vec![],

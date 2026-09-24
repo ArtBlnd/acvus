@@ -11,8 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::{
-    BodyArgsMut, DebugInfo, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, Part, SwitchKey,
-    Traversal, TraversalMut, ValueId,
+    DebugInfo, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, Stages, SwitchKey, ValueId,
 };
 use crate::ty::{Task, Ty};
 
@@ -77,25 +76,15 @@ pub enum Terminator {
     },
     /// One traversal (RFC-0057). The terminator is the loop's condition: no
     /// instruction writes the comparison, the element read or the advance.
-    /// It fills the leading parameters of `body` itself -- the element and
-    /// the counter, which `ForSource::supplied_params` counts -- and
-    /// `body_args` are the carried values that follow them. Where
-    /// `exit_trip` is `Defined` it fills the exit block's leading parameter
-    /// with the trip count the same way (RFC-0057 rule 9), and `exit_args`
-    /// follow it.
+    /// It fills the body block's parameters itself -- the element and the
+    /// counter, which `ForSource::supplied_params` counts -- and the body
+    /// reads the carried values as the header's parameters. The body is a
+    /// chain of `stages` (RFC-0089). Where `exit_trip` is `Defined` it
+    /// fills the exit block's leading parameter with the trip count
+    /// (RFC-0057 rule 9), and `exit_args` follow it.
     For {
         source: ForSource,
-        body: Label,
-        body_args: Vec<ValueId>,
-        exit: Label,
-        exit_trip: ExitTrip,
-        exit_args: Vec<ValueId>,
-    },
-    /// See [`crate::ir::InstKind::ForParts`].
-    ForParts {
-        source: ForSource,
-        body: Label,
-        parts: Vec<Part>,
+        stages: Stages,
         exit: Label,
         exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
@@ -109,81 +98,6 @@ pub enum Terminator {
     Diverge,
     /// Implicit fallthrough to next block.
     Fallthrough,
-}
-
-impl Terminator {
-    /// See [`crate::ir::traversal`].
-    pub fn traversal(&self) -> Option<Traversal<'_>> {
-        match self {
-            Terminator::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => Some(Traversal {
-                source: *source,
-                body: *body,
-                body_args,
-                exit: *exit,
-                exit_trip: *exit_trip,
-                exit_args,
-            }),
-            Terminator::ForParts {
-                source,
-                body,
-                parts: _,
-                exit,
-                exit_trip,
-                exit_args,
-            } => Some(Traversal {
-                source: *source,
-                body: *body,
-                body_args: &[],
-                exit: *exit,
-                exit_trip: *exit_trip,
-                exit_args,
-            }),
-            _ => None,
-        }
-    }
-
-    pub fn traversal_mut(&mut self) -> Option<TraversalMut<'_>> {
-        match self {
-            Terminator::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => Some(TraversalMut {
-                source,
-                body,
-                body_args: BodyArgsMut::Listed(body_args),
-                exit,
-                exit_trip,
-                exit_args,
-            }),
-            Terminator::ForParts {
-                source,
-                body,
-                parts: _,
-                exit,
-                exit_trip,
-                exit_args,
-            } => Some(TraversalMut {
-                source,
-                body,
-                body_args: BodyArgsMut::Unlisted,
-                exit,
-                exit_trip,
-                exit_args,
-            }),
-            _ => None,
-        }
-    }
 }
 
 // -- CfgBody -------------------------------------------------------
@@ -248,9 +162,8 @@ impl CfgBody {
                     }
                 }
             }
-            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-                let traversal = term.traversal().expect("a `For` or a `ForParts`");
-                for label in [traversal.body, traversal.exit] {
+            Terminator::For { stages, exit, .. } => {
+                for label in [stages.body(), *exit] {
                     if let Some(&bi) = self.label_to_block.get(&label) {
                         succs.push(bi);
                     }
@@ -499,35 +412,14 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
             }
             InstKind::For {
                 source,
-                body,
-                body_args,
+                stages,
                 exit,
                 exit_trip,
                 exit_args,
             } => {
                 let term = Terminator::For {
                     source: *source,
-                    body: *body,
-                    body_args: body_args.clone(),
-                    exit: *exit,
-                    exit_trip: *exit_trip,
-                    exit_args: exit_args.clone(),
-                };
-                insts.pop();
-                return term;
-            }
-            InstKind::ForParts {
-                source,
-                body,
-                parts,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
-                let term = Terminator::ForParts {
-                    source: *source,
-                    body: *body,
-                    parts: parts.clone(),
+                    stages: stages.clone(),
                     exit: *exit,
                     exit_trip: *exit_trip,
                     exit_args: exit_args.clone(),
@@ -635,8 +527,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
             }
             Terminator::For {
                 source,
-                body,
-                body_args,
+                stages,
                 exit,
                 exit_trip,
                 exit_args,
@@ -645,28 +536,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     span: acvus_ast::Span::ZERO,
                     kind: InstKind::For {
                         source,
-                        body,
-                        body_args,
-                        exit,
-                        exit_trip,
-                        exit_args,
-                    },
-                });
-            }
-            Terminator::ForParts {
-                source,
-                body,
-                parts,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
-                insts.push(Inst {
-                    span: acvus_ast::Span::ZERO,
-                    kind: InstKind::ForParts {
-                        source,
-                        body,
-                        parts,
+                        stages,
                         exit,
                         exit_trip,
                         exit_args,
@@ -718,9 +588,12 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 .chain(default.iter().map(|(label, _)| label.0))
                 .max()
                 .map(|l| l + 1),
-            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                crate::ir::traversal(kind).map(|t| t.body.0.max(t.exit.0) + 1)
-            }
+            InstKind::For { stages, exit, .. } => stages
+                .entries()
+                .map(|label| label.0)
+                .chain([exit.0])
+                .max()
+                .map(|l| l + 1),
             _ => None,
         })
         .max()

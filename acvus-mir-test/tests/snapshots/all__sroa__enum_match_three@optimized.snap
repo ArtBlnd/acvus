@@ -6,26 +6,32 @@ expression: listing
      0 |   r0 = fetch @n
      3 |   jump L0(0 (r1), 0 (r2))
      4 | L0(r3: i64, r4: i64):
-     5 |   for range(0 (r2)..r0) -> L1 else L2
+     5 |   for range(0 (r2)..r0) -> L1 else L2 stages [L1: pure, L8: join(r4) in_order, L9: pure, L10: join(r3) in_order]
      6 | L1(r5: i64):
-     8 |   r6 = r4 % 3 (r7)
-    10 |   r8 = r4 + 1 (r9)
-    11 |   switch r6 { 0 -> L4, 1 -> L5, _ -> L6 }
-    12 | L4:
-    13 |   r10 = r3 + r4
-    14 |   jump L7(r10)
-    15 | L5:
-    16 |   r11 = r3 + r8
-    17 |   jump L7(r11)
-    18 | L6:
-    20 |   r12 = r4 + 2 (r13)
-    21 |   r14 = r3 + r12
-    22 |   jump L7(r14)
-    23 | L7(r15: i64):
-    24 |   jump L0(r15, r8)
-    25 | L2:
-    26 |   commit @n = r0
-    27 |   return r3
+     9 |   jump L8
+    10 | L8:
+    11 |   r6 = r4 + 1 (r7)
+    12 |   jump L9
+    13 | L9:
+    14 |   r8 = r4 % 3 (r9)
+    15 |   jump L10
+    16 | L10:
+    17 |   switch r8 { 0 -> L4, 1 -> L5, _ -> L6 }
+    18 | L4:
+    19 |   r10 = r3 + r4
+    20 |   jump L7(r10)
+    21 | L5:
+    22 |   r11 = r3 + r6
+    23 |   jump L7(r11)
+    24 | L6:
+    26 |   r12 = r4 + 2 (r13)
+    27 |   r14 = r3 + r12
+    28 |   jump L7(r14)
+    29 | L7(r15: i64):
+    30 |   jump L0(r15, r6)
+    31 | L2:
+    32 |   commit @n = r0
+    33 |   return r3
 
     ; r0 (@n) : i64
     ; r1 (v3) : i64
@@ -33,10 +39,10 @@ expression: listing
     ; r3 (v59) : i64
     ; r4 (v56) : i64
     ; r5 (v79) : i64
-    ; r6 (v12) : i64
-    ; r7 (v11) : i64
-    ; r8 (v47) : i64
-    ; r9 (v46) : i64
+    ; r6 (v47) : i64
+    ; r7 (v46) : i64
+    ; r8 (v12) : i64
+    ; r9 (v11) : i64
     ; r10 (v30) : i64
     ; r11 (v36) : i64
     ; r12 (v21) : i64

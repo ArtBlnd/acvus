@@ -43,6 +43,9 @@ impl BlockBody {
     }
 }
 
+/// The listing's blocks, with a loop's stage chain read as the one body it
+/// is (RFC-0089 rule 1): a block without parameters that the block before
+/// it enters by a bare jump continues that block.
 fn blocks(listing: &str) -> Vec<BlockBody> {
     let mut found = vec![BlockBody {
         label: ENTRY.to_string(),
@@ -54,15 +57,26 @@ fn blocks(listing: &str) -> Vec<BlockBody> {
         };
         let rest = rest.trim_end();
         match rest.strip_prefix(' ').filter(|r| !r.starts_with(' ')) {
-            Some(header) => found.push(BlockBody {
-                label: header
+            Some(header) => {
+                let label = header
                     .split('(')
                     .next()
                     .unwrap_or(header)
                     .trim_end_matches(':')
-                    .to_string(),
-                insts: Vec::new(),
-            }),
+                    .to_string();
+                let before = found.last_mut().expect("a listing opens with the entry block");
+                let stepped = before.insts.last() == Some(&format!("jump {label}"))
+                    && !header.contains('(');
+                match stepped {
+                    true => {
+                        before.insts.pop();
+                    }
+                    false => found.push(BlockBody {
+                        label,
+                        insts: Vec::new(),
+                    }),
+                }
+            }
             None => {
                 let inst = rest.trim();
                 if !inst.is_empty() {

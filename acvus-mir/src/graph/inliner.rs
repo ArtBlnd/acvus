@@ -1166,22 +1166,28 @@ fn remap_inst(
             else_args: rv(else_args),
             join: rl(*join),
         },
-        InstKind::For { .. } | InstKind::ForParts { .. } => {
-            let mut remapped = kind.clone();
-            let mut traversal =
-                crate::ir::traversal_mut(&mut remapped).expect("a `For` or a `ForParts`");
-            traversal.source.for_each_use(|v| *v = r(*v));
-            *traversal.body = rl(*traversal.body);
-            traversal.body_args.for_each(|v| *v = r(*v));
-            *traversal.exit = rl(*traversal.exit);
-            traversal.exit_args.iter_mut().for_each(|v| *v = r(*v));
-            if let InstKind::ForParts { parts, .. } = &mut remapped {
-                for part in parts {
-                    part.entry = rl(part.entry);
-                    part.fold_storages_mut().for_each(|v| *v = r(*v));
-                }
+        InstKind::For {
+            source,
+            stages,
+            exit,
+            exit_trip,
+            exit_args,
+        } => {
+            let mut source = *source;
+            source.for_each_use(|v| *v = r(*v));
+            let mut stages = stages.clone();
+            for stage in stages.iter_mut() {
+                let entry = stage.entry_mut();
+                *entry = rl(*entry);
             }
-            remapped
+            stages.values_mut().for_each(|v| *v = r(*v));
+            InstKind::For {
+                source,
+                stages,
+                exit: rl(*exit),
+                exit_trip: *exit_trip,
+                exit_args: rv(exit_args),
+            }
         }
         InstKind::Switch { tag, arms, default } => InstKind::Switch {
             tag: r(*tag),

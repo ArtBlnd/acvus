@@ -120,7 +120,7 @@ fn an_if_whose_arms_a_pass_scattered_and_another_rejoined_is_a_diamond_again() {
          match e { E::A(v) => { acc = acc + v; }, E::B(v) => { acc = acc + v; } }; \
          i = i + 1; } acc",
     );
-    assert_eq!(diamond_lines(&ir), ["if r8 -> L3 else L5 join L6"], "{ir}");
+    assert_eq!(diamond_lines(&ir), ["if r10 -> L3 else L5 join L6"], "{ir}");
     assert_eq!(
         ir.matches(JUMP_IF).count(),
         0,
