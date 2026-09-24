@@ -13,7 +13,7 @@ use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp, Strength};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
-use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
+use acvus_mir::cfg::{BlockIdx, CfgBody, promote};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, ValueId};
@@ -84,16 +84,18 @@ impl Compiled {
     }
 
     fn exit_trip(&self, loop_: &Loop) -> ExitTrip {
-        match &self.cfg.blocks[loop_.natural.header.0].terminator {
-            Terminator::For { exit_trip, .. } => *exit_trip,
-            other => panic!("a `for` header ends in {other:?}"),
+        let header = &self.cfg.blocks[loop_.natural.header.0].terminator;
+        match header.traversal() {
+            Some(traversal) => traversal.exit_trip,
+            None => panic!("a `for` header ends in {header:?}"),
         }
     }
 
     fn exit_block(&self, loop_: &Loop) -> BlockIdx {
-        match &self.cfg.blocks[loop_.natural.header.0].terminator {
-            Terminator::For { exit, .. } => self.cfg.label_to_block[exit],
-            other => panic!("a `for` header ends in {other:?}"),
+        let header = &self.cfg.blocks[loop_.natural.header.0].terminator;
+        match header.traversal() {
+            Some(traversal) => self.cfg.label_to_block[&traversal.exit],
+            None => panic!("a `for` header ends in {header:?}"),
         }
     }
 

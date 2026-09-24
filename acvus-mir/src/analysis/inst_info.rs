@@ -72,6 +72,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
+        | InstKind::ForParts { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge
         | InstKind::Nop => smallvec![],
@@ -213,16 +214,9 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         // The source is read once; the two edges carry the block arguments
         // their targets take after the ones the terminator fills itself
         // (RFC-0057).
-        InstKind::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => {
-            let mut v: SmallVec<[ValueId; 4]> = source.uses().into_iter().collect();
-            v.extend(body_args.iter().copied());
-            v.extend(exit_args.iter().copied());
-            v
+        kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+            let traversal = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
+            traversal_uses(&traversal)
         }
         // The tag is read once; every edge carries the block arguments
         // its target takes (RFC-0051).
@@ -259,17 +253,9 @@ pub fn terminator_uses(term: &Terminator) -> SmallVec<[ValueId; 4]> {
             .chain(then_args.iter().copied())
             .chain(else_args.iter().copied())
             .collect(),
-        Terminator::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => source
-            .uses()
-            .into_iter()
-            .chain(body_args.iter().copied())
-            .chain(exit_args.iter().copied())
-            .collect(),
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            traversal_uses(&term.traversal().expect("a `For` or a `ForParts`"))
+        }
         Terminator::Switch { tag, arms, default } => std::iter::once(*tag)
             .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
             .chain(default.iter().flat_map(|(_, args)| args.iter().copied()))
@@ -277,6 +263,16 @@ pub fn terminator_uses(term: &Terminator) -> SmallVec<[ValueId; 4]> {
         Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Diverge | Terminator::Fallthrough => SmallVec::new(),
     }
+}
+
+fn traversal_uses(traversal: &crate::ir::Traversal<'_>) -> SmallVec<[ValueId; 4]> {
+    traversal
+        .source
+        .uses()
+        .into_iter()
+        .chain(traversal.body_args.iter().copied())
+        .chain(traversal.exit_args.iter().copied())
+        .collect()
 }
 
 /// The storage slot a place names directly, if any.

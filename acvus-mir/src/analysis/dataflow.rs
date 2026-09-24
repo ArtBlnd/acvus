@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, ValueId};
+use crate::ir::{Inst, Traversal, ValueId};
 use rustc_hash::FxHashMap;
 
 use crate::analysis::domain::SemiLattice;
@@ -360,27 +360,28 @@ fn propagate_to_successors<A: DataflowAnalysis>(
         // parameters are the terminator's own, so only the carried ones
         // take arguments from this edge (RFC-0057), and so is the exit's
         // first where the edge defines the trip count (rule 9).
-        Terminator::For {
-            source,
-            body,
-            body_args,
-            exit,
-            exit_trip,
-            exit_args,
-        } => {
-            if let Some(&t) = cfg.label_to_block.get(body) {
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let Traversal {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_trip,
+                exit_args,
+            } = term.traversal().expect("a `For` or a `ForParts`");
+            if let Some(&t) = cfg.label_to_block.get(&body) {
                 let changed = analysis.propagate_forward(
                     exit_state,
                     &cfg.blocks[t.0].params,
                     source.supplied_params(),
-                    body_args,
+                    &body_args,
                     &mut block_entry[t.0],
                 );
                 if changed || !visited[t.0] {
                     worklist.push(t);
                 }
             }
-            if let Some(&t) = cfg.label_to_block.get(exit) {
+            if let Some(&t) = cfg.label_to_block.get(&exit) {
                 let changed = analysis.propagate_forward(
                     exit_state,
                     &cfg.blocks[t.0].params,
@@ -498,24 +499,25 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                 }
             }
         }
-        Terminator::For {
-            source,
-            body,
-            body_args,
-            exit,
-            exit_trip,
-            exit_args,
-        } => {
-            if let Some(&t) = cfg.label_to_block.get(body) {
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let Traversal {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_trip,
+                exit_args,
+            } = term.traversal().expect("a `For` or a `ForParts`");
+            if let Some(&t) = cfg.label_to_block.get(&body) {
                 analysis.propagate_backward(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,
                     source.supplied_params(),
-                    body_args,
+                    &body_args,
                     exit_state,
                 );
             }
-            if let Some(&t) = cfg.label_to_block.get(exit) {
+            if let Some(&t) = cfg.label_to_block.get(&exit) {
                 analysis.propagate_backward(
                     &block_entry[t.0],
                     &cfg.blocks[t.0].params,

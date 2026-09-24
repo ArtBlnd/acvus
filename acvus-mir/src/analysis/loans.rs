@@ -17,7 +17,9 @@ use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysi
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, ValueId};
+use crate::ir::{
+    Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, Traversal, ValueId,
+};
 use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Source, Ty};
 
 // -- Positions (RFC-0079 rule 2) ------------------------------------
@@ -1632,10 +1634,11 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
     /// is the terminator's own extent (RFC-0057 rule 2). An array's element
     /// is moved out of it, and holds the array's element positions.
     fn terminator_uses(&self, term: &Terminator, state: &mut State) {
-        let Terminator::For { source, body, .. } = term else {
+        let Some(Traversal { source, body, .. }) = term.traversal() else {
             return;
         };
-        let Some(&target) = self.cfg.label_to_block.get(body) else {
+        let source = &source;
+        let Some(&target) = self.cfg.label_to_block.get(&body) else {
             return;
         };
         let Some(&element) = self.cfg.blocks[target.0].params.first() else {

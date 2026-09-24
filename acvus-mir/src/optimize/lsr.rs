@@ -191,11 +191,10 @@ fn sole_edge_args_mut(term: &mut Terminator, label: Label) -> &mut Vec<ValueId> 
                 }
             }
         }
-        Terminator::For {
-            exit, exit_args, ..
-        } => {
-            if *exit == label {
-                edges.push(exit_args);
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+            if *traversal.exit == label {
+                edges.push(traversal.exit_args);
             }
         }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
@@ -500,15 +499,11 @@ fn subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) 
             then_args.iter_mut().for_each(&mut one);
             else_args.iter_mut().for_each(&mut one);
         }
-        Terminator::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => {
-            source.for_each_use(&mut one);
-            body_args.iter_mut().for_each(&mut one);
-            exit_args.iter_mut().for_each(&mut one);
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+            traversal.source.for_each_use(&mut one);
+            traversal.body_args.for_each(&mut one);
+            traversal.exit_args.iter_mut().for_each(&mut one);
         }
         Terminator::Switch { tag, arms, default } => {
             one(tag);

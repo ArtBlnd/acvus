@@ -8,6 +8,7 @@ pub mod dce;
 pub mod drop_insertion;
 pub mod dse;
 pub mod empty_loop;
+pub mod for_parts;
 pub mod fold;
 pub mod forward;
 pub mod gvn;

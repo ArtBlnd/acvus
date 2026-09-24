@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{
-    Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+    Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, Traversal, ValueId,
 };
 use crate::ty::Ty;
 
@@ -449,16 +449,17 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
             // takes an argument from that edge; the exit takes the loop's
             // carried values, after the trip count where the edge defines
             // one (RFC-0057 rules 2 and 9).
-            Terminator::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
-                for (label, args) in [(body, body_args), (exit, exit_args)] {
-                    if let Some(&target_idx) = cfg.label_to_block.get(label) {
+            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                let Traversal {
+                    source,
+                    body,
+                    body_args,
+                    exit,
+                    exit_trip,
+                    exit_args,
+                } = term.traversal().expect("a `For` or a `ForParts`");
+                for (label, args) in [(body, &body_args[..]), (exit, exit_args)] {
+                    if let Some(&target_idx) = cfg.label_to_block.get(&label) {
                         let params = &cfg.blocks[target_idx.0].params;
                         let taking: &[ValueId] = match label == body {
                             true => source.carried_params(params),
@@ -1113,7 +1114,8 @@ fn process_inst(
         | InstKind::JumpIf { .. }
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
-        | InstKind::For { .. } => {}
+        | InstKind::For { .. }
+        | InstKind::ForParts { .. } => {}
     }
 }
 

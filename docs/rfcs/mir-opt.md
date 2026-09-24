@@ -522,20 +522,21 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    merges. A `while` is declined, since it states no count; a later exact
    recognizer makes it a `for`, and this pass applies to that unchanged.
 
-8. **A cost table is measured, not written.** At first compilation on a
-   target, the runtime measures every operation kind it can emit (each `Op`
-   family at its register forms, a spawn, a join, a frame bind) and caches
-   the table per target. The cache is invalidated when the runtime binary
-   changes. Every later cost is a sum of rows in the table's own unit. The
-   table records ranges, and the lowerer compares against the conservative
-   end. A target with no table runs every loop on one thread. A loop's cost
-   is its body's rows times its trip count, a lower bound.
+8. **A cost table is the backend's, supplied from outside.** The embedder
+   gives the lowerer one table for the backend it runs. The table has a row
+   per operation kind the backend can emit (each `Op` family at its
+   register forms, a spawn, a join, a frame bind) in the table's own unit.
+   How a backend produces its table is its own. Every cost is a sum of
+   rows. A table records ranges, and the lowerer compares against the
+   conservative end. With no table, every loop runs in place. A loop's cost
+   is its body's rows times its trip count, a lower bound. Costs are
+   computed once, by the lowerer, and no MIR pass reads them.
 
-9. **Regions.** A region is a weak loop's body evaluated as one unit without
-   crossing a jump the analysis cannot see through. A jump's target must be
-   inside it. It carries the entry and exit values of every variable
-   crossing its boundary, its cost per iteration, and its merges with their
-   exactness. A loop whose body is not one region is not divided.
+9. **Regions.** A region is a part of a `ForParts` (RFC-0089) evaluated
+   as one unit, without crossing a jump the analysis cannot see through. A
+   jump's target must be inside it. A `Law` part's accumulators are its
+   merges, with their laws and exactness. A loop whose body is not one
+   region is not divided.
 
 10. **The lowerer decides.** `prepare` chooses between a split region
     (chunks as `Heavy` spawns joined through the merges), a region
@@ -557,8 +558,8 @@ reordered, and a count says only what reordering costs. The author writes
 the loop, and the system finds the parallelism from facts the checker
 already establishes.
 **Cost.** Three analyses built per body and read by every loop pass. A
-measurement step per target and a family of split operations (chunk, spawn,
-join through a merge). A loop's normalization is chosen by its strength, so
+table per backend and a family of split operations (chunk, spawn, join
+through a merge). A loop's normalization is chosen by its strength, so
 a change in the analysis moves a loop between two passes. RFC-0057's and
 RFC-0064's analyses become inputs whose promises must stay stable.
 **Rejected.**
@@ -568,6 +569,10 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - Strength decided by the number of carried values — a count is a cost, and
   a loop with one recurrence is ordered where a loop with ten sums is not.
 - Constant costs in source — true on one machine on one day.
+- A table the runtime measures at first compilation and caches — it ties
+  the compiler to one machine's timing at one moment and adds a cache to
+  invalidate. The backend knows its costs, and the embedder that chose the
+  backend supplies them.
 - Scalar evolution alone — it answers the trip count and nothing when that
   fails.
 - Leaving an `Iv` read after the loop carried — that loop keeps the
@@ -581,8 +586,172 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 **Open.** How `&&` and `||` are recognized as merges. Whether
 rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
 the machine offers an explicitly reassociable float reduction, which is a
-language decision. What a failed join drops and in what order, which is
-answered in rule 10's operation family.
+language decision.
+
+## RFC-0089: a `for` states its body as independent parts, each joined by a law or run in sequence
+
+Status: Proposed
+
+What a loop's iterations hand on, and how, decides what may run apart.
+`ForParts` states it as a terminator. The body is split into parts that
+share only the element, the counter and values from outside the loop. Each
+part's carried state is either joined by a law or is a recurrence. The form
+states facts and decides no shape: running in place, chunking a part,
+distributing the parts into loops, or running them together are the
+lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
+
+1. **The terminator.** `Terminator::ForParts { source, body, parts, exit,
+   exit_trip, exit_args }`, where `source`, `exit`, `exit_trip` and
+   `exit_args` are `For`'s (RFC-0057).
+   - The body block's leading parameters are the element and the counter,
+     and the header's carried values follow them, grouped by part in part
+     order.
+   - `Part { entry, carried, kind }` names the part's first block, its range
+     of the carried values, and its kind.
+   - `body` is the first part's entry. Each part's last block jumps to the
+     next part's entry, and the last part's jumps to the header with every
+     carried value.
+
+2. **The body is a sequential program, and its parts are independent.** The
+   parts run one after another as written. Every pass that reads edges
+   therefore reads the body as it read a `For`, and running the loop as
+   written is not a second meaning. What the terminator adds is that no
+   part reads a value another part defines, and no part reads or writes a
+   storage another part writes. A part reads only its own carried values,
+   the element, the counter, and values defined outside the loop. Any order
+   of the parts, or any interleaving of them, is then the same program.
+
+3. **Kinds.** A part is `Law(accs)` when every carried value of the part is
+   an accumulator (rule 4). Otherwise it is `Sequential`, and its
+   iterations keep their order, as a recurrence's do.
+
+4. **A law is a monoid action.**
+   - Each iteration contributes an element of a monoid `M` without reading
+     the accumulator. The accumulator is `init` acted on by the product of
+     the elements in iteration order.
+   - Split into chunks `c₀ … cₖ`, it is `act(init, p₀ · … · pₖ)`, where `pⱼ`
+     is chunk `j`'s product from the identity. The products join in chunk
+     order unless the law commutes, and a law that commutes may join in any
+     order.
+   - For a reduction, `M` is the accumulator's type, and acting is the
+     law's combine.
+
+   The vocabulary is closed, and a law enters it with the recognizer that
+   produces it (RFC-0082 rule 1):
+   - `Op(op)` is `+` or `*` at an integer or float type. Its identity is `0`
+     or `1`, and for float `+` it is `-0.0`, for which `x + e = x` holds at
+     every `x`.
+   - `Call(callee)` is an extern that declares itself associative
+     (RFC-0082 rule 2). Without a declared identity, `M` is `Option` of the
+     type with `None` as its identity, and a chunk starts empty.
+   - `Fold(law)` is a storage the part writes only through calls of one
+     extern that declares a `fold` law, with that law's combine and
+     identity (RFC-0082 rule 3).
+   - `Order` is the `Order` of an `anyorder` region (RFC-0007 rule 7), and
+     `Merge` joins it. A chunk starts from `init`, the region's entry order,
+     which every order inside the region follows.
+
+   Each accumulator records whether it is `exact`, which is false exactly for
+   a float `Op`, and whether it is `commutative`, which is the law's. `Order`
+   commutes. Splitting an inexact law is the lowerer's reassociation policy
+   (RFC-0066 rule 6).
+
+5. **Who writes it.** A pass partitions a `for`'s body. It runs after IV
+   canonicalization (RFC-0066 rule 7) and after every pass that moves or
+   merges the body's instructions.
+   - The parts are the connected components of the body's instructions. Two
+     instructions are connected when one reads a value the other defines,
+     when both touch a storage that one of them writes, or when one lies in
+     an arm of a branch the other's terminator decides.
+   - The pass duplicates nothing: an instruction two parts would share
+     joins them.
+   - A loop left from anywhere but its header stays a `For`: a `break` in
+     one part skips the others.
+   - A loop whose partition is one `Sequential` part stays a `For`.
+
+6. **An ordered call inside `anyorder` is not a recurrence.** The lowering
+   gives every effectful call in the region the region's entry order. It
+   merges the order the call yields into the region's accumulator. A call
+   whose order input is an `Order` accumulator's `init`, and whose order
+   output reaches only that accumulator's `Merge`, is unordered by the
+   author's declaration (RFC-0007 rule 2), and `analysis::carried` does not
+   count it as a dependence.
+   - Its effects are unordered with respect to a trap in the region, as
+     they are with respect to each other. RFC-0007 rule 2 admits running the
+     region in parallel, where one call's effect may happen before another's
+     trap.
+   - Every other instruction that carries an order is a recurrence, as
+     before.
+
+7. **`validate` holds the form.** It refuses a `ForParts` when any of these
+   holds:
+   - its parameters, parts or latch are not rule 1's;
+   - a part crosses rule 2's boundary;
+   - an accumulator is read other than as its law's operand, which is
+     `Op`'s `BinOp`, `Call`'s call, the storage lent only to `Fold`'s calls,
+     or `Order`'s `Merge`;
+   - a `Law` part holds an order-carrying instruction other than rule 6's,
+     or writes a storage other than the `SliceMut` source's element or a
+     `Fold` accumulator;
+   - the body is left other than through the header.
+
+   A later pass that puts a dependence across parts or into a law is
+   refused, and no loop runs apart on a fact that stopped holding.
+
+8. **Loans, drops and traps.**
+   - The loans and drops read the body as the sequential program of rule 2.
+     A value's drop is placed in the part that defines it.
+   - Run apart:
+     - a `SliceMut` element belongs to one part by rule 2, and chunks reach
+       disjoint elements (RFC-0057 rule 5);
+     - values from outside the loop are read shared, and the frame keeps its
+       cells while any piece is in flight (RFC-0046 rule 3);
+     - `init` is the frame's until the first join, and a partial is its
+       chunk's until the join moves it.
+   - The trap a run as written raises is the least in the order
+     (iteration, part). A run apart reports that one and releases the
+     partials not joined, in chunk order.
+   - The form admits an `Array` source. Split, the elements it has not yet
+     yielded are scattered over the chunks, which RFC-0057 rule 6's release
+     does not cover. Until the machine's release covers them, the lowerer
+     runs an `Array` source's loop in place.
+
+**Why.** RFC-0066 rule 1 admits stating a merge's join apart from the body
+as a normal form, since it holds on every target. The partition is a fact
+of the program. Fission, fusion and chunking are choices about a target, so
+MIR states the fact and the lowerer chooses, and a strong loop still runs
+its independent parts apart. Naming each law in the terminator ends
+"what joins these" there, as `Diamond` ended "where do these arms meet"
+(RFC-0063). A monoid action is the most general join a chunk can compute
+without its predecessor's result.
+**Cost.** One terminator arm in every reader of `Terminator`. A validator
+rule that restates the partition and the laws over the form. `carried`
+gains rule 6's exception. An instruction two parts would share merges them.
+**Rejected.**
+- A `For` with optional parts or join — RFC-0063's reason: a terminator
+  that is the shape has no optional part.
+- Parts as arms that fork and all run — every pass reads a block's
+  successors as alternatives, so a move or an exclusive borrow in two arms
+  would be admitted. The chain keeps each pass sound as it stands, and the
+  terminator states the independence.
+- Combine and identity as blocks of the body — the CFG is flat, and every
+  pass would learn a nesting whose boundary holds by convention.
+- Distributing the parts into loops in MIR — whether fission pays depends on
+  the target (RFC-0066 rule 1).
+- Duplicating an instruction two parts share — recomputation against
+  running apart is a cost, and cost is the lowerer's.
+- A reduction-only form — independent recurrences and joins over another
+  type would each need a second form.
+
+**Open.**
+- A part that reads another part's per-iteration value: a pipeline, which
+  needs a buffer or a channel to run apart.
+- An early exit as a law that keeps the first, which requires cancelling
+  chunks past it.
+- Keeping the last value.
+- An affine recurrence `x' = a·x + b`, whose maps compose, as a law, with
+  a scan's two passes when the body reads it.
+- Parts of a `while`.
 
 ## RFC-0081: a `while` that counts by one to an invariant bound is a range `for`
 

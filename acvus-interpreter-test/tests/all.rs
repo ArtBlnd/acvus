@@ -34,6 +34,7 @@ mod extern_call_forms;
 mod extern_fn;
 mod fold_agreement;
 mod for_loop;
+mod for_parts;
 mod fused_run;
 mod hash_instances;
 mod inlined_closure_capture;

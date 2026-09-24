@@ -11,7 +11,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::{
-    DebugInfo, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, SwitchKey, ValueId,
+    BodyArgsMut, DebugInfo, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, Part, SwitchKey,
+    Traversal, TraversalMut, ValueId, body_args_of,
 };
 use crate::ty::{Task, Ty};
 
@@ -90,6 +91,15 @@ pub enum Terminator {
         exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
     },
+    /// See [`crate::ir::InstKind::ForParts`].
+    ForParts {
+        source: ForSource,
+        body: Label,
+        parts: Vec<Part>,
+        exit: Label,
+        exit_trip: ExitTrip,
+        exit_args: Vec<ValueId>,
+    },
     Return {
         value: ValueId,
         order: Option<ValueId>,
@@ -99,6 +109,81 @@ pub enum Terminator {
     Diverge,
     /// Implicit fallthrough to next block.
     Fallthrough,
+}
+
+impl Terminator {
+    /// See [`crate::ir::traversal`].
+    pub fn traversal(&self) -> Option<Traversal<'_>> {
+        match self {
+            Terminator::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_trip,
+                exit_args,
+            } => Some(Traversal {
+                source: *source,
+                body: *body,
+                body_args: std::borrow::Cow::Borrowed(body_args),
+                exit: *exit,
+                exit_trip: *exit_trip,
+                exit_args,
+            }),
+            Terminator::ForParts {
+                source,
+                body,
+                parts,
+                exit,
+                exit_trip,
+                exit_args,
+            } => Some(Traversal {
+                source: *source,
+                body: *body,
+                body_args: std::borrow::Cow::Owned(body_args_of(parts)),
+                exit: *exit,
+                exit_trip: *exit_trip,
+                exit_args,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn traversal_mut(&mut self) -> Option<TraversalMut<'_>> {
+        match self {
+            Terminator::For {
+                source,
+                body,
+                body_args,
+                exit,
+                exit_trip,
+                exit_args,
+            } => Some(TraversalMut {
+                source,
+                body,
+                body_args: BodyArgsMut::Listed(body_args),
+                exit,
+                exit_trip,
+                exit_args,
+            }),
+            Terminator::ForParts {
+                source,
+                body,
+                parts,
+                exit,
+                exit_trip,
+                exit_args,
+            } => Some(TraversalMut {
+                source,
+                body,
+                body_args: BodyArgsMut::Parts(parts),
+                exit,
+                exit_trip,
+                exit_args,
+            }),
+            _ => None,
+        }
+    }
 }
 
 // -- CfgBody -------------------------------------------------------
@@ -163,9 +248,10 @@ impl CfgBody {
                     }
                 }
             }
-            Terminator::For { body, exit, .. } => {
-                for label in [body, exit] {
-                    if let Some(&bi) = self.label_to_block.get(label) {
+            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                let traversal = term.traversal().expect("a `For` or a `ForParts`");
+                for label in [traversal.body, traversal.exit] {
+                    if let Some(&bi) = self.label_to_block.get(&label) {
                         succs.push(bi);
                     }
                 }
@@ -430,6 +516,25 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
+            InstKind::ForParts {
+                source,
+                body,
+                parts,
+                exit,
+                exit_trip,
+                exit_args,
+            } => {
+                let term = Terminator::ForParts {
+                    source: *source,
+                    body: *body,
+                    parts: parts.clone(),
+                    exit: *exit,
+                    exit_trip: *exit_trip,
+                    exit_args: exit_args.clone(),
+                };
+                insts.pop();
+                return term;
+            }
             InstKind::Return { value, order } => {
                 let term = Terminator::Return {
                     value: *value,
@@ -548,6 +653,26 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     },
                 });
             }
+            Terminator::ForParts {
+                source,
+                body,
+                parts,
+                exit,
+                exit_trip,
+                exit_args,
+            } => {
+                insts.push(Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind: InstKind::ForParts {
+                        source,
+                        body,
+                        parts,
+                        exit,
+                        exit_trip,
+                        exit_args,
+                    },
+                });
+            }
             Terminator::Return { value, order, span } => {
                 insts.push(Inst {
                     span,
@@ -593,7 +718,9 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 .chain(default.iter().map(|(label, _)| label.0))
                 .max()
                 .map(|l| l + 1),
-            InstKind::For { body, exit, .. } => Some(body.0.max(exit.0) + 1),
+            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+                crate::ir::traversal(kind).map(|t| t.body.0.max(t.exit.0) + 1)
+            }
             _ => None,
         })
         .max()

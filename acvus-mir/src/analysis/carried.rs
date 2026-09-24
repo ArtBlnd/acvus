@@ -47,6 +47,16 @@
 //!
 //! A loop left from anywhere but its header, by a `break` or a `return`,
 //! is ordered: the iterations after the one that leaves never run.
+//!
+//! Inside `anyorder` the lowering gives every effectful call the region's
+//! entry order and merges the order the call yields into the region's
+//! accumulator, a header parameter of type `Order` whose back edges send a
+//! chain of `Merge`s over it: a [`MergeOp::Order`]. A call whose order input
+//! is that accumulator's entry value and whose order output reaches only the
+//! chain is unordered by the author's declaration (RFC-0089 rule 6), and it
+//! is not an ordered effect here. After `spawn_split` such a call is a
+//! `Spawn` that takes the order and the `Eval` that yields it, and the pair
+//! is excused as the one call it was.
 
 use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
@@ -54,10 +64,10 @@ use rustc_hash::FxHashMap;
 use crate::analysis::affine::{AffineValues, Arithmetic, Derivation, exact_under_wrapping};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::{Loop, LoopKind};
+use crate::analysis::loops::{Loop, LoopKind, passed_into_body};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{Callee, ForSource, InstKind, ValueId};
+use crate::ir::{CallIdentity, Callee, ForSource, InstKind, ValueId};
 use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
 use crate::ty::{Mutability, Ty};
 
@@ -66,6 +76,7 @@ pub enum MergeOp {
     Add,
     Mul,
     Extern(ExternMerge),
+    Order,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +84,7 @@ pub struct ExternMerge {
     pub callee: QualifiedRef,
     pub instance: usize,
     pub commutative: bool,
+    pub identity: CallIdentity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,18 +136,22 @@ pub struct CarriedState {
     pub params: Vec<CarriedParam>,
     pub storage_merges: Vec<StorageMerge>,
     pub dependences: Vec<Dependence>,
+    /// By `dst`: RFC-0089 rule 6's order-carrying instructions.
+    pub unordered: Vec<ValueId>,
 }
 
 impl CarriedState {
     pub fn of(loans: &Loans<'_>, loop_: &Loop, affine: &AffineValues, laws: &LawTable) -> Self {
         let cfg = loans.cfg();
         let natural = &loop_.natural;
+        let into_body = passed_into_body(cfg, natural.header);
         let body = Body {
             loans,
             loop_,
             laws,
-            reads: Reads::in_loop(cfg, loop_),
+            reads: Reads::in_loop(cfg, loop_, &into_body),
             arithmetic: Arithmetic::in_loop(cfg, loop_),
+            into_body,
         };
         let params: Vec<CarriedParam> = cfg.blocks[natural.header.0]
             .params
@@ -158,6 +174,7 @@ impl CarriedState {
             .filter(|p| p.carried == Carried::Recurrence)
             .map(|p| Dependence::Recurrence(p.param))
             .collect();
+        let unordered = body.unordered_calls(&params);
         let lent = lent_by_source(loop_, loans);
         let storage_merges = body.storage_merges(&lent);
         for block in natural.blocks().filter(|&block| block != natural.header) {
@@ -183,7 +200,10 @@ impl CarriedState {
                 if let InstKind::Commit { context, .. } = &inst.kind {
                     found.push(Dependence::ContextWrite(*context));
                 }
-                if carries_order(&inst.kind) {
+                let excused = inst_info::defs(&inst.kind)
+                    .iter()
+                    .any(|dst| unordered.contains(dst));
+                if carries_order(&inst.kind) && !excused {
                     found.push(Dependence::OrderedEffect { block });
                 }
                 for dependence in found {
@@ -197,6 +217,7 @@ impl CarriedState {
             params,
             storage_merges,
             dependences,
+            unordered,
         }
     }
 
@@ -221,11 +242,18 @@ struct Body<'a, 'cfg> {
     laws: &'a LawTable,
     reads: Reads,
     arithmetic: Arithmetic,
+    into_body: FxHashMap<ValueId, ValueId>,
 }
 
 impl<'cfg> Body<'_, 'cfg> {
     fn cfg(&self) -> &'cfg CfgBody {
         self.loans.cfg()
+    }
+
+    /// Whether `value` is header parameter `param`: the parameter itself,
+    /// or the body parameter its traversal's body edge passes it to.
+    fn is_param(&self, value: ValueId, param: ValueId) -> bool {
+        value == param || self.into_body.get(&param) == Some(&value)
     }
 
     /// `Carried::Merge` when header parameter `param`, at `index`, is one.
@@ -234,7 +262,10 @@ impl<'cfg> Body<'_, 'cfg> {
         let next = natural.back_arg(self.cfg(), index)?;
         let merge = match self.arithmetic.get(next) {
             Some(operation) => {
-                if !operation.one_operand_is(param) {
+                let taken = self.into_body.get(&param).copied();
+                let reads_param = operation.one_operand_is(param)
+                    || taken.is_some_and(|taken| operation.one_operand_is(taken));
+                if !reads_param {
                     return None;
                 }
                 let op = match operation.op {
@@ -249,6 +280,10 @@ impl<'cfg> Body<'_, 'cfg> {
                 };
                 Carried::Merge { op, exact }
             }
+            None if self.order_chain(next, param).is_some() => Carried::Merge {
+                op: MergeOp::Order,
+                exact: true,
+            },
             None => Carried::Merge {
                 op: MergeOp::Extern(self.extern_merge(next, param)?),
                 exact: true,
@@ -257,6 +292,116 @@ impl<'cfg> Body<'_, 'cfg> {
         let read_only_as_operand = self.reads.count(param) == 1;
         let read_only_by_back_edges = self.reads.count(next) == natural.latches.len();
         (read_only_as_operand && read_only_by_back_edges).then_some(merge)
+    }
+
+    /// The `Merge`s from `next` down to `param`, an `Order`, where each link
+    /// is read by the next one alone and `param` is an operand of the last.
+    fn order_chain(&self, next: ValueId, param: ValueId) -> Option<Vec<ValueId>> {
+        if self.cfg().val_types.get(&param) != Some(&Ty::Order) {
+            return None;
+        }
+        let mut chain = vec![next];
+        let mut at = next;
+        loop {
+            let InstKind::Merge { orders, .. } = self.defining(at)? else {
+                return None;
+            };
+            if orders.iter().any(|order| self.is_param(*order, param)) {
+                return Some(chain);
+            }
+            let linked: Vec<ValueId> = orders
+                .iter()
+                .copied()
+                .filter(|order| self.reaches_through_merges(*order, param))
+                .collect();
+            let [link] = linked[..] else {
+                return None;
+            };
+            if self.reads.count(link) != 1 {
+                return None;
+            }
+            chain.push(link);
+            at = link;
+        }
+    }
+
+    fn reaches_through_merges(&self, value: ValueId, param: ValueId) -> bool {
+        match self.defining(value) {
+            Some(InstKind::Merge { orders, .. }) => orders
+                .iter()
+                .any(|order| self.is_param(*order, param) || self.reaches_through_merges(*order, param)),
+            _ => false,
+        }
+    }
+
+    /// RFC-0089 rule 6's calls, by the `dst` of each instruction.
+    fn unordered_calls(&self, params: &[CarriedParam]) -> Vec<ValueId> {
+        let natural = &self.loop_.natural;
+        let mut unordered = Vec::new();
+        for (index, carried) in params.iter().enumerate() {
+            let Carried::Merge {
+                op: MergeOp::Order, ..
+            } = carried.carried
+            else {
+                continue;
+            };
+            let (Some(next), Some(init)) = (
+                natural.back_arg(self.cfg(), index),
+                natural.entry_arg(self.cfg(), index),
+            ) else {
+                continue;
+            };
+            let Some(chain) = self.order_chain(next, carried.param) else {
+                continue;
+            };
+            let merged_into_chain = |order: ValueId| {
+                self.reads.count(order) == 1
+                    && chain.iter().any(|link| {
+                        matches!(self.defining(*link),
+                            Some(InstKind::Merge { orders, .. }) if orders.contains(&order))
+                    })
+            };
+            for kind in self.body_insts() {
+                match kind {
+                    InstKind::FunctionCall {
+                        dst,
+                        order: Some(edge),
+                        ..
+                    } if edge.before == init && merged_into_chain(edge.after) => {
+                        unordered.push(*dst);
+                    }
+                    InstKind::Eval {
+                        dst,
+                        src,
+                        order: Some(after),
+                    } if merged_into_chain(*after) && self.reads.count(*src) == 1 => {
+                        let Some(InstKind::Spawn {
+                            dst: handle,
+                            order: Some(before),
+                            ..
+                        }) = self.defining(*src)
+                        else {
+                            continue;
+                        };
+                        if *before == init {
+                            unordered.push(*handle);
+                            unordered.push(*dst);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        unordered
+    }
+
+    fn body_insts(&self) -> impl Iterator<Item = &'cfg InstKind> + '_ {
+        let cfg = self.cfg();
+        self.loop_
+            .natural
+            .blocks()
+            .flat_map(move |block| &cfg.blocks[block.0].insts)
+            .map(|inst| &inst.kind)
     }
 
     fn extern_merge(&self, next: ValueId, param: ValueId) -> Option<ExternMerge> {
@@ -269,7 +414,7 @@ impl<'cfg> Body<'_, 'cfg> {
         let Laws::Binary(BinaryLaws {
             associative: true,
             commutative,
-            ..
+            identity,
         }) = self.laws.of_callee(callee)
         else {
             return None;
@@ -277,12 +422,16 @@ impl<'cfg> Body<'_, 'cfg> {
         let &[first, second] = args.as_slice() else {
             return None;
         };
-        let param_is_first = first == param && second != param;
-        let param_is_second = second == param && first != param;
+        let param_is_first = self.is_param(first, param) && !self.is_param(second, param);
+        let param_is_second = self.is_param(second, param) && !self.is_param(first, param);
         (param_is_first || (*commutative && param_is_second)).then_some(ExternMerge {
             callee: *id,
             instance: *instance,
             commutative: *commutative,
+            identity: match identity {
+                Some(_) => CallIdentity::Declared,
+                None => CallIdentity::OptionLifted,
+            },
         })
     }
 
@@ -392,15 +541,35 @@ struct Reads {
 }
 
 impl Reads {
-    fn in_loop(cfg: &CfgBody, loop_: &Loop) -> Self {
+    /// A body parameter a header parameter is passed to is read as that
+    /// header parameter, and the pass itself is no read.
+    fn in_loop(cfg: &CfgBody, loop_: &Loop, into_body: &FxHashMap<ValueId, ValueId>) -> Self {
+        let as_header: FxHashMap<ValueId, ValueId> = into_body
+            .iter()
+            .map(|(header, body)| (*body, *header))
+            .collect();
+        let header = loop_.natural.header;
         let mut by_value: FxHashMap<ValueId, usize> = FxHashMap::default();
-        for block in loop_.natural.blocks() {
-            let block = &cfg.blocks[block.0];
+        for at in loop_.natural.blocks() {
+            let block = &cfg.blocks[at.0];
             let insts = block
                 .insts
                 .iter()
                 .flat_map(|inst| inst_info::uses(&inst.kind));
-            for value in insts.chain(inst_info::terminator_uses(&block.terminator)) {
+            let mut terminator = inst_info::terminator_uses(&block.terminator);
+            if at == header
+                && let Some(traversal) = block.terminator.traversal()
+            {
+                for passed in traversal.body_args.iter() {
+                    if into_body.contains_key(passed)
+                        && let Some(at) = terminator.iter().position(|used| used == passed)
+                    {
+                        terminator.remove(at);
+                    }
+                }
+            }
+            for value in insts.chain(terminator) {
+                let value = as_header.get(&value).copied().unwrap_or(value);
                 *by_value.entry(value).or_default() += 1;
             }
         }
@@ -431,7 +600,7 @@ fn lent_by_source(loop_: &Loop, loans: &Loans<'_>) -> Vec<ValueId> {
         .collect()
 }
 
-fn carries_order(kind: &InstKind) -> bool {
+pub fn carries_order(kind: &InstKind) -> bool {
     match kind {
         InstKind::FunctionCall { order, .. } => order.is_some(),
         InstKind::Spawn { order, .. } | InstKind::Eval { order, .. } => order.is_some(),

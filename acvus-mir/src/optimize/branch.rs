@@ -151,6 +151,7 @@ fn decide(
         }
         Terminator::Jump { .. }
         | Terminator::For { .. }
+        | Terminator::ForParts { .. }
         | Terminator::Return { .. }
         | Terminator::Diverge
         | Terminator::Fallthrough => None,

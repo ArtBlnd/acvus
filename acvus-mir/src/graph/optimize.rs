@@ -99,6 +99,9 @@ pub fn optimize(
 
         let mut errors = validate::type_check::check_types(&module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
+        // RFC-0089 rule 7, asked of the module after `insert_drops`, which is
+        // the last pass: the form must hold on the body the machine runs.
+        errors.extend(validate::for_parts::check(&module));
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }
@@ -292,6 +295,14 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // before `reorder`, which schedules within a block.
     optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
+    // RFC-0089 rule 5: after every pass that moves or merges a body's
+    // instructions -- `code_motion` and `forward` across blocks, `reorder`
+    // within one -- since a part is a set of instructions and a pass that
+    // moved one across a part's boundary would join two parts after the
+    // fact; after `iv_canon`, so a weak loop carries only its counter and
+    // its merges. Before `bce`, which then reads the chain this writes as
+    // the order `validate::bounds` reads again.
+    optimize::for_parts::run(cfg, laws);
     // RFC-0047 rule 7: after the loop passes, which leave a range `for`
     // whose counter indexes and one hoisted `as_slice`, and after the last
     // pass that moves an instruction, so that `validate::bounds` reads the
@@ -435,15 +446,12 @@ fn debug_validate(cfg: &CfgBody) {
                 v.extend(else_args);
                 v
             }
-            crate::cfg::Terminator::For {
-                source,
-                body_args,
-                exit_args,
-                ..
-            } => {
-                let mut v = source.uses().to_vec();
-                v.extend(body_args);
-                v.extend(exit_args);
+            term @ (crate::cfg::Terminator::For { .. }
+            | crate::cfg::Terminator::ForParts { .. }) => {
+                let traversal = term.traversal().expect("a `For` or a `ForParts`");
+                let mut v = traversal.source.uses().to_vec();
+                v.extend(traversal.body_args.iter());
+                v.extend(traversal.exit_args);
                 v
             }
             crate::cfg::Terminator::Switch { tag, arms, default } => {

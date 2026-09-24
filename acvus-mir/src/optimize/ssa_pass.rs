@@ -217,15 +217,12 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             then_args.iter_mut().for_each(|v| s(v));
             else_args.iter_mut().for_each(|v| s(v));
         }
-        InstKind::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => {
-            source.for_each_use(&mut *s);
-            body_args.iter_mut().for_each(|v| s(v));
-            exit_args.iter_mut().for_each(|v| s(v));
+        InstKind::For { .. } | InstKind::ForParts { .. } => {
+            let mut traversal =
+                crate::ir::traversal_mut(kind).expect("a `For` or a `ForParts`");
+            traversal.source.for_each_use(&mut *s);
+            traversal.body_args.for_each(|v| s(v));
+            traversal.exit_args.iter_mut().for_each(|v| s(v));
         }
         InstKind::Switch { tag, arms, default } => {
             s(tag);
@@ -271,15 +268,11 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
             then_args.iter_mut().for_each(&s);
             else_args.iter_mut().for_each(&s);
         }
-        Terminator::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => {
-            source.for_each_use(|v| s(v));
-            body_args.iter_mut().for_each(&s);
-            exit_args.iter_mut().for_each(&s);
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+            traversal.source.for_each_use(|v| s(v));
+            traversal.body_args.for_each(&s);
+            traversal.exit_args.iter_mut().for_each(&s);
         }
         Terminator::Switch { tag, arms, default } => {
             s(tag);
@@ -713,18 +706,13 @@ pub(super) fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa
             // (RFC-0057); the exit's phis follow the trip count where the
             // edge defines one (rule 9), and are all its parameters where
             // it does not.
-            Terminator::For {
-                body,
-                body_args,
-                exit,
-                exit_args,
-                ..
-            } => {
-                if let Some(extra) = jump_extra_args.get(&(pred_label, *body)) {
-                    body_args.extend_from_slice(extra);
+            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+                if let Some(extra) = jump_extra_args.get(&(pred_label, *traversal.body)) {
+                    traversal.body_args.extend(extra);
                 }
-                if let Some(extra) = jump_extra_args.get(&(pred_label, *exit)) {
-                    exit_args.extend_from_slice(extra);
+                if let Some(extra) = jump_extra_args.get(&(pred_label, *traversal.exit)) {
+                    traversal.exit_args.extend_from_slice(extra);
                 }
             }
             _ => {}

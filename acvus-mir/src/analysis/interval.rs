@@ -14,6 +14,7 @@
 //! A fact that names a value dies where that value is defined again, which
 //! a loop does on every iteration.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -22,7 +23,7 @@ use acvus_ast::Literal;
 
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{BinOp, Callee, ForSource, InstKind, PathSeg, RefTarget, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, InstKind, PathSeg, RefTarget, Traversal, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
 use crate::ty::{IntTy, Mutability, Ty};
 
@@ -455,7 +456,7 @@ enum EdgeId {
 /// What a terminator hands one successor.
 struct Edge<'a> {
     target: BlockIdx,
-    args: &'a [ValueId],
+    args: std::borrow::Cow<'a, [ValueId]>,
     supplied: Supplied,
     decided_by: Option<Decision>,
 }
@@ -592,6 +593,7 @@ impl<'a> Domain<'a> {
             | InstKind::Diamond { .. }
             | InstKind::Switch { .. }
             | InstKind::For { .. }
+            | InstKind::ForParts { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge => {
                 unreachable!("a block's instructions hold no control flow: {kind:?}")
@@ -934,7 +936,10 @@ impl<'a> Domain<'a> {
     fn edges(&self, b: BlockIdx) -> Vec<Edge<'a>> {
         let cfg: &'a CfgBody = self.cfg;
         let mut edges = Vec::new();
-        let mut push = |target: Option<BlockIdx>, args: &'a [ValueId], supplied, decided_by| {
+        let mut push = |target: Option<BlockIdx>,
+                        args: std::borrow::Cow<'a, [ValueId]>,
+                        supplied,
+                        decided_by| {
             if let Some(target) = target {
                 edges.push(Edge {
                     target,
@@ -946,7 +951,7 @@ impl<'a> Domain<'a> {
         };
         let block_of = |label| cfg.label_to_block.get(label).copied();
         match &cfg.blocks[b.0].terminator {
-            Terminator::Jump { label, args } => push(block_of(label), args, Supplied::Nothing, None),
+            Terminator::Jump { label, args } => push(block_of(label), Cow::Borrowed(args), Supplied::Nothing, None),
             Terminator::JumpIf {
                 cond,
                 then_label,
@@ -968,39 +973,40 @@ impl<'a> Domain<'a> {
                         taken,
                     })
                 };
-                push(block_of(then_label), then_args, Supplied::Nothing, decided(true));
-                push(block_of(else_label), else_args, Supplied::Nothing, decided(false));
+                push(block_of(then_label), Cow::Borrowed(then_args), Supplied::Nothing, decided(true));
+                push(block_of(else_label), Cow::Borrowed(else_args), Supplied::Nothing, decided(false));
             }
             Terminator::Switch { arms, default, .. } => {
                 for (_, label, args) in arms {
-                    push(block_of(label), args, Supplied::Nothing, None);
+                    push(block_of(label), Cow::Borrowed(args), Supplied::Nothing, None);
                 }
                 if let Some((label, args)) = default {
-                    push(block_of(label), args, Supplied::Nothing, None);
+                    push(block_of(label), Cow::Borrowed(args), Supplied::Nothing, None);
                 }
             }
-            Terminator::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
-                let supplied = match *source {
+            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                let Traversal {
+                    source,
+                    body,
+                    body_args,
+                    exit,
+                    exit_trip,
+                    exit_args,
+                } = term.traversal().expect("a `For` or a `ForParts`");
+                let supplied = match source {
                     ForSource::Range { at, hi } => Supplied::Counter { at, hi },
                     ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => {
                         Supplied::Unknown(source.supplied_params())
                     }
                 };
-                push(block_of(body), body_args, supplied, None);
+                push(block_of(&body), body_args, supplied, None);
                 let trip = Supplied::Unknown(exit_trip.supplied_params());
-                push(block_of(exit), exit_args, trip, None);
+                push(block_of(&exit), Cow::Borrowed(exit_args), trip, None);
             }
             Terminator::Fallthrough => {
                 let next = BlockIdx(b.0 + 1);
                 let target = (next.0 < cfg.blocks.len()).then_some(next);
-                push(target, &[], Supplied::Nothing, None);
+                push(target, Cow::Borrowed(&[]), Supplied::Nothing, None);
             }
             Terminator::Return { .. } | Terminator::Diverge => {}
         }

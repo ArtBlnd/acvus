@@ -1165,24 +1165,22 @@ fn remap_inst(
             else_args: rv(else_args),
             join: rl(*join),
         },
-        InstKind::For {
-            source,
-            body,
-            body_args,
-            exit,
-            exit_trip,
-            exit_args,
-        } => {
-            let mut source = *source;
-            source.for_each_use(|v| *v = r(*v));
-            InstKind::For {
-                source,
-                body: rl(*body),
-                body_args: rv(body_args),
-                exit: rl(*exit),
-                exit_trip: *exit_trip,
-                exit_args: rv(exit_args),
+        InstKind::For { .. } | InstKind::ForParts { .. } => {
+            let mut remapped = kind.clone();
+            let mut traversal =
+                crate::ir::traversal_mut(&mut remapped).expect("a `For` or a `ForParts`");
+            traversal.source.for_each_use(|v| *v = r(*v));
+            *traversal.body = rl(*traversal.body);
+            traversal.body_args.for_each(|v| *v = r(*v));
+            *traversal.exit = rl(*traversal.exit);
+            traversal.exit_args.iter_mut().for_each(|v| *v = r(*v));
+            if let InstKind::ForParts { parts, .. } = &mut remapped {
+                for part in parts {
+                    part.entry = rl(part.entry);
+                    part.fold_storages_mut().for_each(|v| *v = r(*v));
+                }
             }
+            remapped
         }
         InstKind::Switch { tag, arms, default } => InstKind::Switch {
             tag: r(*tag),

@@ -468,7 +468,7 @@ fn built(shape: Shape) -> Built {
 fn fors(cfg: &CfgBody) -> usize {
     cfg.blocks
         .iter()
-        .filter(|block| matches!(block.terminator, Terminator::For { .. }))
+        .filter(|block| block.terminator.traversal().is_some())
         .count()
 }
 
@@ -731,7 +731,7 @@ fn a_loop_that_carries_a_merge_stays() {
         .cfg
         .blocks
         .iter()
-        .filter(|block| matches!(block.terminator, Terminator::For { .. }))
+        .filter(|block| block.terminator.traversal().is_some())
         .collect();
     let [header] = headers.as_slice() else {
         panic!("one loop stays: {listing}")

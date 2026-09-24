@@ -538,12 +538,9 @@ fn thread_one(
     // An exit edge that defines the trip count fills the target's first
     // parameter itself, so its arguments are not indexed by the target's
     // parameters, and it is not threaded (RFC-0057 rule 9).
-    if let Terminator::For {
-        exit,
-        exit_trip: ExitTrip::Defined,
-        ..
-    } = &graph.cfg.blocks[pred.0].terminator
-        && *exit == graph.cfg.blocks[at.0].label
+    if let Some(traversal) = graph.cfg.blocks[pred.0].terminator.traversal()
+        && traversal.exit_trip == ExitTrip::Defined
+        && traversal.exit == graph.cfg.blocks[at.0].label
     {
         return None;
     }
@@ -820,7 +817,7 @@ fn shape_of(ty: &Ty) -> Option<Shape> {
 /// An edge into a block: the arguments it passes the block's parameters,
 /// or the parameters it fills itself, which no constructor stands behind.
 enum Incoming<'t> {
-    Carries(&'t Vec<ValueId>),
+    Carries(&'t [ValueId]),
     Fills,
 }
 
@@ -855,20 +852,16 @@ fn incoming(term: &Terminator, label: Label) -> Vec<Incoming<'_>> {
         // A `For`'s exit edge carries its target's whole parameter list
         // unless it defines the trip count, which it fills as its body edge
         // fills the body's leading parameters (RFC-0057 rules 2 and 9).
-        Terminator::For {
-            exit,
-            exit_trip: ExitTrip::Absent,
-            exit_args,
-            ..
-        } if *exit == label => vec![Incoming::Carries(exit_args)],
-        Terminator::For {
-            exit,
-            exit_trip: ExitTrip::Defined,
-            ..
-        } if *exit == label => vec![Incoming::Fills],
-        Terminator::For { body, .. } if *body == label => vec![Incoming::Fills],
-        Terminator::For { .. }
-        | Terminator::Jump { .. }
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal().expect("a `For` or a `ForParts`");
+            match (traversal.exit == label, traversal.exit_trip) {
+                (true, ExitTrip::Absent) => vec![Incoming::Carries(traversal.exit_args)],
+                (true, ExitTrip::Defined) => vec![Incoming::Fills],
+                (false, _) if traversal.body == label => vec![Incoming::Fills],
+                (false, _) => Vec::new(),
+            }
+        }
+        Terminator::Jump { .. }
         | Terminator::Return { .. }
         | Terminator::Fallthrough
         | Terminator::Diverge => Vec::new(),
@@ -1006,9 +999,10 @@ fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
         // block whose leading parameters the terminator fills by position,
         // and an arm the dispatch was threaded to has no such parameters
         // (RFC-0057).
-        Terminator::For {
-            exit, exit_args, ..
-        } => leave(exit, exit_args),
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+            leave(traversal.exit, traversal.exit_args)
+        }
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}
     }
 }

@@ -48,12 +48,12 @@ pub fn run(cfg: &mut CfgBody) {
                 .copied()
                 .filter(|v| !params.contains(v))
                 .collect();
-            let copies = copies_for(cfg, &live_by_own_name, args.iter().copied());
+            let copies = copies_for(cfg, &live_by_own_name, args.iter().map(|arg| **arg));
             for (src, dst) in &copies.clones {
                 new.push(clone_inst(span, *src, *dst));
             }
             let mut remaining = copies;
-            for arg in args.iter_mut() {
+            for arg in args {
                 remaining.redirect(arg);
             }
         }
@@ -155,11 +155,10 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => then_args.iter().chain(else_args).copied().collect(),
-        Terminator::For {
-            body_args,
-            exit_args,
-            ..
-        } => body_args.iter().chain(exit_args).copied().collect(),
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal().expect("a `For` or a `ForParts`");
+            traversal.body_args.iter().chain(traversal.exit_args).copied().collect()
+        }
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .flat_map(|(_, _, args)| args.iter())
@@ -171,9 +170,12 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
 }
 
 /// Each edge a terminator leaves by, with the arguments it passes.
-fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, &mut Vec<ValueId>)> {
+fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, Vec<&mut ValueId>)> {
+    fn each(args: &mut [ValueId]) -> Vec<&mut ValueId> {
+        args.iter_mut().collect()
+    }
     match t {
-        Terminator::Jump { label, args } => vec![(*label, args)],
+        Terminator::Jump { label, args } => vec![(*label, each(args))],
         Terminator::JumpIf {
             then_label,
             then_args,
@@ -187,18 +189,18 @@ fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, &mut Vec<ValueId>)> {
             else_label,
             else_args,
             ..
-        } => vec![(*then_label, then_args), (*else_label, else_args)],
-        Terminator::For {
-            body,
-            body_args,
-            exit,
-            exit_args,
-            ..
-        } => vec![(*body, body_args), (*exit, exit_args)],
+        } => vec![(*then_label, each(then_args)), (*else_label, each(else_args))],
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+            vec![
+                (*traversal.body, traversal.body_args.into_values_mut()),
+                (*traversal.exit, each(traversal.exit_args)),
+            ]
+        }
         Terminator::Switch { arms, default, .. } => arms
             .iter_mut()
-            .map(|(_, label, args)| (*label, args))
-            .chain(default.iter_mut().map(|(label, args)| (*label, args)))
+            .map(|(_, label, args)| (*label, each(args)))
+            .chain(default.iter_mut().map(|(label, args)| (*label, each(args))))
             .collect(),
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => Vec::new(),
     }

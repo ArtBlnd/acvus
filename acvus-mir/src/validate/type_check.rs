@@ -129,6 +129,40 @@ pub enum ValidationErrorKind {
     DemotedDiamondMeetsAgain {
         join: Label,
     },
+    /// RFC-0089 rule 7: the parameters, parts or latch of the `ForParts`
+    /// ending `header` are not rule 1's.
+    ForPartsShape {
+        header: Label,
+        fault: crate::validate::for_parts::ShapeFault,
+    },
+    /// RFC-0089 rule 7: part `part` reads a value, or touches a storage or
+    /// a context, that another part defines or writes (rule 2).
+    ForPartsCrossing {
+        header: Label,
+        part: usize,
+        crossing: crate::validate::for_parts::Crossing,
+    },
+    /// RFC-0089 rule 7: accumulator `acc` of part `part` is read other than
+    /// as its law's operand.
+    ForPartsAccumulatorRead {
+        header: Label,
+        part: usize,
+        acc: usize,
+    },
+    /// RFC-0089 rule 7: `Law` part `part` holds an order-carrying
+    /// instruction rule 6 does not excuse, or writes a storage other than
+    /// the `SliceMut` source's or one it folds into.
+    ForPartsLawEffect {
+        header: Label,
+        part: usize,
+        effect: crate::validate::for_parts::LawEffect,
+    },
+    /// RFC-0089 rule 7: block `from` of the body leaves it other than
+    /// through the header.
+    ForPartsLeaves {
+        header: Label,
+        from: Label,
+    },
     /// A `match` over a locally closed enum leaves a variant untaken.
     MatchMissesVariants {
         enum_name: Option<Astr>,
@@ -1981,14 +2015,17 @@ impl CheckCtx {
             // A `For` is the loop's condition (RFC-0057): the source decides
             // the element and the counter it hands the body, and the edges'
             // remaining arguments are checked the way a `Jump`'s are.
-            InstKind::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
+            InstKind::For { .. } | InstKind::ForParts { .. } => {
+                let crate::ir::Traversal {
+                    source,
+                    body,
+                    body_args,
+                    exit,
+                    exit_trip,
+                    exit_args,
+                } = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
+                let (source, body, exit) = (&source, &body, &exit);
+                let body_args = &body_args[..];
                 let element = match source {
                     ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
                         let slice_ty = ty!(*slice);
@@ -2340,8 +2377,9 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
                 .chain(default.iter().map(|(to, _)| to))
                 .filter(|to| **to == label)
                 .count(),
-            InstKind::For { body, exit, .. } => {
-                usize::from(*body == label) + usize::from(*exit == label)
+            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+                let traversal = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
+                usize::from(traversal.body == label) + usize::from(traversal.exit == label)
             }
             _ => 0,
         })
@@ -2357,6 +2395,7 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
                 | InstKind::Diamond { .. }
                 | InstKind::Switch { .. }
                 | InstKind::For { .. }
+                | InstKind::ForParts { .. }
                 | InstKind::Return { .. }
                 | InstKind::Diverge
         ),

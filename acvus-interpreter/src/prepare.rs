@@ -22,7 +22,7 @@ use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::{
     BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
-    RefTarget, SwitchKey, TwoWay, ValueId, two_way,
+    RefTarget, SwitchKey, Traversal, TwoWay, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -55,16 +55,17 @@ macro_rules! for_head {
     ($prep:expr, $at:expr, |$src:ident, $head:ident, $counter:ident| $make:expr) => {{
         let prep: &Prepare<'_> = $prep;
         let terminator: usize = $at;
-        let InstKind::For {
+        let Some(acvus_mir::ir::Traversal {
             source,
             body,
             exit_trip,
             ..
-        } = &prep.body.insts[terminator].kind
+        }) = acvus_mir::ir::traversal(&prep.body.insts[terminator].kind)
         else {
             panic!("instruction {terminator} is not a `For`")
         };
-        let params: &[ValueId] = prep.block_params(body);
+        let (source, exit_trip) = (&source, &exit_trip);
+        let params: &[ValueId] = prep.block_params(&body);
         let $counter: Off = prep.off(params[source.counter_param()]);
         // The count is laid in the counter's register, and the exit edge's
         // moves carry it to the exit block's first parameter (`exit_moves`).
@@ -1087,7 +1088,10 @@ fn targets(inst: &Inst, label: Label) -> bool {
             arms.iter().any(|(_, named, _)| *named == label)
                 || default.as_ref().is_some_and(|(named, _)| *named == label)
         }
-        InstKind::For { body, exit, .. } => *body == label || *exit == label,
+        kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+            let traversal = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
+            traversal.body == label || traversal.exit == label
+        }
         _ => false,
     }
 }
@@ -1674,20 +1678,20 @@ impl<'a> Prepare<'a> {
     /// none that an exit argument is read from.
     fn exit_moves(&mut self, terminator: usize) -> Vec<Node> {
         let body = self.body;
-        let InstKind::For {
+        let Some(Traversal {
             source,
             body: body_label,
             exit,
             exit_trip,
             exit_args,
             ..
-        } = &body.insts[terminator].kind
+        }) = acvus_mir::ir::traversal(&body.insts[terminator].kind)
         else {
             panic!("instruction {terminator} is not a `For`")
         };
-        let mut pairs = self.carried_pairs(exit, exit_args, exit_trip.supplied_params());
-        if let Some(trip) = exit_trip.trip_param(self.block_params(exit)) {
-            let counter = self.block_params(body_label)[source.counter_param()];
+        let mut pairs = self.carried_pairs(&exit, exit_args, exit_trip.supplied_params());
+        if let Some(trip) = exit_trip.trip_param(self.block_params(&exit)) {
+            let counter = self.block_params(&body_label)[source.counter_param()];
             pairs.push(Carried {
                 at: Pair {
                     from: self.slot(counter),
@@ -2108,6 +2112,7 @@ impl<'a> Prepare<'a> {
             // is one too (RFC-0057).
             | InstKind::Switch { .. }
             | InstKind::For { .. }
+            | InstKind::ForParts { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
             | InstKind::Eval { .. }
@@ -2453,9 +2458,8 @@ impl<'a> Prepare<'a> {
         }
 
         let terminator = head + 1;
-        let InstKind::For { body, exit, .. } = &insts.get(terminator)?.kind else {
-            return None;
-        };
+        let Traversal { body, exit, .. } = acvus_mir::ir::traversal(&insts.get(terminator)?.kind)?;
+        let (body, exit) = (&body, &exit);
         let reaching = self.references(header);
         let back = self.latch(&reaching, Some(at), head)?;
         if !matches!(insts[back].kind, InstKind::Jump { .. }) {
@@ -3249,12 +3253,12 @@ impl<'a> Prepare<'a> {
 
     fn for_op(&mut self, region: &ForRegion, ops: &mut Vec<Node>) {
         let body = self.body;
-        let InstKind::For {
+        let Some(Traversal {
             source,
             body: body_label,
             body_args,
             ..
-        } = &body.insts[region.terminator].kind
+        }) = acvus_mir::ir::traversal(&body.insts[region.terminator].kind)
         else {
             panic!("a recognized `for`'s terminator is not a `For`")
         };
@@ -3276,7 +3280,7 @@ impl<'a> Prepare<'a> {
         let entering = self.move_ops(entered, entering);
         ops.extend(entering);
 
-        let into_body = self.moves_past(body_label, body_args, source.supplied_params());
+        let into_body = self.moves_past(&body_label, &body_args, source.supplied_params());
         let leaving = self.exit_moves(region.terminator);
         let back = self.move_ops(header, back_args);
 
@@ -3314,22 +3318,22 @@ impl<'a> Prepare<'a> {
 
     fn for_at(&mut self, at: usize) -> Box<dyn Op> {
         let insts = self.body.insts.as_slice();
-        let InstKind::For {
+        let Some(Traversal {
             source,
             body,
             body_args,
             exit,
             ..
-        } = &insts[at].kind
+        }) = acvus_mir::ir::traversal(&insts[at].kind)
         else {
             panic!("`for_at` was handed instruction {at}, which is not a `For`")
         };
         self.header_edges_carry_the_counter(at);
 
-        let into_body = self.moves_past(body, body_args, source.supplied_params());
+        let into_body = self.moves_past(&body, &body_args, source.supplied_params());
         let into_exit = self.exit_moves(at);
-        let body_target = self.target(body);
-        let exit_target = self.target(exit);
+        let body_target = self.target(&body);
+        let exit_target = self.target(&exit);
         let on_body = self.edge(into_body, body_target);
         let on_exit = self.edge(into_exit, exit_target);
 
@@ -3358,7 +3362,7 @@ impl<'a> Prepare<'a> {
 
     fn for_header(&self, label: &Label) -> Option<usize> {
         let at = self.label(label) as usize;
-        matches!(self.body.insts.get(at + 1)?.kind, InstKind::For { .. }).then_some(at)
+        acvus_mir::ir::traversal(&self.body.insts.get(at + 1)?.kind).map(|_| at)
     }
 
     /// `counter_op` is reached from the `Jump` arm alone, and it reads the
@@ -3747,7 +3751,7 @@ impl<'a> Prepare<'a> {
                 return Some(self.switch_op(*tag, arms, default.as_ref()));
             }
 
-            InstKind::For { .. } => return Some(self.for_at(at)),
+            InstKind::For { .. } | InstKind::ForParts { .. } => return Some(self.for_at(at)),
 
             InstKind::Jump { label, args } => {
                 let target = self.target(label);
@@ -5847,9 +5851,10 @@ impl Edges<'_> {
                     visit(self.target(label));
                 }
             }
-            InstKind::For { body, exit, .. } => {
-                visit(self.target(body));
-                visit(self.target(exit));
+            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+                let traversal = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
+                visit(self.target(&traversal.body));
+                visit(self.target(&traversal.exit));
             }
             InstKind::Return { .. } | InstKind::Diverge => {}
             _ => {
@@ -5874,10 +5879,8 @@ impl Edges<'_> {
     /// reader. It is a real use, and liveness that does not carry it gives
     /// the counter's register to a value live across the loop.
     fn for_counter(&self, at: usize) -> Option<ValueId> {
-        let InstKind::For { source, body, .. } = &self.insts[at].kind else {
-            return None;
-        };
-        Some(self.block_params(body)[source.counter_param()])
+        let Traversal { source, body, .. } = acvus_mir::ir::traversal(&self.insts[at].kind)?;
+        Some(self.block_params(&body)[source.counter_param()])
     }
 }
 
@@ -6038,23 +6041,24 @@ fn edge_moves(edges: &Edges<'_>) -> Vec<EdgeMove> {
                     edge(label, args);
                 }
             }
-            InstKind::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
+            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+                let Traversal {
+                    source,
+                    body,
+                    body_args,
+                    exit,
+                    exit_trip,
+                    exit_args,
+                } = acvus_mir::ir::traversal(kind).expect("a `For` or a `ForParts`");
                 carried_moves(
                     &mut moves,
-                    exit_trip.carried_params(edges.block_params(exit)),
+                    exit_trip.carried_params(edges.block_params(&exit)),
                     exit_args,
                 );
                 carried_moves(
                     &mut moves,
-                    source.carried_params(edges.block_params(body)),
-                    body_args,
+                    source.carried_params(edges.block_params(&body)),
+                    &body_args,
                 );
             }
             _ => {}

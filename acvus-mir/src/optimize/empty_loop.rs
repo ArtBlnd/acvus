@@ -16,7 +16,9 @@ use acvus_ast::{Literal, Span};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::loops::{NaturalLoop, natural_loops_innermost_first};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
-use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::ir::{
+    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, Traversal, ValOrigin, ValueId,
+};
 use crate::optimize::dce;
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
 
@@ -58,16 +60,13 @@ fn first_empty(cfg: &CfgBody) -> Option<Empty> {
 impl Empty {
     fn of(cfg: &CfgBody, loop_: &NaturalLoop) -> Option<Empty> {
         let header = &cfg.blocks[loop_.header.0];
-        let Terminator::For {
+        let Traversal {
             source,
             exit,
             exit_trip,
             exit_args,
             ..
-        } = &header.terminator
-        else {
-            return None;
-        };
+        } = header.terminator.traversal()?;
         if !header.params.is_empty() || !header.insts.is_empty() {
             return None;
         }
@@ -89,13 +88,13 @@ impl Empty {
         if !body_does_nothing {
             return None;
         }
-        let count = Count::of(cfg, *source)?;
+        let count = Count::of(cfg, source)?;
         Some(Empty {
             header: loop_.header,
             count,
-            exit: *exit,
-            exit_trip: *exit_trip,
-            exit_args: exit_args.clone(),
+            exit,
+            exit_trip,
+            exit_args: exit_args.to_vec(),
         })
     }
 }

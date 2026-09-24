@@ -387,6 +387,286 @@ impl ExitTrip {
     }
 }
 
+/// One part of a `ForParts` (RFC-0089 rule 1). `carried` is the part's run
+/// of the header parameters, which the body edge passes on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    pub entry: Label,
+    pub carried: Vec<ValueId>,
+    pub kind: PartKind,
+}
+
+impl Part {
+    pub fn fold_storages_mut(&mut self) -> impl Iterator<Item = &mut ValueId> {
+        let accs: &mut [Accumulator] = match &mut self.kind {
+            PartKind::Law(accs) => accs,
+            PartKind::Sequential => &mut [],
+        };
+        accs.iter_mut().filter_map(|acc| match &mut acc.law {
+            Law::Fold(fold) => Some(&mut fold.storage),
+            Law::Op(_) | Law::Call(_) | Law::Order => None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartKind {
+    /// One accumulator per carried value, in `carried`'s order, then one
+    /// `Law::Fold` per storage the part folds into.
+    Law(Vec<Accumulator>),
+    Sequential,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Accumulator {
+    pub law: Law,
+    pub exact: bool,
+    pub commutative: bool,
+}
+
+/// RFC-0089 rule 4's closed vocabulary. `analysis::carried` is the
+/// recognizer every law enters it through.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Law {
+    Op(LawOp),
+    Call(CallLaw),
+    Fold(FoldAccumulator),
+    /// The `Order` of an `anyorder` region, joined by `Merge`.
+    Order,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LawOp {
+    Add,
+    Mul,
+}
+
+impl LawOp {
+    pub fn bin_op(self) -> BinOp {
+        match self {
+            Self::Add => BinOp::Add,
+            Self::Mul => BinOp::Mul,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallLaw {
+    pub callee: QualifiedRef,
+    pub instance: usize,
+    pub identity: CallIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallIdentity {
+    Declared,
+    /// The extern declares no identity, so a chunk's monoid is `Option` of
+    /// the type with `None` as its identity. The lifting is the lowerer's to
+    /// write when it chunks the part; MIR records only that it is needed.
+    OptionLifted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FoldAccumulator {
+    pub storage: ValueId,
+    pub callee: QualifiedRef,
+    pub instance: usize,
+    pub fold: crate::laws::FoldLaw,
+}
+
+/// A `For` or a `ForParts`, read as the traversal both state. The parts of
+/// a `ForParts` run one after another as written (RFC-0089 rule 2), so a
+/// reader of edges reads it as the `For` it replaced, through this, as
+/// [`two_way`] is read for `JumpIf` and `Diamond`.
+pub struct Traversal<'a> {
+    pub source: ForSource,
+    pub body: Label,
+    pub body_args: std::borrow::Cow<'a, [ValueId]>,
+    pub exit: Label,
+    pub exit_trip: ExitTrip,
+    pub exit_args: &'a [ValueId],
+}
+
+pub fn body_args_of(parts: &[Part]) -> Vec<ValueId> {
+    parts.iter().flat_map(|part| part.carried.iter().copied()).collect()
+}
+
+pub struct TraversalMut<'a> {
+    pub source: &'a mut ForSource,
+    pub body: &'a mut Label,
+    pub body_args: BodyArgsMut<'a>,
+    pub exit: &'a mut Label,
+    pub exit_trip: &'a mut ExitTrip,
+    pub exit_args: &'a mut Vec<ValueId>,
+}
+
+pub enum BodyArgsMut<'a> {
+    Listed(&'a mut Vec<ValueId>),
+    Parts(&'a mut [Part]),
+}
+
+impl<'a> BodyArgsMut<'a> {
+    pub fn for_each(&mut self, mut f: impl FnMut(&mut ValueId)) {
+        match self {
+            Self::Listed(args) => args.iter_mut().for_each(f),
+            Self::Parts(parts) => parts
+                .iter_mut()
+                .flat_map(|part| part.carried.iter_mut())
+                .for_each(&mut f),
+        }
+    }
+
+    pub fn values(&self) -> Vec<ValueId> {
+        match self {
+            Self::Listed(args) => args.to_vec(),
+            Self::Parts(parts) => body_args_of(parts),
+        }
+    }
+
+    pub fn into_values_mut(self) -> Vec<&'a mut ValueId> {
+        match self {
+            Self::Listed(args) => args.iter_mut().collect(),
+            Self::Parts(parts) => parts
+                .iter_mut()
+                .flat_map(|part| part.carried.iter_mut())
+                .collect(),
+        }
+    }
+
+    /// A `ForParts` part that is given carried values its kind was not
+    /// found for runs them in order: they join the last part, which becomes
+    /// `Sequential`.
+    pub fn extend(&mut self, values: &[ValueId]) {
+        match self {
+            Self::Listed(args) => args.extend_from_slice(values),
+            Self::Parts(parts) => {
+                let Some(last) = parts.last_mut() else {
+                    panic!("a `ForParts` has at least one part")
+                };
+                last.carried.extend_from_slice(values);
+                if !values.is_empty() {
+                    last.kind = PartKind::Sequential;
+                }
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        let every: Vec<usize> = (0..self.values().len()).collect();
+        self.remove_positions(&every);
+    }
+
+    /// Drops the arguments at `dead`, positions over the whole edge. A
+    /// part's carried value leaves with the accumulator that stands at its
+    /// position.
+    pub fn remove_positions(&mut self, dead: &[usize]) {
+        match self {
+            Self::Listed(args) => {
+                let mut at = 0;
+                args.retain(|_| {
+                    let keep = !dead.contains(&at);
+                    at += 1;
+                    keep
+                });
+            }
+            Self::Parts(parts) => {
+                let mut first = 0;
+                for part in parts.iter_mut() {
+                    let width = part.carried.len();
+                    let local: Vec<usize> = dead
+                        .iter()
+                        .filter_map(|&at| at.checked_sub(first).filter(|&at| at < width))
+                        .collect();
+                    first += width;
+                    let keep: Vec<bool> = (0..width).map(|at| !local.contains(&at)).collect();
+                    let mut kept = keep.iter();
+                    part.carried.retain(|_| *kept.next().expect("one flag per carried value"));
+                    if let PartKind::Law(accs) = &mut part.kind {
+                        let mut at = 0;
+                        accs.retain(|_| {
+                            let keep = keep.get(at).copied().unwrap_or(true);
+                            at += 1;
+                            keep
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn traversal(kind: &InstKind) -> Option<Traversal<'_>> {
+    match kind {
+        InstKind::For {
+            source,
+            body,
+            body_args,
+            exit,
+            exit_trip,
+            exit_args,
+        } => Some(Traversal {
+            source: *source,
+            body: *body,
+            body_args: std::borrow::Cow::Borrowed(body_args),
+            exit: *exit,
+            exit_trip: *exit_trip,
+            exit_args,
+        }),
+        InstKind::ForParts {
+            source,
+            body,
+            parts,
+            exit,
+            exit_trip,
+            exit_args,
+        } => Some(Traversal {
+            source: *source,
+            body: *body,
+            body_args: std::borrow::Cow::Owned(body_args_of(parts)),
+            exit: *exit,
+            exit_trip: *exit_trip,
+            exit_args,
+        }),
+        _ => None,
+    }
+}
+
+pub fn traversal_mut(kind: &mut InstKind) -> Option<TraversalMut<'_>> {
+    match kind {
+        InstKind::For {
+            source,
+            body,
+            body_args,
+            exit,
+            exit_trip,
+            exit_args,
+        } => Some(TraversalMut {
+            source,
+            body,
+            body_args: BodyArgsMut::Listed(body_args),
+            exit,
+            exit_trip,
+            exit_args,
+        }),
+        InstKind::ForParts {
+            source,
+            body,
+            parts,
+            exit,
+            exit_trip,
+            exit_args,
+        } => Some(TraversalMut {
+            source,
+            body,
+            body_args: BodyArgsMut::Parts(parts),
+            exit,
+            exit_trip,
+            exit_args,
+        }),
+        _ => None,
+    }
+}
+
 /// Which of the four heads a `for` was written with (RFC-0057 rule 1).
 /// The checker settles it from the head's type; the lowering reads it and
 /// decides nothing, as it reads an [`IndexAccess`].
@@ -736,6 +1016,16 @@ pub enum InstKind {
         exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
     },
+    /// A `For` whose body states its independent parts (RFC-0089);
+    /// `validate::for_parts` refuses one whose shape is not rule 1's.
+    ForParts {
+        source: ForSource,
+        body: Label,
+        parts: Vec<Part>,
+        exit: Label,
+        exit_trip: ExitTrip,
+        exit_args: Vec<ValueId>,
+    },
     /// Leave the body with `value`; `order` is the `Order` the body yields
     /// last when its effect is not Pure.
     Return {
@@ -842,7 +1132,10 @@ fn successor_labels(insts: &[Inst], at: usize) -> Vec<Label> {
                     .chain(default.iter().map(|(label, _)| *label))
                     .collect();
             }
-            InstKind::For { body, exit, .. } => return vec![*body, *exit],
+            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+                let traversal = traversal(kind).expect("a `For` or a `ForParts`");
+                return vec![traversal.body, traversal.exit];
+            }
             InstKind::Return { .. } | InstKind::Diverge => return Vec::new(),
             _ => {}
         }

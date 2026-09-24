@@ -763,15 +763,11 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
             v.extend(*order);
             v
         }
-        Terminator::For {
-            source,
-            body_args,
-            exit_args,
-            ..
-        } => {
-            let mut v = source.uses().to_vec();
-            v.extend(body_args);
-            v.extend(exit_args);
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal().expect("a `For` or a `ForParts`");
+            let mut v = traversal.source.uses().to_vec();
+            v.extend(traversal.body_args.iter());
+            v.extend(traversal.exit_args);
             v
         }
         Terminator::Switch { tag, arms, default } => {

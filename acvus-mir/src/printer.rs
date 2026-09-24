@@ -7,7 +7,8 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
 use crate::ir::{
-    Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label, MirBody, MirModule, ValueId,
+    Accumulator, CallIdentity, Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label,
+    Law, LawOp, MirBody, MirModule, PartKind, ValueId,
 };
 
 /// Normalizes ValueIds to sequential order of first appearance.
@@ -64,6 +65,31 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
         IndexBound::Checked => "",
         IndexBound::Proven => " proven",
     }
+}
+
+/// `Op(Add) exact commutative`, `Call(#0, option-lifted) exact`,
+/// `Fold(r3, #1) exact`, `Order exact commutative`.
+fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
+    let law = match &acc.law {
+        Law::Op(LawOp::Add) => "Op(Add)".to_string(),
+        Law::Op(LawOp::Mul) => "Op(Mul)".to_string(),
+        Law::Call(call) => {
+            let identity = match call.identity {
+                CallIdentity::Declared => "identity",
+                CallIdentity::OptionLifted => "option-lifted",
+            };
+            format!("Call({}, {identity})", ctx.fmt_fn_id(call.callee))
+        }
+        Law::Fold(fold) => format!(
+            "Fold({}, {})",
+            vn.fmt_val(fold.storage),
+            ctx.fmt_fn_id(fold.callee)
+        ),
+        Law::Order => "Order".to_string(),
+    };
+    let exact = if acc.exact { " exact" } else { " inexact" };
+    let commutative = if acc.commutative { " commutative" } else { "" };
+    format!("{law}{exact}{commutative}")
 }
 
 fn fmt_label(l: Label) -> String {
@@ -730,28 +756,33 @@ fn write_body(
             // that block's label is. An exit edge that defines the trip count
             // prints it as `trip` where the exit block's first parameter
             // takes it: `else L2(trip, r5)` (RFC-0057 rule 9).
-            InstKind::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
+            // `for slice(r3) -> L1(r9, r10) else L2 parts [L1(r9): law(Op(Add)
+            // exact commutative), L3(r10): sequential]` (RFC-0089): the
+            // traversal as a `For` prints it, then each part's entry, its run
+            // of the carried values, and its kind with each law.
+            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
+                let crate::ir::Traversal {
+                    source,
+                    body,
+                    body_args,
+                    exit,
+                    exit_trip,
+                    exit_args,
+                } = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
                 let over = match source {
                     ForSource::Slice(slice) => {
-                        format!("slice({})", vn.fmt_use(*slice, &consts, &texts))
+                        format!("slice({})", vn.fmt_use(slice, &consts, &texts))
                     }
                     ForSource::SliceMut(slice) => {
-                        format!("slice_mut({})", vn.fmt_use(*slice, &consts, &texts))
+                        format!("slice_mut({})", vn.fmt_use(slice, &consts, &texts))
                     }
                     ForSource::Array(array) => {
-                        format!("array({})", vn.fmt_use(*array, &consts, &texts))
+                        format!("array({})", vn.fmt_use(array, &consts, &texts))
                     }
                     ForSource::Range { at, hi } => format!(
                         "range({}..{})",
-                        vn.fmt_use(*at, &consts, &texts),
-                        vn.fmt_use(*hi, &consts, &texts)
+                        vn.fmt_use(at, &consts, &texts),
+                        vn.fmt_use(hi, &consts, &texts)
                     ),
                 };
                 let mut edge = |label: &Label, args: &[ValueId]| {
@@ -765,21 +796,50 @@ fn write_body(
                         )
                     }
                 };
-                let taken = edge(body, body_args);
+                let taken = edge(&body, &body_args);
                 drop(edge);
                 let carried =
                     (!exit_args.is_empty()).then(|| vn.fmt_uses(exit_args, &consts, &texts));
                 let left = match (exit_trip, carried) {
-                    (ExitTrip::Absent, None) => fmt_label(*exit),
+                    (ExitTrip::Absent, None) => fmt_label(exit),
                     (ExitTrip::Absent, Some(carried)) => {
-                        format!("{}({carried})", fmt_label(*exit))
+                        format!("{}({carried})", fmt_label(exit))
                     }
-                    (ExitTrip::Defined, None) => format!("{}(trip)", fmt_label(*exit)),
+                    (ExitTrip::Defined, None) => format!("{}(trip)", fmt_label(exit)),
                     (ExitTrip::Defined, Some(carried)) => {
-                        format!("{}(trip, {carried})", fmt_label(*exit))
+                        format!("{}(trip, {carried})", fmt_label(exit))
                     }
                 };
-                writeln!(f, "for {over} -> {taken} else {left}")?
+                match kind {
+                    InstKind::ForParts { parts, .. } => {
+                        let parts: Vec<String> = parts
+                            .iter()
+                            .map(|part| {
+                                let kind = match &part.kind {
+                                    PartKind::Sequential => "sequential".to_string(),
+                                    PartKind::Law(accs) => {
+                                        let laws: Vec<String> = accs
+                                            .iter()
+                                            .map(|acc| fmt_accumulator(acc, ctx, &mut vn))
+                                            .collect();
+                                        format!("law({})", laws.join(", "))
+                                    }
+                                };
+                                format!(
+                                    "{}({}): {kind}",
+                                    fmt_label(part.entry),
+                                    vn.fmt_uses(&part.carried, &consts, &texts)
+                                )
+                            })
+                            .collect();
+                        writeln!(
+                            f,
+                            "for {over} -> {taken} else {left} parts [{}]",
+                            parts.join(", ")
+                        )?
+                    }
+                    _ => writeln!(f, "for {over} -> {taken} else {left}")?,
+                }
             }
             // `switch r5 { A -> L1, B -> L2, _ -> L3 }`, and a literal
             // dispatch's keys as written: `switch r5 { 1 -> L1, _ -> L2 }`

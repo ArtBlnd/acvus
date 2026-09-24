@@ -606,9 +606,10 @@ impl Incoming {
                         incoming.edge(*label, args);
                     }
                 }
-                Terminator::For { body, exit, .. } => {
-                    incoming.opaque(*body);
-                    incoming.opaque(*exit);
+                term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                    let traversal = term.traversal().expect("a `For` or a `ForParts`");
+                    incoming.opaque(traversal.body);
+                    incoming.opaque(traversal.exit);
                 }
                 Terminator::Fallthrough => {
                     if let Some(next) = cfg.blocks.get(at + 1) {

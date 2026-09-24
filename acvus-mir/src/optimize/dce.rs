@@ -22,7 +22,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, ValueId};
+use std::borrow::Cow;
+
+use crate::ir::{Inst, InstKind, Label, Traversal, ValueId};
 use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
 
@@ -354,7 +356,12 @@ fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
         Terminator::Switch { tag, .. } => vec![*tag],
         // A `For` reads its source on every iteration, so the source is a
         // root of the traversal (RFC-0057).
-        Terminator::For { source, .. } => source.uses().to_vec(),
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => term
+            .traversal()
+            .expect("a `For` or a `ForParts`")
+            .source
+            .uses()
+            .to_vec(),
         Terminator::Jump { .. } | Terminator::Fallthrough | Terminator::Diverge => vec![],
     }
 }
@@ -375,11 +382,10 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => values.extend(then_args.iter().chain(else_args)),
-        Terminator::For {
-            body_args,
-            exit_args,
-            ..
-        } => values.extend(body_args.iter().chain(exit_args)),
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal().expect("a `For` or a `ForParts`");
+            values.extend(traversal.body_args.iter().chain(traversal.exit_args))
+        }
         Terminator::Switch { arms, default, .. } => {
             for (_, _, args) in arms {
                 values.extend(args);
@@ -466,9 +472,9 @@ pub fn run(cfg: &mut CfgBody) {
                         // the first parameter the edge carries an argument for:
                         // a `For`'s body edge starts after the parameters the
                         // terminator fills itself (RFC-0057).
-                        let pred_args: Vec<(usize, &[ValueId])> = match &pred_block.terminator {
+                        let pred_args: Vec<(usize, Cow<'_, [ValueId]>)> = match &pred_block.terminator {
                             Terminator::Jump { label, args } if *label == block_label => {
-                                vec![(0, args.as_slice())]
+                                vec![(0, Cow::Borrowed(args.as_slice()))]
                             }
                             Terminator::JumpIf {
                                 then_label,
@@ -486,34 +492,38 @@ pub fn run(cfg: &mut CfgBody) {
                             } => [(then_label, then_args), (else_label, else_args)]
                                 .into_iter()
                                 .filter(|(label, _)| **label == block_label)
-                                .map(|(_, args)| (0, args.as_slice()))
+                                .map(|(_, args)| (0, Cow::Borrowed(args.as_slice())))
                                 .collect(),
                             Terminator::Switch { arms, default, .. } => arms
                                 .iter()
                                 .map(|(_, label, args)| (label, args))
                                 .chain(default.iter().map(|(label, args)| (label, args)))
                                 .filter(|(label, _)| **label == block_label)
-                                .map(|(_, args)| (0, args.as_slice()))
+                                .map(|(_, args)| (0, Cow::Borrowed(args.as_slice())))
                                 .collect(),
-                            Terminator::For {
-                                source,
-                                body,
-                                body_args,
-                                exit,
-                                exit_trip,
-                                exit_args,
-                            } => [
-                                (body, source.supplied_params(), body_args),
-                                (exit, exit_trip.supplied_params(), exit_args),
-                            ]
-                            .into_iter()
-                            .filter(|(label, _, _)| **label == block_label)
-                            .map(|(_, first, args)| (first, args.as_slice()))
-                            .collect(),
+                            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                                let Traversal {
+                                    source,
+                                    body,
+                                    body_args,
+                                    exit,
+                                    exit_trip,
+                                    exit_args,
+                                } = term.traversal().expect("a `For` or a `ForParts`");
+                                [
+                                    (body, source.supplied_params(), body_args),
+                                    (exit, exit_trip.supplied_params(), Cow::Borrowed(exit_args)),
+                                ]
+                                .into_iter()
+                                .filter(|(label, _, _)| *label == block_label)
+                                .map(|(_, first, args)| (first, args))
+                                .collect()
+                            }
                             _ => Vec::new(),
                         };
                         for (first, args) in pred_args {
-                            if let Some(&arg) = param.checked_sub(first).and_then(|i| args.get(i)) {
+                            if let Some(&arg) = param.checked_sub(first).and_then(|i| args.get(i))
+                            {
                                 worklist.push(arg);
                             }
                         }
@@ -561,18 +571,12 @@ pub fn run(cfg: &mut CfgBody) {
     let supplied: FxHashMap<Label, usize> = cfg
         .blocks
         .iter()
-        .filter_map(|block| match &block.terminator {
-            Terminator::For {
-                source,
-                body,
-                exit,
-                exit_trip,
-                ..
-            } => Some([
-                (*body, source.supplied_params()),
-                (*exit, exit_trip.supplied_params()),
-            ]),
-            _ => None,
+        .filter_map(|block| {
+            let traversal = block.terminator.traversal()?;
+            Some([
+                (traversal.body, traversal.source.supplied_params()),
+                (traversal.exit, traversal.exit_trip.supplied_params()),
+            ])
         })
         .flatten()
         .filter(|(_, pinned)| *pinned > 0)
@@ -639,23 +643,17 @@ pub fn run(cfg: &mut CfgBody) {
                     prune(else_args, dead);
                 }
             }
-            Terminator::For {
-                source,
-                body,
-                body_args,
-                exit,
-                exit_trip,
-                exit_args,
-            } => {
-                let first = source.supplied_params();
-                if let Some(dead) = dead_of(*body) {
+            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+                let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
+                let first = traversal.source.supplied_params();
+                if let Some(dead) = dead_of(*traversal.body) {
                     let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
-                    prune(body_args, &shifted);
+                    traversal.body_args.remove_positions(&shifted);
                 }
-                if let Some(dead) = dead_of(*exit) {
-                    let first = exit_trip.supplied_params();
+                if let Some(dead) = dead_of(*traversal.exit) {
+                    let first = traversal.exit_trip.supplied_params();
                     let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
-                    prune(exit_args, &shifted);
+                    prune(traversal.exit_args, &shifted);
                 }
             }
             Terminator::Switch { arms, default, .. } => {

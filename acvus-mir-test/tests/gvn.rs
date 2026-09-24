@@ -5,7 +5,7 @@
 
 use acvus_ast::Literal;
 use acvus_mir::analysis::affine::for_body;
-use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
+use acvus_mir::cfg::{BlockIdx, CfgBody, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{BinOp, Callee, InstKind};
 use acvus_mir::printer::dump_with;
@@ -80,7 +80,7 @@ fn a_canonicalized_counter_is_the_counter() {
     let full = Compiled::of(COLLATZ, &[int("n")], Opt::Full);
     let [header] = (0..full.cfg.blocks.len())
         .map(BlockIdx)
-        .filter(|block| matches!(full.cfg.blocks[block.0].terminator, Terminator::For { .. }))
+        .filter(|block| full.cfg.blocks[block.0].terminator.traversal().is_some())
         .collect::<Vec<_>>()[..]
     else {
         panic!("one `for`:\n{}", full.listing);

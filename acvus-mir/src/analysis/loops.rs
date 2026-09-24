@@ -284,20 +284,12 @@ pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
                 }
             }
         }
-        Terminator::For {
-            exit,
-            exit_trip: ExitTrip::Absent,
-            exit_args,
-            ..
-        } => {
-            if *exit == label {
-                edges.push(exit_args);
+        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
+            let traversal = term.traversal().expect("a `For` or a `ForParts`");
+            if traversal.exit_trip == ExitTrip::Absent && traversal.exit == label {
+                edges.push(traversal.exit_args);
             }
         }
-        Terminator::For {
-            exit_trip: ExitTrip::Defined,
-            ..
-        } => {}
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
     }
     match edges[..] {
@@ -367,6 +359,27 @@ impl From<Invariant> for Term {
     }
 }
 
+/// Each header parameter a traversal's body edge passes on, with the body
+/// parameter that takes it. A `For` whose body reads the header's
+/// parameters directly passes none; a `ForParts` passes every one
+/// (RFC-0089 rule 1), and an analysis reads the body parameter as the
+/// header parameter it is, so it reads the `ForParts` as the `For` it
+/// replaced.
+pub fn passed_into_body(cfg: &CfgBody, header: BlockIdx) -> FxHashMap<ValueId, ValueId> {
+    let Some(traversal) = cfg.blocks[header.0].terminator.traversal() else {
+        return FxHashMap::default();
+    };
+    let header_params = &cfg.blocks[header.0].params;
+    let body_params = &cfg.blocks[cfg.label_to_block[&traversal.body].0].params;
+    traversal
+        .body_args
+        .iter()
+        .zip(traversal.source.carried_params(body_params))
+        .filter(|(passed, _)| header_params.contains(passed))
+        .map(|(passed, taken)| (*passed, *taken))
+        .collect()
+}
+
 /// The loop headers a terminator names, with the traversal each one is
 /// (RFC-0057 rule 3). A `for` header is a loop header by what ends it, so
 /// a reader that wants the loop and its induction variable asks the
@@ -376,8 +389,9 @@ pub fn for_headers(cfg: &CfgBody) -> FxHashMap<BlockIdx, ForSource> {
         .iter()
         .enumerate()
         .filter_map(|(bi, block)| match &block.terminator {
-            Terminator::For { source, .. } => Some((BlockIdx(bi), *source)),
-            _ => None,
+            term => term
+                .traversal()
+                .map(|traversal| (BlockIdx(bi), traversal.source)),
         })
         .collect()
 }

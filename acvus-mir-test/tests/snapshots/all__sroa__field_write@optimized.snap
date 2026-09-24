@@ -6,10 +6,10 @@ expression: listing
      0 |   r0 = fetch @n
      3 |   jump L0(0 (r1))
      4 | L0(r2: i64):
-     5 |   for range(0 (r3)..r0) -> L1 else L2
-     6 | L1(r4: i64):
-     7 |   r5 = r2 + r4
-     8 |   jump L0(r5)
+     5 |   for range(0 (r3)..r0) -> L1(r2) else L2 parts [L1(r2): law(Op(Add) exact commutative)]
+     6 | L1(r4: i64, r5: i64):
+     7 |   r6 = r5 + r4
+     8 |   jump L0(r6)
      9 | L2:
     10 |   commit @n = r0
     11 |   return r2
@@ -19,29 +19,30 @@ expression: listing
     ; r2 (v26) : i64
     ; r3 (v7) : i64
     ; r4 (v27) : i64
-    ; r5 (v14) : i64
-    ; r6 (v22) : i64
-    ; r7 (v25) : i64
-    ; r8 (p) : {x: i64, y: i64}
-    ; r9 (i) : i64
-    ; r10 (v28) : i64
-    ; r11 (p.x) : i64
-    ; r12 (v31) : i64
-    ; r13 (v30) : i64
-    ; r14 (i) : i64
-    ; r15 (v11) : Bool
-    ; r16 (v20) : i64
-    ; r17 (v17) : i64
-    ; r18 (v23) : i64
-    ; r19 (@n) : i64
-    ; r20 (i) : i64
-    ; r21 (p.x) : i64
-    ; r22 (v21) : i64
-    ; r23 (v24) : i64
-    ; r24 (v5) : {x: i64, y: i64}
-    ; r25 (v4) : i64
-    ; r26 (v29) : i64
-    ; r27 (@n) : i64
-    ; r28 (i) : i64
-    ; r29 (v16) : i64
-    ; r30 (v19) : i64
+    ; r5 (v32) : i64
+    ; r6 (v14) : i64
+    ; r7 (v22) : i64
+    ; r8 (v25) : i64
+    ; r9 (p) : {x: i64, y: i64}
+    ; r10 (i) : i64
+    ; r11 (v28) : i64
+    ; r12 (p.x) : i64
+    ; r13 (v31) : i64
+    ; r14 (v11) : Bool
+    ; r15 (v30) : i64
+    ; r16 (v17) : i64
+    ; r17 (@n) : i64
+    ; r18 (v20) : i64
+    ; r19 (v4) : i64
+    ; r20 (v23) : i64
+    ; r21 (i) : i64
+    ; r22 (p.x) : i64
+    ; r23 (v21) : i64
+    ; r24 (v24) : i64
+    ; r25 (v5) : {x: i64, y: i64}
+    ; r26 (i) : i64
+    ; r27 (v29) : i64
+    ; r28 (@n) : i64
+    ; r29 (i) : i64
+    ; r30 (v16) : i64
+    ; r31 (v19) : i64
