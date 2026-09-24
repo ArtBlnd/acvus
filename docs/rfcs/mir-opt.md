@@ -300,9 +300,9 @@ second is the case the hoist cannot reach: control equivalence keeps a
 `Const` inside the body, yet it reads nothing and writes the same word every
 time. Such a constant is re-emitted above the header, not moved.
 
-**Only a counter read in an `InOrder` join is reduced** (RFC-0066 rule
-7). A counter that feeds a pure stage or an unordered join is canonicalized
-instead, so each iteration computes `i * k + x` from its own `i`. A derived
+**Only a counter expression read in one `InOrder` join is reduced**
+(RFC-0066 rule 7), after the stages are written; its step joins that join.
+Elsewhere each iteration computes `i * k + x` from its own `i`. A derived
 counter would carry that value from the previous iteration and order what
 reads it. An `InOrder` join runs in order already, so the reduction costs
 it nothing.
@@ -507,14 +507,17 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    is its `&mut` source's element, joined `Disjoint`.
 
 7. **One normalization per induction variable.** IV canonicalization
-   rewrites an `Iv` into `base + k·step` in the body, `k` read off the
-   counter, and `base + trip·step` where it is read after the loop, from
-   the count the exit edge defines (RFC-0057 rule 9), whenever the `Iv`
-   feeds a join that is not `InOrder` or a pure stage. Strength reduction
-   (RFC-0056) applies to an `Iv` whose readers all sit in an `InOrder`
-   join, which runs in order anyway. The choice is per variable, not per
-   loop. A `while` is declined, since it states no count; a later exact
-   recognizer makes it a `for`, and this pass applies to that unchanged.
+   rewrites every `Iv` of a `for` that anything besides its own step reads
+   into `base + k·step` in the body, `k` read off the counter, and
+   `base + trip·step` where it is read after the loop, from the count the
+   exit edge defines (RFC-0057 rule 9). A rewritten `Iv` is carried no
+   longer, so it is no target and orders nothing. The choice is per
+   variable, not per loop, and reads nothing the stage pass decides. After
+   the stages are written, strength reduction (RFC-0056) reduces a counter
+   expression whose readers all sit in one `InOrder` join, and its step
+   joins that join. A `while` is declined, since it states no count; a later
+   exact recognizer makes it a `for`, and this pass applies to that
+   unchanged.
 
 8. **A cost table is the backend's, supplied from outside.** The embedder
    gives the lowerer one table for the backend it runs. The table has a row
@@ -664,8 +667,9 @@ states. How either runs is the lowerer's (RFC-0066 rule 10).
    scattered over chunks exists.
 
 8. **Who writes it.** A pass after IV canonicalization, which is decided
-   per target rather than per loop (RFC-0066 rule 7), and after every pass
-   that moves or merges the body's instructions, writes the stages. It
+   per variable rather than per loop (RFC-0066 rule 7), and after every pass
+   that moves or merges the body's instructions, writes the stages;
+   strength reduction runs after it, inside `InOrder` joins. It
    duplicates nothing: an instruction two joins share joins them. A loop
    the pass cannot split is one `InOrder` join over everything it
    touches, and runs as written.
