@@ -51,7 +51,8 @@ pub fn split_context(
     let mut snapshot = HashMap::new();
     for (name, TypedValue { ty, value }) in context {
         types.insert(name, ty);
-        snapshot.insert(interner.resolve(name).to_string(), Owned::from_value(value));
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        snapshot.insert(interner.resolve(name).to_string(), unsafe { Owned::from_value(value) });
     }
     (types, snapshot)
 }
@@ -581,7 +582,8 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
                 Value::array(
                     items
                         .into_iter()
-                        .map(|t| Owned::from_value(t.value))
+                        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                        .map(|t| unsafe { Owned::from_value(t.value) })
                         .collect(),
                 ),
             )
@@ -593,7 +595,8 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
                 let key = interner.intern(k);
                 let TypedValue { ty, value } = value_from_json(interner, v);
                 tys.insert(key, ty);
-                values.push((key, Owned::from_value(value)));
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                values.push((key, unsafe { Owned::from_value(value) }));
             }
             typed(
                 Ty::Object(ObjectTy::written(tys)),
@@ -631,9 +634,12 @@ pub fn user_context(interner: &Interner) -> Context {
             Value::object_by_name(
                 interner,
                 [
-                    (name, Owned::from_value(Value::string("alice"))),
-                    (age, Owned::from_value(Value::int(30))),
-                    (email, Owned::from_value(Value::string("alice@example.com"))),
+                    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                    (name, unsafe { Owned::from_value(Value::string("alice")) }),
+                    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                    (age, unsafe { Owned::from_value(Value::int(30)) }),
+                    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                    (email, unsafe { Owned::from_value(Value::string("alice@example.com")) }),
                 ],
             ),
         ),
@@ -649,7 +655,8 @@ pub fn items_context(interner: &Interner, items: Vec<i64>) -> Context {
             Value::array(
                 items
                     .into_iter()
-                    .map(|n| Owned::from_value(Value::int(n)))
+                    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                    .map(|n| unsafe { Owned::from_value(Value::int(n)) })
                     .collect(),
             ),
         ),
@@ -748,12 +755,16 @@ pub mod corpus {
     /// The standard registries and the corpus's own: `opaque(x)` and
     /// `opaque_async(x)` answer `x` at effect `opaque`, which no standard
     /// function has, so a program can hand the checker an effectful
-    /// function (RFC-0014).
+    /// function (RFC-0014). `keep`, `keep_in_state` and `keep_on_thread`
+    /// keep what they are handed past the call, which their opaque `T`
+    /// admits, and `pass` hands its argument back through a lent `T`
+    /// (RFC-0079 rule 8).
     fn registries() -> Vec<acvus_extern::Registry<acvus_interpreter::AcvusRuntime>> {
         let mut registries = acvus_ext::std_registries();
         registries.push(acvus_extern::extern_registry! {
             ns: "corpus",
-            fns: [opaque, opaque_async],
+            fns: [opaque, opaque_async, keep, keep_on_thread, keep_in_state(Stash::default()),
+                  pass],
         });
         registries
     }
@@ -767,6 +778,58 @@ pub mod corpus {
     async fn opaque_async(x: i64) -> i64 {
         x
     }
+
+    #[acvus_extern::extern_fn(effect = pure, unsafe(lent(T)))]
+    fn pass<T>(x: T) -> T
+    where
+        T: acvus_extern::Var<acvus_extern::kind::Type>,
+    {
+        x
+    }
+
+    thread_local! {
+        static KEPT: std::cell::RefCell<Option<Box<dyn std::any::Any>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Answers what the call before kept. At run time every `T` is the
+    /// runtime's value, so the downcast cannot tell two `T`s apart: a
+    /// program calls it at one type.
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn keep<T>(x: T) -> Option<T>
+    where
+        T: acvus_extern::Var<acvus_extern::kind::Type>,
+    {
+        let kept = KEPT.with(|k| k.replace(Some(Box::new(x))))?;
+        Some(*kept.downcast::<T>().expect("probe: kept a T"))
+    }
+
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn keep_on_thread<T>(x: T) -> i64
+    where
+        T: acvus_extern::Var<acvus_extern::kind::Type>,
+    {
+        std::thread::spawn(move || {
+            std::thread::sleep(HELD_ON_THREAD);
+            drop(x);
+        });
+        0
+    }
+
+    const HELD_ON_THREAD: std::time::Duration = std::time::Duration::from_millis(20);
+
+    #[derive(Default)]
+    struct Stash(std::sync::Mutex<Option<Box<dyn std::any::Any + Send>>>);
+
+    #[acvus_extern::extern_fn(effect = opaque)]
+    fn keep_in_state<T>(#[state] stash: &Stash, x: T) -> Option<T>
+    where
+        T: acvus_extern::Var<acvus_extern::kind::Type>,
+    {
+        let kept = stash.0.lock().expect("probe").replace(Box::new(x))?;
+        Some(*kept.downcast::<T>().expect("probe: kept a T"))
+    }
+
 
     /// One source the corpus holds, with the call site it was written at.
     #[derive(Clone)]

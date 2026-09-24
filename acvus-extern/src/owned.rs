@@ -38,13 +38,30 @@ where
     R: Runtime,
 {
     /// The runtime's and the glue's: a handler never names an `Owned`
-    /// (RFC-0068 rule 4). Only `Owned` is made from a bare value without
-    /// `unsafe`: any other `Erased` names the type its value was erased
-    /// from, and that is `FromValue::from_value`'s claim.
+    /// (RFC-0068 rule 4). `Owned` names no type its value was erased from,
+    /// so this claims less than `FromValue::from_value`: only that the
+    /// holder owns the word.
+    ///
+    /// # Safety
+    /// No other holder owns `value`: it was moved out of the one that did,
+    /// or it owns nothing. `R::Value` is `Copy`, so a word read out of a
+    /// live holder (`Erased`'s `Deref`) and made an `Owned` here would be
+    /// released twice, and a word kept past the call it was lent to would
+    /// come back as a value holding a loan that ended (RFC-0079 rule 8).
     #[doc(hidden)]
     #[inline(always)]
-    pub fn from_value(value: R::Value) -> Self {
+    pub unsafe fn from_value(value: R::Value) -> Self {
         Self::holding(value)
+    }
+
+    /// `value` erased into a holder of its own: `erase` consumes it, so no
+    /// other holder owns the word.
+    #[inline(always)]
+    pub fn erased<T, Rep>(rt: &R, value: T) -> Self
+    where
+        T: crate::OneValue<R, Rep>,
+    {
+        Self::holding(value.erase(rt))
     }
 
     /// A holder of the runtime's default value, which owns nothing. Written
@@ -59,8 +76,13 @@ where
     /// The held value, to replace in place. On `Owned` alone and not as
     /// `DerefMut`, for `vacant`'s reason: a value written into an
     /// `Erased<R, T>` would have to be one erased from a `T`.
+    ///
+    /// # Safety
+    /// A word written through the result is owned by no other holder, as
+    /// `from_value`'s, and the word it replaces is released or moved out
+    /// by the caller.
     #[inline(always)]
-    pub fn value_mut(&mut self) -> &mut R::Value {
+    pub unsafe fn value_mut(&mut self) -> &mut R::Value {
         self.held_mut()
     }
 }

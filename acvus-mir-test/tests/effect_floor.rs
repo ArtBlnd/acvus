@@ -22,6 +22,7 @@ fn declared(i: &Interner, name: &str, ty: PolyTy, effect_bounds: Vec<EffectVarBo
             effect_bounds,
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }
@@ -71,10 +72,12 @@ fn pull(i: &Interner) -> Function {
                     effect_bounds: vec![EffectVarBound::Suspends],
                     laws: Default::default(),
                     ensures: Vec::new(),
+                    vars: acvus_mir::ty::VarsStated::Elsewhere,
                 }],
                 generic: None,
             },
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }

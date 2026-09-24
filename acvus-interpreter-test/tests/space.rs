@@ -46,7 +46,8 @@ type ValueDeque = Deque<Owned<AcvusRuntime>>;
 fn deque_of(rt: &AcvusRuntime, items: impl IntoIterator<Item = Value>) -> Value {
     let mut d = ValueDeque::default();
     for v in items {
-        d.push_back(Owned::from_value(v));
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        d.push_back(unsafe { Owned::from_value(v) });
     }
     // SAFETY: a `ValueDeque` erased as itself; the space's hooks read it back as that.
     unsafe { rt.erase::<ValueDeque>(d) }
@@ -85,17 +86,20 @@ fn a_value_of_a_language_shape_comes_back_equal() {
     let mut value = Value::object_by_name(
         &i,
         [
-            (i.intern("name"), Owned::from_value(Value::string("acvus"))),
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            (i.intern("name"), unsafe { Owned::from_value(Value::string("acvus")) }),
             (
                 i.intern("scores"),
-                Owned::from_value(Value::array(vec![
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                unsafe { Owned::from_value(Value::array(vec![
                     Owned::from_value(Value::int(7)),
                     Owned::from_value(Value::int(-3)),
-                ])),
+                ])) },
             ),
             (
                 i.intern("tag"),
-                Owned::from_value(Value::some(Value::bool_(true))),
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                unsafe { Owned::from_value(Value::some(Value::bool_(true))) },
             ),
         ],
     );
@@ -132,9 +136,11 @@ fn a_deque_s_commit_is_its_ops_replayed_from_the_last_checkpoint() {
 
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
-        d.push_back(Owned::from_value(Value::int(3)));
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        d.push_back(unsafe { Owned::from_value(Value::int(3)) });
         assert_eq!(d.pop_front().map(|v| v.as_int()), Some(1));
-        d.push_front(Owned::from_value(Value::int(0)));
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        d.push_front(unsafe { Owned::from_value(Value::int(0)) });
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     assert_eq!(space.node_count(), 4, "one state and three ops");
@@ -156,7 +162,8 @@ fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
         for n in 1..=5 {
-            d.push_back(Owned::from_value(Value::int(n)));
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            d.push_back(unsafe { Owned::from_value(Value::int(n)) });
         }
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
@@ -164,7 +171,8 @@ fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
     assert_eq!(space.node_count(), 7);
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
-        d.push_back(Owned::from_value(Value::int(6)))
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        d.push_back(unsafe { Owned::from_value(Value::int(6)) })
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     assert_eq!(
@@ -186,7 +194,8 @@ fn in_plain_mode_a_commit_is_one_state_node() {
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
-        d.push_back(Owned::from_value(Value::int(2)))
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        d.push_back(unsafe { Owned::from_value(Value::int(2)) })
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     assert_eq!(space.node_count(), 2);
@@ -219,7 +228,8 @@ fn a_deque_nested_in_a_deque_has_its_own_log() {
     with_deque(&rt, &loaded, |outer| {
         let first = outer.get_mut(0).expect("two inner deques");
         with_deque(&rt, first, |inner| {
-            inner.push_back(Owned::from_value(Value::int(2)))
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            inner.push_back(unsafe { Owned::from_value(Value::int(2)) })
         });
     });
     space.commit(&rt, "dd", &ty, &mut loaded).unwrap();
@@ -248,8 +258,10 @@ fn a_head_that_moved_refuses_the_commit() {
     space.commit(&rt, "d", &ty, &mut d).unwrap();
     let mut a = space.load(&rt, "d", &ty).unwrap().unwrap();
     let mut b = space.load(&rt, "d", &ty).unwrap().unwrap();
-    with_deque(&rt, &a, |d| d.push_back(Owned::from_value(Value::int(2))));
-    with_deque(&rt, &b, |d| d.push_back(Owned::from_value(Value::int(3))));
+    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+    with_deque(&rt, &a, |d| d.push_back(unsafe { Owned::from_value(Value::int(2)) }));
+    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+    with_deque(&rt, &b, |d| d.push_back(unsafe { Owned::from_value(Value::int(3)) }));
     space.commit(&rt, "d", &ty, &mut a).unwrap();
     let err = space
         .commit(&rt, "d", &ty, &mut b)
@@ -290,7 +302,8 @@ async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
         .find(|w| w.key == "d")
         .expect("d was written")
         .value;
-    space.commit(&rt, "d", &ty, written.value_mut()).unwrap();
+    // SAFETY: `commit` edits the value in place and writes no word into it.
+    space.commit(&rt, "d", &ty, unsafe { written.value_mut() }).unwrap();
     assert_eq!(space.node_count(), 3, "the state and two ops");
     assert_eq!(
         ints(&rt, &space.load(&rt, "d", &ty).unwrap().unwrap()),
@@ -316,7 +329,8 @@ fn a_directory_store_holds_nodes_and_heads_across_openings() {
         space.commit(&rt, "d", &ty, &mut d).unwrap();
         let mut loaded = space.load(&rt, "d", &ty).unwrap().unwrap();
         with_deque(&rt, &loaded, |d| {
-            d.push_back(Owned::from_value(Value::int(2)))
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            d.push_back(unsafe { Owned::from_value(Value::int(2)) })
         });
         space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     }
@@ -428,10 +442,12 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let obj = Value::object_by_name(
         &i,
         [
-            (i.intern("name"), Owned::from_value(Value::string("a"))),
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            (i.intern("name"), unsafe { Owned::from_value(Value::string("a")) }),
             (
                 i.intern("log"),
-                Owned::from_value(deque_of(&rt, [Value::int(1)])),
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                unsafe { Owned::from_value(deque_of(&rt, [Value::int(1)])) },
             ),
         ],
     );
@@ -448,7 +464,8 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
         let obj = outer.get_mut(0).unwrap();
         let log = unsafe { obj.value_mut().field_by_name_mut(i.intern("log")) }.unwrap();
         with_deque(&rt, log, |inner| {
-            inner.push_back(Owned::from_value(Value::int(2)))
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            inner.push_back(unsafe { Owned::from_value(Value::int(2)) })
         });
     });
     space.commit(&rt, "o", &ty, &mut loaded).unwrap();
@@ -493,7 +510,8 @@ fn a_host_s_mode_decides_the_nodes_and_the_history_reads_back() {
     for n in 1..=3 {
         let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
         with_deque(&rt, &loaded, |d| {
-            d.push_back(Owned::from_value(Value::int(n)))
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            d.push_back(unsafe { Owned::from_value(Value::int(n)) })
         });
         space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     }
@@ -585,7 +603,7 @@ where
             .ok_or_else(|| SpaceError::new("Tally: truncated count"))?;
         *input = rest;
         let items = (0..u64::from_le_bytes(*count))
-            .map(|_| elem(ty, input).map(Owned::from_value))
+            .map(|_| elem(ty, input))
             .collect::<SpaceResult<Vec<_>>>()?;
         let settled = items.len();
         Ok(Tally(
@@ -624,7 +642,7 @@ where
         op: &mut &[u8],
     ) -> SpaceResult<()> {
         let ty = tally_element(type_args)?;
-        self.0.items.push(Owned::from_value(elem(ty, op)?));
+        self.0.items.push(elem(ty, op)?);
         self.0.settled = self.0.items.len();
         Ok(())
     }
@@ -632,7 +650,7 @@ where
     fn children(&mut self, type_args: &[Ty], visit: &mut Visit<'_, Rt>) -> SpaceResult<()> {
         let ty = tally_element(type_args)?;
         for item in &mut self.0.items {
-            visit(ty, item.value_mut())?;
+            visit(ty, item)?;
         }
         Ok(())
     }
@@ -695,7 +713,8 @@ fn tally_of(rt: &AcvusRuntime, items: impl IntoIterator<Item = i64>) -> Value {
         TallyState {
             items: items
                 .into_iter()
-                .map(|n| Owned::from_value(Value::int(n)))
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                .map(|n| unsafe { Owned::from_value(Value::int(n)) })
                 .collect(),
             settled: 0,
             head: None,

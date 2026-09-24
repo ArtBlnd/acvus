@@ -1314,9 +1314,12 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
         "a slice-returning declaration takes one container and hands back two words"
     );
     let storage = erased(vec![
-        Owned::<Tiny>::from_value(erased(1i64)),
-        Owned::<Tiny>::from_value(erased(2i64)),
-        Owned::<Tiny>::from_value(erased(3i64)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(1i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(2i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(3i64)) },
     ]);
     // SAFETY: `storage` outlives every run taken from it here (RFC-0018).
     let container = || unsafe { Tiny.reference(&storage) };
@@ -1464,8 +1467,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     );
 
     let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
-        Owned::from_value(erased(1i64)),
-        Owned::from_value(erased(2i64)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(erased(1i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(erased(2i64)) },
     ]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]);
     // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
@@ -1496,8 +1501,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let point = erased(acvus_extern::Obj::new(
         acvus_extern::ObjectShape::of(&SYMBOLS, [Tiny.symbol("x"), Tiny.symbol("label")]),
         Box::new([
-            Owned::<Tiny>::from_value(erased("p".to_owned())),
-            Owned::from_value(erased(21i64)),
+            // SAFETY: the word is made here, and no other holder owns it.
+            unsafe { Owned::<Tiny>::from_value(erased("p".to_owned())) },
+            // SAFETY: the word is made here, and no other holder owns it.
+            unsafe { Owned::from_value(erased(21i64)) },
         ]),
     ));
     let out = call_async(handler(&reg, &i, "fetch"), vec![point]).await;
@@ -1522,8 +1529,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 fn a_lent_element_names_the_containers_own_storage() {
     let (i, reg) = combined::<Tiny>();
     let storage = erased(vec![
-        Owned::<Tiny>::from_value(erased(10i64)),
-        Owned::<Tiny>::from_value(erased(20i64)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(10i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(20i64)) },
     ]);
     // SAFETY: `storage` outlives every reference taken from it here.
     let container = || unsafe { Tiny.reference(&storage) };
@@ -1550,8 +1559,10 @@ fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
     let held = call_sync(
         handler(&reg, &i, "held"),
         vec![erased(vec![
-            Owned::<Tiny>::from_value(erased(41i64)),
-            Owned::<Tiny>::from_value(erased(5i64)),
+            // SAFETY: the word is made here, and no other holder owns it.
+            unsafe { Owned::<Tiny>::from_value(erased(41i64)) },
+            // SAFETY: the word is made here, and no other holder owns it.
+            unsafe { Owned::<Tiny>::from_value(erased(5i64)) },
         ])],
     );
     let held_ty = acvus_extern::Ty::UserDefined {
@@ -1633,9 +1644,12 @@ fn a_lent_element_out_of_a_lent_slice_names_the_container() {
 fn a_borrowed_closure_argument_is_a_reference_into_the_handlers_borrow() {
     let (i, reg) = combined::<Tiny>();
     let storage = erased(vec![
-        Owned::<Tiny>::from_value(erased(1i64)),
-        Owned::<Tiny>::from_value(erased(5i64)),
-        Owned::<Tiny>::from_value(erased(9i64)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(1i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(5i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Tiny>::from_value(erased(9i64)) },
     ]);
     // SAFETY: `storage` outlives every reference taken from it here.
     let container = unsafe { Tiny.reference(&storage) };
@@ -2038,9 +2052,12 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     let payload = OneValue::<Tiny>::erase(
         Boxed::<Owned<Tiny>, Pure, Tiny>(
             vec![
-                Owned::from_value(erased(1.5f64)),
-                Owned::from_value(erased(2.5f64)),
-                Owned::from_value(erased(3.5f64)),
+                // SAFETY: the word is made here, and no other holder owns it.
+                unsafe { Owned::from_value(erased(1.5f64)) },
+                // SAFETY: the word is made here, and no other holder owns it.
+                unsafe { Owned::from_value(erased(2.5f64)) },
+                // SAFETY: the word is made here, and no other holder owns it.
+                unsafe { Owned::from_value(erased(3.5f64)) },
             ],
             PhantomData,
         ),
@@ -2163,8 +2180,10 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
         &i,
     );
     let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
-        Owned::from_value(erased(7i64)),
-        Owned::from_value(erased(8i64)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(erased(7i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(erased(8i64)) },
     ]));
     let h = instance_for(&reg, &i, "first", &on_array).unwrap();
     assert_eq!(open::<i64>(call_sync(h, vec![arr])), 7);
@@ -2323,8 +2342,10 @@ fn an_effect_variable_signature_admits_an_effect_instance_and_a_pure_one() {
         &i,
     );
     let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
-        Owned::from_value(erased(7i64)),
-        Owned::from_value(erased(8i64)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(erased(7i64)) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(erased(8i64)) },
     ]));
     let h = instance_for(&reg, &i, "drain", &on_array).expect("the array instance");
     assert_eq!(open::<i64>(call_sync(h, vec![arr])), 2);
@@ -2700,6 +2721,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     names: Vec::new(),
                     laws: acvus_extern::Laws::None,
                     ensures: Vec::new(),
+                    vars: acvus_extern::VarsStated::Here(Vec::new()),
                 }],
             },
             instances: acvus_extern::FxHashMap::from_iter([(

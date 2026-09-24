@@ -1,0 +1,3 @@
+// refuse
+// pass's result borrows `s` through its lent `T` (RFC-0079 rule 6): `s` is written while the result is live.
+let s = "ab".to_string(); let r = pass(&s); s = "c".to_string(); len(r)

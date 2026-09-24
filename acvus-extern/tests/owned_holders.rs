@@ -412,7 +412,8 @@ fn an_owned_releases_its_value_once() {
     let rt = Counted;
     let drops = Drops::default();
     {
-        let _held = Owned::<Counted>::from_value(tracked_value(&rt, &drops));
+        // SAFETY: the word is made here, and no other holder owns it.
+        let _held = unsafe { Owned::<Counted>::from_value(tracked_value(&rt, &drops)) };
         assert_eq!(drops.count(), 0, "the holder has not been let go of yet");
     }
     assert_eq!(drops.count(), 1, "the holder released its value once");
@@ -422,7 +423,8 @@ fn an_owned_releases_its_value_once() {
 fn an_owned_that_gave_its_value_back_releases_nothing() {
     let rt = Counted;
     let drops = Drops::default();
-    let value = Owned::<Counted>::from_value(tracked_value(&rt, &drops)).into_value();
+    // SAFETY: the word is made here, and no other holder owns it.
+    let value = unsafe { Owned::<Counted>::from_value(tracked_value(&rt, &drops)) }.into_value();
     assert_eq!(drops.count(), 0, "the value is out of the holder");
     value.release();
     assert_eq!(drops.count(), 1, "its new owner released it once");
@@ -564,7 +566,8 @@ fn an_option_releases_its_payload_once() {
 fn one_field(rt: &Counted, drops: &Drops) -> acvus_extern::Obj<Owned<Counted>> {
     acvus_extern::Obj::new(
         acvus_extern::ObjectShape::of(&SYMBOLS, [rt.symbol("payload")]),
-        Box::new([Owned::from_value(tracked_value(rt, drops))]),
+        // SAFETY: the word is made here, and no other holder owns it.
+        Box::new([unsafe { Owned::from_value(tracked_value(rt, drops)) }]),
     )
 }
 
@@ -599,8 +602,10 @@ fn an_object_field_taken_out_is_released_by_its_receiver() {
 
 fn carrying(rt: &Counted, drops: &Drops) -> acvus_extern::Variant<Owned<Counted>> {
     acvus_extern::Variant::of(
-        Owned::from_value(rt.variant_tag("Held")),
-        Owned::from_value(tracked_value(rt, drops)),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(rt.variant_tag("Held")) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(tracked_value(rt, drops)) },
     )
 }
 
@@ -639,8 +644,10 @@ fn a_unit_variants_registers_release_nothing() {
     let rt = Counted;
     let drops = Drops::default();
     let unit = acvus_extern::Variant::of(
-        Owned::<Counted>::from_value(rt.variant_tag("Bare")),
-        Owned::from_value(rt.undef()),
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::<Counted>::from_value(rt.variant_tag("Bare")) },
+        // SAFETY: the word is made here, and no other holder owns it.
+        unsafe { Owned::from_value(rt.undef()) },
     );
     drop(unit);
     assert_eq!(drops.count(), 0, "a unit variant holds nothing to release");
@@ -691,7 +698,8 @@ fn a_derived_structs_field_table_is_the_shape_order() {
 // -- `Variant<Owned<Rt>>`: a variant's payload ---------------------------
 
 fn one_payload(rt: &Counted, drops: &Drops) -> Option<Owned<Counted>> {
-    Some(Owned::from_value(tracked_value(rt, drops)))
+    // SAFETY: the word is made here, and no other holder owns it.
+    Some(unsafe { Owned::from_value(tracked_value(rt, drops)) })
 }
 
 #[test]
@@ -1176,7 +1184,8 @@ fn set_releases_the_payload_it_writes_over() {
     let value = acvus_extern::derive::variant::erase(
         &rt,
         "Count",
-        Some(Owned::from_value(tracked_value(&rt, &drops))),
+        // SAFETY: the word is made here, and no other holder owns it.
+        Some(unsafe { Owned::from_value(tracked_value(&rt, &drops)) }),
     );
     {
         // SAFETY: `value` is live and named by nothing else for the borrow.

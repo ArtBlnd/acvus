@@ -796,12 +796,14 @@ impl Value {
     /// RFC-0050 rules 4 and 8's flat variant: the tag register and one payload,
     /// `Undef` where the tag carries none.
     pub fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
-        let payload = payload.unwrap_or_else(|| Owned::from_value(Value::UNDEF));
+        // SAFETY: `UNDEF` owns nothing.
+        let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(Value::UNDEF) });
         Value::variant_of(Value::tag(tag), payload)
     }
 
     pub fn variant_of(tag: Value, payload: Owned<AcvusRuntime>) -> Self {
-        large(&VARIANT, VariantValue::of(Owned::from_value(tag), payload))
+        // SAFETY: a tag is a word that owns nothing.
+        large(&VARIANT, VariantValue::of(unsafe { Owned::from_value(tag) }, payload))
     }
 
     /// The word a tag register holds: the one number a run of the program gives
@@ -1168,11 +1170,14 @@ mod tests {
         let alive = Arc::new(());
         let values: Vec<Owned<AcvusRuntime>> = (0..3)
             .map(|_| {
-                Owned::from_value(unsafe {
+                let word = unsafe {
                     Value::erase(Counted {
                         _alive: Arc::clone(&alive),
                     })
-                })
+                };
+                // SAFETY: `erase` made a fresh word, which no other holder
+                // owns.
+                unsafe { Owned::from_value(word) }
             })
             .collect();
         assert_eq!(Arc::strong_count(&alive), 4);

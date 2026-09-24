@@ -23,6 +23,10 @@ use crate::value::{Kind, Place, PlaceMut, Value};
 /// reaches its place with no branch.
 pub trait Segment: Send + Sync + 'static {
     fn at<'v>(&self, value: &'v Value) -> Place<'v>;
+    /// A place is written only by `move_place`, which moves its word out and
+    /// leaves `Undef`, and by `overwrite`, which releases the word it
+    /// replaces and writes one the operation took: `Owned::value_mut`'s
+    /// contract, which each impl relies on.
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v>;
 }
 
@@ -42,8 +46,9 @@ impl Segment for Field {
 
     #[inline]
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
-        // SAFETY: the preparation read `Object` from the type.
-        PlaceMut::At(unsafe { value.as_object_mut() }[self.0.index()].value_mut())
+        // SAFETY: the preparation read `Object` from the type; the field's
+        // word is written as `Segment::at_mut` states.
+        PlaceMut::At(unsafe { value.as_object_mut()[self.0.index()].value_mut() })
     }
 }
 
@@ -65,7 +70,8 @@ impl<const ARRAY: bool> Segment for Index<ARRAY> {
 
     #[inline]
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
-        // SAFETY (both arms): the preparation read the shape off the type.
+        // SAFETY (both arms): the preparation read the shape off the type;
+        // the element's word is written as `Segment::at_mut` states.
         PlaceMut::At(match ARRAY {
             true => unsafe { value.as_array_mut().0[self.0].value_mut() },
             false => unsafe { value.as_tuple_mut().0[self.0].value_mut() },
@@ -106,8 +112,9 @@ impl Segment for VariantPayload {
 
     #[inline]
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
-        // SAFETY: the preparation read an enum from the type.
-        let held: &mut Value = unsafe { value.as_variant_mut() }.payload_mut().value_mut();
+        // SAFETY: the preparation read an enum from the type; the payload's
+        // word is written as `Segment::at_mut` states.
+        let held: &mut Value = unsafe { value.as_variant_mut().payload_mut().value_mut() };
         debug_assert!(
             held.kind() != Kind::Undef,
             "{PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE}"
@@ -704,7 +711,8 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
-        m.ctx.rt.page.set(&self.key, Owned::from_value(value));
+        // SAFETY: `take` moved the word out of its register.
+        m.ctx.rt.page.set(&self.key, unsafe { Owned::from_value(value) });
         self.next.run(m, r0)
     }
 }

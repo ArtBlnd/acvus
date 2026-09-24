@@ -22,6 +22,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: params
@@ -80,8 +81,10 @@ fn a_lent_place_and_the_reference_to_it_take_different_registers() {
     assert_ne!(register, slot, "{ir}");
 }
 
+/// RFC-0079 rule 9: an effectful call lent a place is not split into a
+/// spawn, so no task holds the loan; it runs before the read of the place.
 #[test]
-fn an_eval_does_not_sink_past_a_read_of_what_its_spawn_holds() {
+fn an_effectful_call_lent_a_place_is_not_spawned() {
     let i = Interner::new();
     let ir = optimized(
         &i,
@@ -89,9 +92,10 @@ fn an_eval_does_not_sink_past_a_read_of_what_its_spawn_holds() {
         Effect::OPAQUE,
     );
     let main = main_body(&ir);
-    let eval = main.find("eval ").expect("the eval");
+    assert!(!main.contains("spawn "), "{ir}");
+    let call = main.find("call #0").expect("the call");
     let read = main.find("take ").expect("the read of x");
-    assert!(eval < read, "{ir}");
+    assert!(call < read, "{ir}");
 }
 
 /// `peek(&mut Int) -> &Int`: a reference result holds its argument's loan
@@ -104,6 +108,7 @@ fn peek(i: &Interner) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

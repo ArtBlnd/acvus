@@ -88,7 +88,8 @@ mod tests {
     fn make_ctx(pairs: Vec<(&str, Value)>) -> InMemoryContext {
         let data: HashMap<String, Owned<AcvusRuntime>> = pairs
             .into_iter()
-            .map(|(k, v)| (k.to_string(), Owned::from_value(v)))
+            // SAFETY: each value is moved in by the caller and held nowhere else.
+            .map(|(k, v)| (k.to_string(), unsafe { Owned::from_value(v) }))
             .collect();
         InMemoryContext::new(data)
     }
@@ -133,15 +134,18 @@ mod tests {
     fn set_after_take_restores_the_key() {
         let ctx = make_ctx(vec![("x", Value::int(1))]);
         assert!(is_int(ctx.take(&run(), "x"), 1));
-        ctx.set("x", Owned::from_value(Value::int(2)));
+        // SAFETY: an integer word owns nothing.
+        ctx.set("x", unsafe { Owned::from_value(Value::int(2)) });
         assert!(is_int(ctx.take(&run(), "x"), 2));
     }
 
     #[test]
     fn take_writes_hands_out_final_values() {
         let ctx = make_ctx(vec![("x", Value::int(1)), ("y", Value::int(9))]);
-        ctx.set("x", Owned::from_value(Value::int(2)));
-        ctx.set("x", Owned::from_value(Value::int(3)));
+        // SAFETY: an integer word owns nothing.
+        ctx.set("x", unsafe { Owned::from_value(Value::int(2)) });
+        // SAFETY: an integer word owns nothing.
+        ctx.set("x", unsafe { Owned::from_value(Value::int(3)) });
         let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].key, "x");
@@ -161,7 +165,8 @@ mod tests {
             .map(|i| {
                 let ctx_ref = Arc::clone(&ctx);
                 std::thread::spawn(move || {
-                    ctx_ref.set("counter", Owned::from_value(Value::int(i)));
+                    // SAFETY: an integer word owns nothing.
+                    ctx_ref.set("counter", unsafe { Owned::from_value(Value::int(i)) });
                     let _ = ctx_ref.take(&run(), "counter");
                 })
             })

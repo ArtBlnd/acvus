@@ -1,0 +1,3 @@
+// refuse
+// keep's `T` is opaque: filled with a reference, a handler keeping its values would keep a loan past the call (RFC-0079 rule 8).
+let v = vec(["hello".to_string()]); let k = match get(&v, 0u64) { Some(p) => keep(p), None => None }; v = vec(["zz".to_string()]); let w = "x".to_string(); match keep(&w) { Some(p) => len(p), None => 0u64 }

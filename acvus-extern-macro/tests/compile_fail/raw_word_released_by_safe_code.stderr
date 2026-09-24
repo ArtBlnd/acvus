@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `acvus_extern::owned::<impl Erased<R, <fn() -> ! as acvus_extern::owned::never::HasOutput>::Output>>::from_value` is unsafe and requires unsafe block
+  --> tests/compile_fail/raw_word_released_by_safe_code.rs:12:10
+   |
+12 |     drop(Owned::<Rt>::from_value(**s));
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

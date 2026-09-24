@@ -502,8 +502,10 @@ fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
     let rt = Counting::default();
     let strings = OneValue::<Counting>::erase(
         Arr::<Owned<Counting>, ()>::new(vec![
-            Owned::from_value(erased_from(&rt, "a".to_owned())),
-            Owned::from_value(erased_from(&rt, "b".to_owned())),
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            unsafe { Owned::from_value(erased_from(&rt, "a".to_owned())) },
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            unsafe { Owned::from_value(erased_from(&rt, "b".to_owned())) },
         ]),
         &rt,
     );

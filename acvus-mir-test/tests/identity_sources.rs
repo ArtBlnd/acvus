@@ -21,6 +21,7 @@ fn iterator_registry(i: &Interner) -> TypeRegistry {
         identity_params: 1,
         region_params: 0,
         specializable: vec![false],
+        vars: vec![],
     })
     .expect("one declaration per name");
     reg
@@ -93,6 +94,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![],
@@ -111,6 +113,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![

@@ -105,8 +105,9 @@ impl Shape {
     /// `value` is a live value of the type this shape was built from.
     unsafe fn copy(&self, ctx: &mut Ctx<'_, Rt>, value: &Value) -> Value {
         let mut copied = |shape: &Shape, part: &Owned<Rt>| {
-            // SAFETY: the caller's contract, at the part's own type.
-            Owned::from_value(unsafe { shape.copy(ctx, part) })
+            // SAFETY: the caller's contract, at the part's own type; `copy`
+            // makes a fresh word, which no other holder owns.
+            unsafe { Owned::from_value(shape.copy(ctx, part)) }
         };
         // SAFETY for every `as_*` below: the caller's contract names the
         // composite each arm reads.
@@ -146,6 +147,8 @@ impl Shape {
                     let held = value.as_variant();
                     let payload = match Shape::arm(arms, held.tag()) {
                         Some(shape) => copied(shape, held.payload()),
+                        // SAFETY (`from_value`, inside the block above):
+                        // `UNDEF` owns nothing.
                         None => Owned::from_value(Value::UNDEF),
                     };
                     Value::variant_of(**held.tag(), payload)

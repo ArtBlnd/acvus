@@ -1236,7 +1236,8 @@ mod tests {
                 .member(tag)
                 .expect("a Result names this side")
                 .register();
-            let payload = acvus_extern::Owned::from_value(crate::value::Value::int(7));
+            // SAFETY: an integer word owns nothing.
+            let payload = unsafe { acvus_extern::Owned::from_value(crate::value::Value::int(7)) };
             let heap = crate::value::Value::variant(tag, Some(payload));
             // SAFETY: `Value::variant` erased a variant.
             let held = unsafe { heap.as_variant() };

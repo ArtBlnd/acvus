@@ -1,0 +1,3 @@
+// refuse
+// `push(&mut v, &t)` writes `t`'s loan into `v` through its lent `T`: `t` is written while `v` is live.
+let s = "ab".to_string(); let t = "cd".to_string(); let v = vec([&s]); push(&mut v, &t); t = "x".to_string(); len(&v)

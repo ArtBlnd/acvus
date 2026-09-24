@@ -36,6 +36,7 @@ fn shaped_like_the_str_view(i: &Interner, ns: &str, name: &str) -> Function {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }

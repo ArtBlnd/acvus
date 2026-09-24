@@ -558,7 +558,9 @@ impl<const LARGE: bool, const WORD: bool> Array<LARGE, WORD> {
     fn lay(&self, regs: &mut Regs<'_>, at: u64) {
         // SAFETY: as `bound`; `at` is below the length that read.
         let slot = unsafe { &mut regs.peek_mut(self.array).as_array_mut().0[at as usize] };
-        let taken: Owned<AcvusRuntime> = std::mem::replace(slot, Owned::from_value(Value::UNDEF));
+        // SAFETY: `UNDEF` owns nothing.
+        let vacant = unsafe { Owned::from_value(Value::UNDEF) };
+        let taken: Owned<AcvusRuntime> = std::mem::replace(slot, vacant);
         regs.store::<LARGE, WORD>(self.elem, taken.into_value());
         regs.set_word(self.index, at);
     }

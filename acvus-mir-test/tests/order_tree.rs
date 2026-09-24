@@ -14,6 +14,7 @@ fn commutative_io(i: &Interner, name: &str) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
@@ -57,6 +58,7 @@ fn a_chain_of_calls_is_one_line() {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(
@@ -91,6 +93,7 @@ fn anyorder_in_a_script_merges_its_calls() {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

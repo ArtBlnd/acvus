@@ -1,5 +1,9 @@
 //! Spawn-split pass: a `FunctionCall` whose effect `runs_apart` becomes a
-//! `Spawn` and an `Eval`.
+//! `Spawn` and an `Eval`, unless an argument has a position (RFC-0079
+//! rule 9): a spawned task can outlive a run that is dropped before its
+//! `Eval`, and a loan an argument holds would then name storage that is
+//! gone. Such a call stays a `FunctionCall`, awaited in the run's own
+//! future.
 //!
 //! This pass does not reorder. Moving independent instructions between a
 //! `Spawn` and its `Eval` is `optimize::reorder`'s job.
@@ -26,7 +30,7 @@ pub fn run(cfg: &mut CfgBody) {
                     ref callee_ty,
                     ref args,
                     order,
-                } if runs_apart(callee_ty) => {
+                } if runs_apart(callee_ty) && !lends(&cfg.val_types, args) => {
                     // Allocate a Handle ValueId.
                     let handle = cfg.val_factory.next();
 
@@ -73,6 +77,16 @@ fn runs_apart(callee_ty: &Ty) -> bool {
     matches!(callee_ty.effect(), Some(e) if e.runs_apart())
 }
 
+/// Whether an argument may hold a loan: its type has a position, or the
+/// body does not type it, so nothing shows it holds none.
+fn lends(val_types: &rustc_hash::FxHashMap<ValueId, Ty>, args: &[ValueId]) -> bool {
+    args.iter().any(|arg| {
+        val_types
+            .get(arg)
+            .is_none_or(|ty| crate::analysis::loans::positions(ty) > 0)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +130,51 @@ mod tests {
     /// Collect all instructions from all blocks (flattened).
     fn all_insts(cfg: &CfgBody) -> Vec<&Inst> {
         cfg.blocks.iter().flat_map(|b| b.insts.iter()).collect()
+    }
+
+    /// RFC-0079 rule 9: a call handed a reference is not spawned, so no
+    /// task holds the loan past a run dropped before its `Eval`.
+    #[test]
+    fn a_call_handed_a_reference_is_not_spawned() {
+        let i = Interner::new();
+        let print_id = QualifiedRef::root(i.intern("print"));
+        let taken = Ty::Ref(
+            crate::ty::Mutability::Shared,
+            Box::new(crate::ty::TypeArg::uniform(Ty::String)),
+        );
+        let print_ty = Ty::Fn {
+            params: vec![Param::new(i.intern("s"), taken.clone())],
+            ret: Box::new(Ty::Unit),
+            captures: vec![],
+            effect: crate::ty::Effect::OPAQUE.into(),
+            flows: crate::ty::Flows::none().into(),
+        };
+        let mut cfg = make_cfg(
+            vec![
+                InstKind::FunctionCall {
+                    dst: v(1),
+                    callee: Callee::Direct(print_id),
+                    callee_ty: print_ty,
+                    args: vec![v(0)],
+                    order: None,
+                },
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
+            ],
+            2,
+        );
+        cfg.val_types.insert(v(0), taken);
+
+        run(&mut cfg);
+
+        let insts = all_insts(&cfg);
+        assert!(
+            matches!(insts[0].kind, InstKind::FunctionCall { .. }),
+            "a call whose argument holds a loan stays a call"
+        );
+        assert!(!insts.iter().any(|inst| matches!(inst.kind, InstKind::Spawn { .. })));
     }
 
     #[test]

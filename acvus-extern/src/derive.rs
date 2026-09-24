@@ -29,7 +29,7 @@ where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    Owned::from_value(value.erase(rt))
+    Owned::erased(rt, value)
 }
 
 /// # Safety

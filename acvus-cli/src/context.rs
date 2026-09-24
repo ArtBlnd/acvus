@@ -67,7 +67,8 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
                     }
                     Some(_) => {}
                 }
-                values.push(Owned::from_value(t.value));
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                values.push(unsafe { Owned::from_value(t.value) });
             }
             let elem = elem.ok_or_else(|| format!("{at}: an empty array has no element type"))?;
             Typed {
@@ -82,7 +83,8 @@ fn typed(interner: &Interner, at: &str, v: &serde_json::Value) -> Result<Typed, 
                 let t = typed(interner, &format!("{at}.{k}"), v)?;
                 let key = interner.intern(k);
                 tys.insert(key, t.ty);
-                values.push((key, Owned::from_value(t.value)));
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                values.push((key, unsafe { Owned::from_value(t.value) }));
             }
             Typed {
                 ty: Ty::Object(ObjectTy::written(tys)),
@@ -108,7 +110,8 @@ pub fn from_text(interner: &Interner, text: &str) -> Result<Loaded, String> {
         loaded.types.insert(interner.intern(k), t.ty);
         loaded
             .snapshot
-            .insert(k.clone(), Owned::from_value(t.value));
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            .insert(k.clone(), unsafe { Owned::from_value(t.value) });
         loaded.raw.insert(k.clone(), v.clone());
     }
     Ok(loaded)

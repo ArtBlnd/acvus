@@ -1270,8 +1270,10 @@ where
     Rt: Runtime,
 {
     let inner: Result<Owned<Rt>, Owned<Rt>> = value
-        .map(|v| Owned::from_value(erase_ok(v, rt)))
-        .map_err(|e| Owned::from_value(erase_err(e, rt)));
+        // SAFETY: each word is the fresh result of erasing the value it
+        // came from, which the erase consumed, so no other holder owns it.
+        .map(|v| unsafe { Owned::from_value(erase_ok(v, rt)) })
+        .map_err(|e| unsafe { Owned::from_value(erase_err(e, rt)) });
     // SAFETY: the language's Result is the runtime's
     // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 rule 7).
     unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
@@ -1358,7 +1360,7 @@ where
         let items: Vec<Owned<Rt>> = self
             .0
             .into_iter()
-            .map(|v| Owned::from_value(v.erase(rt)))
+            .map(|v| Owned::erased(rt, v))
             .collect();
         // SAFETY: the language's array is `Arr<Owned<Rt>, ()>` (RFC-0047 rule 1,
         // RFC-0048 rule 7).

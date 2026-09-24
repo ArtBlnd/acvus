@@ -93,8 +93,8 @@ pub use acvus_mir::laws::{
     BinaryLaws, FoldLaw, Identity, Laws, PostTerm, Postcondition, Relation, Subject,
 };
 pub use acvus_mir::ty::{
-    Alignment, CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, Flow, FlowEnd, Flows, HeldTy, Home, IdentityTerm,
-    LenTerm, no_flow_var,
+    Alignment, CastRule, DeclaredVar, Effect, EffectArg, EffectTerm, EffectVarBound, Flow, FlowEnd, Flows, HeldTy, Home, IdentityTerm,
+    LenTerm, Lending, NotKept, VarsStated, no_flow_var,
     Mutability, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty,
     TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };

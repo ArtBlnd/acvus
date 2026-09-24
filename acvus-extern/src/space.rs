@@ -42,10 +42,10 @@ pub type SpaceResult<T> = Result<T, SpaceError>;
 /// it, and it turns a nested journaled value into its head hash.
 pub type Encode<'a, Rt> =
     dyn Fn(&Ty, &<Rt as Runtime>::Value, &mut Vec<u8>) -> SpaceResult<()> + 'a;
-/// Reads an element of type `Ty` back.
-pub type Decode<'a, Rt> = dyn Fn(&Ty, &mut &[u8]) -> SpaceResult<<Rt as Runtime>::Value> + 'a;
+/// Reads an element of type `Ty` back, in a holder of its own.
+pub type Decode<'a, Rt> = dyn Fn(&Ty, &mut &[u8]) -> SpaceResult<crate::Owned<Rt>> + 'a;
 /// Visits a nested value the space commits before its parent.
-pub type Visit<'a, Rt> = dyn FnMut(&Ty, &mut <Rt as Runtime>::Value) -> SpaceResult<()> + 'a;
+pub type Visit<'a, Rt> = dyn FnMut(&Ty, &mut crate::Owned<Rt>) -> SpaceResult<()> + 'a;
 
 /// An extension type a space can hold. `type_args` are the arguments of
 /// the declared type (`Deque<Int>` gives `[Int]`); every element passes

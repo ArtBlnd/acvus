@@ -20,8 +20,10 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
         Value::object_by_name(
             &i,
             [
-                (name, Owned::from_value(Value::string("alice"))),
-                (age, Owned::from_value(Value::int(30))),
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                (name, unsafe { Owned::from_value(Value::string("alice")) }),
+                // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+                (age, unsafe { Owned::from_value(Value::int(30)) }),
             ],
         ),
     );

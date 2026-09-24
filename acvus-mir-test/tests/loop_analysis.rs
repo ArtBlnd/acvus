@@ -215,6 +215,7 @@ fn emit(i: &Interner) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(

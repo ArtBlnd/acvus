@@ -54,6 +54,37 @@ struct ExternFnAttr {
     sync: Option<Ident>,
     law: Option<law::LawAttr>,
     ensures: Option<ensures::EnsuresAttr>,
+    /// `unsafe(lent(T, ..))`: the type variables the author asserts the
+    /// handler keeps no value of past the call (RFC-0079 rule 8).
+    lent: Vec<Ident>,
+}
+
+/// `lent(T, ..)` inside `unsafe(..)`: the variables it names.
+fn parse_unsafe_lent(input: ParseStream) -> syn::Result<Vec<Ident>> {
+    input.parse::<Token![unsafe]>()?;
+    let outer;
+    syn::parenthesized!(outer in input);
+    let key: Ident = outer.parse()?;
+    if key != "lent" {
+        return Err(syn::Error::new(key.span(), "expected `lent(..)` inside `unsafe(..)`"));
+    }
+    let inner;
+    syn::parenthesized!(inner in outer);
+    let named = inner.parse_terminated(Ident::parse, Token![,])?;
+    if !outer.is_empty() {
+        return Err(outer.error("`unsafe(..)` holds one `lent(..)`"));
+    }
+    Ok(named.into_iter().collect())
+}
+
+/// Refuses `lent` written without `unsafe`: a lent variable is an assertion.
+fn lent_without_unsafe(key: &Ident) -> syn::Error {
+    syn::Error::new(
+        key.span(),
+        "a lent type variable is asserted, not declared: write `unsafe(lent(T))`, accepting \
+         that every value of `T` the handler receives reaches, after the call returns, only \
+         the outputs the signature's flows name for `T` (RFC-0079 rule 8)",
+    )
 }
 
 impl Parse for ExternFnAttr {
@@ -67,9 +98,23 @@ impl Parse for ExternFnAttr {
             sync: None,
             law: None,
             ensures: None,
+            lent: Vec::new(),
         };
         while !input.is_empty() {
+            if input.peek(Token![unsafe]) {
+                if !out.lent.is_empty() {
+                    return Err(input.error("`unsafe(lent(..))` is stated twice: name every variable in one"));
+                }
+                out.lent = parse_unsafe_lent(input)?;
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             let key: Ident = input.parse()?;
+            if key == "lent" {
+                return Err(lent_without_unsafe(&key));
+            }
             if key == "commutative" {
                 out.commutative = true;
                 if !input.is_empty() {
@@ -120,7 +165,7 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     or `ensures`",
+                     `ensures`, or `unsafe(lent(..))`",
                 ));
             }
             if !input.is_empty() {
@@ -1164,6 +1209,12 @@ fn generate_extern_fn(
         }
         None => quote! { ::std::vec::Vec::new() },
     };
+    let declared_vars = vars.declared_var_exprs(&attr.lent)?;
+    let decl_vars = quote! { ::acvus_extern::VarsStated::Here(vec![#(#declared_vars),*]) };
+    let instance_vars = match attr.instance_of {
+        Some(_) => decl_vars.clone(),
+        None => quote! { ::acvus_extern::VarsStated::Elsewhere },
+    };
     // The instances one member of the declaration contributes, in the
     // order `Instances::into_handlers` indexes them.
     let at_member = |member: Option<&Type>| -> Vec<proc_macro2::TokenStream> {
@@ -1176,6 +1227,7 @@ fn generate_extern_fn(
                 admits: ::acvus_extern::Task::Heavy,
                 requires: #instance_requires,
                 effect_bounds: #instance_effect_bounds,
+                vars: #instance_vars,
             }
         };
         let Some(sync_fn) = &attr.sync else {
@@ -1191,6 +1243,7 @@ fn generate_extern_fn(
                     admits: ::acvus_extern::Task::Sync,
                     requires: #instance_requires,
                     effect_bounds: #instance_effect_bounds,
+                    vars: #instance_vars,
                 }
             },
             declared,
@@ -1332,6 +1385,7 @@ fn generate_extern_fn(
                     names: __vars.names(),
                     laws: #laws,
                     ensures: #ensures,
+                    vars: #decl_vars,
                 },
                 instances: __instances,
             };
@@ -1497,6 +1551,9 @@ struct ExternTypeAttr {
     /// `UniformPayload` states, for a payload whose field types the marker
     /// does not reach (RFC-0076).
     uniform_payload: bool,
+    /// `unsafe(lent(T, ..))`: the type parameters the author asserts no
+    /// code of the type keeps a value of past a call (RFC-0079 rule 8).
+    lent: Vec<Ident>,
     /// `space`: the type is a context a space holds, through the author's
     /// `Journaled` impl at the form the runtime holds (RFC-0033).
     space: bool,
@@ -1516,6 +1573,7 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
         name: None,
         ns: None,
         uniform_payload: false,
+        lent: Vec::new(),
         space: false,
     };
     for attr in attrs {
@@ -1533,15 +1591,29 @@ fn parse_extern_type_attr(attrs: &[Attribute]) -> syn::Result<ExternTypeAttr> {
                 out.space = true;
             } else if meta.path.is_ident("unsafe") {
                 meta.parse_nested_meta(|inner| {
-                    if !inner.path.is_ident("uniform_payload") {
-                        return Err(inner.error("expected `uniform_payload`"));
+                    if inner.path.is_ident("uniform_payload") {
+                        out.uniform_payload = true;
+                        return Ok(());
                     }
-                    out.uniform_payload = true;
-                    Ok(())
+                    if inner.path.is_ident("lent") {
+                        return inner.parse_nested_meta(|named| {
+                            let Some(ident) = named.path.get_ident() else {
+                                return Err(named.error("`lent(..)` names type parameters"));
+                            };
+                            out.lent.push(ident.clone());
+                            Ok(())
+                        });
+                    }
+                    Err(inner.error("expected `uniform_payload` or `lent(..)`"))
                 })?;
+            } else if meta.path.is_ident("lent") {
+                let Some(key) = meta.path.get_ident() else {
+                    unreachable!("`is_ident` held")
+                };
+                return Err(lent_without_unsafe(key));
             } else {
                 return Err(meta.error(
-                    "expected `name`, `ns`, `space`, or `unsafe(uniform_payload)`",
+                    "expected `name`, `ns`, `space`, `unsafe(uniform_payload)`, or `unsafe(lent(..))`",
                 ));
             }
             Ok(())
@@ -1759,6 +1831,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     let effect_arg_exprs = vars.effect_arg_exprs();
     let identity_arg_exprs = vars.identity_arg_exprs();
     let n_tys = vars.count(VarKind::Ty);
+    let declared_vars = vars.declared_var_exprs(&attr.lent)?;
     let n_effects = vars.count(VarKind::Effect);
     let n_identities = vars.count(VarKind::Identity);
     if n_identities > 1 {
@@ -2063,6 +2136,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     identity_params: #n_identities,
                     region_params: Self::REGION_PARAMS,
                     specializable: vec![true; #n_tys],
+                    vars: vec![#(#declared_vars),*],
                 }
             }
 
@@ -3190,7 +3264,10 @@ fn generate_enum_ty_arg(
                     #ident::#v { #(#idents),* } => (
                         #tag,
                         ::core::option::Option::Some(
-                            ::acvus_extern::Owned::from_value(#erase),
+                            // SAFETY: the object word is built here from
+                            // fields the arm moved out, so no other holder
+                            // owns it.
+                            unsafe { ::acvus_extern::Owned::from_value(#erase) },
                         ),
                     )
                 });
@@ -3438,7 +3515,9 @@ fn enum_projection(
                     <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
                 };
                 let __at = ::acvus_extern::derive::variant::arm_of(__tag, &__table.tags, #name);
-                let __payload = __variant.payload_mut().value_mut();
+                // SAFETY: the payload word is only handed to its arm's
+                // `project_mut`, whose contract is what is written through it.
+                let __payload = unsafe { __variant.payload_mut().value_mut() };
                 match __at {
                     #(#write_arms,)*
                 }

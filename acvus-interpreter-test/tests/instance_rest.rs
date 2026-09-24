@@ -88,8 +88,10 @@ where
 {
     let mut a = a;
     let rest = match b {
-        Some(x) => Owned::from_value(ctx.rt.some(x.into().into_value())),
-        None => Owned::from_value(ctx.rt.none()),
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        Some(x) => unsafe { Owned::from_value(ctx.rt.some(x.into().into_value())) },
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        None => unsafe { Owned::from_value(ctx.rt.none()) },
     };
     // SAFETY: as `same`'s, at the option the signature writes there.
     tally.call(ctx, &mut a, (rest,))

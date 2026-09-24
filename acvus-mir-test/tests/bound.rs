@@ -21,6 +21,7 @@ fn add_fn(i: &Interner) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![
@@ -47,6 +48,7 @@ fn types(i: &Interner) -> TypeRegistry {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false; params],
+                vars: vec![],
             })
             .expect("one declaration per name");
     }
@@ -86,6 +88,7 @@ fn advance_fn(i: &Interner) -> Function {
         effect_bounds: vec![],
         laws: Default::default(),
         ensures: Vec::new(),
+        vars: acvus_mir::ty::VarsStated::Elsewhere,
     };
     let mut inner = PolyBuilder::new();
     Function {
@@ -104,6 +107,7 @@ fn advance_fn(i: &Interner) -> Function {
                 generic: None,
             },
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("it"), s.clone())],
@@ -138,6 +142,7 @@ fn drain_fn(i: &Interner) -> Function {
                 pattern: signature(t.clone()),
                 calls: Task::Sync,
             }],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: signature(t),
     }
@@ -155,6 +160,7 @@ fn wrap_fn(i: &Interner) -> Function {
             effect_bounds: vec![],
             instances: Default::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: TyTerm::Fn {
             params: vec![ParamTerm::<Poly>::new(i.intern("it"), t.clone())],

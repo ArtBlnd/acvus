@@ -113,7 +113,8 @@ Status: Accepted
    `Async` is `Async`. An extern marked `heavy`, or a function value whose
    task is `Heavy`, is `Heavy`.
 3. A plain `fn` extern that is not Pure is `Async`, because the spawn split
-   turns it into a `Spawn` and an awaiting `Eval`.
+   turns it into a `Spawn` and an awaiting `Eval` where no argument has a
+   position (RFC-0079 rule 9).
 4. Task and purity are independent: a `heavy` Pure extern commutes, stands
    outside the order chain, runs on a blocking pool and is awaited.
    Independent Pure `Heavy` calls therefore hoist without `commutative`.

@@ -80,7 +80,8 @@ impl<const LARGE: bool> Op for MakeVariant<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let payload = Owned::from_value(regs.take::<LARGE>(self.slots.src));
+        // SAFETY: `take` moved the word out of its register.
+        let payload = unsafe { Owned::from_value(regs.take::<LARGE>(self.slots.src)) };
         let value = Value::variant_of(self.tag, payload);
         regs.define::<true>(self.slots.dst, value);
         self.next.run(m, r0)
@@ -97,7 +98,8 @@ impl Op for MakeUnitVariant {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let value = Value::variant_of(self.tag, Owned::from_value(Value::UNDEF));
+        // SAFETY: `UNDEF` owns nothing.
+        let value = Value::variant_of(self.tag, unsafe { Owned::from_value(Value::UNDEF) });
         m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
     }

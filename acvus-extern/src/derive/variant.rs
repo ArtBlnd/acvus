@@ -23,8 +23,10 @@ pub fn words<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Variant<Owne
 where
     Rt: Runtime,
 {
-    let payload = payload.unwrap_or_else(|| Owned::from_value(rt.undef()));
-    Variant::of(Owned::from_value(rt.variant_tag(tag)), payload)
+    // SAFETY: `undef` and `variant_tag` make fresh words no holder owns.
+    let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(rt.undef()) });
+    // SAFETY: as above.
+    Variant::of(unsafe { Owned::from_value(rt.variant_tag(tag)) }, payload)
 }
 
 pub fn erase<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Rt::Value

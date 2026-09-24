@@ -282,16 +282,15 @@ Status: Proposed
 7. **A box key erases lifetimes.** `Canonical::Canon` fills every lifetime
    with `'static`; a box is keyed there, and a value is read out at its
    branded form. Every box key is `'static`.
-8. **A type variable is opaque or lent.** An opaque variable, the
-   default, is filled only by a type with no position, so no loan reaches
-   the callee through it and the callee may keep its values. A lent
-   variable, declared so, may be filled by any type; the handler receives
-   its values at the call's brand, as a carrier, so Rust refuses keeping
-   them past the call. Where the brand cannot be carried, a lent variable
-   is asserted not kept with `unsafe` (RFC-0080).
+8. **A type variable is opaque or lent.** An extern's type variable, and
+   an extension type's type parameter, is opaque unless declared lent. An opaque one is filled only by a type with no position, so the
+   handler may keep its values: the checker refuses a use where one
+   resolved to a type with a position. A lent one takes any type and is
+   asserted with `unsafe` not to be kept (RFC-0080 rule 3).
 9. **A value crossing out of the body holds no loan.** A body's result
-   to the host, a context write and a spawn's argument are refused where
-   any of their positions may hold a loan. A lambda's or named function's
+   to the host and a context write are refused where any of their
+   positions may hold a loan; a call whose argument has a position is not
+   split into a spawn (RFC-0075). A lambda's or named function's
    outputs, its result and what it writes through a parameter or a
    capture, hold only loans on its inputs that its flows name (rule 5); a
    loan on the body's own storage there is refused, a by-value
@@ -320,7 +319,7 @@ constraint is solved.
 its flows, meeting two function types joins them, and a component of the
 call graph that calls itself is checked once more per round its flows
 grow. A container extern
-declares its type variables lent. Extern authors write
+declares its type variables lent, with `unsafe`. Extern authors write
 lifetimes where a result borrows from more than one parameter, and an
 extension that holds a carrier declares a region parameter.
 **Rejected.**

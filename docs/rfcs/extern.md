@@ -730,9 +730,9 @@ type is `Stored` at its payload. `Vec<Erased<R, T>>` is the runtime's
 `fn() -> !` until `never_type` stabilizes and then written `!`. Nothing
 implements a trait on it. The language's `!` and the uninhabited field of
 the compile-time stand-ins is `Bottom`. `Owned` alone is made from a bare
-value (`from_value`, `vacant`) and written through (`value_mut`), as
-inherent methods, so safe code puts no value into another `Erased` that
-breaks its `T`.
+value (`vacant`, `unsafe` `from_value`) and written through (`unsafe`
+`value_mut`) as inherent methods, so no safe code breaks an
+`Erased`'s `T`.
 
 1. At a runtime that makes values, `Erased<R, T>` has no trait impl whose
    existence or items depend on `T`, with one exception: `Branded`'s impl
@@ -927,8 +927,28 @@ Status: Accepted
    requirement words is `unsafe`, `prepare` being its caller. `Ctx`'s frame
    is private, and `Ctx::new`, `Ctx::frame_mut` and `Runtime::ctx_of` are
    `unsafe`, since two `Ctx`s in safe hands swap frames. A handler that
-   needs cells of its own calls `Closure::call_rooted`.
-3. **Effect declarations are outside it.** `pure`, `idempotent` and
+   needs cells of its own calls `Closure::call_rooted`. `Owned::from_value`
+   and `Owned::value_mut` are `unsafe`: the runtime's word is `Copy`, so a
+   word read out of a live holder and made an `Owned`, or written into
+   one, is released twice, and one kept past the call it was lent to
+   comes back holding a loan that ended. A value erased by its own
+   `OneValue::erase` is held safely through `Owned::erased`, and the
+   space's `Decode` and `Visit` hand over and lend `Owned` holders, not
+   words.
+3. **A lent type variable is asserted.** `unsafe(lent(T))` on
+   `#[extern_fn]` or `#[extern_type]`, or `NotKept::asserted()`, which is
+   `unsafe`, in a declaration written by hand, asserts `NotKept`'s
+   `# Safety`: every value of `T` the handler receives reaches, after the
+   call returns, only the outputs the signature's flows name for `T`,
+   never a static, a `#[state]`, a raw word kept past the call, or another
+   thread; for an extension type, the same of every part `T` fills, for
+   every piece of code the type runs. `lent(T)` without `unsafe` is
+   refused. A shared signature's variables reach no handler: each instance
+   states its own. The standard library's containers (`Vec`, `Deque`,
+   `HashMap`, `HashSet`, arrays, their slices, and `Option` and `Result`,
+   which hold at most one value) and iterator stages are lent. `Branded` and `UniformPayload` state in their `# Safety` that no
+   part a region or type parameter reaches sits behind an `UnsafeCell`.
+4. **Effect declarations are outside it.** `pure`, `idempotent` and
    `commutative` are the extern author's own promise, which the checker
    trusts (RFC-0013). An extension library is written for the users of its
    own language, and its author answers for its soundness.
@@ -938,12 +958,20 @@ code break the trust: an `Inline` impl outside the list, a `Ctx` frame
 swapped, an `Instance` forged from a word each reached undefined behaviour
 with no `unsafe` in the author's code. One form of guarantee makes each
 such fact visible where it is made.
-**Cost.** A runtime writes `unsafe` where it builds a `Ctx` or a call site.
+**Cost.** A runtime writes `unsafe` where it builds a `Ctx` or a call site,
+and where it makes an `Owned` of a word; an extern author writes
+`unsafe(lent(..))` for a variable the handler must be handed references in.
 **Rejected.**
 - `ctx_of` on a runtime-only trait — the glue calls it with `Rt: Runtime`
   alone, so the trait is `Runtime`'s supertrait and a handler reaches it
   through the same bound; `unsafe` is what keeps it from a handler.
 - Debug asserts on the trusted facts — they vanish in the build that runs.
+- A lent variable's values handed at the call's brand, as a carrier, so
+  Rust refuses keeping them — 131 of 191 generic handlers carry bounds
+  (`Stored`, `Cross`, `PassedByValue`) a branded filler fails; it is the
+  direction once those traits take a brand.
+- Refusing a spawn of a loan — the spawn is the optimizer's split, so a
+  refusal would differ between optimization levels.
 
 ## RFC-0082: An extern states its laws and its postconditions in a closed vocabulary, and a pass reads each
 

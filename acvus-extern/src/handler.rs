@@ -1582,6 +1582,8 @@ pub struct DeclaredInstance<R: Runtime> {
     /// rule 5), and any other declaration states them on
     /// `FnDecl::effect_bounds`, so its instances carry none.
     pub effect_bounds: Vec<EffectVarBound>,
+    /// Each type variable's lending, carried as `effect_bounds` is.
+    pub vars: acvus_mir::ty::VarsStated,
 }
 
 impl<R> DeclaredInstance<R>
@@ -1599,6 +1601,7 @@ where
             task: self.handler.task(),
             requires: self.requires.clone(),
             effect_bounds: self.effect_bounds.clone(),
+            vars: self.vars.clone(),
             laws,
             ensures,
         }

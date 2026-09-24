@@ -470,6 +470,7 @@ fn opaque(i: &Interner) -> Vec<Function> {
             effect_bounds: vec![],
             instances: Instances::default(),
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty: PolyTy::Fn {
             params: vec![ParamTerm::<Poly>::new(

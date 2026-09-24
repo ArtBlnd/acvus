@@ -348,7 +348,8 @@ where
     Rt: Runtime,
 {
     /// # Safety
-    /// As `of`'s, at the fields `ats`.
+    /// As `of`'s, at the fields `ats`, and as `Owned::value_mut`'s for what
+    /// is written through each result.
     ///
     /// # Panics
     /// Two of `ats` are equal, or one is past the object's width.
@@ -363,7 +364,8 @@ where
                  distinct positions"
             )
         };
-        fields.map(Owned::value_mut)
+        // SAFETY: this function's contract carries `value_mut`'s.
+        fields.map(|field| unsafe { field.value_mut() })
     }
 }
 

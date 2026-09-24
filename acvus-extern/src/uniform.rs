@@ -23,6 +23,12 @@ use std::marker::PhantomData;
 /// bound this impl's `where` clause requires, of that parameter or of a type
 /// that names it. Every other way it reaches a parameter is by holding it,
 /// directly or in a type that is itself `UniformPayload<M>` at that argument.
+///
+/// No part a type parameter reaches sits behind an `UnsafeCell` (`Cell`,
+/// `RefCell`, `Mutex`, an atomic, …): through a shared borrow of the
+/// payload a handler could store there a value lent to one call and read it
+/// in another (RFC-0079 rule 8). An impl that holds one asserts, in its own
+/// `unsafe`, that no call's loan is ever stored there.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not known to hold its type parameters only as fields",
     label = "`{Self}` is not `UniformPayload`",

@@ -44,7 +44,8 @@ mod fx_a {
         unreachable!("a type-only fixture is never run")
     }
 
-    #[extern_fn(effect = pure)]
+    // SAFETY: a type-only fixture, never run, keeps nothing.
+    #[extern_fn(effect = pure, unsafe(lent(A)))]
     pub fn apply_any<A, E, Rt>(f: Closure<'_, (A,), bool, E, Rt>) -> bool
     where
         A: Var<kind::Type>,

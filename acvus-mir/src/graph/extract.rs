@@ -113,6 +113,7 @@ mod tests {
                     effect_bounds: vec![],
                     instances: crate::ty::Instances::default(),
                     requires: vec![],
+                    vars: crate::ty::VarsStated::Here(vec![]),
                 },
                 ty: TyTerm::Fn {
                     params: vec![],

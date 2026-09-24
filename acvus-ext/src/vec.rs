@@ -3,6 +3,11 @@
 //! reference into it, so the container is neither moved nor changed while
 //! the element is in use (RFC-0028).
 
+// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
+// rule 8) of a std container's or iterator stage's handler or type. Nothing
+// here holds a static, a cell, a `#[state]` or a thread, and a value of a
+// lent variable leaves a call only through an output its signature names.
+
 use std::ops::Deref;
 
 use acvus_extern::Ctx;
@@ -35,7 +40,7 @@ extern_signature! {
         T: Var<kind::Type>;
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn reverse<T>(mut items: Vec<T>) -> Vec<T>
 where
     T: Var<kind::Type>,
@@ -44,7 +49,7 @@ where
     items
 }
 
-#[extern_fn(instance_of = vec, effect = pure)]
+#[extern_fn(instance_of = vec, effect = pure, unsafe(lent(T)))]
 #[extern_cast]
 fn vec_array<T, N>(items: Arr<T, N>) -> Vec<T>
 where
@@ -64,7 +69,7 @@ pub(crate) fn as_len(n: u64) -> usize {
 }
 
 /// The empty vec, `Vec::new`. It is `push`'s fold identity.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn new<T>() -> Vec<T>
 where
     T: Var<kind::Type>,
@@ -72,7 +77,7 @@ where
     Vec::new()
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn with_capacity<T>(n: u64) -> Vec<T>
 where
     T: Var<kind::Type>,
@@ -96,7 +101,7 @@ filled_of!(
     filled_str: String,
 );
 
-#[extern_fn(effect = pure, ensures(ret = len(c)))]
+#[extern_fn(effect = pure, ensures(ret = len(c)), unsafe(lent(T)))]
 fn len<T>(c: &Vec<T>) -> u64
 where
     T: Var<kind::Type>,
@@ -104,7 +109,7 @@ where
     c.len() as u64
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn is_empty<T>(c: &Vec<T>) -> bool
 where
     T: Var<kind::Type>,
@@ -116,7 +121,7 @@ where
 /// indexes this and nothing else. No copy — the slice is a pointer and a
 /// length into the container's own storage, returned as Rust's own borrow
 /// of the parameter the caller lent (RFC-0068 rule 4).
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 #[extern_view]
 fn as_slice<T, Rt>(c: &Vec<T>) -> &[T]
 where
@@ -126,7 +131,7 @@ where
     c
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 #[extern_view]
 fn as_slice_mut<T, Rt>(c: &mut Vec<T>) -> &mut [T]
 where
@@ -136,7 +141,7 @@ where
     c
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn first<T, Rt>(c: &Vec<T>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -145,7 +150,7 @@ where
     c.first()
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn last<T, Rt>(c: &Vec<T>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -156,7 +161,7 @@ where
 
 /// Pushing a run of items onto `c` equals extending `c` by the vecs that
 /// pushing each part of the run onto `new()` builds, in the run's order.
-#[extern_fn(effect = pure, law(fold(combine = extend, identity = new)))]
+#[extern_fn(effect = pure, law(fold(combine = extend, identity = new)), unsafe(lent(T)))]
 fn push<T>(c: &mut Vec<T>, item: T)
 where
     T: Var<kind::Type>,
@@ -164,7 +169,7 @@ where
     c.push(item);
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn pop<T>(c: &mut Vec<T>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -172,7 +177,7 @@ where
     c.pop()
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn insert<T>(c: &mut Vec<T>, index: u64, item: T)
 where
     T: Var<kind::Type>,
@@ -186,7 +191,7 @@ where
     c.insert(index, item);
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn remove<T>(c: &mut Vec<T>, index: u64) -> T
 where
     T: Var<kind::Type>,
@@ -200,7 +205,7 @@ where
     c.remove(index)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn clear<T>(c: &mut Vec<T>)
 where
     T: Var<kind::Type>,
@@ -208,7 +213,7 @@ where
     c.clear();
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn truncate<T>(c: &mut Vec<T>, len: u64)
 where
     T: Var<kind::Type>,
@@ -216,7 +221,7 @@ where
     c.truncate(usize::try_from(len).unwrap_or(usize::MAX));
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn extend<T>(c: &mut Vec<T>, items: Vec<T>)
 where
     T: Var<kind::Type>,
@@ -224,7 +229,7 @@ where
     c.extend(items);
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn swap<T>(c: &mut Vec<T>, i: u64, j: u64)
 where
     T: Var<kind::Type>,
@@ -235,7 +240,7 @@ where
 
 // -- the vec's own ------------------------------------------------------
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn capacity<T>(c: &Vec<T>) -> u64
 where
     T: Var<kind::Type>,
@@ -243,7 +248,7 @@ where
     c.capacity() as u64
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn shrink_to_fit<T>(c: &mut Vec<T>)
 where
     T: Var<kind::Type>,
@@ -251,7 +256,7 @@ where
     c.shrink_to_fit();
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn split_off<T>(c: &mut Vec<T>, at: u64) -> Vec<T>
 where
     T: Var<kind::Type>,
@@ -272,7 +277,7 @@ where
 // `v[i] = x`, which is the indexing instruction and keeps the exclusive
 // loan at the place (RFC-0047).
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn get<'a, T, Rt>(c: &Vec<T>, at: u64) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -308,7 +313,7 @@ where
     permute(c, &keyed_order(keys));
 }
 
-#[extern_fn(effect = E, sync = sort_by_key_now)]
+#[extern_fn(effect = E, sync = sort_by_key_now, unsafe(lent(T)))]
 async fn sort_by_key<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: KeyOf<'_, T, E, Rt>)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -382,7 +387,7 @@ where
     permute(c, &order);
 }
 
-#[extern_fn(effect = E, sync = sort_by_now)]
+#[extern_fn(effect = E, sync = sort_by_now, unsafe(lent(T)))]
 async fn sort_by<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: Comparator<'_, T, E, Rt>)
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -425,7 +430,7 @@ where
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-#[extern_fn(instance_of = core::eq, effect = pure)]
+#[extern_fn(instance_of = core::eq, effect = pure, unsafe(lent(T)))]
 fn eq_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
@@ -447,7 +452,7 @@ where
     true
 }
 
-#[extern_fn(instance_of = core::clone, effect = pure)]
+#[extern_fn(instance_of = core::clone, effect = pure, unsafe(lent(T)))]
 fn clone_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
@@ -468,7 +473,7 @@ where
     out
 }
 
-#[extern_fn(instance_of = core::cmp, effect = pure)]
+#[extern_fn(instance_of = core::cmp, effect = pure, unsafe(lent(T)))]
 fn cmp_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
@@ -488,7 +493,7 @@ where
     verdict(a.len().cmp(&b.len()))
 }
 
-#[extern_fn(instance_of = core::hash, effect = pure)]
+#[extern_fn(instance_of = core::hash, effect = pure, unsafe(lent(T)))]
 fn hash_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,

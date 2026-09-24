@@ -24,6 +24,11 @@
 //! instance for it. An element never leaves the type it was declared at:
 //! what an instance returns is a `T`, not a runtime value read back.
 
+// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
+// rule 8) of a std container's or iterator stage's handler or type. Nothing
+// here holds a static, a cell, a `#[state]` or a thread, and a value of a
+// lent variable leaves a call only through an output its signature names.
+
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -75,7 +80,7 @@ pub struct ItemsBody<T> {
 
 /// The owned source: the elements of a container that was consumed.
 #[derive(ExternType)]
-#[extern_type(name = "Items")]
+#[extern_type(name = "Items", unsafe(lent(T)))]
 #[repr(transparent)]
 pub struct Items<T, I, Rt>(ItemsBody<T>, PhantomData<(I, Rt)>)
 where
@@ -103,7 +108,7 @@ where
     }
 }
 
-#[extern_fn(instance_of = sig::next, effect = pure)]
+#[extern_fn(instance_of = sig::next, effect = pure, unsafe(lent(T)))]
 pub(crate) fn next_items<T, I, Rt>(it: &mut Items<T, I, Rt>) -> Option<T>
 where
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -144,7 +149,7 @@ where
 /// Each container that can be read by position declares the `next` of its
 /// own `Refs`.
 #[derive(ExternType)]
-#[extern_type(name = "Refs")]
+#[extern_type(name = "Refs", unsafe(lent(C)))]
 #[repr(transparent)]
 pub struct Refs<'a, C, I, Rt>(pub(crate) RefsBody<'a, C, Rt>, PhantomData<I>)
 where
@@ -178,7 +183,7 @@ where
     }
 }
 
-#[extern_fn(instance_of = sig::next, effect = pure)]
+#[extern_fn(instance_of = sig::next, effect = pure, unsafe(lent(T)))]
 pub(crate) fn next_refs_vec<'a, T, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &'a mut Refs<'a, Vec<T>, I, Rt>,
@@ -191,7 +196,7 @@ where
     it.step(ctx, |items, index| items.get(index))
 }
 
-#[extern_fn(instance_of = sig::next, effect = pure)]
+#[extern_fn(instance_of = sig::next, effect = pure, unsafe(lent(T)))]
 pub(crate) fn next_refs_array<'a, T, N, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &'a mut Refs<'a, Arr<T, N>, I, Rt>,
@@ -276,7 +281,7 @@ where
 }
 
 #[derive(ExternType)]
-#[extern_type(name = "Map")]
+#[extern_type(name = "Map", unsafe(lent(I, T, U)))]
 #[repr(transparent)]
 pub struct Map<'a, I, T, U, E, Rt>(pub(crate) MapBody<'a, I, T, U, E, Rt>)
 where
@@ -298,7 +303,7 @@ where
     Some(it.0.f.call_now(ctx, (x,)))
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_map_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_map_now, unsafe(lent(I, T, U)))]
 pub(crate) async fn next_map<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Map<'_, I, T, U, E, Rt>,
@@ -342,7 +347,7 @@ where
 /// joined, and keeps the results; each pull hands out the next one in input
 /// order.
 #[derive(ExternType)]
-#[extern_type(name = "Unordered")]
+#[extern_type(name = "Unordered", unsafe(lent(I, T, U)))]
 #[repr(transparent)]
 pub struct Unordered<'a, I, T, U, E, Rt>(pub(crate) UnorderedBody<'a, I, T, U, E, Rt>)
 where
@@ -352,7 +357,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-#[extern_fn(instance_of = sig::next, effect = E)]
+#[extern_fn(instance_of = sig::next, effect = E, unsafe(lent(I, T, U)))]
 pub(crate) async fn next_unordered<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Unordered<'_, I, T, U, E, Rt>,
@@ -412,7 +417,7 @@ where
 }
 
 #[derive(ExternType)]
-#[extern_type(name = "Filter")]
+#[extern_type(name = "Filter", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct Filter<'a, I, T, E, Rt>(pub(crate) FilterBody<'a, I, T, E, Rt>)
 where
@@ -436,7 +441,7 @@ where
     }
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_filter_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_filter_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_filter<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Filter<'_, I, T, E, Rt>,
@@ -470,7 +475,7 @@ where
 
 /// The first `n` elements, and fewer when the source ends first.
 #[derive(ExternType)]
-#[extern_type(name = "Take")]
+#[extern_type(name = "Take", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct Take<'a, I, T, E, Rt>(pub(crate) TakeBody<'a, I, T, E, Rt>)
 where
@@ -490,7 +495,7 @@ where
     it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_take_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_take_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_take<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Take<'_, I, T, E, Rt>,
@@ -521,7 +526,7 @@ where
 /// Everything after the first `n` elements; the elements skipped are drawn
 /// at the first step, not at construction.
 #[derive(ExternType)]
-#[extern_type(name = "Skip")]
+#[extern_type(name = "Skip", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct Skip<'a, I, T, E, Rt>(pub(crate) SkipBody<'a, I, T, E, Rt>)
 where
@@ -544,7 +549,7 @@ where
     it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_skip<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Skip<'_, I, T, E, Rt>,
@@ -579,7 +584,7 @@ where
 /// Every `step`th element, the first included. `step` is at least one: the
 /// constructor traps on zero before this is reached.
 #[derive(ExternType)]
-#[extern_type(name = "StepBy")]
+#[extern_type(name = "StepBy", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct StepBy<'a, I, T, E, Rt>(pub(crate) StepByBody<'a, I, T, E, Rt>)
 where
@@ -604,7 +609,7 @@ where
     it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_step_by_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_step_by_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_step_by<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut StepBy<'_, I, T, E, Rt>,
@@ -642,7 +647,7 @@ where
 /// and dropped, and the stage answers `None` from then on without drawing
 /// again.
 #[derive(ExternType)]
-#[extern_type(name = "TakeWhile")]
+#[extern_type(name = "TakeWhile", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct TakeWhile<'a, I, T, E, Rt>(pub(crate) TakeWhileBody<'a, I, T, E, Rt>)
 where
@@ -672,7 +677,7 @@ where
     None
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_take_while_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_take_while_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_take_while<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut TakeWhile<'_, I, T, E, Rt>,
@@ -711,7 +716,7 @@ where
 /// Everything from the first element the predicate refuses, that element
 /// included; the predicate is not called again after it.
 #[derive(ExternType)]
-#[extern_type(name = "SkipWhile")]
+#[extern_type(name = "SkipWhile", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct SkipWhile<'a, I, T, E, Rt>(pub(crate) SkipWhileBody<'a, I, T, E, Rt>)
 where
@@ -740,7 +745,7 @@ where
     it.0.next.call(ctx, &mut it.0.inner, ())
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_while_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_while_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_skip_while<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut SkipWhile<'_, I, T, E, Rt>,
@@ -778,7 +783,7 @@ where
 /// source runs out. `size` is at least one: the constructor traps on zero
 /// before this is reached. One chunk is the only buffer.
 #[derive(ExternType)]
-#[extern_type(name = "Chunks")]
+#[extern_type(name = "Chunks", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct Chunks<'a, I, T, E, Rt>(pub(crate) ChunksBody<'a, I, T, E, Rt>)
 where
@@ -807,7 +812,7 @@ where
     (!chunk.is_empty()).then_some(chunk)
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_chunks_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_chunks_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_chunks<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Chunks<'_, I, T, E, Rt>,
@@ -894,7 +899,7 @@ where
 /// Consecutive equal elements collapsed to the first, the element's own
 /// `core::eq` deciding which are equal.
 #[derive(ExternType)]
-#[extern_type(name = "Dedup")]
+#[extern_type(name = "Dedup", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct Dedup<'a, I, T, E, Rt>(pub(crate) DedupBody<'a, I, T, E, Rt>)
 where
@@ -942,7 +947,7 @@ where
     None
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_dedup_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_dedup_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_dedup<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Dedup<'_, I, T, E, Rt>,
@@ -983,7 +988,7 @@ where
 /// The first pipeline, then the second. The two may be of different types;
 /// each stands beside its own `next`.
 #[derive(ExternType)]
-#[extern_type(name = "Chain")]
+#[extern_type(name = "Chain", unsafe(lent(A, B, T)))]
 #[repr(transparent)]
 pub struct Chain<'a, A, B, T, E, Rt>(pub(crate) ChainBody<'a, A, B, T, E, Rt>)
 where
@@ -1013,7 +1018,7 @@ where
     it.0.next_second.call(ctx, &mut it.0.second, ())
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_chain_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_chain_now, unsafe(lent(A, B, T)))]
 pub(crate) async fn next_chain<A, B, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Chain<'_, A, B, T, E, Rt>,
@@ -1052,7 +1057,7 @@ where
 /// container the source's elements stand at — a `Vec` or an `Arr` — and the
 /// one it last drew is the only buffer.
 #[derive(ExternType)]
-#[extern_type(name = "Flatten")]
+#[extern_type(name = "Flatten", unsafe(lent(I, C, T)))]
 #[repr(transparent)]
 pub struct Flatten<'a, I, C, T, E, Rt>(pub(crate) FlattenBody<'a, I, C, T, E, Rt>)
 where
@@ -1121,7 +1126,7 @@ where
     next_flatten_now(ctx, it)
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_vecs_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_vecs_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_flatten_vecs<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Flatten<'_, I, Vec<T>, T, E, Rt>,
@@ -1149,7 +1154,7 @@ where
     next_flatten_now(ctx, it)
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_arrays_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_flatten_arrays_now, unsafe(lent(I, T)))]
 pub(crate) async fn next_flatten_arrays<I, T, N, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut Flatten<'_, I, Arr<T, N>, T, E, Rt>,
@@ -1183,7 +1188,7 @@ where
 /// and `flatten` in one stage: two stages would need two instances, and the
 /// intermediate one has no name to require an instance at.
 #[derive(ExternType)]
-#[extern_type(name = "FlatMap")]
+#[extern_type(name = "FlatMap", unsafe(lent(I, T, U)))]
 #[repr(transparent)]
 pub struct FlatMap<'a, I, T, U, E, Rt>(pub(crate) FlatMapBody<'a, I, T, U, E, Rt>)
 where
@@ -1213,7 +1218,7 @@ where
     }
 }
 
-#[extern_fn(instance_of = sig::next, effect = E, sync = next_flat_map_now)]
+#[extern_fn(instance_of = sig::next, effect = E, sync = next_flat_map_now, unsafe(lent(I, T, U)))]
 pub(crate) async fn next_flat_map<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: &mut FlatMap<'_, I, T, U, E, Rt>,

@@ -137,7 +137,8 @@ async fn run_parsed(
     exec_fns.extend(prepared);
     let snapshot: HashMap<String, Owned<AcvusRuntime>> = context
         .into_iter()
-        .map(|(k, (_, v))| (interner.resolve(k).to_string(), Owned::from_value(v)))
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        .map(|(k, (_, v))| (interner.resolve(k).to_string(), unsafe { Owned::from_value(v) }))
         .collect();
 
     let executor = Arc::new(SequentialExecutor);

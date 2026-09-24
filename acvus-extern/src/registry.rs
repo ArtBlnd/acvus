@@ -8,7 +8,7 @@ use acvus_mir::laws::{FoldLaw, Identity, Laws, Postcondition};
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
     ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg,
-    TypeRegistry, UserDefinedDecl, Viewed, bind_chosen, matches_pattern, unify_patterns,
+    TypeRegistry, UserDefinedDecl, VarsStated, Viewed, bind_chosen, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -41,6 +41,8 @@ pub struct FnDecl {
     pub laws: Laws,
     /// What the declaration promises of its result (RFC-0082 rule 4).
     pub ensures: Vec<Postcondition>,
+    /// Each type variable's lending (RFC-0079 rule 8).
+    pub vars: VarsStated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +189,7 @@ where
             names: Vec::new(),
             laws: Laws::None,
             ensures: Vec::new(),
+            vars: VarsStated::Elsewhere,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -195,6 +198,7 @@ where
                 admits: Task::Heavy,
                 requires: Vec::new(),
                 effect_bounds: Vec::new(),
+                vars: VarsStated::Elsewhere,
             }],
             generic: None,
         },
@@ -314,6 +318,7 @@ where
             names: decl.names,
             laws: decl.laws,
             ensures: decl.ensures,
+            vars: VarsStated::Elsewhere,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -322,6 +327,7 @@ where
                 admits: Task::Heavy,
                 requires: Vec::new(),
                 effect_bounds: Vec::new(),
+                vars: VarsStated::Elsewhere,
             }],
             generic: None,
         },
@@ -968,6 +974,7 @@ impl<R: Runtime> Externs<R> {
                         .iter()
                         .map(Requirement::signature_of)
                         .collect(),
+                    vars: decl.vars,
                 },
                 ty: decl.ty,
             });
@@ -1026,6 +1033,7 @@ impl<R: Runtime> Externs<R> {
                     effect_bounds: Vec::new(),
                     instances: signatures,
                     requires: Vec::new(),
+                    vars: VarsStated::Elsewhere,
                 },
                 ty: c.decl.ty,
             });
@@ -1277,7 +1285,7 @@ fn add_instance<R: Runtime>(
     {
         return Err(CombineError::DuplicateInstance { signature: sig, ty });
     }
-    let admitted = at_declared_type(&decl.ty, instances, &requires, &decl.effect_bounds)
+    let admitted = at_declared_type(&decl.ty, instances, &requires, &decl.effect_bounds, &decl.vars)
         .ok_or_else(mismatch)?;
     for instance in &admitted {
         ceiling_admits(i, decl.qref, &instance.signature, &instance.handler)?;
@@ -1309,13 +1317,14 @@ fn add_instance<R: Runtime>(
 
 /// The instances one declaration contributes to the signature it names.
 /// A declaration whose handler is generic has none of its own, and the one
-/// built here is where its requirements and effect bounds are written;
-/// `#[extern_fn]` writes them on the instances it builds itself.
+/// built here is where its requirements, effect bounds and variables are
+/// written; `#[extern_fn]` writes them on the instances it builds itself.
 fn at_declared_type<R>(
     declared: &PolyTy,
     instances: Instances<R>,
     requires: &[RequirementSig],
     effect_bounds: &[EffectVarBound],
+    vars: &VarsStated,
 ) -> Option<Vec<DeclaredInstance<R>>>
 where
     R: Runtime,
@@ -1330,6 +1339,7 @@ where
             admits: Task::Heavy,
             requires: requires.to_vec(),
             effect_bounds: effect_bounds.to_vec(),
+            vars: vars.clone(),
         }]),
         Instances {
             concrete,

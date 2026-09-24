@@ -78,6 +78,7 @@ fn registry(i: &Interner) -> TypeRegistry {
         identity_params: 0,
         region_params: 0,
         specializable: vec![true],
+        vars: vec![],
     })
     .expect("one declaration per name");
     reg.register(UserDefinedDecl {
@@ -87,6 +88,7 @@ fn registry(i: &Interner) -> TypeRegistry {
         identity_params: 0,
         region_params: 0,
         specializable: vec![false],
+        vars: vec![],
     })
     .expect("one declaration per name");
     reg
@@ -131,6 +133,7 @@ fn extern_fn(i: &Interner, name: &str, ty: PolyTy, instances: Instances) -> Func
             effect_bounds: vec![],
             instances,
             requires: vec![],
+            vars: acvus_mir::ty::VarsStated::Here(vec![]),
         },
         ty,
     }

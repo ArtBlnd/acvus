@@ -487,7 +487,7 @@ impl Space {
                 }
             }
         };
-        let decode = |t: &Ty, input: &mut &[u8]| layout::decode(rt, self, t, input);
+        let decode = |t: &Ty, input: &mut &[u8]| layout::decode_owned(rt, self, t, input);
         let mut value = (hooks.decode_state)(rt, &args, &decode, &mut state.bytes.as_slice())?;
         for op in ops.iter().rev() {
             (hooks.apply_op)(rt, &mut value, &args, &decode, &mut op.bytes.as_slice())?;
@@ -513,7 +513,8 @@ impl Space {
         let mut children_moved = false;
         if args.iter().any(layout::holds_extension) {
             (hooks.children)(rt, value, &args, &mut |child_ty, child| {
-                self.commit_nested(rt, child_ty, child, &mut children_moved)
+                // SAFETY: `commit_nested` writes no word into the child.
+                self.commit_nested(rt, child_ty, unsafe { child.value_mut() }, &mut children_moved)
             })?;
         }
         let encode = |t: &Ty, v: &Value, out: &mut Vec<u8>| layout::encode(rt, self, t, v, out);
@@ -563,6 +564,9 @@ impl Space {
 
     /// Commit every extension value inside `value`, walking the language
     /// shapes by type down to each; `moved` records whether any head moved.
+    /// It edits an extension's payload in place through the type's hooks and
+    /// writes no word into `value` or any part of it, which is what each
+    /// `value_mut` below relies on.
     fn commit_nested(
         &self,
         rt: &AcvusRuntime,
@@ -582,13 +586,15 @@ impl Space {
                 // SAFETY (each composite): the type is the runtime's witness
                 // of the value's shape.
                 for v in unsafe { value.as_array_mut() }.0.iter_mut() {
-                    self.commit_nested(rt, elem, v.value_mut(), moved)?;
+                    // SAFETY: `commit_nested` writes no word into the part.
+                    self.commit_nested(rt, elem, unsafe { v.value_mut() }, moved)?;
                 }
                 Ok(())
             }
             Ty::Tuple(elems) => {
                 for (v, t) in unsafe { value.as_tuple_mut() }.0.iter_mut().zip(elems) {
-                    self.commit_nested(rt, t, v.value_mut(), moved)?;
+                    // SAFETY: as the array's.
+                    self.commit_nested(rt, t, unsafe { v.value_mut() }, moved)?;
                 }
                 Ok(())
             }
@@ -597,7 +603,8 @@ impl Space {
                 let types: Vec<Ty> = laid.iter().map(|(_, t)| (*t).clone()).collect();
                 let values = unsafe { value.as_object_mut() };
                 for (t, v) in types.iter().zip(values.iter_mut()) {
-                    self.commit_nested(rt, t, v.value_mut(), moved)?;
+                    // SAFETY: as the array's.
+                    self.commit_nested(rt, t, unsafe { v.value_mut() }, moved)?;
                 }
                 Ok(())
             }
@@ -612,7 +619,8 @@ impl Space {
                 // SAFETY: the same witness — a variant's first register is its tag.
                 let tag = unsafe { variant.tag().as_tag() };
                 let (_, held) = layout::result_side(rt, tag, ok, err)?;
-                self.commit_nested(rt, held, variant.payload_mut().value_mut(), moved)
+                // SAFETY: as the array's.
+                self.commit_nested(rt, held, unsafe { variant.payload_mut().value_mut() }, moved)
             }
             Ty::Enum { variants, .. } => {
                 let variant = unsafe { value.as_variant_mut() };
@@ -620,7 +628,8 @@ impl Space {
                 let tag = unsafe { variant.tag().as_tag() };
                 if let Some(Some(t)) = variants.get(&tag) {
                     let t = t.as_ref().clone();
-                    self.commit_nested(rt, &t, variant.payload_mut().value_mut(), moved)?;
+                    // SAFETY: as the array's.
+                    self.commit_nested(rt, &t, unsafe { variant.payload_mut().value_mut() }, moved)?;
                 }
                 Ok(())
             }
@@ -722,7 +731,9 @@ impl SpacePage {
                 .get(&id)
                 .ok_or_else(|| SpaceError::new(format!("@{id}: no type")))?;
             let mut value = held.remove(&id).expect("listed");
-            let head = self.space.commit(rt, &id, ty, value.value_mut())?;
+            // SAFETY: `commit` edits the value in place as `commit_nested`
+            // does and writes no word into it.
+            let head = self.space.commit(rt, &id, ty, unsafe { value.value_mut() })?;
             out.push((id, head));
         }
         Ok(out)
@@ -738,7 +749,9 @@ impl crate::journal::RuntimeContext for SpacePage {
         self.space
             .load(rt, key, ty)
             .unwrap_or_else(|e| panic!("context fetch: @{key}: {e}"))
-            .map(Owned::from_value)
+            // SAFETY: `load` decodes a fresh word, which no other holder
+            // owns.
+            .map(|value| unsafe { Owned::from_value(value) })
     }
 
     fn set(&self, key: &str, value: Owned<AcvusRuntime>) {

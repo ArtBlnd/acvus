@@ -1561,7 +1561,8 @@ impl Terms {
     /// names its representations, and a variable is a generic body's
     /// (hash-types.md R3).
     fn instantiate_open(&mut self, ty: &PolyTy, registry: &TypeRegistry) -> InferTy {
-        self.instantiate_open_beside(ty, &[], &[], registry).ty
+        self.instantiate_open_beside(ty, &[], &[], &crate::ty::VarsStated::Elsewhere, registry)
+            .ty
     }
 
     /// `ty` and `beside` at one set of fresh variables: a placeholder `ty`
@@ -1571,10 +1572,12 @@ impl Terms {
         ty: &PolyTy,
         beside: &[&PolyTy],
         effect_bounds: &[EffectVarBound],
+        vars: &crate::ty::VarsStated,
         registry: &TypeRegistry,
     ) -> OpenInstance {
         let mut maps = PolyMaps::default();
         let mut bounded_effects: Vec<EffectVarId> = Vec::new();
+        let mut opaque: Vec<OpaqueVar> = Vec::new();
         let Terms {
             ty_bounds,
             effect_vars,
@@ -1585,12 +1588,17 @@ impl Terms {
         let mut instantiate = |poly: &PolyTy| {
             poly.map(
                 &mut |id: u32| {
-                    TyTerm::Var(
-                        *maps
-                            .ty
-                            .entry(id)
-                            .or_insert_with(|| alloc_ty_var(ty_bounds, TyVarBound::Any)),
-                    )
+                    TyTerm::Var(*maps.ty.entry(id).or_insert_with(|| {
+                        let fresh = alloc_ty_var(ty_bounds, TyVarBound::Any);
+                        if let Some(name) = vars.opaque_at(id) {
+                            opaque.push(OpaqueVar {
+                                var: fresh,
+                                index: id,
+                                name,
+                            });
+                        }
+                        fresh
+                    }))
                 },
                 &mut |id: u32| {
                     *maps
@@ -1633,6 +1641,7 @@ impl Terms {
                 .map(|poly| uniform_slots(poly, registry))
                 .collect(),
             bounded_effects,
+            opaque,
         }
     }
 
@@ -1904,6 +1913,7 @@ pub struct Candidate {
     /// Written at this candidate's own variables, as `ty` is (RFC-0070 rule 3).
     pub requires: Vec<RequirementSig>,
     pub effect_bounds: Vec<EffectVarBound>,
+    pub vars: crate::ty::VarsStated,
 }
 
 /// Which side of an instance's join holds the effect the other stays
@@ -2346,6 +2356,7 @@ pub enum SettledSignature {
         instance: Option<InstanceChoice>,
         bounded: Vec<TypeBoundId>,
         bounded_effects: Vec<EffectVarId>,
+        opaque: Vec<OpaqueVar>,
         requirements: Vec<RequiredDecision>,
     },
     Local,
@@ -2554,10 +2565,29 @@ pub struct InstanceBound {
     pub var: EffectVarId,
 }
 
+/// An opaque type variable of the instance a decision settled on, recorded
+/// as an `InstanceBound` is: the checker refuses it where it froze to a
+/// type with a position (RFC-0079 rule 8).
+#[derive(Debug, Clone, Copy)]
+pub struct InstanceOpaque {
+    pub decision: DecisionId,
+    pub var: OpaqueVar,
+}
+
+/// One opaque type variable of a declaration at one instantiation: the
+/// solver variable it became, and the declaration's name for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpaqueVar {
+    pub var: TypeBoundId,
+    pub index: u32,
+    pub name: Option<Astr>,
+}
+
 struct CandidateAt {
     ty: InferTy,
     required: Vec<RequiredCall>,
     bounded_effects: Vec<EffectVarId>,
+    opaque: Vec<OpaqueVar>,
 }
 
 pub struct Solver<'src> {
@@ -2568,6 +2598,7 @@ pub struct Solver<'src> {
     structural: FxHashMap<DecisionId, SettledStructural>,
     opened_children: Vec<OpenedChild>,
     instance_bounds: Vec<InstanceBound>,
+    instance_opaque: Vec<InstanceOpaque>,
     /// Mints a new source for every identity a declaration introduces;
     /// lent by the compilation for this solver's lifetime.
     sources: &'src mut Sources,
@@ -2591,6 +2622,7 @@ pub struct SolverSnapshot {
     structural: FxHashMap<DecisionId, SettledStructural>,
     opened_children: Vec<OpenedChild>,
     instance_bounds: Vec<InstanceBound>,
+    instance_opaque: Vec<InstanceOpaque>,
     sources: Sources,
 }
 
@@ -2608,6 +2640,7 @@ impl<'src> Solver<'src> {
             structural: FxHashMap::default(),
             opened_children: Vec::new(),
             instance_bounds: Vec::new(),
+            instance_opaque: Vec::new(),
             sources,
             registry,
             signatures,
@@ -2630,6 +2663,7 @@ impl<'src> Solver<'src> {
             structural: self.structural.clone(),
             opened_children: self.opened_children.clone(),
             instance_bounds: self.instance_bounds.clone(),
+            instance_opaque: self.instance_opaque.clone(),
             sources: self.sources.clone(),
         }
     }
@@ -2643,6 +2677,7 @@ impl<'src> Solver<'src> {
             structural,
             opened_children,
             instance_bounds,
+            instance_opaque,
             sources,
         } = snapshot;
         self.terms = terms;
@@ -2652,6 +2687,7 @@ impl<'src> Solver<'src> {
         self.structural = structural;
         self.opened_children = opened_children;
         self.instance_bounds = instance_bounds;
+        self.instance_opaque = instance_opaque;
         *self.sources = sources;
     }
 
@@ -2668,6 +2704,7 @@ impl<'src> Solver<'src> {
             structural: self.structural.clone(),
             opened_children: self.opened_children.clone(),
             instance_bounds: self.instance_bounds.clone(),
+            instance_opaque: self.instance_opaque.clone(),
             sources: &mut sources,
             registry: self.registry,
             signatures: self.signatures,
@@ -3433,6 +3470,7 @@ impl<'src> Solver<'src> {
                             ty,
                             bounded,
                             bounded_effects,
+                            opaque,
                             instance,
                             requirements,
                         } = self.instantiate_scheme(scheme);
@@ -3443,6 +3481,7 @@ impl<'src> Solver<'src> {
                                 instance,
                                 bounded,
                                 bounded_effects,
+                                opaque,
                                 requirements,
                             },
                         )
@@ -4085,6 +4124,7 @@ impl<'src> Solver<'src> {
                     ty: instance,
                     required,
                     bounded_effects,
+                    opaque,
                 } = self.instantiate_candidate(only);
                 match self.settle_instance(
                     id,
@@ -4099,6 +4139,11 @@ impl<'src> Solver<'src> {
                             bounded_effects
                                 .into_iter()
                                 .map(|var| InstanceBound { decision: id, var }),
+                        );
+                        self.instance_opaque.extend(
+                            opaque
+                                .into_iter()
+                                .map(|var| InstanceOpaque { decision: id, var }),
                         );
                         self.begin_unbound_sources(id, &instance);
                         self.require_instances(id, required);
@@ -4588,16 +4633,22 @@ impl<'src> Solver<'src> {
         std::mem::take(&mut self.instance_bounds)
     }
 
+    pub fn take_instance_opaque(&mut self) -> Vec<InstanceOpaque> {
+        std::mem::take(&mut self.instance_opaque)
+    }
+
     fn instantiate_candidate(&mut self, candidate: &Candidate) -> CandidateAt {
         let patterns: Vec<&PolyTy> = candidate.requires.iter().map(|r| &r.pattern).collect();
         let OpenInstance {
             ty,
             beside,
             bounded_effects,
+            opaque,
         } = self.terms.instantiate_open_beside(
             &candidate.ty,
             &patterns,
             &candidate.effect_bounds,
+            &candidate.vars,
             self.registry,
         );
         let required = candidate
@@ -4614,6 +4665,7 @@ impl<'src> Solver<'src> {
             ty,
             required,
             bounded_effects,
+            opaque,
         }
     }
 
@@ -4645,6 +4697,7 @@ impl<'src> Solver<'src> {
                         admits: sig.admits,
                         requires: sig.requires.clone(),
                         effect_bounds: sig.effect_bounds.clone(),
+                        vars: sig.vars.clone(),
                     })
                     .collect(),
                 generic: None,
@@ -4684,6 +4737,7 @@ impl<'src> Solver<'src> {
         } = compiler;
         let mut bounded: Vec<TypeBoundId> = Vec::new();
         let mut bounded_effects: Vec<EffectVarId> = Vec::new();
+        let mut opaque: Vec<OpaqueVar> = Vec::new();
         let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
             instances.concrete.is_empty()
                 && instances.generic.is_none()
@@ -4703,6 +4757,13 @@ impl<'src> Solver<'src> {
                 let bound = scheme.bound_of(var);
                 if bound != TyVarBound::Any {
                     bounded.push(fresh);
+                }
+                if let Some(name) = scheme.vars.opaque_at(var) {
+                    opaque.push(OpaqueVar {
+                        var: fresh,
+                        index: var,
+                        name,
+                    });
                 }
                 bound
             },
@@ -4735,6 +4796,7 @@ impl<'src> Solver<'src> {
                             admits: sig.admits,
                             requires: sig.requires.clone(),
                             effect_bounds: sig.effect_bounds.clone(),
+                        vars: sig.vars.clone(),
                         })
                         .collect(),
                     generic: None,
@@ -4772,6 +4834,7 @@ impl<'src> Solver<'src> {
                         admits: sig.admits,
                         requires: sig.requires,
                         effect_bounds: sig.effect_bounds,
+                        vars: sig.vars,
                     })
                     .chain(compiler_instances)
                     .collect(),
@@ -4789,6 +4852,7 @@ impl<'src> Solver<'src> {
             ty,
             bounded,
             bounded_effects,
+            opaque,
             instance,
             requirements,
         }
@@ -5044,6 +5108,7 @@ struct OpenInstance {
     ty: InferTy,
     beside: Vec<InferTy>,
     bounded_effects: Vec<EffectVarId>,
+    opaque: Vec<OpaqueVar>,
 }
 
 #[derive(Default)]
@@ -5354,6 +5419,8 @@ pub struct Instantiated {
     pub bounded: Vec<TypeBoundId>,
     /// The effect variables a declared bound floors (RFC-0011 rule 5).
     pub bounded_effects: Vec<EffectVarId>,
+    /// The variables the scheme declares opaque (RFC-0079 rule 8).
+    pub opaque: Vec<OpaqueVar>,
     /// `Some` for an Extern function.
     pub instance: Option<InstanceChoice>,
     /// One instance decision per requirement the scheme states, in the
@@ -5411,6 +5478,7 @@ mod requirement_tests {
                     task: Task::Sync,
                     requires: Vec::new(),
                     effect_bounds: Vec::new(),
+                    vars: crate::ty::VarsStated::Elsewhere,
                     laws: crate::laws::Laws::None,
                     ensures: Vec::new(),
                 })
@@ -5432,6 +5500,7 @@ mod requirement_tests {
                 calls: Task::Sync,
             }],
             effect_bounds: Vec::new(),
+            vars: crate::ty::VarsStated::Elsewhere,
         }
     }
 

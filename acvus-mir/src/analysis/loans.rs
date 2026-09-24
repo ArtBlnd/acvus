@@ -18,7 +18,7 @@ use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, ValueId};
-use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Source, Ty};
+use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Phase, Source, Ty, TyTerm};
 
 // -- Positions (RFC-0079 rule 2) ------------------------------------
 
@@ -37,33 +37,43 @@ pub enum PositionKind {
     InFlight,
 }
 
-/// How many positions a value of `ty` has.
-pub fn positions(ty: &Ty) -> usize {
+/// How many positions a value of `ty` has. A type variable has none until
+/// it resolves (RFC-0079 rule 2), and one the solve left open closes to `!`.
+pub fn positions<V>(ty: &TyTerm<V>) -> usize
+where
+    V: Phase,
+{
     match ty {
-        Ty::Ref(_, inner) => 1 + positions(&inner.ty()),
-        Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => positions(inner),
-        Ty::Handle(inner) => 1 + positions(inner),
-        Ty::Result(ok, err) => positions(ok) + positions(err),
-        Ty::Tuple(items) => items.iter().map(positions).sum(),
-        Ty::Object(fields) => fields.values().map(positions).sum(),
-        Ty::Enum { variants, .. } => variants.values().flatten().map(|t| positions(t)).sum(),
-        Ty::Fn { .. } => 1,
-        Ty::UserDefined {
+        TyTerm::Ref(_, inner) => 1 + positions(&inner.ty()),
+        TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Slice(inner) => {
+            positions(inner.as_ref())
+        }
+        TyTerm::Handle(inner) => 1 + positions(inner.as_ref()),
+        TyTerm::Result(ok, err) => positions(ok.as_ref()) + positions(err.as_ref()),
+        TyTerm::Tuple(items) => items.iter().map(positions).sum(),
+        TyTerm::Object(fields) => fields.values().map(positions).sum(),
+        TyTerm::Enum { variants, .. } => variants
+            .values()
+            .flatten()
+            .map(|t| positions(t.as_ref()))
+            .sum(),
+        TyTerm::Fn { .. } => 1,
+        TyTerm::UserDefined {
             type_args,
             region_params,
             ..
         } => *region_params + type_args.iter().map(|a| positions(&a.ty())).sum::<usize>(),
-        Ty::Int(_)
-        | Ty::Float
-        | Ty::Char
-        | Ty::String
-        | Ty::Bool
-        | Ty::Unit
-        | Ty::Never
-        | Ty::Order
-        | Ty::Str
-        | Ty::Error(_)
-        | Ty::Var(_) => 0,
+        TyTerm::Int(_)
+        | TyTerm::Float
+        | TyTerm::Char
+        | TyTerm::String
+        | TyTerm::Bool
+        | TyTerm::Unit
+        | TyTerm::Never
+        | TyTerm::Order
+        | TyTerm::Str
+        | TyTerm::Error(_)
+        | TyTerm::Var(_) => 0,
     }
 }
 

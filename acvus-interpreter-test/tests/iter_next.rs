@@ -11,6 +11,11 @@
 //! designs against each other inside one binary. Rename anything here and
 //! those bench rows stop compiling.
 
+// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
+// rule 8). Nothing here holds a static, a cell, a `#[state]` or a thread,
+// and a value of a lent variable leaves a call only through an output its
+// signature names.
+
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -81,7 +86,7 @@ where
 }
 
 #[derive(ExternType)]
-#[extern_type(name = "NMap")]
+#[extern_type(name = "NMap", unsafe(lent(I, T, U)))]
 #[repr(transparent)]
 pub struct NMap<'a, I, T, U, E, Rt>(NMapBody<'a, I, T, U, E, Rt>)
 where
@@ -91,7 +96,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(I, T, U)))]
 fn nmap<'a, I, T, U, E, Rt>(
     it: I,
     f: Closure<'a, (T,), U, E, Rt>,
@@ -107,7 +112,7 @@ where
     NMap(NMapBody { inner: it, next, f })
 }
 
-#[extern_fn(instance_of = sig::next, effect = E)]
+#[extern_fn(instance_of = sig::next, effect = E, unsafe(lent(I, T, U)))]
 fn next_nmap<I, T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NMap<'_, I, T, U, E, Rt>) -> Option<U>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -134,7 +139,7 @@ where
 }
 
 #[derive(ExternType)]
-#[extern_type(name = "NFilter")]
+#[extern_type(name = "NFilter", unsafe(lent(I, T)))]
 #[repr(transparent)]
 pub struct NFilter<'a, I, T, E, Rt>(NFilterBody<'a, I, T, E, Rt>)
 where
@@ -143,7 +148,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime;
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(I, T)))]
 fn nfilter<'a, I, T, E, Rt>(
     it: I,
     f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
@@ -158,7 +163,7 @@ where
     NFilter(NFilterBody { inner: it, next, f })
 }
 
-#[extern_fn(instance_of = sig::next, effect = E)]
+#[extern_fn(instance_of = sig::next, effect = E, unsafe(lent(I, T)))]
 fn next_nfilter<I, T, E, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NFilter<'_, I, T, E, Rt>) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -175,7 +180,7 @@ where
     }
 }
 
-#[extern_fn(effect = E)]
+#[extern_fn(effect = E, unsafe(lent(I)))]
 fn nsum<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
@@ -205,14 +210,14 @@ where
 }
 
 #[derive(ExternType)]
-#[extern_type(name = "NSlowed")]
+#[extern_type(name = "NSlowed", unsafe(lent(I)))]
 #[repr(transparent)]
 pub struct NSlowed<'a, I, Rt>(NSlowedBody<'a, I, Rt>)
 where
     I: Var<kind::Type>,
     Rt: Runtime;
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(I)))]
 fn nslowed<'a, I, Rt>(it: I, next: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt>) -> NSlowed<'a, I, Rt>
 where
     I: Var<kind::Type>,
@@ -224,7 +229,7 @@ where
 /// The file's async stage: it suspends once per element and reaches its
 /// inner stage through `into_async` — the sync instance `nslowed` was
 /// handed, called at the async task (RFC-0067 rule 5).
-#[extern_fn(instance_of = sig::next, effect = pure)]
+#[extern_fn(instance_of = sig::next, effect = pure, unsafe(lent(I)))]
 async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<'_, I, Rt>) -> Option<i64>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -239,7 +244,7 @@ where
 
 /// `nsum` at the async task: the requirement is written `Later`, so the
 /// instance the site resolves is called with `call_await`.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(I)))]
 async fn nsum_await<I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,

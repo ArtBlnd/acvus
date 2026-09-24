@@ -67,8 +67,10 @@ fn student(i: &Interner, name: &str, score: i64) -> Value {
     Value::object_by_name(
         i,
         [
-            (i.intern("name"), Owned::from_value(Value::string(name))),
-            (i.intern("score"), Owned::from_value(Value::int(score))),
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            (i.intern("name"), unsafe { Owned::from_value(Value::string(name)) }),
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            (i.intern("score"), unsafe { Owned::from_value(Value::int(score)) }),
         ],
     )
 }
@@ -84,7 +86,8 @@ fn students(i: &Interner, items: Vec<Value>) -> TypedValue {
     let len = items.len();
     typed(
         Ty::Array(Box::new(student_ty(i)), LenTerm::Known(len)),
-        Value::array(items.into_iter().map(Owned::from_value).collect()),
+        // SAFETY: each word is moved in from `items`, and no other holder owns it.
+        Value::array(items.into_iter().map(|item| unsafe { Owned::from_value(item) }).collect()),
     )
 }
 

@@ -619,7 +619,9 @@ li = li + one; \
 /// (`acvus-ext/src/vec.rs`), so a context value of that type is that vector,
 /// erased.
 fn vec_value(items: Vec<Value>) -> Value {
-    let items: Vec<Owned<AcvusRuntime>> = items.into_iter().map(Owned::from_value).collect();
+    // SAFETY: each word is moved in from `items`, and no other holder owns it.
+    let items: Vec<Owned<AcvusRuntime>> =
+        items.into_iter().map(|item| unsafe { Owned::from_value(item) }).collect();
     // SAFETY: the only reader is `Vec<T>`'s `Cross` impl, which materializes
     // a language `Vec` as this exact `Vec<Owned<AcvusRuntime>>`; `context`
     // declares the matching `vec_ty` for both names below.

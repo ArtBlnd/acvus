@@ -199,6 +199,18 @@ fn take_u64(input: &mut &[u8]) -> SpaceResult<u64> {
     Ok(u64::from_le_bytes(bytes))
 }
 
+/// A part `decode` reads, in a holder of its own.
+pub(crate) fn decode_owned(
+    rt: &AcvusRuntime,
+    nested: &dyn Nested,
+    ty: &Ty,
+    input: &mut &[u8],
+) -> SpaceResult<Owned<AcvusRuntime>> {
+    let value = decode(rt, nested, ty, input)?;
+    // SAFETY: `decode` made the word, and no other holder owns it.
+    Ok(unsafe { Owned::from_value(value) })
+}
+
 pub fn decode(
     rt: &AcvusRuntime,
     nested: &dyn Nested,
@@ -242,14 +254,14 @@ pub fn decode(
             }
             Value::array(
                 (0..count)
-                    .map(|_| decode(rt, nested, elem, input).map(Owned::from_value))
+                    .map(|_| decode_owned(rt, nested, elem, input))
                     .collect::<SpaceResult<_>>()?,
             )
         }
         Ty::Tuple(elems) => Value::tuple(
             elems
                 .iter()
-                .map(|t| decode(rt, nested, t, input).map(Owned::from_value))
+                .map(|t| decode_owned(rt, nested, t, input))
                 .collect::<SpaceResult<_>>()?,
         ),
         Ty::Object(fields) => {
@@ -257,7 +269,7 @@ pub fn decode(
             let shape = ObjectShape::in_order(laid.iter().map(|(name, _)| **name).collect());
             let values: Box<[Owned<AcvusRuntime>]> = laid
                 .iter()
-                .map(|(_, t)| decode(rt, nested, t, input).map(Owned::from_value))
+                .map(|(_, t)| decode_owned(rt, nested, t, input))
                 .collect::<SpaceResult<_>>()?;
             Value::object(shape, values)
         }
@@ -272,7 +284,7 @@ pub fn decode(
                 1 => ("Err", err),
                 other => return Err(SpaceError::new(format!("Result: tag {other}"))),
             };
-            let payload = Owned::from_value(decode(rt, nested, held, input)?);
+            let payload = decode_owned(rt, nested, held, input)?;
             Value::variant(rt.shared.interner.intern(tag), Some(payload))
         }
         Ty::Enum { variants, .. } => {
@@ -282,7 +294,7 @@ pub fn decode(
                 .get(index)
                 .ok_or_else(|| SpaceError::new("variant index out of its enum type"))?;
             let payload = match payload_ty {
-                Some(t) => Some(Owned::from_value(decode(rt, nested, t, input)?)),
+                Some(t) => Some(decode_owned(rt, nested, t, input)?),
                 None => None,
             };
             Value::variant(**tag, payload)

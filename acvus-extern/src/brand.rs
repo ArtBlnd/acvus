@@ -16,6 +16,13 @@ use crate::canonical::same_layout;
 /// lent past `'a` (RFC-0079 rule 6): each lifetime parameter and each part a
 /// type parameter fills is at `'a` there, and a part named at one fixed type
 /// holds only what Rust code built at that type.
+///
+/// No part a lifetime or type parameter reaches sits behind an
+/// `UnsafeCell` (`Cell`, `RefCell`, `Mutex`, an atomic, …): a shared
+/// borrow of such a part could store a value lent at `'a` where the brand
+/// no longer names it, which `At<'a>` would not show (RFC-0079 rule 8).
+/// An impl that holds one asserts, in its own `unsafe`, that no call's
+/// loan is ever stored there.
 pub unsafe trait Branded {
     type At<'a>: 'a;
 }

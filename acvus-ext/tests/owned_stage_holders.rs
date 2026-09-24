@@ -397,7 +397,8 @@ fn a_deque_releases_its_elements_once() {
     {
         let mut deque = Deque::<Owned<Counted>>::default();
         for _ in 0..3 {
-            deque.push_back(Owned::from_value(tracked_value(&rt, &drops)));
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            deque.push_back(unsafe { Owned::from_value(tracked_value(&rt, &drops)) });
         }
         assert_eq!(drops.count(), 0, "the elements are in the deque");
     }
@@ -409,7 +410,8 @@ fn a_deque_element_popped_is_released_by_its_receiver() {
     let rt = Counted;
     let drops = Drops::default();
     let mut deque = Deque::<Owned<Counted>>::default();
-    deque.push_front(Owned::from_value(tracked_value(&rt, &drops)));
+    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+    deque.push_front(unsafe { Owned::from_value(tracked_value(&rt, &drops)) });
     let popped = deque
         .pop_front()
         .expect("the element just pushed is the front");
@@ -426,7 +428,8 @@ fn an_abandoned_source_releases_the_elements_it_did_not_yield() {
     let rt = Counted;
     let drops = Drops::default();
     let items = (0..3)
-        .map(|_| Owned::from_value(tracked_value(&rt, &drops)))
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        .map(|_| unsafe { Owned::from_value(tracked_value(&rt, &drops)) })
         .collect();
     {
         let _abandoned = Items::<Owned<Counted>, (), Counted>::of(items);

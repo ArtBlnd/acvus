@@ -227,7 +227,8 @@ where
 
     unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
         let sync = rt.call_is_sync(&value);
-        Self(Owned::from_value(value), sync, PhantomData)
+        // SAFETY: `materialize`'s caller hands over the word it owned.
+        Self(unsafe { Owned::from_value(value) }, sync, PhantomData)
     }
 }
 

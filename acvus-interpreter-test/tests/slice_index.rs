@@ -279,7 +279,8 @@ fn stored_vec(items: &[i64]) -> Value {
     let values: Vec<Owned<AcvusRuntime>> = items
         .iter()
         .copied()
-        .map(|n| Owned::from_value(Value::int(n)))
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        .map(|n| unsafe { Owned::from_value(Value::int(n)) })
         .collect();
     // SAFETY: read back only as this same `Vec<Owned<AcvusRuntime>>`, which
     // is what `vec::as_slice`'s glue derefs.
@@ -287,7 +288,8 @@ fn stored_vec(items: &[i64]) -> Value {
 }
 
 fn page_with(items: &[i64]) -> HashMap<String, Owned<AcvusRuntime>> {
-    [(CONTAINER.to_string(), Owned::from_value(stored_vec(items)))]
+    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+    [(CONTAINER.to_string(), unsafe { Owned::from_value(stored_vec(items)) })]
         .into_iter()
         .collect()
 }
@@ -387,10 +389,12 @@ fn counted_page(len: usize) -> HashMap<String, Owned<AcvusRuntime>> {
     // the buffer only as the `Vec<Owned<AcvusRuntime>>` `vec::as_slice_mut`
     // derefs.
     let values: Vec<Owned<AcvusRuntime>> = (0..len)
-        .map(|_| Owned::from_value(unsafe { Value::erase(Counted) }))
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        .map(|_| unsafe { Owned::from_value(Value::erase(Counted)) })
         .collect();
     let stored = unsafe { Value::erase(values) };
-    [(CONTAINER.to_string(), Owned::from_value(stored))]
+    // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+    [(CONTAINER.to_string(), unsafe { Owned::from_value(stored) })]
         .into_iter()
         .collect()
 }
@@ -457,7 +461,8 @@ async fn index_set_drops_the_element_it_replaces() {
     // SAFETY: as `counted_page`.
     page.insert(
         REPLACEMENT.to_string(),
-        Owned::from_value(unsafe { Value::erase(Counted) }),
+        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+        unsafe { Owned::from_value(Value::erase(Counted)) },
     );
 
     ELEMENTS_DROPPED.store(0, Ordering::Relaxed);

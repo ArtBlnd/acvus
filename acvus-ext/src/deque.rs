@@ -4,6 +4,11 @@
 //! last settled as counts over its own storage: an append-only journal
 //! persists that record instead of the whole value.
 
+// SAFETY: each `unsafe(lent(..))` in this file asserts `NotKept` (RFC-0079
+// rule 8) of a std container's or iterator stage's handler or type. Nothing
+// here holds a static, a cell, a `#[state]` or a thread, and a value of a
+// lent variable leaves a call only through an output its signature names.
+
 use std::collections::VecDeque;
 
 use acvus_extern::{
@@ -219,6 +224,14 @@ where
             identity_params: 0,
             region_params: Self::REGION_PARAMS,
             specializable: vec![true],
+            vars: vec![acvus_extern::DeclaredVar {
+                name: i.intern("T"),
+                // SAFETY: a `Deque` runs no code on its elements but moving,
+                // releasing and journaling them (a context holds data, so a
+                // journaled element holds no loan), and every std handler
+                // over it keeps no element past its call (RFC-0079 rule 8).
+                lending: acvus_extern::Lending::Lent(unsafe { acvus_extern::NotKept::asserted() }),
+            }],
         }
     }
 
@@ -303,7 +316,7 @@ where
         let count = read_u64(input)?;
         let mut d = Deque::default();
         for _ in 0..count {
-            d.items.push_back(Owned::from_value(elem(ty, input)?));
+            d.items.push_back(elem(ty, input)?);
         }
         d.settle();
         Ok(d)
@@ -354,8 +367,8 @@ where
         *op = rest;
         let empty = || SpaceError::new("Deque: a pop on an empty deque in the log");
         match Op::from_byte(*tag)? {
-            Op::PushFront => self.items.push_front(Owned::from_value(elem(ty, op)?)),
-            Op::PushBack => self.items.push_back(Owned::from_value(elem(ty, op)?)),
+            Op::PushFront => self.items.push_front(elem(ty, op)?),
+            Op::PushBack => self.items.push_back(elem(ty, op)?),
             Op::PopFront => drop(self.items.pop_front().ok_or_else(empty)?),
             Op::PopBack => drop(self.items.pop_back().ok_or_else(empty)?),
         }
@@ -366,7 +379,7 @@ where
     fn children(&mut self, type_args: &[Ty], visit: &mut Visit<'_, Rt>) -> SpaceResult<()> {
         let ty = element_of(type_args)?;
         for item in self.items.iter_mut() {
-            visit(ty, item.value_mut())?;
+            visit(ty, item)?;
         }
         Ok(())
     }
@@ -380,7 +393,7 @@ where
     }
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn deque<T>() -> Deque<T>
 where
     T: Var<kind::Type>,
@@ -388,7 +401,7 @@ where
     Deque::default()
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn push_front<T>(d: &mut Deque<T>, item: T)
 where
     T: Var<kind::Type>,
@@ -396,7 +409,7 @@ where
     d.push_front(item);
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn push_back<T>(d: &mut Deque<T>, item: T)
 where
     T: Var<kind::Type>,
@@ -404,7 +417,7 @@ where
     d.push_back(item);
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn pop_front<T>(d: &mut Deque<T>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -412,7 +425,7 @@ where
     d.pop_front()
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn pop_back<T>(d: &mut Deque<T>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -421,7 +434,7 @@ where
 }
 
 /// A deque demotes to a vec: the record is dropped with the deque.
-#[extern_fn(instance_of = crate::vec::vec, effect = pure)]
+#[extern_fn(instance_of = crate::vec::vec, effect = pure, unsafe(lent(T)))]
 #[extern_cast]
 fn vec_deque<T>(d: Deque<T>) -> Vec<T>
 where
@@ -430,7 +443,7 @@ where
     d.items.into()
 }
 
-#[extern_fn(instance_of = sig::into_iter, effect = pure)]
+#[extern_fn(instance_of = sig::into_iter, effect = pure, unsafe(lent(T)))]
 fn into_iter_deque<T, I, Rt>(d: Deque<T>) -> Items<T, I, Rt>
 where
     T: Var<kind::Type> + acvus_extern::OneValue<Rt>,
@@ -440,7 +453,7 @@ where
     Items::of(d.items.into())
 }
 
-#[extern_fn(instance_of = sig::as_iter, effect = pure)]
+#[extern_fn(instance_of = sig::as_iter, effect = pure, unsafe(lent(T)))]
 fn as_iter_deque<T, I, Rt>(d: Ref<'_, Deque<T>, Shared, Rt>) -> Refs<'_, Deque<T>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -450,7 +463,7 @@ where
     Refs::of(d)
 }
 
-#[extern_fn(instance_of = sig::next, effect = pure)]
+#[extern_fn(instance_of = sig::next, effect = pure, unsafe(lent(T)))]
 fn next_refs_deque<'a, T, I, Rt>(
     ctx: &mut acvus_extern::Ctx<'_, Rt>,
     it: &'a mut Refs<'_, Deque<T>, I, Rt>,
@@ -463,7 +476,7 @@ where
     it.step(ctx, Deque::get)
 }
 
-#[extern_fn(effect = pure, ensures(ret = len(d)))]
+#[extern_fn(effect = pure, ensures(ret = len(d)), unsafe(lent(T)))]
 fn len<T>(d: &Deque<T>) -> u64
 where
     T: Var<kind::Type>,
@@ -471,7 +484,7 @@ where
     d.len() as u64
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn is_empty<T>(d: &Deque<T>) -> bool
 where
     T: Var<kind::Type>,
@@ -488,7 +501,7 @@ fn checked_index(name: &'static str, len: usize, index: i64) -> usize {
         .unwrap_or_else(|| panic!("{name}: index {index} is out of range for length {len}"))
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn get<T, Rt>(d: &Deque<T>, index: i64) -> &T
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -498,7 +511,7 @@ where
     &d.items[i]
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn get_mut<T, Rt>(d: &mut Deque<T>, index: i64) -> &mut T
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -508,7 +521,7 @@ where
     &mut d.items[i]
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn first<T, Rt>(d: &Deque<T>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -517,7 +530,7 @@ where
     d.items.front()
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, unsafe(lent(T)))]
 fn last<T, Rt>(d: &Deque<T>) -> Option<&T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

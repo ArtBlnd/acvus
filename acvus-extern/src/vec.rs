@@ -62,9 +62,7 @@ where
             // SAFETY: the branch condition is `into_values`'s contract.
             unsafe { into_values::<T, Rt>(self) }
         } else {
-            self.into_iter()
-                .map(|v| Owned::from_value(v.erase(rt)))
-                .collect()
+            self.into_iter().map(|v| Owned::erased(rt, v)).collect()
         };
         // SAFETY: `Vec<T>` is stored as `Vec<Owned<Rt>>` (RFC-0039 rule 5,
         // RFC-0048 rule 7).
@@ -170,6 +168,13 @@ where
             identity_params: 0,
             region_params: Self::REGION_PARAMS,
             specializable: vec![true],
+            vars: vec![crate::DeclaredVar {
+                name: i.intern("T"),
+                // SAFETY: a `Vec` runs no code of its own on its elements
+                // but moving and releasing them, and every std handler over
+                // it keeps no element past its call (RFC-0079 rule 8).
+                lending: crate::Lending::Lent(unsafe { crate::NotKept::asserted() }),
+            }],
         }
     }
 }

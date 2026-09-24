@@ -2372,7 +2372,11 @@ impl Op for MakeClosure {
             let mut captures = self
                 .captures
                 .iter()
-                .map(|slot| Owned::from_value(regs.read(*slot)));
+                // SAFETY: every register read here that owns a word is in the mask
+                // `take_mask` clears below, so its word moves here; the others
+                // hold words that own nothing (`prepare` builds the mask from the
+                // operands that own).
+                .map(|slot| unsafe { Owned::from_value(regs.read(*slot)) });
             let closure = Value::closure(self.code, &mut captures);
             regs.take_mask(self.takes);
             closure

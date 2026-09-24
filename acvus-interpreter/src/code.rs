@@ -409,7 +409,9 @@ impl Konst {
             Konst::List(items) => Value::array(
                 items
                     .iter()
-                    .map(|item| Owned::from_value(item.value()))
+                    // SAFETY: `value` makes a fresh word, which no other
+                    // holder owns.
+                    .map(|item| unsafe { Owned::from_value(item.value()) })
                     .collect(),
             ),
         }
