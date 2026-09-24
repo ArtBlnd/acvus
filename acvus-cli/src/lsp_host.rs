@@ -366,6 +366,7 @@ impl Host for CliHost {
                         qref: compile::entry_ref(interner),
                         mode: source.mode,
                         ty: compile::entry_ty(),
+                        inputs: acvus_mir::graph::Inputs::FromReads,
                     },
                 }],
             })

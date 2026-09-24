@@ -37,7 +37,7 @@ fn the_resolved_type_of_a_borrowed_source_carries_the_count() {
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse"));
     functions.push(Function {
         qref: entry,
-        kind: FnKind::Local(ast),
+        kind: FnKind::Local(ast, acvus_mir::graph::Inputs::FromReads),
         ty: PolyTy::Fn {
             params: vec![],
             ret: Box::new(PolyBuilder::new().fresh_ty_var()),

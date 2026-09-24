@@ -30,6 +30,7 @@ fn document(interner: &Interner, name: &str) -> Document {
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs: acvus_mir::graph::Inputs::FromReads,
     }
 }
 
@@ -791,6 +792,7 @@ impl Host for TailHost {
                 effect: Effect::OPAQUE.into(),
                 flows: acvus_mir::ty::Flows::Every.into(),
             },
+            inputs: acvus_mir::graph::Inputs::FromReads,
         };
         Listing {
             compilations: vec![CompilationSpec {

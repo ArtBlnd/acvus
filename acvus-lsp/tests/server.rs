@@ -40,6 +40,7 @@ fn document(interner: &Interner, name: &str, mode: Mode) -> Document {
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs: acvus_mir::graph::Inputs::FromReads,
     }
 }
 

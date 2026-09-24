@@ -1137,7 +1137,7 @@ impl LawSite<'_> {
         let function = self.declared.get(named).ok_or_else(refused)?;
         match &function.kind {
             FnKind::Extern { .. } => Ok(&function.ty),
-            FnKind::Local(_) => Err(refused()),
+            FnKind::Local(..) => Err(refused()),
         }
     }
 

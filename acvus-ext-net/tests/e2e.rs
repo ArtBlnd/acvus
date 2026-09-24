@@ -85,7 +85,7 @@ fn reissue_of(source: &str) -> Reissue {
     let mut pb = PolyBuilder::new();
     let mut functions = vec![Function {
         qref: entry,
-        kind: FnKind::Local(parsed(&i, source)),
+        kind: FnKind::Local(parsed(&i, source), acvus_mir::graph::Inputs::FromReads),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(lift_declaration(&Ty::String, &mut pb)),

@@ -37,7 +37,7 @@ pub(crate) fn make_graph(
         functions: Freeze::new(vec![
             Function {
                 qref: test_qref,
-                kind: FnKind::Local(parsed),
+                kind: FnKind::Local(parsed, crate::graph::Inputs::FromReads),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),

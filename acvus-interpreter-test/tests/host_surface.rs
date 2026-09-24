@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acvus_extern::{Ctx, Declared, Erased, ExternType, Registry, TyArg, extern_fn, extern_registry};
 use acvus_interpreter::{
-    AcvusRuntime, EntryError, Host, InMemoryContext, OutputError, PageError, Plain, Program,
-    SequentialExecutor, Source, Space, SpacePage,
+    AcvusRuntime, EntryError, EntryPart, Host, InMemoryContext, OutputError, PageError, Plain,
+    Program, SequentialExecutor, Source, Space, SpacePage,
 };
+use acvus_mir::graph::{Bindings, BoundValue};
 
 type Rt = AcvusRuntime;
 use acvus_utils::Interner;
@@ -119,8 +120,8 @@ fn int_of(page: &mut InMemoryContext, key: &str) -> Result<i64, PageError> {
 }
 
 async fn run_unit(program: &Program, name: &str, page: &Arc<InMemoryContext>) {
-    let entry = program.entry::<()>(name).expect("the entry returns `()`");
-    entry.run(page).await.expect("the page holds the graph's contexts");
+    let entry = program.entry::<(), ()>(name).expect("the entry returns `()`");
+    entry.run(page, ()).await.expect("the page holds the graph's contexts");
 }
 
 const INIT_LOG: &str = "@log = vec([]);";
@@ -129,8 +130,8 @@ const PUSH_LOG: &str = r#"@log.push("x".to_string());"#;
 fn log_program(i: &Interner) -> Program {
     compiled(
         host(i)
-            .entry::<()>("init", Source::Script(INIT_LOG))
-            .entry::<()>("turn", Source::Script(PUSH_LOG)),
+            .entry::<(), ()>("init", Source::Script(INIT_LOG))
+            .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
     )
 }
 
@@ -154,8 +155,8 @@ fn two_stores_of_one_enum_context_solve_to_the_union_of_their_variants() {
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<()>("init", Source::Script("@mode = Mode::Idle;"))
-            .entry::<()>("turn", Source::Script("@mode = Mode::Busy;")),
+            .entry::<(), ()>("init", Source::Script("@mode = Mode::Idle;"))
+            .entry::<(), ()>("turn", Source::Script("@mode = Mode::Busy;")),
     );
     assert_eq!(solved(&program, &i, "mode"), "Mode{Busy, Idle}");
     let declared = <Mode as Declared>::declared(&i).display(&i).to_string();
@@ -167,8 +168,8 @@ async fn an_enum_context_two_entries_store_is_read_through_its_projection() {
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<()>("init", Source::Script("@job = Job::Idle;"))
-            .entry::<()>("turn", Source::Script("@job = Job::Busy(7);")),
+            .entry::<(), ()>("init", Source::Script("@job = Job::Idle;"))
+            .entry::<(), ()>("turn", Source::Script("@job = Job::Busy(7);")),
     );
     assert_eq!(solved(&program, &i, "job"), "Job{Busy(i64), Idle}");
     let mut page = Arc::new(InMemoryContext::of(program.contexts()));
@@ -191,7 +192,7 @@ async fn an_enum_context_two_entries_store_is_read_through_its_projection() {
 #[tokio::test]
 async fn a_context_the_graph_leaves_open_closes_to_never_and_no_rust_type_reads_it() {
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<()>("init", Source::Script("@xs = [];")));
+    let program = compiled(host(&i).entry::<(), ()>("init", Source::Script("@xs = [];")));
     assert_eq!(solved(&program, &i, "xs"), "Array<!, 0>");
     let mut page = Arc::new(InMemoryContext::of(program.contexts()));
     run_unit(&program, "init", &page).await;
@@ -267,15 +268,15 @@ async fn a_host_insert_is_what_the_next_run_reads() {
 async fn a_space_that_stores_a_context_at_another_type_opens_no_page() {
     let i = Interner::new();
     let space = Arc::new(Space::new(Plain));
-    let text = compiled(host(&i).entry::<()>("init", Source::Script(r#"@n = "a".to_string();"#)));
+    let text = compiled(host(&i).entry::<(), ()>("init", Source::Script(r#"@n = "a".to_string();"#)));
     let page = Arc::new(
         SpacePage::of(Arc::clone(&space), text.contexts()).expect("the space holds nothing"),
     );
-    let entry = text.entry::<()>("init").expect("the entry returns `()`");
-    entry.run(&page).await.expect("the page holds `@n`");
+    let entry = text.entry::<(), ()>("init").expect("the entry returns `()`");
+    entry.run(&page, ()).await.expect("the page holds `@n`");
     page.commit_opened().expect("the space takes `@n`");
 
-    let number = compiled(host(&i).entry::<()>("init", Source::Script("@n = 1;")));
+    let number = compiled(host(&i).entry::<(), ()>("init", Source::Script("@n = 1;")));
     let opened = SpacePage::of(Arc::clone(&space), number.contexts()).map(|_| ());
     let Err(PageError::Mismatched { key, held, asked }) = opened else {
         panic!("a space storing `@n` as `String` opened for an `i64` `@n`: {opened:?}")
@@ -288,16 +289,16 @@ async fn a_space_that_stores_a_context_at_another_type_opens_no_page() {
 #[tokio::test]
 async fn a_page_that_holds_a_context_at_another_type_does_not_run() {
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<i64>("main", Source::Script("@n")).entry::<()>(
+    let program = compiled(host(&i).entry::<(), i64>("main", Source::Script("@n")).entry::<(), ()>(
         "init",
         Source::Script("@n = 1;"),
     ));
-    let other = compiled(host(&i).entry::<()>("init", Source::Script(r#"@n = "a".to_string();"#)));
+    let other = compiled(host(&i).entry::<(), ()>("init", Source::Script(r#"@n = "a".to_string();"#)));
     let page = Arc::new(InMemoryContext::of(other.contexts()));
 
-    let entry = program.entry::<i64>("main").expect("the entry returns `i64`");
+    let entry = program.entry::<(), i64>("main").expect("the entry returns `i64`");
     assert!(matches!(
-        entry.run(&page).await,
+        entry.run(&page, ()).await,
         Err(PageError::Mismatched { .. })
     ));
 }
@@ -305,11 +306,11 @@ async fn a_page_that_holds_a_context_at_another_type_does_not_run() {
 #[tokio::test]
 async fn a_string_result_is_read_and_edited_through_its_output() {
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<String>("main", Source::Script(r#""hello".to_string()"#)));
+    let program = compiled(host(&i).entry::<(), String>("main", Source::Script(r#""hello".to_string()"#)));
     let page = Arc::new(InMemoryContext::of(program.contexts()));
 
-    let entry = program.entry::<String>("main").expect("the entry returns `String`");
-    let mut output = entry.run(&page).await.expect("the graph has no context");
+    let entry = program.entry::<(), String>("main").expect("the entry returns `String`");
+    let mut output = entry.run(&page, ()).await.expect("the graph has no context");
     let kept: String = output.with(|s: &str| s.to_owned()).expect("the result is a `String`");
     assert_eq!(kept, "hello");
     output
@@ -322,14 +323,14 @@ async fn a_string_result_is_read_and_edited_through_its_output() {
 #[tokio::test]
 async fn a_structural_result_is_read_and_edited_through_its_projection() {
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<Profile>(
+    let program = compiled(host(&i).entry::<(), Profile>(
         "main",
         Source::Script(r#"profile("ann".to_string(), 41)"#),
     ));
     let page = Arc::new(InMemoryContext::of(program.contexts()));
 
-    let entry = program.entry::<Profile>("main").expect("the entry returns `Profile`");
-    let mut output = entry.run(&page).await.expect("the graph has no context");
+    let entry = program.entry::<(), Profile>("main").expect("the entry returns `Profile`");
+    let mut output = entry.run(&page, ()).await.expect("the graph has no context");
     let read = |p: ProfileRef<'_>| (p.name.clone(), *p.age);
     assert_eq!(output.with(read).expect("the result is a `Profile`"), ("ann".to_owned(), 41));
     output
@@ -345,7 +346,7 @@ async fn a_structural_result_is_read_and_edited_through_its_projection() {
 fn an_entry_that_returns_another_type_is_refused_at_compile_time() {
     let i = Interner::new();
     let refused = host(&i)
-        .entry::<String>("main", Source::Script("1 + 1"))
+        .entry::<(), String>("main", Source::Script("1 + 1"))
         .compile(Arc::new(SequentialExecutor));
 
     let Err(refusals) = refused else {
@@ -363,14 +364,14 @@ fn an_entry_that_returns_another_type_is_refused_at_compile_time() {
 #[test]
 fn an_entry_asked_for_at_another_type_than_it_declared_is_refused_before_it_runs() {
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<String>("main", Source::Script(r#""a".to_string()"#)));
+    let program = compiled(host(&i).entry::<(), String>("main", Source::Script(r#""a".to_string()"#)));
 
     assert!(matches!(
-        program.entry::<i64>("main").map(|_| ()),
+        program.entry::<(), i64>("main").map(|_| ()),
         Err(EntryError::Mismatched { .. })
     ));
     assert!(matches!(
-        program.entry::<String>("elsewhere").map(|_| ()),
+        program.entry::<(), String>("elsewhere").map(|_| ()),
         Err(EntryError::NotInGraph { .. })
     ));
 }
@@ -399,14 +400,14 @@ async fn dropping_an_output_releases_its_value_once() {
     const ELEMENTS: usize = 3;
     let counting = Counting::start();
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<Tracked>(
+    let program = compiled(host(&i).entry::<(), Tracked>(
         "main",
         Source::Script(&format!("tracked({ELEMENTS})")),
     ));
     let page = Arc::new(InMemoryContext::of(program.contexts()));
 
-    let entry = program.entry::<Tracked>("main").expect("the entry returns `Tracked`");
-    let output = entry.run(&page).await.expect("the graph has no context");
+    let entry = program.entry::<(), Tracked>("main").expect("the entry returns `Tracked`");
+    let output = entry.run(&page, ()).await.expect("the graph has no context");
     assert_eq!(output.with(|t: &Tracked| t.0.len()).expect("the result is a `Tracked`"), ELEMENTS);
     assert_eq!(counting.released(), 0, "the output holds every element");
     drop(output);
@@ -436,8 +437,8 @@ fn a_container_is_declared_from_its_parts() {
 fn fresh_log_program(i: &Interner) -> Program {
     compiled(
         host(i)
-            .entry::<()>("init", Source::Script(INIT_LOG))
-            .entry::<()>("turn", Source::Script(&format!("bump(); {PUSH_LOG}"))),
+            .entry::<(), ()>("init", Source::Script(INIT_LOG))
+            .entry::<(), ()>("turn", Source::Script(&format!("bump(); {PUSH_LOG}"))),
     )
 }
 
@@ -465,8 +466,8 @@ async fn a_turn_before_its_initializer_is_refused_before_any_of_it_runs() {
     let mut page = Arc::new(InMemoryContext::of(program.contexts()));
     let bumps_before = BUMPS.load(Ordering::SeqCst);
 
-    let turn = program.entry::<()>("turn").expect("the entry returns `()`");
-    let refused = turn.run(&page).await.map(|_| ());
+    let turn = program.entry::<(), ()>("turn").expect("the entry returns `()`");
+    let refused = turn.run(&page, ()).await.map(|_| ());
 
     let Err(PageError::Absent { key }) = refused else {
         panic!("a turn that pushes to `@log` ran on a page without `@log`: {refused:?}")
@@ -492,15 +493,15 @@ async fn a_run_whose_callee_fetches_a_context_the_page_lacks_is_refused_before_i
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<()>("init", Source::Script(INIT_LOG))
-            .entry::<()>("log_x", Source::Script(PUSH_LOG))
-            .entry::<()>("turn", Source::Script("bump(); log_x();")),
+            .entry::<(), ()>("init", Source::Script(INIT_LOG))
+            .entry::<(), ()>("log_x", Source::Script(PUSH_LOG))
+            .entry::<(), ()>("turn", Source::Script("bump(); log_x();")),
     );
     let page = Arc::new(InMemoryContext::of(program.contexts()));
     let bumps_before = BUMPS.load(Ordering::SeqCst);
 
-    let turn = program.entry::<()>("turn").expect("the entry returns `()`");
-    let refused = turn.run(&page).await.map(|_| ());
+    let turn = program.entry::<(), ()>("turn").expect("the entry returns `()`");
+    let refused = turn.run(&page, ()).await.map(|_| ());
     let Err(PageError::Absent { key }) = refused else {
         panic!("a run whose callee fetches `@log` ran without `@log`: {refused:?}")
     };
@@ -517,20 +518,20 @@ async fn a_context_assigned_on_one_branch_only_is_fetched_and_refused_on_an_empt
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<i64>("main", Source::Script("if coin() { @x = 1; } @x"))
-            .entry::<()>("init", Source::Script("@x = 5;")),
+            .entry::<(), i64>("main", Source::Script("if coin() { @x = 1; } @x"))
+            .entry::<(), ()>("init", Source::Script("@x = 5;")),
     );
     let page = Arc::new(InMemoryContext::of(program.contexts()));
-    let main = program.entry::<i64>("main").expect("the entry returns `i64`");
+    let main = program.entry::<(), i64>("main").expect("the entry returns `i64`");
 
-    let refused = main.run(&page).await.map(|_| ());
+    let refused = main.run(&page, ()).await.map(|_| ());
     let Err(PageError::Absent { key }) = refused else {
         panic!("a body that may read `@x` unassigned ran without `@x`: {refused:?}")
     };
     assert_eq!(key, "x");
 
     run_unit(&program, "init", &page).await;
-    let output = main.run(&page).await.expect("the page holds `@x`");
+    let output = main.run(&page, ()).await.expect("the page holds `@x`");
     assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 1);
 }
 
@@ -542,13 +543,13 @@ async fn a_whole_assignment_inside_a_callee_does_not_spare_the_callers_fetch() {
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<()>("set_x", Source::Script("@x = 1;"))
-            .entry::<i64>("main", Source::Script("set_x(); @x")),
+            .entry::<(), ()>("set_x", Source::Script("@x = 1;"))
+            .entry::<(), i64>("main", Source::Script("set_x(); @x")),
     );
     let mut page = Arc::new(InMemoryContext::of(program.contexts()));
-    let main = program.entry::<i64>("main").expect("the entry returns `i64`");
+    let main = program.entry::<(), i64>("main").expect("the entry returns `i64`");
 
-    let refused = main.run(&page).await.map(|_| ());
+    let refused = main.run(&page, ()).await.map(|_| ());
     let Err(PageError::Absent { key }) = refused else {
         panic!("the caller read `@x` without fetching it: {refused:?}")
     };
@@ -557,7 +558,7 @@ async fn a_whole_assignment_inside_a_callee_does_not_spare_the_callers_fetch() {
     exclusive(&mut page)
         .insert("x", 7_i64)
         .expect("`@x` is an `i64`");
-    let output = main.run(&page).await.expect("the page holds `@x`");
+    let output = main.run(&page, ()).await.expect("the page holds `@x`");
     assert_eq!(
         output.with(|n: &i64| *n).expect("the result is an `i64`"),
         1,
@@ -570,13 +571,13 @@ async fn a_call_that_writes_a_context_before_the_body_assigns_it_makes_the_body_
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<()>("set_x", Source::Script("@x = 1;"))
-            .entry::<i64>("main", Source::Script("set_x(); @x = 2; @x")),
+            .entry::<(), ()>("set_x", Source::Script("@x = 1;"))
+            .entry::<(), i64>("main", Source::Script("set_x(); @x = 2; @x")),
     );
-    let main = program.entry::<i64>("main").expect("the entry returns `i64`");
+    let main = program.entry::<(), i64>("main").expect("the entry returns `i64`");
 
     let empty = Arc::new(InMemoryContext::of(program.contexts()));
-    let refused = main.run(&empty).await.map(|_| ());
+    let refused = main.run(&empty, ()).await.map(|_| ());
     let Err(PageError::Absent { key }) = refused else {
         panic!("the body skipped the fetch the call's bracket needs: {refused:?}")
     };
@@ -586,7 +587,7 @@ async fn a_call_that_writes_a_context_before_the_body_assigns_it_makes_the_body_
     exclusive(&mut page)
         .insert("x", 7_i64)
         .expect("`@x` is an `i64`");
-    let output = main.run(&page).await.expect("the page holds `@x`");
+    let output = main.run(&page, ()).await.expect("the page holds `@x`");
     assert_eq!(
         output.with(|n: &i64| *n).expect("the result is an `i64`"),
         2,
@@ -601,22 +602,22 @@ async fn a_callee_reads_what_its_caller_assigned_before_the_call() {
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<i64>("read_x", Source::Script("@x"))
-            .entry::<i64>("main", Source::Script("@x = 3; read_x()")),
+            .entry::<(), i64>("read_x", Source::Script("@x"))
+            .entry::<(), i64>("main", Source::Script("@x = 3; read_x()")),
     );
     let page = Arc::new(InMemoryContext::of(program.contexts()));
 
-    let main = program.entry::<i64>("main").expect("the entry returns `i64`");
+    let main = program.entry::<(), i64>("main").expect("the entry returns `i64`");
     let output = main
-        .run(&page)
+        .run(&page, ())
         .await
         .expect("the caller commits `@x` before the callee fetches it");
     assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 3);
 
-    let read_x = program.entry::<i64>("read_x").expect("the entry returns `i64`");
+    let read_x = program.entry::<(), i64>("read_x").expect("the entry returns `i64`");
     let empty = Arc::new(InMemoryContext::of(program.contexts()));
     assert!(matches!(
-        read_x.run(&empty).await.map(|_| ()),
+        read_x.run(&empty, ()).await.map(|_| ()),
         Err(PageError::Absent { .. })
     ));
 }
@@ -641,7 +642,7 @@ async fn a_store_only_run_over_a_held_value_releases_the_value_it_replaces_once(
     const ELEMENTS: usize = 3;
     let counting = Counting::start();
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<()>(
+    let program = compiled(host(&i).entry::<(), ()>(
         "init",
         Source::Script(&format!("@t = tracked({ELEMENTS});")),
     ));
@@ -682,8 +683,8 @@ async fn a_derived_context_is_edited_through_its_projection_and_the_next_run_rea
     let i = Interner::new();
     let program = compiled(
         host(&i)
-            .entry::<()>("init", Source::Script(r#"@p = profile("ann".to_string(), 41);"#))
-            .entry::<i64>("age", Source::Script("@p.age")),
+            .entry::<(), ()>("init", Source::Script(r#"@p = profile("ann".to_string(), 41);"#))
+            .entry::<(), i64>("age", Source::Script("@p.age")),
     );
     let mut page = Arc::new(InMemoryContext::of(program.contexts()));
     run_unit(&program, "init", &page).await;
@@ -699,8 +700,8 @@ async fn a_derived_context_is_edited_through_its_projection_and_the_next_run_rea
         .expect("`@p` holds a `Profile`");
     assert_eq!(name, "anne");
 
-    let age = program.entry::<i64>("age").expect("the entry returns `i64`");
-    let output = age.run(&page).await.expect("the page holds `@p`");
+    let age = program.entry::<(), i64>("age").expect("the entry returns `i64`");
+    let output = age.run(&page, ()).await.expect("the page holds `@p`");
     assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 42);
 }
 
@@ -723,8 +724,8 @@ async fn a_closure_of_another_type_is_refused_before_it_runs_and_the_page_is_unc
     assert_eq!(asked, "&mut String");
     assert_eq!(log_of(exclusive(&mut page)).expect("`@log` is held"), ["x"]);
 
-    let entry = program.entry::<()>("turn").expect("the entry returns `()`");
-    let output = entry.run(&page).await.expect("the page holds `@log`");
+    let entry = program.entry::<(), ()>("turn").expect("the entry returns `()`");
+    let output = entry.run(&page, ()).await.expect("the page holds `@log`");
     let mut ran = false;
     let refused = output.with(|_: &i64| ran = true);
     assert!(matches!(refused, Err(OutputError::Mismatched { .. })), "{refused:?}");
@@ -734,7 +735,7 @@ async fn a_closure_of_another_type_is_refused_before_it_runs_and_the_page_is_unc
 #[tokio::test]
 async fn a_string_context_is_kept_as_a_copy_the_host_makes() {
     let i = Interner::new();
-    let program = compiled(host(&i).entry::<()>("init", Source::Script(r#"@name = "ann".to_string();"#)));
+    let program = compiled(host(&i).entry::<(), ()>("init", Source::Script(r#"@name = "ann".to_string();"#)));
     let mut page = Arc::new(InMemoryContext::of(program.contexts()));
     run_unit(&program, "init", &page).await;
 
@@ -757,8 +758,8 @@ async fn a_space_page_lends_what_it_loads_and_commits_what_it_was_lent() {
     let space = Arc::new(Space::new(Plain));
     let program = compiled(
         host(&i)
-            .entry::<()>("init", Source::Script(r#"@name = "ann".to_string();"#))
-            .entry::<String>("name", Source::Script("@name")),
+            .entry::<(), ()>("init", Source::Script(r#"@name = "ann".to_string();"#))
+            .entry::<(), String>("name", Source::Script("@name")),
     );
     let page = Arc::new(SpacePage::of(Arc::clone(&space), program.contexts()).expect("empty"));
     run_unit_on(&program, "init", &page).await;
@@ -775,12 +776,212 @@ async fn a_space_page_lends_what_it_loads_and_commits_what_it_was_lent() {
     reopened.commit_opened().expect("the space takes the edit");
 
     let fresh = Arc::new(SpacePage::of(Arc::clone(&space), program.contexts()).expect("same types"));
-    let entry = program.entry::<String>("name").expect("the entry returns `String`");
-    let output = entry.run(&fresh).await.expect("the space holds `@name`");
+    let entry = program.entry::<(), String>("name").expect("the entry returns `String`");
+    let output = entry.run(&fresh, ()).await.expect("the space holds `@name`");
     assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "ann?");
 }
 
 async fn run_unit_on(program: &Program, name: &str, page: &Arc<SpacePage>) {
-    let entry = program.entry::<()>(name).expect("the entry returns `()`");
-    entry.run(page).await.expect("the page holds the graph's contexts");
+    let entry = program.entry::<(), ()>(name).expect("the entry returns `()`");
+    entry.run(page, ()).await.expect("the page holds the graph's contexts");
+}
+
+// -- An entry's `$` inputs are declared by Rust type (RFC-0090 rule 2) --
+
+#[derive(TyArg)]
+pub struct N {
+    n: i64,
+}
+
+#[derive(TyArg)]
+pub struct S {
+    s: String,
+}
+
+#[derive(TyArg)]
+pub struct DeclaredAgainstNameOrder {
+    b: i64,
+    a: i64,
+}
+
+#[derive(TyArg)]
+pub struct Spare {
+    used: i64,
+    unused: String,
+}
+
+#[derive(TyArg)]
+pub struct HeldProfile {
+    p: Profile,
+}
+
+#[derive(TyArg)]
+pub struct Maybe {
+    m: Option<i64>,
+}
+
+#[derive(TyArg)]
+pub struct Wrong {
+    n: String,
+}
+
+fn refusal_messages(host: Host) -> Vec<String> {
+    match host.compile(Arc::new(SequentialExecutor)) {
+        Ok(_) => panic!("the program compiled"),
+        Err(refusals) => refusals.into_iter().map(|refusal| refusal.message).collect(),
+    }
+}
+
+async fn int_result<I>(program: &Program, inputs: I) -> i64
+where
+    I: acvus_extern::Declared + acvus_extern::Cross<Rt, ReturnForm: acvus_extern::Returned<Verdict = ()>>,
+{
+    let page = Arc::new(InMemoryContext::of(program.contexts()));
+    let entry = program.entry::<I, i64>("main").expect("the entry takes `I` and returns `i64`");
+    let output = entry.run(&page, inputs).await.expect("the graph has no context");
+    output.with(|n: &i64| *n).expect("the result is an `i64`")
+}
+
+#[test]
+fn a_dollar_read_by_an_entry_declaring_no_inputs_is_refused_at_compile_time() {
+    let i = Interner::new();
+    let messages = refusal_messages(host(&i).entry::<(), i64>("main", Source::Script("$n + 1")));
+    assert!(
+        messages.iter().any(|message| message.contains("`$n`")),
+        "{messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_input_crosses_into_the_parameter_its_field_names() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<N, i64>("main", Source::Script("$n + 1")));
+    assert_eq!(int_result(&program, N { n: 41 }).await, 42);
+}
+
+#[tokio::test]
+async fn a_text_input_crosses_as_the_string_it_is() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<S, String>("main", Source::Script(r#"$s + "x""#)));
+    let page = Arc::new(InMemoryContext::of(program.contexts()));
+    let entry = program.entry::<S, String>("main").expect("the entry takes `S`");
+    let output = entry
+        .run(&page, S { s: "jun".to_owned() })
+        .await
+        .expect("the graph has no context");
+    assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "junx");
+}
+
+#[tokio::test]
+async fn two_inputs_each_reach_the_parameter_of_their_own_name() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<DeclaredAgainstNameOrder, i64>("main", Source::Script("$a * 10 + $b")));
+    assert_eq!(int_result(&program, DeclaredAgainstNameOrder { b: 2, a: 1 }).await, 12);
+}
+
+#[tokio::test]
+async fn an_input_the_entry_does_not_read_still_crosses() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<Spare, i64>("main", Source::Script("$used")));
+    let spare = Spare {
+        used: 7,
+        unused: "left alone".to_owned(),
+    };
+    assert_eq!(int_result(&program, spare).await, 7);
+}
+
+#[tokio::test]
+async fn a_derived_struct_input_is_read_by_its_fields() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<HeldProfile, i64>("main", Source::Script("$p.age + 1")));
+    let held = HeldProfile {
+        p: Profile {
+            name: "ann".to_owned(),
+            age: 41,
+        },
+    };
+    assert_eq!(int_result(&program, held).await, 42);
+}
+
+#[tokio::test]
+async fn an_option_input_crosses_present_or_absent() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<Maybe, i64>(
+        "main",
+        Source::Script("match $m { Some(x) => x, None => 0 }"),
+    ));
+    assert_eq!(int_result(&program, Maybe { m: Some(5) }).await, 5);
+    assert_eq!(int_result(&program, Maybe { m: None }).await, 0);
+}
+
+#[test]
+fn an_entry_asked_for_with_other_inputs_than_it_declared_is_refused_before_it_runs() {
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<N, i64>("main", Source::Script("$n")));
+
+    for refused in [
+        program.entry::<Wrong, i64>("main").map(|_| ()),
+        program.entry::<(), i64>("main").map(|_| ()),
+    ] {
+        assert!(
+            matches!(
+                refused,
+                Err(EntryError::Mismatched {
+                    part: EntryPart::Inputs,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn an_input_a_binding_already_fixes_is_refused_at_compile_time() {
+    let i = Interner::new();
+    let mut bindings = Bindings::default();
+    bindings
+        .bind(i.intern("n"), BoundValue::Int(1))
+        .expect("an integer types on its own");
+    let messages = refusal_messages(
+        host(&i)
+            .bindings(bindings)
+            .entry::<N, i64>("main", Source::Script("$n")),
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`$n`") && message.contains("binding")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn inputs_declared_by_neither_unit_nor_a_struct_are_refused_at_compile_time() {
+    let i = Interner::new();
+    let messages = refusal_messages(host(&i).entry::<i64, i64>("main", Source::Script("1")));
+    assert!(
+        messages.iter().any(|message| message.contains("inputs of the entry `main`")),
+        "{messages:?}"
+    );
+}
+
+#[derive(TyArg)]
+pub struct UnreadTracked {
+    used: i64,
+    tracked: Tracked,
+}
+
+#[tokio::test]
+async fn an_input_the_entry_does_not_read_is_released_once_by_the_run() {
+    const ELEMENTS: usize = 3;
+    let counting = Counting::start();
+    let i = Interner::new();
+    let program = compiled(host(&i).entry::<UnreadTracked, i64>("main", Source::Script("$used")));
+    let inputs = UnreadTracked {
+        used: 7,
+        tracked: Tracked((0..ELEMENTS).map(|_| Counted).collect()),
+    };
+    assert_eq!(int_result(&program, inputs).await, 7);
+    assert_eq!(counting.released(), ELEMENTS);
 }

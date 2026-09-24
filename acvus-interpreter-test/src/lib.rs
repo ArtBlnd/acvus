@@ -229,7 +229,7 @@ where
     let mut functions = Vec::new();
     functions.push(Function {
         qref: entry_qref,
-        kind: FnKind::Local(main),
+        kind: FnKind::Local(main, acvus_mir::graph::Inputs::FromReads),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(lift_declaration(&ret, &mut pb)),
@@ -251,7 +251,7 @@ where
         };
         functions.push(Function {
             qref: QualifiedRef::root(interner.intern(helper.name)),
-            kind: FnKind::Local(ParsedAst::Script(parsed)),
+            kind: FnKind::Local(ParsedAst::Script(parsed), acvus_mir::graph::Inputs::Declared),
             ty: TyTerm::Fn {
                 params: helper.params.clone(),
                 ret: Box::new(pb.fresh_ty_var()),

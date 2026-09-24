@@ -208,13 +208,18 @@ CompilationGraph {
 }
 
 Function { qref: QualifiedRef, kind: FnKind, ty: PolyTy }
-FnKind::Local(ParsedAst) | FnKind::Extern { bounds: Vec<TyVarBound> }
+FnKind::Local(ParsedAst, Inputs) | FnKind::Extern { bounds: Vec<TyVarBound> }
+Inputs::Declared | Inputs::FromReads
 Context { qref: QualifiedRef, ty: PolyTy }
 ```
 
 The entry is an ordinary declared function: its `PolyTy::Fn { ret }` is
 what the host declared `main` returns (RFC-0054), lifted through the same
-`lift_declaration` the hosts call for context types.
+`lift_declaration` the hosts call for context types. Its `PolyTy::Fn { params }`
+are the `$` inputs the host declared, and `Inputs::Declared` refuses a `$`
+outside them and the bindings (RFC-0054 rule 6). `Inputs::FromReads` makes each
+further `$` the body reads one more parameter, for an analysis that reports
+what a body requires.
 
 ## The pipeline
 

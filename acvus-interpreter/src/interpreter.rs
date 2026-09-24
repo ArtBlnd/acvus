@@ -120,7 +120,7 @@ pub struct Interpreter {
     page: Arc<dyn RuntimeContext>,
     flight: Arc<Flight>,
     tally: Arc<Tally>,
-    spawn_args: Vec<Value>,
+    args: Vec<Value>,
     _flying: Option<Flying>,
 }
 
@@ -143,7 +143,7 @@ impl Interpreter {
             page,
             flight: Flight::new(),
             tally: Tally::outermost(),
-            spawn_args: Vec::new(),
+            args: Vec::new(),
             _flying: None,
         }
     }
@@ -161,7 +161,7 @@ impl Interpreter {
             page: Arc::clone(&rt.page),
             flight: Arc::clone(&rt.flight),
             tally: Arc::clone(&rt.tally),
-            spawn_args: args,
+            args,
             _flying: Some(rt.flight.start()),
         };
         AsyncJob::new(Box::pin(async move { run.run().await }))
@@ -188,14 +188,19 @@ impl Interpreter {
     /// entries` carries which bodies are entries and `typeck::ResultCrossing::
     /// OneValue` refuses it there, so reaching this assert means a program
     /// arrived without passing the checker.
+    #[cfg(feature = "tooling")]
     pub async fn execute(&mut self) -> Result<Value, PageError> {
+        Ok(self.accept_page()?.run(Vec::new()).await)
+    }
+
+    pub(crate) fn accept_page(&mut self) -> Result<Accepted<'_>, PageError> {
         let module = lookup_module(&self.shared, &self.entry);
-        if let Some(key) = module.fetched_first.iter().find(|key| !self.page.holds(key)) {
-            return Err(PageError::Absent {
+        match module.fetched_first.iter().find(|key| !self.page.holds(key)) {
+            Some(key) => Err(PageError::Absent {
                 key: key.to_string(),
-            });
+            }),
+            None => Ok(Accepted(self)),
         }
-        Ok(self.run().await)
     }
 
     async fn run(&mut self) -> Value {
@@ -205,12 +210,21 @@ impl Interpreter {
             "the entry's result is a view, and a host reads one value by kind (RFC-0054); \
              typeck refuses this at `CompilationGraph::entries`, so the checker was bypassed"
         );
-        let args = std::mem::take(&mut self.spawn_args);
+        let args = std::mem::take(&mut self.args);
         call_module(self.runtime(), self.entry, args).await
     }
 
     #[cfg(feature = "tooling")]
     pub fn take_writes(&self) -> Vec<ContextWrite> {
         self.page.take_writes()
+    }
+}
+
+pub(crate) struct Accepted<'i>(&'i mut Interpreter);
+
+impl Accepted<'_> {
+    pub(crate) async fn run(self, args: Vec<Value>) -> Value {
+        self.0.args = args;
+        self.0.run().await
     }
 }

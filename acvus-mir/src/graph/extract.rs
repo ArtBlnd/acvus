@@ -43,7 +43,7 @@ pub fn extract(interner: &Interner, graph: &CompilationGraph) -> ExtractResult {
 /// Parse a single local function. Returns None for Extern functions.
 pub fn extract_one(_interner: &Interner, func: &Function) -> Option<ParsedSource> {
     match &func.kind {
-        FnKind::Local(ast) => match ast {
+        FnKind::Local(ast, _) => match ast {
             ParsedAst::Script(script) => {
                 let _ = acvus_ast::extract_script_context_refs(script);
                 Some(ParsedSource::Script(script.clone()))
@@ -70,9 +70,10 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: fn_qref,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
+                kind: FnKind::Local(
+                    ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse")),
+                    crate::graph::Inputs::FromReads,
+                ),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),

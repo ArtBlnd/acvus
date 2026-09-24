@@ -206,7 +206,7 @@ fn build_call_graph(
     let name_to_id: FxHashMap<Astr, QualifiedRef> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(..)))
         .map(|f| (f.qref.name, f.qref))
         .collect();
 
@@ -575,7 +575,7 @@ pub fn declared_bounds<'a>(
                     requires: requires.clone(),
                 },
             )),
-            FnKind::Local(_) => None,
+            FnKind::Local(..) => None,
         })
         .collect()
 }
@@ -677,6 +677,7 @@ struct BodyCheck<'c> {
     interner: &'c Interner,
     env: &'c crate::ty::TypeEnv,
     declared_params: Vec<ParamTerm<Infer>>,
+    inputs: Inputs,
     bindings: &'c Bindings,
     effect: EffectTerm<Infer>,
     probe: Option<acvus_ast::AstId>,
@@ -706,7 +707,7 @@ impl BodyCheck<'_> {
     where
         S: Checks,
     {
-        let checker = TypeChecker::new(self.interner, self.env, solver)
+        let checker = TypeChecker::new(self.interner, self.env, solver, self.inputs)
             .with_declared_params(self.declared_params.clone())
             .with_bound_inputs(self.bindings)
             .with_body_effect(self.effect.clone());
@@ -822,7 +823,8 @@ pub fn infer_scc(
         // Typecheck each function in this SCC.
         for &fid in scc {
             let func = fn_by_id[&fid];
-            let Some(parsed) = extract_parsed.get(&fid) else {
+            let (Some(parsed), FnKind::Local(_, inputs)) = (extract_parsed.get(&fid), &func.kind)
+            else {
                 continue;
             };
 
@@ -847,6 +849,7 @@ pub fn infer_scc(
                 interner,
                 env: &env,
                 declared_params: fn_declared_params[&fid].clone(),
+                inputs: *inputs,
                 bindings,
                 effect: fn_effect_vars[&fid].clone(),
                 probe: probe
@@ -1041,7 +1044,7 @@ fn infer_at(
     let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(..)))
         .map(|f| (f.qref, f))
         .collect();
     // -- STEP 1: Call graph + SCCs ------------------------------------
@@ -1050,7 +1053,7 @@ fn infer_at(
     let local_ids: Vec<QualifiedRef> = graph
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(_)))
+        .filter(|f| matches!(f.kind, FnKind::Local(..)))
         .map(|f| f.qref)
         .collect();
     let sccs = tarjan_scc(&local_ids, &call_graph);
@@ -1130,7 +1133,9 @@ fn infer_at(
 
             for &fid in scc {
                 let func = fn_by_id[&fid];
-                let Some(parsed) = extract.parsed.get(&fid) else {
+                let (Some(parsed), FnKind::Local(_, inputs)) =
+                    (extract.parsed.get(&fid), &func.kind)
+                else {
                     continue;
                 };
 
@@ -1158,6 +1163,7 @@ fn infer_at(
                     interner,
                     env: &env,
                     declared_params: scc_declared_params[&fid].clone(),
+                    inputs: *inputs,
                     bindings: &graph.bindings,
                     effect: scc_effect_vars[&fid].clone(),
                     probe: None,
@@ -1321,9 +1327,10 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
+                kind: FnKind::Local(
+                    ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse")),
+                    crate::graph::Inputs::FromReads,
+                ),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
@@ -1356,9 +1363,10 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
+                kind: FnKind::Local(
+                    ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse")),
+                    crate::graph::Inputs::FromReads,
+                ),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
@@ -1450,9 +1458,10 @@ mod tests {
         let qref = QualifiedRef::root(interner.intern("test"));
         functions.push(Function {
             qref,
-            kind: FnKind::Local(ParsedAst::Script(
-                acvus_ast::parse_script(interner, source).expect("parse"),
-            )),
+            kind: FnKind::Local(
+                ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse")),
+                crate::graph::Inputs::FromReads,
+            ),
             ty: TyTerm::Fn {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),
@@ -1479,7 +1488,7 @@ mod tests {
             .functions
             .iter()
             .rev()
-            .find(|f| matches!(f.kind, FnKind::Local(_)))
+            .find(|f| matches!(f.kind, FnKind::Local(..)))
             .expect("no local function")
             .qref
     }
@@ -1517,23 +1526,25 @@ mod tests {
             let aname = interner.intern(name);
             let fid = QualifiedRef::root(aname);
             ids.push((aname, fid));
-            let poly_params: Vec<PolyParam> = sig
-                .as_ref()
-                .map(|params| {
+            let (inputs, poly_params): (Inputs, Vec<PolyParam>) = match sig {
+                Some(params) => (
+                    Inputs::Declared,
                     params
                         .iter()
                         .map(|(name, ty)| {
                             ParamTerm::<Poly>::new(interner.intern(name), lift_to_poly(ty))
                         })
-                        .collect()
-                })
-                .unwrap_or_default();
+                        .collect(),
+                ),
+                None => (Inputs::FromReads, Vec::new()),
+            };
             let ret = output.clone().unwrap_or_else(|| pb.fresh_ty_var());
             functions.push(Function {
                 qref: fid,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
+                kind: FnKind::Local(
+                    ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse")),
+                    inputs,
+                ),
                 ty: TyTerm::Fn {
                     params: poly_params,
                     ret: Box::new(ret),
@@ -2709,9 +2720,10 @@ mod tests {
         let graph = CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: test_qref,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(&i, "@x + 1").expect("parse"),
-                )),
+                kind: FnKind::Local(
+                    ParsedAst::Script(acvus_ast::parse_script(&i, "@x + 1").expect("parse")),
+                    crate::graph::Inputs::FromReads,
+                ),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),

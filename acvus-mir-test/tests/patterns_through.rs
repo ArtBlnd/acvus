@@ -157,9 +157,10 @@ fn script_fn(i: &Interner, source: &str) -> Function {
     let mut pb = PolyBuilder::new();
     Function {
         qref: QualifiedRef::root(i.intern("script")),
-        kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(i, source).expect("parse"),
-        )),
+        kind: FnKind::Local(
+            ParsedAst::Script(acvus_ast::parse_script(i, source).expect("parse")),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),

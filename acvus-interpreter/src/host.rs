@@ -106,13 +106,19 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use acvus_ast::Span;
-use acvus_extern::{Borrows, Declared, Externs, Holding, Lendable, Owned, Registry, Shared, SpaceError};
+use acvus_extern::{
+    Borrows, Cross, Crossing, Declared, Externs, Form, FormKind, Gives, Holding, Lendable,
+    ObjectShape, Owned, Registry, Returned, Shared, SpaceError, Uniform, Val,
+};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
-    Bindings, CompilationGraph, Context, FnKind, Function, Parsed, ParsedAst, QualifiedRef,
-    RecoveredAst, extract, infer, lower, optimize,
+    Bindings, CompilationGraph, Context, FnKind, Function, Inputs, Parsed, ParsedAst,
+    QualifiedRef, RecoveredAst, extract, infer, lower, optimize,
 };
-use acvus_mir::ty::{Effect, Flows, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration, try_freeze_poly};
+use acvus_mir::ty::{
+    Effect, Flows, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
+    try_freeze_poly,
+};
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -121,6 +127,7 @@ use crate::interpreter::{Executable, Interpreter, InterpreterContext};
 use crate::journal::RuntimeContext;
 use crate::prepare::{PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
+use crate::value::Value;
 
 pub enum Source<'a> {
     Script(&'a str),
@@ -139,7 +146,32 @@ pub struct Refusal {
 struct EntryDecl {
     name: String,
     ast: ParsedAst,
+    inputs: DeclaredInputs,
     declared: PolyTy,
+}
+
+/// The entry's `$` inputs as `I` declares them (RFC-0090 rule 2).
+struct DeclaredInputs {
+    ty: PolyTy,
+    params: Vec<ParamTerm<Poly>>,
+}
+
+impl DeclaredInputs {
+    fn of(interner: &Interner, ty: PolyTy) -> Option<Self> {
+        let params = match &ty {
+            TyTerm::Unit => Vec::new(),
+            TyTerm::Object(fields) => {
+                let order = ObjectShape::of(interner, fields.keys().copied());
+                order
+                    .names()
+                    .iter()
+                    .map(|name| ParamTerm::new(*name, fields[name].clone()))
+                    .collect()
+            }
+            _ => return None,
+        };
+        Some(DeclaredInputs { ty, params })
+    }
 }
 
 /// The entries of one compilation graph. An initializer that stores a
@@ -168,8 +200,9 @@ impl Host {
         Host { bindings, ..self }
     }
 
-    pub fn entry<R>(mut self, name: &str, source: Source<'_>) -> Self
+    pub fn entry<I, R>(mut self, name: &str, source: Source<'_>) -> Self
     where
+        I: Declared,
         R: Declared,
     {
         if self.entries.iter().any(|entry| entry.name == name) {
@@ -188,9 +221,23 @@ impl Host {
             message: e.kind.to_string(),
             span: span_of(e.span),
         }));
+        let asked = I::declared(&self.interner);
+        let Some(inputs) = DeclaredInputs::of(&self.interner, asked.clone()) else {
+            self.refusals.push(Refusal {
+                entry: Some(name.to_owned()),
+                message: format!(
+                    "the inputs of the entry `{name}` are declared as {}, which is neither `()` \
+                     nor a struct of named fields",
+                    asked.display(&self.interner)
+                ),
+                span: None,
+            });
+            return self;
+        };
         self.entries.push(EntryDecl {
             name: name.to_owned(),
             ast,
+            inputs,
             declared: R::declared(&self.interner),
         });
         self
@@ -234,6 +281,7 @@ impl Host {
         for EntryDecl {
             name,
             ast,
+            inputs,
             declared: ret,
         } in entries
         {
@@ -245,19 +293,34 @@ impl Host {
                     span: None,
                 });
             }
+            refusals.extend(
+                inputs
+                    .params
+                    .iter()
+                    .filter(|param| bindings.get(param.name).is_some())
+                    .map(|param| Refusal {
+                        entry: Some(name.clone()),
+                        message: format!(
+                            "the input `${}` of the entry `{name}` is already fixed by a binding",
+                            interner.resolve(param.name)
+                        ),
+                        span: None,
+                    }),
+            );
             named.extend(context_refs(&ast));
             declared.insert(
                 qref,
                 Declaration {
                     name,
+                    inputs: inputs.ty,
                     declared: ret.clone(),
                 },
             );
             functions.push(Function {
                 qref,
-                kind: FnKind::Local(ast),
+                kind: FnKind::Local(ast, Inputs::Declared),
                 ty: TyTerm::Fn {
-                    params: vec![],
+                    params: inputs.params,
                     ret: Box::new(ret),
                     captures: vec![],
                     effect: Effect::OPAQUE.into(),
@@ -330,12 +393,14 @@ impl Host {
 
         let compiled_entries: HashMap<String, CompiledEntry> = declared
             .into_iter()
-            .map(|(qref, Declaration { name, declared })| {
+            .map(|(qref, Declaration { name, inputs, declared })| {
                 let Some(module) = optimized.modules.get(&qref) else {
                     panic!("an entry lowers to a module whenever no stage refused it")
                 };
                 let entry = CompiledEntry {
                     qref,
+                    inputs,
+                    module_params: module.main.params.iter().map(|(name, _)| *name).collect(),
                     declared,
                     ret: module.ret.clone(),
                 };
@@ -402,6 +467,7 @@ fn context_refs(ast: &ParsedAst) -> FxHashSet<QualifiedRef> {
 
 struct Declaration {
     name: String,
+    inputs: PolyTy,
     declared: PolyTy,
 }
 
@@ -411,8 +477,42 @@ fn span_of(span: Span) -> Option<Span> {
 
 struct CompiledEntry {
     qref: QualifiedRef,
+    inputs: PolyTy,
+    module_params: Vec<Astr>,
     declared: PolyTy,
     ret: Ty,
+}
+
+enum InputsCrossing {
+    Nothing,
+    Fields { width: usize },
+}
+
+impl InputsCrossing {
+    fn of<I>(interner: &Interner, asked: &PolyTy, params: &[Astr]) -> Option<Self>
+    where
+        I: Cross<AcvusRuntime>,
+    {
+        match asked {
+            TyTerm::Unit => params.is_empty().then_some(InputsCrossing::Nothing),
+            TyTerm::Object(fields) => {
+                let form = (
+                    <I::ReturnForm as Form>::KIND,
+                    <I::ReturnForm as Form>::WIDTH,
+                );
+                let order = ObjectShape::of(interner, fields.keys().copied());
+                match form {
+                    (FormKind::Components, width)
+                        if width == params.len() && order.names() == params =>
+                    {
+                        Some(InputsCrossing::Fields { width })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 pub struct Program {
@@ -426,8 +526,9 @@ impl Program {
         &self.contexts
     }
 
-    pub fn entry<R>(&self, name: &str) -> Result<Entry<'_, R>, EntryError>
+    pub fn entry<I, R>(&self, name: &str) -> Result<Entry<'_, I, R>, EntryError>
     where
+        I: Declared + Cross<AcvusRuntime>,
         R: Declared,
     {
         let Some(compiled) = self.entries.get(name) else {
@@ -436,18 +537,31 @@ impl Program {
             });
         };
         let interner = &self.shared.interner;
+        let mismatched = |part: EntryPart, declared: &PolyTy, asked: &PolyTy| {
+            EntryError::Mismatched {
+                name: name.to_owned(),
+                part,
+                declared: declared.display(interner).to_string(),
+                asked: asked.display(interner).to_string(),
+            }
+        };
+        let inputs = I::declared(interner);
+        if !inputs.same_erased(&compiled.inputs) {
+            return Err(mismatched(EntryPart::Inputs, &compiled.inputs, &inputs));
+        }
+        let Some(crossed) = InputsCrossing::of::<I>(interner, &inputs, &compiled.module_params)
+        else {
+            return Err(mismatched(EntryPart::Inputs, &compiled.inputs, &inputs));
+        };
         let asked = R::declared(interner);
         if !asked.same_erased(&compiled.declared) {
-            return Err(EntryError::Mismatched {
-                name: name.to_owned(),
-                declared: compiled.declared.display(interner).to_string(),
-                asked: asked.display(interner).to_string(),
-            });
+            return Err(mismatched(EntryPart::Result, &compiled.declared, &asked));
         }
         Ok(Entry {
             program: self,
             compiled,
-            result: PhantomData,
+            crossed,
+            declared: PhantomData,
         })
     }
 }
@@ -459,9 +573,17 @@ pub enum EntryError {
     },
     Mismatched {
         name: String,
+        part: EntryPart,
         declared: String,
         asked: String,
     },
+}
+
+/// The half of an entry's declaration a mismatch is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryPart {
+    Inputs,
+    Result,
 }
 
 impl fmt::Display for EntryError {
@@ -470,6 +592,16 @@ impl fmt::Display for EntryError {
             EntryError::NotInGraph { name } => write!(f, "the compilation has no entry `{name}`"),
             EntryError::Mismatched {
                 name,
+                part: EntryPart::Inputs,
+                declared,
+                asked,
+            } => write!(
+                f,
+                "the entry `{name}` was declared to take {declared}, and was asked for taking {asked}"
+            ),
+            EntryError::Mismatched {
+                name,
+                part: EntryPart::Result,
                 declared,
                 asked,
             } => write!(
@@ -482,14 +614,19 @@ impl fmt::Display for EntryError {
 
 impl std::error::Error for EntryError {}
 
-pub struct Entry<'p, R> {
+pub struct Entry<'p, I, R> {
     program: &'p Program,
     compiled: &'p CompiledEntry,
-    result: PhantomData<fn() -> R>,
+    crossed: InputsCrossing,
+    declared: PhantomData<fn(I) -> R>,
 }
 
-impl<R> Entry<'_, R> {
-    pub async fn run<P>(&self, page: &Arc<P>) -> Result<Output<R>, PageError>
+impl<I, R> Entry<'_, I, R>
+where
+    I: Cross<AcvusRuntime>,
+    I::ReturnForm: Returned<Verdict = ()>,
+{
+    pub async fn run<P>(&self, page: &Arc<P>, inputs: I) -> Result<Output<R>, PageError>
     where
         P: Page + 'static,
     {
@@ -510,7 +647,22 @@ impl<R> Entry<'_, R> {
         let page: Arc<dyn RuntimeContext> = Arc::<P>::clone(page);
         let mut interpreter =
             Interpreter::on_page(program.shared.clone(), self.compiled.qref, page);
-        let value = interpreter.execute().await?;
+        let accepted = interpreter.accept_page()?;
+        let rt = program.shared.runtime_over_an_empty_page();
+        let args = match self.crossed {
+            InputsCrossing::Nothing => Vec::new(),
+            InputsCrossing::Fields { width } => {
+                let mut run: Vec<Value> = std::iter::repeat_with(Value::unit).take(width).collect();
+                // SAFETY: `Program::entry` compared `I`'s declaration with the
+                // one the entry was compiled against, and `I`'s crossing
+                // writes one value per parameter, at that parameter's type and
+                // in the order the module takes them.
+                let crossing = unsafe { Crossing::new(&rt) };
+                <I as Gives<Val<I, Uniform>, AcvusRuntime>>::give(inputs, crossing, &mut run);
+                run
+            }
+        };
+        let value = accepted.run(args).await;
         Ok(Output {
             // SAFETY: the run moved its result out to this caller, and no
             // other holder owns it.

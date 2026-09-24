@@ -58,13 +58,14 @@ impl Mode {
     }
 }
 
-/// `ty` must be the `Fn` type the host's batch path gives this source's
+/// `ty` and `inputs` must be what the host's batch path gives this source's
 /// function; a different one checks a program the host never compiles.
 #[derive(Debug, Clone)]
 pub struct Document {
     pub qref: QualifiedRef,
     pub mode: Mode,
     pub ty: PolyTy,
+    pub inputs: Inputs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,7 +396,7 @@ impl LspSession {
             Some(_) => self.graph.update_ast(document.qref, ast),
             None => self.graph.add_function(Function {
                 qref: document.qref,
-                kind: FnKind::Local(ast),
+                kind: FnKind::Local(ast, document.inputs),
                 ty: document.ty.clone(),
             }),
         }
@@ -650,7 +651,7 @@ impl LspSession {
         let marked: AstId = nodes_of(&ast).at(site.word.start).first()?.id;
         let body = Function {
             qref: document.qref,
-            kind: FnKind::Local(ast),
+            kind: FnKind::Local(ast, document.inputs),
             ty: document.ty.clone(),
         };
         self.graph.probe(body, marked)
@@ -687,7 +688,7 @@ impl LspSession {
                 Some(Definition::Local { span })
             }
             Resolved::Function(qref) => match self.graph.function(qref)?.kind {
-                FnKind::Local(_) => Some(Definition::Function(qref)),
+                FnKind::Local(..) => Some(Definition::Function(qref)),
                 FnKind::Extern { .. } => None,
             },
             Resolved::Context(qref) => Some(Definition::Context(qref)),
@@ -831,7 +832,7 @@ impl LspSession {
             .graph
             .view_as(Function {
                 qref: document.qref,
-                kind: FnKind::Local(ast),
+                kind: FnKind::Local(ast, document.inputs),
                 ty: document.ty.clone(),
             })
             .expect("a document's function is local, so its body is checked");

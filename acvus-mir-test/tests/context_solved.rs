@@ -62,9 +62,10 @@ fn solve(bodies: &[Body], contexts: &[&str]) -> Solved {
         .iter()
         .map(|body| Function {
             qref: QualifiedRef::root(i.intern(body.name)),
-            kind: FnKind::Local(ParsedAst::Script(
-                acvus_ast::parse_script(&i, body.source).expect("parse"),
-            )),
+            kind: FnKind::Local(
+                ParsedAst::Script(acvus_ast::parse_script(&i, body.source).expect("parse")),
+                acvus_mir::graph::Inputs::FromReads,
+            ),
             ty: TyTerm::Fn {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),

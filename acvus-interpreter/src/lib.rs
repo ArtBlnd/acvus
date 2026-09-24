@@ -66,7 +66,8 @@ mod vtable;
 
 pub use executor::{AsyncJob, BlockingJob, Done, Executor, Handle, SequentialExecutor, TokioExecutor};
 pub use host::{
-    Contexts, Entry, EntryError, Host, Output, OutputError, Page, PageError, Program, Refusal, Source,
+    Contexts, Entry, EntryError, EntryPart, Host, Output, OutputError, Page, PageError, Program,
+    Refusal, Source,
 };
 pub use journal::{Held, InMemoryContext, RuntimeContext};
 pub use runtime::AcvusRuntime;

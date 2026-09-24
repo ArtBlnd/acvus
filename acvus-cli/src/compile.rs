@@ -319,7 +319,7 @@ pub fn check(
     let entry = entry_ref(interner);
     let functions: Vec<Function> = std::iter::once(Function {
         qref: entry,
-        kind: FnKind::Local(parsed),
+        kind: FnKind::Local(parsed, acvus_mir::graph::Inputs::FromReads),
         ty: entry_ty(),
     })
     .chain(environment.functions.iter().cloned())

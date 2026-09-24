@@ -150,7 +150,7 @@ impl IncrementalGraph {
             return;
         };
         match &mut func.kind {
-            FnKind::Local(existing) => *existing = ast,
+            FnKind::Local(existing, _) => *existing = ast,
             FnKind::Extern { .. } => return,
         }
 
@@ -322,7 +322,7 @@ impl IncrementalGraph {
         let local_qrefs: Vec<QualifiedRef> = self
             .functions
             .values()
-            .filter(|f| f.qref != qref && matches!(f.kind, FnKind::Local(_)))
+            .filter(|f| f.qref != qref && matches!(f.kind, FnKind::Local(..)))
             .map(|f| f.qref)
             .chain(std::iter::once(qref))
             .collect();
@@ -347,7 +347,7 @@ impl IncrementalGraph {
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
             .iter()
-            .filter(|(member, f)| **member != qref && matches!(f.kind, FnKind::Local(_)))
+            .filter(|(member, f)| **member != qref && matches!(f.kind, FnKind::Local(..)))
             .map(|(&member, f)| (member, f))
             .chain(std::iter::once((qref, &probed)))
             .collect();
@@ -409,7 +409,7 @@ impl IncrementalGraph {
     fn root_fn_names(&self) -> FxHashMap<Astr, QualifiedRef> {
         self.functions
             .iter()
-            .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(_)))
+            .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(..)))
             .map(|(&q, _)| (q.name, q))
             .collect()
     }
@@ -450,7 +450,7 @@ impl IncrementalGraph {
         let local_qrefs: Vec<QualifiedRef> = self
             .functions
             .values()
-            .filter(|f| matches!(f.kind, FnKind::Local(_)))
+            .filter(|f| matches!(f.kind, FnKind::Local(..)))
             .map(|f| f.qref)
             .collect();
 
@@ -478,7 +478,7 @@ impl IncrementalGraph {
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
             .iter()
-            .filter(|(_, f)| matches!(f.kind, FnKind::Local(_)))
+            .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
             .map(|(&qref, f)| (qref, f))
             .collect();
 
@@ -548,7 +548,7 @@ impl IncrementalGraph {
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
             .iter()
-            .filter(|(_, f)| matches!(f.kind, FnKind::Local(_)))
+            .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
             .map(|(&qref, f)| (qref, f))
             .collect();
 

@@ -169,7 +169,7 @@ pub fn compile_to_ir_with(
     };
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Template(ast)),
+        FnKind::Local(ParsedAst::Template(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -253,7 +253,7 @@ pub fn compile_script_ir_with(
     };
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
+        FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -290,7 +290,7 @@ pub fn compile_script_raw(
     };
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
+        FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -389,7 +389,7 @@ pub fn refuse_script_mode_ir_with(
     };
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
+        FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -509,7 +509,7 @@ fn lower_script_returning(
         acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
     let mut functions = vec![Function {
         qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Script(ast)),
+        kind: FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(ret),
@@ -572,7 +572,7 @@ pub fn optimized_script_module(
         acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
+        FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -669,7 +669,7 @@ pub fn compile_script_at(
     };
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
+        FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -799,7 +799,7 @@ pub fn refuse_script_mode_optimized(
     };
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Script(ast)),
+        FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);
@@ -927,7 +927,7 @@ pub fn compile_inline_ir_with(
 
     let mut functions = vec![inferred_function(
         target_qref,
-        FnKind::Local(ParsedAst::Script(target_ast)),
+        FnKind::Local(ParsedAst::Script(target_ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
 
@@ -937,7 +937,7 @@ pub fn compile_inline_ir_with(
             .map_err(|e| format!("parse error in helper '{}': {e:?}", name))?;
         functions.push(inferred_function(
             qref,
-            FnKind::Local(ParsedAst::Script(ast)),
+            FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::Declared),
             params.clone(),
         ));
     }
@@ -1053,7 +1053,7 @@ fn compile_graph_raw(
 
     let mut functions = vec![inferred_function(
         target_qref,
-        FnKind::Local(target.1),
+        FnKind::Local(target.1, acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
 
@@ -1063,7 +1063,7 @@ fn compile_graph_raw(
             .map_err(|e| format!("parse error in helper '{}': {e:?}", name))?;
         functions.push(inferred_function(
             qref,
-            FnKind::Local(ParsedAst::Script(ast)),
+            FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::Declared),
             params.clone(),
         ));
     }
@@ -1162,7 +1162,7 @@ fn compile_multi_fn_at(
 
     let mut functions = vec![inferred_function(
         target_qref,
-        FnKind::Local(ParsedAst::Script(target_ast)),
+        FnKind::Local(ParsedAst::Script(target_ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
 
@@ -1172,7 +1172,7 @@ fn compile_multi_fn_at(
             .map_err(|e| format!("parse error in helper '{}': {e:?}", name))?;
         functions.push(inferred_function(
             qref,
-            FnKind::Local(ParsedAst::Script(ast)),
+            FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::Declared),
             params.clone(),
         ));
     }
@@ -1255,7 +1255,7 @@ pub fn compile_template_bound(
     let ast = acvus_ast::parse(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Template(ast)),
+        FnKind::Local(ParsedAst::Template(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
     let type_registry = extend_with_std(interner, &mut functions);

@@ -6,7 +6,9 @@ use acvus_lsp::{
     CallShape, CompletionItem, CompletionKind, DocId, Document, Hover, LspError, LspSession, Mode,
     ParamHint,
 };
-use acvus_mir::graph::{Bindings, CompilationGraph, Context, FnKind, Function, QualifiedRef};
+use acvus_mir::graph::{
+    Bindings, CompilationGraph, Context, FnKind, Function, Inputs, QualifiedRef,
+};
 use acvus_mir::ty::{
     Effect, ParamTerm, PolyBuilder, PolyParam, Ty, TyTerm, TyVarBound, TypeRegistry, lift_to_poly,
 };
@@ -48,7 +50,13 @@ fn with_std(interner: &Interner, contexts: Vec<Context>) -> CompilationGraph {
     environment(contexts, functions, types)
 }
 
-fn document(interner: &Interner, name: &str, mode: Mode, params: Vec<PolyParam>) -> Document {
+fn document(
+    interner: &Interner,
+    name: &str,
+    mode: Mode,
+    inputs: Inputs,
+    params: Vec<PolyParam>,
+) -> Document {
     let mut pb = PolyBuilder::new();
     Document {
         qref: QualifiedRef::root(interner.intern(name)),
@@ -60,6 +68,7 @@ fn document(interner: &Interner, name: &str, mode: Mode, params: Vec<PolyParam>)
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs,
     }
 }
 
@@ -71,7 +80,10 @@ fn open(
 ) -> (LspSession, DocId) {
     let mut session = LspSession::new(interner, environment);
     let id = session
-        .open(document(interner, "test", mode, vec![]), source)
+        .open(
+            document(interner, "test", mode, Inputs::FromReads, vec![]),
+            source,
+        )
         .expect("the session opens no other document");
     (session, id)
 }
@@ -201,7 +213,10 @@ fn the_declared_inputs_are_offered_after_dollar() {
     let mut session = LspSession::new(&i, bare(vec![]));
     let source = "let local = 1; $";
     let doc = session
-        .open(document(&i, "test", Mode::Script, params), source)
+        .open(
+            document(&i, "test", Mode::Script, Inputs::Declared, params),
+            source,
+        )
         .expect("the session opens no other document");
     let items = completed(&session, doc, source.len());
     assert_eq!(
@@ -625,15 +640,24 @@ fn completion_leaves_the_graph_unchanged() {
     let mut session = LspSession::new(&i, with_std(&i, contexts));
     let helper_source = "let n = @name; n";
     let helper = session
-        .open(document(&i, "helper", Mode::Script, vec![]), helper_source)
+        .open(
+            document(&i, "helper", Mode::Script, Inputs::FromReads, vec![]),
+            helper_source,
+        )
         .expect("no other open document is `helper`");
     let main_source = "let s = helper(); let o = { a: s, }; o.a.tr";
     let main = session
-        .open(document(&i, "main", Mode::Script, vec![]), main_source)
+        .open(
+            document(&i, "main", Mode::Script, Inputs::FromReads, vec![]),
+            main_source,
+        )
         .expect("no other open document is `main`");
     let broken_source = "let t = 1; t * \"x\"; t";
     let broken = session
-        .open(document(&i, "broken", Mode::Script, vec![]), broken_source)
+        .open(
+            document(&i, "broken", Mode::Script, Inputs::FromReads, vec![]),
+            broken_source,
+        )
         .expect("no other open document is `broken`");
     let documents = [
         Opened {

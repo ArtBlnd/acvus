@@ -267,9 +267,10 @@ mod tests {
         CompilationGraph {
             functions: Freeze::new(vec![Function {
                 qref: fn_qref,
-                kind: FnKind::Local(ParsedAst::Script(
-                    acvus_ast::parse_script(interner, source).expect("parse"),
-                )),
+                kind: FnKind::Local(
+                    ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse")),
+                    crate::graph::Inputs::FromReads,
+                ),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),
