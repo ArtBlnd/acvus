@@ -756,6 +756,8 @@ gains rule 6's exception. An instruction two parts would share merges them.
   chunks past it.
 - Keeping the last value.
 - A merge under a branch whose other arm passes the accumulator through.
+- The element's binding as the element: today its storage joins every part
+  that reads it.
 - An affine recurrence `x' = a·x + b`, whose maps compose, as a law, with
   a scan's two passes when the body reads it.
 - Parts of a `while`.
