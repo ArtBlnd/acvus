@@ -366,9 +366,9 @@ fn framed(
     // measures the gap: a closure demoted to the parameter's effect is
     // typed `Async` while its operations only add, and that body holds no
     // call for `suspends_at` to read.
-    let may_suspend = body.task > Task::Sync;
+    let may_suspend = body.task > Task::Sync || prep.may_suspend;
     debug_assert!(
-        !prep.may_suspend || may_suspend,
+        !prep.may_suspend || body.task > Task::Sync,
         "body {role:?}: the prepared operations await and the checker's task does not say so"
     );
 
