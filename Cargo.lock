@@ -132,6 +132,7 @@ dependencies = [
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
+ "futures",
  "glob",
  "libtest-mimic",
  "rustc-hash",

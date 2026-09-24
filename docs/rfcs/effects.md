@@ -113,8 +113,12 @@ Status: Accepted
    `Async` is `Async`. An extern marked `heavy`, or a function value whose
    task is `Heavy`, is `Heavy`.
 3. A plain `fn` extern that is not Pure is `Async`, because the spawn split
-   turns it into a `Spawn` and an awaiting `Eval` where no argument has a
-   position (RFC-0079 rule 9).
+   turns it into a `Spawn` and an awaiting `Eval`. A spawn's argument may
+   hold a loan, which the `Handle` holds until the `Eval` (RFC-0079 rule 9).
+   A frame counts the tasks it spawned and has not evaluated, and those the
+   frames within it ended with; at every end — return, trap, its run
+   dropped — it releases its cells at once if that count is zero, else once
+   every task of its run has finished.
 4. Task and purity are independent: a `heavy` Pure extern commutes, stands
    outside the order chain, runs on a blocking pool and is awaited.
    Independent Pure `Heavy` calls therefore hoist without `commutative`.
@@ -141,6 +145,8 @@ Status: Accepted
 synchrony into the effect gives it effect variables, bounds and instance
 selection by effect with no new machinery, and a loop over a synchronous
 iterator is a synchronous loop by type, not by discovery.
+**Cost.** A frame that ends with a task not yet evaluated keeps its cells
+until the last task of its run has finished.
 **Rejected.**
 - Separate `SyncFn`/`AsyncFn` types — two function types, a coercion, and a
   second variable on every container type.
@@ -153,3 +159,14 @@ iterator is a synchronous loop by type, not by discovery.
 - A symmetric join at a decision's value position — a closure argument's
   function type reaches it too; effects relate in the one direction rule 7
   gives.
+- A spawn refused where an argument has a position — the spawn is the
+  optimizer's split, so the program's parallelism would depend on whether
+  it lends.
+- A dropped run waiting for its tasks in `Drop` — an executor cannot stop
+  a task being polled on another thread or a handler on a pool thread, so
+  the wait blocks the thread dropping the run, and on a current-thread
+  runtime deadlocks against the task.
+- A return releasing its frame's cells at once because `spawn_split` puts
+  every `Eval` before the return — nothing checks it, and a pass that moves
+  an `Eval` or a new producer of a `Spawn` would free cells a task still
+  reads; the return reads the frame's count as a trap does.

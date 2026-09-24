@@ -15,6 +15,7 @@ use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
 
+use crate::flight::Launched;
 use crate::runtime::AcvusRuntime;
 use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
 
@@ -651,7 +652,7 @@ static FN: Vtable = Vtable {
     drop: drop_closure,
     debug: Some(dbg_fn),
 };
-static HANDLE: Vtable = vtable::<HandleValue>(|| "Handle", Composite::Handle, None);
+static HANDLE: Vtable = vtable::<Launched>(|| "Handle", Composite::Handle, None);
 
 /// The vtable `T` is erased through: a composite's own static, else the
 /// drop-only constant every type has.
@@ -854,8 +855,8 @@ impl Value {
             word: code.address() as u64,
         }
     }
-    pub fn handle(h: HandleValue) -> Self {
-        large(&HANDLE, h)
+    pub(crate) fn handle(launched: Launched) -> Self {
+        large(&HANDLE, launched)
     }
 
     pub fn is_object(&self) -> bool {
@@ -1021,7 +1022,7 @@ mod tests {
         assert_composite(vtable_of::<Object>(), Composite::Object, "Object");
         assert_composite(vtable_of::<VariantValue>(), Composite::Variant, "Variant");
         assert_composite(vtable_of::<FnValue>(), Composite::Fn, "Fn");
-        assert_composite(vtable_of::<HandleValue>(), Composite::Handle, "Handle");
+        assert_composite(vtable_of::<Launched>(), Composite::Handle, "Handle");
     }
 
     #[test]

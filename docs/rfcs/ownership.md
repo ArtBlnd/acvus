@@ -291,8 +291,8 @@ Status: Proposed
    alias falls to `Within`.
 9. **A value crossing out of the body holds no loan.** A body's result
    to the host and a context write are refused where any of their
-   positions may hold a loan; a call whose argument has a position is not
-   split into a spawn (RFC-0075). A lambda's or named function's
+   positions may hold a loan; a spawn's argument may hold one until its
+   `Eval` (RFC-0046 rule 3). A lambda's or named function's
    outputs, its result and what it writes through a parameter or a
    capture, hold only loans on its inputs that its flows name (rule 5); a
    loan on the body's own storage there is refused, a by-value

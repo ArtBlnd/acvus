@@ -22,13 +22,14 @@ use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
 use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
+use crate::flight::{Aloft, Launched};
 use crate::interpreter::lookup_module;
 use crate::machine::{
     Lent, LentCall, LentOut, Machine, call_module, call_module_sync, fn_value_call,
 };
 use crate::ops::control::{self, Ends, Escapes, Rejoins};
 use crate::runtime::AcvusRuntime;
-use crate::value::{HandleValue, Value};
+use crate::value::Value;
 use acvus_extern::Release;
 
 /// The declared instance a call reaches, cloned out of the module table for
@@ -2056,19 +2057,29 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
         let rt = m.ctx.rt.clone();
         let f = Arc::clone(&self.f);
         let executor = Arc::clone(&m.shared().executor);
+        let flying = rt.flight.start();
         // SAFETY: the window is this call's whole argument run, owned by the
         // closure the pool runs.
-        let handle = executor.spawn_blocking(Box::new(move || {
-            let mut rooted = rt.rooted();
-            // SAFETY: the `Ctx` is lent to the handler alone, and safe code
-            // reaches no second `Ctx` to exchange it with: `ctx_of`,
-            // `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
-            unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
-        }));
+        let work = Aloft::new(
+            move || {
+                let mut rooted = rt.rooted();
+                // SAFETY: the `Ctx` is lent to the handler alone, and safe code
+                // reaches no second `Ctx` to exchange it with: `ctx_of`,
+                // `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
+                unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
+            },
+            flying,
+        );
+        let unevaluated = m.ctx.rt.tally.spawned();
+        let handle = executor.spawn_blocking(Box::new(move || work.run()));
         m.suspend::<LARGE>(
             self.dst,
             self.next,
-            Box::pin(async move { executor.eval(handle).await }),
+            Box::pin(async move {
+                let value = executor.eval(handle).await;
+                unevaluated.evaluated();
+                value
+            }),
         );
         SUSPEND
     }
@@ -2133,15 +2144,14 @@ impl<const LARGE: bool, const PAIR: bool> Op for CallDirectAsync<LARGE, PAIR> {
             )
         }
         let args = staged(m, &self.args, self.takes);
-        let shared = Arc::clone(m.shared());
-        let page = Arc::clone(&m.ctx.rt.page);
+        let rt = m.ctx.rt.clone();
         match PAIR {
             true => {
-                let fut = Box::pin(call_module::<Words>(shared, page, self.callee, args));
+                let fut = Box::pin(call_module::<Words>(rt, self.callee, args));
                 m.suspend_pair(SlicePair::at(self.dst.at), self.next, fut);
             }
             false => {
-                let fut = Box::pin(call_module::<Value>(shared, page, self.callee, args));
+                let fut = Box::pin(call_module::<Value>(rt, self.callee, args));
                 m.suspend::<LARGE>(self.dst, self.next, fut);
             }
         }
@@ -2260,16 +2270,19 @@ pub struct Eval<const LARGE: bool> {
 impl<const LARGE: bool> Op for Eval<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         // SAFETY: the type checker admits only a handle value here.
-        let handle = unsafe {
-            m.regs()
-                .take::<true>(self.handle)
-                .materialize::<HandleValue>()
-        };
+        let Launched {
+            handle,
+            unevaluated,
+        } = unsafe { m.regs().take::<true>(self.handle).materialize::<Launched>() };
         let executor = Arc::clone(&m.shared().executor);
         m.suspend::<LARGE>(
             self.dst,
             self.next,
-            Box::pin(async move { executor.eval(handle).await }),
+            Box::pin(async move {
+                let value = executor.eval(handle).await;
+                unevaluated.evaluated();
+                value
+            }),
         );
         SUSPEND
     }
@@ -2292,15 +2305,21 @@ impl Op for SpawnExternSync {
         let args = self.window.own(m);
         let rt = m.ctx.rt.clone();
         let f = Arc::clone(&self.f);
+        let flying = rt.flight.start();
         // SAFETY: as `CallHeavy`'s.
-        let handle = m.shared().executor.spawn_blocking(Box::new(move || {
-            let mut rooted = rt.rooted();
-            // SAFETY: the `Ctx` is lent to the handler alone, and safe code
-            // reaches no second `Ctx` to exchange it with: `ctx_of`,
-            // `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
-            unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
-        }));
-        m.regs().define::<true>(self.dst, Value::handle(handle));
+        let work = Aloft::new(
+            move || {
+                let mut rooted = rt.rooted();
+                // SAFETY: the `Ctx` is lent to the handler alone, and safe code
+                // reaches no second `Ctx` to exchange it with: `ctx_of`,
+                // `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
+                unsafe { f.call_owned(AcvusRuntime::ctx_of(&mut rooted), &args) }
+            },
+            flying,
+        );
+        let unevaluated = m.ctx.rt.tally.spawned();
+        let handle = m.shared().executor.spawn_blocking(Box::new(move || work.run()));
+        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
         self.next.run(m, r0)
     }
 }
@@ -2318,10 +2337,12 @@ impl Op for SpawnExternAsync {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = self.window.own(m);
         let rt = m.ctx.rt.clone();
+        let flying = rt.flight.start();
         // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
         let fut = unsafe { self.f.call_async(rt, &args) };
-        let handle = m.shared().executor.spawn_async(fut);
-        m.regs().define::<true>(self.dst, Value::handle(handle));
+        let unevaluated = m.ctx.rt.tally.spawned();
+        let handle = m.shared().executor.spawn_async(Box::pin(Aloft::new(fut, flying)));
+        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
         self.next.run(m, r0)
     }
 }
@@ -2339,14 +2360,10 @@ impl Op for SpawnModule {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = staged(m, &self.args, self.takes);
-        let child = crate::interpreter::Interpreter::spawned(
-            Arc::clone(m.shared()),
-            self.callee,
-            Arc::clone(&m.ctx.rt.page),
-            args,
-        );
+        let child = crate::interpreter::Interpreter::spawned(m.ctx.rt, self.callee, args);
+        let unevaluated = m.ctx.rt.tally.spawned();
         let handle = m.shared().executor.spawn_interpreter(child);
-        m.regs().define::<true>(self.dst, Value::handle(handle));
+        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
         self.next.run(m, r0)
     }
 }

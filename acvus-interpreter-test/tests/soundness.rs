@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use acvus_interpreter_test::corpus::{self, Outcome, Stage};
+use acvus_interpreter_test::corpus::{self, Attempt, Outcome, Scheduler, Stage};
 use acvus_mir::graph::optimize::Opt;
 
 /// A program the branch still gets wrong, and the words that show it.
@@ -41,6 +41,7 @@ const PAST_THE_CHECKER: &[&str] = &[
 /// A program's own trap (RFC-0038): an outcome like a value, the same at
 /// both levels.
 const TRAPS: &[&str] = &[
+    "unwrap: called on None",
     "attempt to divide by zero",
     "attempt to divide with overflow",
     "attempt to calculate the remainder with a divisor of zero",
@@ -100,6 +101,28 @@ fn outcome(
         contexts = contexts,
         opt,
         Stage::Run,
+        LIMIT
+    ) {
+        Ok(outcome) => outcome,
+        Err(lapse) => Outcome::RunPanicked(format!("the run lapsed: {lapse:?}")),
+    }
+}
+
+fn outcome_on(
+    source: &str,
+    contexts: &serde_json::Map<String, serde_json::Value>,
+    opt: Opt,
+    scheduler: Scheduler,
+) -> Outcome {
+    let attempt = Attempt {
+        opt,
+        stage: Stage::Run,
+        scheduler,
+    };
+    match acvus_interpreter_test::attempt_within!(
+        source,
+        contexts = contexts,
+        attempt = attempt,
         LIMIT
     ) {
         Ok(outcome) => outcome,
@@ -246,6 +269,82 @@ fn every_program_is_refused_or_runs_to_one_value() {
         "{} of {} programs break the contract:\n{}",
         wrong.len(),
         found.len(),
+        wrong.join("\n")
+    );
+}
+
+/// The programs whose spawned calls are lent a place. On tokio a task still
+/// runs on another thread when the run traps before its `Eval`, and reads the
+/// place after the run has ended (RFC-0079 rule 9).
+const LENT_SPAWNS: &str = "spawn-join";
+
+/// A task's schedule against the run's trap differs from one run to the
+/// next, so each program runs this many times at each level.
+const TOKIO_RUNS: usize = 8;
+
+/// A trap is the program's outcome like a value, so the message its first
+/// line names is the one the run gives.
+fn traps_otherwise(expected: &Expected, outcome: &Outcome) -> Option<String> {
+    match (expected, outcome) {
+        (Expected::Value(want), Outcome::RunPanicked(got)) if got != want => {
+            Some(format!("a wrong trap: expected {want}, got {got}"))
+        }
+        _ => None,
+    }
+}
+
+#[test]
+fn lent_spawns_keep_the_contract_on_tokio() {
+    let mut found = Vec::new();
+    programs(&corpus_dir().join(LENT_SPAWNS), &mut found);
+    assert!(!found.is_empty(), "the lent-spawn programs are there");
+
+    let wrong: Vec<String> = std::thread::scope(|scope| {
+        let handles: Vec<_> = found
+            .iter()
+            .map(|program| {
+                scope.spawn(move || {
+                    let source = std::fs::read_to_string(program).expect("a program is readable");
+                    let contexts = contexts_of(program);
+                    let expected = expected(&source).expect("a lent-spawn program states its outcome");
+                    let sequential = outcome(&source, &contexts, Opt::None);
+                    let name = program
+                        .strip_prefix(corpus_dir())
+                        .expect("a program is under the corpus")
+                        .display()
+                        .to_string();
+                    let mut wrong = Vec::new();
+                    for run in 0..TOKIO_RUNS {
+                        let none = outcome_on(&source, &contexts, Opt::None, Scheduler::Tokio);
+                        let full = outcome_on(&source, &contexts, Opt::Full, Scheduler::Tokio);
+                        let why = hole(&none, &full)
+                            .or_else(|| contradicts(&expected, &none))
+                            .or_else(|| traps_otherwise(&expected, &none))
+                            .or_else(|| {
+                                (none != sequential).then(|| {
+                                    format!(
+                                        "tokio and the sequential executor disagree: \
+                                         {none:?} against {sequential:?}"
+                                    )
+                                })
+                            });
+                        if let Some(why) = why {
+                            wrong.push(format!("{name} (run {run}): {why}"));
+                        }
+                    }
+                    wrong
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("a program's runs finish"))
+            .collect()
+    });
+    assert!(
+        wrong.is_empty(),
+        "{} runs break the contract:\n{}",
+        wrong.len(),
         wrong.join("\n")
     );
 }

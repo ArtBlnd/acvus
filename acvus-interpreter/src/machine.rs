@@ -20,8 +20,8 @@ use crate::code::{
     BlockId, Body, Code, CodeBody, EntryKonst, Exit, Marked, Off, Op, Pending, Prepared, RETURN,
     SENTINEL, SUSPEND, SlicePair,
 };
+use crate::flight::FrameCells;
 use crate::interpreter::{InterpreterContext, lookup_module};
-use crate::journal::RuntimeContext;
 use crate::regs::{FrameState, Regs, RootFrame, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -368,20 +368,14 @@ where
 }
 
 /// Run the entry body of the module `id` names.
-pub async fn call_module<R>(
-    shared: Arc<InterpreterContext>,
-    page: Arc<dyn RuntimeContext>,
-    id: QualifiedRef,
-    args: Vec<Value>,
-) -> R
+pub async fn call_module<R>(rt: AcvusRuntime, id: QualifiedRef, args: Vec<Value>) -> R
 where
     R: Returned,
 {
-    let prepared: Arc<Prepared> = Arc::clone(lookup_module(&shared, &id));
-    let rt = AcvusRuntime::new(shared, page);
+    let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
     let body = prepared.main.as_ref();
-    let mut store = Store::new();
-    let (mut regs, _) = store.bind(body);
+    let (mut cells, rt) = FrameCells::open(Store::new(), &rt);
+    let (mut regs, _) = cells.store().bind(body);
     open_frame(body, &mut regs);
     for (slot, arg) in body.params.iter().zip(args) {
         regs.put(*slot, arg);
@@ -539,10 +533,10 @@ pub fn fn_value_call<'f>(
     let resume = unsafe { f.code_of() }.code().start(*f, rt, args);
     async move {
         match resume {
-            Resume::Frame { body, mut store } => {
-                let (regs, _) = store.bind(body);
-                let machine = Machine::new(body, regs, rt);
-                drive(machine).await
+            Resume::Frame { body, store } => {
+                let (mut cells, rt) = FrameCells::open(store, rt);
+                let (regs, _) = cells.store().bind(body);
+                drive(Machine::new(body, regs, &rt)).await
             }
             Resume::Done(value) => value,
         }
