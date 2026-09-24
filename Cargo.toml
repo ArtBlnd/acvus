@@ -15,6 +15,11 @@ members = [
     "acvus-extern-macro",
 ]
 
+[workspace.package]
+# The Acvus License (`LICENSE`) has no SPDX identifier, so crates name the
+# file rather than a `license` expression.
+license-file = "LICENSE"
+
 [workspace.dependencies]
 rustc-hash = "2"
 uuid = { version = "1", features = ["v4", "js"] }

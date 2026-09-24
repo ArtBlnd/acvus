@@ -2,6 +2,7 @@
 name = "acvus-mir-test"
 version = "0.1.0"
 edition = "2024"
+license-file.workspace = true
 # `tests/all.rs` names every file under `tests/` as a module, so this crate
 # links one test binary instead of one per file. Linking, not compiling, is
 # the cost a workspace test run is made of: sccache caches compilation, and
