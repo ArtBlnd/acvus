@@ -1,0 +1,28 @@
+error[E0310]: the parameter type `T` may not live long enough
+  --> tests/compile_fail/keep_var_ref_thread.rs:12:5
+   |
+12 |     std::thread::spawn(move || drop(x));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     the parameter type `T` must be valid for the static lifetime...
+   |     ...so that the type `T` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+ 9 |     T: Var<kind::Type> + 'static,
+   |                        +++++++++
+
+error[E0521]: borrowed data escapes outside of function
+  --> tests/compile_fail/keep_var_ref_thread.rs:12:5
+   |
+ 7 | fn keep<T, Rt>(x: Ref<'_, T, Shared, Rt>) -> i64
+   |                -
+   |                |
+   |                `x` is a reference that is only valid in the function body
+   |                has type `acvus_extern::Ref<'1, T, acvus_extern::Shared, Rt>`
+...
+12 |     std::thread::spawn(move || drop(x));
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     `x` escapes the function body here
+   |     argument requires that `'1` must outlive `'static`

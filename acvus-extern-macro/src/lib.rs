@@ -518,6 +518,7 @@ fn generate_extern_fn(
         })
         .collect();
     let ret = parse_return(&func.sig.output);
+    refuse_static_argument(&ret)?;
     let returning = Returning::of(&ret);
     let mut roles: Vec<flows::Role> = takes_ctx.then_some(flows::Role::Ctx).into_iter().collect();
     let mut acvus_index = 0;
@@ -1391,6 +1392,7 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             }));
             continue;
         }
+        refuse_static_argument(pat_type.ty.as_ref())?;
         if let Some(required) = required_of(pat_type.ty.as_ref())? {
             params.push(RustParam::Required(required));
             continue;
@@ -1432,6 +1434,46 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
         }));
     }
     Ok(Signature { takes_ctx, params })
+}
+
+/// Refuses a type in an extern's signature that takes `'static` as a
+/// lifetime argument, as `Ref<'static, …>` does. Rust would refuse it too,
+/// where the glue requires the handler's parameter `Within` the call, but
+/// with an error at the glue; one behind an alias or a container is still
+/// refused there (RFC-0079 rule 6).
+fn refuse_static_argument(ty: &Type) -> syn::Result<()> {
+    struct Find(Option<(Ident, syn::Lifetime)>);
+
+    impl<'ast> syn::visit::Visit<'ast> for Find {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            if self.0.is_none()
+                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                && let Some(lifetime) = args.args.iter().find_map(|arg| match arg {
+                    syn::GenericArgument::Lifetime(lifetime) if lifetime.ident == "static" => {
+                        Some(lifetime)
+                    }
+                    _ => None,
+                })
+            {
+                self.0 = Some((segment.ident.clone(), lifetime.clone()));
+            }
+            syn::visit::visit_path_segment(self, segment);
+        }
+    }
+
+    let mut find = Find(None);
+    syn::visit::Visit::visit_type(&mut find, ty);
+    match find.0 {
+        None => Ok(()),
+        Some((carrier, lifetime)) => Err(syn::Error::new(
+            lifetime.span(),
+            format!(
+                "`{carrier}<'static, …>` in an extern's signature: what a call hands the \
+                 handler is at that call and is not kept past it, so the signature names the \
+                 call's lifetime, `'_` or a lifetime parameter (RFC-0079 rule 6)"
+            ),
+        )),
+    }
 }
 
 fn crosses_as_ctx(ty: &Type, runtime: &Ident) -> bool {

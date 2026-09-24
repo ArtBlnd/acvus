@@ -1,0 +1,13 @@
+error: `T` is a type variable, and a type variable takes no lifetime bound: `T: 'a` would let the handler keep a `T` past the call, though a `T` may hold a loan that ends with it (RFC-0079 rule 8)
+  --> tests/compile_fail/type_variable_bounded_by_a_lifetime.rs:10:8
+   |
+10 |     T: 'a,
+   |        ^^
+
+warning: unused imports: `Var` and `kind`
+ --> tests/compile_fail/type_variable_bounded_by_a_lifetime.rs:4:20
+  |
+4 | use acvus_extern::{Var, extern_fn, kind};
+  |                    ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

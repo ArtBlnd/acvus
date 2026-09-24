@@ -1,0 +1,19 @@
+error: `Ref<'static, …>` in an extern's signature: what a call hands the handler is at that call and is not kept past it, so the signature names the call's lifetime, `'_` or a lifetime parameter (RFC-0079 rule 6)
+ --> tests/compile_fail/static_carrier_in_a_signature.rs:7:20
+  |
+7 | fn keep<Rt>(r: Ref<'static, String, Shared, Rt>) -> i64
+  |                    ^^^^^^^
+
+error: `Ref<'static, …>` in an extern's signature: what a call hands the handler is at that call and is not kept past it, so the signature names the call's lifetime, `'_` or a lifetime parameter (RFC-0079 rule 6)
+  --> tests/compile_fail/static_carrier_in_a_signature.rs:16:43
+   |
+16 | fn count<T, E, Rt>(keep: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>) -> i64
+   |                                           ^^^^^^^
+
+warning: unused imports: `Closure`, `Ref`, `Runtime`, `Shared`, `Var`, and `kind`
+ --> tests/compile_fail/static_carrier_in_a_signature.rs:4:20
+  |
+4 | use acvus_extern::{Closure, Ref, Runtime, Shared, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^  ^^^^^^^  ^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

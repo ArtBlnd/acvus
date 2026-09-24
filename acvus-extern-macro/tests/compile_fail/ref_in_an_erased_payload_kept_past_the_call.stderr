@@ -1,7 +1,7 @@
 error: implementation of `Within` is not general enough
-  --> tests/compile_fail/ref_in_an_erased_payload_kept_past_the_call.rs:24:1
+  --> tests/compile_fail/ref_in_an_erased_payload_kept_past_the_call.rs:27:1
    |
-24 | #[extern_fn(effect = opaque)]
+27 | #[extern_fn(effect = opaque)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation of `Within` is not general enough
    |
    = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, __R>`, for any lifetime `'0`...

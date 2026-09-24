@@ -1,0 +1,13 @@
+error[E0310]: the parameter type `T` may not live long enough
+  --> tests/compile_fail/keep_t_dyn_any.rs:13:44
+   |
+13 |     let kept: Box<dyn Any + Send + Sync> = Box::new(x);
+   |                                            ^^^^^^^^^^^
+   |                                            |
+   |                                            the parameter type `T` must be valid for the static lifetime...
+   |                                            ...so that the type `T` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+11 |     T: Var<kind::Type> + 'static,
+   |                        +++++++++

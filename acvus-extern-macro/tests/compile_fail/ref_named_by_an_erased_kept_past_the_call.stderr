@@ -1,7 +1,7 @@
 error: implementation of `Within` is not general enough
-  --> tests/compile_fail/ref_named_by_an_erased_kept_past_the_call.rs:12:1
+  --> tests/compile_fail/ref_named_by_an_erased_kept_past_the_call.rs:16:1
    |
-12 | #[extern_fn(effect = opaque)]
+16 | #[extern_fn(effect = opaque)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation of `Within` is not general enough
    |
    = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, __R>`, for any lifetime `'0`...
@@ -9,9 +9,9 @@ error: implementation of `Within` is not general enough
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: implementation of `Within` is not general enough
-  --> tests/compile_fail/ref_named_by_an_erased_kept_past_the_call.rs:12:1
+  --> tests/compile_fail/ref_named_by_an_erased_kept_past_the_call.rs:16:1
    |
-12 | #[extern_fn(effect = opaque)]
+16 | #[extern_fn(effect = opaque)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation of `Within` is not general enough
    |
    = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, TypesOnly>`, for any lifetime `'0`...

@@ -1,7 +1,7 @@
 error: lifetime may not live long enough
-  --> tests/compile_fail/ref_in_a_container_kept_past_the_call.rs:21:1
+  --> tests/compile_fail/ref_in_a_container_kept_past_the_call.rs:24:1
    |
-21 | #[extern_fn(effect = opaque)]
+24 | #[extern_fn(effect = opaque)]
    | -^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    | |
    | let's call the lifetime of this reference `'1`

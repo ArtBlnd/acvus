@@ -285,9 +285,10 @@ Status: Proposed
    extension type bounds its `Chosen` parameter `'static` at the key.
 8. **A type variable's value is not kept.** A type variable takes any
    type, and its `Var` does not imply `'static` (rule 7), so a handler
-   keeping a value of one past the call, in a static, a thread, a
-   `Box<dyn Any>` or a `#[state]`, needs `T: 'static`, which Rust
-   refuses.
+   keeping a value of one in a static, a thread, a `Box<dyn Any>` or a
+   `#[state]` needs `T: 'static`, which Rust refuses. The macros refuse a lifetime bound on a type variable and a
+   `'static` carrier in a signature (`Ref<'static, …>`); one behind an
+   alias falls to `Within`.
 9. **A value crossing out of the body holds no loan.** A body's result
    to the host and a context write are refused where any of their
    positions may hold a loan; a call whose argument has a position is not

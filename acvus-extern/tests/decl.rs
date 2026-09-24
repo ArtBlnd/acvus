@@ -688,7 +688,7 @@ where
 fn first_of<I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    front_at: Instance<'_, front<I, Ref<'static, Erased<Rt, i64>, Shared, Rt>, Rt>, I, Rt>,
+    front_at: Instance<'_, front<I, Ref<'_, Erased<Rt, i64>, Shared, Rt>, Rt>, I, Rt>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,

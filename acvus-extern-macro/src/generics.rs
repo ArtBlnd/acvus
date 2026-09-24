@@ -201,6 +201,20 @@ impl Vars {
                     ));
                 }
             };
+            if kind == VarKind::Ty
+                && let Some(TypeParamBound::Lifetime(lifetime)) = bounds_of(generics, tp)
+                    .find(|bound| matches!(bound, TypeParamBound::Lifetime(_)))
+            {
+                let var = &tp.ident;
+                return Err(syn::Error::new(
+                    lifetime.span(),
+                    format!(
+                        "`{var}` is a type variable, and a type variable takes no lifetime bound: \
+                         `{var}: {lifetime}` would let the handler keep a `{var}` past the call, \
+                         though a `{var}` may hold a loan that ends with it (RFC-0079 rule 8)"
+                    ),
+                ));
+            }
             if mono.is_some() && kind != VarKind::Ty {
                 return Err(syn::Error::new(
                     tp.ident.span(),

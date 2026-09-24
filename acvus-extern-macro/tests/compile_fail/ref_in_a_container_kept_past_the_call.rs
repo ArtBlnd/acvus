@@ -1,8 +1,8 @@
-//! p4 through a derived container: the handler names the `Ref` at `'static`
-//! inside the container's type argument and puts the container into a
-//! static. The container's brand is its payload's, and the payload holds the
-//! `Ref` by value, so the handler is handed it at the call's brand and the
-//! `'static` it names does not match (RFC-0079 rule 6).
+//! p4 through a derived container: the handler names the `Ref` at `'static`,
+//! behind an alias, inside the container's type argument and puts the
+//! container into a static. The container is `Within` the call where its
+//! payload is, and the payload holds the `Ref` by value, so the glue refuses
+//! the `'static` it names (RFC-0079 rule 6).
 #![forbid(unsafe_code)]
 use std::any::Any;
 use std::sync::Mutex;
@@ -18,8 +18,11 @@ struct Box8<T>(Vec<T>)
 where
     T: Var<kind::Type>;
 
+/// `'static` behind an alias, which the macro does not see through.
+type Kept<Rt> = Ref<'static, String, Shared, Rt>;
+
 #[extern_fn(effect = opaque)]
-fn keep_box<Rt>(b: Box8<Ref<'static, String, Shared, Rt>>) -> i64
+fn keep_box<Rt>(b: Box8<Kept<Rt>>) -> i64
 where
     Rt: Runtime,
 {

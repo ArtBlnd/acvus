@@ -15,8 +15,11 @@ struct Box8<T>(Vec<T>)
 where
     T: Var<kind::Type>;
 
+/// `'static` behind an alias, which the macro does not see through.
+type Kept<Rt> = Ref<'static, String, Shared, Rt>;
+
 #[extern_fn(effect = opaque)]
-fn keep_box<Rt>(b: Box8<Option<Ref<'static, String, Shared, Rt>>>) -> i64
+fn keep_box<Rt>(b: Box8<Option<Kept<Rt>>>) -> i64
 where
     Rt: Runtime,
 {

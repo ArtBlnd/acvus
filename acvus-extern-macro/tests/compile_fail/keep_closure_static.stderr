@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/compile_fail/keep_closure_static.rs:16:34
+   |
+12 | fn keep<Rt>(x: Closure<'_, (), i64, Pure, Rt>) -> i64
+   |             - has type `Closure<'1, (), i64, Pure, Rt>`
+...
+16 |     *KEPT.lock().unwrap() = Some(Box::new(x));
+   |                                  ^^^^^^^^^^^ coercion requires that `'1` must outlive `'static`

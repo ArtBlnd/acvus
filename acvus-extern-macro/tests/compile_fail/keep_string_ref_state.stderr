@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/compile_fail/keep_string_ref_state.rs:17:34
+   |
+13 | fn keep<Rt>(#[state] stash: &Stash, x: Ref<'_, String, Shared, Rt>) -> i64
+   |                                     - has type `acvus_extern::Ref<'1, std::string::String, acvus_extern::Shared, Rt>`
+...
+17 |     stash.0.lock().unwrap().push(Box::new(x));
+   |                                  ^^^^^^^^^^^ coercion requires that `'1` must outlive `'static`
