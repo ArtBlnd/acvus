@@ -1561,7 +1561,7 @@ where
             // the handler writes each at most once.
             let out = unsafe { acvus_extern::lend_run(acvus_extern::Holding::new(), &mut values) };
             call(&mut m.ctx, out);
-            let object = Value::object(Arc::clone(shape), values);
+            let object = Value::object_with(shape, || values);
             m.regs().define::<true>(*dst, object);
         }
     }
@@ -1772,7 +1772,7 @@ where
                 let Lent { run, ctx } = m.lend_and_window(self.window.at, self.window.arity);
                 // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.
                 let () = unsafe { self.f.call(ctx, run, <H::Ret as Returned>::from_slice(out)) };
-                let object = Value::object(Arc::clone(shape), values);
+                let object = Value::object_with(shape, || values);
                 m.regs().define::<true>(*dst, object);
             }
         }

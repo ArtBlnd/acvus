@@ -4673,7 +4673,7 @@ impl<'a> Prepare<'a> {
                     .releases()
                     .map(|at| Marked::of(Off::of(run.base + at)))
                     .collect();
-                node(move |next| run_ops::DropRun { registers, next })
+                made(move |next| run_ops::drop_run(registers, next))
             }
             InstKind::Drop { src } => {
                 let slot = self.marked(*src);
@@ -5431,11 +5431,7 @@ impl<'a> Prepare<'a> {
             }]),
             None => Box::new([]),
         };
-        node(move |next| run_ops::LayRun {
-            konsts,
-            moved,
-            next,
-        })
+        made(move |next| run_ops::lay_run(konsts, moved, next))
     }
 
     /// The heap realization of an object (RFC-0050 rule 4): its settled type's
@@ -5493,11 +5489,7 @@ impl<'a> Prepare<'a> {
             }
         }
         let (konsts, moved) = (konsts.into_boxed_slice(), moved.into_boxed_slice());
-        node(move |next| run_ops::LayRun {
-            konsts,
-            moved,
-            next,
-        })
+        made(move |next| run_ops::lay_run(konsts, moved, next))
     }
 
     fn make_variant(&mut self, dst: ValueId, tag: Astr, payload: Option<ValueId>) -> Node {

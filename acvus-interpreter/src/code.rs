@@ -406,14 +406,14 @@ impl Konst {
         match self {
             Konst::Word(kind, bits) => Value::inline(*kind, *bits),
             Konst::Str(s) => Value::string(s.as_str()),
-            Konst::List(items) => Value::array(
+            Konst::List(items) => Value::array_with(|| {
                 items
                     .iter()
                     // SAFETY: `value` makes a fresh word, which no other
                     // holder owns.
                     .map(|item| unsafe { Owned::from_value(acvus_extern::Holding::new(), item.value()) })
-                    .collect(),
-            ),
+                    .collect()
+            }),
         }
     }
 }

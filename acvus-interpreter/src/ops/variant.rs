@@ -80,9 +80,10 @@ impl<const LARGE: bool> Op for MakeVariant<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        // SAFETY: `take` moved the word out of its register.
-        let payload = unsafe { Owned::from_value(acvus_extern::Holding::new(), regs.take::<LARGE>(self.slots.src)) };
-        let value = Value::variant_of(self.tag, payload);
+        let value = Value::variant_with(self.tag, || {
+            // SAFETY: `take` moved the word out of its register.
+            unsafe { Owned::from_value(acvus_extern::Holding::new(), regs.take::<LARGE>(self.slots.src)) }
+        });
         regs.define::<true>(self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -99,7 +100,7 @@ impl Op for MakeUnitVariant {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         // SAFETY: `UNDEF` owns nothing.
-        let value = Value::variant_of(self.tag, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) });
+        let value = Value::variant_with(self.tag, || unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) });
         m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
     }

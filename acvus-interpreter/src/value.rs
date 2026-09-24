@@ -141,11 +141,32 @@ impl Release for Value {
     }
 }
 
-fn large<T>(vtable: &'static Vtable, value: T) -> Value {
-    let slot = Box::new(Slot {
-        header: Header { vtable },
-        value,
-    });
+/// A `Large` holding what `make` returns. The slot is allocated before `make`
+/// runs and its value is written where the slot lies, so a constructor that
+/// reads its parts inside `make` writes them straight into the heap, rather
+/// than building the value on the stack and copying it in after `malloc`.
+///
+/// `make` is the one thing that runs while the slot is uninitialized. If it
+/// unwinds, the slot is still a `Box<MaybeUninit<Slot<T>>>`, whose drop frees
+/// the allocation and runs no `Drop` of `T`; a closure cannot return from
+/// here early.
+fn large<T, F>(vtable: &'static Vtable, make: F) -> Value
+where
+    F: FnOnce() -> T,
+{
+    let mut slot = Box::<Slot<T>>::new_uninit();
+    let at = slot.as_mut_ptr();
+    // SAFETY: `at` is the allocation `slot` owns, sized and aligned for a
+    // `Slot<T>`. `&raw mut` names each field without reading the
+    // uninitialized memory or making a reference to it, and each write puts a
+    // valid value in its field.
+    unsafe {
+        (&raw mut (*at).header).write(Header { vtable });
+        (&raw mut (*at).value).write(make());
+    }
+    // SAFETY: `header` and `value` are both written above, and `Slot<T>` has
+    // no other field.
+    let slot = unsafe { slot.assume_init() };
     Value {
         kind: Kind::Large,
         word: Box::into_raw(slot) as *mut Header as u64,
@@ -201,7 +222,7 @@ impl Value {
                 mem::forget(value);
                 Value { kind, word }
             }
-            None => large(vtable_of::<T>(), value),
+            None => large(vtable_of::<T>(), || value),
         }
     }
 
@@ -309,6 +330,11 @@ impl Value {
     #[inline]
     pub fn bits(&self) -> u64 {
         debug_assert!(self.kind.is_inline(), "bits: {self:?} carries no bits");
+        self.word
+    }
+
+    #[cfg(test)]
+    pub(crate) fn word_of_any_kind(&self) -> u64 {
         self.word
     }
 
@@ -729,27 +755,56 @@ impl Value {
     }
 
     pub fn string(s: impl Into<String>) -> Self {
-        large(&STRING, s.into())
+        large(&STRING, || s.into())
     }
     pub fn array(items: Vec<Owned<AcvusRuntime>>) -> Self {
-        large(&ARRAY, Array::new(items))
+        Value::array_with(|| items)
+    }
+    /// An array of the items `items` gives, called after the slot is
+    /// allocated: how an operation reads its registers straight into the heap
+    /// (`large`).
+    pub fn array_with<F>(items: F) -> Self
+    where
+        F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
+    {
+        large(&ARRAY, || Array::new(items()))
     }
     pub fn tuple(items: Vec<Owned<AcvusRuntime>>) -> Self {
-        large(&TUPLE, Tuple(items))
+        Value::tuple_with(|| items)
+    }
+    /// As `array_with`, for a tuple.
+    pub fn tuple_with<F>(items: F) -> Self
+    where
+        F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
+    {
+        large(&TUPLE, || Tuple(items()))
     }
     /// A heap object: the shape its type fixes and one value per field of it,
     /// in that order (RFC-0050 rules 4 and 8).
     pub fn object(shape: Arc<ObjectShape>, values: Box<[Owned<AcvusRuntime>]>) -> Self {
-        large(&OBJECT, acvus_extern::Obj::new(shape, values))
+        large(&OBJECT, || acvus_extern::Obj::new(shape, values))
+    }
+
+    /// As `object`, with the shape shared and the values `values` gives, both
+    /// taken after the slot is allocated (`large`).
+    pub fn object_with<F>(shape: &Arc<ObjectShape>, values: F) -> Self
+    where
+        F: FnOnce() -> Box<[Owned<AcvusRuntime>]>,
+    {
+        large(&OBJECT, || {
+            acvus_extern::Obj::new(Arc::clone(shape), values())
+        })
     }
 
     /// An object whose field at each position is read where `at` says, which is
-    /// how `composite::MakeObject` fills one with no width to compare.
-    pub fn object_filled<F>(shape: Arc<ObjectShape>, at: F) -> Self
+    /// how `composite::MakeObject` fills one with no width to compare. The
+    /// shape is shared and the fields read after the slot is allocated
+    /// (`large`).
+    pub fn object_filled<F>(shape: &Arc<ObjectShape>, at: F) -> Self
     where
         F: FnMut(FieldAt) -> Owned<AcvusRuntime>,
     {
-        large(&OBJECT, acvus_extern::Obj::filled(shape, at))
+        large(&OBJECT, || acvus_extern::Obj::filled(Arc::clone(shape), at))
     }
 
     /// An object built from the names it writes rather than from a type: what a
@@ -775,8 +830,20 @@ impl Value {
     }
 
     pub fn variant_of(tag: Value, payload: Owned<AcvusRuntime>) -> Self {
-        // SAFETY: a tag is a word that owns nothing.
-        large(&VARIANT, VariantValue::of(unsafe { Owned::from_value(acvus_extern::Holding::new(), tag) }, payload))
+        Value::variant_with(tag, || payload)
+    }
+
+    /// As `variant_of`, with the payload `payload` gives, called after the slot
+    /// is allocated (`large`).
+    pub fn variant_with<F>(tag: Value, payload: F) -> Self
+    where
+        F: FnOnce() -> Owned<AcvusRuntime>,
+    {
+        large(&VARIANT, || {
+            // SAFETY: a tag is a word that owns nothing.
+            let tag = unsafe { Owned::from_value(acvus_extern::Holding::new(), tag) };
+            VariantValue::of(tag, payload())
+        })
     }
 
     /// The word a tag register holds: the one number a run of the program gives
@@ -856,7 +923,7 @@ impl Value {
         }
     }
     pub(crate) fn handle(launched: Launched) -> Self {
-        large(&HANDLE, launched)
+        large(&HANDLE, || launched)
     }
 
     pub fn is_object(&self) -> bool {
@@ -1167,6 +1234,141 @@ mod tests {
         }
         assert_eq!(Arc::strong_count(&alive), 2);
         large.release();
+        assert_eq!(Arc::strong_count(&alive), 1);
+    }
+
+    // -- `large`: the slot is allocated first and filled in place --------
+
+    /// A fresh `Large` the test owns, whose drop the count in `alive` shows.
+    fn counted(alive: &Arc<()>) -> Owned<AcvusRuntime> {
+        let word = unsafe {
+            Value::erase(Counted {
+                _alive: Arc::clone(alive),
+            })
+        };
+        // SAFETY: `erase` made a fresh word, which no other holder owns.
+        unsafe { Owned::from_value(acvus_extern::Holding::new(), word) }
+    }
+
+    fn int(n: i64) -> Owned<AcvusRuntime> {
+        // SAFETY: an integer is a word that owns nothing.
+        unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(n)) }
+    }
+
+    #[test]
+    fn a_variant_built_in_place_reads_back_its_tag_and_payload_and_drops_it_once() {
+        let interner = Interner::new();
+        let alive = Arc::new(());
+        let tag = Value::tag(interner.intern("A"));
+        let v = Value::variant_with(tag, || counted(&alive));
+        assert!(v.is_variant());
+        assert_eq!(Arc::strong_count(&alive), 2);
+        // SAFETY: `variant_with` wrote a variant.
+        let held = unsafe { v.as_variant() };
+        assert_eq!(**held.tag(), tag);
+        assert_eq!(held.payload().kind(), Kind::Large);
+        v.release();
+        assert_eq!(Arc::strong_count(&alive), 1);
+
+        let unit = Value::variant_with(tag, || unsafe {
+            // SAFETY: `UNDEF` owns nothing.
+            Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF)
+        });
+        // SAFETY: `variant_with` wrote a variant.
+        let held = unsafe { unit.as_variant() };
+        assert_eq!(**held.tag(), tag);
+        assert_eq!(held.payload().kind(), Kind::Undef);
+        unit.release();
+    }
+
+    #[test]
+    fn an_array_and_a_tuple_built_in_place_read_back_their_items_and_drop_them_once() {
+        let alive = Arc::new(());
+        let a = Value::array_with(|| vec![int(1), counted(&alive), int(3)]);
+        assert!(a.is_array());
+        // SAFETY: `array_with` wrote an array.
+        let items = unsafe { a.as_array() };
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].as_int(), 1);
+        assert_eq!(items[1].kind(), Kind::Large);
+        assert_eq!(items[2].as_int(), 3);
+        assert_eq!(Arc::strong_count(&alive), 2);
+        a.release();
+        assert_eq!(Arc::strong_count(&alive), 1);
+
+        let t = Value::tuple_with(|| vec![counted(&alive), int(7)]);
+        assert!(t.is_tuple());
+        // SAFETY: `tuple_with` wrote a tuple.
+        let items = unsafe { t.as_tuple() };
+        assert_eq!(items[1].as_int(), 7);
+        assert_eq!(Arc::strong_count(&alive), 2);
+        t.release();
+        assert_eq!(Arc::strong_count(&alive), 1);
+    }
+
+    #[test]
+    fn an_object_built_in_place_reads_back_its_shape_and_fields_and_drops_them_once() {
+        let interner = Interner::new();
+        let alive = Arc::new(());
+        let shape = ObjectShape::in_order([interner.intern("a"), interner.intern("b")].into());
+
+        let o = Value::object_with(&shape, || [int(4), counted(&alive)].into());
+        assert!(o.is_object());
+        // SAFETY: `object_with` wrote an object.
+        unsafe {
+            assert!(Arc::ptr_eq(o.as_shape(), &shape));
+            assert_eq!(o.as_object()[0].as_int(), 4);
+            assert_eq!(o.as_object()[1].kind(), Kind::Large);
+        }
+        assert_eq!(Arc::strong_count(&shape), 2);
+        assert_eq!(Arc::strong_count(&alive), 2);
+        o.release();
+        assert_eq!(Arc::strong_count(&shape), 1);
+        assert_eq!(Arc::strong_count(&alive), 1);
+
+        let f = Value::object_filled(&shape, |at| match at.index() {
+            0 => counted(&alive),
+            _ => int(9),
+        });
+        // SAFETY: `object_filled` wrote an object.
+        unsafe {
+            assert!(Arc::ptr_eq(f.as_shape(), &shape));
+            assert_eq!(f.as_object()[0].kind(), Kind::Large);
+            assert_eq!(f.as_object()[1].as_int(), 9);
+        }
+        assert_eq!(Arc::strong_count(&alive), 2);
+        f.release();
+        assert_eq!(Arc::strong_count(&shape), 1);
+        assert_eq!(Arc::strong_count(&alive), 1);
+    }
+
+    #[test]
+    fn a_string_built_in_place_reads_back_and_drops() {
+        let s = Value::string("in place");
+        assert!(s.is_string());
+        // SAFETY: `string` wrote a string.
+        assert_eq!(unsafe { s.as_str() }, "in place");
+        s.release();
+    }
+
+    /// The one thing between the allocation and the last write is `make`. If
+    /// it unwinds, the slot is freed without a drop of the value it never
+    /// held, and what `make` owned is dropped once, by the unwind. Under Miri
+    /// a slot that was not freed is a leak and a drop of the uninitialized
+    /// value is undefined behaviour, so this test fails there on either.
+    #[test]
+    fn a_constructor_that_unwinds_before_the_slot_is_filled_frees_it_and_drops_nothing_twice() {
+        let alive = Arc::new(());
+        let held = Counted {
+            _alive: Arc::clone(&alive),
+        };
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            large(vtable_of::<Counted>(), move || -> Counted {
+                let _held = held;
+                panic!("make unwinds before it returns")
+            })
+        }));
+        assert!(unwound.is_err());
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 }
