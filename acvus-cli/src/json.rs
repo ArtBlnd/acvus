@@ -1,6 +1,10 @@
 //! A runtime value as JSON.
 
-use acvus_interpreter::{Composite, Kind, Value};
+use std::any::TypeId;
+
+use acvus_ext::Deque;
+use acvus_extern::Owned;
+use acvus_interpreter::{AcvusRuntime, Composite, Kind, Value};
 use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 use serde_json::{Map, Value as Json};
@@ -88,8 +92,44 @@ fn by_composite(interner: &Interner, value: &Value) -> Json {
                 )])),
             }
         }
-        Some(Composite::Fn | Composite::Handle) | None => {
-            Json::from(format!("<{}>", (value.vtable().name)()))
-        }
+        None => by_extension(interner, value),
+        Some(Composite::Fn | Composite::Handle) => named(value),
     }
+}
+
+/// A result leaves a run through a uniform slot, where acvus-extern keys a
+/// container's box at its element's canonical form, `Owned` over the runtime
+/// (RFC-0039 rule 5, RFC-0076). A change to that key moves this type with it.
+type ResultElement = Owned<AcvusRuntime>;
+
+fn by_extension(interner: &Interner, value: &Value) -> Json {
+    if let Some(items) = payload_of::<Vec<ResultElement>>(value) {
+        return items_array(interner, items.iter());
+    }
+    if let Some(items) = payload_of::<Deque<ResultElement>>(value) {
+        return items_array(interner, items.iter());
+    }
+    named(value)
+}
+
+fn payload_of<T>(value: &Value) -> Option<&T>
+where
+    T: 'static,
+{
+    (value.vtable().type_id == TypeId::of::<T>()).then(|| {
+        // SAFETY: the header's `type_id` is the runtime's own witness that the
+        // payload is a `T`.
+        unsafe { value.peek::<T>() }
+    })
+}
+
+fn items_array<'v, I>(interner: &Interner, items: I) -> Json
+where
+    I: Iterator<Item = &'v ResultElement>,
+{
+    Json::Array(items.map(|item| by_kind(interner, item)).collect())
+}
+
+fn named(value: &Value) -> Json {
+    Json::from(format!("<{}>", (value.vtable().name)()))
 }

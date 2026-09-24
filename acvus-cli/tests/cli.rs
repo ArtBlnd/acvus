@@ -983,6 +983,56 @@ fn what_the_machine_cannot_run_the_checker_refuses() {
 /// A literal arm over a place behind a reference tests what the reference
 /// names, at both optimization levels.
 #[test]
+fn a_vec_and_a_deque_print_as_the_json_array_of_their_items() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("let v = vec::new(); push(&mut v, 1); push(&mut v, 2); v", "[1,2]\n"),
+        (
+            "let v = vec::new(); push(&mut v, \"a\".to_string()); push(&mut v, \"b\".to_string()); v",
+            "[\"a\",\"b\"]\n",
+        ),
+        (
+            "let v = vec::new(); let w = vec::new(); push(&mut w, 1); push(&mut w, 2); push(&mut v, w); push(&mut v, vec([3])); v",
+            "[[1,2],[3]]\n",
+        ),
+        ("let v = vec([1]); pop(&mut v); v", "[]\n"),
+        ("vec([{ x: 1, }, { x: 2, }])", "[{\"x\":1},{\"x\":2}]\n"),
+        ("let d = deque(); push_back(&mut d, 1); push_front(&mut d, 0); d", "[0,1]\n"),
+        ("let d = deque(); push_back(&mut d, 1); pop_back(&mut d); d", "[]\n"),
+    ];
+    for (source, expected) in cases {
+        for level in ["full", "none"] {
+            let out = acvus(dir.path(), &["run", "-e", source, "--opt", level]);
+            assert_eq!(out.status.code(), Some(0), "{source}: {}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), expected, "{source} at opt {level}");
+        }
+    }
+}
+
+#[test]
+fn a_value_with_no_data_view_prints_its_name_and_a_closure_never_reaches_the_printer() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(
+        dir.path(),
+        &["run", "-e", "match regex(\"a+\") { Ok(r) => r, Err(e) => panic(\"no\".to_string()), }"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let printed = text(&out.stdout);
+    assert!(
+        printed.starts_with("\"<") && printed.ends_with(">\"\n") && printed.contains("Regex"),
+        "{printed}"
+    );
+    let out = acvus(dir.path(), &["run", "-e", "(1, |x| -> x + 1)"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("a closure does not leave the run it was made in"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(text(&out.stdout), "");
+}
+
+#[test]
 fn a_literal_arm_through_a_reference_runs() {
     let dir = tempfile::tempdir().unwrap();
     write(
