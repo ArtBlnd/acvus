@@ -649,7 +649,7 @@ fn context(interner: &Interner, corpus: &Corpus) -> Context {
     entries.into_iter().collect()
 }
 
-fn snapshot(interner: &Interner, corpus: &Corpus) -> HashMap<String, Owned<AcvusRuntime>> {
+fn snapshot(interner: &Interner, corpus: &Corpus) -> HashMap<String, (acvus_mir::ty::Ty, Owned<AcvusRuntime>)> {
     split_context(interner, context(interner, corpus)).1
 }
 
@@ -788,7 +788,7 @@ fn prepare_run(
 fn run_once(rt: &Runtime, interner: &Interner, case: &Case, corpus: &Arc<Corpus>) -> Run {
     let (_shared, mut interp) = prepare_run(interner, case, corpus);
     let start = Instant::now();
-    let value = rt.block_on(interp.execute());
+    let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
     let elapsed = start.elapsed();
     Run {
         elapsed,

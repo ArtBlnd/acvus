@@ -69,7 +69,7 @@ fn graph_of(functions: Vec<Function>) -> CompilationGraph {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     }
 }
 

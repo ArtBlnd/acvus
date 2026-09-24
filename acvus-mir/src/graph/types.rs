@@ -5,11 +5,13 @@
 //!
 //! MIR receives **parsed ASTs**, not source strings. Parsing happens outside.
 
+use std::convert::Infallible;
+
 use acvus_utils::{Astr, Freeze};
 use rustc_hash::FxHashMap;
 
 use super::bind::{BindingRefused, BoundValue};
-use crate::ty::{PolyTy, Ty, TypeRegistry};
+use crate::ty::{EffectTerm, IdentityTerm, Poly, PolyTy, Ty, TypeRegistry};
 
 // -- Identifiers -----------------------------------------------------
 
@@ -128,6 +130,25 @@ pub struct Context {
     pub ty: PolyTy,
 }
 
+impl Context {
+    /// Whether the graph solves this context's type (RFC-0090 rule 1): its
+    /// type holds a type, length or representation variable. An identity or
+    /// effect variable is not one, since a declared type is lifted with a
+    /// variable at every identity (`lift_declaration`).
+    pub fn is_open(&self) -> bool {
+        self.ty
+            .try_map::<Poly, ()>(
+                &mut |_| Err(()),
+                &mut |var| Ok(IdentityTerm::Var(var)),
+                &mut |var| Ok(EffectTerm::Var(var)),
+                &mut |_| Err(()),
+                &mut |_| Err(()),
+                &mut |never: Infallible| match never {},
+            )
+            .is_err()
+    }
+}
+
 // -- Inputs -----------------------------------------------------------
 
 /// A name a host must inject for this compilation to run: a context `@name`,
@@ -194,9 +215,12 @@ pub struct CompilationGraph {
     pub contexts: Freeze<Vec<Context>>,
     pub types: Freeze<TypeRegistry>,
     pub bindings: Bindings,
-    /// Obligation across artifacts: this body's result crosses to the host
-    /// as one `Value` read by kind, which `acvus_interpreter::Interpreter::
-    /// execute` reads and RFC-0054 fixes. `None` is a graph no host starts,
-    /// compiled to be lowered, printed or diagnosed.
-    pub entry: Option<QualifiedRef>,
+    /// Obligation across artifacts: each of these bodies' results crosses to
+    /// the host, which `acvus_interpreter::Interpreter::execute` and
+    /// `acvus_interpreter::Output` read, and RFC-0054 fixes each one's
+    /// declared return. A host that runs an initializer and the scripts that
+    /// read what it stored compiles them into one graph with an entry each
+    /// (RFC-0090 rule 1). No entry is a graph no host starts, compiled to be
+    /// lowered, printed or diagnosed.
+    pub entries: Vec<QualifiedRef>,
 }

@@ -74,7 +74,7 @@ fn environment(interner: &Interner, x: Ty) -> CompilationGraph {
         }]),
         types: Freeze::default(),
         bindings: Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     }
 }
 

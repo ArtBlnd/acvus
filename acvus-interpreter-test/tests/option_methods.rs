@@ -32,7 +32,7 @@ fn compile_and_run(source: &str, ret: Ty, opt: Opt) -> Result<Value, Refusal> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime");
-    Ok(runtime.block_on(interp.execute()))
+    Ok(runtime.block_on(interp.execute()).expect("the page holds every context the run fetches first"))
 }
 
 fn run_or_report(source: &str, ret: Ty, opt: Opt) -> Value {

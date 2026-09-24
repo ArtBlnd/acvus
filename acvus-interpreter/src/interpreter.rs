@@ -7,16 +7,24 @@ use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::Ty;
 use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::FxHashMap;
+#[cfg(feature = "tooling")]
 use smallvec::SmallVec;
 
 use crate::code::Prepared;
 use crate::flight::{Flight, Flying, Tally};
-use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
+use crate::host::PageError;
+#[cfg(feature = "tooling")]
+use crate::journal::ContextWrite;
+#[cfg(feature = "tooling")]
+use crate::journal::InMemoryContext;
+use crate::executor::AsyncJob;
+use crate::journal::RuntimeContext;
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
 use crate::value::Value;
 
 /// Call arguments. Stack-allocated for <=4 args.
+#[cfg(feature = "tooling")]
 pub type Args = SmallVec<[Value; 4]>;
 
 /// A single executable unit - a prepared MIR module or an extern function's
@@ -105,6 +113,7 @@ pub(crate) fn lookup_module<'a>(
     }
 }
 
+
 pub struct Interpreter {
     shared: Arc<InterpreterContext>,
     entry: QualifiedRef,
@@ -116,6 +125,7 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
+    #[cfg(feature = "tooling")]
     pub fn new(shared: InterpreterContext, entry: QualifiedRef, page: InMemoryContext) -> Self {
         Self::on_page(shared, entry, Arc::new(page))
     }
@@ -141,8 +151,11 @@ impl Interpreter {
     /// The deferred run a `Spawn` of a module issues: the spawning run's
     /// runtime, whose frame the new run's frames run within, and the
     /// arguments it passed.
-    pub(crate) fn spawned(rt: &AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> Self {
-        Self {
+    ///
+    /// The spawning run's page check covered what this one fetches first: a
+    /// spawn is a call whose callee's `fetched_first` joins the spawner's.
+    pub(crate) fn spawned(rt: &AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> AsyncJob {
+        let mut run = Self {
             shared: Arc::clone(&rt.shared),
             entry,
             page: Arc::clone(&rt.page),
@@ -150,7 +163,8 @@ impl Interpreter {
             tally: Arc::clone(&rt.tally),
             spawn_args: args,
             _flying: Some(rt.flight.start()),
-        }
+        };
+        AsyncJob::new(Box::pin(async move { run.run().await }))
     }
 
     /// The run as a `Runtime`, for a host that commits the page afterwards.
@@ -164,25 +178,38 @@ impl Interpreter {
     }
 
     /// Execute the entry module and return its value. The page keeps every
-    /// context the run assigned; `take_writes` hands them out.
+    /// context the run assigned. A run whose page does not hold a context it
+    /// fetches before assigning it is refused before it starts
+    /// (RFC-0025 rule 2).
     ///
     /// # Panics
     /// The entry's result is a view: a host reads one `Value` by kind
     /// (RFC-0054), which a register pair has none of. `CompilationGraph::
-    /// entry` carries which body this is and `typeck::ResultCrossing::
+    /// entries` carries which bodies are entries and `typeck::ResultCrossing::
     /// OneValue` refuses it there, so reaching this assert means a program
     /// arrived without passing the checker.
-    pub async fn execute(&mut self) -> Value {
+    pub async fn execute(&mut self) -> Result<Value, PageError> {
+        let module = lookup_module(&self.shared, &self.entry);
+        if let Some(key) = module.fetched_first.iter().find(|key| !self.page.holds(key)) {
+            return Err(PageError::Absent {
+                key: key.to_string(),
+            });
+        }
+        Ok(self.run().await)
+    }
+
+    async fn run(&mut self) -> Value {
         let entry = lookup_module(&self.shared, &self.entry).main.as_ref();
         assert!(
             !entry.returns_a_view,
             "the entry's result is a view, and a host reads one value by kind (RFC-0054); \
-             typeck refuses this at `CompilationGraph::entry`, so the checker was bypassed"
+             typeck refuses this at `CompilationGraph::entries`, so the checker was bypassed"
         );
         let args = std::mem::take(&mut self.spawn_args);
         call_module(self.runtime(), self.entry, args).await
     }
 
+    #[cfg(feature = "tooling")]
     pub fn take_writes(&self) -> Vec<ContextWrite> {
         self.page.take_writes()
     }

@@ -420,9 +420,10 @@ compilation holds the body to it.**
 1. **A compilation declares the entry's return type.** The declaration is a
    `Ty`, and it enters through the slot the graph already has for one: the
    entry `Function`'s `PolyTy::Fn { ret }`. A declared entry is an ordinary
-   declared function. The entry is the `QualifiedRef` the `CompilationGraph`
-   carries, and `None` says the graph has no host. A template's entry
-   declares `String` itself, since its tail is text.
+   declared function. A `CompilationGraph` carries its entries, each a
+   `QualifiedRef` with its own declaration, and a graph with none has no
+   host. A template's entry declares `String` itself, since its tail is
+   text.
 2. **The body joins the declaration on the shared path.** `check_script`
    sets the body's own return variable from the declaration, so the tail and
    every `?`'s early return join it through one path; a body with no tail
@@ -1052,91 +1053,111 @@ evaluation of postconditions at every return.
 
 Status: Proposed
 
-A host supplies contexts, runs the entry, and reads the result and the
-contexts a run wrote. A host is an extern turned around. The entry's result
-crosses from the script into Rust, as an extern's argument does. A context
-the host supplies crosses into the script, as an extern's return does. Each
-crossing is the glue's, at the type the checker settled, as the rule at the
-top of `acvus-extern` holds for an extern. The host declares Rust types. It
-reads through projections of them, and it writes values of them.
+A host runs programs, reads their results, and reads and writes the
+contexts that persist between runs. A host is an extern turned around. The
+entry's result crosses from the script into Rust, as an extern's argument
+does. A value the host puts into a context crosses into the script, as an
+extern's return does. Each crossing is the glue's, at the type the checker
+settled, as the rule at the top of `acvus-extern` holds for an extern.
 
-1. **The host declares by Rust type.**
-   - A compilation takes the entry's return type as a Rust type `R`. It
-     takes each context the host supplies as a key with a Rust type.
-   - The declared `Ty` is the Rust type's acvus type, read by the derive an
-     extern's parameter uses. It is the entry's return (RFC-0054 rule 1)
-     and the context's type.
-   - A declaration cannot differ from its Rust type, because it is read off
-     that type.
+1. **A context's type is the graph's.**
+   - The host does not declare a context's type, and neither does data the
+     host reads.
+   - A context enters the graph as a variable (RFC-0025). Its type is solved
+     with the rest of the graph from every body that stores or reads it, and
+     structural types meet as they do anywhere else.
+   - A store is always admitted where the solved type holds it. Initializing
+     a context is a script that stores it (`@log = [];`), compiled into the
+     same graph as the scripts that read it.
+   - A context whose type the graph leaves open closes to `!` at the freeze
+     (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
+   - A value no script names is not a context. The host keeps it itself.
+
+2. **The entry's result is declared by Rust type.**
+   - A compilation takes the entry's return type as a Rust type `R`. Its
+     `Ty` is read by the derive an extern's parameter uses, and it is the
+     entry's declaration (RFC-0054 rule 1). The declaration and `R` cannot
+     differ.
+   - A script that only stores returns `Unit`.
    - A host that names no type declares `!` (RFC-0054 rule 5), and rule 6
      covers it.
 
-2. **The result is an `Output<R>`.** Running the entry gives an `Output<R>`.
-   It owns the value and releases it when dropped. It offers
-   `get(&self) -> R::Ref<'_>` and `get_mut(&mut self) -> R::Mut<'_>`:
-   - for a type held whole, such as an opaque extern type, `R::Ref` is a
-     Rust reference;
-   - for a structural type, `R::Ref` is the derive's projection, `SRef` or
-     `SMut`, which borrows each field in place (RFC-0050 rule 6).
+3. **A host reads and edits as a handler does.** The host lends a value to a
+   closure, and the closure's parameters cross exactly as an extern
+   handler's do, through the glue the macro emits for a handler parameter:
+   `&T`, `&mut T`, `&str`, a slice of `Erased<Rt, T>`, a derive's
+   projection, and a `Ctx` that carries the runtime. There is no second
+   crossing and no host-only view.
+   - Running the entry gives an `Output<R>`. It owns the value, releases it
+     when dropped, and offers `with(|p| …)` and `with_mut(|p| …)`.
+   - A page (RFC-0033) is built from a compilation's solved context types.
+     It offers `with(key, |p| …)` and `with_mut(key, |p| …)`, and
+     `insert::<T>(key, value: T)`, which moves `value` in through the glue
+     an extern's return uses.
+   - A type a handler parameter cannot take, a host cannot take either, and
+     the gap is closed on the extern side.
 
-   No read can fail, and nothing checks a kind after the run.
-
-3. **A page is read and written through a declared type.**
-   - A page (RFC-0033) offers `read::<T>(key) -> Result<T::Ref<'_>, _>`,
-     `update::<T>(key, |m: T::Mut<'_>| …)` and `insert::<T>(key, value: T)`.
-   - Each compares `T`'s acvus type with the type the page holds for `key`,
-     which is rule 1's declaration. A mismatch, or a key the page does not
-     hold, is an error before any value is touched.
-   - The comparison is of declared types. It reads no tag on the value,
-     which an untagged runtime does not have.
-   - `insert` moves `value` in through the glue an extern's return uses.
+4. **The type is checked before the closure runs.**
+   - A page compares the closure parameter's acvus type with the solved
+     type of `key`, and `Output` compares it with `R`. A mismatch, a key the
+     graph does not have, or a key that holds no value yet is an error
+     before any value is touched.
+   - The comparison is of types the compilation settled. It reads no tag on
+     the value, which an untagged runtime does not have.
    - The contexts a run wrote are read the same way, after the run.
+   - A stored value whose type differs from the solved one, as after a
+     script changed, is a mismatch when the page opens. What to do with it
+     is the host's.
 
-4. **A projection borrows its holder.**
-   - A projection borrows the `Output` or the page for its lifetime
-     (`Within<'s>`, RFC-0079 rule 6). `get_mut` and `update` hold it
-     exclusively.
-   - A value the host keeps is a copy the host makes in Rust from the
-     projection, as `&str` to `String`.
-   - No projection holds a loan into a run: the checker refuses an entry
+5. **A lent value lives for the closure.**
+   - The borrow is the closure's, as a handler's is the call's
+     (`Within<'s>`, RFC-0079 rule 6), and `with_mut` holds the value
+     exclusively. Nothing the closure is lent outlives it.
+   - A value the host keeps is a copy the host makes in Rust inside the
+     closure, as `&str` to `String`.
+   - No lent value holds a loan into a run: the checker refuses an entry
      result or a context write that may hold one (RFC-0079 rule 9).
 
-5. **The host's surface names no runtime value.** The host's surface is:
-   - the declarations;
-   - `Output`;
-   - the page's typed methods.
-
-   The value word, the construction of an `Owned`, and the accessors that
-   read a word at a kind belong to the runtime and the glue. A storage
-   behind a page (`RuntimeContext`) moves whole holders and never reads
-   inside one.
-
-6. **A host that declares `!` is the runtime's own tooling.** The CLI prints
-   whatever a file returns. It reads the value by its settled `Ty`, inside
-   the workspace, with the runtime's accessors. No public reader by `Ty` is
-   offered.
+6. **The host's surface names no runtime value.**
+   - The surface is the entry declaration, `Output`, the page's lending
+     methods and `insert`.
+   - The value word, the construction of an `Owned`, the accessors that
+     read a word at a kind, and a run's raw writes belong to the runtime and
+     the glue. Raw writes are reached only under the runtime's `tooling`
+     feature, which a host turns on only by naming it.
+   - A storage behind a page (`RuntimeContext`) moves whole holders and
+     never reads inside one.
+   - The CLI, which declares `!` and prints whatever a file returns, is the
+     runtime's own tooling. It reads by the settled `Ty` inside the
+     workspace. No public reader by `Ty` is offered.
 
 **Why.** The burden falls on the language's developers first, then on the
 authors of externs and hosts, who take care but meet no trap. The script's
 user takes on nothing. A host that reads the value word writes, again, the
 walk only the runtime can check, and a reinterpretation at a wrong type is a
-transmute. A projection is enough to read and to change a value in place.
-Anything the host keeps is copied in Rust, where Rust checks it. Declaring
-by Rust type makes the checker's contract and the host's code one fact.
+transmute. A context's type written in data is a second statement of what
+the scripts already say, and two statements can disagree. Solved in the
+graph, the type has one source, and the stores that initialize it are
+checked like every other store. An extern handler already crosses the
+boundary soundly with values lent and not kept, and a host that lends into a
+closure needs nothing more, so one crossing serves both and a gap in one is a
+gap in the other. Anything the host keeps is copied in Rust, where Rust
+checks it.
 **Cost.**
-- Each host names a Rust type for its entry and for each context it
-  supplies. A host whose types come from data, such as a JSON file, is
-  rule 6's.
-- The derive must cover every type a host declares.
+- A host names a Rust type for its entry, and for each context it reads or
+  inserts.
+- A host can take what a handler parameter can take, and no more.
 - A page compares two types on each call.
 
 **Rejected.**
+- A context type declared by the host or by data such as a manifest — a
+  second source that can disagree with the scripts.
+- An initializer that returns the context's value — its result type would be
+  inferred from its own body with nothing to refuse it (RFC-0054). A store
+  is checked against the type the whole graph solves.
 - `as_typed::<T>()` on a result value — it is a `Value -> T`, and it checks
   a kind after the run (RFC-0054).
 - Returning the value word with documented accessors — every host rewrites
   an unchecked walk, which is a trap at the host's tier.
-- A public reader over a `(Ty, value)` pair — a typed host does not need
-  it, and every host that used it would rebuild a type system on the
-  runtime's layout.
-- Converting the result into an owned `R` — a projection is enough, and a
-  host's copies are Rust's own.
+- A public reader over a `(Ty, value)` pair — every host that used it would
+  rebuild a type system on the runtime's layout.

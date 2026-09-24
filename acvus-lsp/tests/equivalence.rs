@@ -35,7 +35,7 @@ fn environment(
         contexts: Freeze::new(contexts),
         types: Freeze::new(types),
         bindings,
-        entry: None,
+        entries: Vec::new(),
     }
 }
 

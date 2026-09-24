@@ -282,7 +282,7 @@ pub trait Op: Named + Send + Sync {
 
 /// Put `make`'s node in `slot`'s place, carrying the successor the node
 /// there held (RFC-0047 rule 7's probe, now that a successor is a field).
-#[cfg(any(debug_assertions, feature = "probe"))]
+#[cfg(all(feature = "tooling", any(debug_assertions, feature = "probe")))]
 pub fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
 where
     F: FnOnce(Box<dyn Op>) -> Box<dyn Op>,
@@ -683,6 +683,7 @@ impl CodeRef {
 
     /// # Safety
     /// `address` came from `CodeRef::address`.
+    #[cfg(feature = "tooling")]
     pub unsafe fn from_address(address: usize) -> CodeRef {
         // SAFETY: the caller's contract: an address `CodeRef::address` gave
         // is a `NonNull<Code>`.
@@ -850,6 +851,8 @@ pub struct Prepared {
     pub main: Arc<Body>,
     pub closures: FxHashMap<Label, Arc<Code>>,
     pub instances: crate::prepare::InstanceEntryStore,
+    /// The page keys of `MirModule::fetched_first`.
+    pub fetched_first: Vec<Box<str>>,
 }
 
 #[cfg(test)]

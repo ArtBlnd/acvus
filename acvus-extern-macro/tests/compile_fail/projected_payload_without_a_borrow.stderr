@@ -47,6 +47,54 @@ help: the trait `Project<__R>` is implemented for `Shape`
   |          ^^^^^
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^ the trait `Project<__R>` is not implemented for `Vec<i64>`
+  |
+  = help: the following other types implement trait `Project<Rt>`:
+            `()` implements `Project<__Rt>`
+            `Shape` implements `Project<__R>`
+            `bool` implements `Project<__Rt>`
+            `char` implements `Project<__Rt>`
+            `f64` implements `Project<__Rt>`
+            `i16` implements `Project<__Rt>`
+            `i32` implements `Project<__Rt>`
+            `i64` implements `Project<__Rt>`
+          and $N others
+  = note: required for `ShapeRef<'__a>` to implement `Takes<'__a, '__a, ByProjection<ShapeRef<'static>>, __R>`
+note: required by a bound in `acvus_extern::Param::At`
+ --> $WORKSPACE/acvus-extern/src/lend.rs
+  |
+  |     type At<'a>: Takes<'a, 'a, Self::Marker, Rt>;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Param::At`
+  = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied
+ --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
+  |
+7 | #[derive(TyArg)]
+  |          ^^^^^ the trait `Project<__R>` is not implemented for `Vec<i64>`
+  |
+  = help: the following other types implement trait `Project<Rt>`:
+            `()` implements `Project<__Rt>`
+            `Shape` implements `Project<__R>`
+            `bool` implements `Project<__Rt>`
+            `char` implements `Project<__Rt>`
+            `f64` implements `Project<__Rt>`
+            `i16` implements `Project<__Rt>`
+            `i32` implements `Project<__Rt>`
+            `i64` implements `Project<__Rt>`
+          and $N others
+  = note: required for `ShapeMut<'__a, __R>` to implement `Takes<'__a, '__a, ByProjection<ShapeMut<'static, __R>>, __R>`
+note: required by a bound in `acvus_extern::Param::At`
+ --> $WORKSPACE/acvus-extern/src/lend.rs
+  |
+  |     type At<'a>: Takes<'a, 'a, Self::Marker, Rt>;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Param::At`
+  = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `ShapeMut<'__s, __R>`
  --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
   |

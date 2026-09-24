@@ -108,129 +108,123 @@ expression: raw
 -- main --
 === main ===
      0 |   assign $order = r0
-     1 |   r1 = fetch @result_label
-     2 |   assign @result_label = r1
-     3 |   r2 = fetch @weight
-     4 |   assign @weight = r2
-     5 |   r3 = fetch @alert_count
-     6 |   assign @alert_count = r3
-     7 |   r4 = fetch @result_score
-     8 |   assign @result_score = r4
-     9 |   r5 = fetch @threshold
-    10 |   assign @threshold = r5
-    11 |   r6 = fetch @user_id
-    12 |   assign @user_id = r6
-    13 |   r7 = take @user_id
-    14 |   r8 = take $order
-    15 |   r9 = call #0(r7) [r8 -> r10]
-    16 |   assign $order = r10
-    17 |   assign profile = r9
-    18 |   r11 = take @user_id
-    19 |   r12 = take $order
-    20 |   r13 = call #1(r11) [r12 -> r14]
-    21 |   assign $order = r14
-    22 |   assign history = r13
-    23 |   r15 = take profile
-    24 |   r16 = take history
-    25 |   r17 = take @weight
-    26 |   r18 = call #2(r15, r16, r17)
-    27 |   assign score = r18
-    28 |   r19 = take profile
-    29 |   r20 = take score
-    30 |   r21 = call #3(r19, r20)
-    31 |   assign label = r21
-    32 |   r22 = take score
-    33 |   r23 = take @threshold
-    34 |   r24 = r22 > r23
-    35 |   r25 = test r24 == true
-    36 |   if r25 -> L0 else L1 join L1
-    37 | L0:
-    38 |   r26 = take @user_id
-    39 |   r27 = take score
-    40 |   r28 = take $order
-    41 |   r29 = call #4(r26, r27) [r28 -> r30]
-    42 |   assign $order = r30
-    43 |   r31 = take @alert_count
-    45 |   r32 = r31 + 1 (r33)
-    46 |   assign @alert_count = r32
-    47 |   jump L1
-    48 | L1:
-    50 |   r34 = take label
-    51 |   assign @result_label = r34
-    52 |   r35 = take score
-    53 |   assign @result_score = r35
-    54 |   r36 = take score
-    55 |   r37 = take @result_label
-    56 |   commit @result_label = r37
-    57 |   r38 = take @weight
-    58 |   commit @weight = r38
-    59 |   r39 = take @alert_count
-    60 |   commit @alert_count = r39
-    61 |   r40 = take @result_score
-    62 |   commit @result_score = r40
-    63 |   r41 = take @threshold
-    64 |   commit @threshold = r41
-    65 |   r42 = take @user_id
-    66 |   commit @user_id = r42
-    67 |   r43 = take $order
-    68 |   return r36 [r43]
+     1 |   r1 = fetch @weight
+     2 |   assign @weight = r1
+     3 |   r2 = fetch @alert_count
+     4 |   assign @alert_count = r2
+     5 |   r3 = fetch @threshold
+     6 |   assign @threshold = r3
+     7 |   r4 = fetch @user_id
+     8 |   assign @user_id = r4
+     9 |   r5 = take @user_id
+    10 |   r6 = take $order
+    11 |   r7 = call #0(r5) [r6 -> r8]
+    12 |   assign $order = r8
+    13 |   assign profile = r7
+    14 |   r9 = take @user_id
+    15 |   r10 = take $order
+    16 |   r11 = call #1(r9) [r10 -> r12]
+    17 |   assign $order = r12
+    18 |   assign history = r11
+    19 |   r13 = take profile
+    20 |   r14 = take history
+    21 |   r15 = take @weight
+    22 |   r16 = call #2(r13, r14, r15)
+    23 |   assign score = r16
+    24 |   r17 = take profile
+    25 |   r18 = take score
+    26 |   r19 = call #3(r17, r18)
+    27 |   assign label = r19
+    28 |   r20 = take score
+    29 |   r21 = take @threshold
+    30 |   r22 = r20 > r21
+    31 |   r23 = test r22 == true
+    32 |   if r23 -> L0 else L1 join L1
+    33 | L0:
+    34 |   r24 = take @user_id
+    35 |   r25 = take score
+    36 |   r26 = take $order
+    37 |   r27 = call #4(r24, r25) [r26 -> r28]
+    38 |   assign $order = r28
+    39 |   r29 = take @alert_count
+    41 |   r30 = r29 + 1 (r31)
+    42 |   assign @alert_count = r30
+    43 |   jump L1
+    44 | L1:
+    46 |   r32 = take label
+    47 |   assign @result_label = r32
+    48 |   r33 = take score
+    49 |   assign @result_score = r33
+    50 |   r34 = take score
+    51 |   r35 = take @result_label
+    52 |   commit @result_label = r35
+    53 |   r36 = take @weight
+    54 |   commit @weight = r36
+    55 |   r37 = take @alert_count
+    56 |   commit @alert_count = r37
+    57 |   r38 = take @result_score
+    58 |   commit @result_score = r38
+    59 |   r39 = take @threshold
+    60 |   commit @threshold = r39
+    61 |   r40 = take @user_id
+    62 |   commit @user_id = r40
+    63 |   r41 = take $order
+    64 |   return r34 [r41]
 
     ; orders: what the body's yielded Order waits for
-    ;   r43(entry)
+    ;   r41(entry)
 
     ; r0 (v1) : Order
-    ; r1 (@result_label) : String
-    ; r2 (@weight) : i64
-    ; r3 (@alert_count) : i64
-    ; r4 (@result_score) : i64
-    ; r5 (@threshold) : i64
-    ; r6 (@user_id) : i64
-    ; r7 (@user_id) : i64
-    ; r8 (v17) : Order
-    ; r9 (fetch_profile(...)) : i64
-    ; r10 (v18) : Order
-    ; r11 (@user_id) : i64
-    ; r12 (v22) : Order
-    ; r13 (fetch_history(...)) : i64
-    ; r14 (v23) : Order
-    ; r15 (profile) : i64
-    ; r16 (history) : i64
-    ; r17 (@weight) : i64
-    ; r18 (compute_score(...)) : i64
-    ; r19 (profile) : i64
+    ; r1 (@weight) : i64
+    ; r2 (@alert_count) : i64
+    ; r3 (@threshold) : i64
+    ; r4 (@user_id) : i64
+    ; r5 (@user_id) : i64
+    ; r6 (v17) : Order
+    ; r7 (fetch_profile(...)) : i64
+    ; r8 (v18) : Order
+    ; r9 (@user_id) : i64
+    ; r10 (v22) : Order
+    ; r11 (fetch_history(...)) : i64
+    ; r12 (v23) : Order
+    ; r13 (profile) : i64
+    ; r14 (history) : i64
+    ; r15 (@weight) : i64
+    ; r16 (compute_score(...)) : i64
+    ; r17 (profile) : i64
+    ; r18 (score) : i64
+    ; r19 (format_label(...)) : String
     ; r20 (score) : i64
-    ; r21 (format_label(...)) : String
-    ; r22 (score) : i64
-    ; r23 (@threshold) : i64
-    ; r24 (v36) : Bool
-    ; r25 (v37) : Bool
-    ; r26 (@user_id) : i64
-    ; r27 (score) : i64
-    ; r28 (v41) : Order
-    ; r29 (notify_alert(...)) : i64
-    ; r30 (v42) : Order
-    ; r31 (@alert_count) : i64
-    ; r32 (v45) : i64
-    ; r33 (v44) : i64
-    ; r34 (label) : String
-    ; r35 (score) : i64
-    ; r36 (score) : i64
-    ; r37 (v50) : String
-    ; r38 (v51) : i64
-    ; r39 (v52) : i64
-    ; r40 (v53) : i64
-    ; r41 (v54) : i64
-    ; r42 (v55) : i64
-    ; r43 (v56) : Order
-    ; r44 (@result_label) : String
-    ; r45 (history) : i64
-    ; r46 ($order) : Order
-    ; r47 (@weight) : i64
-    ; r48 (v46) : Unit
-    ; r49 (@result_score) : i64
-    ; r50 (@threshold) : i64
-    ; r51 (label) : String
-    ; r52 (score) : i64
-    ; r53 (@alert_count) : i64
-    ; r54 (@user_id) : i64
-    ; r55 (profile) : i64
+    ; r21 (@threshold) : i64
+    ; r22 (v36) : Bool
+    ; r23 (v37) : Bool
+    ; r24 (@user_id) : i64
+    ; r25 (score) : i64
+    ; r26 (v41) : Order
+    ; r27 (notify_alert(...)) : i64
+    ; r28 (v42) : Order
+    ; r29 (@alert_count) : i64
+    ; r30 (v45) : i64
+    ; r31 (v44) : i64
+    ; r32 (label) : String
+    ; r33 (score) : i64
+    ; r34 (score) : i64
+    ; r35 (v50) : String
+    ; r36 (v51) : i64
+    ; r37 (v52) : i64
+    ; r38 (v53) : i64
+    ; r39 (v54) : i64
+    ; r40 (v55) : i64
+    ; r41 (v56) : Order
+    ; r42 (@result_label) : String
+    ; r43 (history) : i64
+    ; r44 ($order) : Order
+    ; r45 (@weight) : i64
+    ; r46 (v46) : Unit
+    ; r47 (@result_score) : i64
+    ; r48 (@threshold) : i64
+    ; r49 (label) : String
+    ; r50 (score) : i64
+    ; r51 (@alert_count) : i64
+    ; r52 (@user_id) : i64
+    ; r53 (profile) : i64

@@ -10,12 +10,11 @@ expression: ir
      4 |   r4 = undef
      5 |   r5 = fetch @a
      6 |   r6 = fetch @b
-     7 |   r7 = fetch @out
-     8 |   r8 = r5 + r6
-    11 |   commit @a = r5
-    12 |   commit @b = r6
-    13 |   commit @out = r8
-    14 |   return r8
+     7 |   r7 = r5 + r6
+    10 |   commit @a = r5
+    11 |   commit @b = r6
+    12 |   commit @out = r7
+    13 |   return r7
 
     ; r0 (v20) : i64
     ; r1 (v21) : i64
@@ -24,20 +23,19 @@ expression: ir
     ; r4 (v24) : i64
     ; r5 (@a) : i64
     ; r6 (@b) : i64
-    ; r7 (@out) : i64
-    ; r8 (v13) : i64
-    ; r9 (x) : i64
-    ; r10 (@b) : i64
-    ; r11 (v14) : Unit
+    ; r7 (v13) : i64
+    ; r8 (x) : i64
+    ; r9 (@b) : i64
+    ; r10 (v14) : Unit
+    ; r11 (y) : i64
     ; r12 (v17) : i64
-    ; r13 (y) : i64
+    ; r13 (@a) : i64
     ; r14 (x) : i64
     ; r15 (v15) : Unit
     ; r16 (y) : i64
     ; r17 (v18) : i64
-    ; r18 (@a) : i64
-    ; r19 (y) : i64
+    ; r18 (y) : i64
+    ; r19 (@out) : i64
     ; r20 (@out) : i64
-    ; r21 (@out) : i64
-    ; r22 (x) : i64
-    ; r23 (v19) : i64
+    ; r21 (x) : i64
+    ; r22 (v19) : i64

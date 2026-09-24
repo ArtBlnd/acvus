@@ -1,6 +1,7 @@
-use acvus_mir::ty::PolyTy;
+use acvus_mir::ty::{LenTerm, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::registry::ExternTypeDecl;
 use crate::ty_arg::{PolyVars, TyArg};
 
 /// An extension type named at `()` for an identity parameter is declared at
@@ -27,3 +28,70 @@ macro_rules! declared_as_ty_arg {
 }
 
 declared_as_ty_arg!(i8, i16, i32, i64, u8, u16, u32, u64, f64, char, String, bool, ());
+
+impl<T> Declared for Option<T>
+where
+    T: Declared,
+{
+    fn declared(interner: &Interner) -> PolyTy {
+        PolyTy::Option(Box::new(T::declared(interner)))
+    }
+}
+
+impl<T, E> Declared for Result<T, E>
+where
+    T: Declared,
+    E: Declared,
+{
+    fn declared(interner: &Interner) -> PolyTy {
+        PolyTy::Result(
+            Box::new(T::declared(interner)),
+            Box::new(E::declared(interner)),
+        )
+    }
+}
+
+macro_rules! declared_tuple {
+    ($($T:ident),+) => {
+        impl<$($T),+> Declared for ($($T,)+)
+        where
+            $($T: Declared,)+
+        {
+            fn declared(interner: &Interner) -> PolyTy {
+                PolyTy::Tuple(vec![$($T::declared(interner)),+])
+            }
+        }
+    };
+}
+
+declared_tuple!(A);
+declared_tuple!(A, B);
+declared_tuple!(A, B, C);
+declared_tuple!(A, B, C, D);
+
+impl<T, const N: usize> Declared for [T; N]
+where
+    T: Declared,
+{
+    fn declared(interner: &Interner) -> PolyTy {
+        PolyTy::Array(Box::new(T::declared(interner)), LenTerm::Known(N))
+    }
+}
+
+/// Obligation across artifacts: the checker settles a `Vec` a script builds
+/// with a uniform argument, since its elements are the runtime's values, and
+/// this declaration must name the same representation for a page to read it.
+impl<T> Declared for Vec<T>
+where
+    T: Declared + Send + Sync,
+{
+    fn declared(interner: &Interner) -> PolyTy {
+        PolyTy::UserDefined {
+            id: PolyVars::empty().extension::<Vec<T>>(interner),
+            type_args: vec![TypeArg::uniform(T::declared(interner))],
+            effect_args: vec![],
+            identity_args: vec![],
+            region_params: <Vec<T> as ExternTypeDecl>::REGION_PARAMS,
+        }
+    }
+}

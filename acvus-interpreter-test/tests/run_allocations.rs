@@ -182,7 +182,7 @@ async fn balance(
         execute_compiled(&interner, compiled, snapshot, Arc::new(SequentialExecutor));
     let allocated = ALLOCATIONS.load(Ordering::Relaxed);
     let released = RELEASES.load(Ordering::Relaxed);
-    let answer = interp.execute().await;
+    let answer = interp.execute().await.expect("the page holds every context the run fetches first");
     Balance {
         allocations: ALLOCATIONS.load(Ordering::Relaxed) - allocated,
         releases: RELEASES.load(Ordering::Relaxed) - released,

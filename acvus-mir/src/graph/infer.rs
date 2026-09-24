@@ -10,8 +10,9 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ty::{
-    EffectTerm, Flows, Infer, InferTy, MachineCoercion, Param, ParamTerm, PolyTy, Scheme, Solver,
-    Sources, Ty, TyTerm, TyVarBound, TypeRegistry, lift_to_poly, lift_ty,
+    EffectTerm, Flows, Infer, InferTy, MachineCoercion, Param, ParamTerm, PolyBuilder, PolyTy,
+    Scheme, Solver, Sources, Ty, TyTerm, TyVarBound, TypeRegistry, lift_declaration, lift_to_poly,
+    lift_ty,
 };
 
 use super::extract::{ExtractResult, ParsedSource};
@@ -724,8 +725,8 @@ fn refused(checked: Checked<Unresolved>) -> Checked {
     }
 }
 
-fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck::ResultCrossing {
-    match entry == Some(body) {
+fn crossing_of(entries: &[QualifiedRef], body: QualifiedRef) -> crate::typeck::ResultCrossing {
+    match entries.contains(&body) {
         true => crate::typeck::ResultCrossing::Host,
         false => crate::typeck::ResultCrossing::Registers,
     }
@@ -734,7 +735,7 @@ fn crossing_of(entry: Option<QualifiedRef>, body: QualifiedRef) -> crate::typeck
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
-    entry: Option<QualifiedRef>,
+    entries: &[QualifiedRef],
     bindings: &Bindings,
     fn_by_id: &FxHashMap<QualifiedRef, &Function>,
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
@@ -852,7 +853,7 @@ pub fn infer_scc(
                     .filter(|probe| probe.body == fid)
                     .map(|probe| probe.marker),
                 expected_tail: expected_tail_ty.as_ref(),
-                crossing: crossing_of(entry, fid),
+                crossing: crossing_of(entries, fid),
             }
             .check(&mut solver, parsed);
 
@@ -975,6 +976,43 @@ pub fn infer(
     graph: &CompilationGraph,
     extract: &ExtractResult,
 ) -> InferResult {
+    if !graph.contexts.iter().any(Context::is_open) {
+        return infer_at(interner, graph, extract, &graph.contexts);
+    }
+    let solving = infer_at(interner, graph, extract, &graph.contexts);
+    let solved = solved_contexts(&graph.contexts, &solving);
+    infer_at(interner, graph, extract, &solved)
+}
+
+/// A context at an open type is solved from every body that stores or reads
+/// it (RFC-0090 rule 1), and each body is then checked at the solved type.
+/// The first round is the solve: one solver holds the context's variable
+/// across every component, but a body's types are frozen when its own check
+/// ends, so a body checked before another body constrained the variable
+/// would keep the narrower type. The second round checks every body against
+/// the type the whole graph solved, where a store is admitted as it is at
+/// any declared type. A context the first round could not settle stays at
+/// its variable, so the second round reports it where it is used.
+fn solved_contexts(contexts: &[Context], solving: &InferResult) -> Vec<Context> {
+    let mut builder = PolyBuilder::new();
+    contexts
+        .iter()
+        .map(|context| match solving.context_type(&context.qref) {
+            Some(ty) if !ty.is_error() && context.is_open() => Context {
+                qref: context.qref,
+                ty: lift_declaration(ty, &mut builder),
+            },
+            Some(_) | None => context.clone(),
+        })
+        .collect()
+}
+
+fn infer_at(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    extract: &ExtractResult,
+    contexts: &[Context],
+) -> InferResult {
     let mut sources = Sources::new();
     let declared = declared_bounds(graph.functions.iter());
     let signatures = declared_instances(&declared);
@@ -995,8 +1033,7 @@ pub fn infer(
         }
     }
 
-    let known_ctx: FxHashMap<QualifiedRef, InferTy> = graph
-        .contexts
+    let known_ctx: FxHashMap<QualifiedRef, InferTy> = contexts
         .iter()
         .map(|ctx| (ctx.qref, solver.instantiate_poly(&ctx.ty)))
         .collect();
@@ -1125,7 +1162,7 @@ pub fn infer(
                     effect: scc_effect_vars[&fid].clone(),
                     probe: None,
                     expected_tail: expected_tail_ty.as_ref(),
-                    crossing: crossing_of(graph.entry, fid),
+                    crossing: crossing_of(&graph.entries, fid),
                 }
                 .check(&mut solver, parsed);
 
@@ -1239,12 +1276,12 @@ pub fn infer(
 
     // -- STEP 5: Build result ----------------------------------------
 
-    // Freeze InferTy -> Ty for context types at the output boundary.
+    // A context the graph leaves open closes to `!` (RFC-0038 rule 2).
     let context_types: FxHashMap<QualifiedRef, Ty> = known_ctx
         .iter()
         .map(|(&k, v)| {
             let resolved = solver.resolve_ty(v);
-            let frozen = solver.freeze_ty(&resolved).unwrap_or_else(|_| Ty::error());
+            let frozen = solver.close_ty(&resolved).unwrap_or_else(|_| Ty::error());
             (k, frozen)
         })
         .collect();
@@ -1298,7 +1335,7 @@ mod tests {
             contexts: Freeze::new(vec![]),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         }
     }
 
@@ -1333,7 +1370,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         }
     }
 
@@ -1429,7 +1466,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         }
     }
 
@@ -1512,7 +1549,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         };
         let ext = extract::extract(interner, &graph);
         let result = infer(interner, &graph, &ext);
@@ -2686,7 +2723,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         };
         let ext = extract::extract(&i, &graph);
         let result = infer(&i, &graph, &ext);

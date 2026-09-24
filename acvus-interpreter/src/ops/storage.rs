@@ -682,6 +682,7 @@ impl<const LARGE: bool> Op for SetPath<LARGE> {
 pub struct Fetch<const LARGE: bool> {
     pub dst: Marked,
     pub key: Box<str>,
+    pub settled: std::sync::Arc<acvus_mir::ty::Ty>,
     pub next: Box<dyn Op>,
 }
 
@@ -691,12 +692,22 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let key = &self.key;
         let rt = m.ctx.rt;
-        let held = rt
-            .page
-            .take(rt, key)
-            .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
-        // SAFETY: the runtime moves the context's word into a register.
-        m.regs().define::<LARGE>(self.dst, held.into_value(unsafe { acvus_extern::Holding::new() }));
+        let held = rt.page.take(rt, key).unwrap_or_else(|| {
+            panic!(
+                "context fetch: '{key}' holds no value, and `Interpreter::execute` refuses a run \
+                 whose page lacks a context it fetches first (RFC-0025 rule 2); the page answered \
+                 `holds` and then gave nothing"
+            )
+        });
+        assert!(
+            held.ty().same_erased(&self.settled),
+            "context fetch: the page gave '{key}' a holder crossed at another type than the \
+             context's settled one (RFC-0090 rule 6)"
+        );
+        // SAFETY: the holder carries the context's settled type, the word
+        // moves into a register the checker typed at it, and the register
+        // owns it from then on.
+        m.regs().define::<LARGE>(self.dst, held.into_value().into_value(unsafe { acvus_extern::Holding::new() }));
         self.next.run(m, r0)
     }
 }
@@ -704,6 +715,7 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
 pub struct Commit<const LARGE: bool> {
     pub src: Marked,
     pub key: Box<str>,
+    pub settled: std::sync::Arc<acvus_mir::ty::Ty>,
     pub next: Box<dyn Op>,
 }
 
@@ -713,8 +725,13 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
         // SAFETY: `take` moved the word out of its register, and the checker
-        // typed the write at the context's settled type.
-        unsafe { m.ctx.rt.page.set(&self.key, Owned::from_value(acvus_extern::Holding::new(), value)) };
+        // typed the write at the context's settled type, which the holder
+        // carries.
+        let value = unsafe { Owned::from_value(acvus_extern::Holding::new(), value) };
+        m.ctx
+            .rt
+            .page
+            .set(&self.key, crate::journal::Held::new(value, std::sync::Arc::clone(&self.settled)));
         self.next.run(m, r0)
     }
 }

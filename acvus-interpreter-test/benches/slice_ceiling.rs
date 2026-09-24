@@ -411,7 +411,9 @@ fn swap_in_chain(head: &mut Box<dyn Op>) -> usize {
     }
 }
 
-fn page(n: usize) -> HashMap<String, Owned<AcvusRuntime>> {
+/// The page each run reads, at the types `body` fetches it at.
+fn page(interner: &Interner, n: usize) -> HashMap<String, (Ty, Owned<AcvusRuntime>)> {
+    let container = acvus_extern::vec_ty(interner, Ty::Float);
     let run = |offset: f64| {
         let values: Vec<Value> = (0..n).map(|i| Value::float(i as f64 + offset)).collect();
         // SAFETY: read back only as this same `Vec<Value>`, which is what
@@ -419,13 +421,13 @@ fn page(n: usize) -> HashMap<String, Owned<AcvusRuntime>> {
         unsafe { Value::erase(values) }
     };
     [
-        (QUERY.to_string(), run(1.0)),
-        (KEYS.to_string(), run(2.0)),
-        (LENGTH.to_string(), Value::int(n as i64)),
+        (QUERY.to_string(), container.clone(), run(1.0)),
+        (KEYS.to_string(), container, run(2.0)),
+        (LENGTH.to_string(), INDEX_TY, Value::int(n as i64)),
     ]
     .into_iter()
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    .map(|(name, value)| (name, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) }))
+    .map(|(name, ty, value)| (name, (ty, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) })))
     .collect()
 }
 
@@ -492,6 +494,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
         closures: FxHashMap::default(),
         ret: Ty::Float,
         flows: acvus_mir::ty::Flows::Every,
+        fetched_first: Vec::new(),
     };
     let mut prepared = prepare_module(
         &module,
@@ -511,13 +514,13 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
 
     let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor))
         .with_context_names(context_names);
-    let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page(n)));
+    let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page(&interner, n)));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread tokio runtime");
     let start = Instant::now();
-    let value = runtime.block_on(interpreter.execute());
+    let value = runtime.block_on(interpreter.execute()).expect("the page holds every context the run fetches first");
     Timing {
         elapsed: start.elapsed(),
         value: black_box(value.as_float()),

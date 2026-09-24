@@ -11,104 +11,101 @@ expression: raw
   T5 = ")"
 
 === main ===
-     0 |   r0 = fetch @output
-     1 |   assign @output = r0
-     2 |   r1 = fetch @user
-     3 |   assign @user = r1
-     4 |   r2 = take @user.age
-     5 |   assign age = r2
-     6 |   r3 = const_str T0
-     7 |   r4 = call #0(r3)
-     8 |   assign @output = r4
-     9 |   r5 = take age
-    11 |   r6 = r5 >= 65 (r7)
-    12 |   r8 = test r6 == true
-    13 |   if r8 -> L0 else L1 join L1
-    14 | L0:
-    15 |   r9 = const_str T1
-    16 |   r10 = call #0(r9)
-    17 |   assign @output = r10
-    18 |   jump L1
-    19 | L1:
-    21 |   r11 = take age
-    23 |   r12 = r11 >= 18 (r13)
-    24 |   r14 = test r12 == true
-    25 |   if r14 -> L2 else L3 join L3
-    26 | L2:
-    27 |   r15 = const_str T2
-    28 |   r16 = call #0(r15)
-    29 |   assign @output = r16
-    30 |   jump L3
-    31 | L3:
-    33 |   r17 = take age
-    35 |   r18 = r17 < 18 (r19)
-    36 |   r20 = test r18 == true
-    37 |   if r20 -> L4 else L5 join L5
-    38 | L4:
-    39 |   r21 = const_str T3
-    40 |   r22 = call #0(r21)
-    41 |   assign @output = r22
-    42 |   jump L5
-    43 | L5:
-    45 |   r23 = ref &@user.name
-    46 |   r24 = const_str T4
-    47 |   r25 = string_concat [r23, r24]
-    48 |   assign v33 = r25
-    49 |   r26 = ref &v33
-    50 |   r27 = ref &@output
-    51 |   r28 = string_concat [r26, r27]
-    52 |   assign v37 = r28
-    53 |   r29 = ref &v37
-    54 |   r30 = const_str T5
-    55 |   r31 = string_concat [r29, r30]
-    56 |   assign @output = r31
-    57 |   r32 = take @output
-    58 |   r33 = take @output
-    59 |   commit @output = r33
-    60 |   r34 = take @user
-    61 |   commit @user = r34
-    62 |   return r32
+     0 |   r0 = fetch @user
+     1 |   assign @user = r0
+     2 |   r1 = take @user.age
+     3 |   assign age = r1
+     4 |   r2 = const_str T0
+     5 |   r3 = call #0(r2)
+     6 |   assign @output = r3
+     7 |   r4 = take age
+     9 |   r5 = r4 >= 65 (r6)
+    10 |   r7 = test r5 == true
+    11 |   if r7 -> L0 else L1 join L1
+    12 | L0:
+    13 |   r8 = const_str T1
+    14 |   r9 = call #0(r8)
+    15 |   assign @output = r9
+    16 |   jump L1
+    17 | L1:
+    19 |   r10 = take age
+    21 |   r11 = r10 >= 18 (r12)
+    22 |   r13 = test r11 == true
+    23 |   if r13 -> L2 else L3 join L3
+    24 | L2:
+    25 |   r14 = const_str T2
+    26 |   r15 = call #0(r14)
+    27 |   assign @output = r15
+    28 |   jump L3
+    29 | L3:
+    31 |   r16 = take age
+    33 |   r17 = r16 < 18 (r18)
+    34 |   r19 = test r17 == true
+    35 |   if r19 -> L4 else L5 join L5
+    36 | L4:
+    37 |   r20 = const_str T3
+    38 |   r21 = call #0(r20)
+    39 |   assign @output = r21
+    40 |   jump L5
+    41 | L5:
+    43 |   r22 = ref &@user.name
+    44 |   r23 = const_str T4
+    45 |   r24 = string_concat [r22, r23]
+    46 |   assign v33 = r24
+    47 |   r25 = ref &v33
+    48 |   r26 = ref &@output
+    49 |   r27 = string_concat [r25, r26]
+    50 |   assign v37 = r27
+    51 |   r28 = ref &v37
+    52 |   r29 = const_str T5
+    53 |   r30 = string_concat [r28, r29]
+    54 |   assign @output = r30
+    55 |   r31 = take @output
+    56 |   r32 = take @output
+    57 |   commit @output = r32
+    58 |   r33 = take @user
+    59 |   commit @user = r33
+    60 |   return r31
 
-    ; r0 (@output) : String
-    ; r1 (@user) : {age: i64, name: String}
-    ; r2 (@user.age) : i64
-    ; r3 (v7) : &str
-    ; r4 (to_string(...)) : String
-    ; r5 (age) : i64
-    ; r6 (v11) : Bool
-    ; r7 (v10) : i64
-    ; r8 (v12) : Bool
-    ; r9 (v13) : &str
-    ; r10 (to_string(...)) : String
-    ; r11 (age) : i64
-    ; r12 (v18) : Bool
-    ; r13 (v17) : i64
-    ; r14 (v19) : Bool
-    ; r15 (v20) : &str
-    ; r16 (to_string(...)) : String
-    ; r17 (age) : i64
-    ; r18 (v25) : Bool
-    ; r19 (v24) : i64
-    ; r20 (v26) : Bool
-    ; r21 (v27) : &str
-    ; r22 (to_string(...)) : String
-    ; r23 (@user.name) : &String
-    ; r24 (v31) : &str
-    ; r25 (v32) : String
-    ; r26 (var_33.) : &String
-    ; r27 (@output.) : &String
-    ; r28 (v36) : String
-    ; r29 (var_37.) : &String
-    ; r30 (v39) : &str
-    ; r31 (v40) : String
-    ; r32 (@output) : String
-    ; r33 (v42) : String
-    ; r34 (v43) : {age: i64, name: String}
-    ; r35 (@user) : {age: i64, name: String}
-    ; r36 (v22) : Unit
-    ; r37 (age) : i64
-    ; r38 (v33) : String
-    ; r39 (v15) : Unit
-    ; r40 (v37) : String
-    ; r41 (@output) : String
-    ; r42 (v29) : Unit
+    ; r0 (@user) : {age: i64, name: String}
+    ; r1 (@user.age) : i64
+    ; r2 (v7) : &str
+    ; r3 (to_string(...)) : String
+    ; r4 (age) : i64
+    ; r5 (v11) : Bool
+    ; r6 (v10) : i64
+    ; r7 (v12) : Bool
+    ; r8 (v13) : &str
+    ; r9 (to_string(...)) : String
+    ; r10 (age) : i64
+    ; r11 (v18) : Bool
+    ; r12 (v17) : i64
+    ; r13 (v19) : Bool
+    ; r14 (v20) : &str
+    ; r15 (to_string(...)) : String
+    ; r16 (age) : i64
+    ; r17 (v25) : Bool
+    ; r18 (v24) : i64
+    ; r19 (v26) : Bool
+    ; r20 (v27) : &str
+    ; r21 (to_string(...)) : String
+    ; r22 (@user.name) : &String
+    ; r23 (v31) : &str
+    ; r24 (v32) : String
+    ; r25 (var_33.) : &String
+    ; r26 (@output.) : &String
+    ; r27 (v36) : String
+    ; r28 (var_37.) : &String
+    ; r29 (v39) : &str
+    ; r30 (v40) : String
+    ; r31 (@output) : String
+    ; r32 (v42) : String
+    ; r33 (v43) : {age: i64, name: String}
+    ; r34 (@user) : {age: i64, name: String}
+    ; r35 (v22) : Unit
+    ; r36 (age) : i64
+    ; r37 (v33) : String
+    ; r38 (v15) : Unit
+    ; r39 (v37) : String
+    ; r40 (@output) : String
+    ; r41 (v29) : Unit

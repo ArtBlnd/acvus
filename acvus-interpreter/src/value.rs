@@ -173,267 +173,275 @@ where
     }
 }
 
-impl Value {
-    pub const WORD_OFFSET: usize = 8;
+/// The value word and its storage: the runtime's and its tooling's
+/// (RFC-0090 rule 6).
+macro_rules! value_word {
+    ($v:vis) => {
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl Value {
+            $v const WORD_OFFSET: usize = 8;
 
-    pub const UNDEF: Value = Value {
-        kind: Kind::Undef,
-        word: 0,
-    };
-    pub const NONE: Value = Value {
-        kind: Kind::None,
-        word: 0,
-    };
+            $v const UNDEF: Value = Value {
+                kind: Kind::Undef,
+                word: 0,
+            };
+            $v const NONE: Value = Value {
+                kind: Kind::None,
+                word: 0,
+            };
 
-    #[inline]
-    pub fn inline(kind: Kind, bits: u64) -> Value {
-        debug_assert!(kind.is_inline(), "inline: {kind:?} does not carry bits");
-        Value { kind, word: bits }
-    }
-
-    #[inline]
-    pub fn kind(&self) -> Kind {
-        self.kind
-    }
-
-    /// # Safety
-    /// The value may only be materialized back as this same `T`.
-    pub unsafe fn erase<T>(value: T) -> Value
-    where
-        T: Send + Sync + 'static,
-    {
-        if TypeId::of::<T>() == TypeId::of::<Value>() {
-            // SAFETY: T is Value; the copy takes over and the original is forgotten.
-            let same: Value = unsafe { mem::transmute_copy(&value) };
-            mem::forget(value);
-            return same;
-        }
-        match Kind::of::<T>() {
-            Some(kind) => {
-                let mut word = 0u64;
-                // SAFETY: an `Inline` T fits the word; low bytes are written and read alike.
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        &value as *const T as *const u8,
-                        &mut word as *mut u64 as *mut u8,
-                        mem::size_of::<T>(),
-                    );
-                }
-                mem::forget(value);
-                Value { kind, word }
+            #[inline]
+            $v fn inline(kind: Kind, bits: u64) -> Value {
+                debug_assert!(kind.is_inline(), "inline: {kind:?} does not carry bits");
+                Value { kind, word: bits }
             }
-            None => large(vtable_of::<T>(), || value),
-        }
-    }
 
-    /// # Safety
-    /// `T` is the type this value was erased from.
-    pub unsafe fn materialize<T>(self) -> T
-    where
-        T: Send + Sync + 'static,
-    {
-        if TypeId::of::<T>() == TypeId::of::<Value>() {
-            // SAFETY: T is Value, one bit pattern under another name.
-            return unsafe { mem::transmute_copy(&self) };
-        }
-        match Kind::of::<T>() {
-            Some(kind) => {
+            #[inline]
+            $v fn kind(&self) -> Kind {
+                self.kind
+            }
+
+            /// # Safety
+            /// The value may only be materialized back as this same `T`.
+            $v unsafe fn erase<T>(value: T) -> Value
+            where
+                T: Send + Sync + 'static,
+            {
+                if TypeId::of::<T>() == TypeId::of::<Value>() {
+                    // SAFETY: T is Value; the copy takes over and the original is forgotten.
+                    let same: Value = unsafe { mem::transmute_copy(&value) };
+                    mem::forget(value);
+                    return same;
+                }
+                match Kind::of::<T>() {
+                    Some(kind) => {
+                        let mut word = 0u64;
+                        // SAFETY: an `Inline` T fits the word; low bytes are written and read alike.
+                        unsafe {
+                            ptr::copy_nonoverlapping(
+                                &value as *const T as *const u8,
+                                &mut word as *mut u64 as *mut u8,
+                                mem::size_of::<T>(),
+                            );
+                        }
+                        mem::forget(value);
+                        Value { kind, word }
+                    }
+                    None => large(vtable_of::<T>(), || value),
+                }
+            }
+
+            /// # Safety
+            /// `T` is the type this value was erased from.
+            $v unsafe fn materialize<T>(self) -> T
+            where
+                T: Send + Sync + 'static,
+            {
+                if TypeId::of::<T>() == TypeId::of::<Value>() {
+                    // SAFETY: T is Value, one bit pattern under another name.
+                    return unsafe { mem::transmute_copy(&self) };
+                }
+                match Kind::of::<T>() {
+                    Some(kind) => {
+                        debug_assert_eq!(
+                            self.kind,
+                            kind,
+                            "materialize: value is not a {}",
+                            std::any::type_name::<T>()
+                        );
+                        let word = self.word;
+                        let mut out = MaybeUninit::<T>::uninit();
+                        // SAFETY: erase wrote T's bytes into the low bytes of the word.
+                        unsafe {
+                            ptr::copy_nonoverlapping(
+                                &word as *const u64 as *const u8,
+                                out.as_mut_ptr() as *mut u8,
+                                mem::size_of::<T>(),
+                            );
+                            out.assume_init()
+                        }
+                    }
+                    None => {
+                        debug_assert_eq!(
+                            self.header().vtable.type_id,
+                            TypeId::of::<T>(),
+                            "materialize: value is not a {}",
+                            std::any::type_name::<T>()
+                        );
+                        let p = self.payload();
+                        // SAFETY: the payload was allocated by `large` as Box<Slot<T>>.
+                        let slot = unsafe { Box::from_raw(p.cast::<Slot<T>>().as_ptr()) };
+                        let Slot { value, .. } = *slot;
+                        value
+                    }
+                }
+            }
+
+            /// The payload a `Large` names.
+            ///
+            /// The kind check is a `debug_assert!`: every caller reaches here having
+            /// already read `Kind::Large`, or under a `# Safety` contract that the
+            /// value was erased from a type with no inline kind.
+            #[inline]
+            fn payload(&self) -> NonNull<Header> {
+                debug_assert_eq!(self.kind, Kind::Large, "payload: {self:?} is not large");
+                // SAFETY: a `Large` word is the pointer `large` leaked, never null.
+                unsafe { NonNull::new_unchecked(self.word as *mut Header) }
+            }
+
+            fn header(&self) -> &Header {
+                // SAFETY: the header is live for as long as the value.
+                unsafe { self.payload().as_ref() }
+            }
+
+            /// The vtable a `Large` payload was erased through.
+            $v fn vtable(&self) -> &'static Vtable {
+                self.header().vtable
+            }
+
+            $v fn composite(&self) -> Option<Composite> {
+                if self.kind == Kind::Large {
+                    self.header().vtable.composite
+                } else {
+                    None
+                }
+            }
+
+            /// Read a `Large` payload in place.
+            ///
+            /// # Safety
+            /// `T` is the type this value was erased from.
+            $v unsafe fn peek<T: 'static>(&self) -> &T {
+                debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
+                // SAFETY: the payload is a live Slot<T>.
+                unsafe { &self.payload().cast::<Slot<T>>().as_ref().value }
+            }
+
+            /// Mutate a `Large` payload in place.
+            ///
+            /// # Safety
+            /// `T` is the type this value was erased from.
+            $v unsafe fn peek_mut<T: 'static>(&mut self) -> &mut T {
+                debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
+                // SAFETY: the payload is a live Slot<T> and we hold &mut self.
+                unsafe { &mut self.payload().cast::<Slot<T>>().as_mut().value }
+            }
+
+            /// The bits an `Inline` type was erased into.
+            ///
+            /// The kind check is a `debug_assert!`: the MIR type checker gives every
+            /// slot these read a primitive type, and only an inline kind is erased
+            /// from one.
+            #[inline]
+            $v fn bits(&self) -> u64 {
+                debug_assert!(self.kind.is_inline(), "bits: {self:?} carries no bits");
+                self.word
+            }
+
+            #[cfg(test)]
+            pub(crate) fn word_of_any_kind(&self) -> u64 {
+                self.word
+            }
+
+            /// As `bits`, in place.
+            #[inline]
+            $v fn bits_ref(&self) -> &u64 {
+                debug_assert!(self.kind.is_inline(), "bits_ref: {self:?} carries no bits");
+                &self.word
+            }
+
+            /// As `bits`, in place and exclusively.
+            #[inline]
+            $v fn bits_mut(&mut self) -> &mut u64 {
+                debug_assert!(self.kind.is_inline(), "bits_mut: {self:?} carries no bits");
+                &mut self.word
+            }
+
+            // -- References (RFC-0018) ------------------------------------
+
+            #[inline]
+            $v fn reference(target: &Value) -> Value {
+                Value {
+                    kind: Kind::Ref,
+                    word: ptr::from_ref(target) as u64,
+                }
+            }
+
+            /// The storage a reference names.
+            ///
+            /// The kind check is a `debug_assert!`: the MIR type checker gives a
+            /// slot read through `RefTarget::Through`, and an extern parameter
+            /// `&T` / `&mut T`, a reference type, and `Value::reference` is the only
+            /// value of that type.
+            ///
+            /// # Safety
+            /// `self` is a reference made by `Value::reference` whose target is
+            /// still live and unmoved.
+            #[inline]
+            $v unsafe fn target<'a>(&self) -> &'a Value {
+                debug_assert_eq!(self.kind, Kind::Ref, "target: {self:?} is not a reference");
+                // SAFETY: the caller's contract: the target is live and unmoved.
+                unsafe { &*(self.word as *const Value) }
+            }
+
+            #[inline]
+            $v fn instance(entry: &acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) -> Value {
+                Value {
+                    kind: match entry.run.task() {
+                        acvus_extern::Task::Sync => Kind::Instance,
+                        _ => Kind::InstanceAwait,
+                    },
+                    word: entry as *const _ as u64,
+                }
+            }
+
+            /// # Safety
+            /// The value was made by `Value::instance` from an entry that outlives
+            /// `'a`.
+            #[inline]
+            $v unsafe fn as_instance_entry<'a>(
+                &self,
+            ) -> &'a acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime> {
+                debug_assert!(
+                    matches!(self.kind, Kind::Instance | Kind::InstanceAwait),
+                    "as_instance_entry: {self:?} is not an instance"
+                );
+                // SAFETY: the caller's contract.
+                unsafe { &*(self.word as *const acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) }
+            }
+
+            /// A projection onto the aggregate whose flat layout begins at `base`.
+            ///
+            /// Nothing reads through one yet: `prepare` knows every projected web's
+            /// base, so it folds each use of a projection onto the register it names.
+            /// The read and write through a projection are RFC-0050 rule 3's one
+            /// family over a run and a heap `Large` alike, and they arrive with the
+            /// flat heap object.
+            #[inline]
+            $v fn large_ref(base: *mut Value) -> Value {
+                Value {
+                    kind: Kind::LargeRef,
+                    word: base as u64,
+                }
+            }
+
+            /// # Safety
+            /// As `target`, and no other name of the storage is used meanwhile.
+            #[allow(clippy::mut_from_ref)]
+            #[inline]
+            $v unsafe fn target_mut<'a>(&self) -> &'a mut Value {
                 debug_assert_eq!(
                     self.kind,
-                    kind,
-                    "materialize: value is not a {}",
-                    std::any::type_name::<T>()
+                    Kind::Ref,
+                    "target_mut: {self:?} is not a reference"
                 );
-                let word = self.word;
-                let mut out = MaybeUninit::<T>::uninit();
-                // SAFETY: erase wrote T's bytes into the low bytes of the word.
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        &word as *const u64 as *const u8,
-                        out.as_mut_ptr() as *mut u8,
-                        mem::size_of::<T>(),
-                    );
-                    out.assume_init()
-                }
-            }
-            None => {
-                debug_assert_eq!(
-                    self.header().vtable.type_id,
-                    TypeId::of::<T>(),
-                    "materialize: value is not a {}",
-                    std::any::type_name::<T>()
-                );
-                let p = self.payload();
-                // SAFETY: the payload was allocated by `large` as Box<Slot<T>>.
-                let slot = unsafe { Box::from_raw(p.cast::<Slot<T>>().as_ptr()) };
-                let Slot { value, .. } = *slot;
-                value
+                // SAFETY: the caller's contract: the target is live and named once.
+                unsafe { &mut *(self.word as *mut Value) }
             }
         }
-    }
-
-    /// The payload a `Large` names.
-    ///
-    /// The kind check is a `debug_assert!`: every caller reaches here having
-    /// already read `Kind::Large`, or under a `# Safety` contract that the
-    /// value was erased from a type with no inline kind.
-    #[inline]
-    fn payload(&self) -> NonNull<Header> {
-        debug_assert_eq!(self.kind, Kind::Large, "payload: {self:?} is not large");
-        // SAFETY: a `Large` word is the pointer `large` leaked, never null.
-        unsafe { NonNull::new_unchecked(self.word as *mut Header) }
-    }
-
-    fn header(&self) -> &Header {
-        // SAFETY: the header is live for as long as the value.
-        unsafe { self.payload().as_ref() }
-    }
-
-    /// The vtable a `Large` payload was erased through.
-    pub fn vtable(&self) -> &'static Vtable {
-        self.header().vtable
-    }
-
-    pub fn composite(&self) -> Option<Composite> {
-        if self.kind == Kind::Large {
-            self.header().vtable.composite
-        } else {
-            None
-        }
-    }
-
-    /// Read a `Large` payload in place.
-    ///
-    /// # Safety
-    /// `T` is the type this value was erased from.
-    pub unsafe fn peek<T: 'static>(&self) -> &T {
-        debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
-        // SAFETY: the payload is a live Slot<T>.
-        unsafe { &self.payload().cast::<Slot<T>>().as_ref().value }
-    }
-
-    /// Mutate a `Large` payload in place.
-    ///
-    /// # Safety
-    /// `T` is the type this value was erased from.
-    pub unsafe fn peek_mut<T: 'static>(&mut self) -> &mut T {
-        debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
-        // SAFETY: the payload is a live Slot<T> and we hold &mut self.
-        unsafe { &mut self.payload().cast::<Slot<T>>().as_mut().value }
-    }
-
-    /// The bits an `Inline` type was erased into.
-    ///
-    /// The kind check is a `debug_assert!`: the MIR type checker gives every
-    /// slot these read a primitive type, and only an inline kind is erased
-    /// from one.
-    #[inline]
-    pub fn bits(&self) -> u64 {
-        debug_assert!(self.kind.is_inline(), "bits: {self:?} carries no bits");
-        self.word
-    }
-
-    #[cfg(test)]
-    pub(crate) fn word_of_any_kind(&self) -> u64 {
-        self.word
-    }
-
-    /// As `bits`, in place.
-    #[inline]
-    pub fn bits_ref(&self) -> &u64 {
-        debug_assert!(self.kind.is_inline(), "bits_ref: {self:?} carries no bits");
-        &self.word
-    }
-
-    /// As `bits`, in place and exclusively.
-    #[inline]
-    pub fn bits_mut(&mut self) -> &mut u64 {
-        debug_assert!(self.kind.is_inline(), "bits_mut: {self:?} carries no bits");
-        &mut self.word
-    }
-
-    // -- References (RFC-0018) ------------------------------------
-
-    #[inline]
-    pub fn reference(target: &Value) -> Value {
-        Value {
-            kind: Kind::Ref,
-            word: ptr::from_ref(target) as u64,
-        }
-    }
-
-    /// The storage a reference names.
-    ///
-    /// The kind check is a `debug_assert!`: the MIR type checker gives a
-    /// slot read through `RefTarget::Through`, and an extern parameter
-    /// `&T` / `&mut T`, a reference type, and `Value::reference` is the only
-    /// value of that type.
-    ///
-    /// # Safety
-    /// `self` is a reference made by `Value::reference` whose target is
-    /// still live and unmoved.
-    #[inline]
-    pub unsafe fn target<'a>(&self) -> &'a Value {
-        debug_assert_eq!(self.kind, Kind::Ref, "target: {self:?} is not a reference");
-        // SAFETY: the caller's contract: the target is live and unmoved.
-        unsafe { &*(self.word as *const Value) }
-    }
-
-    #[inline]
-    pub fn instance(entry: &acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) -> Value {
-        Value {
-            kind: match entry.run.task() {
-                acvus_extern::Task::Sync => Kind::Instance,
-                _ => Kind::InstanceAwait,
-            },
-            word: entry as *const _ as u64,
-        }
-    }
-
-    /// # Safety
-    /// The value was made by `Value::instance` from an entry that outlives
-    /// `'a`.
-    #[inline]
-    pub unsafe fn as_instance_entry<'a>(
-        &self,
-    ) -> &'a acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime> {
-        debug_assert!(
-            matches!(self.kind, Kind::Instance | Kind::InstanceAwait),
-            "as_instance_entry: {self:?} is not an instance"
-        );
-        // SAFETY: the caller's contract.
-        unsafe { &*(self.word as *const acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) }
-    }
-
-    /// A projection onto the aggregate whose flat layout begins at `base`.
-    ///
-    /// Nothing reads through one yet: `prepare` knows every projected web's
-    /// base, so it folds each use of a projection onto the register it names.
-    /// The read and write through a projection are RFC-0050 rule 3's one
-    /// family over a run and a heap `Large` alike, and they arrive with the
-    /// flat heap object.
-    #[inline]
-    pub fn large_ref(base: *mut Value) -> Value {
-        Value {
-            kind: Kind::LargeRef,
-            word: base as u64,
-        }
-    }
-
-    /// # Safety
-    /// As `target`, and no other name of the storage is used meanwhile.
-    #[allow(clippy::mut_from_ref)]
-    #[inline]
-    pub unsafe fn target_mut<'a>(&self) -> &'a mut Value {
-        debug_assert_eq!(
-            self.kind,
-            Kind::Ref,
-            "target_mut: {self:?} is not a reference"
-        );
-        // SAFETY: the caller's contract: the target is live and named once.
-        unsafe { &mut *(self.word as *mut Value) }
-    }
+    };
 }
+tooling_vis!(value_word);
 
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -591,35 +599,6 @@ impl fmt::Debug for FnValue {
     }
 }
 
-/// A deferred computation handle (spawn result). Consumed exactly once by
-/// eval. Move-only. Inner type is executor-specific.
-pub struct HandleValue {
-    inner: Box<dyn std::any::Any + Send + Sync>,
-}
-
-impl HandleValue {
-    pub fn new<T: std::any::Any + Send + Sync + 'static>(value: T) -> Self {
-        Self {
-            inner: Box::new(value),
-        }
-    }
-    pub fn try_downcast<T: std::any::Any + Send + Sync>(self) -> Result<T, Self> {
-        match self.inner.downcast::<T>() {
-            Ok(val) => Ok(*val),
-            Err(inner) => Err(Self { inner }),
-        }
-    }
-    pub fn into_inner(self) -> Box<dyn std::any::Any + Send + Sync> {
-        self.inner
-    }
-}
-
-impl fmt::Debug for HandleValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Handle")
-    }
-}
-
 // -- Composite vtables ------------------------------------------------
 
 const fn vtable<T: 'static>(name: NameFn, composite: Composite, debug: Option<DebugFn>) -> Vtable {
@@ -705,372 +684,380 @@ where
 
 // -- Constructors -----------------------------------------------------
 
-impl Value {
-    pub fn int(n: i64) -> Self {
-        Value::inline(Kind::I64, n as u64)
-    }
-    /// An integer of width `k` from its two's-complement bits, sign- or
-    /// zero-extended to the word as `k` says (RFC-0037).
-    pub fn from_bits(k: IntTy, bits: u64) -> Self {
-        Value::inline(Kind::int(k), bits)
-    }
-    pub fn float(f: f64) -> Self {
-        Value::inline(Kind::F64, f.to_bits())
-    }
-    /// A `char`'s word is its scalar value, the `u32` `char as u32` gives
-    /// (RFC-0058).
-    pub fn char_(c: char) -> Self {
-        Value::inline(Kind::Char, u64::from(u32::from(c)))
-    }
-    pub fn bool_(b: bool) -> Self {
-        Value::inline(Kind::Bool, b as u64)
-    }
-    pub fn unit() -> Self {
-        Value::inline(Kind::Unit, 0)
-    }
-    pub fn byte(b: u8) -> Self {
-        Value::inline(Kind::U8, b as u64)
-    }
-    pub fn as_int(&self) -> i64 {
-        self.bits() as i64
-    }
-    pub fn as_float(&self) -> f64 {
-        f64::from_bits(self.bits())
-    }
-    /// The scalar value this word spells.
-    pub fn as_char(&self) -> u32 {
-        let code = self.bits() as u32;
-        debug_assert!(
-            char::from_u32(code).is_some(),
-            "a char's word is a Unicode scalar value, found {code:#x}; every way into a `Char` \
-             register is `Value::char_` or a `u8 as char`"
-        );
-        code
-    }
-    pub fn as_bool(&self) -> bool {
-        self.bits() != 0
-    }
-    pub fn as_byte(&self) -> u8 {
-        self.bits() as u8
-    }
+/// Building a `Value` from Rust data and reading Rust data out of one: the
+/// runtime's and its tooling's (RFC-0090 rule 6).
+macro_rules! value_constructors {
+    ($v:vis) => {
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl Value {
+            $v fn int(n: i64) -> Self {
+                Value::inline(Kind::I64, n as u64)
+            }
+            /// An integer of width `k` from its two's-complement bits, sign- or
+            /// zero-extended to the word as `k` says (RFC-0037).
+            $v fn from_bits(k: IntTy, bits: u64) -> Self {
+                Value::inline(Kind::int(k), bits)
+            }
+            $v fn float(f: f64) -> Self {
+                Value::inline(Kind::F64, f.to_bits())
+            }
+            /// A `char`'s word is its scalar value, the `u32` `char as u32` gives
+            /// (RFC-0058).
+            $v fn char_(c: char) -> Self {
+                Value::inline(Kind::Char, u64::from(u32::from(c)))
+            }
+            $v fn bool_(b: bool) -> Self {
+                Value::inline(Kind::Bool, b as u64)
+            }
+            $v fn unit() -> Self {
+                Value::inline(Kind::Unit, 0)
+            }
+            $v fn byte(b: u8) -> Self {
+                Value::inline(Kind::U8, b as u64)
+            }
+            $v fn as_int(&self) -> i64 {
+                self.bits() as i64
+            }
+            $v fn as_float(&self) -> f64 {
+                f64::from_bits(self.bits())
+            }
+            /// The scalar value this word spells.
+            $v fn as_char(&self) -> u32 {
+                let code = self.bits() as u32;
+                debug_assert!(
+                    char::from_u32(code).is_some(),
+                    "a char's word is a Unicode scalar value, found {code:#x}; every way into a `Char` \
+                     register is `Value::char_` or a `u8 as char`"
+                );
+                code
+            }
+            $v fn as_bool(&self) -> bool {
+                self.bits() != 0
+            }
+            $v fn as_byte(&self) -> u8 {
+                self.bits() as u8
+            }
 
-    pub fn string(s: impl Into<String>) -> Self {
-        large(&STRING, || s.into())
-    }
-    pub fn array(items: Vec<Owned<AcvusRuntime>>) -> Self {
-        Value::array_with(|| items)
-    }
-    /// An array of the items `items` gives, called after the slot is
-    /// allocated: how an operation reads its registers straight into the heap
-    /// (`large`).
-    pub fn array_with<F>(items: F) -> Self
-    where
-        F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
-    {
-        large(&ARRAY, || Array::new(items()))
-    }
-    pub fn tuple(items: Vec<Owned<AcvusRuntime>>) -> Self {
-        Value::tuple_with(|| items)
-    }
-    /// As `array_with`, for a tuple.
-    pub fn tuple_with<F>(items: F) -> Self
-    where
-        F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
-    {
-        large(&TUPLE, || Tuple(items()))
-    }
-    /// A heap object: the shape its type fixes and one value per field of it,
-    /// in that order (RFC-0050 rules 4 and 8).
-    pub fn object(shape: Arc<ObjectShape>, values: Box<[Owned<AcvusRuntime>]>) -> Self {
-        large(&OBJECT, || acvus_extern::Obj::new(shape, values))
-    }
+            $v fn string(s: impl Into<String>) -> Self {
+                large(&STRING, || s.into())
+            }
+            $v fn array(items: Vec<Owned<AcvusRuntime>>) -> Self {
+                Value::array_with(|| items)
+            }
+            /// An array of the items `items` gives, called after the slot is
+            /// allocated: how an operation reads its registers straight into the heap
+            /// (`large`).
+            $v fn array_with<F>(items: F) -> Self
+            where
+                F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
+            {
+                large(&ARRAY, || Array::new(items()))
+            }
+            $v fn tuple(items: Vec<Owned<AcvusRuntime>>) -> Self {
+                Value::tuple_with(|| items)
+            }
+            /// As `array_with`, for a tuple.
+            $v fn tuple_with<F>(items: F) -> Self
+            where
+                F: FnOnce() -> Vec<Owned<AcvusRuntime>>,
+            {
+                large(&TUPLE, || Tuple(items()))
+            }
+            /// A heap object: the shape its type fixes and one value per field of it,
+            /// in that order (RFC-0050 rules 4 and 8).
+            $v fn object(shape: Arc<ObjectShape>, values: Box<[Owned<AcvusRuntime>]>) -> Self {
+                large(&OBJECT, || acvus_extern::Obj::new(shape, values))
+            }
 
-    /// As `object`, with the shape shared and the values `values` gives, both
-    /// taken after the slot is allocated (`large`).
-    pub fn object_with<F>(shape: &Arc<ObjectShape>, values: F) -> Self
-    where
-        F: FnOnce() -> Box<[Owned<AcvusRuntime>]>,
-    {
-        large(&OBJECT, || {
-            acvus_extern::Obj::new(Arc::clone(shape), values())
-        })
-    }
+            /// As `object`, with the shape shared and the values `values` gives, both
+            /// taken after the slot is allocated (`large`).
+            $v fn object_with<F>(shape: &Arc<ObjectShape>, values: F) -> Self
+            where
+                F: FnOnce() -> Box<[Owned<AcvusRuntime>]>,
+            {
+                large(&OBJECT, || {
+                    acvus_extern::Obj::new(Arc::clone(shape), values())
+                })
+            }
 
-    /// An object whose field at each position is read where `at` says, which is
-    /// how `composite::MakeObject` fills one with no width to compare. The
-    /// shape is shared and the fields read after the slot is allocated
-    /// (`large`).
-    pub fn object_filled<F>(shape: &Arc<ObjectShape>, at: F) -> Self
-    where
-        F: FnMut(FieldAt) -> Owned<AcvusRuntime>,
-    {
-        large(&OBJECT, || acvus_extern::Obj::filled(Arc::clone(shape), at))
-    }
+            /// An object whose field at each position is read where `at` says, which is
+            /// how `composite::MakeObject` fills one with no width to compare. The
+            /// shape is shared and the fields read after the slot is allocated
+            /// (`large`).
+            $v fn object_filled<F>(shape: &Arc<ObjectShape>, at: F) -> Self
+            where
+                F: FnMut(FieldAt) -> Owned<AcvusRuntime>,
+            {
+                large(&OBJECT, || acvus_extern::Obj::filled(Arc::clone(shape), at))
+            }
 
-    /// An object built from the names it writes rather than from a type: what a
-    /// host has when it turns a JSON object into a value, whose language type is
-    /// `Written` over exactly those names. Rule 8's order for such a type is
-    /// those names sorted, so the order is computed here and nothing has to
-    /// have been told it.
-    pub fn object_by_name<I>(interner: &Interner, fields: I) -> Self
-    where
-        I: IntoIterator<Item = (Astr, Owned<AcvusRuntime>)>,
-    {
-        let mut fields: Vec<(Astr, Owned<AcvusRuntime>)> = fields.into_iter().collect();
-        fields.sort_by(|(a, _), (b, _)| interner.resolve(*a).cmp(interner.resolve(*b)));
-        let shape = ObjectShape::in_order(fields.iter().map(|(name, _)| *name).collect());
-        Value::object(shape, fields.into_iter().map(|(_, v)| v).collect())
-    }
-    /// RFC-0050 rules 4 and 8's flat variant: the tag register and one payload,
-    /// `Undef` where the tag carries none.
-    pub fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
-        // SAFETY: `UNDEF` owns nothing.
-        let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) });
-        Value::variant_of(Value::tag(tag), payload)
-    }
+            /// An object built from the names it writes rather than from a type: what a
+            /// host has when it turns a JSON object into a value, whose language type is
+            /// `Written` over exactly those names. Rule 8's order for such a type is
+            /// those names sorted, so the order is computed here and nothing has to
+            /// have been told it.
+            $v fn object_by_name<I>(interner: &Interner, fields: I) -> Self
+            where
+                I: IntoIterator<Item = (Astr, Owned<AcvusRuntime>)>,
+            {
+                let mut fields: Vec<(Astr, Owned<AcvusRuntime>)> = fields.into_iter().collect();
+                fields.sort_by(|(a, _), (b, _)| interner.resolve(*a).cmp(interner.resolve(*b)));
+                let shape = ObjectShape::in_order(fields.iter().map(|(name, _)| *name).collect());
+                Value::object(shape, fields.into_iter().map(|(_, v)| v).collect())
+            }
+            /// RFC-0050 rules 4 and 8's flat variant: the tag register and one payload,
+            /// `Undef` where the tag carries none.
+            $v fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
+                // SAFETY: `UNDEF` owns nothing.
+                let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) });
+                Value::variant_of(Value::tag(tag), payload)
+            }
 
-    pub fn variant_of(tag: Value, payload: Owned<AcvusRuntime>) -> Self {
-        Value::variant_with(tag, || payload)
-    }
+            $v fn variant_of(tag: Value, payload: Owned<AcvusRuntime>) -> Self {
+                Value::variant_with(tag, || payload)
+            }
 
-    /// As `variant_of`, with the payload `payload` gives, called after the slot
-    /// is allocated (`large`).
-    pub fn variant_with<F>(tag: Value, payload: F) -> Self
-    where
-        F: FnOnce() -> Owned<AcvusRuntime>,
-    {
-        large(&VARIANT, || {
-            // SAFETY: a tag is a word that owns nothing.
-            let tag = unsafe { Owned::from_value(acvus_extern::Holding::new(), tag) };
-            VariantValue::of(tag, payload())
-        })
-    }
+            /// As `variant_of`, with the payload `payload` gives, called after the slot
+            /// is allocated (`large`).
+            $v fn variant_with<F>(tag: Value, payload: F) -> Self
+            where
+                F: FnOnce() -> Owned<AcvusRuntime>,
+            {
+                large(&VARIANT, || {
+                    // SAFETY: a tag is a word that owns nothing.
+                    let tag = unsafe { Owned::from_value(acvus_extern::Holding::new(), tag) };
+                    VariantValue::of(tag, payload())
+                })
+            }
 
-    /// The word a tag register holds: the one number a run of the program gives
-    /// the name, so two tags compare as words and neither side needs the enum's
-    /// type to write or read one.
-    pub fn tag(tag: Astr) -> Value {
-        Value::inline(Kind::U64, tag.bits())
-    }
-    /// `Some(payload)`, in the one shape every option takes: the payload's
-    /// own value, unless the payload is itself a `None`, whose depth word
-    /// this `Some` raises by one (RFC-0039 rule 6).
-    pub fn some(payload: Value) -> Self {
-        if payload.kind != Kind::None {
-            return payload;
-        }
-        Value {
-            kind: Kind::None,
-            word: payload.word + 1,
-        }
-    }
+            /// The word a tag register holds: the one number a run of the program gives
+            /// the name, so two tags compare as words and neither side needs the enum's
+            /// type to write or read one.
+            $v fn tag(tag: Astr) -> Value {
+                Value::inline(Kind::U64, tag.bits())
+            }
+            /// `Some(payload)`, in the one shape every option takes: the payload's
+            /// own value, unless the payload is itself a `None`, whose depth word
+            /// this `Some` raises by one (RFC-0039 rule 6).
+            $v fn some(payload: Value) -> Self {
+                if payload.kind != Kind::None {
+                    return payload;
+                }
+                Value {
+                    kind: Kind::None,
+                    word: payload.word + 1,
+                }
+            }
 
-    /// The `None` check is a `debug_assert!`: every caller reaches here
-    /// having already read `Some` — the extern boundary from `is_none`,
-    /// the machine from the `TestVariant` that chose the branch.
-    #[inline]
-    pub fn some_payload(option: Value) -> Self {
-        debug_assert!(!option.is_none(), "some_payload: the value is None");
-        if option.kind != Kind::None {
-            return option;
-        }
-        Value {
-            kind: Kind::None,
-            word: option.word - 1,
-        }
-    }
+            /// The `None` check is a `debug_assert!`: every caller reaches here
+            /// having already read `Some` — the extern boundary from `is_none`,
+            /// the machine from the `TestVariant` that chose the branch.
+            #[inline]
+            $v fn some_payload(option: Value) -> Self {
+                debug_assert!(!option.is_none(), "some_payload: the value is None");
+                if option.kind != Kind::None {
+                    return option;
+                }
+                Value {
+                    kind: Kind::None,
+                    word: option.word - 1,
+                }
+            }
 
-    /// A closure that captures: one block, the head and the captures
-    /// behind it (RFC-0069 rule 4). `captures` is not empty; a closure of no
-    /// captures is `Value::code`.
-    pub fn closure(
-        code: crate::code::CodeRef,
-        captures: &mut dyn ExactSizeIterator<Item = Owned<AcvusRuntime>>,
-    ) -> Self {
-        let len =
-            u16::try_from(captures.len()).expect("a closure captures at most u16::MAX registers");
-        debug_assert!(len > 0, "a closure of no captures is `Value::code`");
-        let layout = closure_layout(len);
-        // SAFETY: the layout has a non-zero size.
-        let block = unsafe { alloc(layout) }.cast::<Slot<FnValue>>();
-        let Some(head) = NonNull::new(block) else {
-            handle_alloc_error(layout)
-        };
-        // SAFETY: `block` is `layout` bytes, uninitialized: the head is
-        // written first, then each capture in order.
-        unsafe {
-            head.as_ptr().write(Slot {
-                header: Header { vtable: &FN },
-                value: FnValue { code, len },
-            });
-            let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
-            for (at, capture) in captures.enumerate() {
-                first.add(at).write(capture);
+            /// A closure that captures: one block, the head and the captures
+            /// behind it (RFC-0069 rule 4). `captures` is not empty; a closure of no
+            /// captures is `Value::code`.
+            $v fn closure(
+                code: crate::code::CodeRef,
+                captures: &mut dyn ExactSizeIterator<Item = Owned<AcvusRuntime>>,
+            ) -> Self {
+                let len =
+                    u16::try_from(captures.len()).expect("a closure captures at most u16::MAX registers");
+                debug_assert!(len > 0, "a closure of no captures is `Value::code`");
+                let layout = closure_layout(len);
+                // SAFETY: the layout has a non-zero size.
+                let block = unsafe { alloc(layout) }.cast::<Slot<FnValue>>();
+                let Some(head) = NonNull::new(block) else {
+                    handle_alloc_error(layout)
+                };
+                // SAFETY: `block` is `layout` bytes, uninitialized: the head is
+                // written first, then each capture in order.
+                unsafe {
+                    head.as_ptr().write(Slot {
+                        header: Header { vtable: &FN },
+                        value: FnValue { code, len },
+                    });
+                    let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+                    for (at, capture) in captures.enumerate() {
+                        first.add(at).write(capture);
+                    }
+                }
+                Value {
+                    kind: Kind::Large,
+                    word: head.as_ptr() as *mut Header as u64,
+                }
+            }
+
+            /// A closure of no captures: its code, inline (RFC-0069 rule 3).
+            #[inline]
+            $v fn code(code: crate::code::CodeRef) -> Self {
+                Value {
+                    kind: Kind::Code,
+                    word: code.address() as u64,
+                }
+            }
+            pub(crate) fn handle(launched: Launched) -> Self {
+                large(&HANDLE, || launched)
+            }
+
+            $v fn is_object(&self) -> bool {
+                self.composite() == Some(Composite::Object)
+            }
+            $v fn is_array(&self) -> bool {
+                self.composite() == Some(Composite::Array)
+            }
+            $v fn is_tuple(&self) -> bool {
+                self.composite() == Some(Composite::Tuple)
+            }
+            $v fn is_variant(&self) -> bool {
+                self.composite() == Some(Composite::Variant)
+            }
+            $v fn is_string(&self) -> bool {
+                self.composite() == Some(Composite::String)
+            }
+            $v fn is_none(&self) -> bool {
+                self.kind == Kind::None && self.word == 0
+            }
+
+            /// The payload a `Some` carries, read where it lies. A `Some` of a
+            /// `None` owns nothing, so the payload it yields is a word the reader
+            /// holds rather than a borrow of this value.
+            $v fn option_payload(&self) -> Option<Place<'_>> {
+                let Kind::None = self.kind else {
+                    return Some(Place::At(self));
+                };
+                self.word.checked_sub(1).map(|depth| {
+                    Place::Depth(Value {
+                        kind: Kind::None,
+                        word: depth,
+                    })
+                })
+            }
+
+            /// The payload a `Some` owns, exclusively. `None` both for the option
+            /// `None` and for a `Some` of one, the two values with nothing under
+            /// them.
+            $v fn option_payload_mut(&mut self) -> Option<&mut Value> {
+                (self.kind != Kind::None).then_some(self)
+            }
+            /// # Safety
+            /// The value is a `String`.
+            $v unsafe fn as_str(&self) -> &str {
+                unsafe { self.peek::<String>() }
+            }
+            /// # Safety
+            /// The value is an `Array`.
+            $v unsafe fn as_array(&self) -> &[Owned<AcvusRuntime>] {
+                unsafe { &self.peek::<Array>().0 }
+            }
+            /// # Safety
+            /// The value is a `Tuple`.
+            $v unsafe fn as_tuple(&self) -> &[Owned<AcvusRuntime>] {
+                unsafe { &self.peek::<Tuple>().0 }
+            }
+            /// The object's fields, flat, in its shape's order: `as_object()[i]` is
+            /// the field `as_shape().names()[i]` names (RFC-0050 rule 8).
+            ///
+            /// # Safety
+            /// The value is an `Object`.
+            $v unsafe fn as_object(&self) -> &[Owned<AcvusRuntime>] {
+                unsafe { &self.peek::<Object>().values }
+            }
+
+            /// # Safety
+            /// The value is an `Object`.
+            $v unsafe fn as_shape(&self) -> &Arc<ObjectShape> {
+                unsafe { &self.peek::<Object>().shape }
+            }
+
+            /// A field by name, through the object's own shape: the path RFC-0050 rule 6
+            /// leaves a reader that holds a name and no type. No operation takes it —
+            /// `prepare` resolved every field a body mentions to a position.
+            ///
+            /// # Safety
+            /// The value is an `Object`.
+            $v unsafe fn field_by_name(&self, name: Astr) -> Option<&Owned<AcvusRuntime>> {
+                let held = unsafe { self.peek::<Object>() };
+                held.shape.at(name).map(|at| &held.values[at.index()])
+            }
+
+            /// # Safety
+            /// The value is an `Object`.
+            $v unsafe fn field_by_name_mut(&mut self, name: Astr) -> Option<&mut Owned<AcvusRuntime>> {
+                let held = unsafe { self.peek_mut::<Object>() };
+                let at = held.shape.at(name)?;
+                Some(&mut held.values[at.index()])
+            }
+            /// # Safety
+            /// The value is an `Array`.
+            $v unsafe fn as_array_mut(&mut self) -> &mut Array {
+                unsafe { self.peek_mut::<Array>() }
+            }
+            /// # Safety
+            /// The value is a `Tuple`.
+            $v unsafe fn as_tuple_mut(&mut self) -> &mut Tuple {
+                unsafe { self.peek_mut::<Tuple>() }
+            }
+            /// # Safety
+            /// The value is an `Object`.
+            $v unsafe fn as_object_mut(&mut self) -> &mut [Owned<AcvusRuntime>] {
+                unsafe { &mut self.peek_mut::<Object>().values }
+            }
+            /// # Safety
+            /// The value is a `Variant`.
+            $v unsafe fn as_variant(&self) -> &VariantValue {
+                unsafe { self.peek::<VariantValue>() }
+            }
+            /// # Safety
+            /// The value is a variant.
+            $v unsafe fn as_variant_mut(&mut self) -> &mut VariantValue {
+                unsafe { self.peek_mut::<VariantValue>() }
+            }
+            /// # Safety
+            /// The value is a variant's tag register.
+            $v unsafe fn as_tag(&self) -> Astr {
+                Astr::of_bits(self.bits())
+            }
+            /// # Safety
+            /// The value is a closure: `Value::code` or `Value::closure` wrote it.
+            #[inline(always)]
+            $v unsafe fn code_of(&self) -> crate::code::CodeRef {
+                let record: *const FnValue = match self.kind {
+                    Kind::Code => (&raw const self.word).cast(),
+                    // SAFETY: the caller's contract: a closure that is not
+                    // `Kind::Code` is a boxed `FnValue`.
+                    _ => unsafe { &raw const self.payload().cast::<Slot<FnValue>>().as_ref().value },
+                };
+                // SAFETY: `FnValue` is `repr(C)` with `code` first, and a `Kind::Code`
+                // word is a `CodeRef`, so both arms point at one.
+                unsafe { (*record).code }
+            }
+
+            /// # Safety
+            /// As `code_of`.
+            #[inline(always)]
+            $v unsafe fn captures_of(&self) -> &[Owned<AcvusRuntime>] {
+                match self.kind {
+                    Kind::Code => &[],
+                    // SAFETY: the caller's contract, as `code_of`: a boxed closure
+                    // is a record `Value::closure` laid.
+                    _ => unsafe { FnValue::captures(self.payload().cast::<Slot<FnValue>>()) },
+                }
             }
         }
-        Value {
-            kind: Kind::Large,
-            word: head.as_ptr() as *mut Header as u64,
-        }
-    }
-
-    /// A closure of no captures: its code, inline (RFC-0069 rule 3).
-    #[inline]
-    pub fn code(code: crate::code::CodeRef) -> Self {
-        Value {
-            kind: Kind::Code,
-            word: code.address() as u64,
-        }
-    }
-    pub(crate) fn handle(launched: Launched) -> Self {
-        large(&HANDLE, || launched)
-    }
-
-    pub fn is_object(&self) -> bool {
-        self.composite() == Some(Composite::Object)
-    }
-    pub fn is_array(&self) -> bool {
-        self.composite() == Some(Composite::Array)
-    }
-    pub fn is_tuple(&self) -> bool {
-        self.composite() == Some(Composite::Tuple)
-    }
-    pub fn is_variant(&self) -> bool {
-        self.composite() == Some(Composite::Variant)
-    }
-    pub fn is_string(&self) -> bool {
-        self.composite() == Some(Composite::String)
-    }
-    pub fn is_none(&self) -> bool {
-        self.kind == Kind::None && self.word == 0
-    }
-
-    /// The payload a `Some` carries, read where it lies. A `Some` of a
-    /// `None` owns nothing, so the payload it yields is a word the reader
-    /// holds rather than a borrow of this value.
-    pub fn option_payload(&self) -> Option<Place<'_>> {
-        let Kind::None = self.kind else {
-            return Some(Place::At(self));
-        };
-        self.word.checked_sub(1).map(|depth| {
-            Place::Depth(Value {
-                kind: Kind::None,
-                word: depth,
-            })
-        })
-    }
-
-    /// The payload a `Some` owns, exclusively. `None` both for the option
-    /// `None` and for a `Some` of one, the two values with nothing under
-    /// them.
-    pub fn option_payload_mut(&mut self) -> Option<&mut Value> {
-        (self.kind != Kind::None).then_some(self)
-    }
-    /// # Safety
-    /// The value is a `String`.
-    pub unsafe fn as_str(&self) -> &str {
-        unsafe { self.peek::<String>() }
-    }
-    /// # Safety
-    /// The value is an `Array`.
-    pub unsafe fn as_array(&self) -> &[Owned<AcvusRuntime>] {
-        unsafe { &self.peek::<Array>().0 }
-    }
-    /// # Safety
-    /// The value is a `Tuple`.
-    pub unsafe fn as_tuple(&self) -> &[Owned<AcvusRuntime>] {
-        unsafe { &self.peek::<Tuple>().0 }
-    }
-    /// The object's fields, flat, in its shape's order: `as_object()[i]` is
-    /// the field `as_shape().names()[i]` names (RFC-0050 rule 8).
-    ///
-    /// # Safety
-    /// The value is an `Object`.
-    pub unsafe fn as_object(&self) -> &[Owned<AcvusRuntime>] {
-        unsafe { &self.peek::<Object>().values }
-    }
-
-    /// # Safety
-    /// The value is an `Object`.
-    pub unsafe fn as_shape(&self) -> &Arc<ObjectShape> {
-        unsafe { &self.peek::<Object>().shape }
-    }
-
-    /// A field by name, through the object's own shape: the path RFC-0050 rule 6
-    /// leaves a reader that holds a name and no type. No operation takes it —
-    /// `prepare` resolved every field a body mentions to a position.
-    ///
-    /// # Safety
-    /// The value is an `Object`.
-    pub unsafe fn field_by_name(&self, name: Astr) -> Option<&Owned<AcvusRuntime>> {
-        let held = unsafe { self.peek::<Object>() };
-        held.shape.at(name).map(|at| &held.values[at.index()])
-    }
-
-    /// # Safety
-    /// The value is an `Object`.
-    pub unsafe fn field_by_name_mut(&mut self, name: Astr) -> Option<&mut Owned<AcvusRuntime>> {
-        let held = unsafe { self.peek_mut::<Object>() };
-        let at = held.shape.at(name)?;
-        Some(&mut held.values[at.index()])
-    }
-    /// # Safety
-    /// The value is an `Array`.
-    pub unsafe fn as_array_mut(&mut self) -> &mut Array {
-        unsafe { self.peek_mut::<Array>() }
-    }
-    /// # Safety
-    /// The value is a `Tuple`.
-    pub unsafe fn as_tuple_mut(&mut self) -> &mut Tuple {
-        unsafe { self.peek_mut::<Tuple>() }
-    }
-    /// # Safety
-    /// The value is an `Object`.
-    pub unsafe fn as_object_mut(&mut self) -> &mut [Owned<AcvusRuntime>] {
-        unsafe { &mut self.peek_mut::<Object>().values }
-    }
-    /// # Safety
-    /// The value is a `Variant`.
-    pub unsafe fn as_variant(&self) -> &VariantValue {
-        unsafe { self.peek::<VariantValue>() }
-    }
-    /// # Safety
-    /// The value is a variant.
-    pub unsafe fn as_variant_mut(&mut self) -> &mut VariantValue {
-        unsafe { self.peek_mut::<VariantValue>() }
-    }
-    /// # Safety
-    /// The value is a variant's tag register.
-    pub unsafe fn as_tag(&self) -> Astr {
-        Astr::of_bits(self.bits())
-    }
-    /// # Safety
-    /// The value is a closure: `Value::code` or `Value::closure` wrote it.
-    #[inline(always)]
-    pub unsafe fn code_of(&self) -> crate::code::CodeRef {
-        let record: *const FnValue = match self.kind {
-            Kind::Code => (&raw const self.word).cast(),
-            // SAFETY: the caller's contract: a closure that is not
-            // `Kind::Code` is a boxed `FnValue`.
-            _ => unsafe { &raw const self.payload().cast::<Slot<FnValue>>().as_ref().value },
-        };
-        // SAFETY: `FnValue` is `repr(C)` with `code` first, and a `Kind::Code`
-        // word is a `CodeRef`, so both arms point at one.
-        unsafe { (*record).code }
-    }
-
-    /// # Safety
-    /// As `code_of`.
-    #[inline(always)]
-    pub unsafe fn captures_of(&self) -> &[Owned<AcvusRuntime>] {
-        match self.kind {
-            Kind::Code => &[],
-            // SAFETY: the caller's contract, as `code_of`: a boxed closure
-            // is a record `Value::closure` laid.
-            _ => unsafe { FnValue::captures(self.payload().cast::<Slot<FnValue>>()) },
-        }
-    }
+    };
 }
+tooling_vis!(value_constructors);
 
 #[cfg(test)]
 mod tests {

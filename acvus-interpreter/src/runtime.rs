@@ -23,13 +23,21 @@ pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 /// suspending frame runs on a copy naming its own tally. A closure value
 /// carries none of them (RFC-0069 rule 1): every caller of one holds a
 /// `&AcvusRuntime`.
-#[derive(Clone)]
-pub struct AcvusRuntime {
-    pub shared: Arc<InterpreterContext>,
-    pub page: Arc<dyn crate::journal::RuntimeContext>,
-    pub(crate) flight: Arc<Flight>,
-    pub(crate) tally: Arc<Tally>,
+/// The compilation and the page a run reads through are the runtime's and
+/// its tooling's (RFC-0090 rule 6): a handler holds an `&AcvusRuntime`
+/// (`Ctx::rt`), and neither field is public to it without `tooling`.
+macro_rules! acvus_runtime {
+    ($v:vis) => {
+        #[derive(Clone)]
+        pub struct AcvusRuntime {
+            $v shared: Arc<InterpreterContext>,
+            $v page: Arc<dyn crate::journal::RuntimeContext>,
+            pub(crate) flight: Arc<Flight>,
+            pub(crate) tally: Arc<Tally>,
+        }
+    };
 }
+tooling_vis!(acvus_runtime);
 
 impl AcvusRuntime {
     pub(crate) fn new(

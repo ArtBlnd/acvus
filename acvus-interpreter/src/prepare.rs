@@ -289,6 +289,11 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
         main,
         closures,
         instances: entries.into_inner(),
+        fetched_first: module
+            .fetched_first
+            .iter()
+            .map(|context| ctx.page_key(context))
+            .collect(),
     }
 }
 
@@ -4228,15 +4233,18 @@ impl<'a> Prepare<'a> {
             InstKind::Fetch { dst, context } => {
                 let key = self.ctx.page_key(context);
                 let slot = self.marked(*dst);
+                let settled = Arc::new(self.ty(*dst).clone());
                 match self.owns(*dst) {
                     true => node(move |next| storage::Fetch::<true> {
                         dst: slot,
                         key,
+                        settled,
                         next,
                     }),
                     false => node(move |next| storage::Fetch::<false> {
                         dst: slot,
                         key,
+                        settled,
                         next,
                     }),
                 }
@@ -4244,9 +4252,10 @@ impl<'a> Prepare<'a> {
             InstKind::Commit { context, value } => {
                 let key = self.ctx.page_key(context);
                 let src = self.marked(*value);
+                let settled = Arc::new(self.ty(*value).clone());
                 match self.owns(*value) {
-                    true => node(move |next| storage::Commit::<true> { src, key, next }),
-                    false => node(move |next| storage::Commit::<false> { src, key, next }),
+                    true => node(move |next| storage::Commit::<true> { src, key, settled, next }),
+                    false => node(move |next| storage::Commit::<false> { src, key, settled, next }),
                 }
             }
 

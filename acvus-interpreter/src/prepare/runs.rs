@@ -194,6 +194,7 @@ impl Layout {
         self.words.is_empty()
     }
 
+    #[cfg(any(test, feature = "tooling"))]
     pub fn large(&self, at: u16) -> bool {
         self.words[usize::from(at)].large
     }
@@ -292,6 +293,7 @@ where
 
 #[derive(Clone, Debug)]
 pub struct Run {
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub var: ValueId,
     pub base: Slot,
     pub layout: Layout,
@@ -306,6 +308,7 @@ pub struct RunPlan {
     /// The registers all of the runs together take above the scalar ones.
     pub total: u16,
     /// The aggregates that did not fit, realized on the heap instead (rule 4).
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub heaped: Vec<ValueId>,
 }
 

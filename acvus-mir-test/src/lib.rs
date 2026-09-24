@@ -179,7 +179,7 @@ pub fn compile_to_ir_with(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
     let module = run_pipeline(interner, &graph, test_qref)?;
     Ok(dump_with(interner, &module))
@@ -263,7 +263,7 @@ pub fn compile_script_ir_with(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
     let module = run_pipeline(interner, &graph, test_qref)?;
     Ok(dump_with(interner, &module))
@@ -299,7 +299,7 @@ pub fn compile_script_raw(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -399,7 +399,7 @@ pub fn refuse_script_mode_ir_with(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -525,7 +525,7 @@ fn lower_script_returning(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -582,7 +582,7 @@ pub fn optimized_script_module(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -678,7 +678,7 @@ pub fn compile_script_at(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -808,7 +808,7 @@ pub fn refuse_script_mode_optimized(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -950,7 +950,7 @@ pub fn compile_inline_ir_with(
         contexts: Freeze::new(ctx_vec),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
 
     // Run extract -> infer -> lower (full pipeline).
@@ -1076,7 +1076,7 @@ fn compile_graph_raw(
         contexts: Freeze::new(ctx_vec),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -1185,7 +1185,7 @@ fn compile_multi_fn_at(
         contexts: Freeze::new(ctx_vec),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
 
     let ext = extract::extract(interner, &graph);
@@ -1270,7 +1270,7 @@ pub fn compile_template_bound(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings,
-        entry: Some(test_qref),
+        entries: vec![test_qref],
     };
 
     let ext = extract::extract(interner, &graph);

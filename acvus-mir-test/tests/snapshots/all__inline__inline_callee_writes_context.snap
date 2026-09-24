@@ -4,20 +4,17 @@ expression: ir
 ---
 === main ===
      1 |   assign v3 = 42 (r0)
-     2 |   r1 = fetch @count
+     2 |   r1 = take v3
      3 |   assign @count = r1
      4 |   r2 = take v3
-     5 |   assign @count = r2
-     6 |   r3 = take v3
-     7 |   r4 = take @count
-     8 |   commit @count = r4
-     9 |   return r3
+     5 |   r3 = take @count
+     6 |   commit @count = r3
+     7 |   return r2
 
     ; r0 (v1) : i64
-    ; r1 (@count) : i64
+    ; r1 ($x) : i64
     ; r2 ($x) : i64
-    ; r3 ($x) : i64
-    ; r4 (v8) : i64
+    ; r3 (v8) : i64
+    ; r4 (@count) : i64
     ; r5 (v3) : i64
     ; r6 (set_count(...)) : i64
-    ; r7 (@count) : i64

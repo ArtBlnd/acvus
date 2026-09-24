@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod cfg;
+mod entry_fetch;
 pub mod error;
 pub mod flows;
 pub mod graph;

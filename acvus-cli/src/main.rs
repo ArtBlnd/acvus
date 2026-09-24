@@ -764,13 +764,25 @@ async fn run(
                 Interpreter::on_page(shared, entry, Arc::clone(&page) as Arc<dyn RuntimeContext>);
             (Some(page), interp)
         }
-        None => (
-            None,
-            Interpreter::new(shared, entry, InMemoryContext::new(snapshot)),
-        ),
+        None => {
+            let seed = snapshot
+                .into_iter()
+                .map(|(k, v)| {
+                    let ty = loaded.types[&interner.intern(&k)].clone();
+                    (k, (ty, v))
+                })
+                .collect();
+            (None, Interpreter::new(shared, entry, InMemoryContext::new(seed)))
+        }
     };
     let watch = Stopwatch::start(Timed::of(args.time));
-    let value = interp.execute().await;
+    let value = match interp.execute().await {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(EXIT_RUN);
+        }
+    };
     if let Some(timings) = &mut timings {
         timings.run = watch.stop();
     }

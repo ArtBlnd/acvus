@@ -18,7 +18,7 @@ path = "tests/all.rs"
 acvus-ast = { path = "../acvus-ast" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
-acvus-interpreter = { path = "../acvus-interpreter", features = ["probe"] }
+acvus-interpreter = { path = "../acvus-interpreter", features = ["probe", "tooling"] }
 acvus-extern = { path = "../acvus-extern" }
 acvus-ext = { path = "../acvus-ext" }
 rustc-hash = { workspace = true }
@@ -47,11 +47,21 @@ path = "tests/run_allocations.rs"
 name = "view_allocates_nothing"
 path = "tests/view_allocates_nothing.rs"
 
+[[test]]
+name = "host_lend_allocates_nothing"
+path = "tests/host_lend_allocates_nothing.rs"
+
 # Its allocator overwrites every freed block, so a read of released cells
 # answers the fill pattern; no other test should pay for that.
 [[test]]
 name = "run_dropped_in_flight"
 path = "tests/run_dropped_in_flight.rs"
+
+# Its bounds are wall-clock durations, which the parallel tests of `all`
+# would stretch.
+[[test]]
+name = "sleep"
+path = "tests/sleep.rs"
 
 [[test]]
 name = "fixtures"

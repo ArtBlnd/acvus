@@ -140,7 +140,7 @@ fn measure(source: &str) -> Measured {
     let value = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime")
-        .block_on(interp.execute());
+        .block_on(interp.execute()).expect("the page holds every context the run fetches first");
     let after = ALLOCATIONS.with(std::cell::Cell::get);
     Measured {
         allocations: after - before,

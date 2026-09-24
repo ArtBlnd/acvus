@@ -84,7 +84,7 @@ mod tests {
             contexts: Freeze::new(vec![]),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         };
         (graph, fn_qref)
     }
@@ -125,7 +125,7 @@ mod tests {
             contexts: Freeze::new(vec![]),
             types: Freeze::default(),
             bindings: Bindings::default(),
-            entry: None,
+            entries: Vec::new(),
         };
         let result = extract(&i, &graph);
         assert!(result.parsed.is_empty());

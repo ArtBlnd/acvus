@@ -3076,6 +3076,22 @@ impl<'a> ObjectShape<'a> {
                 }
             }
 
+            impl<'__q, __R> ::acvus_extern::Param<__R> for #shared<'__q>
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                type Marker = ::acvus_extern::ByProjection<#shared<'static>>;
+                type At<'__a> = #shared<'__a>;
+            }
+
+            impl<'__q, __R> ::acvus_extern::Param<__R> for #exclusive<'__q>
+            where
+                __R: ::acvus_extern::Runtime,
+            {
+                type Marker = ::acvus_extern::ByProjection<#exclusive<'static>>;
+                type At<'__a> = #exclusive<'__a>;
+            }
+
             // SAFETY: a projection is at its own lifetime, and borrows only
             // parts of the object the caller lent at it.
             unsafe impl<'__s> ::acvus_extern::Within<'__s> for #shared<'__s> {}
@@ -3084,6 +3100,7 @@ impl<'a> ObjectShape<'a> {
             where
                 __R: ::acvus_extern::Runtime,
             {
+                type Loan = ::acvus_extern::Shared;
                 type Table = #table_ty;
 
                 fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -3114,6 +3131,7 @@ impl<'a> ObjectShape<'a> {
             where
                 __R: ::acvus_extern::Runtime,
             {
+                type Loan = ::acvus_extern::Mut;
                 type Table = #table_ty;
 
                 fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -3639,6 +3657,22 @@ fn enum_projection(
             }
         }
 
+        impl<'__q, __R> ::acvus_extern::Param<__R> for #shared<'__q>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            type Marker = ::acvus_extern::ByProjection<#shared<'static>>;
+            type At<'__a> = #shared<'__a>;
+        }
+
+        impl<'__q, __R> ::acvus_extern::Param<__R> for #exclusive<'__q, __R>
+        where
+            __R: ::acvus_extern::Runtime,
+        {
+            type Marker = ::acvus_extern::ByProjection<#exclusive<'static, __R>>;
+            type At<'__a> = #exclusive<'__a, __R>;
+        }
+
         // SAFETY: a projection is at its own lifetime, and borrows only parts
         // of the variant the caller lent at it.
         unsafe impl<'__s> ::acvus_extern::Within<'__s> for #shared<'__s> {}
@@ -3647,6 +3681,7 @@ fn enum_projection(
         where
             __R: ::acvus_extern::Runtime,
         {
+            type Loan = ::acvus_extern::Shared;
             type Table = #table_ty;
 
             fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {
@@ -3676,6 +3711,7 @@ fn enum_projection(
         where
             __R: ::acvus_extern::Runtime,
         {
+            type Loan = ::acvus_extern::Mut;
             type Table = #table_ty;
 
             fn table(__at: ::acvus_extern::ArgAt<'_>) -> Self::Table {

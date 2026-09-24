@@ -8,29 +8,27 @@ expression: ir
      2 |   r2 = undef
      3 |   r3 = fetch @user
      4 |   assign @user = r3
-     5 |   r4 = fetch @out
-     6 |   r5 = take @user.name
-     7 |   r6 = take @user.age
-     9 |   r7 = take @user
-    10 |   commit @user = r7
-    11 |   r8 = string_clone r5
-    12 |   commit @out = r8
-    13 |   return r5
+     5 |   r4 = take @user.name
+     6 |   r5 = take @user.age
+     8 |   r6 = take @user
+     9 |   commit @user = r6
+    10 |   r7 = string_clone r4
+    11 |   commit @out = r7
+    12 |   return r4
 
     ; r0 (v14) : String
     ; r1 (v15) : String
     ; r2 (v16) : i64
     ; r3 (@user) : {age: i64, name: String}
-    ; r4 (@out) : String
-    ; r5 (name) : String
-    ; r6 (age) : i64
-    ; r7 (v12) : {age: i64, name: String}
-    ; r8 (v17) : String
+    ; r4 (name) : String
+    ; r5 (age) : i64
+    ; r6 (v12) : {age: i64, name: String}
+    ; r7 (v17) : String
+    ; r8 (@out) : String
     ; r9 (@out) : String
-    ; r10 (@out) : String
+    ; r10 (name) : String
     ; r11 (name) : String
-    ; r12 (name) : String
-    ; r13 (@user) : {age: i64, name: String}
-    ; r14 (v10) : Unit
-    ; r15 (v13) : String
-    ; r16 (age) : i64
+    ; r12 (@user) : {age: i64, name: String}
+    ; r13 (v10) : Unit
+    ; r14 (v13) : String
+    ; r15 (age) : i64

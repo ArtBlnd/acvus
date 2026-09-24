@@ -120,7 +120,7 @@ fn context_of(interner: &Interner, json: &serde_json::Value) -> Context {
 fn snapshot_of(
     interner: &Interner,
     json: &serde_json::Value,
-) -> HashMap<String, Owned<AcvusRuntime>> {
+) -> HashMap<String, (acvus_mir::ty::Ty, Owned<AcvusRuntime>)> {
     split_context(interner, context_of(interner, json)).1
 }
 
@@ -356,7 +356,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
         let snapshot = snapshot_of(&interner, &json);
         let (_shared, mut interp) =
             execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
-        let (value, execute) = timed(|| rt.block_on(interp.execute()));
+        let (value, execute) = timed(|| rt.block_on(interp.execute()).expect("the page holds every context the run fetches first"));
         Phases {
             compile,
             setup,
@@ -446,7 +446,7 @@ fn execute_only(rt: &Runtime, case: &Case, kernel: Kernel) -> Duration {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute());
+        let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
         (value, start.elapsed())
     };
 

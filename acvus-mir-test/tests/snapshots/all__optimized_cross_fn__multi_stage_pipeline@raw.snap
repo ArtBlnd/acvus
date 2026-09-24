@@ -44,119 +44,110 @@ expression: raw
      0 |   assign $order = r0
      1 |   r1 = fetch @offset
      2 |   assign @offset = r1
-     3 |   r2 = fetch @stage2
-     4 |   assign @stage2 = r2
-     5 |   r3 = fetch @scale
-     6 |   assign @scale = r3
-     7 |   r4 = fetch @stage3
-     8 |   assign @stage3 = r4
-     9 |   r5 = fetch @source_id
-    10 |   assign @source_id = r5
-    11 |   r6 = fetch @stage1
-    12 |   assign @stage1 = r6
-    13 |   r7 = fetch @precision
-    14 |   assign @precision = r7
-    15 |   r8 = take @source_id
-    16 |   r9 = take $order
-    17 |   r10 = call #0(r8) [r9 -> r11]
-    18 |   assign $order = r11
-    19 |   assign raw = r10
-    20 |   r12 = take raw
-    21 |   r13 = take @scale
-    22 |   r14 = call #1(r12, r13)
-    23 |   assign s1 = r14
-    24 |   r15 = take s1
-    25 |   assign @stage1 = r15
-    26 |   r16 = take s1
-    27 |   r17 = take @offset
-    28 |   r18 = call #2(r16, r17)
-    29 |   assign s2 = r18
-    30 |   r19 = take s2
-    31 |   assign @stage2 = r19
-    32 |   r20 = take s2
-    33 |   r21 = take @precision
-    34 |   r22 = call #3(r20, r21)
-    35 |   assign s3 = r22
-    36 |   r23 = take s3
-    37 |   assign @stage3 = r23
-    38 |   r24 = take s1
-    39 |   r25 = take s2
-    40 |   r26 = take s3
-    41 |   r27 = take $order
-    42 |   r28 = call #4(r24, r25, r26) [r27 -> r29]
-    43 |   assign $order = r29
-    44 |   r30 = take s3
-    45 |   r31 = take @offset
-    46 |   commit @offset = r31
-    47 |   r32 = take @stage2
-    48 |   commit @stage2 = r32
-    49 |   r33 = take @scale
-    50 |   commit @scale = r33
-    51 |   r34 = take @stage3
-    52 |   commit @stage3 = r34
-    53 |   r35 = take @source_id
-    54 |   commit @source_id = r35
-    55 |   r36 = take @stage1
-    56 |   commit @stage1 = r36
-    57 |   r37 = take @precision
-    58 |   commit @precision = r37
-    59 |   r38 = take $order
-    60 |   return r30 [r38]
+     3 |   r2 = fetch @scale
+     4 |   assign @scale = r2
+     5 |   r3 = fetch @source_id
+     6 |   assign @source_id = r3
+     7 |   r4 = fetch @precision
+     8 |   assign @precision = r4
+     9 |   r5 = take @source_id
+    10 |   r6 = take $order
+    11 |   r7 = call #0(r5) [r6 -> r8]
+    12 |   assign $order = r8
+    13 |   assign raw = r7
+    14 |   r9 = take raw
+    15 |   r10 = take @scale
+    16 |   r11 = call #1(r9, r10)
+    17 |   assign s1 = r11
+    18 |   r12 = take s1
+    19 |   assign @stage1 = r12
+    20 |   r13 = take s1
+    21 |   r14 = take @offset
+    22 |   r15 = call #2(r13, r14)
+    23 |   assign s2 = r15
+    24 |   r16 = take s2
+    25 |   assign @stage2 = r16
+    26 |   r17 = take s2
+    27 |   r18 = take @precision
+    28 |   r19 = call #3(r17, r18)
+    29 |   assign s3 = r19
+    30 |   r20 = take s3
+    31 |   assign @stage3 = r20
+    32 |   r21 = take s1
+    33 |   r22 = take s2
+    34 |   r23 = take s3
+    35 |   r24 = take $order
+    36 |   r25 = call #4(r21, r22, r23) [r24 -> r26]
+    37 |   assign $order = r26
+    38 |   r27 = take s3
+    39 |   r28 = take @offset
+    40 |   commit @offset = r28
+    41 |   r29 = take @stage2
+    42 |   commit @stage2 = r29
+    43 |   r30 = take @scale
+    44 |   commit @scale = r30
+    45 |   r31 = take @stage3
+    46 |   commit @stage3 = r31
+    47 |   r32 = take @source_id
+    48 |   commit @source_id = r32
+    49 |   r33 = take @stage1
+    50 |   commit @stage1 = r33
+    51 |   r34 = take @precision
+    52 |   commit @precision = r34
+    53 |   r35 = take $order
+    54 |   return r27 [r35]
 
     ; orders: what the body's yielded Order waits for
-    ;   r38(entry)
+    ;   r35(entry)
 
     ; r0 (v1) : Order
     ; r1 (@offset) : i64
-    ; r2 (@stage2) : i64
-    ; r3 (@scale) : i64
-    ; r4 (@stage3) : i64
+    ; r2 (@scale) : i64
+    ; r3 (@source_id) : i64
+    ; r4 (@precision) : i64
     ; r5 (@source_id) : i64
-    ; r6 (@stage1) : i64
-    ; r7 (@precision) : i64
-    ; r8 (@source_id) : i64
-    ; r9 (v19) : Order
-    ; r10 (fetch_data(...)) : i64
-    ; r11 (v20) : Order
-    ; r12 (raw) : i64
-    ; r13 (@scale) : i64
-    ; r14 (normalize(...)) : i64
-    ; r15 (s1) : i64
-    ; r16 (s1) : i64
-    ; r17 (@offset) : i64
-    ; r18 (enrich(...)) : i64
-    ; r19 (s2) : i64
-    ; r20 (s2) : i64
-    ; r21 (@precision) : i64
-    ; r22 (finalize(...)) : i64
+    ; r6 (v19) : Order
+    ; r7 (fetch_data(...)) : i64
+    ; r8 (v20) : Order
+    ; r9 (raw) : i64
+    ; r10 (@scale) : i64
+    ; r11 (normalize(...)) : i64
+    ; r12 (s1) : i64
+    ; r13 (s1) : i64
+    ; r14 (@offset) : i64
+    ; r15 (enrich(...)) : i64
+    ; r16 (s2) : i64
+    ; r17 (s2) : i64
+    ; r18 (@precision) : i64
+    ; r19 (finalize(...)) : i64
+    ; r20 (s3) : i64
+    ; r21 (s1) : i64
+    ; r22 (s2) : i64
     ; r23 (s3) : i64
-    ; r24 (s1) : i64
-    ; r25 (s2) : i64
-    ; r26 (s3) : i64
-    ; r27 (v41) : Order
-    ; r28 (log_pipeline(...)) : i64
-    ; r29 (v42) : Order
-    ; r30 (s3) : i64
-    ; r31 (v44) : i64
-    ; r32 (v45) : i64
-    ; r33 (v46) : i64
-    ; r34 (v47) : i64
-    ; r35 (v48) : i64
-    ; r36 (v49) : i64
-    ; r37 (v50) : i64
-    ; r38 (v51) : Order
-    ; r39 (@offset) : i64
-    ; r40 (s1) : i64
-    ; r41 (raw) : i64
-    ; r42 ($order) : Order
-    ; r43 (@stage2) : i64
-    ; r44 (@stage3) : i64
-    ; r45 (@precision) : i64
-    ; r46 (s2) : i64
-    ; r47 (@source_id) : i64
-    ; r48 (s3) : i64
-    ; r49 (@stage1) : i64
-    ; r50 (@scale) : i64
+    ; r24 (v41) : Order
+    ; r25 (log_pipeline(...)) : i64
+    ; r26 (v42) : Order
+    ; r27 (s3) : i64
+    ; r28 (v44) : i64
+    ; r29 (v45) : i64
+    ; r30 (v46) : i64
+    ; r31 (v47) : i64
+    ; r32 (v48) : i64
+    ; r33 (v49) : i64
+    ; r34 (v50) : i64
+    ; r35 (v51) : Order
+    ; r36 (@offset) : i64
+    ; r37 (s1) : i64
+    ; r38 (@stage3) : i64
+    ; r39 ($order) : Order
+    ; r40 (@stage2) : i64
+    ; r41 (@precision) : i64
+    ; r42 (raw) : i64
+    ; r43 (s2) : i64
+    ; r44 (@source_id) : i64
+    ; r45 (@scale) : i64
+    ; r46 (s3) : i64
+    ; r47 (@stage1) : i64
 
 -- normalize --
 === main ===

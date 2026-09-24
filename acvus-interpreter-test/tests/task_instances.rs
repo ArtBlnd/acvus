@@ -415,7 +415,7 @@ async fn executed_in(source: &str, ret: Ty) -> (Duration, i64) {
     let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), ret);
     let (_shared, mut interp) = execute_compiled(&i, cr, HashMap::new(), Arc::new(TokioExecutor));
     let start = Instant::now();
-    let value: Value = interp.execute().await;
+    let value: Value = interp.execute().await.expect("the page holds every context the run fetches first");
     (start.elapsed(), value.as_int())
 }
 

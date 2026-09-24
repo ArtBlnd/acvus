@@ -7,6 +7,7 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::entry_fetch::{self, PageOps};
 use crate::error::OperatorSignature;
 use crate::graph::QualifiedRef;
 use crate::ir::{
@@ -53,6 +54,9 @@ pub struct Lowerer<'a> {
     /// `Stmt::Append` writes through (RFC-0071). `None` in a script.
     result: Option<ValueId>,
     context_slots: BTreeMap<QualifiedRef, ValueId>,
+    page_ops: PageOps,
+    /// The contexts `main` fetches at entry.
+    main_fetches: Vec<QualifiedRef>,
     /// The places the calls being lowered have taken out for their
     /// callees, innermost call last (RFC-0041).
     taken_out: Vec<PlaceRestore>,
@@ -428,6 +432,8 @@ impl<'a> Lowerer<'a> {
             anyorder: None,
             result: None,
             context_slots: BTreeMap::new(),
+            page_ops: PageOps::default(),
+            main_fetches: Vec::new(),
             taken_out: Vec::new(),
             loops: Vec::new(),
         }
@@ -451,6 +457,7 @@ impl<'a> Lowerer<'a> {
         }
         let result = self.emit_take(template.span, RefTarget::Var(slot), vec![], Ty::String);
         self.emit_return(template.span, result);
+        self.main_fetches = self.skip_assigned_fetches();
         self.build_module()
     }
 
@@ -466,7 +473,15 @@ impl<'a> Lowerer<'a> {
             None => self.emit_unit(script.span),
         };
         self.emit_return(script.span, val);
+        self.main_fetches = self.skip_assigned_fetches();
         self.build_module()
+    }
+
+    /// RFC-0025 rule 2 on the body just lowered; the contexts it still
+    /// fetches at entry.
+    fn skip_assigned_fetches(&mut self) -> Vec<QualifiedRef> {
+        let ops = std::mem::take(&mut self.page_ops);
+        entry_fetch::skip_assigned_fetches(&mut self.body, ops)
     }
 
     /// Give the body being lowered its entry `Order` when its effect is not
@@ -496,7 +511,8 @@ impl<'a> Lowerer<'a> {
                 .cloned()
                 .unwrap_or_else(|| panic!("context {qref:?} is named but was not typed"));
             let slot = self.alloc_slot(ty.clone(), ValOrigin::Context(qref.name));
-            self.fetch_into(span, qref, slot, ty);
+            let fetched = self.fetch_into(span, qref, slot, ty);
+            self.page_ops.entry(qref, slot, fetched);
             self.context_slots.insert(qref, slot);
         }
     }
@@ -516,7 +532,7 @@ impl<'a> Lowerer<'a> {
             .unwrap_or_else(|| panic!("slot {slot:?} has no type"))
     }
 
-    fn fetch_into(&mut self, span: Span, context: QualifiedRef, slot: ValueId, ty: Ty) {
+    fn fetch_into(&mut self, span: Span, context: QualifiedRef, slot: ValueId, ty: Ty) -> ValueId {
         let fetched = self.alloc_val();
         self.set_val_type(fetched, ty);
         self.set_origin(fetched, ValOrigin::Context(context.name));
@@ -528,6 +544,7 @@ impl<'a> Lowerer<'a> {
             },
         );
         self.emit_assign(span, RefTarget::Var(slot), vec![], fetched);
+        fetched
     }
 
     fn commit_from(&mut self, span: Span, context: QualifiedRef, slot: ValueId) {
@@ -706,7 +723,8 @@ impl<'a> Lowerer<'a> {
         );
         for (qref, slot) in bracketed {
             let ty = self.slot_type(slot);
-            self.fetch_into(span, qref, slot, ty);
+            let fetched = self.fetch_into(span, qref, slot, ty);
+            self.page_ops.refetched(fetched);
         }
         let Some(edge) = order else {
             return;
@@ -1581,6 +1599,7 @@ impl<'a> Lowerer<'a> {
             closures: self.closures,
             ret: self.ret,
             flows: self.resolution.flows.clone(),
+            fetched_first: self.main_fetches,
         }
     }
 
@@ -2820,6 +2839,7 @@ impl<'a> Lowerer<'a> {
                 let saved_order_slot = self.order_slot;
                 let saved_anyorder = self.anyorder;
                 let saved_context_slots = std::mem::take(&mut self.context_slots);
+                let saved_page_ops = std::mem::take(&mut self.page_ops);
                 let saved_taken_out = std::mem::take(&mut self.taken_out);
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
@@ -2863,12 +2883,14 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or(Ty::error());
                 self.emit_return(*span, result_reg);
+                let _fetched_where_called: Vec<QualifiedRef> = self.skip_assigned_fetches();
 
                 let mut closure_body_mir = std::mem::replace(&mut self.body, saved_body);
                 self.scopes = saved_scopes;
                 self.order_slot = saved_order_slot;
                 self.anyorder = saved_anyorder;
                 self.context_slots = saved_context_slots;
+                self.page_ops = saved_page_ops;
                 self.taken_out = saved_taken_out;
 
                 closure_body_mir.captures = captured

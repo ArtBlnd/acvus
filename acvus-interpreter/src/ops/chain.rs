@@ -1026,6 +1026,7 @@ impl Nodes {
         }
     }
 
+    #[cfg(feature = "tooling")]
     pub fn concrete(&self, shape: Shape) -> usize {
         let ops = self.ops[..shape.interior()]
             .iter()

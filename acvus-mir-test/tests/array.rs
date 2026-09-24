@@ -33,7 +33,7 @@ fn return_type(i: &Interner, source: &str) -> Ty {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(acvus_mir::ty::TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(i, &graph, &ext);

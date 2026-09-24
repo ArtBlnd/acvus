@@ -40,21 +40,25 @@ fn a_store_the_next_read_names_stays() {
     );
 }
 
+/// A body that assigns `@out` whole before reading it does not fetch it
+/// (RFC-0025 rule 2), so the store overwritten here is the one the call's
+/// bracket fetches back after `peek` reads `@out`.
 #[test]
 fn a_store_overwritten_before_any_read_is_gone_and_its_value_released() {
-    let ir = listing("@out = @other; @out = @out + \")\"; 1");
-    assert_eq!(
-        count(&ir, "assign @out"),
-        2,
-        "the store of `@other` and the store of the concatenation stand; \
-         the store of the fetched `@out` is dead\n{ir}"
-    );
+    let ir = listing("let peek = | | -> @out + \"\"; peek(); @out = @other; @out = @out + \")\"; 1");
     let fetched = ir
         .lines()
+        .skip_while(|line| *line != "=== main ===")
+        .take_while(|line| !line.is_empty())
         .filter_map(|line| line.split_once(" = fetch @out"))
         .map(|(head, _)| head.split_whitespace().last().expect("a register name"))
-        .next()
-        .expect("the fetch of @out stands");
+        .last()
+        .expect("the fetch after the call stands");
+    assert_eq!(
+        count(&ir, &format!("assign @out = {fetched}")),
+        0,
+        "the store of the value fetched after the call is dead\n{ir}"
+    );
     assert_eq!(
         count(&ir, &format!("drop {fetched}")),
         1,

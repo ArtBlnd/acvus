@@ -493,7 +493,7 @@ fn context(interner: &Interner, n: i64) -> Context {
         .collect()
 }
 
-fn snapshot(interner: &Interner, n: i64) -> HashMap<String, Owned<AcvusRuntime>> {
+fn snapshot(interner: &Interner, n: i64) -> HashMap<String, (acvus_mir::ty::Ty, Owned<AcvusRuntime>)> {
     split_context(interner, context(interner, n)).1
 }
 
@@ -540,7 +540,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute());
+        let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
         (value.as_int(), start.elapsed())
     };
     let run_rust = || {
@@ -622,7 +622,7 @@ fn perf_run(rt: &Runtime, case: &Case, n: i64, side: Side) {
                     snapshot(&interner, n),
                     Arc::new(SequentialExecutor),
                 );
-                value = Some(rt.block_on(interp.execute()).as_int());
+                value = Some(rt.block_on(interp.execute()).expect("the page holds every context the run fetches first").as_int());
             }
             value.expect("PERF_REPS is at least one") - outer_count(n) * B
         }

@@ -10,7 +10,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [dev-dependencies]
 acvus-ext = { path = "../acvus-ext" }
-acvus-interpreter = { path = "../acvus-interpreter" }
+acvus-interpreter = { path = "../acvus-interpreter", features = ["tooling"] }
 acvus-interpreter-test = { path = "../acvus-interpreter-test" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-ast = { path = "../acvus-ast" }

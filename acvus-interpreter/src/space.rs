@@ -9,12 +9,13 @@ use std::collections::hash_map::Entry;
 use std::sync::{Arc, Mutex};
 
 use acvus_extern::{
-    ArgAt, Borrowed, Crossing, Declared, Holding, NodeHash, OneValue, Owned, Project, SpaceError,
+    Borrows, Crossing, Declared, Holding, Lendable, NodeHash, OneValue, Owned, Shared, SpaceError,
     SpaceResult,
 };
 use acvus_mir::ty::Ty;
 
 use crate::host::{Contexts, Page, PageError, held_as};
+use crate::journal::{Held, RuntimeContext, in_graph};
 use crate::layout::{self, Nested};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -432,41 +433,54 @@ impl Space {
             },
         )
     }
+}
 
-    /// The value of `id` as its head names it.
-    pub fn load(&self, rt: &AcvusRuntime, id: &str, ty: &Ty) -> SpaceResult<Option<Value>> {
-        match self.head(id) {
-            Some(head) => self.load_at(rt, ty, head).map(Some),
-            None => Ok(None),
+/// A value word loaded from or committed to the space: the runtime's and its
+/// tooling's (RFC-0090 rule 6). A host reads and writes a context through
+/// `SpacePage`'s typed methods.
+macro_rules! space_values {
+    ($v:vis) => {
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl Space {
+            /// The value of `id` as its head names it.
+            $v fn load(&self, rt: &AcvusRuntime, id: &str, ty: &Ty) -> SpaceResult<Option<Value>> {
+                match self.head(id) {
+                    Some(head) => self.load_at(rt, ty, head).map(Some),
+                    None => Ok(None),
+                }
+            }
+
+            /// Commit `value` as the new head of `id`. An extension value carries
+            /// the head it was loaded at, and the commit is refused when the head
+            /// has moved since; a value that carries none, or one of a language
+            /// shape, replaces whatever the head is.
+            $v fn commit(
+                &self,
+                rt: &AcvusRuntime,
+                id: &str,
+                ty: &Ty,
+                value: &mut Value,
+            ) -> SpaceResult<NodeHash> {
+                let loaded_at = match layout::extension(rt, ty) {
+                    Ok((hooks, _)) => (hooks.head)(rt, value),
+                    Err(_) => None,
+                };
+                let expected = loaded_at.or_else(|| self.head(id));
+                let new = self.commit_value(rt, ty, value)?;
+                self.cmpxchg(id, expected, new, ty)?.map_err(|current| {
+                    SpaceError::new(format!(
+                        "@{id}: head moved to {} since it was loaded",
+                        current.map_or("nothing".to_string(), |h| hex(&h))
+                    ))
+                })?;
+                Ok(new)
+            }
         }
-    }
+    };
+}
+tooling_vis!(space_values);
 
-    /// Commit `value` as the new head of `id`. An extension value carries
-    /// the head it was loaded at, and the commit is refused when the head
-    /// has moved since; a value that carries none, or one of a language
-    /// shape, replaces whatever the head is.
-    pub fn commit(
-        &self,
-        rt: &AcvusRuntime,
-        id: &str,
-        ty: &Ty,
-        value: &mut Value,
-    ) -> SpaceResult<NodeHash> {
-        let loaded_at = match layout::extension(rt, ty) {
-            Ok((hooks, _)) => (hooks.head)(rt, value),
-            Err(_) => None,
-        };
-        let expected = loaded_at.or_else(|| self.head(id));
-        let new = self.commit_value(rt, ty, value)?;
-        self.cmpxchg(id, expected, new, ty)?.map_err(|current| {
-            SpaceError::new(format!(
-                "@{id}: head moved to {} since it was loaded",
-                current.map_or("nothing".to_string(), |h| hex(&h))
-            ))
-        })?;
-        Ok(new)
-    }
-
+impl Space {
     fn load_at(&self, rt: &AcvusRuntime, ty: &Ty, head: NodeHash) -> SpaceResult<Value> {
         if !matches!(ty, Ty::UserDefined { .. }) {
             let node = self.get(head)?;
@@ -696,46 +710,30 @@ fn unhex(text: &str) -> SpaceResult<NodeHash> {
 pub struct SpacePage {
     space: Arc<Space>,
     types: HashMap<String, Ty>,
-    held: Mutex<HashMap<String, Owned<AcvusRuntime>>>,
-    declared: Option<Contexts>,
+    held: Mutex<HashMap<String, Held>>,
+    solved: Option<Contexts>,
 }
 
 impl SpacePage {
-    /// A page over `space` for the identities it holds, plus `seed`:
-    /// values for identities the space does not hold yet, or replaces.
-    pub fn new(
-        space: Arc<Space>,
-        seed: HashMap<String, (Ty, Owned<AcvusRuntime>)>,
-    ) -> SpaceResult<Self> {
-        let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
-        let mut held = HashMap::new();
-        for (id, (ty, value)) in seed {
-            types.insert(id.clone(), ty);
-            held.insert(id, value);
-        }
-        Ok(Self {
-            space,
-            types,
-            held: Mutex::new(held),
-            declared: None,
-        })
-    }
-
-    pub fn of(space: Arc<Space>, contexts: &Contexts) -> SpaceResult<Self> {
+    pub fn of(space: Arc<Space>, contexts: &Contexts) -> Result<Self, PageError> {
         let interner = &contexts.rt().shared.interner;
-        let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
-        for (key, declared) in contexts.settled() {
+        let mut types: HashMap<String, Ty> = space
+            .identities()
+            .map_err(PageError::Space)?
+            .into_iter()
+            .collect();
+        for (key, solved) in contexts.solved() {
             match types.get(key) {
-                Some(stored) if !stored.same_erased(declared) => {
-                    return Err(SpaceError::new(format!(
-                        "@{key} is stored as {}, and declared as {}",
-                        stored.display(interner),
-                        declared.display(interner)
-                    )));
+                Some(stored) if !stored.same_erased(solved) => {
+                    return Err(PageError::Mismatched {
+                        key: key.clone(),
+                        held: stored.display(interner).to_string(),
+                        asked: solved.display(interner).to_string(),
+                    });
                 }
                 Some(_) => {}
                 None => {
-                    types.insert(key.clone(), declared.clone());
+                    types.insert(key.clone(), solved.clone());
                 }
             }
         }
@@ -743,116 +741,143 @@ impl SpacePage {
             space,
             types,
             held: Mutex::new(HashMap::new()),
-            declared: Some(contexts.clone()),
+            solved: Some(contexts.clone()),
         })
     }
 
-    pub fn read<T>(&mut self, key: &str) -> Result<<T as Borrowed>::Ref<'_>, PageError>
+    /// Lend `key`'s value to `f`, loaded from the space if no run has
+    /// fetched it, whose parameter crosses as a handler's shared one does
+    /// (RFC-0090 rule 3).
+    pub fn with<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, PageError>
     where
-        T: Declared + Project<AcvusRuntime>,
+        F: Borrows<AcvusRuntime, Q, O>,
+        F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
-        let (contexts, ty, value) = self.loaded_as::<T>(key)?;
-        let table = T::table(ArgAt {
-            interner: &contexts.rt().shared.interner,
-            ty,
-        });
-        // SAFETY: the page holds `key` at `ty`, which is `T`'s, and a value
-        // enters the page only at the type it holds the key at.
-        Ok(unsafe { T::project(contexts.rt(), value, &table) })
+        let contexts = in_graph(&self.solved, key)?;
+        let held = loaded(&self.space, &self.types, self.held.get_mut().expect("page"), contexts, key)?;
+        held.lend(contexts, key, f)
     }
 
-    pub fn update<T, F, U>(&mut self, key: &str, f: F) -> Result<U, PageError>
+    /// As `with`, exclusively: the parameter crosses as a handler's does,
+    /// shared or exclusive.
+    pub fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, PageError>
     where
-        T: Declared + Project<AcvusRuntime>,
-        F: FnOnce(<T as Borrowed>::Mut<'_>) -> U,
+        F: Borrows<AcvusRuntime, Q, O>,
     {
-        let (contexts, ty, value) = self.loaded_as::<T>(key)?;
-        let table = T::table(ArgAt {
-            interner: &contexts.rt().shared.interner,
-            ty,
-        });
-        // SAFETY: `&mut self` names the value exclusively, and a projection
-        // writes inside the storage the word names, never the word itself.
-        let word = unsafe { value.value_mut(Holding::new()) };
-        // SAFETY: as `read`, exclusively.
-        Ok(f(unsafe { T::project_mut(contexts.rt(), word, &table) }))
+        let contexts = in_graph(&self.solved, key)?;
+        let held = loaded(&self.space, &self.types, self.held.get_mut().expect("page"), contexts, key)?;
+        held.lend(contexts, key, f)
     }
 
     pub fn insert<T>(&mut self, key: &str, value: T) -> Result<(), PageError>
     where
         T: Declared + OneValue<AcvusRuntime>,
     {
-        let Some(contexts) = &self.declared else {
-            return Err(PageError::Undeclared {
-                key: key.to_owned(),
-            });
-        };
-        held_as::<T>(&contexts.rt().shared.interner, key, self.types.get(key))?;
+        let contexts = in_graph(&self.solved, key)?;
+        let ty = held_as::<T>(&contexts.rt().shared.interner, key, contexts.solved().get(key))?;
         // SAFETY: `value` crosses at `T`, the type the page holds `key` at.
-        let held = Owned::erased(unsafe { Crossing::new(contexts.rt()) }, value);
+        let value = Owned::erased(unsafe { Crossing::new(contexts.rt()) }, value);
         self.held
             .get_mut()
             .expect("page")
-            .insert(key.to_owned(), held);
+            .insert(key.to_owned(), Held::new(value, Arc::new(ty.clone())));
         Ok(())
-    }
-
-    fn loaded_as<T>(
-        &mut self,
-        key: &str,
-    ) -> Result<(&Contexts, &Ty, &mut Owned<AcvusRuntime>), PageError>
-    where
-        T: Declared,
-    {
-        let Some(contexts) = &self.declared else {
-            return Err(PageError::Undeclared {
-                key: key.to_owned(),
-            });
-        };
-        let ty = held_as::<T>(&contexts.rt().shared.interner, key, self.types.get(key))?;
-        let value = match self.held.get_mut().expect("page").entry(key.to_owned()) {
-            Entry::Occupied(held) => held.into_mut(),
-            Entry::Vacant(vacant) => {
-                let Some(loaded) = self
-                    .space
-                    .load(contexts.rt(), key, ty)
-                    .map_err(PageError::Space)?
-                else {
-                    return Err(PageError::Absent {
-                        key: key.to_owned(),
-                    });
-                };
-                // SAFETY: `load` decodes a fresh word, which no other holder
-                // owns.
-                vacant.insert(unsafe { Owned::from_value(Holding::new(), loaded) })
-            }
-        };
-        Ok((contexts, ty, value))
     }
 
     pub fn types(&self) -> &HashMap<String, Ty> {
         &self.types
     }
+}
 
-    /// Commit every context the page holds; the new head of each, in
-    /// identity order. A context the run never fetched is not touched.
-    pub fn commit(&self, rt: &AcvusRuntime) -> SpaceResult<Vec<(String, NodeHash)>> {
-        let mut held = std::mem::take(&mut *self.held.lock().expect("page"));
-        let mut ids: Vec<String> = held.keys().cloned().collect();
-        ids.sort();
-        let mut out = Vec::new();
-        for id in ids {
-            let ty = self
-                .types
-                .get(&id)
-                .ok_or_else(|| SpaceError::new(format!("@{id}: no type")))?;
-            let mut value = held.remove(&id).expect("listed");
-            // SAFETY: `commit` edits the value in place as `commit_nested`
-            // does and writes no word into it.
-            let head = self.space.commit(rt, &id, ty, unsafe { value.value_mut(acvus_extern::Holding::new()) })?;
-            out.push((id, head));
+/// The holder of `key` in `held`, loaded from `space` at the type `types`
+/// states for it when no run has fetched it. The parts of a `SpacePage` are
+/// passed apart, since the holder is lent while the compilation is read.
+fn loaded<'h>(
+    space: &Space,
+    types: &HashMap<String, Ty>,
+    held: &'h mut HashMap<String, Held>,
+    contexts: &Contexts,
+    key: &str,
+) -> Result<&'h mut Held, PageError> {
+    match held.entry(key.to_owned()) {
+        Entry::Occupied(held) => Ok(held.into_mut()),
+        Entry::Vacant(vacant) => {
+            let absent = || PageError::Absent {
+                key: key.to_owned(),
+            };
+            let ty = types.get(key).ok_or_else(absent)?;
+            let Some(value) = space.load(contexts.rt(), key, ty).map_err(PageError::Space)? else {
+                return Err(absent());
+            };
+            // SAFETY: `load` decodes a fresh word, which no other holder
+            // owns.
+            let value = unsafe { Owned::from_value(Holding::new(), value) };
+            Ok(vacant.insert(Held::new(value, Arc::new(ty.clone()))))
         }
-        Ok(out)
+    }
+}
+
+/// A page seeded with raw holders, and a commit through a runtime the
+/// caller names: the runtime's and its tooling's (RFC-0090 rule 6). A host
+/// opens a page with `of` and commits it with `commit_opened`.
+macro_rules! space_page_values {
+    ($v:vis) => {
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl SpacePage {
+            /// A page over `space` for the identities it holds, plus `seed`:
+            /// values for identities the space does not hold yet, or replaces.
+            $v fn new(
+                space: Arc<Space>,
+                seed: HashMap<String, (Ty, Owned<AcvusRuntime>)>,
+            ) -> SpaceResult<Self> {
+                let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
+                let mut held = HashMap::new();
+                for (id, (ty, value)) in seed {
+                    types.insert(id.clone(), ty.clone());
+                    held.insert(id, Held::new(value, Arc::new(ty)));
+                }
+                Ok(Self {
+                    space,
+                    types,
+                    held: Mutex::new(held),
+                    solved: None,
+                })
+            }
+
+            /// Commit every context the page holds; the new head of each, in
+            /// identity order. A context the run never fetched is not touched.
+            $v fn commit(&self, rt: &AcvusRuntime) -> SpaceResult<Vec<(String, NodeHash)>> {
+                let mut held = std::mem::take(&mut *self.held.lock().expect("page"));
+                let mut ids: Vec<String> = held.keys().cloned().collect();
+                ids.sort();
+                let mut out = Vec::new();
+                for id in ids {
+                    let ty = self
+                        .types
+                        .get(&id)
+                        .ok_or_else(|| SpaceError::new(format!("@{id}: no type")))?;
+                    let mut value = held.remove(&id).expect("listed").into_value();
+                    // SAFETY: `commit` edits the value in place as `commit_nested`
+                    // does and writes no word into it.
+                    let head = self.space.commit(rt, &id, ty, unsafe { value.value_mut(acvus_extern::Holding::new()) })?;
+                    out.push((id, head));
+                }
+                Ok(out)
+            }
+        }
+    };
+}
+tooling_vis!(space_page_values);
+
+impl SpacePage {
+    /// `commit` through the compilation the page was opened for by `of`.
+    pub fn commit_opened(&self) -> Result<Vec<(String, NodeHash)>, PageError> {
+        let Some(contexts) = &self.solved else {
+            return Err(PageError::Space(SpaceError::new(
+                "the page was not opened for a compilation".to_owned(),
+            )));
+        };
+        self.commit(contexts.rt()).map_err(PageError::Space)
     }
 }
 
@@ -862,27 +887,36 @@ impl Page for SpacePage {
     }
 }
 
-impl crate::journal::RuntimeContext for SpacePage {
-    fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>> {
-        if let Some(v) = self.held.lock().expect("page").remove(key) {
-            return Some(v);
+impl RuntimeContext for SpacePage {
+    fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Held> {
+        if let Some(held) = self.held.lock().expect("page").remove(key) {
+            return Some(held);
         }
         let ty = self.types.get(key)?;
         self.space
             .load(rt, key, ty)
             .unwrap_or_else(|e| panic!("context fetch: @{key}: {e}"))
-            // SAFETY: `load` decodes a fresh word, which no other holder
-            // owns.
-            .map(|value| unsafe { Owned::from_value(acvus_extern::Holding::new(), value) })
+            .map(|value| {
+                // SAFETY: `load` decodes a fresh word, which no other holder
+                // owns.
+                let value = unsafe { Owned::from_value(acvus_extern::Holding::new(), value) };
+                Held::new(value, Arc::new(ty.clone()))
+            })
     }
 
-    unsafe fn set(&self, key: &str, value: Owned<AcvusRuntime>) {
+    fn holds(&self, key: &str) -> bool {
+        self.held.lock().expect("page").contains_key(key)
+            || (self.types.contains_key(key) && self.space.head(key).is_some())
+    }
+
+    fn set(&self, key: &str, held: Held) {
         self.held
             .lock()
             .expect("page")
-            .insert(key.to_string(), value);
+            .insert(key.to_string(), held);
     }
 
+    #[cfg(feature = "tooling")]
     fn take_writes(&self) -> Vec<crate::journal::ContextWrite> {
         Vec::new()
     }

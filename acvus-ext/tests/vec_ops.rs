@@ -51,7 +51,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: Some(entry_qref),
+        entries: vec![entry_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -103,7 +103,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
     let shared = InterpreterContext::new(interner, exec_fns, executor);
     let page = InMemoryContext::new(HashMap::new());
     let mut interp = Interpreter::new(shared, entry_qref, page);
-    interp.execute().await
+    interp.execute().await.expect("the page holds every context the run fetches first")
 }
 
 /// Every intent is asked of both levels: `None` runs only what a program

@@ -70,7 +70,7 @@ fn compile_analysis(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
 
     let ext = extract::extract(interner, &graph);

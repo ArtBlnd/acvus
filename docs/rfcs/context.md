@@ -63,8 +63,11 @@ Status: Accepted
    targets a variable, a parameter, or the storage a reference names.
 2. **The page.** The page — the host's store of contexts — is touched at four
    places and nowhere else:
-   - **Entry.** Every context the body names is fetched into its variable:
-     `Fetch { dst, context }`.
+   - **Entry.** Every context the body names is fetched into its variable,
+     `Fetch { dst, context }`, unless every path assigns it whole before
+     touching it. A call whose summary names it touches it, and a callee's
+     assignment is not the body's. Such a variable starts unset, as a `let`
+     with no value does, and RFC-0018's rules hold it until the assignment.
    - **Exit.** On every return, each such variable is committed back:
      `Commit { context, value }`, where `value` is a `Take` of the variable.
    - **Around a call.** A call whose summary touches `@x` is bracketed:
@@ -76,8 +79,9 @@ Status: Accepted
    A context the body does not name is not fetched; a context touched only by
    callees is fetched and committed by the callees. `Fetch` and `Commit` carry
    no path: the page stores whole values, and a field of a context is a field
-   of the variable. A fetch of a context the page does not hold is a run-time
-   failure (RFC-0044).
+   of the variable. The contexts a run fetches before assigning are known
+   before it starts, and a run whose page does not hold one is refused before
+   it starts (RFC-0090); no fetch reaches an absent context.
 3. **Moves.** A context left moved out at an exit is reported at the move the
    source wrote, once per move, as `context @x is moved out here and not
    assigned again before the run ends`. A context touched while a spawn that

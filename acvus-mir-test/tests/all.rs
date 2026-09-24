@@ -10,6 +10,7 @@ mod cast;
 mod code_motion;
 mod consumer_task;
 mod context_move;
+mod context_solved;
 mod context_variable;
 mod cyclic;
 mod dataflow_scale;

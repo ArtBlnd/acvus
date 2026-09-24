@@ -31,7 +31,8 @@ use parking_lot::Mutex;
 
 use crate::regs::Store;
 use crate::runtime::AcvusRuntime;
-use crate::value::{HandleValue, Value};
+use crate::executor::{Handle, JobId};
+use crate::value::Value;
 
 #[derive(Default)]
 pub struct Flight {
@@ -179,7 +180,8 @@ impl Unevaluated {
 /// What a `Handle` register holds: the executor's handle and the task's
 /// count in the frame that spawned it.
 pub(crate) struct Launched {
-    pub(crate) handle: HandleValue,
+    pub(crate) handle: Handle,
+    pub(crate) job: JobId,
     pub(crate) unevaluated: Unevaluated,
 }
 

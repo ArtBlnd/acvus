@@ -92,6 +92,7 @@ async fn spawn_eval_basic() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
+            fetched_first: Vec::new(),
         }
     };
 
@@ -142,6 +143,7 @@ async fn spawn_eval_basic() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
+            fetched_first: Vec::new(),
         }
     };
 
@@ -166,7 +168,7 @@ async fn spawn_eval_basic() {
     let shared = make_context(&interner, functions);
     let page = empty_page();
     let mut interp = Interpreter::new(shared, entry_id, page);
-    let result = interp.execute().await;
+    let result = interp.execute().await.expect("the page holds every context the run fetches first");
 
     assert_eq!(result.as_int(), 42);
 }
@@ -218,6 +220,7 @@ async fn spawn_eval_multi_args() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
+            fetched_first: Vec::new(),
         }
     };
 
@@ -273,6 +276,7 @@ async fn spawn_eval_multi_args() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
+            fetched_first: Vec::new(),
         }
     };
 
@@ -297,7 +301,7 @@ async fn spawn_eval_multi_args() {
     let shared = make_context(&interner, functions);
     let page = empty_page();
     let mut interp = Interpreter::new(shared, entry_id, page);
-    let result = interp.execute().await;
+    let result = interp.execute().await.expect("the page holds every context the run fetches first");
 
     assert_eq!(result.as_int(), 42);
 }

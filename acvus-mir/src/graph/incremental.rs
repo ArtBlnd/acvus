@@ -17,7 +17,7 @@ use super::extract::{ParsedSource, extract_one};
 use super::infer::{
     FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
 };
-use super::lower::lower_one;
+use super::lower::{close_fetched_first, lower_one};
 use super::optimize::{Opt, optimize};
 use super::types::*;
 
@@ -59,9 +59,9 @@ pub struct IncrementalGraph {
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
     contexts: FxHashMap<QualifiedRef, Context>,
-    /// The same fact `CompilationGraph::entry` carries, for a graph built by
-    /// accumulation: unset until a host says which body it starts.
-    entry: Option<QualifiedRef>,
+    /// The same fact `CompilationGraph::entries` carries, for a graph built
+    /// by accumulation: empty until a host says which bodies it starts.
+    entries: Vec<QualifiedRef>,
 
     // -- Phase 0: Extract cache --
     extract_cache: FxHashMap<QualifiedRef, ExtractEntry>,
@@ -92,7 +92,7 @@ impl IncrementalGraph {
             contexts,
             types,
             bindings,
-            entry,
+            entries,
         } = graph;
         let mut this = Self {
             interner: interner.clone(),
@@ -101,7 +101,7 @@ impl IncrementalGraph {
             bindings,
             functions: functions.iter().map(|f| (f.qref, f.clone())).collect(),
             contexts: contexts.iter().map(|c| (c.qref, c.clone())).collect(),
-            entry,
+            entries,
             extract_cache: FxHashMap::default(),
             call_edges: FxHashMap::default(),
             reverse_edges: FxHashMap::default(),
@@ -366,7 +366,7 @@ impl IncrementalGraph {
         Some(infer_scc(
             &self.interner,
             &scc_order[at],
-            self.entry,
+            &self.entries,
             &self.bindings,
             &fn_by_id,
             &parsed_for_scc,
@@ -511,7 +511,7 @@ impl IncrementalGraph {
             let result = infer_scc(
                 &self.interner,
                 scc,
-                self.entry,
+                &self.entries,
                 &self.bindings,
                 &fn_by_id,
                 &parsed_owned,
@@ -601,7 +601,7 @@ impl IncrementalGraph {
             let result = infer_scc(
                 &self.interner,
                 scc,
-                self.entry,
+                &self.entries,
                 &self.bindings,
                 &fn_by_id,
                 &parsed_for_scc,
@@ -702,12 +702,13 @@ impl IncrementalGraph {
 
         // A body lowering refused is not optimized, as `acvus check` does not
         // optimize a graph a stage before it refused.
-        let modules: FxHashMap<QualifiedRef, MirModule> = self
+        let mut modules: FxHashMap<QualifiedRef, MirModule> = self
             .lower_cache
             .iter()
             .filter(|(_, entry)| entry.refusals.is_empty())
             .map(|(&qref, entry)| (qref, entry.module.clone()))
             .collect();
+        close_fetched_first(&mut modules);
         let laws = LawTable::of(self.functions.values());
         let result = optimize(&self.interner, &laws, modules, Opt::Full);
 

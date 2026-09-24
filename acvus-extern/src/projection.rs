@@ -96,6 +96,7 @@ pub trait Projected<'a, Rt>: Sized
 where
     Rt: Runtime,
 {
+    type Loan: Loan;
     type Table: Clone + Send + Sync + 'static;
 
     fn table(at: ArgAt<'_>) -> Self::Table;

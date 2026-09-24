@@ -165,183 +165,177 @@ expression: raw
      0 |   assign $order = r0
      1 |   r1 = fetch @item_count
      2 |   assign @item_count = r1
-     3 |   r2 = fetch @total_out
-     4 |   assign @total_out = r2
-     5 |   r3 = fetch @shipping
-     6 |   assign @shipping = r3
-     7 |   r4 = fetch @tax_rate
-     8 |   assign @tax_rate = r4
-     9 |   r5 = fetch @default_ship
-    10 |   assign @default_ship = r5
-    11 |   r6 = fetch @receipt_out
-    12 |   assign @receipt_out = r6
-    13 |   r7 = fetch @discount_rate
-    14 |   assign @discount_rate = r7
-    15 |   r8 = fetch @customer
-    16 |   assign @customer = r8
-    17 |   r9 = fetch @free_ship_min
-    18 |   assign @free_ship_min = r9
-    19 |   r10 = take @item_count
-    21 |   r11 = r10 * 100 (r12)
-    22 |   assign subtotal = r11
-    23 |   r13 = take subtotal
-    24 |   r14 = take @discount_rate
-    25 |   r15 = call #0(r13, r14)
-    26 |   assign discount = r15
-    27 |   r16 = take subtotal
-    28 |   r17 = take discount
-    29 |   r18 = r16 - r17
-    30 |   r19 = take @tax_rate
-    31 |   r20 = call #1(r18, r19)
-    32 |   assign tax = r20
-    33 |   r21 = take subtotal
-    34 |   r22 = take discount
-    35 |   r23 = r21 - r22
-    36 |   r24 = take tax
-    37 |   r25 = r23 + r24
-    38 |   assign total = r25
-    39 |   r26 = take total
-    40 |   r27 = take @free_ship_min
-    41 |   r28 = r26 > r27
-    42 |   r29 = test r28 == true
-    43 |   if r29 -> L0 else L1 join L1
-    44 | L0:
-    46 |   assign @shipping = 0 (r30)
-    47 |   jump L1
-    48 | L1:
-    50 |   r31 = take total
-    51 |   r32 = take @free_ship_min
-    52 |   r33 = r31 <= r32
-    53 |   r34 = test r33 == true
-    54 |   if r34 -> L2 else L3 join L3
-    55 | L2:
-    56 |   r35 = take @default_ship
-    57 |   assign @shipping = r35
-    58 |   jump L3
-    59 | L3:
-    61 |   r36 = take total
-    62 |   r37 = take @shipping
-    63 |   r38 = r36 + r37
-    64 |   assign final_total = r38
-    65 |   r39 = take @customer
-    66 |   r40 = take subtotal
-    67 |   r41 = take discount
-    68 |   r42 = take tax
-    69 |   r43 = take @shipping
-    70 |   r44 = take final_total
-    71 |   r45 = call #2(r39, r40, r41, r42, r43, r44)
-    72 |   assign receipt = r45
-    73 |   r46 = take final_total
-    74 |   assign @total_out = r46
-    75 |   r47 = take receipt
-    76 |   assign @receipt_out = r47
-    77 |   r48 = take receipt
-    78 |   r49 = take $order
-    79 |   r50 = call #3(r48) [r49 -> r51]
-    80 |   assign $order = r51
-    81 |   r52 = take final_total
-    82 |   r53 = take @item_count
-    83 |   commit @item_count = r53
-    84 |   r54 = take @total_out
-    85 |   commit @total_out = r54
-    86 |   r55 = take @shipping
-    87 |   commit @shipping = r55
-    88 |   r56 = take @tax_rate
-    89 |   commit @tax_rate = r56
-    90 |   r57 = take @default_ship
-    91 |   commit @default_ship = r57
-    92 |   r58 = take @receipt_out
-    93 |   commit @receipt_out = r58
-    94 |   r59 = take @discount_rate
-    95 |   commit @discount_rate = r59
-    96 |   r60 = take @customer
-    97 |   commit @customer = r60
-    98 |   r61 = take @free_ship_min
-    99 |   commit @free_ship_min = r61
-   100 |   r62 = take $order
-   101 |   return r52 [r62]
+     3 |   r2 = fetch @shipping
+     4 |   assign @shipping = r2
+     5 |   r3 = fetch @tax_rate
+     6 |   assign @tax_rate = r3
+     7 |   r4 = fetch @default_ship
+     8 |   assign @default_ship = r4
+     9 |   r5 = fetch @discount_rate
+    10 |   assign @discount_rate = r5
+    11 |   r6 = fetch @customer
+    12 |   assign @customer = r6
+    13 |   r7 = fetch @free_ship_min
+    14 |   assign @free_ship_min = r7
+    15 |   r8 = take @item_count
+    17 |   r9 = r8 * 100 (r10)
+    18 |   assign subtotal = r9
+    19 |   r11 = take subtotal
+    20 |   r12 = take @discount_rate
+    21 |   r13 = call #0(r11, r12)
+    22 |   assign discount = r13
+    23 |   r14 = take subtotal
+    24 |   r15 = take discount
+    25 |   r16 = r14 - r15
+    26 |   r17 = take @tax_rate
+    27 |   r18 = call #1(r16, r17)
+    28 |   assign tax = r18
+    29 |   r19 = take subtotal
+    30 |   r20 = take discount
+    31 |   r21 = r19 - r20
+    32 |   r22 = take tax
+    33 |   r23 = r21 + r22
+    34 |   assign total = r23
+    35 |   r24 = take total
+    36 |   r25 = take @free_ship_min
+    37 |   r26 = r24 > r25
+    38 |   r27 = test r26 == true
+    39 |   if r27 -> L0 else L1 join L1
+    40 | L0:
+    42 |   assign @shipping = 0 (r28)
+    43 |   jump L1
+    44 | L1:
+    46 |   r29 = take total
+    47 |   r30 = take @free_ship_min
+    48 |   r31 = r29 <= r30
+    49 |   r32 = test r31 == true
+    50 |   if r32 -> L2 else L3 join L3
+    51 | L2:
+    52 |   r33 = take @default_ship
+    53 |   assign @shipping = r33
+    54 |   jump L3
+    55 | L3:
+    57 |   r34 = take total
+    58 |   r35 = take @shipping
+    59 |   r36 = r34 + r35
+    60 |   assign final_total = r36
+    61 |   r37 = take @customer
+    62 |   r38 = take subtotal
+    63 |   r39 = take discount
+    64 |   r40 = take tax
+    65 |   r41 = take @shipping
+    66 |   r42 = take final_total
+    67 |   r43 = call #2(r37, r38, r39, r40, r41, r42)
+    68 |   assign receipt = r43
+    69 |   r44 = take final_total
+    70 |   assign @total_out = r44
+    71 |   r45 = take receipt
+    72 |   assign @receipt_out = r45
+    73 |   r46 = take receipt
+    74 |   r47 = take $order
+    75 |   r48 = call #3(r46) [r47 -> r49]
+    76 |   assign $order = r49
+    77 |   r50 = take final_total
+    78 |   r51 = take @item_count
+    79 |   commit @item_count = r51
+    80 |   r52 = take @total_out
+    81 |   commit @total_out = r52
+    82 |   r53 = take @shipping
+    83 |   commit @shipping = r53
+    84 |   r54 = take @tax_rate
+    85 |   commit @tax_rate = r54
+    86 |   r55 = take @default_ship
+    87 |   commit @default_ship = r55
+    88 |   r56 = take @receipt_out
+    89 |   commit @receipt_out = r56
+    90 |   r57 = take @discount_rate
+    91 |   commit @discount_rate = r57
+    92 |   r58 = take @customer
+    93 |   commit @customer = r58
+    94 |   r59 = take @free_ship_min
+    95 |   commit @free_ship_min = r59
+    96 |   r60 = take $order
+    97 |   return r50 [r60]
 
     ; orders: what the body's yielded Order waits for
-    ;   r62(entry)
+    ;   r60(entry)
 
     ; r0 (v1) : Order
     ; r1 (@item_count) : i64
-    ; r2 (@total_out) : i64
-    ; r3 (@shipping) : i64
-    ; r4 (@tax_rate) : i64
-    ; r5 (@default_ship) : i64
-    ; r6 (@receipt_out) : String
-    ; r7 (@discount_rate) : i64
-    ; r8 (@customer) : String
-    ; r9 (@free_ship_min) : i64
-    ; r10 (@item_count) : i64
-    ; r11 (v23) : i64
-    ; r12 (v22) : i64
-    ; r13 (subtotal) : i64
-    ; r14 (@discount_rate) : i64
-    ; r15 (calc_discount(...)) : i64
-    ; r16 (subtotal) : i64
-    ; r17 (discount) : i64
-    ; r18 (v31) : i64
-    ; r19 (@tax_rate) : i64
-    ; r20 (calc_tax(...)) : i64
-    ; r21 (subtotal) : i64
-    ; r22 (discount) : i64
-    ; r23 (v37) : i64
-    ; r24 (tax) : i64
-    ; r25 (v39) : i64
-    ; r26 (total) : i64
-    ; r27 (@free_ship_min) : i64
-    ; r28 (v43) : Bool
-    ; r29 (v44) : Bool
-    ; r30 (v45) : i64
-    ; r31 (total) : i64
-    ; r32 (@free_ship_min) : i64
-    ; r33 (v49) : Bool
-    ; r34 (v50) : Bool
-    ; r35 (@default_ship) : i64
-    ; r36 (total) : i64
-    ; r37 (@shipping) : i64
-    ; r38 (v55) : i64
-    ; r39 (@customer) : String
-    ; r40 (subtotal) : i64
-    ; r41 (discount) : i64
-    ; r42 (tax) : i64
-    ; r43 (@shipping) : i64
+    ; r2 (@shipping) : i64
+    ; r3 (@tax_rate) : i64
+    ; r4 (@default_ship) : i64
+    ; r5 (@discount_rate) : i64
+    ; r6 (@customer) : String
+    ; r7 (@free_ship_min) : i64
+    ; r8 (@item_count) : i64
+    ; r9 (v23) : i64
+    ; r10 (v22) : i64
+    ; r11 (subtotal) : i64
+    ; r12 (@discount_rate) : i64
+    ; r13 (calc_discount(...)) : i64
+    ; r14 (subtotal) : i64
+    ; r15 (discount) : i64
+    ; r16 (v31) : i64
+    ; r17 (@tax_rate) : i64
+    ; r18 (calc_tax(...)) : i64
+    ; r19 (subtotal) : i64
+    ; r20 (discount) : i64
+    ; r21 (v37) : i64
+    ; r22 (tax) : i64
+    ; r23 (v39) : i64
+    ; r24 (total) : i64
+    ; r25 (@free_ship_min) : i64
+    ; r26 (v43) : Bool
+    ; r27 (v44) : Bool
+    ; r28 (v45) : i64
+    ; r29 (total) : i64
+    ; r30 (@free_ship_min) : i64
+    ; r31 (v49) : Bool
+    ; r32 (v50) : Bool
+    ; r33 (@default_ship) : i64
+    ; r34 (total) : i64
+    ; r35 (@shipping) : i64
+    ; r36 (v55) : i64
+    ; r37 (@customer) : String
+    ; r38 (subtotal) : i64
+    ; r39 (discount) : i64
+    ; r40 (tax) : i64
+    ; r41 (@shipping) : i64
+    ; r42 (final_total) : i64
+    ; r43 (format_receipt(...)) : String
     ; r44 (final_total) : i64
-    ; r45 (format_receipt(...)) : String
-    ; r46 (final_total) : i64
-    ; r47 (receipt) : String
-    ; r48 (receipt) : String
-    ; r49 (v69) : Order
-    ; r50 (send_email(...)) : i64
-    ; r51 (v70) : Order
-    ; r52 (final_total) : i64
-    ; r53 (v72) : i64
-    ; r54 (v73) : i64
-    ; r55 (v74) : i64
-    ; r56 (v75) : i64
-    ; r57 (v76) : i64
-    ; r58 (v77) : String
-    ; r59 (v78) : i64
-    ; r60 (v79) : String
-    ; r61 (v80) : i64
-    ; r62 (v81) : Order
-    ; r63 (discount) : i64
-    ; r64 (final_total) : i64
-    ; r65 (subtotal) : i64
-    ; r66 (@total_out) : i64
-    ; r67 (@default_ship) : i64
-    ; r68 (@customer) : String
-    ; r69 (@item_count) : i64
-    ; r70 (@tax_rate) : i64
-    ; r71 (tax) : i64
-    ; r72 (@discount_rate) : i64
-    ; r73 (total) : i64
-    ; r74 ($order) : Order
-    ; r75 (v46) : Unit
-    ; r76 (v52) : Unit
-    ; r77 (receipt) : String
-    ; r78 (@shipping) : i64
-    ; r79 (@receipt_out) : String
-    ; r80 (@free_ship_min) : i64
+    ; r45 (receipt) : String
+    ; r46 (receipt) : String
+    ; r47 (v69) : Order
+    ; r48 (send_email(...)) : i64
+    ; r49 (v70) : Order
+    ; r50 (final_total) : i64
+    ; r51 (v72) : i64
+    ; r52 (v73) : i64
+    ; r53 (v74) : i64
+    ; r54 (v75) : i64
+    ; r55 (v76) : i64
+    ; r56 (v77) : String
+    ; r57 (v78) : i64
+    ; r58 (v79) : String
+    ; r59 (v80) : i64
+    ; r60 (v81) : Order
+    ; r61 (final_total) : i64
+    ; r62 (discount) : i64
+    ; r63 (@shipping) : i64
+    ; r64 (subtotal) : i64
+    ; r65 (@total_out) : i64
+    ; r66 (@default_ship) : i64
+    ; r67 (@customer) : String
+    ; r68 (@item_count) : i64
+    ; r69 (@tax_rate) : i64
+    ; r70 (tax) : i64
+    ; r71 (@discount_rate) : i64
+    ; r72 (total) : i64
+    ; r73 ($order) : Order
+    ; r74 (v46) : Unit
+    ; r75 (v52) : Unit
+    ; r76 (receipt) : String
+    ; r77 (@receipt_out) : String
+    ; r78 (@free_ship_min) : i64

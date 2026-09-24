@@ -50,7 +50,7 @@ fn infer_effects(i: &Interner, functions: Vec<Function>) -> FxHashMap<String, Ef
         contexts: Freeze::new(vec![]),
         types: Freeze::new(acvus_mir::ty::TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(i, &graph, &ext);

@@ -3,46 +3,44 @@ source: acvus-mir-test/tests/optimized.rs
 expression: opt
 ---
 === main ===
-     0 |   r0 = fetch @output
-     1 |   r1 = fetch @a
-     2 |   r2 = fetch @scale
-     3 |   r3 = fetch @b
-     4 |   r4 = r1 + r3
-     5 |   r5 = r4 * r2
-     6 |   r6 = r5 + r1
-     7 |   commit @output = r6
-     8 |   commit @a = r1
-     9 |   commit @scale = r2
-    10 |   commit @b = r3
-    11 |   return r6
+     0 |   r0 = fetch @a
+     1 |   r1 = fetch @scale
+     2 |   r2 = fetch @b
+     3 |   r3 = r0 + r2
+     4 |   r4 = r3 * r1
+     5 |   r5 = r4 + r0
+     6 |   commit @output = r5
+     7 |   commit @a = r0
+     8 |   commit @scale = r1
+     9 |   commit @b = r2
+    10 |   return r5
 
-    ; r0 (@output) : i64
-    ; r1 (@a) : i64
-    ; r2 (@scale) : i64
-    ; r3 (@b) : i64
-    ; r4 (v11) : i64
-    ; r5 (v15) : i64
-    ; r6 (v19) : i64
-    ; r7 (@a) : i64
-    ; r8 (v22) : i64
-    ; r9 (v25) : i64
-    ; r10 (@a) : i64
-    ; r11 (v28) : i64
-    ; r12 (sum) : i64
-    ; r13 (v30) : i64
-    ; r14 (scaled) : i64
-    ; r15 (@scale) : i64
+    ; r0 (@a) : i64
+    ; r1 (@scale) : i64
+    ; r2 (@b) : i64
+    ; r3 (v11) : i64
+    ; r4 (v15) : i64
+    ; r5 (v19) : i64
+    ; r6 (@a) : i64
+    ; r7 (v22) : i64
+    ; r8 (v25) : i64
+    ; r9 (@a) : i64
+    ; r10 (v28) : i64
+    ; r11 (sum) : i64
+    ; r12 (v30) : i64
+    ; r13 (scaled) : i64
+    ; r14 (@scale) : i64
+    ; r15 (@output) : i64
     ; r16 (@output) : i64
-    ; r17 (@output) : i64
-    ; r18 (v23) : i64
-    ; r19 (@a) : i64
-    ; r20 (v21) : i64
-    ; r21 (v24) : i64
-    ; r22 (@scale) : i64
-    ; r23 (v27) : i64
-    ; r24 (v26) : i64
-    ; r25 (@b) : i64
-    ; r26 (v29) : i64
-    ; r27 (@b) : i64
-    ; r28 (sum) : i64
-    ; r29 (scaled) : i64
+    ; r17 (v23) : i64
+    ; r18 (@a) : i64
+    ; r19 (v21) : i64
+    ; r20 (v24) : i64
+    ; r21 (@scale) : i64
+    ; r22 (v27) : i64
+    ; r23 (v26) : i64
+    ; r24 (@b) : i64
+    ; r25 (v29) : i64
+    ; r26 (@b) : i64
+    ; r27 (sum) : i64
+    ; r28 (scaled) : i64

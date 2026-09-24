@@ -94,7 +94,7 @@ async fn run_parsed(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: Some(entry_qref),
+        entries: vec![entry_qref],
     };
 
     let ext = extract::extract(interner, &graph);
@@ -151,10 +151,10 @@ async fn run_parsed(
         })
         .collect();
     exec_fns.extend(prepared);
-    let snapshot: HashMap<String, Owned<AcvusRuntime>> = context
+    let snapshot: HashMap<String, (Ty, Owned<AcvusRuntime>)> = context
         .into_iter()
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        .map(|(k, (_, v))| (interner.resolve(k).to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), v) }))
+        .map(|(k, (ty, v))| (interner.resolve(k).to_string(), (ty, unsafe { Owned::from_value(acvus_extern::Holding::new(), v) })))
         .collect();
 
     let executor = Arc::new(SequentialExecutor);
@@ -162,7 +162,7 @@ async fn run_parsed(
         InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
     let page = InMemoryContext::new(snapshot);
     let mut interp = Interpreter::new(shared, entry_qref, page);
-    interp.execute().await
+    interp.execute().await.expect("the page holds every context the run fetches first")
 }
 
 fn assert_str(v: &Value, expected: &str) {

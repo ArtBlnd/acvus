@@ -4,13 +4,11 @@ expression: ir
 ---
 === main ===
      0 |   r0 = undef
-     1 |   r1 = fetch @x
-     3 |   commit @x = 42 (r2)
-     4 |   return 42 (r2)
+     2 |   commit @x = 42 (r1)
+     3 |   return 42 (r1)
 
     ; r0 (v6) : i64
-    ; r1 (@x) : i64
-    ; r2 (v3) : i64
-    ; r3 (@x) : i64
-    ; r4 (v5) : i64
-    ; r5 (@x) : i64
+    ; r1 (v3) : i64
+    ; r2 (@x) : i64
+    ; r3 (v5) : i64
+    ; r4 (@x) : i64

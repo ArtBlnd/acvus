@@ -557,6 +557,7 @@ fn hand_built(trip_ty: Ty, entries: ExitEntries) -> MirModule {
         closures: FxHashMap::default(),
         ret: Ty::U64,
         flows: acvus_mir::ty::Flows::Every,
+        fetched_first: Vec::new(),
     }
 }
 

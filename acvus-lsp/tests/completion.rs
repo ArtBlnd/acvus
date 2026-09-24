@@ -32,7 +32,7 @@ fn environment(
         contexts: Freeze::new(contexts),
         types: Freeze::new(types),
         bindings: Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     }
 }
 

@@ -2,21 +2,85 @@
 //!
 //! `Context` is a single snapshot of context state. Read/write via `&self`
 //! (interior mutability via RwLock). A context place is a storage like a
-//! local (RFC-0018). The page remembers which keys a run assigned, and
-//! `take_writes` hands their final values out.
+//! local (RFC-0018). A host reads what a run wrote through the page's typed
+//! methods; the runtime's own tooling, built with the `tooling` feature,
+//! also drains the raw values a run assigned (RFC-0090 rule 6).
 
-use std::collections::{BTreeSet, HashMap};
-use std::sync::{Mutex, RwLock};
+#[cfg(feature = "tooling")]
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::sync::Arc;
+#[cfg(feature = "tooling")]
+use std::sync::Mutex;
+use std::sync::RwLock;
 
-use acvus_extern::{ArgAt, Borrowed, Crossing, Declared, Holding, OneValue, Owned, Project};
+use acvus_extern::{Borrows, Crossing, Declared, Holding, Lendable, OneValue, Owned, Shared};
 use acvus_mir::ty::Ty;
 
 use crate::host::{Contexts, Page, PageError, held_as};
 use crate::runtime::AcvusRuntime;
 
+// -- Held --------------------------------------------------------------
+
+/// One context's value as a page keeps it: the runtime's word and the type
+/// the word was crossed at. Neither is readable outside the runtime, so a
+/// storage moves a holder whole and never reads inside it (RFC-0090 rule 6).
+/// A run reads a holder only at the type it carries: a storage that gives
+/// back another key's holder, or another compilation's, is refused at the
+/// fetch before the word is read.
+pub struct Held {
+    value: Owned<AcvusRuntime>,
+    ty: Arc<Ty>,
+}
+
+impl Held {
+    pub(crate) fn new(value: Owned<AcvusRuntime>, ty: Arc<Ty>) -> Self {
+        Held { value, ty }
+    }
+
+    pub(crate) fn ty(&self) -> &Ty {
+        &self.ty
+    }
+
+    /// Lend the value to `f` at the type the holder carries, as the page's
+    /// `key`.
+    pub(crate) fn lend<Q, O, F>(&mut self, contexts: &Contexts, key: &str, f: F) -> Result<O, PageError>
+    where
+        F: Borrows<AcvusRuntime, Q, O>,
+    {
+        let interner = &contexts.rt().shared.interner;
+        // SAFETY: `&mut self` names the holder exclusively for the call, and
+        // a lent parameter writes inside the storage the word names or the
+        // word in place, never another holder's.
+        let word = unsafe { self.value.value_mut(Holding::new()) };
+        // SAFETY: the word was crossed at the type the holder carries, and
+        // `word` is its only live name for the call.
+        unsafe { acvus_extern::lend(contexts.rt(), interner, word, &self.ty, f) }.map_err(|asked| {
+            PageError::Mismatched {
+                key: key.to_owned(),
+                held: self.ty.display(interner).to_string(),
+                asked: asked.display(interner).to_string(),
+            }
+        })
+    }
+}
+
+macro_rules! held_values {
+    ($v:vis) => {
+        impl Held {
+            /// The holder's value, moved out: the runtime's and its tooling's.
+            $v fn into_value(self) -> Owned<AcvusRuntime> {
+                self.value
+            }
+        }
+    };
+}
+tooling_vis!(held_values);
+
 // -- ContextWrite -----------------------------------------------------
 
 /// The final value of a context a run assigned.
+#[cfg(feature = "tooling")]
 #[derive(Debug)]
 pub struct ContextWrite {
     pub key: String,
@@ -25,16 +89,19 @@ pub struct ContextWrite {
 
 // -- Context trait ---------------------------------------------------
 
-/// Single snapshot of context state. Read/write via `&self`.
+/// A storage a run's contexts are fetched from and committed to. It moves
+/// whole holders, which it cannot open (RFC-0090 rule 6): a wrong
+/// implementation loses or misplaces a holder, which the run refuses when it
+/// fetches, and never makes the run read a value at another type.
 pub trait RuntimeContext: Send + Sync {
-    /// Move the whole value out; the key is unset until `set`. `rt` is the
-    /// run the page belongs to, which a page that loads a value reads it with.
-    fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>>;
-    /// # Safety
-    /// `value` was crossed at the type the checker settled for `key`, which
-    /// a typed page reads it back at (`Page::held_type`).
-    unsafe fn set(&self, key: &str, value: Owned<AcvusRuntime>);
+    /// Move the holder out; the key is unset until `set`. `rt` is the run
+    /// the page belongs to, which a page that loads a value decodes it with.
+    fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Held>;
+    fn set(&self, key: &str, held: Held);
+    /// Whether `take` of `key` would give a holder.
+    fn holds(&self, key: &str) -> bool;
     /// The final value of every key `set` since the last drain, moved out.
+    #[cfg(feature = "tooling")]
     fn take_writes(&self) -> Vec<ContextWrite>;
 }
 
@@ -43,125 +110,142 @@ pub trait RuntimeContext: Send + Sync {
 /// In-memory Context backed by RwLock<HashMap>. No persistence.
 /// Suitable for tests and the sequential executor.
 pub struct InMemoryContext {
-    data: RwLock<HashMap<String, Owned<AcvusRuntime>>>,
+    data: RwLock<HashMap<String, Held>>,
+    #[cfg(feature = "tooling")]
     assigned: Mutex<BTreeSet<String>>,
-    declared: Option<Contexts>,
+    solved: Option<Contexts>,
 }
 
 impl InMemoryContext {
-    pub fn new(initial: HashMap<String, Owned<AcvusRuntime>>) -> Self {
-        Self {
-            data: RwLock::new(initial),
-            assigned: Mutex::new(BTreeSet::new()),
-            declared: None,
-        }
-    }
-
     pub fn empty() -> Self {
-        Self::new(HashMap::new())
+        Self::holding(HashMap::new(), None)
     }
 
     pub fn of(contexts: &Contexts) -> Self {
+        Self::holding(HashMap::new(), Some(contexts.clone()))
+    }
+
+    fn holding(data: HashMap<String, Held>, solved: Option<Contexts>) -> Self {
         Self {
-            data: RwLock::new(HashMap::new()),
+            data: RwLock::new(data),
+            #[cfg(feature = "tooling")]
             assigned: Mutex::new(BTreeSet::new()),
-            declared: Some(contexts.clone()),
+            solved,
         }
     }
 
-    pub fn read<T>(&mut self, key: &str) -> Result<<T as Borrowed>::Ref<'_>, PageError>
+    /// Lend `key`'s value to `f`, whose parameter crosses as a handler's
+    /// shared one does (RFC-0090 rule 3).
+    pub fn with<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, PageError>
     where
-        T: Declared + Project<AcvusRuntime>,
+        F: Borrows<AcvusRuntime, Q, O>,
+        F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
-        let contexts = declared(&self.declared, key)?;
-        let interner = &contexts.rt().shared.interner;
-        let ty = held_as::<T>(interner, key, contexts.settled().get(key))?;
-        let data = self.data.get_mut().expect("page");
-        let Some(value) = data.get(key) else {
+        let contexts = in_graph(&self.solved, key)?;
+        let Some(held) = self.data.get_mut().expect("page").get_mut(key) else {
             return Err(PageError::Absent {
                 key: key.to_owned(),
             });
         };
-        let table = T::table(ArgAt { interner, ty });
-        // SAFETY: the page holds `key` at `ty`, which is `T`'s, and a value
-        // enters the page only at the type it holds the key at.
-        Ok(unsafe { T::project(contexts.rt(), value, &table) })
+        held.lend(contexts, key, f)
     }
 
-    pub fn update<T, F, U>(&mut self, key: &str, f: F) -> Result<U, PageError>
+    /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
+    /// handler's does, shared or exclusive.
+    pub fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, PageError>
     where
-        T: Declared + Project<AcvusRuntime>,
-        F: FnOnce(<T as Borrowed>::Mut<'_>) -> U,
+        F: Borrows<AcvusRuntime, Q, O>,
     {
-        let contexts = declared(&self.declared, key)?;
-        let interner = &contexts.rt().shared.interner;
-        let ty = held_as::<T>(interner, key, contexts.settled().get(key))?;
-        let data = self.data.get_mut().expect("page");
-        let Some(value) = data.get_mut(key) else {
+        let contexts = in_graph(&self.solved, key)?;
+        let Some(held) = self.data.get_mut().expect("page").get_mut(key) else {
             return Err(PageError::Absent {
                 key: key.to_owned(),
             });
         };
-        let table = T::table(ArgAt { interner, ty });
-        // SAFETY: `&mut self` names the value exclusively, and a projection
-        // writes inside the storage the word names, never the word itself.
-        let word = unsafe { value.value_mut(Holding::new()) };
-        // SAFETY: as `read`, exclusively.
-        Ok(f(unsafe { T::project_mut(contexts.rt(), word, &table) }))
+        held.lend(contexts, key, f)
     }
 
     pub fn insert<T>(&mut self, key: &str, value: T) -> Result<(), PageError>
     where
         T: Declared + OneValue<AcvusRuntime>,
     {
-        let contexts = declared(&self.declared, key)?;
-        let interner = &contexts.rt().shared.interner;
-        held_as::<T>(interner, key, contexts.settled().get(key))?;
+        let contexts = in_graph(&self.solved, key)?;
+        let ty = held_as::<T>(&contexts.rt().shared.interner, key, contexts.solved().get(key))?;
         // SAFETY: `value` crosses at `T`, the type the page holds `key` at.
-        let held = Owned::erased(unsafe { Crossing::new(contexts.rt()) }, value);
+        let value = Owned::erased(unsafe { Crossing::new(contexts.rt()) }, value);
         self.data
             .get_mut()
             .expect("page")
-            .insert(key.to_owned(), held);
+            .insert(key.to_owned(), Held::new(value, Arc::new(ty.clone())));
         Ok(())
     }
 }
 
-fn declared<'c>(declared: &'c Option<Contexts>, key: &str) -> Result<&'c Contexts, PageError> {
-    let Some(contexts) = declared else {
-        return Err(PageError::Undeclared {
-            key: key.to_owned(),
-        });
+/// A page seeded with raw holders, each at the type the tooling states for
+/// it, in `SpacePage::new`'s seed shape: the runtime's and its tooling's
+/// (RFC-0090 rule 6). A host opens a page with `of` and fills it with
+/// `insert`.
+macro_rules! in_memory_values {
+    ($v:vis) => {
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl InMemoryContext {
+            $v fn new(initial: HashMap<String, (Ty, Owned<AcvusRuntime>)>) -> Self {
+                let data = initial
+                    .into_iter()
+                    .map(|(key, (ty, value))| (key, Held::new(value, Arc::new(ty))))
+                    .collect();
+                Self::holding(data, None)
+            }
+        }
     };
-    Ok(contexts)
+}
+tooling_vis!(in_memory_values);
+
+/// The compilation the page was opened for, where it names `key`.
+pub(crate) fn in_graph<'c>(solved: &'c Option<Contexts>, key: &str) -> Result<&'c Contexts, PageError> {
+    match solved {
+        Some(contexts) if contexts.solved().contains_key(key) => Ok(contexts),
+        _ => Err(PageError::NotInGraph {
+            key: key.to_owned(),
+        }),
+    }
 }
 
 impl Page for InMemoryContext {
     fn held_type(&self, key: &str) -> Option<&Ty> {
-        self.declared.as_ref()?.settled().get(key)
+        self.solved.as_ref()?.solved().get(key)
     }
 }
 
 impl RuntimeContext for InMemoryContext {
-    fn take(&self, _: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>> {
+    fn take(&self, _: &AcvusRuntime, key: &str) -> Option<Held> {
         self.data.write().unwrap().remove(key)
     }
 
-    unsafe fn set(&self, key: &str, value: Owned<AcvusRuntime>) {
-        self.assigned.lock().unwrap().insert(key.to_string());
-        self.data.write().unwrap().insert(key.to_string(), value);
+    fn holds(&self, key: &str) -> bool {
+        self.data.read().unwrap().contains_key(key)
     }
 
+    fn set(&self, key: &str, held: Held) {
+        #[cfg(feature = "tooling")]
+        self.assigned.lock().unwrap().insert(key.to_string());
+        self.data.write().unwrap().insert(key.to_string(), held);
+    }
+
+    #[cfg(feature = "tooling")]
     fn take_writes(&self) -> Vec<ContextWrite> {
         let assigned = std::mem::take(&mut *self.assigned.lock().unwrap());
         let mut data = self.data.write().unwrap();
         assigned
             .into_iter()
             .map(|key| {
-                let value = data.remove(&key).unwrap_or_else(|| {
+                let held = data.remove(&key).unwrap_or_else(|| {
                     panic!("context '{key}' was assigned but holds no value at the end of the run")
                 });
-                ContextWrite { key, value }
+                ContextWrite {
+                    key,
+                    value: held.into_value(),
+                }
             })
             .collect()
     }
@@ -172,11 +256,28 @@ mod tests {
     use super::*;
     use crate::value::Value;
 
+    fn owned(v: Value) -> Owned<AcvusRuntime> {
+        // SAFETY: each value is moved in by the caller and held nowhere else.
+        unsafe { Owned::from_value(acvus_extern::Holding::new(), v) }
+    }
+
+    /// The settled type of the one kind of value each test stores.
+    fn ty_of(v: &Value) -> Ty {
+        match v.is_string() {
+            true => Ty::String,
+            false => Ty::Int(acvus_mir::ty::IntTy::I64),
+        }
+    }
+
+    fn held(v: Value) -> Held {
+        let ty = ty_of(&v);
+        Held::new(owned(v), Arc::new(ty))
+    }
+
     fn make_ctx(pairs: Vec<(&str, Value)>) -> InMemoryContext {
-        let data: HashMap<String, Owned<AcvusRuntime>> = pairs
+        let data: HashMap<String, (Ty, Owned<AcvusRuntime>)> = pairs
             .into_iter()
-            // SAFETY: each value is moved in by the caller and held nowhere else.
-            .map(|(k, v)| (k.to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), v) }))
+            .map(|(k, v)| (k.to_string(), (ty_of(&v), owned(v))))
             .collect();
         InMemoryContext::new(data)
     }
@@ -190,6 +291,10 @@ mod tests {
             std::sync::Arc::new(crate::executor::SequentialExecutor),
         )
         .runtime_over_an_empty_page()
+    }
+
+    fn take(ctx: &InMemoryContext, key: &str) -> Option<Owned<AcvusRuntime>> {
+        ctx.take(&run(), key).map(Held::into_value)
     }
 
     fn is_int(v: Option<Owned<AcvusRuntime>>, n: i64) -> bool {
@@ -207,41 +312,39 @@ mod tests {
     #[test]
     fn take_moves_the_value_out() {
         let ctx = make_ctx(vec![("x", Value::string("hi"))]);
-        assert!(is_str(ctx.take(&run(), "x"), "hi"));
-        assert!(ctx.take(&run(), "x").is_none());
+        assert!(is_str(take(&ctx, "x"), "hi"));
+        assert!(take(&ctx, "x").is_none());
     }
 
     #[test]
     fn take_missing_returns_none() {
         let ctx = make_ctx(vec![]);
-        assert!(ctx.take(&run(), "x").is_none());
+        assert!(take(&ctx, "x").is_none());
     }
 
     #[test]
     fn set_after_take_restores_the_key() {
         let ctx = make_ctx(vec![("x", Value::int(1))]);
-        assert!(is_int(ctx.take(&run(), "x"), 1));
-        // SAFETY: an integer word owns nothing, and this page declares no type.
-        unsafe { ctx.set("x", Owned::from_value(acvus_extern::Holding::new(), Value::int(2))) };
-        assert!(is_int(ctx.take(&run(), "x"), 2));
+        assert!(is_int(take(&ctx, "x"), 1));
+        ctx.set("x", held(Value::int(2)));
+        assert!(is_int(take(&ctx, "x"), 2));
     }
 
+    #[cfg(feature = "tooling")]
     #[test]
     fn take_writes_hands_out_final_values() {
         let ctx = make_ctx(vec![("x", Value::int(1)), ("y", Value::int(9))]);
-        // SAFETY: an integer word owns nothing, and this page declares no type.
-        unsafe { ctx.set("x", Owned::from_value(acvus_extern::Holding::new(), Value::int(2))) };
-        // SAFETY: as above.
-        unsafe { ctx.set("x", Owned::from_value(acvus_extern::Holding::new(), Value::int(3))) };
+        ctx.set("x", held(Value::int(2)));
+        ctx.set("x", held(Value::int(3)));
         let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].key, "x");
         assert!(is_int(Some(writes.into_iter().next().unwrap().value), 3));
         assert!(
-            ctx.take(&run(), "x").is_none(),
+            take(&ctx, "x").is_none(),
             "the drained value left the page"
         );
-        assert!(is_int(ctx.take(&run(), "y"), 9), "an unassigned key stays");
+        assert!(is_int(take(&ctx, "y"), 9), "an unassigned key stays");
     }
 
     #[test]
@@ -252,9 +355,8 @@ mod tests {
             .map(|i| {
                 let ctx_ref = Arc::clone(&ctx);
                 std::thread::spawn(move || {
-                    // SAFETY: an integer word owns nothing, and this page declares no type.
-                    unsafe { ctx_ref.set("counter", Owned::from_value(acvus_extern::Holding::new(), Value::int(i))) };
-                    let _ = ctx_ref.take(&run(), "counter");
+                                ctx_ref.set("counter", held(Value::int(i)));
+                    let _ = take(&ctx_ref, "counter");
                 })
             })
             .collect();

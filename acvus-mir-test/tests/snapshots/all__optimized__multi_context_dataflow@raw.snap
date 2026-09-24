@@ -3,58 +3,55 @@ source: acvus-mir-test/tests/optimized.rs
 expression: raw
 ---
 === main ===
-     0 |   r0 = fetch @output
-     1 |   assign @output = r0
-     2 |   r1 = fetch @a
-     3 |   assign @a = r1
-     4 |   r2 = fetch @scale
-     5 |   assign @scale = r2
-     6 |   r3 = fetch @b
-     7 |   assign @b = r3
-     8 |   r4 = take @a
-     9 |   r5 = take @b
-    10 |   r6 = r4 + r5
-    11 |   assign sum = r6
-    12 |   r7 = take sum
-    13 |   r8 = take @scale
-    14 |   r9 = r7 * r8
-    15 |   assign scaled = r9
-    16 |   r10 = take scaled
-    17 |   r11 = take @a
-    18 |   r12 = r10 + r11
-    19 |   assign @output = r12
-    20 |   r13 = take @output
-    21 |   r14 = take @output
-    22 |   commit @output = r14
-    23 |   r15 = take @a
-    24 |   commit @a = r15
-    25 |   r16 = take @scale
-    26 |   commit @scale = r16
-    27 |   r17 = take @b
-    28 |   commit @b = r17
-    29 |   return r13
+     0 |   r0 = fetch @a
+     1 |   assign @a = r0
+     2 |   r1 = fetch @scale
+     3 |   assign @scale = r1
+     4 |   r2 = fetch @b
+     5 |   assign @b = r2
+     6 |   r3 = take @a
+     7 |   r4 = take @b
+     8 |   r5 = r3 + r4
+     9 |   assign sum = r5
+    10 |   r6 = take sum
+    11 |   r7 = take @scale
+    12 |   r8 = r6 * r7
+    13 |   assign scaled = r8
+    14 |   r9 = take scaled
+    15 |   r10 = take @a
+    16 |   r11 = r9 + r10
+    17 |   assign @output = r11
+    18 |   r12 = take @output
+    19 |   r13 = take @output
+    20 |   commit @output = r13
+    21 |   r14 = take @a
+    22 |   commit @a = r14
+    23 |   r15 = take @scale
+    24 |   commit @scale = r15
+    25 |   r16 = take @b
+    26 |   commit @b = r16
+    27 |   return r12
 
-    ; r0 (@output) : i64
-    ; r1 (@a) : i64
-    ; r2 (@scale) : i64
-    ; r3 (@b) : i64
-    ; r4 (@a) : i64
-    ; r5 (@b) : i64
-    ; r6 (v11) : i64
-    ; r7 (sum) : i64
-    ; r8 (@scale) : i64
-    ; r9 (v15) : i64
-    ; r10 (scaled) : i64
-    ; r11 (@a) : i64
-    ; r12 (v19) : i64
-    ; r13 (@output) : i64
-    ; r14 (v21) : i64
-    ; r15 (v22) : i64
-    ; r16 (v23) : i64
-    ; r17 (v24) : i64
-    ; r18 (@a) : i64
-    ; r19 (@b) : i64
-    ; r20 (@output) : i64
-    ; r21 (sum) : i64
-    ; r22 (@scale) : i64
-    ; r23 (scaled) : i64
+    ; r0 (@a) : i64
+    ; r1 (@scale) : i64
+    ; r2 (@b) : i64
+    ; r3 (@a) : i64
+    ; r4 (@b) : i64
+    ; r5 (v11) : i64
+    ; r6 (sum) : i64
+    ; r7 (@scale) : i64
+    ; r8 (v15) : i64
+    ; r9 (scaled) : i64
+    ; r10 (@a) : i64
+    ; r11 (v19) : i64
+    ; r12 (@output) : i64
+    ; r13 (v21) : i64
+    ; r14 (v22) : i64
+    ; r15 (v23) : i64
+    ; r16 (v24) : i64
+    ; r17 (@a) : i64
+    ; r18 (@b) : i64
+    ; r19 (@output) : i64
+    ; r20 (sum) : i64
+    ; r21 (@scale) : i64
+    ; r22 (scaled) : i64

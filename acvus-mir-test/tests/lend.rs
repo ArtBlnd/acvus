@@ -43,7 +43,7 @@ fn recorded_types(i: &Interner, source: &str) -> Result<Vec<Ty>, Vec<String>> {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(i, &graph, &ext);

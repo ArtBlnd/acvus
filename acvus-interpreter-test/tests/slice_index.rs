@@ -100,7 +100,7 @@ fn as_slice_of(interner: &Interner, namespace: &str, name: &str) -> ExternInstan
 async fn run_with(
     interner: &Interner,
     body: MirBody,
-    page: HashMap<String, Owned<AcvusRuntime>>,
+    page: HashMap<String, (Ty, Owned<AcvusRuntime>)>,
     ret: Ty,
 ) -> Value {
     let combined = Externs::combine(acvus_ext::std_registries::<AcvusRuntime>(), interner)
@@ -122,6 +122,7 @@ async fn run_with(
         closures: FxHashMap::default(),
         ret,
         flows: acvus_mir::ty::Flows::Every,
+        fetched_first: Vec::new(),
     };
     let prepared = prepare_module(
         &module,
@@ -141,7 +142,7 @@ async fn run_with(
     )
     .with_context_names(context_names);
     let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page));
-    interpreter.execute().await
+    interpreter.execute().await.expect("the page holds every context the run fetches first")
 }
 
 async fn run(interner: &Interner, body: MirBody, ret: Ty) -> Value {
@@ -287,11 +288,11 @@ fn stored_vec(items: &[i64]) -> Value {
     unsafe { Value::erase(values) }
 }
 
-fn page_with(items: &[i64]) -> HashMap<String, Owned<AcvusRuntime>> {
+fn page_with(interner: &Interner, items: &[i64]) -> HashMap<String, (Ty, Owned<AcvusRuntime>)> {
+    let ty = acvus_extern::vec_ty(interner, Ty::Int(IntTy::I64));
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    [(CONTAINER.to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), stored_vec(items)) })]
-        .into_iter()
-        .collect()
+    let held = unsafe { Owned::from_value(acvus_extern::Holding::new(), stored_vec(items)) };
+    [(CONTAINER.to_string(), (ty, held))].into_iter().collect()
 }
 
 // -- Reading an element ----------------------------------------------
@@ -327,7 +328,7 @@ async fn a_vec_element_is_read_by_copy() {
     let got = run_with(
         &interner,
         vec_body(&interner, IndexMode::Copy, 2, Ty::I64),
-        page_with(&[7, 8, 9]),
+        page_with(&interner, &[7, 8, 9]),
         Ty::I64,
     )
     .await;
@@ -341,7 +342,7 @@ async fn a_vec_element_is_read_through_a_reference() {
     let got = run_with(
         &interner,
         vec_body(&interner, IndexMode::Ref, 1, dst.clone()),
-        page_with(&[7, 8, 9]),
+        page_with(&interner, &[7, 8, 9]),
         dst,
     )
     .await;
@@ -384,7 +385,7 @@ fn counted_ty(interner: &Interner) -> Ty {
     }
 }
 
-fn counted_page(len: usize) -> HashMap<String, Owned<AcvusRuntime>> {
+fn counted_page(interner: &Interner, len: usize) -> HashMap<String, (Ty, Owned<AcvusRuntime>)> {
     // SAFETY: each element is read back only as this same `Counted`, and
     // the buffer only as the `Vec<Owned<AcvusRuntime>>` `vec::as_slice_mut`
     // derefs.
@@ -393,10 +394,10 @@ fn counted_page(len: usize) -> HashMap<String, Owned<AcvusRuntime>> {
         .map(|_| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::erase(Counted)) })
         .collect();
     let stored = unsafe { Value::erase(values) };
+    let ty = acvus_extern::vec_ty(interner, counted_ty(interner));
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    [(CONTAINER.to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), stored) })]
-        .into_iter()
-        .collect()
+    let held = unsafe { Owned::from_value(acvus_extern::Holding::new(), stored) };
+    [(CONTAINER.to_string(), (ty, held))].into_iter().collect()
 }
 
 /// `c[0] = Counted` over a `&mut [Counted]` taken from the page.
@@ -457,12 +458,15 @@ const REPLACEMENT: &str = "r";
 #[tokio::test]
 async fn index_set_drops_the_element_it_replaces() {
     let interner = Interner::new();
-    let mut page = counted_page(3);
+    let mut page = counted_page(&interner, 3);
     // SAFETY: as `counted_page`.
     page.insert(
         REPLACEMENT.to_string(),
-        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::erase(Counted)) },
+        (
+            counted_ty(&interner),
+            // SAFETY: the word was made for this holder and moved in; no other holder owns it.
+            unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::erase(Counted)) },
+        ),
     );
 
     ELEMENTS_DROPPED.store(0, Ordering::Relaxed);
@@ -547,6 +551,7 @@ fn refusals(body: MirBody, ret: Ty) -> Vec<ValidationErrorKind> {
         closures: FxHashMap::default(),
         ret,
         flows: acvus_mir::ty::Flows::Every,
+        fetched_first: Vec::new(),
     };
     validate(&module).into_iter().map(|e| e.kind).collect()
 }

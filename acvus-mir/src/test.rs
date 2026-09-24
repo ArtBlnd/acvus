@@ -51,7 +51,7 @@ pub(crate) fn make_graph(
         contexts: Freeze::new(contexts),
         types: Freeze::default(),
         bindings: Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
     (graph, test_qref)
 }

@@ -29,7 +29,7 @@ rust_decimal = "1"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-acvus-interpreter = { path = "../acvus-interpreter" }
+acvus-interpreter = { path = "../acvus-interpreter", features = ["tooling"] }
 acvus-ast = { path = "../acvus-ast" }
 tokio = { version = "1", features = ["macros", "rt"] }
 

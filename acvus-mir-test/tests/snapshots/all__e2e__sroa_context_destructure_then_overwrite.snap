@@ -4,22 +4,20 @@ expression: ir
 ---
 === main ===
      0 |   r0 = undef
-     1 |   r1 = fetch @a
-     2 |   r2 = fetch @b
-     3 |   assign @b = r2
-     4 |   r3 = take @b.x
-     6 |   commit @a = 0 (r4)
-     7 |   r5 = take @b
-     8 |   commit @b = r5
-     9 |   return 0 (r4)
+     1 |   r1 = fetch @b
+     2 |   assign @b = r1
+     3 |   r2 = take @b.x
+     5 |   commit @a = 0 (r3)
+     6 |   r4 = take @b
+     7 |   commit @b = r4
+     8 |   return 0 (r3)
 
     ; r0 (v10) : i64
-    ; r1 (@a) : i64
-    ; r2 (@b) : {x: i64}
-    ; r3 (@b.x) : i64
-    ; r4 (v6) : i64
-    ; r5 (v9) : {x: i64}
-    ; r6 (@b) : {x: i64}
+    ; r1 (@b) : {x: i64}
+    ; r2 (@b.x) : i64
+    ; r3 (v6) : i64
+    ; r4 (v9) : {x: i64}
+    ; r5 (@b) : {x: i64}
+    ; r6 (@a) : i64
     ; r7 (@a) : i64
-    ; r8 (@a) : i64
-    ; r9 (v8) : i64
+    ; r8 (v8) : i64

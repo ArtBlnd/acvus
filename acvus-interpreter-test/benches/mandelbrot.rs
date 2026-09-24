@@ -100,7 +100,7 @@ fn context(interner: &Interner, grid: &Grid) -> Context {
     .collect()
 }
 
-fn snapshot(interner: &Interner, grid: &Grid) -> HashMap<String, Owned<AcvusRuntime>> {
+fn snapshot(interner: &Interner, grid: &Grid) -> HashMap<String, (acvus_mir::ty::Ty, Owned<AcvusRuntime>)> {
     split_context(interner, context(interner, grid)).1
 }
 
@@ -121,7 +121,7 @@ fn measure(rt: &Runtime, grid: &Grid) -> Timing {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute());
+        let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
         (value.as_int(), start.elapsed())
     };
     let run_rust = || {

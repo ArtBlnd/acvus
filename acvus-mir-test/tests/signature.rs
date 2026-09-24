@@ -95,7 +95,7 @@ fn check(i: &Interner, source: &str) -> Result<Ty, Vec<String>> {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
-        entry: None,
+        entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);
     let inf = infer::infer(i, &graph, &ext);

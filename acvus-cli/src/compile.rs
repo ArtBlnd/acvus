@@ -272,7 +272,7 @@ pub fn environment(
             contexts: Freeze::new(contexts),
             types: Freeze::new(types),
             bindings,
-            entry: Some(entry_ref(interner)),
+            entries: vec![entry_ref(interner)],
         },
         handlers,
         space,

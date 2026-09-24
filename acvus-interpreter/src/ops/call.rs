@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
 use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
+use crate::executor::{AsyncJob, BlockingJob};
 use crate::flight::{Aloft, Launched};
 use crate::interpreter::lookup_module;
 use crate::machine::{
@@ -2071,12 +2072,16 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
             flying,
         );
         let unevaluated = m.ctx.rt.tally.spawned();
-        let handle = executor.spawn_blocking(Box::new(move || work.run()));
+        let job = BlockingJob::new(Box::new(move || work.run()));
+        let id = job.id();
+        let handle = executor.spawn_blocking(job);
         m.suspend::<LARGE>(
             self.dst,
             self.next,
             Box::pin(async move {
-                let value = executor.eval(handle).await;
+                // The value goes to `dst`, a register the checker typed at the
+                // spawn's result, which owns it from then on.
+                let value = executor.eval(handle).await.of_job(id);
                 unevaluated.evaluated();
                 value
             }),
@@ -2272,6 +2277,7 @@ impl<const LARGE: bool> Op for Eval<LARGE> {
         // SAFETY: the type checker admits only a handle value here.
         let Launched {
             handle,
+            job,
             unevaluated,
         } = unsafe { m.regs().take::<true>(self.handle).materialize::<Launched>() };
         let executor = Arc::clone(&m.shared().executor);
@@ -2279,7 +2285,9 @@ impl<const LARGE: bool> Op for Eval<LARGE> {
             self.dst,
             self.next,
             Box::pin(async move {
-                let value = executor.eval(handle).await;
+                // The value goes to `dst`, a register the checker typed at the
+                // spawn's result, which owns it from then on.
+                let value = executor.eval(handle).await.of_job(job);
                 unevaluated.evaluated();
                 value
             }),
@@ -2318,8 +2326,13 @@ impl Op for SpawnExternSync {
             flying,
         );
         let unevaluated = m.ctx.rt.tally.spawned();
-        let handle = m.shared().executor.spawn_blocking(Box::new(move || work.run()));
-        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
+        let job = BlockingJob::new(Box::new(move || work.run()));
+        let launched = Launched {
+            job: job.id(),
+            handle: m.shared().executor.spawn_blocking(job),
+            unevaluated,
+        };
+        m.regs().define::<true>(self.dst, Value::handle(launched));
         self.next.run(m, r0)
     }
 }
@@ -2341,8 +2354,13 @@ impl Op for SpawnExternAsync {
         // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
         let fut = unsafe { self.f.call_async(rt, &args) };
         let unevaluated = m.ctx.rt.tally.spawned();
-        let handle = m.shared().executor.spawn_async(Box::pin(Aloft::new(fut, flying)));
-        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
+        let job = AsyncJob::new(Box::pin(Aloft::new(fut, flying)));
+        let launched = Launched {
+            job: job.id(),
+            handle: m.shared().executor.spawn_async(job),
+            unevaluated,
+        };
+        m.regs().define::<true>(self.dst, Value::handle(launched));
         self.next.run(m, r0)
     }
 }
@@ -2360,10 +2378,14 @@ impl Op for SpawnModule {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = staged(m, &self.args, self.takes);
-        let child = crate::interpreter::Interpreter::spawned(m.ctx.rt, self.callee, args);
+        let job = crate::interpreter::Interpreter::spawned(m.ctx.rt, self.callee, args);
         let unevaluated = m.ctx.rt.tally.spawned();
-        let handle = m.shared().executor.spawn_interpreter(child);
-        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
+        let launched = Launched {
+            job: job.id(),
+            handle: m.shared().executor.spawn_async(job),
+            unevaluated,
+        };
+        m.regs().define::<true>(self.dst, Value::handle(launched));
         self.next.run(m, r0)
     }
 }

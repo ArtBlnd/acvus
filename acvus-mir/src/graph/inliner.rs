@@ -66,6 +66,7 @@ fn inline_module(
         closures,
         ret: module.ret.clone(),
         flows: module.flows.clone(),
+        fetched_first: module.fetched_first.clone(),
     }
 }
 
@@ -1250,6 +1251,7 @@ mod tests {
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
             flows: crate::ty::Flows::Every,
+            fetched_first: Vec::new(),
         }
     }
 
@@ -1576,6 +1578,7 @@ mod tests {
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: crate::ty::Ty::Unit,
             flows: crate::ty::Flows::Every,
+            fetched_first: Vec::new(),
         }
     }
 
