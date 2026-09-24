@@ -999,7 +999,11 @@ Status: Proposed
    in order. `g` is a registered `g(s: &mut S, part: S)` and `e` a
    registered `e() -> S`, named as rule 2 names an extern.
    `associative` and `identity` beside `fold` are refused: they are a
-   binary function's.
+   binary function's. `#[extern_fn(law(inverse = g))]` on `f(s: &mut S) ->
+   Option<X>` states that after `g(s, x)`, `f(s)` gives `Some(x)` and
+   leaves `s` as before `g`, and that `g(s, x)` after `f(s)` gave `Some(x)`
+   leaves `s` as before `f`: the two are one cell, which RFC-0089 rule 4
+   promotes across a loop.
 4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2, ..))]` relates two
    terms by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
    parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and

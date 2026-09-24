@@ -115,7 +115,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0081: a `while` that counts by one to an invariant bound is a range `for` (Proposed)
 - RFC-0083: a pure operation computed on every path to it is the value computed first (Proposed)
 - RFC-0088: a `for` whose body does nothing is a jump to its exit (Proposed)
-- RFC-0089: a `for` states its body as independent parts, each joined by a law or run in sequence (Proposed)
+- RFC-0089: a `for` is a chain of stages, each pure or a join over the storage it changes, and each join states its order (Proposed)
 
 ### [ownership.md](ownership.md)
 

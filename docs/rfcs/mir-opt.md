@@ -300,11 +300,12 @@ second is the case the hoist cannot reach: control equivalence keeps a
 `Const` inside the body, yet it reads nothing and writes the same word every
 time. Such a constant is re-emitted above the header, not moved.
 
-**Only a strong loop is reduced** (RFC-0066 rule 7). A weak loop's
-iterations may run in any order, and its counters are canonicalized instead,
-so each iteration computes `i * k + x` from its own `i`. A derived counter
-would carry that value from the previous iteration and order the loop. A
-strong loop is ordered already, so the reduction costs it nothing.
+**Only a counter read in an `InOrder` join is reduced** (RFC-0066 rule
+7). A counter that feeds a pure stage or an unordered join is canonicalized
+instead, so each iteration computes `i * k + x` from its own `i`. A derived
+counter would carry that value from the previous iteration and order what
+reads it. An `InOrder` join runs in order already, so the reduction costs
+it nothing.
 
 **`i * k + x`, where only that sum reads the product, becomes a header
 parameter.** It is started in the preheader and advanced in the latch. The
@@ -497,29 +498,22 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    but they reach MIR as a short-circuit `Diamond`, and their recognition
    is open.
 
-6. **Weak and strong, by kind.** A loop is weak when every carried
-   parameter is an `Iv` or a `Merge`, no instruction of the body carries an
-   `Order` (RFC-0013, RFC-0046), and every storage the body writes is its
-   `SliceMut` source's, reached through the element (RFC-0057 rule 3).
-   Otherwise it is strong. The kind of the carried state decides, never its
-   count: how many merges a loop carries is a cost, and cost is the
-   lowerer's. An inexact merge is weak and marked inexact, and whether to
-   split one is the lowerer's, by its reassociation policy. A merge through
-   storage, such as `v.push(x)` in a loop, is a write and strong unless the
-   extern declares what kind of merge it is, ordered or not, by a `fold`
-   law (RFC-0082 rule 3); that is declared by the extern, not discovered
-   here. A loop left from anywhere but its header, by a
-   `break` or a `return`, is strong: the iterations after the one that
-   leaves never run. RFC-0057 rule 3's question
-   is a weak loop that carries nothing.
+6. **Order is per target, not per loop.** What a loop changes and how the
+   change is ordered is stated per target by the stages of RFC-0089: pure
+   work runs apart, and each join is `Disjoint`, `AnyOrder` or `InOrder`.
+   A carried value is a target like any storage. A loop whose every target
+   joins `InOrder` with no law runs in order; that is a cost, not a
+   different form. RFC-0057 rule 3's question is a loop whose only target
+   is its `&mut` source's element, joined `Disjoint`.
 
-7. **One normalization per loop.** Strength reduction (RFC-0056) applies to
-   strong loops, which run in order anyway. IV canonicalization applies to
-   weak `for` loops: each `Iv` becomes `base + k·step` in the body, `k` read
-   off the counter, and `base + trip·step` where it is read after the loop,
-   from the count the exit edge defines (RFC-0057 rule 9). A loop gets one
-   or the other, and a weak `for` then carries only its counter and its
-   merges. A `while` is declined, since it states no count; a later exact
+7. **One normalization per induction variable.** IV canonicalization
+   rewrites an `Iv` into `base + k·step` in the body, `k` read off the
+   counter, and `base + trip·step` where it is read after the loop, from
+   the count the exit edge defines (RFC-0057 rule 9), whenever the `Iv`
+   feeds a join that is not `InOrder` or a pure stage. Strength reduction
+   (RFC-0056) applies to an `Iv` whose readers all sit in an `InOrder`
+   join, which runs in order anyway. The choice is per variable, not per
+   loop. A `while` is declined, since it states no count; a later exact
    recognizer makes it a `for`, and this pass applies to that unchanged.
 
 8. **A cost table is the backend's, supplied from outside.** The embedder
@@ -532,22 +526,28 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    is its body's rows times its trip count, a lower bound. Costs are
    computed once, by the lowerer, and no MIR pass reads them.
 
-9. **Regions.** A region is a part of a `ForParts` (RFC-0089) evaluated
-   as one unit, without crossing a jump the analysis cannot see through. A
-   jump's target must be inside it. A `Law` part's accumulators are its
-   merges, with their laws and exactness. A loop whose body is not one
-   region is not divided.
+9. **Regions.** A region is a stage of a `For` (RFC-0089) evaluated as
+   one unit, without crossing a jump the analysis cannot see through. A
+   jump's target must be inside it. A loop whose stages are not regions is
+   not divided.
 
-10. **The lowerer decides.** `prepare` chooses between a split region
-    (chunks as `Heavy` spawns joined through the merges), a region
-    evaluated in place, and a region unrolled at the operation level. The
-    choice is one comparison of sums of rule 8's table. Where the count is
-    known only at run time, the lowerer inserts one dispatch point ahead of
-    the loop. It reads `n`, compares against a threshold folded from the
-    table at a few concrete points, and continues into the split chain
-    (cold, laid out of line) or the in-place chain (hot). A loop never
-    worth splitting costs one compare. The lowerer splits nested regions at
-    one level, and the level is a comparison over rule 8's table.
+10. **The lowerer reads each join's order, and the executor decides how
+    to wait.**
+    - Split, the pure stages run in chunks, bounded in how many are in
+      flight. An `InOrder` join takes the chunks' results in chunk order;
+      an `AnyOrder` join takes them as they arrive; a `Disjoint` join lets
+      each chunk write its own range. A law lets a chunk combine before the
+      join.
+    - In a body typed `Sync`, the split is one synchronous call to the
+      embedder's executor, `run_ordered` or `run_unordered`, and the
+      executor decides how to wait: inline, on a pool, or otherwise. The
+      body stays `Sync` (RFC-0046 rule 1). In a body that already suspends,
+      the chunks are spawned and awaited, in order or as they arrive.
+    - Running in place is always admitted, and is the only choice with no
+      table (rule 8). Where the count is known only at run time, one
+      compare ahead of the loop, against a threshold folded from the table,
+      chooses between the split chain and the in-place chain.
+    - A chunk does not split again: one level, by structure.
 
 **Why.** A normal form that holds on every target is the same program
 everywhere, so writing it into MIR decides nothing a target could decide
@@ -588,169 +588,114 @@ rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
 the machine offers an explicitly reassociable float reduction, which is a
 language decision.
 
-## RFC-0089: a `for` states its body as independent parts, each joined by a law or run in sequence
+## RFC-0089: a `for` is a chain of stages, each pure or a join over the storage it changes, and each join states its order
 
 Status: Proposed
 
-What a loop's iterations hand on, and how, decides what may run apart.
-`ForParts` states it as a terminator. The body is split into parts that
-share only the element, the counter and values from outside the loop. Each
-part's carried state is either joined by a law or is a recurrence. The form
-states facts and decides no shape: running in place, chunking a part,
-distributing the parts into loops, or running them together are the
-lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
+An iteration reads, computes, and changes storage. `For` states which of its
+instructions only compute and which touch what the loop changes, and how
+the touching is ordered. Pure work runs apart; a join runs in the order it
+states. How either runs is the lowerer's (RFC-0066 rule 10).
 
-1. **The terminator.** `Terminator::ForParts { source, body, parts, exit,
-   exit_trip, exit_args }`, where `source`, `exit`, `exit_trip` and
-   `exit_args` are `For`'s (RFC-0057).
-   - The body block's parameters are the element and the counter, as
-     `For`'s. A part reads its carried values as the header's parameters.
-   - `Part { entry, carried, kind }` names the part's first block, the
-     header parameters it carries, and its kind. Parts are in body order.
-   - `body` is the first part's entry. Each part's last block jumps to the
-     next part's entry, and the last part's is the one latch, which jumps to
-     the header with every carried value.
+1. **The terminator.** `Terminator::For { source, stages, exit, exit_trip,
+   exit_args }`, with `source`, `exit`, `exit_trip` and `exit_args` as
+   RFC-0057 states them.
+   - `stages` lists `Stage::Pure { entry }` and `Stage::Join { entry,
+     targets, order, law }` in body order. The body block's parameters are
+     the element and the counter. Each stage's last block jumps to the next
+     stage's entry, and the last one is the one latch, which `continue`s
+     join.
+   - The stages run one after another as written. Every pass that reads
+     edges reads the body as a sequential program, and running in place is
+     the loop as written: the chain is the body of the region RFC-0057
+     rule 3 builds.
+   - A value reaches a later stage by dominance.
 
-2. **The body is a sequential program, and its parts are independent.** The
-   parts run one after another as written. Every pass that reads edges
-   therefore reads the body as it read a `For`. Running the loop as written
-   is not a second meaning: in place, the chain is the body of the region
-   the `For` would be (RFC-0057 rule 3). What the terminator adds is that no
-   part reads a value another part defines, and no part reads or writes a
-   storage another part writes. A part reads only its own carried values,
-   the element, the counter, and values defined outside the loop. Any order
-   of the parts, or any interleaving of them, is then the same program.
+2. **A target is storage the loop changes.** A target is a storage live at
+   the header that an instruction of the body writes or lends `&mut`. A
+   context is a storage (RFC-0025). A slot the body defines and drops
+   inside an iteration is not a target. The element of a `&mut` source is
+   a target whose writes land at the counter's slot.
 
-3. **Kinds.** A part is `Law(accs)` when every carried value of the part is
-   an accumulator (rule 4), and a part that carries nothing is `Law` with
-   none. Otherwise it is `Sequential`, and its iterations keep their order,
-   as a recurrence's do.
+3. **A pure stage changes no target.** No instruction of a pure stage
+   writes a target, lends one `&mut`, carries an ordered effect, or leaves
+   the loop. It reads the element, the counter, values from outside the
+   loop and values earlier stages defined, through shared borrows.
+   `validate` refuses a pure stage that breaks this, from stage membership
+   and `analysis::loans`; nothing else about purity is assumed.
 
-4. **A law is a monoid action.**
-   - Each iteration contributes an element of a monoid `M` without reading
-     the accumulator. The accumulator is `init` acted on by the product of
-     the elements in iteration order.
-   - Split into chunks `c₀ … cₖ`, it is `act(init, p₀ · … · pₖ)`, where `pⱼ`
-     is chunk `j`'s product from the identity. The products join in chunk
-     order unless the law commutes, and a law that commutes may join in any
-     order.
-   - For a reduction, `M` is the accumulator's type, and acting is the
-     law's combine.
+4. **A join is the smallest slice that touches a target.** It starts at
+   each instruction that reads a target's state, such as a `pop`, and holds
+   everything whose value depends on that state up to the instructions
+   that write the target: the target's dependence cycle.
+   - Instructions on one target keep their written order unless a
+     declaration relates them, since two `&mut` users of one storage are
+     opaque to each other.
+   - A heavy call inside a join is split into spawn and evaluation
+     (RFC-0046 rule 3), so the join can issue it and wait apart.
+   - Work that depends on a target's state and writes no target leaves the
+     cycle as a pure stage after the join.
+   - A body that needs a target's state before it can compute makes that
+     target's join a producer placed before the pure stage that reads it.
+     A pair of target operations declared inverse is promoted to one
+     carried value before the loop and written back after it (RFC-0082).
 
-   The vocabulary is closed, and a law enters it with the recognizer that
-   produces it (RFC-0082 rule 1):
-   - `Op(op)` is `+` or `*` at an integer or float type. Its identity is `0`
-     or `1`, and for float `+` it is `-0.0`, for which `x + e = x` holds at
-     every `x`.
-   - `Call(callee)` is an extern that declares itself associative
-     (RFC-0082 rule 2). Without a declared identity, `M` is `Option` of the
-     type with `None` as its identity, and a chunk starts empty.
-   - `Fold(law)` is a storage the part writes only through calls of one
-     extern that declares a `fold` law, with that law's combine and
-     identity (RFC-0082 rule 3).
-   - `Order` is the `Order` of an `anyorder` region (RFC-0007 rule 7), and
-     `Merge` joins it. A chunk starts from `init`, the region's entry order,
-     which every order inside the region follows.
+5. **Order is one of three.**
+   - `Disjoint`: each iteration writes only the element at its counter.
+   - `AnyOrder`: every operation of the join commutes (RFC-0013), stands in
+     an `anyorder` region (RFC-0007), storage writes included, or joins
+     through a commutative law.
+   - `InOrder`: anything else. A float law is `InOrder` by default:
+     joining in arrival order changes the rounding.
 
-   Each accumulator records whether it is `exact`, which is false exactly for
-   a float `Op`, and whether it is `commutative`, which is the law's. `Order`
-   commutes. Splitting an inexact law is the lowerer's reassociation policy
-   (RFC-0066 rule 6).
+   `validate` holds the mark to the operations' declarations.
 
-5. **Who writes it.** A pass partitions a `for`'s body. It runs after IV
-   canonicalization (RFC-0066 rule 7) and after every pass that moves or
-   merges the body's instructions.
-   - The parts are the connected components of the body's instructions. Two
-     instructions are connected when one reads a value the other defines,
-     when both touch a storage that one of them writes (a context is a
-     storage, RFC-0025), or when one lies in an arm of a branch the other's
-     terminator decides.
-   - The pass duplicates nothing: an instruction two parts would share
-     joins them.
-   - A loop left from anywhere but its header stays a `For`: a `break` in
-     one part skips the others.
-   - A loop stays a `For` when its partition is one `Sequential` part, its
-     header holds an instruction, an arm ends in `!`, or its body holds no
-     instruction.
+6. **A law is specialization, not permission.** A join whose target's
+   update is a monoid action names it: `Op`, `Call` (an associative extern,
+   lifted over `Option` when it states no identity), `Fold` (RFC-0082
+   rule 3) or `Order` (RFC-0007 rule 7). The lowerer may combine inside a
+   chunk and join the partials. A join without a law still runs in its
+   order.
 
-6. **An ordered call inside `anyorder` is not a recurrence.** The lowering
-   gives every effectful call in the region the region's entry order. It
-   merges the order the call yields into the region's accumulator. A call
-   whose order input is an `Order` accumulator's `init`, and whose order
-   output reaches only that accumulator's `Merge`s, is unordered by the
-   author's declaration (RFC-0007 rule 2), and `analysis::carried` does not
-   count it as a dependence.
-   - Its effects are unordered with respect to a trap in the region, as
-     they are with respect to each other. RFC-0007 rule 2 admits running the
-     region in parallel, where one call's effect may happen before another's
-     trap.
-   - Every other instruction that carries an order is a recurrence, as
-     before.
+7. **Exits and traps.** A loop is left only from the header or from an
+   `InOrder` join. A run apart reports the trap least in the order
+   (iteration, stage), and a trap releases nothing (RFC-0048 rule 8). The
+   lowerer runs an `Array` source in place until the release of elements
+   scattered over chunks exists.
 
-7. **`validate` holds the form.** It refuses a `ForParts` when any of these
-   holds:
-   - its parameters, parts or latch are not rule 1's;
-   - a part crosses rule 2's boundary;
-   - an accumulator is read other than as its law's operand, which is
-     `Op`'s `BinOp`, `Call`'s call, the storage lent only to `Fold`'s calls,
-     or `Order`'s `Merge`, or its law's result is read other than by the
-     latch;
-   - a `Law` part holds an order-carrying instruction other than rule 6's,
-     or writes a storage other than the `SliceMut` source's element or a
-     `Fold` accumulator;
-   - the body is left other than through the header.
+8. **Who writes it.** A pass after IV canonicalization, which is decided
+   per target rather than per loop (RFC-0066 rule 7), and after every pass
+   that moves or merges the body's instructions, writes the stages. It
+   duplicates nothing: an instruction two joins share joins them. A loop
+   the pass cannot split is one `InOrder` join over everything it
+   touches, and runs as written.
 
-   A later pass that puts a dependence across parts or into a law is
-   refused, and no loop runs apart on a fact that stopped holding.
-
-8. **Loans, drops and traps.**
-   - The loans and drops read the body as the sequential program of rule 2.
-     A value's drop is placed in the part that touches it. The element's is
-     in the part that last reads it, or in the first part when none does.
-   - Run apart:
-     - a `SliceMut` element belongs to one part by rule 2, and chunks reach
-       disjoint elements (RFC-0057 rule 5);
-     - values from outside the loop are read shared, and the frame keeps its
-       cells while any piece is in flight (RFC-0046 rule 3);
-     - `init` is the frame's until the first join, and a partial is its
-       chunk's until the join moves it.
-   - The trap a run as written raises is the least in the order
-     (iteration, part). A run apart reports that one and releases the
-     partials not joined, in chunk order.
-   - An `Array` source's unyielded elements scatter over split chunks,
-     which RFC-0057 rule 6's release does not cover, so until it does the
-     lowerer runs such a loop in place.
-
-**Why.** The partition holds on every target, so it is a normal form
-(RFC-0066 rule 1); fission, fusion and chunking are choices about a target,
-and a strong loop still runs its independent parts apart. Naming each law
-in the terminator ends "what joins these" there, as `Diamond` ended "where
-do these arms meet" (RFC-0063). A monoid action is the most general join a
-chunk can compute without its predecessor's result.
-**Cost.** A terminator arm in every reader, a validator restating the
-partition and laws, and rule 6's exception in `carried`.
+**Why.** Pure work and changes to storage are different facts, and only the
+second has an order. Stating them apart makes independence a structural
+check (rule 3) and leaves one question to the lowerer, how each join is
+ordered. A recurrence is a join that serializes; that is a cost the form
+states, not a shape it refuses.
+**Cost.** A terminator arm in every reader. A validator that restates rule
+3 and rule 5. The stage pass and IV canonicalization per target.
 **Rejected.**
-- A `For` with optional parts or join — RFC-0063's reason: a terminator
-  that is the shape has no optional part.
-- Parts as arms that fork and all run — every pass reads successors as
-  alternatives, so a move or an exclusive borrow in two arms would pass.
-- Combine and identity as blocks of the body — the CFG is flat, and every
-  pass would learn a nesting whose boundary holds by convention.
-- Distributing the parts into loops in MIR — whether fission pays depends on
-  the target (RFC-0066 rule 1).
-- Duplicating an instruction two parts share — that trade is a cost, and
-  cost is the lowerer's.
-- A reduction-only form — independent recurrences would need a second.
+- Parts joined by a law, with writes left in the body — writes in a body
+  made independence a proof about which element each write reaches, and a
+  law became the price of running apart.
+- A two-valued order — an element store is neither ordered nor a free
+  join; it is disjoint by the counter.
+- Join operations marked in place in the body — the order would be read
+  per instruction by every pass.
+- Arms that fork and all run — every pass reads successors as
+  alternatives.
 
-**Open.**
-- A part reading another's per-iteration value: a pipeline.
-- An early exit as a law keeping the first, which cancels later chunks.
-- Keeping the last value.
-- A merge under a branch whose other arm passes the accumulator through.
-- The element's binding as the element: today its storage joins every part
-  that reads it.
-- An affine recurrence `x' = a·x + b` as a law, with a scan's two passes.
-- Parts of a `while`.
+**Open.** Each runs as `InOrder` today; the tiers weigh ease against reach.
+- First, after the form: a law through a nested loop; a store at an
+  injective affine index of the counter as `Disjoint`; named commutation
+  sets in place of `commutes: bool`.
+- After the executor's ordered and unordered runs: a join split by key; a
+  `Stream` source for `while` loops.
+- When a use asks: speculative exits; a scan law, for a body that reads a
+  partial; an action law for heavy work inside a target's cycle.
 
 ## RFC-0081: a `while` that counts by one to an invariant bound is a range `for`
 
@@ -999,7 +944,7 @@ gains or loses a move.
 
 Status: Proposed
 
-IV canonicalization computes a weak loop's induction variables from its
+IV canonicalization computes a loop's induction variables from its
 counter (RFC-0066 rule 7), and value numbering and the `dce` after it sweep
 what that leaves unread (RFC-0083). A loop whose only work was advancing
 those variables is then a `for` whose body only jumps back and whose header
