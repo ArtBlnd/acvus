@@ -12,7 +12,7 @@
 //!
 //! # Only inside one `InOrder` join
 //!
-//! The pass runs after the stages are written (RFC-0089 rule 8), and it
+//! The pass runs after the stages are written (RFC-0089 rule 6), and it
 //! reduces a counter expression only when every reader of it sits in one
 //! `InOrder` join with no law (RFC-0056, RFC-0066 rule 7). The derived
 //! counter is a carried value: its advance is placed at the end of that

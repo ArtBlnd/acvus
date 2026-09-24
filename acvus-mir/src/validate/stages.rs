@@ -1,4 +1,4 @@
-//! RFC-0089 rules 1, 3, 5 and 7, asked of every `For` from its stage
+//! RFC-0089 rules 1, 3, 4 and 5, asked of every `For` from its stage
 //! membership and `analysis::loans`, so no loop runs apart on a fact that
 //! stopped holding.
 //!

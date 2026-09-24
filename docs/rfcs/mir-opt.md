@@ -326,7 +326,7 @@ point the accumulated form is a different number, and on mandelbrot's grid
 34 of 20000 pixels reach a different escape count. A multiplication that does
 not run on every iteration is not reduced.
 
-The pass runs after the stages are written (RFC-0089 rule 8) and before
+The pass runs after the stages are written (RFC-0089 rule 6) and before
 `bce`. `code_motion` has put `k` and `x` above the header and left the
 preheader a block of its own. No value numbering follows, so the pass writes
 its start and step already folded where their operands are constants: a
@@ -535,18 +535,17 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    jump's target must be inside it. A loop whose stages are not regions is
    not divided.
 
-10. **The lowerer reads each join's order, and the executor decides how
-    to wait.**
-    - Split, the pure stages run in chunks, bounded in how many are in
-      flight. An `InOrder` join takes the chunks' results in chunk order;
-      an `AnyOrder` join takes them as they arrive; a `Disjoint` join lets
-      each chunk write its own range. A law lets a chunk combine before the
-      join.
-    - In a body typed `Sync`, the split is one synchronous call to the
-      embedder's executor, `run_ordered` or `run_unordered`, and the
-      executor decides how to wait: inline, on a pool, or otherwise. The
-      body stays `Sync` (RFC-0046 rule 1). In a body that already suspends,
-      the chunks are spawned and awaited, in order or as they arrive.
+10. **The lowerer runs the stages as a token pipeline, and the executor
+    decides how to wait.**
+    - Split, chunks of iterations, bounded in flight, pass the stages in
+      order. A free stage runs a chunk on arrival; a stage with a cycle
+      admits a chunk holding its token, passed in chunk order under
+      `InOrder`, one chunk at a time under `AnyOrder`, and absent under
+      `Disjoint`. With a law, a chunk combines first and the stage joins
+      the partial. The control token passes with the exiting stage's.
+    - In a `Sync` body the split is one synchronous executor call, and the
+      executor decides how to wait; the body stays `Sync` (RFC-0046 rule
+      1). A body that already suspends spawns the chunks and awaits them.
     - Running in place is always admitted, and is the only choice with no
       table (rule 8). Where the count is known only at run time, one
       compare ahead of the loop, against a threshold folded from the table,
@@ -592,117 +591,102 @@ rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
 the machine offers an explicitly reassociable float reduction, which is a
 language decision.
 
-## RFC-0089: a `for` is a chain of stages, each pure or a join over the storage it changes, and each join states its order
+## RFC-0089: a `for` is a chain of stages no dependence cycle crosses, and what each stage is the IR already says
 
 Status: Proposed
 
-An iteration reads, computes, and changes storage. `For` states which of its
-instructions only compute and which touch what the loop changes, and how
-the touching is ordered. Pure work runs apart; a join runs in the order it
-states. How either runs is the lowerer's (RFC-0066 rule 10).
+An iteration waits for another only through a token the IR already holds.
+`For` writes where the body is cut and nothing else; which stage serializes
+what, in which order and by which law, is read from the tokens and the
+operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
+10).
 
 1. **The terminator.** `Terminator::For { source, stages, exit, exit_trip,
    exit_args }`, with `source`, `exit`, `exit_trip` and `exit_args` as
-   RFC-0057 states them.
-   - `stages` lists `Stage::Pure { entry }` and `Stage::Join { entry,
-     targets, order, law }` in body order. The body block's parameters are
-     the element and the counter. Each stage's last block jumps to the next
-     stage's entry, and the last one is the one latch, which `continue`s
-     join.
-   - The stages run one after another as written. Every pass that reads
-     edges reads the body as a sequential program, and running in place is
-     the loop as written: the chain is the body of the region RFC-0057
-     rule 3 builds.
-   - A value reaches a later stage by dominance.
+   RFC-0057 states them, and `stages` the entry blocks of the body's stages
+   in body order. The body block is the first, and its parameters are the
+   element and the counter. Each stage's last block jumps to the next
+   stage's entry, and the last one is the one latch, which `continue`s
+   join. Every pass that reads edges reads the body as a sequential
+   program; running in place is the loop as written, the chain being the
+   body of the region RFC-0057 rule 3 builds. A value reaches a later
+   stage by dominance.
 
-2. **A target is storage the loop changes.** A target is a storage live at
-   the header that an instruction of the body writes or lends `&mut`. A
-   context is a storage (RFC-0025). A slot the body defines and drops
-   inside an iteration is not a target. The element of a `&mut` source is
-   a target whose writes land at the counter's slot.
+2. **Tokens.** One iteration orders another only through:
+   - an `Order` value (RFC-0007);
+   - a header parameter, which carries a value to the next iteration;
+   - a storage the body writes or lends `&mut`, a context among them
+     (RFC-0025); the `&mut` source's element is written at its counter's
+     slot;
+   - the control token, the fact that an iteration exists: every
+     iteration has it from the start when every exit is the header's, and
+     otherwise receives it from the stage its predecessor could leave from.
 
-3. **A pure stage changes no target.** No instruction of a pure stage
-   writes a target, lends one `&mut`, carries an ordered effect, or leaves
-   the loop. It reads the element, the counter, values from outside the
-   loop and values earlier stages defined, through shared borrows.
-   `validate` refuses a pure stage that breaks this, from stage membership
-   and `analysis::loans`; nothing else about purity is assumed. Membership is
-   one analysis, `analysis::stages`, which `validate`, the drops and
-   strength reduction read.
+3. **No cycle crosses a boundary.** A dependence cycle through a token lies
+   inside one stage. A stage that holds one is that token's join; a stage
+   that holds none is free. `validate` checks this, rule 5 and rule 1's
+   shape from the IR alone.
 
-4. **A join is the smallest slice that touches a target.** It starts at
-   each instruction that reads a target's state, such as a `pop`, and holds
-   everything whose value depends on that state up to the instructions
-   that write the target: the target's dependence cycle.
-   - Instructions on one target keep their written order unless a
-     declaration relates them, since two `&mut` users of one storage are
-     opaque to each other.
-   - A heavy call inside a join is split into spawn and evaluation
-     (RFC-0046 rule 3), so the join can issue it and wait apart.
-   - Work that depends on a target's state and writes no target leaves the
-     cycle as a pure stage after the join.
-   - A body that needs a target's state before it can compute makes that
-     target's join a producer placed before the pure stage that reads it.
-     A pair of target operations declared inverse is promoted to one
-     carried value before the loop and written back after it (RFC-0082).
-
-5. **Order is one of three.**
-   - `Disjoint`: each iteration writes only the element at its counter.
-   - `AnyOrder`: every operation of the join commutes (RFC-0013), stands in
-     an `anyorder` region (RFC-0007), storage writes included, or joins
-     through a commutative law.
-   - `InOrder`: anything else. A float law is `InOrder` by default:
+4. **What a stage is, is read.** `analysis::loop_deps` is the one place
+   that computes, per stage, its cycles and, per cycle, its token, order
+   and law; the validator, the passes and the lowerer read it.
+   - Order is `Disjoint` when the cycle writes only the element at its
+     counter; `AnyOrder` when every operation in it commutes (RFC-0013), is
+     joined by a `merge` (RFC-0007 rule 7), or combines through a
+     commutative law; `InOrder` otherwise. A float law is `InOrder`:
      joining in arrival order changes the rounding.
+   - A law is specialization, not permission: `Op`, `Call` (an associative
+     extern, lifted over `Option` when it states no identity), `Fold`
+     (RFC-0082 rule 3) or `Order` (RFC-0007 rule 7). The lowerer may
+     combine inside a chunk and join the partials; a cycle without one
+     still runs in its order.
 
-   `validate` holds the mark to the operations' declarations.
+5. **Exits and effects.** A loop is left only from the header or from a
+   stage whose cycle is `InOrder`. An operation with an effect runs only
+   once its iteration holds the control token, so no effect is issued
+   ahead of an exit; one without an effect may run ahead and be discarded.
+   A run apart reports the trap least in the order (iteration, stage), and
+   a trap releases nothing (RFC-0048 rule 8). The lowerer runs an `Array`
+   source in place until the release of elements scattered over chunks
+   exists.
 
-6. **A law is specialization, not permission.** A join whose target's
-   update is a monoid action names it: `Op`, `Call` (an associative extern,
-   lifted over `Option` when it states no identity), `Fold` (RFC-0082
-   rule 3) or `Order` (RFC-0007 rule 7). The lowerer may combine inside a
-   chunk and join the partials. A join without a law still runs in its
-   order.
+6. **Who cuts.** A pass after IV canonicalization (RFC-0066 rule 7) and
+   after every pass that moves or merges the body's instructions writes
+   the boundaries, before strength reduction. It keeps each cycle whole,
+   puts work the cycle does not read after it and work it reads before it,
+   and duplicates nothing: an instruction two cycles share joins them. The
+   terminator names no token, so a pass that removes a `merge` or a phi
+   leaves a stage with no cycle, free, and cutting again merges the
+   boundaries left empty. A loop the pass cannot cut is one stage.
 
-7. **Exits and traps.** A loop is left only from the header or from an
-   `InOrder` join. A run apart reports the trap least in the order
-   (iteration, stage), and a trap releases nothing (RFC-0048 rule 8). The
-   lowerer runs an `Array` source in place until the release of elements
-   scattered over chunks exists.
-
-8. **Who writes it.** A pass after IV canonicalization, which is decided
-   per variable rather than per loop (RFC-0066 rule 7), and after every pass
-   that moves or merges the body's instructions, writes the stages;
-   strength reduction runs after it, inside `InOrder` joins. It
-   duplicates nothing: an instruction two joins share joins them. A loop
-   the pass cannot split is one `InOrder` join over everything it
-   touches, and runs as written.
-
-**Why.** Pure work and changes to storage are different facts, and only the
-second has an order. Stating them apart makes independence a structural
-check (rule 3) and leaves one question to the lowerer, how each join is
-ordered. A recurrence is a join that serializes; that is a cost the form
-states, not a shape it refuses.
-**Cost.** A terminator arm in every reader. A validator that restates rule
-3 and rule 5. The stage pass and IV canonicalization per target.
+**Why.** A token is a value, so every pass keeps it right while it moves,
+merges and deletes instructions; a mark on the loop is a second statement
+of the same fact, which a pass can leave stale. Where the body is cut is
+the one fact tokens do not state, and recomputing it is the lowerer's
+whole burden, so the IR writes it. What follows is that a pass that adds a
+`merge` where order does not matter, or removes an order edge, frees
+stages without touching them, and validation checks one invariant.
+**Cost.** A terminator arm in every reader. One analysis every loop reader
+consults. The cutting pass, rerun after a pass that frees a stage.
 **Rejected.**
-- Parts joined by a law, with writes left in the body — writes in a body
-  made independence a proof about which element each write reaches, and a
-  law became the price of running apart.
-- A two-valued order — an element store is neither ordered nor a free
-  join; it is disjoint by the counter.
-- Join operations marked in place in the body — the order would be read
-  per instruction by every pass.
+- Order, law and targets written on the terminator — a second statement
+  of what the tokens say, which a pass can leave stale, and a terminator
+  that names a token keeps its phi alive against elimination.
+- No boundaries, every cut computed by the lowerer — the lowerer re-solves
+  every loop, and no pass can rely on a cut.
+- Parts joined by a law, with writes left in the body — independence
+  became a proof about which element each write reaches.
 - Arms that fork and all run — every pass reads successors as
   alternatives.
 
 **Open.** Each runs as `InOrder` today; the tiers weigh ease against reach.
-- First, after the form: a law through a nested loop; a store at an
-  injective affine index of the counter as `Disjoint`; named commutation
-  sets in place of `commutes: bool`.
-- After the executor's ordered and unordered runs: a join split by key; a
-  `Stream` source for `while` loops.
+- First: a law through a nested loop; a store at an injective affine index
+  of the counter as `Disjoint`; named commutation sets in place of
+  `commutes: bool`.
+- After the executor's pipeline: a cycle split by key; a `Stream` source
+  for `while` loops.
 - When a use asks: speculative exits; a scan law, for a body that reads a
-  partial; an action law for heavy work inside a target's cycle.
+  partial; an action law for heavy work inside a cycle.
 
 ## RFC-0081: a `while` that counts by one to an invariant bound is a range `for`
 

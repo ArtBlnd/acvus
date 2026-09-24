@@ -458,7 +458,7 @@ fn three_independent_accumulators_are_three_joins() {
     );
 }
 
-/// RFC-0089 rule 7: the `break` leaves from the body, so the pure
+/// RFC-0089 rule 5: the `break` leaves from the body, so the pure
 /// computation it tests sits in the one `InOrder` join the loop is.
 #[test]
 fn a_break_in_a_pure_computation_sits_in_an_in_order_join() {

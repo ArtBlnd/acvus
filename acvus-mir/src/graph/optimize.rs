@@ -105,7 +105,7 @@ pub fn optimize(
 
         let mut errors = validate::type_check::check_types(&module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
-        // RFC-0089 rules 1, 3, 5 and 7, asked of the module after
+        // RFC-0089 rules 1, 3, 4 and 5, asked of the module after
         // `insert_drops`, which is the last pass: the form must hold on the
         // body the machine runs.
         errors.extend(validate::stages::check(&module));
@@ -481,7 +481,7 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // schedules within a block.
     optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
-    // RFC-0089 rule 8: after every pass that moves or merges a body's
+    // RFC-0089 rule 6: after every pass that moves or merges a body's
     // instructions -- `code_motion` and `forward` across blocks, `gvn`
     // merging, `reorder` within one block -- since a stage is a set of
     // instructions and a pass that moved one across a stage's boundary

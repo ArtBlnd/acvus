@@ -149,7 +149,7 @@ pub enum ValidationErrorKind {
         fault: crate::validate::stages::OrderFault,
     },
     /// Block `from` of stage `stage` leaves the loop, and the stage is not
-    /// an `InOrder` join (RFC-0089 rule 7).
+    /// an `InOrder` join (RFC-0089 rule 5).
     StageLeaves {
         header: Label,
         stage: usize,

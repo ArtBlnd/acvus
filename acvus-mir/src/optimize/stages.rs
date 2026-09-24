@@ -1,4 +1,4 @@
-//! A `for`'s body as a chain of stages (RFC-0089 rules 2, 4, 5, 6 and 8).
+//! A `for`'s body as a chain of stages (RFC-0089 rules 2, 3, 4 and 6).
 //!
 //! The pass finds the loop's targets, forms each target's join as its
 //! dependence cycle, merges joins that share an instruction, and orders the
