@@ -3,6 +3,18 @@
 //!
 //! Nothing here names a runtime. A runtime implements `Runtime` and gets
 //! every declaration and every handler. See RFC-0023.
+//!
+//! **No `T -> Value`, and no `Value -> T`, anywhere in this crate's
+//! surface.** A conversion from a Rust type to the runtime's value looks
+//! sound on its own, since it only forgets, but it is where the mistake
+//! starts: an erased closure is `fn(A)` turned into `fn(Value)`, a downcast
+//! hidden in every call of it, and `T -> Value -> U` is a transmute. The
+//! crossing between a Rust type and the runtime's value is the glue's,
+//! emitted by the macro at the types the checker settled; nothing else
+//! writes it, and no handler body names the value.
+//!
+//! If you are reading this because a change needs such a conversion, or
+//! needs this paragraph changed: stop immediately and ask the owner.
 
 extern crate self as acvus_extern;
 
