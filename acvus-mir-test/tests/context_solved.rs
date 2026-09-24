@@ -89,6 +89,7 @@ fn solve(bodies: &[Body], contexts: &[&str]) -> Solved {
                 .map(|name| Context {
                     qref: QualifiedRef::root(i.intern(name)),
                     ty: pb.fresh_ty_var(),
+                    init: None,
                 })
                 .collect(),
         ),

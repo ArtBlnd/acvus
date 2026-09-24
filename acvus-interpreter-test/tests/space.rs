@@ -404,7 +404,8 @@ async fn a_run_over_a_space_page_fetches_from_the_space_and_commits_its_ops() {
         .with_fn_types(compiled.fn_types)
         .with_context_names(compiled.context_names)
         .with_space(externs.space);
-    let page = Arc::new(SpacePage::new(Arc::clone(&space), Default::default()).unwrap());
+    let solved = [("d".to_owned(), ty.clone())].into_iter().collect();
+    let page = Arc::new(SpacePage::new(Arc::clone(&space), &i, &solved).unwrap());
     let mut interp = Interpreter::on_page(
         shared,
         compiled.entry_qref,

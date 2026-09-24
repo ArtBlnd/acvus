@@ -70,6 +70,7 @@ async fn run_parsed(
         .map(|(name, (ty, _))| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect();
 

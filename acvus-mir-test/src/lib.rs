@@ -160,6 +160,7 @@ pub fn compile_to_ir_with(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -244,6 +245,7 @@ pub fn compile_script_ir_with(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -281,6 +283,7 @@ pub fn compile_script_raw(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -372,6 +375,7 @@ pub fn refuse_script_mode_ir_with(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -660,6 +664,7 @@ pub fn compile_script_at(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -782,6 +787,7 @@ pub fn refuse_script_mode_optimized(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -918,6 +924,7 @@ pub fn compile_inline_ir_with(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
 
@@ -1046,6 +1053,7 @@ fn compile_graph_raw(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
 
@@ -1153,6 +1161,7 @@ fn compile_multi_fn_at(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
 

@@ -123,7 +123,8 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::interpreter::{Executable, Interpreter, InterpreterContext};
+use crate::init::{DeclaredInits, GraphParts, InitSource, Inits};
+use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::journal::RuntimeContext;
 use crate::prepare::{PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
@@ -132,13 +133,31 @@ use crate::value::Value;
 pub enum Source<'a> {
     Script(&'a str),
     Template(&'a str),
+    Expr(&'a str),
+}
+
+impl Source<'_> {
+    fn parse(&self, interner: &Interner) -> Parsed {
+        match self {
+            Source::Script(text) | Source::Expr(text) => {
+                Parsed::script(acvus_ast::parse_script(interner, text))
+            }
+            Source::Template(text) => Parsed::template(acvus_ast::parse(interner, text)),
+        }
+    }
+}
+
+/// The body whose source a refusal's span points into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    Entry(String),
+    Init(String),
 }
 
 #[derive(Debug)]
 pub struct Refusal {
-    /// The entry whose source `span` points into; `None` for a refusal of
-    /// the compilation as a whole.
-    pub entry: Option<String>,
+    /// `None` for a refusal of the compilation as a whole.
+    pub origin: Option<Origin>,
     pub message: String,
     pub span: Option<Span>,
 }
@@ -174,14 +193,15 @@ impl DeclaredInputs {
     }
 }
 
-/// The entries of one compilation graph. An initializer that stores a
-/// context and the scripts that read it are entries of the same graph, so
-/// the context's type is solved from all of them (RFC-0090 rule 1).
+/// The entries and inits of one compilation graph, so a context's type is
+/// solved from every body that stores, reads or initializes it
+/// (RFC-0090 rule 1).
 pub struct Host {
     interner: Interner,
     registries: Vec<Registry<AcvusRuntime>>,
     bindings: Bindings,
     entries: Vec<EntryDecl>,
+    inits: Vec<InitSource>,
     refusals: Vec<Refusal>,
 }
 
@@ -192,8 +212,23 @@ impl Host {
             registries,
             bindings: Bindings::default(),
             entries: Vec::new(),
+            inits: Vec::new(),
             refusals: Vec::new(),
         }
+    }
+
+    pub fn init(mut self, key: &str, source: Source<'_>) -> Self {
+        let Parsed { ast, errors } = source.parse(&self.interner);
+        self.refusals.extend(errors.iter().map(|e| Refusal {
+            origin: Some(Origin::Init(key.to_owned())),
+            message: e.kind.to_string(),
+            span: span_of(e.span),
+        }));
+        self.inits.push(InitSource {
+            key: key.to_owned(),
+            ast,
+        });
+        self
     }
 
     pub fn bindings(self, bindings: Bindings) -> Self {
@@ -207,24 +242,21 @@ impl Host {
     {
         if self.entries.iter().any(|entry| entry.name == name) {
             self.refusals.push(Refusal {
-                entry: Some(name.to_owned()),
+                origin: Some(Origin::Entry(name.to_owned())),
                 message: format!("the entry `{name}` is given twice"),
                 span: None,
             });
         }
-        let Parsed { ast, errors } = match source {
-            Source::Script(text) => Parsed::script(acvus_ast::parse_script(&self.interner, text)),
-            Source::Template(text) => Parsed::template(acvus_ast::parse(&self.interner, text)),
-        };
+        let Parsed { ast, errors } = source.parse(&self.interner);
         self.refusals.extend(errors.iter().map(|e| Refusal {
-            entry: Some(name.to_owned()),
+            origin: Some(Origin::Entry(name.to_owned())),
             message: e.kind.to_string(),
             span: span_of(e.span),
         }));
         let asked = I::declared(&self.interner);
         let Some(inputs) = DeclaredInputs::of(&self.interner, asked.clone()) else {
             self.refusals.push(Refusal {
-                entry: Some(name.to_owned()),
+                origin: Some(Origin::Entry(name.to_owned())),
                 message: format!(
                     "the inputs of the entry `{name}` are declared as {}, which is neither `()` \
                      nor a struct of named fields",
@@ -249,6 +281,7 @@ impl Host {
             registries,
             bindings,
             entries,
+            inits,
             mut refusals,
         } = self;
         let interner = &interner;
@@ -263,7 +296,7 @@ impl Host {
             Ok(externs) => externs,
             Err(error) => {
                 refusals.push(Refusal {
-                    entry: None,
+                    origin: None,
                     message: format!("the registries do not combine: {error}"),
                     span: None,
                 });
@@ -288,7 +321,7 @@ impl Host {
             let qref = QualifiedRef::root(interner.intern(&name));
             if extern_fns.iter().any(|f| f.qref == qref) {
                 refusals.push(Refusal {
-                    entry: Some(name.clone()),
+                    origin: Some(Origin::Entry(name.clone())),
                     message: format!("the entry `{name}` has the name of an extern function"),
                     span: None,
                 });
@@ -299,7 +332,7 @@ impl Host {
                     .iter()
                     .filter(|param| bindings.get(param.name).is_some())
                     .map(|param| Refusal {
-                        entry: Some(name.clone()),
+                        origin: Some(Origin::Entry(name.clone())),
                         message: format!(
                             "the input `${}` of the entry `{name}` is already fixed by a binding",
                             interner.resolve(param.name)
@@ -330,9 +363,6 @@ impl Host {
         }
         let entry_refs: Vec<QualifiedRef> = functions.iter().map(|f| f.qref).collect();
         functions.extend(extern_fns);
-        if !refusals.is_empty() {
-            return Err(refusals);
-        }
 
         let mut open = PolyBuilder::new();
         let mut contexts: Vec<Context> = named
@@ -340,9 +370,36 @@ impl Host {
             .map(|qref| Context {
                 qref,
                 ty: open.fresh_ty_var(),
+                init: None,
             })
             .collect();
         contexts.sort_by_key(|context| context.qref.name.bits());
+        let mut parts = GraphParts {
+            open,
+            contexts,
+            functions,
+            entries: entry_refs,
+        };
+        let declared_inits = match DeclaredInits::declare(interner, inits, &mut parts) {
+            Ok(declared) => declared,
+            Err(refused) => {
+                refusals.extend(refused.into_iter().map(|refusal| Refusal {
+                    origin: Some(Origin::Init(refusal.key().to_owned())),
+                    message: refusal.to_string(),
+                    span: None,
+                }));
+                return Err(refusals);
+            }
+        };
+        if !refusals.is_empty() {
+            return Err(refusals);
+        }
+        let GraphParts {
+            contexts,
+            functions,
+            entries: entry_refs,
+            ..
+        } = parts;
         let graph = CompilationGraph {
             functions: Freeze::new(functions),
             contexts: Freeze::new(contexts),
@@ -350,13 +407,18 @@ impl Host {
             bindings,
             entries: entry_refs,
         };
-        let entry_of = |qref: &QualifiedRef| declared.get(qref).map(|d| d.name.clone());
+        let entry_of = |qref: &QualifiedRef| match declared.get(qref) {
+            Some(entry) => Some(Origin::Entry(entry.name.clone())),
+            None => declared_inits
+                .key_of(qref)
+                .map(|key| Origin::Init(key.to_owned())),
+        };
 
         let ext = extract::extract(&interner, &graph);
         let inf = infer::infer(&interner, &graph, &ext);
         refusals.extend(inf.errors().into_iter().flat_map(|(qref, errs)| {
             errs.iter().map(move |e| Refusal {
-                entry: entry_of(&qref),
+                origin: entry_of(&qref),
                 message: e.display(&interner).to_string(),
                 span: span_of(e.span),
             })
@@ -364,7 +426,7 @@ impl Host {
         let lowered = lower::lower(&interner, &graph, &ext.view(), &inf);
         refusals.extend(lowered.errors.iter().flat_map(|le| {
             le.errors.iter().map(|e| Refusal {
-                entry: entry_of(&le.fn_id),
+                origin: entry_of(&le.fn_id),
                 message: e.display(&interner).to_string(),
                 span: span_of(e.span),
             })
@@ -382,7 +444,7 @@ impl Host {
         refusals.extend(optimized.errors.into_iter().flat_map(|(qref, errs)| {
             let entry = entry_of(&qref);
             errs.into_iter().map(move |e| Refusal {
-                entry: entry.clone(),
+                origin: entry.clone(),
                 message: e.display(&interner).to_string(),
                 span: span_of(e.span),
             })
@@ -442,6 +504,7 @@ impl Host {
             })
             .collect();
         Ok(Program {
+            inits: declared_inits.solved(&solved),
             contexts: Contexts {
                 rt: shared.runtime_over_an_empty_page(),
                 solved,
@@ -452,7 +515,7 @@ impl Host {
     }
 }
 
-fn context_refs(ast: &ParsedAst) -> FxHashSet<QualifiedRef> {
+pub(crate) fn context_refs(ast: &ParsedAst) -> FxHashSet<QualifiedRef> {
     match ast {
         ParsedAst::Script(script) => acvus_ast::extract_script_context_refs(script),
         ParsedAst::Template(template) => acvus_ast::extract_template_context_refs(template),
@@ -518,12 +581,46 @@ impl InputsCrossing {
 pub struct Program {
     shared: InterpreterContext,
     entries: HashMap<String, CompiledEntry>,
+    inits: Inits,
     contexts: Contexts,
 }
 
 impl Program {
     pub fn contexts(&self) -> &Contexts {
         &self.contexts
+    }
+
+    /// Run every init whose key `page` lacks, and put each result on the
+    /// page; the keys filled.
+    pub async fn init_absent<P>(&self, page: &Arc<P>) -> Result<Vec<String>, PageError>
+    where
+        P: Page + 'static,
+    {
+        self.accept_types(page.as_ref())?;
+        let page: Arc<dyn RuntimeContext> = Arc::<P>::clone(page);
+        self.inits.fill_absent(&self.shared, &page).await
+    }
+
+    /// Refuse a page that holds a context of this compilation at another
+    /// type, or lacks one, before any value is touched (RFC-0090 rule 4).
+    fn accept_types<P>(&self, page: &P) -> Result<(), PageError>
+    where
+        P: Page,
+    {
+        let interner = &self.shared.interner;
+        for (key, solved) in &self.contexts.solved {
+            let Some(held) = page.held_type(key) else {
+                return Err(PageError::NotInGraph { key: key.clone() });
+            };
+            if !held.same_erased(solved) {
+                return Err(PageError::Mismatched {
+                    key: key.clone(),
+                    held: held.display(interner).to_string(),
+                    asked: solved.display(interner).to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn entry<I, R>(&self, name: &str) -> Result<Entry<'_, I, R>, EntryError>
@@ -631,20 +728,13 @@ where
         P: Page + 'static,
     {
         let program = self.program;
-        let interner = &program.shared.interner;
-        for (key, solved) in &program.contexts.solved {
-            let Some(held) = page.held_type(key) else {
-                return Err(PageError::NotInGraph { key: key.clone() });
-            };
-            if !held.same_erased(solved) {
-                return Err(PageError::Mismatched {
-                    key: key.clone(),
-                    held: held.display(interner).to_string(),
-                    asked: solved.display(interner).to_string(),
-                });
-            }
-        }
+        program.accept_types(page.as_ref())?;
         let page: Arc<dyn RuntimeContext> = Arc::<P>::clone(page);
+        let fetched = &lookup_module(&program.shared, &self.compiled.qref).fetched_first;
+        program
+            .inits
+            .fill(&program.shared, &page, fetched.iter().map(|key| &**key))
+            .await?;
         let mut interpreter =
             Interpreter::on_page(program.shared.clone(), self.compiled.qref, page);
         let accepted = interpreter.accept_page()?;

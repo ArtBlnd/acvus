@@ -140,6 +140,10 @@ pub struct Context {
     pub qref: QualifiedRef,
     /// The context's polymorphic type. `Var` = to be inferred.
     pub ty: PolyTy,
+    /// The local function whose result is the context's first value
+    /// (RFC-0090 rule 1). `infer` checks its body against `ty` with every
+    /// identity open, so the source the init makes is the value's.
+    pub init: Option<QualifiedRef>,
 }
 
 impl Context {

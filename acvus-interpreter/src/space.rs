@@ -13,6 +13,7 @@ use acvus_extern::{
     SpaceResult,
 };
 use acvus_mir::ty::Ty;
+use acvus_utils::Interner;
 
 use crate::host::{Contexts, Page, PageError, held_as};
 use crate::journal::{Held, RuntimeContext, in_graph};
@@ -717,26 +718,7 @@ pub struct SpacePage {
 impl SpacePage {
     pub fn of(space: Arc<Space>, contexts: &Contexts) -> Result<Self, PageError> {
         let interner = &contexts.rt().shared.interner;
-        let mut types: HashMap<String, Ty> = space
-            .identities()
-            .map_err(PageError::Space)?
-            .into_iter()
-            .collect();
-        for (key, solved) in contexts.solved() {
-            match types.get(key) {
-                Some(stored) if !stored.same_erased(solved) => {
-                    return Err(PageError::Mismatched {
-                        key: key.clone(),
-                        held: stored.display(interner).to_string(),
-                        asked: solved.display(interner).to_string(),
-                    });
-                }
-                Some(_) => {}
-                None => {
-                    types.insert(key.clone(), solved.clone());
-                }
-            }
-        }
+        let types = typed(&space, interner, contexts.solved())?;
         Ok(Self {
             space,
             types,
@@ -789,6 +771,38 @@ impl SpacePage {
     }
 }
 
+/// Each context `space` holds at the type it holds it, refused where that is
+/// not the type `solved` gives it, and each context of `solved` the space
+/// does not hold yet at the solved type, so a first value an init puts on
+/// the page is committed at it.
+fn typed(
+    space: &Space,
+    interner: &Interner,
+    solved: &HashMap<String, Ty>,
+) -> Result<HashMap<String, Ty>, PageError> {
+    let mut types: HashMap<String, Ty> = space
+        .identities()
+        .map_err(PageError::Space)?
+        .into_iter()
+        .collect();
+    for (key, solved) in solved {
+        match types.get(key) {
+            Some(stored) if !stored.same_erased(solved) => {
+                return Err(PageError::Mismatched {
+                    key: key.clone(),
+                    held: stored.display(interner).to_string(),
+                    asked: solved.display(interner).to_string(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                types.insert(key.clone(), solved.clone());
+            }
+        }
+    }
+    Ok(types)
+}
+
 /// The holder of `key` in `held`, loaded from `space` at the type `types`
 /// states for it when no run has fetched it. The parts of a `SpacePage` are
 /// passed apart, since the holder is lent while the compilation is read.
@@ -817,29 +831,24 @@ fn loaded<'h>(
     }
 }
 
-/// A page seeded with raw holders, and a commit through a runtime the
-/// caller names: the runtime's and its tooling's (RFC-0090 rule 6). A host
-/// opens a page with `of` and commits it with `commit_opened`.
+/// A page opened for the types a compilation the tooling built solved, and
+/// a commit through a runtime the caller names: the runtime's and its
+/// tooling's (RFC-0090 rule 6). A host opens a page with `of` and commits it
+/// with `commit_opened`.
 macro_rules! space_page_values {
     ($v:vis) => {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
         impl SpacePage {
-            /// A page over `space` for the identities it holds, plus `seed`:
-            /// values for identities the space does not hold yet, or replaces.
             $v fn new(
                 space: Arc<Space>,
-                seed: HashMap<String, (Ty, Owned<AcvusRuntime>)>,
-            ) -> SpaceResult<Self> {
-                let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
-                let mut held = HashMap::new();
-                for (id, (ty, value)) in seed {
-                    types.insert(id.clone(), ty.clone());
-                    held.insert(id, Held::new(value, Arc::new(ty)));
-                }
+                interner: &Interner,
+                solved: &HashMap<String, Ty>,
+            ) -> Result<Self, PageError> {
+                let types = typed(&space, interner, solved)?;
                 Ok(Self {
                     space,
                     types,
-                    held: Mutex::new(held),
+                    held: Mutex::new(HashMap::new()),
                     solved: None,
                 })
             }

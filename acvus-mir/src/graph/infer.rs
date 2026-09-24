@@ -681,7 +681,7 @@ struct BodyCheck<'c> {
     bindings: &'c Bindings,
     effect: EffectTerm<Infer>,
     probe: Option<acvus_ast::AstId>,
-    expected_tail: Option<&'c Ty>,
+    expected_tail: Option<InferTy>,
     crossing: ResultCrossing,
 }
 
@@ -689,14 +689,18 @@ impl BodyCheck<'_> {
     fn check(self, solver: &mut Solver<'_>, parsed: &ParsedSource) -> Checked {
         match parsed {
             ParsedSource::Script(script) => {
+                let expected_tail = self.expected_tail.clone();
                 self.checker(solver)
-                    .check_script(script, self.expected_tail, self.crossing)
+                    .check_script(script, expected_tail, self.crossing)
             }
             ParsedSource::Template(template) => self.checker(solver).check_template(template),
-            ParsedSource::Recovered(RecoveredAst::Script(script)) => refused(
-                self.checker(solver)
-                    .check_script(script, self.expected_tail, self.crossing),
-            ),
+            ParsedSource::Recovered(RecoveredAst::Script(script)) => {
+                let expected_tail = self.expected_tail.clone();
+                refused(
+                    self.checker(solver)
+                        .check_script(script, expected_tail, self.crossing),
+                )
+            }
             ParsedSource::Recovered(RecoveredAst::Template(template)) => {
                 refused(self.checker(solver).check_template(template))
             }
@@ -733,6 +737,58 @@ fn crossing_of(entries: &[QualifiedRef], body: QualifiedRef) -> crate::typeck::R
     }
 }
 
+/// Each context's type as one solver's term, and each init's context by the
+/// init's function (RFC-0090 rule 1).
+struct KnownContexts<'g> {
+    types: FxHashMap<QualifiedRef, InferTy>,
+    inits: FxHashMap<QualifiedRef, &'g Context>,
+}
+
+impl<'g> KnownContexts<'g> {
+    fn instantiate(solver: &mut Solver<'_>, contexts: &'g [Context]) -> Self {
+        KnownContexts {
+            types: contexts
+                .iter()
+                .map(|ctx| (ctx.qref, solver.instantiate_poly(&ctx.ty)))
+                .collect(),
+            inits: contexts
+                .iter()
+                .filter_map(|ctx| Some((ctx.init?, ctx)))
+                .collect(),
+        }
+    }
+
+    /// The return `fid` is checked against. An init returns its context's
+    /// type: the context's own variable while the graph still solves it, so
+    /// the init's result joins that solve, and otherwise the settled type
+    /// with every identity open, since a declaration names no source
+    /// (RFC-0012 rule 7) and the init's value carries the source it makes.
+    fn declared_return(&self, solver: &mut Solver<'_>, fid: QualifiedRef, fn_ret: &PolyTy) -> InferTy {
+        match self.inits.get(&fid) {
+            Some(context) if context.is_open() => self.types[&context.qref].clone(),
+            Some(context) => solver.instantiate_open(&context.ty),
+            None => solver.instantiate_poly(fn_ret),
+        }
+    }
+
+    /// The type the body's tail is held to: an init's declared return
+    /// itself, and any other function's declared return where it is
+    /// concrete. `None` leaves the tail inferred.
+    fn expected_tail(
+        &self,
+        solver: &mut Solver<'_>,
+        fid: QualifiedRef,
+        fn_ret: &PolyTy,
+        ret_vars: &FxHashMap<QualifiedRef, InferTy>,
+    ) -> Option<InferTy> {
+        if self.inits.contains_key(&fid) {
+            return Some(ret_vars[&fid].clone());
+        }
+        let infer = solver.instantiate_poly(fn_ret);
+        solver.freeze_ty(&infer).ok().map(|ty| lift_ty(&ty))
+    }
+}
+
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
@@ -740,7 +796,7 @@ pub fn infer_scc(
     bindings: &Bindings,
     fn_by_id: &FxHashMap<QualifiedRef, &Function>,
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
-    known_ctx: &FxHashMap<QualifiedRef, PolyTy>,
+    contexts: &[Context],
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
     declared: &FxHashMap<QualifiedRef, Declared>,
     sources: &mut Sources,
@@ -750,11 +806,7 @@ pub fn infer_scc(
     let signatures = declared_instances(declared);
     let mut solver = Solver::new(sources, registry, &signatures);
 
-    // Instantiate context types into solver-scoped InferTy.
-    let known_ctx_infer: FxHashMap<QualifiedRef, InferTy> = known_ctx
-        .iter()
-        .map(|(&k, v)| (k, solver.instantiate_poly(v)))
-        .collect();
+    let known = KnownContexts::instantiate(&mut solver, contexts);
     let mut fn_bind_params: FxHashMap<QualifiedRef, Vec<Param>> = FxHashMap::default();
     let mut fn_declared_params: FxHashMap<QualifiedRef, Vec<ParamTerm<Infer>>> =
         FxHashMap::default();
@@ -792,7 +844,7 @@ pub fn infer_scc(
             };
 
             // Solver vars for unification (InferTy).
-            let ret_var: InferTy = solver.instantiate_poly(fn_ret);
+            let ret_var: InferTy = known.declared_return(&mut solver, fid, fn_ret);
             fn_ret_vars.insert(fid, ret_var.clone());
             let effect_var = solver.fresh_effect_var();
             fn_effect_vars.insert(fid, effect_var);
@@ -829,7 +881,7 @@ pub fn infer_scc(
             };
 
             let env = crate::ty::TypeEnv {
-                contexts: known_ctx_infer.clone(),
+                contexts: known.types.clone(),
                 functions: env_functions.clone(),
                 machine: machine_signatures.clone(),
             };
@@ -841,10 +893,7 @@ pub fn infer_scc(
                 unreachable!("local function ty must be Fn");
             };
 
-            let expected_tail_ty: Option<Ty> = {
-                let infer = solver.instantiate_poly(fn_ret);
-                solver.freeze_ty(&infer).ok()
-            };
+            let expected_tail_ty = known.expected_tail(&mut solver, fid, fn_ret, &fn_ret_vars);
             let mut checked = BodyCheck {
                 interner,
                 env: &env,
@@ -855,7 +904,7 @@ pub fn infer_scc(
                 probe: probe
                     .filter(|probe| probe.body == fid)
                     .map(|probe| probe.marker),
-                expected_tail: expected_tail_ty.as_ref(),
+                expected_tail: expected_tail_ty.clone(),
                 crossing: crossing_of(entries, fid),
             }
             .check(&mut solver, parsed);
@@ -982,9 +1031,24 @@ pub fn infer(
     if !graph.contexts.iter().any(Context::is_open) {
         return infer_at(interner, graph, extract, &graph.contexts);
     }
-    let solving = infer_at(interner, graph, extract, &graph.contexts);
-    let solved = solved_contexts(&graph.contexts, &solving);
+    let solved = solve_contexts(interner, graph, extract);
     infer_at(interner, graph, extract, &solved)
+}
+
+/// The graph's contexts, each open one at the type the whole graph solves
+/// it to. `infer` checks every body against these, and so does a graph
+/// that infers one component at a time, so both word a refusal alike
+/// (RFC-0085 rule 1).
+pub fn solve_contexts(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    extract: &ExtractResult,
+) -> Vec<Context> {
+    if !graph.contexts.iter().any(Context::is_open) {
+        return graph.contexts.to_vec();
+    }
+    let solving = infer_at(interner, graph, extract, &graph.contexts);
+    solved_contexts(&graph.contexts, &solving)
 }
 
 /// A context at an open type is solved from every body that stores or reads
@@ -1004,6 +1068,7 @@ fn solved_contexts(contexts: &[Context], solving: &InferResult) -> Vec<Context> 
             Some(ty) if !ty.is_error() && context.is_open() => Context {
                 qref: context.qref,
                 ty: lift_declaration(ty, &mut builder),
+                init: context.init,
             },
             Some(_) | None => context.clone(),
         })
@@ -1036,10 +1101,7 @@ fn infer_at(
         }
     }
 
-    let known_ctx: FxHashMap<QualifiedRef, InferTy> = contexts
-        .iter()
-        .map(|ctx| (ctx.qref, solver.instantiate_poly(&ctx.ty)))
-        .collect();
+    let known = KnownContexts::instantiate(&mut solver, contexts);
 
     let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
         .functions
@@ -1101,7 +1163,7 @@ fn infer_at(
                 // Solver vars for unification (InferTy).
                 // If ret is concrete (no Poly Vars) -> instantiate_poly gives concrete InferTy.
                 // If ret has Vars -> instantiate_poly maps each Var to a fresh solver var.
-                let ret_var: InferTy = solver.instantiate_poly(fn_ret);
+                let ret_var: InferTy = known.declared_return(&mut solver, fid, fn_ret);
                 scc_ret_vars.insert(fid, ret_var.clone());
                 scc_effect_vars.insert(fid, solver.fresh_effect_var());
                 scc_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
@@ -1140,7 +1202,7 @@ fn infer_at(
                 };
 
                 let env = crate::ty::TypeEnv {
-                    contexts: known_ctx.clone(),
+                    contexts: known.types.clone(),
                     functions: env_functions.clone(),
                     machine: machine_signatures.clone(),
                 };
@@ -1152,12 +1214,8 @@ fn infer_at(
                     unreachable!("local function ty must be Fn");
                 };
 
-                // For expected_tail: if ret is fully concrete (no Poly Vars), freeze to Ty.
-                // If ret has Vars (inferred), freeze fails -> None -> typechecker infers freely.
-                let expected_tail_ty: Option<Ty> = {
-                    let infer = solver.instantiate_poly(fn_ret);
-                    solver.freeze_ty(&infer).ok()
-                };
+                let expected_tail_ty =
+                    known.expected_tail(&mut solver, fid, fn_ret, &scc_ret_vars);
 
                 let checked = BodyCheck {
                     interner,
@@ -1167,7 +1225,7 @@ fn infer_at(
                     bindings: &graph.bindings,
                     effect: scc_effect_vars[&fid].clone(),
                     probe: None,
-                    expected_tail: expected_tail_ty.as_ref(),
+                    expected_tail: expected_tail_ty.clone(),
                     crossing: crossing_of(&graph.entries, fid),
                 }
                 .check(&mut solver, parsed);
@@ -1283,7 +1341,8 @@ fn infer_at(
     // -- STEP 5: Build result ----------------------------------------
 
     // A context the graph leaves open closes to `!` (RFC-0038 rule 2).
-    let context_types: FxHashMap<QualifiedRef, Ty> = known_ctx
+    let context_types: FxHashMap<QualifiedRef, Ty> = known
+        .types
         .iter()
         .map(|(&k, v)| {
             let resolved = solver.resolve_ty(v);
@@ -1357,6 +1416,7 @@ mod tests {
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
                 ty: lift_declaration(ty, &mut pb),
+                init: None,
             })
             .collect();
         let qref = QualifiedRef::root(interner.intern("test"));
@@ -1452,6 +1512,7 @@ mod tests {
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
                 ty: lift_declaration(ty, &mut pb),
+                init: None,
             })
             .collect();
         let mut functions = Vec::new();
@@ -1515,6 +1576,7 @@ mod tests {
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
                 ty: lift_declaration(ty, &mut pb),
+                init: None,
             })
             .collect();
 
@@ -2715,6 +2777,7 @@ mod tests {
         let contexts = vec![Context {
             qref: QualifiedRef::root(i.intern("x")),
             ty: pb.fresh_ty_var(),
+            init: None,
         }];
         let test_qref = QualifiedRef::root(i.intern("test"));
         let graph = CompilationGraph {

@@ -26,6 +26,7 @@ fn compile_analysis(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect();
 
@@ -38,6 +39,7 @@ fn compile_analysis(
             contexts.push(Context {
                 qref: QualifiedRef::root(ast_qref.name),
                 ty: pb.fresh_ty_var(),
+                init: None,
             });
         }
     }

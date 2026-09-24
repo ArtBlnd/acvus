@@ -1,86 +1,9 @@
 //! A runtime value as JSON.
 
 use acvus_interpreter::{Composite, Kind, Value};
-use acvus_mir::ty::{IntTy, Ty};
+use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 use serde_json::{Map, Value as Json};
-
-pub fn of(interner: &Interner, ty: &Ty, value: &Value) -> Json {
-    match ty {
-        Ty::Int(k) => {
-            let v = k.read(value.bits());
-            if k.signed() {
-                Json::from(v as i64)
-            } else {
-                Json::from(v as u64)
-            }
-        }
-        Ty::Float => Json::from(value.as_float()),
-        Ty::Char => Json::from(char_of(value).to_string()),
-        Ty::Bool => Json::from(value.as_bool()),
-        Ty::Unit => Json::Null,
-        // SAFETY: the type is the runtime's own witness of the value's shape.
-        Ty::String => Json::from(unsafe { value.as_str() }),
-        Ty::Array(elem, _) => Json::Array(
-            unsafe { value.as_array() }
-                .iter()
-                .map(|v| of(interner, elem, v))
-                .collect(),
-        ),
-        Ty::Tuple(elems) => Json::Array(
-            unsafe { value.as_tuple() }
-                .iter()
-                .zip(elems)
-                .map(|(v, t)| of(interner, t, v))
-                .collect(),
-        ),
-        Ty::Object(fields) => {
-            let mut laid: Vec<_> = fields.iter().collect();
-            laid.sort_by(|(a, _), (b, _)| interner.resolve(**a).cmp(interner.resolve(**b)));
-            let values = unsafe { value.as_object() };
-            Json::Object(
-                laid.iter()
-                    .zip(values)
-                    .map(|((k, t), v)| (interner.resolve(**k).to_string(), of(interner, t, v)))
-                    .collect(),
-            )
-        }
-        Ty::Option(inner) => match value.option_payload() {
-            Some(v) => of(interner, inner, &v),
-            None => Json::Null,
-        },
-        Ty::Result(ok, err) => {
-            let variant = unsafe { value.as_variant() };
-            // SAFETY: the same witness — a variant's first register is its tag.
-            let tag = unsafe { variant.tag().as_tag() };
-            let name = interner.resolve(tag).to_string();
-            let held = match name.as_str() {
-                "Ok" => ok,
-                "Err" => err,
-                _ => return Json::from(format!("<{}>", ty.display(interner))),
-            };
-            Json::Object(Map::from_iter([(
-                name,
-                of(interner, held, variant.payload()),
-            )]))
-        }
-        Ty::Enum { variants, .. } => {
-            let variant = unsafe { value.as_variant() };
-            // SAFETY: the same witness — a variant's first register is its tag.
-            let tag = unsafe { variant.tag().as_tag() };
-            let name = interner.resolve(tag).to_string();
-            match variants.get(&tag) {
-                Some(Some(t)) => {
-                    let mut out = Map::new();
-                    out.insert(name, of(interner, t, variant.payload()));
-                    Json::Object(out)
-                }
-                _ => Json::from(name),
-            }
-        }
-        other => Json::from(format!("<{}>", other.display(interner))),
-    }
-}
 
 /// A value read without a type: its `Kind` is the witness for a word, and
 /// the vtable's `Composite` for an allocation.

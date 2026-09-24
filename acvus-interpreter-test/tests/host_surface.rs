@@ -2,13 +2,16 @@
 //! whose type the graph solves, and pages read and written through Rust
 //! types.
 
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use acvus_extern::{Ctx, Declared, Erased, ExternType, Registry, TyArg, extern_fn, extern_registry};
+use acvus_extern::{
+    Ctx, Declared, Erased, ExternType, Registry, TyArg, Var, extern_fn, extern_registry, kind,
+};
 use acvus_interpreter::{
-    AcvusRuntime, EntryError, EntryPart, Host, InMemoryContext, OutputError, PageError, Plain,
-    Program, SequentialExecutor, Source, Space, SpacePage,
+    AcvusRuntime, EntryError, EntryPart, Host, InMemoryContext, Origin, OutputError, PageError,
+    Plain, Program, Refusal, SequentialExecutor, Source, Space, SpacePage,
 };
 use acvus_mir::graph::{Bindings, BoundValue};
 
@@ -78,12 +81,52 @@ fn coin() -> bool {
     true
 }
 
+static INIT_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+static INIT_COUNTED: Mutex<()> = Mutex::new(());
+
+#[extern_fn(effect = opaque)]
+fn init_ran() {
+    INIT_RUNS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// A value that is one source: `history()` begins a new one at every call.
+#[derive(ExternType)]
+#[repr(transparent)]
+pub struct History<I>(Vec<i64>, PhantomData<I>)
+where
+    I: Var<kind::Identity>;
+
+#[extern_fn(effect = pure)]
+fn history<I>() -> History<I>
+where
+    I: Var<kind::Identity>,
+{
+    History(Vec::new(), PhantomData)
+}
+
+#[extern_fn(effect = pure)]
+fn record<I>(h: &mut History<I>, n: i64)
+where
+    I: Var<kind::Identity>,
+{
+    h.0.push(n);
+}
+
+#[extern_fn(effect = pure)]
+fn recorded<I>(h: &History<I>) -> i64
+where
+    I: Var<kind::Identity>,
+{
+    h.0.len() as i64
+}
+
 fn registries() -> Vec<Registry<AcvusRuntime>> {
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(extern_registry! {
         ns: "host",
-        types: [Tracked],
-        fns: [profile, tracked, bump, coin],
+        types: [Tracked, History<_>],
+        fns: [profile, tracked, bump, coin, init_ran, history, record, recorded],
     });
     registries
 }
@@ -136,7 +179,7 @@ fn log_program(i: &Interner) -> Program {
 }
 
 #[tokio::test]
-async fn an_initializer_stores_the_context_its_turn_scripts_push_to() {
+async fn a_script_stores_the_context_its_turn_scripts_push_to() {
     let i = Interner::new();
     let program = log_program(&i);
     assert_eq!(solved(&program, &i, "log"), "Vec<String>");
@@ -355,7 +398,7 @@ fn an_entry_that_returns_another_type_is_refused_at_compile_time() {
     assert!(
         refusals
             .iter()
-            .all(|refusal| refusal.entry.as_deref() == Some("main")),
+            .all(|refusal| refusal.origin == Some(Origin::Entry("main".to_owned()))),
         "{refusals:?}"
     );
     assert!(!refusals.is_empty());
@@ -443,7 +486,7 @@ fn fresh_log_program(i: &Interner) -> Program {
 }
 
 #[tokio::test]
-async fn an_initializer_runs_on_a_page_that_holds_nothing_and_its_turns_push_to_it() {
+async fn a_storing_script_runs_on_a_page_that_holds_nothing_and_its_turns_push_to_it() {
     let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     let i = Interner::new();
     let program = fresh_log_program(&i);
@@ -459,7 +502,7 @@ async fn an_initializer_runs_on_a_page_that_holds_nothing_and_its_turns_push_to_
 }
 
 #[tokio::test]
-async fn a_turn_before_its_initializer_is_refused_before_any_of_it_runs() {
+async fn a_turn_before_the_script_that_stores_its_context_is_refused_before_any_of_it_runs() {
     let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     let i = Interner::new();
     let program = fresh_log_program(&i);
@@ -984,4 +1027,228 @@ async fn an_input_the_entry_does_not_read_is_released_once_by_the_run() {
     };
     assert_eq!(int_result(&program, inputs).await, 7);
     assert_eq!(counting.released(), ELEMENTS);
+}
+
+// -- RFC-0090 rule 1: a context's first value is its init --------------
+
+fn init_counted() -> MutexGuard<'static, ()> {
+    INIT_COUNTED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn refused(host: Host) -> Vec<Refusal> {
+    match host.compile(Arc::new(SequentialExecutor)) {
+        Ok(_) => panic!("the program compiled"),
+        Err(refusals) => refusals,
+    }
+}
+
+#[tokio::test]
+async fn a_turn_on_an_empty_page_runs_the_expression_init_first() {
+    let i = Interner::new();
+    let program = compiled(
+        host(&i)
+            .init("log", Source::Expr("vec([])"))
+            .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
+    );
+    assert_eq!(solved(&program, &i, "log"), "Vec<String>");
+    let mut page = Arc::new(InMemoryContext::of(program.contexts()));
+
+    run_unit(&program, "turn", &page).await;
+
+    let log = log_of(exclusive(&mut page)).expect("`@log` holds a `Vec<String>`");
+    assert_eq!(log, ["x"]);
+}
+
+#[tokio::test]
+async fn a_script_init_edits_what_it_made_and_the_turn_sees_the_edit() {
+    let i = Interner::new();
+    let program = compiled(
+        host(&i)
+            .init(
+                "h",
+                Source::Script(r#"let h = deque(); h.push_back("sys".to_string()); h"#),
+            )
+            .entry::<(), ()>("turn", Source::Script(r#"@h.push_back("user".to_string());"#))
+            .entry::<(), u64>("size", Source::Script("@h.len()"))
+            .entry::<(), String>("oldest", Source::Script("@h.pop_front().unwrap()")),
+    );
+    assert_eq!(solved(&program, &i, "h"), "Deque<String>");
+    let page = Arc::new(InMemoryContext::of(program.contexts()));
+
+    run_unit(&program, "turn", &page).await;
+
+    let size = program.entry::<(), u64>("size").expect("`size` returns `u64`");
+    let output = size.run(&page, ()).await.expect("the page holds `@h`");
+    assert_eq!(output.with(|n: &u64| *n).expect("a `u64`"), 2);
+    let oldest = program.entry::<(), String>("oldest").expect("`oldest` returns `String`");
+    let output = oldest.run(&page, ()).await.expect("the page holds `@h`");
+    assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "sys");
+}
+
+#[tokio::test]
+async fn an_init_runs_once_and_a_second_run_reads_what_the_first_left() {
+    let _counted = init_counted();
+    let i = Interner::new();
+    let program = compiled(
+        host(&i)
+            .init("log", Source::Script("init_ran(); vec([])"))
+            .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
+    );
+    let mut page = Arc::new(InMemoryContext::of(program.contexts()));
+    let before = INIT_RUNS.load(Ordering::SeqCst);
+
+    run_unit(&program, "turn", &page).await;
+    run_unit(&program, "turn", &page).await;
+
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before + 1);
+    let log = log_of(exclusive(&mut page)).expect("`@log` holds a `Vec<String>`");
+    assert_eq!(log, ["x", "x"]);
+}
+
+#[tokio::test]
+async fn a_page_that_holds_the_key_never_runs_its_init() {
+    let _counted = init_counted();
+    let i = Interner::new();
+    let program = compiled(
+        host(&i)
+            .init("log", Source::Script("init_ran(); vec([])"))
+            .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
+    );
+    let mut page = Arc::new(InMemoryContext::of(program.contexts()));
+    exclusive(&mut page)
+        .insert("log", vec!["held".to_owned()])
+        .expect("`@log` is a `Vec<String>`");
+    let before = INIT_RUNS.load(Ordering::SeqCst);
+
+    run_unit(&program, "turn", &page).await;
+    let filled = program.init_absent(&page).await.expect("the page is the program's");
+
+    assert!(filled.is_empty(), "{filled:?}");
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before);
+    let log = log_of(exclusive(&mut page)).expect("`@log` holds a `Vec<String>`");
+    assert_eq!(log, ["held", "x"]);
+}
+
+#[tokio::test]
+async fn a_key_with_no_value_and_no_init_refuses_the_run_before_any_init_or_op_runs() {
+    let _counted = init_counted();
+    let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
+    let i = Interner::new();
+    let program = compiled(
+        host(&i)
+            .init("n", Source::Script("init_ran(); 1"))
+            .entry::<(), ()>("turn", Source::Script(&format!("bump(); @n = @n + 1; {PUSH_LOG}"))),
+    );
+    let mut page = Arc::new(InMemoryContext::of(program.contexts()));
+    let inits_before = INIT_RUNS.load(Ordering::SeqCst);
+    let bumps_before = BUMPS.load(Ordering::SeqCst);
+
+    let turn = program.entry::<(), ()>("turn").expect("the entry returns `()`");
+    let refused = turn.run(&page, ()).await.map(|_| ());
+
+    let Err(PageError::Absent { key }) = refused else {
+        panic!("a turn that pushes to `@log` ran without `@log` or its init: {refused:?}")
+    };
+    assert_eq!(key, "log");
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), inits_before);
+    assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before);
+    assert!(matches!(int_of(exclusive(&mut page), "n"), Err(PageError::Absent { .. })));
+}
+
+#[test]
+fn an_init_that_names_a_context_is_refused_at_compile_naming_its_key() {
+    let i = Interner::new();
+    let refusals = refused(
+        host(&i)
+            .init("a", Source::Expr("@x + 1"))
+            .entry::<(), i64>("main", Source::Script("@a + @x")),
+    );
+    let [refusal] = refusals.as_slice() else {
+        panic!("one refusal, the init's: {refusals:?}")
+    };
+    assert_eq!(refusal.origin, Some(Origin::Init("a".to_owned())));
+    assert_eq!(
+        refusal.message,
+        "the init of `@a` names `@x`, and an init names no context"
+    );
+}
+
+#[test]
+fn a_second_init_for_one_key_is_refused() {
+    let i = Interner::new();
+    let refusals = refused(
+        host(&i)
+            .init("a", Source::Expr("1"))
+            .init("a", Source::Expr("2"))
+            .entry::<(), i64>("main", Source::Script("@a")),
+    );
+    let [refusal] = refusals.as_slice() else {
+        panic!("one refusal, the second init's: {refusals:?}")
+    };
+    assert_eq!(refusal.origin, Some(Origin::Init("a".to_owned())));
+    assert_eq!(refusal.message, "`@a` is given two inits");
+}
+
+/// A declared type names no source (RFC-0012 rule 7): the source the init
+/// makes becomes the context's, and a turn that stores another source is
+/// refused, as it is against any declared context.
+#[tokio::test]
+async fn an_identity_carrying_context_takes_its_init_and_refuses_a_turns_new_source() {
+    let i = Interner::new();
+    let turn = "@h.record(7); @h.recorded()";
+    let program = compiled(
+        host(&i)
+            .init("h", Source::Expr("history()"))
+            .entry::<(), i64>("turn", Source::Script(turn)),
+    );
+    let page = Arc::new(InMemoryContext::of(program.contexts()));
+    let entry = program.entry::<(), i64>("turn").expect("the entry returns `i64`");
+    for expected in [1, 2] {
+        let output = entry.run(&page, ()).await.expect("the init fills `@h`");
+        assert_eq!(output.with(|n: &i64| *n).expect("an `i64`"), expected);
+    }
+
+    let refusals = refused(
+        host(&i)
+            .init("h", Source::Expr("history()"))
+            .entry::<(), i64>("turn", Source::Script(turn))
+            .entry::<(), ()>("reset", Source::Script("@h = history();")),
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|refusal| refusal.origin == Some(Origin::Entry("reset".to_owned()))),
+        "a turn's store of a new source into `@h` is refused: {refusals:?}"
+    );
+    assert!(
+        refusals
+            .iter()
+            .all(|refusal| refusal.origin == Some(Origin::Entry("reset".to_owned()))),
+        "only the turn that stores a new source is refused: {refusals:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_space_is_filled_committed_reopened_and_run_without_its_init() {
+    let _counted = init_counted();
+    let i = Interner::new();
+    let space = Arc::new(Space::new(Plain));
+    let program = compiled(
+        host(&i)
+            .init("name", Source::Script(r#"init_ran(); "ann".to_string()"#))
+            .entry::<(), String>("name", Source::Script("@name")),
+    );
+    let before = INIT_RUNS.load(Ordering::SeqCst);
+
+    let page = Arc::new(SpacePage::of(Arc::clone(&space), program.contexts()).expect("empty"));
+    let filled = program.init_absent(&page).await.expect("the page is the program's");
+    assert_eq!(filled, ["name"]);
+    page.commit_opened().expect("the space takes the context it did not hold");
+
+    let reopened =
+        Arc::new(SpacePage::of(Arc::clone(&space), program.contexts()).expect("same types"));
+    let entry = program.entry::<(), String>("name").expect("the entry returns `String`");
+    let output = entry.run(&reopened, ()).await.expect("the space holds `@name`");
+    assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "ann");
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before + 1);
 }

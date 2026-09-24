@@ -160,8 +160,9 @@ Status: Accepted
 6. A space in `Plain` mode keeps no ops: every commit is a state node.
 7. A run's page may sit over a space: a context is loaded at the run's first
    fetch, and every context the run held is committed when the host asks.
-   `acvus run --space <dir>` runs over a directory store and `acvus space
-   <dir>` lists it.
+   `acvus run <script> --space <space>` runs over the location `acvus ctl`
+   maps the space to, and `acvus ctl space ls <space>` lists it
+   (RFC-0031).
 8. `Deque` pops are tombstones: the ops at its two ends are counters, and a
    pop that would cross the other end's cursor is a conflict the replay
    detects. A value pushed and popped within one run leaves no op.

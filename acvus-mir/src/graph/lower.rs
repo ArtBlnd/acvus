@@ -261,6 +261,7 @@ mod tests {
             .map(|(name, ty)| Context {
                 qref: QualifiedRef::root(interner.intern(name)),
                 ty: crate::ty::lift_declaration(ty, &mut pb),
+                init: None,
             })
             .collect();
         let fn_qref = QualifiedRef::root(interner.intern("test"));

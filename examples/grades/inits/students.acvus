@@ -1,0 +1,9 @@
+[
+    { name: "Ada".to_string(), score: 97, },
+    { name: "Brahms".to_string(), score: 61, },
+    { name: "Curie".to_string(), score: 88, },
+    { name: "Dirac".to_string(), score: 42, },
+    { name: "Emmy".to_string(), score: 93, },
+    { name: "Fermi".to_string(), score: 59, },
+    { name: "Gauss".to_string(), score: 74, },
+]

@@ -21,6 +21,7 @@ fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect()
 }

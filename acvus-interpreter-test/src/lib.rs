@@ -222,6 +222,7 @@ where
         .map(|(name, ty)| acvus_mir::graph::Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
 
@@ -1398,7 +1399,7 @@ pub mod corpus {
     }
 
     /// [`attempt`] with the contexts a JSON object declares: each key is a
-    /// context, its type the value's type, as `acvus run --context` reads it.
+    /// context, its type the value's type, holding the value.
     pub fn attempt_in(
         source: &str,
         contexts: &serde_json::Map<String, serde_json::Value>,

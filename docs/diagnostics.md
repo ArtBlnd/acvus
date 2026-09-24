@@ -92,7 +92,6 @@ them — a deferred decision settles after the text after it was read.
 | `let p = { name: "x".to_string(), age: 3, }; p.nmae` | `p` has no `nmae` stored on every path that reaches here; did you mean `name`? |
 | `match shape { Shape::Circl(r) => r, _ => 0.0, }` | unreachable pattern: `Shape::Circl(_)` is not a variant of `Shape{Circle(Float)}`; did you mean `Shape::Circle`? |
 | `total = 1; total` | cannot assign to `total`: no binding named `total` is in scope; `let total = ...;` binds it |
-| `@missing + 1` | `@missing` is not a declared context |
 
 A candidate is within an edit distance of two of what was written, or has
 it as a prefix or as one of its `_`-separated words (`iter` names `as_iter`
@@ -131,6 +130,7 @@ near it keeps the sentence it had.
 | `let s = "a".to_string(); s + 1` | type mismatch in `+`: String vs i64 |
 | `1 == "a"` | type mismatch in `==`: i64 vs str |
 | `let n = 1; while n { … }` | type mismatch: expected Bool, got i64 |
+| `@x = 1; @x = "a".to_string();` | type mismatch: expected i64, got String |
 | `[1, "a"]` | heterogeneous list: expected i64, got &str |
 | `let v = vec([1, 2]); v.push("b".to_string())` | no instance of std::vec has the call type Fn(Array\<i64, 2>) -> Vec\<String>; the instances it could reach are<br>&nbsp;&nbsp;Fn(Array\<T, N>) -> Vec\<T><br>&nbsp;&nbsp;Fn(Deque\<T>) -> Vec\<T> |
 | `range(1, 100) \| into_iter() \| sum()` | no instance of iter::into_iter has the call type Fn(Range) -> _; the instances it could reach are<br>&nbsp;&nbsp;Fn(Deque\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(HashSet\<T, E>) -> Items\<T><br>&nbsp;&nbsp;Fn(Option\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(Result\<T, U>) -> Items\<T><br>&nbsp;&nbsp;Fn(Vec\<T>) -> Items\<T><br>&nbsp;&nbsp;Fn(Array\<T, N>) -> Items\<T> |

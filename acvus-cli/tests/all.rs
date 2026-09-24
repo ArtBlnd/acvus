@@ -2,9 +2,11 @@
 
 mod bound_input;
 mod cli;
+mod ctl;
 mod examples;
 mod parameter_binding;
 mod refusals;
+mod sandbox;
 
 /// The targets this crate's manifest declares under `[[test]]`, as the paths
 /// of the files that carry them: `path` when it is written, and otherwise the

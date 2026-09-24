@@ -1,8 +1,9 @@
 //! `acvus`: the script runner (RFC-0031).
 
 mod compile;
-mod context;
+mod ctl;
 mod json;
+mod location;
 mod lsp_host;
 mod oplist;
 
@@ -16,16 +17,22 @@ use acvus_ast::Span;
 use acvus_ast::report::{LineIndex, Report, Severity};
 use acvus_extern::Registry;
 use acvus_interpreter::{
-    AcvusRuntime, Composite, ContextWrite, DirStore, Executor, InMemoryContext, Interpreter,
-    InterpreterContext, Kind, Log as SpaceLog, RuntimeContext, SequentialExecutor, Space,
-    SpacePage, TokioExecutor, Value, hex,
+    AcvusRuntime, Composite, Executor, InMemoryContext, Interpreter, InterpreterContext, Kind,
+    PageError, RuntimeContext, SequentialExecutor, SpacePage, TokioExecutor, Value, hex,
 };
 use acvus_utils::Interner;
 
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{Bindings, BoundValue, ContextInfo, NotABoundValue};
 
-use crate::compile::{CompileTimes, Compiled, Diagnostic, Mode, Stopwatch, Timed};
+use crate::compile::{
+    Checked, CompileTimes, Compiled, Diagnostic, Mode, Role, Runnable, Stopwatch, Timed, Unit,
+};
+use crate::ctl::{
+    ConfigFile, CtlError, Defaults, Layers, OptLevel, Parallel, ResolvedSpace, Settings, SpaceChoice,
+    SpaceSource, Timing,
+};
+use crate::location::{EXPR_ENTRY, ScriptKind};
 
 const EXIT_COMPILE: u8 = 1;
 const EXIT_RUN: u8 = 2;
@@ -34,29 +41,38 @@ const EXIT_USAGE: u8 = 64;
 /// `shutdown` exit with 1; `acvus lsp` ends every other failure the same way.
 const EXIT_LSP_FAILED: u8 = 1;
 
+/// The entry a lone file or expression compiles to, with no space around it.
+const LONE_ENTRY: &str = "main";
+
 const USAGE: &str = "\
-usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--commit] [--parallel] [--opt L] [--time]
-       acvus run   -e <expr>              [--context ctx.json] [--bind n=v] [--parallel] [--opt L] [--time]
-       acvus check <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
-       acvus mir   <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
-       acvus ops   <file>                 [--context ctx.json] [--bind n=v] [--json] [--opt L] [--time]
-       acvus space <dir>
+usage: acvus run   <file.acvus|file.acvt|script> [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]]
+       acvus run   -e <expr>                     [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]]
+       acvus check <file|script> | -e <expr>     [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+       acvus mir   <file|script> | -e <expr>     [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+       acvus ops   <file|script> | -e <expr>     [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+       acvus ctl   ...                           (`acvus ctl` lists its commands)
        acvus lsp
 
   .acvus is script mode, .acvt is a template; -e runs one expression.
+  name=literal  binds the input `$name` to the value the literal writes, in
+             the script's own syntax: 10, '\"jun\"', Some(1), [1, 2],
+             { a: 1, }, a variant; the code it decides against is gone, and
+             the inputs it alone read are no longer required
+  --space    a space the active ctl context maps to a location: its scripts
+             and inits compile as one graph, the positional names the script
+             to run, -e compiles beside them, and the run commits its writes
+             to it. A context the run fetches and the space lacks gets its
+             first value from its init, which `acvus ctl space init` stores.
+             Without --space the nearest .acvus/ above the working directory
+             names the space; with neither, a source that names no context
+             runs alone
   lsp        serve the Language Server Protocol on stdin and stdout, over the
              sources under each folder the client serves
-  --context  a JSON object: each key is a context, its type the value's type
-  --bind     `$name=<json scalar>`, repeatable: the input is that constant,
-             the code it decides against is gone, and the inputs it alone
-             read are no longer required
-  --commit   write the contexts back to the context file after the run
-  --space    a directory holding contexts (RFC-0033): the run fetches them
-             from it and commits its changes to it; --context seeds it
   --json     stdout is JSON: the diagnostics as an array of
              {severity, message, path, line, col, span}, and, where `ops`
              has a listing to print, the listing
-  --parallel run spawned calls on the tokio executor
+  --parallel spawned calls run on tokio; --parallel=sequential (the
+             default) runs them in order
   --opt      full (the default) runs every optimization; none runs only what
              a program needs to reach the machine, and both refuse the same
              programs
@@ -64,30 +80,26 @@ usage: acvus run   <file.acvus|file.acvt> [--context ctx.json] [--bind n=v] [--c
              command ran -- compile, with the level it compiled at and its
              parse, typeck, lower and optimize; prepare; run -- in
              milliseconds; under --json a trailing {\"time\": ...} object on
-             stdout instead";
+             stdout instead. --time=off (the default) prints none
+  A flag overrides `acvus ctl set` on the space, which overrides the ctl
+  context's, which overrides the default.";
 
 enum Command {
     Run,
     Check,
     Mir,
     Ops,
-    Space,
 }
 
 struct Args {
     command: Command,
     source: Source,
-    context: Option<PathBuf>,
     bindings: Vec<Binding>,
-    commit: bool,
     json: bool,
-    parallel: bool,
-    time: bool,
-    opt: Opt,
-    space: Option<PathBuf>,
+    flags: Defaults,
+    space: Option<String>,
 }
 
-/// The spelling `--opt` takes and the `time:` line reports.
 fn level(opt: Opt) -> &'static str {
     match opt {
         Opt::None => "none",
@@ -95,13 +107,16 @@ fn level(opt: Opt) -> &'static str {
     }
 }
 
+/// Without a space the positional is a file; with one it is the name of a
+/// script the space holds.
 enum Source {
-    File(PathBuf),
+    Positional(String),
     Expr(String),
 }
 
 enum Invocation {
     Lsp,
+    Ctl(Vec<String>),
     Compile(Args),
 }
 
@@ -114,99 +129,59 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
                 None => Ok(Invocation::Lsp),
             };
         }
+        Some("ctl") => return Ok(Invocation::Ctl(it.cloned().collect())),
         Some("run") => Command::Run,
         Some("check") => Command::Check,
         Some("mir") => Command::Mir,
         Some("ops") => Command::Ops,
-        Some("space") => Command::Space,
         Some(other) => return Err(format!("unknown command `{other}`")),
         None => return Err("no command".to_string()),
     };
     let mut source = None;
-    let mut context = None;
     let mut bindings: Vec<Binding> = Vec::new();
-    let mut commit = false;
     let mut json = false;
-    let mut parallel = false;
-    let mut time = false;
-    let mut opt = Opt::Full;
+    let mut flags = Defaults::default();
     let mut space = None;
     while let Some(arg) = it.next() {
+        if let Some(set) = ctl::run_flag(&mut flags, arg, &mut || it.next().cloned()) {
+            set?;
+            continue;
+        }
         match arg.as_str() {
             "-e" => {
                 let expr = it.next().ok_or("-e takes an expression")?;
-                source = Some(Source::Expr(expr.clone()));
-            }
-            "--context" => {
-                let path = it.next().ok_or("--context takes a file")?;
-                context = Some(PathBuf::from(path));
-            }
-            "--bind" => {
-                let held = it.next().ok_or("--bind takes `name=<literal>`")?;
-                bindings.push(binding(held)?);
-            }
-            "--commit" => commit = true,
-            "--json" => json = true,
-            "--parallel" => parallel = true,
-            "--time" => time = true,
-            "--opt" => {
-                opt = match it.next().map(String::as_str) {
-                    Some("none") => Opt::None,
-                    Some("full") => Opt::Full,
-                    Some(other) => return Err(format!("--opt takes none or full, not `{other}`")),
-                    None => return Err("--opt takes none or full".to_string()),
-                }
-            }
-            "--space" => {
-                let dir = it.next().ok_or("--space takes a directory")?;
-                space = Some(PathBuf::from(dir));
-            }
-            flag if flag.starts_with('-') => return Err(format!("unknown flag `{flag}`")),
-            path => {
                 if source.is_some() {
                     return Err("one source at a time".to_string());
                 }
-                source = Some(Source::File(PathBuf::from(path)));
+                source = Some(Source::Expr(expr.clone()));
             }
+            "--json" => json = true,
+            "--space" => {
+                let name = it.next().ok_or("--space takes a space name")?;
+                space = Some(name.clone());
+            }
+            flag if flag.starts_with('-') => return Err(format!("unknown flag `{flag}`")),
+            word => match binding(word) {
+                Some(bound) => bindings.push(bound),
+                None => {
+                    if source.is_some() {
+                        return Err("one source at a time".to_string());
+                    }
+                    source = Some(Source::Positional(word.to_string()));
+                }
+            },
         }
     }
-    if json && matches!(command, Command::Run | Command::Space) {
+    if json && matches!(command, Command::Run) {
         return Err("--json is for check, mir and ops".to_string());
     }
-    if time && matches!(command, Command::Space) {
-        return Err("--time is for run, check, mir and ops".to_string());
-    }
-    if matches!(command, Command::Space) {
-        let Some(Source::File(dir)) = source else {
-            return Err("space takes a directory".to_string());
-        };
-        return Ok(Invocation::Compile(Args {
-            command,
-            source: Source::Expr(String::new()),
-            context: None,
-            bindings: Vec::new(),
-            commit: false,
-            json: false,
-            parallel: false,
-            time: false,
-            opt: Opt::Full,
-            space: Some(dir),
-        }));
-    }
     let source = source.ok_or("no source")?;
-    if commit && context.is_none() {
-        return Err("--commit needs --context".to_string());
-    }
     Ok(Invocation::Compile(Args {
         command,
         source,
-        context,
         bindings,
-        commit,
         json,
-        parallel,
-        time,
-        opt,
+        flags,
         space,
     }))
 }
@@ -216,11 +191,15 @@ struct Binding {
     text: String,
 }
 
-fn binding(held: &str) -> Result<Binding, String> {
-    let Some((name, text)) = held.split_once('=') else {
-        return Err(format!("--bind takes `name=<literal>`, not `{held}`"));
-    };
-    Ok(Binding {
+/// `name=<literal>`, where `name` is an input's name; any other word is a
+/// source.
+fn binding(word: &str) -> Option<Binding> {
+    let (name, text) = word.split_once('=')?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    let is_name = (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    is_name.then(|| Binding {
         name: name.to_string(),
         text: text.to_string(),
     })
@@ -233,67 +212,30 @@ fn bound_literals(interner: &Interner, bindings: &[Binding]) -> Result<Bindings,
     let mut bound = Bindings::default();
     for Binding { name, text } in bindings {
         let expr = acvus_ast::parse_expr(interner, text)
-            .map_err(|e| format!("--bind {name}: `{text}` does not parse: {e:?}"))?;
+            .map_err(|e| format!("${name}: `{text}` does not parse: {e:?}"))?;
         let written = |span: Span| &text[span.start..span.end];
         let value = BoundValue::from_expr(interner, &expr).map_err(|e| match e {
             NotABoundValue::NotALiteral { form } => format!(
-                "--bind {name}: `{}` is not a value a literal writes",
+                "${name}: `{}` is not a value a literal writes",
                 written(form)
             ),
             NotABoundValue::RepeatedField { key, second } => format!(
-                "--bind {name}: `{}` in `{}` is a field an object holds once",
+                "${name}: `{}` in `{}` is a field an object holds once",
                 interner.resolve(key),
                 written(second)
             ),
         })?;
         bound
             .bind(interner.intern(name), value)
-            .map_err(|refused| format!("--bind {name}: {refused}"))?;
+            .map_err(|refused| format!("${name}: {refused}"))?;
     }
     Ok(bound)
 }
 
-fn open_space(interner: &Interner, dir: &Path) -> Result<Arc<Space>, String> {
-    let store = DirStore::open(dir, interner).map_err(|e| e.to_string())?;
-    Ok(Arc::new(Space::over(
-        SpaceLog {
-            checkpoint_every: 64,
-        },
-        Box::new(store),
-    )))
-}
-
-fn list_space(interner: &Interner, dir: &Path) -> ExitCode {
-    let space = match open_space(interner, dir) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(EXIT_USAGE);
-        }
-    };
-    match space.identities() {
-        Ok(ids) => {
-            for (id, ty) in ids {
-                let head = hex(&space
-                    .head(&id)
-                    .expect("identities are listed by their heads"));
-                println!("@{id}: {} = {head}", ty.display(interner));
-            }
-            println!("{} nodes", space.node_count());
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(EXIT_RUN)
-        }
-    }
-}
-
 fn mode_of(path: &Path) -> Result<Mode, String> {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("acvus") => Ok(Mode::Script),
-        Some("acvt") => Ok(Mode::Template),
-        _ => Err(format!(
+    match ScriptKind::of_path(path) {
+        Some(kind) => Ok(kind.mode()),
+        None => Err(format!(
             "{}: a source is .acvus (script) or .acvt (template)",
             path.display()
         )),
@@ -345,18 +287,22 @@ impl Rendering {
         }
     }
 
-    fn report(&self, path: &str, source: &str, diagnostics: &[Diagnostic]) {
+    fn report(&self, units: &[Unit], diagnostics: &[Diagnostic]) {
         match self {
             Rendering::Text => {
                 for d in diagnostics {
+                    let Some(unit) = d.unit.map(|at| &units[at]) else {
+                        eprintln!("error: {}", d.message);
+                        continue;
+                    };
                     eprint!(
                         "{}",
                         Report {
                             severity: Severity::Error,
                             message: d.message.clone(),
                             primary: d.primary.clone(),
-                            path,
-                            source,
+                            path: &unit.path,
+                            source: &unit.text,
                             span: d.span,
                             labels: d.labels.clone(),
                         }
@@ -364,18 +310,25 @@ impl Rendering {
                 }
             }
             Rendering::Json => {
-                let index = LineIndex::new(source);
                 let array: Vec<serde_json::Value> = diagnostics
                     .iter()
                     .map(|d| {
-                        let at = |span: Span| index.line_col(span.start.min(source.len()));
+                        let unit = d.unit.map(|at| &units[at]);
+                        let lines = unit.map(|unit| Lines {
+                            text: &unit.text,
+                            index: LineIndex::new(&unit.text),
+                        });
+                        let at = |span: Span| {
+                            let lines = lines.as_ref()?;
+                            Some(lines.index.line_col(span.start.min(lines.text.len())))
+                        };
                         let labels: Vec<serde_json::Value> = d
                             .labels
                             .iter()
                             .map(|l| {
                                 serde_json::json!({
-                                    "line": l.span.map(|s| at(s).line),
-                                    "col": l.span.map(|s| at(s).col),
+                                    "line": l.span.and_then(at).map(|p| p.line),
+                                    "col": l.span.and_then(at).map(|p| p.col),
                                     "span": l.span.map(|s| [s.start, s.end]),
                                     "text": l.text,
                                 })
@@ -385,9 +338,9 @@ impl Rendering {
                             "severity": Severity::Error.to_string(),
                             "message": d.message,
                             "primary": d.primary,
-                            "path": path,
-                            "line": d.span.map(|s| at(s).line),
-                            "col": d.span.map(|s| at(s).col),
+                            "path": unit.map(|unit| unit.path.as_str()),
+                            "line": d.span.and_then(at).map(|p| p.line),
+                            "col": d.span.and_then(at).map(|p| p.col),
                             "span": d.span.map(|s| [s.start, s.end]),
                             "labels": labels,
                         })
@@ -400,6 +353,11 @@ impl Rendering {
             }
         }
     }
+}
+
+struct Lines<'u> {
+    text: &'u str,
+    index: LineIndex,
 }
 
 /// `run` holds the machine alone: a script's own `print` happens inside
@@ -538,116 +496,259 @@ async fn cli() -> ExitCode {
     let args = match parse_args(&argv) {
         Ok(Invocation::Compile(args)) => args,
         Ok(Invocation::Lsp) => return lsp(),
+        Ok(Invocation::Ctl(rest)) => return ctl(&rest).await,
         Err(e) => {
             eprintln!("error: {e}\n{USAGE}");
             return ExitCode::from(EXIT_USAGE);
         }
     };
-    let interner = Interner::new();
-    if let Command::Space = args.command {
-        return list_space(
-            &interner,
-            args.space.as_deref().expect("space takes a directory"),
-        );
+    match compile_command(args).await {
+        Ok(code) => code,
+        Err(stop) => stop.reported(),
     }
-    let (path, source, mode) = match &args.source {
-        Source::File(p) => {
-            let mode = match mode_of(p) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::from(EXIT_USAGE);
-                }
-            };
-            match std::fs::read_to_string(p) {
-                Ok(s) => (p.display().to_string(), s, mode),
-                Err(e) => {
-                    eprintln!("error: {}", compile::unreadable_source(p, &e));
-                    return ExitCode::from(EXIT_USAGE);
-                }
-            }
+}
+
+fn working_dir() -> Result<PathBuf, Stop> {
+    std::env::current_dir().map_err(|e| Stop::usage(format!("the working directory: {e}")))
+}
+
+async fn ctl(rest: &[String]) -> ExitCode {
+    if rest.is_empty() {
+        eprintln!("{}", ctl::USAGE);
+        return ExitCode::from(EXIT_USAGE);
+    }
+    let done = match rest {
+        [space, fill, args @ ..] if space == "space" && fill == "fill" => fill_space(args).await,
+        _ => working_dir().and_then(|cwd| ctl::ctl(rest, &cwd).map_err(Stop::from)),
+    };
+    match done {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(stop) => stop.reported(),
+    }
+}
+
+/// `acvus ctl space fill <space>`: every init whose context the space lacks
+/// runs, and the space commits what they made.
+async fn fill_space(args: &[String]) -> Result<(), Stop> {
+    let [name] = args else {
+        return Err(Stop::usage("usage: acvus ctl space fill <space>".to_string()));
+    };
+    let config = ConfigFile::read()?;
+    let space = config.resolve(&SpaceChoice {
+        name: name.clone(),
+        source: SpaceSource::Flag,
+    })?;
+    let units = space_units(&space)?;
+    let interner = Interner::new();
+    let (checked, _) = match compile::check(
+        &interner,
+        &units,
+        Bindings::default(),
+        cli_registries(),
+        Timed::Off,
+        Opt::Full,
+    ) {
+        Ok(checked) => checked,
+        Err(diagnostics) => {
+            Rendering::Text.report(&units, &diagnostics);
+            return Err(Stop {
+                message: format!("space `{name}` does not compile"),
+                exit: EXIT_COMPILE,
+            });
         }
-        Source::Expr(e) => ("<expr>".to_string(), e.clone(), Mode::Expr),
     };
-    let mut loaded = match &args.context {
-        Some(p) => match context::load(&interner, p) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("error: {}: {e}", p.display());
-                return ExitCode::from(EXIT_USAGE);
+    let page = open_space_page(&interner, &checked, &space)?;
+    let Runnable { shared, inits } =
+        checked.prepare(&interner).runnable(&interner, Arc::new(SequentialExecutor));
+    let held: Arc<dyn RuntimeContext> = page.clone();
+    let filled = inits
+        .fill_absent(&shared, &held)
+        .await
+        .map_err(|e| page_refusal(&space.name, e))?;
+    for key in &filled {
+        eprintln!("init @{key}");
+    }
+    commit(&page, &shared)?;
+    if filled.is_empty() {
+        println!("space `{name}` holds every context it has an init of");
+    }
+    Ok(())
+}
+
+/// A command that ends before its output, with the message and the exit
+/// status RFC-0031 rule 7 gives it.
+struct Stop {
+    message: String,
+    exit: u8,
+}
+
+impl Stop {
+    fn usage(message: String) -> Self {
+        Stop {
+            message,
+            exit: EXIT_USAGE,
+        }
+    }
+
+    fn run(message: String) -> Self {
+        Stop {
+            message,
+            exit: EXIT_RUN,
+        }
+    }
+
+    fn reported(self) -> ExitCode {
+        eprintln!("error: {}", self.message);
+        ExitCode::from(self.exit)
+    }
+}
+
+impl From<CtlError> for Stop {
+    fn from(error: CtlError) -> Self {
+        match error {
+            CtlError::Refused(message) => Stop::usage(message),
+            CtlError::Failed(message) => Stop::run(message),
+        }
+    }
+}
+
+/// The units a command compiles, and which one it is about.
+struct Sources {
+    units: Vec<Unit>,
+    target: usize,
+}
+
+fn lone_file(path: &Path) -> Result<Sources, Stop> {
+    let mode = mode_of(path).map_err(Stop::usage)?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Stop::usage(compile::unreadable_source(path, &e)))?;
+    Ok(Sources {
+        units: vec![Unit {
+            role: Role::Entry(LONE_ENTRY.to_string()),
+            path: path.display().to_string(),
+            mode,
+            text,
+        }],
+        target: 0,
+    })
+}
+
+fn expr_unit(entry: &str, text: &str) -> Unit {
+    Unit {
+        role: Role::Entry(entry.to_string()),
+        path: "<expr>".to_string(),
+        mode: Mode::Expr,
+        text: text.to_string(),
+    }
+}
+
+/// Every script the space holds, one entry each, and every init it holds
+/// (RFC-0031 rule 3).
+fn space_units(space: &ResolvedSpace<'_>) -> Result<Vec<Unit>, Stop> {
+    let scripts = space.location.scripts().map_err(Stop::run)?;
+    let inits = space.location.inits().map_err(Stop::run)?;
+    let scripts = scripts.into_iter().map(|script| Unit {
+        path: format!("{}/{}.{}", space.name, script.name, script.kind.extension()),
+        role: Role::Entry(script.name.as_str().to_string()),
+        mode: script.kind.mode(),
+        text: script.text,
+    });
+    let inits = inits.into_iter().map(|init| Unit {
+        path: format!("{}/inits/{}.{}", space.name, init.key, init.kind.extension()),
+        role: Role::Init(init.key.as_str().to_string()),
+        mode: init.kind.mode(),
+        text: init.text,
+    });
+    Ok(scripts.chain(inits).collect())
+}
+
+/// The space's units, and the script named or `-e`'s expression beside
+/// them as the target.
+fn space_sources(space: &ResolvedSpace<'_>, source: &Source) -> Result<Sources, Stop> {
+    let mut units = space_units(space)?;
+    let target = match source {
+        Source::Positional(name) => match units
+            .iter()
+            .position(|unit| matches!(&unit.role, Role::Entry(held) if held == name))
+        {
+            Some(at) => at,
+            None => {
+                return Err(Stop::usage(format!(
+                    "space `{}` holds no script `{name}`; `acvus ctl space add-script {} <file>` stores one",
+                    space.name, space.name
+                )));
             }
         },
-        None => context::Loaded::default(),
+        Source::Expr(text) => {
+            units.push(expr_unit(EXPR_ENTRY, text));
+            units.len() - 1
+        }
     };
-    let space = match &args.space {
-        Some(dir) => match open_space(&interner, dir) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(EXIT_USAGE);
-            }
-        },
+    Ok(Sources { units, target })
+}
+
+async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
+    let cwd = working_dir()?;
+    let config = ConfigFile::read()?;
+    let space = match ctl::choose_space(args.space.as_deref(), &cwd)? {
+        Some(choice) => Some(config.resolve(&choice)?),
         None => None,
     };
-    if let Some(space) = &space {
-        match space.identities() {
-            Ok(ids) => {
-                for (id, ty) in ids {
-                    loaded.types.entry(interner.intern(&id)).or_insert(ty);
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(EXIT_USAGE);
-            }
-        }
+    let settings = Layers {
+        flag: &args.flags,
+        space: space.as_ref().map(|space| space.defaults),
+        context: config.context_defaults(),
     }
+    .settle();
+    let Sources { units, target } = match (&space, &args.source) {
+        (Some(space), source) => space_sources(space, source)?,
+        (None, Source::Positional(path)) => lone_file(Path::new(path))?,
+        (None, Source::Expr(text)) => Sources {
+            units: vec![expr_unit(LONE_ENTRY, text)],
+            target: 0,
+        },
+    };
+
+    let interner = Interner::new();
     let registries = cli_registries();
     let rendering = Rendering::of(args.json);
-    let bindings = match bound_literals(&interner, &args.bindings) {
-        Ok(bound) => bound,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(EXIT_USAGE);
-        }
+    let bindings = bound_literals(&interner, &args.bindings).map_err(Stop::usage)?;
+    let timed = match settings.time.value {
+        Timing::On => Timed::On,
+        Timing::Off => Timed::Off,
     };
-    let timed = Timed::of(args.time);
+    let opt = match settings.opt.value {
+        OptLevel::None => Opt::None,
+        OptLevel::Full => Opt::Full,
+    };
     let watch = Stopwatch::start(timed);
-    let (checked, stages) = match compile::check(
-        &interner,
-        &source,
-        mode,
-        &loaded.types,
-        bindings,
-        registries,
-        timed,
-        args.opt,
-    ) {
+    let (checked, stages) = match compile::check(&interner, &units, bindings, registries, timed, opt) {
         Ok(c) => c,
         Err(diagnostics) => {
-            rendering.report(&path, &source, &diagnostics);
-            return ExitCode::from(EXIT_COMPILE);
+            rendering.report(&units, &diagnostics);
+            return Ok(ExitCode::from(EXIT_COMPILE));
         }
     };
     let mut timings = Timings::of(watch.stop(), stages);
+    let about = checked.target(&interner, target);
     match args.command {
         Command::Check => {
-            rendering.report(&path, &source, &[]);
-            rendering.inputs(&interner, checked.inputs());
+            rendering.report(&units, &[]);
+            rendering.inputs(&interner, &about.inputs);
             if let Some(timings) = &timings {
                 timings.report(&rendering);
             }
-            ExitCode::SUCCESS
+            Ok(ExitCode::SUCCESS)
         }
         Command::Mir => {
             match rendering {
-                Rendering::Text => print!("{}", checked.mir_dump()),
-                Rendering::Json => rendering.report(&path, &source, &[]),
+                Rendering::Text => print!("{}", about.mir),
+                Rendering::Json => rendering.report(&units, &[]),
             }
             if let Some(timings) = &timings {
                 timings.report(&rendering);
             }
-            ExitCode::SUCCESS
+            Ok(ExitCode::SUCCESS)
         }
         Command::Ops => {
             let form = match args.json {
@@ -659,44 +760,45 @@ async fn cli() -> ExitCode {
             if let Some(timings) = &mut timings {
                 timings.prepare = watch.stop();
             }
-
-            match oplist::dump(compiled.entry_prepared(), form) {
-                Ok(text) => {
-                    print!("{text}");
-                    if let Some(timings) = &timings {
-                        timings.report(&rendering);
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("error: the listing does not serialize: {e}");
-                    ExitCode::from(EXIT_RUN)
-                }
+            let text = oplist::dump(compiled.prepared(&about.function), form)
+                .map_err(|e| Stop::run(format!("the listing does not serialize: {e}")))?;
+            print!("{text}");
+            if let Some(timings) = &timings {
+                timings.report(&rendering);
             }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Run => {
-            let missing = checked.inputs();
+            let missing = &about.inputs;
             if !missing.is_empty() {
                 for input in missing {
                     eprintln!(
-                        "error: `${}` is required and not bound",
+                        "error: `${}` is required and not bound; `{}=<literal>` binds it",
+                        interner.resolve(input.name.name),
                         interner.resolve(input.name.name)
                     );
                 }
-                return ExitCode::from(EXIT_COMPILE);
+                return Ok(ExitCode::from(EXIT_COMPILE));
             }
+            let page = open_page(&interner, &checked, space.as_ref())?;
             let watch = Stopwatch::start(timed);
             let compiled = checked.prepare(&interner);
             if let Some(timings) = &mut timings {
                 timings.prepare = watch.stop();
             }
-
-            run(
-                &interner, compiled, loaded, space, &args, &rendering, timings,
-            )
-            .await
+            let run = Run {
+                compiled,
+                entry: about.function,
+                fetched_first: &about.fetched_first,
+                page,
+            };
+            let value = run.run(&interner, &settings, timed, &mut timings).await?;
+            print_result(&interner, &value, units[target].mode);
+            if let Some(timings) = &timings {
+                timings.report(&rendering);
+            }
+            Ok(ExitCode::SUCCESS)
         }
-        Command::Space => unreachable!("handled before compiling"),
     }
 }
 
@@ -717,123 +819,132 @@ fn lsp() -> ExitCode {
     }
 }
 
-async fn run(
-    interner: &Interner,
-    compiled: Compiled,
-    loaded: context::Loaded,
-    space: Option<Arc<Space>>,
-    args: &Args,
-    rendering: &Rendering,
-    mut timings: Option<Timings>,
-) -> ExitCode {
-    let executor: Arc<dyn Executor> = if args.parallel {
-        Arc::new(TokioExecutor)
-    } else {
-        Arc::new(SequentialExecutor)
-    };
-    let Compiled {
-        entry,
-        functions,
-        fn_types,
-        context_names,
-        space: hooks,
-        ..
-    } = compiled;
-    let shared = InterpreterContext::new(interner, functions, executor)
-        .with_fn_types(fn_types)
-        .with_context_names(context_names)
-        .with_space(hooks);
-    let snapshot = loaded.snapshot;
-    let (page, mut interp): (Option<Arc<SpacePage>>, Interpreter) = match &space {
-        Some(space) => {
-            let seed = snapshot
-                .into_iter()
-                .map(|(k, v)| {
-                    let ty = loaded.types[&interner.intern(&k)].clone();
-                    (k, (ty, v))
-                })
-                .collect();
-            let page = match SpacePage::new(Arc::clone(space), seed) {
-                Ok(p) => Arc::new(p),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::from(EXIT_RUN);
-                }
-            };
-            let interp =
-                Interpreter::on_page(shared, entry, Arc::clone(&page) as Arc<dyn RuntimeContext>);
-            (Some(page), interp)
-        }
-        None => {
-            let seed = snapshot
-                .into_iter()
-                .map(|(k, v)| {
-                    let ty = loaded.types[&interner.intern(&k)].clone();
-                    (k, (ty, v))
-                })
-                .collect();
-            (None, Interpreter::new(shared, entry, InMemoryContext::new(seed)))
-        }
-    };
-    let watch = Stopwatch::start(Timed::of(args.time));
-    let value = match interp.execute().await {
-        Ok(value) => value,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(EXIT_RUN);
-        }
-    };
-    if let Some(timings) = &mut timings {
-        timings.run = watch.stop();
-    }
+/// Where a run's contexts come from and go to: a space, or, for a source
+/// that names no context, nothing.
+enum PageSource {
+    Space {
+        name: String,
+        page: Arc<SpacePage>,
+    },
+    Alone,
+}
 
-    if let Some(page) = &page {
-        match page.commit(&interp.runtime()) {
-            Ok(heads) => {
-                for (id, head) in heads {
-                    eprintln!("commit @{id} = {}", hex(&head));
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(EXIT_RUN);
-            }
+/// A run over a space opens a page for the types the space's scripts and
+/// inits solve, and a context the space holds at another type refuses it
+/// before anything runs (RFC-0090 rule 4).
+fn open_page(
+    interner: &Interner,
+    checked: &Checked,
+    space: Option<&ResolvedSpace<'_>>,
+) -> Result<PageSource, Stop> {
+    let Some(space) = space else {
+        let mut named: Vec<&str> = checked.contexts().keys().map(String::as_str).collect();
+        if named.is_empty() {
+            return Ok(PageSource::Alone);
         }
+        named.sort();
+        let named: Vec<String> = named.iter().map(|key| format!("`@{key}`")).collect();
+        return Err(Stop::usage(format!(
+            "{} {} kept in a space, and no space is named here; `acvus ctl space add <space> dir:<path>` maps one, `acvus ctl space add-script <space> <file>` stores this script in it, and `acvus run <script> --space <space>` runs it",
+            named.join(", "),
+            match named.len() {
+                1 => "is",
+                _ => "are",
+            }
+        )));
+    };
+    Ok(PageSource::Space {
+        name: space.name.clone(),
+        page: open_space_page(interner, checked, space)?,
+    })
+}
+
+fn open_space_page(
+    interner: &Interner,
+    checked: &Checked,
+    space: &ResolvedSpace<'_>,
+) -> Result<Arc<SpacePage>, Stop> {
+    let opened = space.location.open_contexts(interner).map_err(Stop::run)?;
+    SpacePage::new(opened, interner, checked.contexts())
+        .map(Arc::new)
+        .map_err(|e| page_refusal(&space.name, e))
+}
+
+/// A page's refusal in the words of the command that resolves it
+/// (RFC-0031 rule 7).
+fn page_refusal(space: &str, error: PageError) -> Stop {
+    match error {
+        PageError::Absent { key } => Stop::run(format!(
+            "`@{key}` is not in space `{space}` yet and has no init; `acvus ctl space init {space} {key} -e <expr>` stores one"
+        )),
+        PageError::Mismatched { key, held, asked } => Stop::run(format!(
+            "`@{key}` is held in space `{space}` as {held}, and the space's scripts and inits solve it to {asked}; `acvus ctl space add-script {space} <file>` changes the scripts back"
+        )),
+        other => Stop::run(other.to_string()),
     }
-    // The body commits every context it fetched (RFC-0025); a commit of
-    // the value that was loaded is not a write.
-    let mut writes: Vec<ContextWrite> = Vec::new();
-    for w in interp.take_writes() {
-        let Some(ty) = loaded.types.get(&interner.intern(&w.key)) else {
-            eprintln!("error: @{}: written but not in the context file", w.key);
-            return ExitCode::from(EXIT_RUN);
+}
+
+/// Commit every context the page holds, one `commit` line each on stderr.
+fn commit(page: &SpacePage, shared: &InterpreterContext) -> Result<(), Stop> {
+    let heads = page
+        .commit(&shared.runtime_over_an_empty_page())
+        .map_err(|e| Stop::run(e.to_string()))?;
+    for (key, head) in heads {
+        eprintln!("commit @{key} = {}", hex(&head));
+    }
+    Ok(())
+}
+
+struct Run<'a> {
+    compiled: Compiled,
+    entry: acvus_mir::graph::QualifiedRef,
+    fetched_first: &'a [String],
+    page: PageSource,
+}
+
+impl Run<'_> {
+    /// Each context the entry fetches first that the page lacks is filled
+    /// from its init, then the entry runs, then a space commits the page.
+    async fn run(
+        self,
+        interner: &Interner,
+        settings: &Settings,
+        timed: Timed,
+        timings: &mut Option<Timings>,
+    ) -> Result<Value, Stop> {
+        let executor: Arc<dyn Executor> = match settings.parallel.value {
+            Parallel::Tokio => Arc::new(TokioExecutor),
+            Parallel::Sequential => Arc::new(SequentialExecutor),
         };
-        let json = json::of(interner, ty, &w.value);
-        if loaded.raw.get(&w.key) == Some(&json) {
-            continue;
+        let Runnable { shared, inits } = self.compiled.runnable(interner, executor);
+        let held: Arc<dyn RuntimeContext> = match &self.page {
+            PageSource::Space { page, .. } => page.clone(),
+            PageSource::Alone => Arc::new(InMemoryContext::empty()),
+        };
+        let watch = Stopwatch::start(timed);
+        if let PageSource::Space { name, .. } = &self.page {
+            let fetched = self.fetched_first.iter().map(String::as_str);
+            let filled = inits
+                .fill(&shared, &held, fetched)
+                .await
+                .map_err(|e| page_refusal(name, e))?;
+            for key in filled {
+                eprintln!("init @{key}");
+            }
         }
-        eprintln!("write @{} = {json}", w.key);
-        writes.push(w);
+        let mut interp = Interpreter::on_page(shared.clone(), self.entry, Arc::clone(&held));
+        let value = interp
+            .execute()
+            .await
+            .map_err(|e| Stop::run(e.to_string()))?;
+        if let Some(timings) = timings {
+            timings.run = watch.stop();
+        }
+        if let PageSource::Space { page, .. } = &self.page {
+            commit(page, &shared)?;
+        }
+        Ok(value)
     }
-    if args.commit
-        && let Some(p) = &args.context
-        && let Err(e) = context::commit(interner, p, &loaded.types, &writes)
-    {
-        eprintln!("error: {}: {e}", p.display());
-        return ExitCode::from(EXIT_RUN);
-    }
-    let mode = match &args.source {
-        Source::File(path) => mode_of(path).map_err(|e| eprintln!("error: {e}")),
-        Source::Expr(_) => Ok(Mode::Expr),
-    };
-    let Ok(mode) = mode else {
-        return ExitCode::from(EXIT_USAGE);
-    };
-    print_result(interner, &value, mode);
-    if let Some(timings) = &timings {
-        timings.report(rendering);
-    }
-    ExitCode::SUCCESS
 }
 
 /// RFC-0054: this host declares `!`, so it has no type for what comes back

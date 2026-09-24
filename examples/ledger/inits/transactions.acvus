@@ -1,0 +1,9 @@
+[
+    { note: "opening float".to_string(), amount: "250.00".to_string(), },
+    { note: "coffee beans".to_string(), amount: "-18.75".to_string(), },
+    { note: "invoice 2041".to_string(), amount: "1200.00".to_string(), },
+    { note: "server rent".to_string(), amount: "-149.90".to_string(), },
+    { note: "keyboard".to_string(), amount: "-212.45".to_string(), },
+    { note: "invoice 2042".to_string(), amount: "480.50".to_string(), },
+    { note: "coffee beans".to_string(), amount: "-18.75".to_string(), },
+]

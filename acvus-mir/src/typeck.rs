@@ -30,7 +30,7 @@ use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, Flows, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability,
     ObjectTy, ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View,
-    Viewed, lift_ty,
+    Viewed,
 };
 use crate::variant::VariantPayload;
 
@@ -2043,7 +2043,7 @@ where
     pub fn check_script(
         mut self,
         script: &acvus_ast::Script<S>,
-        expected_tail: Option<&Ty>,
+        expected_tail: Option<InferTy>,
         crossing: ResultCrossing,
     ) -> Checked<S::Resolution>
     where
@@ -2053,7 +2053,7 @@ where
         // `return` joins against it exactly as the tail does; undeclared, it
         // is the fresh variable the tail resolves.
         let return_ty = match expected_tail {
-            Some(declared) => lift_ty(declared),
+            Some(declared) => declared,
             None => self.solver.fresh_ty_var(),
         };
         self.return_ty = Some(return_ty.clone());

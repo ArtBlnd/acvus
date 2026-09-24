@@ -72,6 +72,7 @@ fn environment(interner: &Interner, x: Ty) -> CompilationGraph {
         contexts: Freeze::new(vec![Context {
             qref: QualifiedRef::root(interner.intern("x")),
             ty: lift_to_poly(&x),
+            init: None,
         }]),
         types: Freeze::default(),
         bindings: Bindings::default(),

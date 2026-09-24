@@ -1,0 +1,9 @@
+[
+    { name: "fetch-index".to_string(), },
+    { name: "parse-index".to_string(), },
+    { name: "fetch-page-1".to_string(), },
+    { name: "fetch-page-2".to_string(), },
+    { name: "parse-page-1".to_string(), },
+    { name: "parse-page-2".to_string(), },
+    { name: "write-report".to_string(), },
+]

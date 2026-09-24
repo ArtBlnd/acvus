@@ -1,9 +1,9 @@
 // A producer and a consumer share one `deque`: every round pushes a task
 // on the back, and every second round pops one off the front, so the order
 // out is the order in.
-// The deque is built from a context array because a context value's type
-// comes from JSON, which has no deque; a deque held in a space is what
-// `--commit` writes back.
+// The deque is built here from the context array its init gives, so the
+// run leaves `@tasks` as it found it; a deque held in a space as a context
+// would be committed back after every run.
 
 let pending = deque();
 let served = vec([]);

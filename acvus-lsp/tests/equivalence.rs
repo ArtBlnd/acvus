@@ -20,6 +20,7 @@ fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect()
 }
@@ -334,6 +335,7 @@ fn namespace_context_isolation() {
     contexts.push(Context {
         qref: QualifiedRef::qualified(i.intern("node_a"), i.intern("value")),
         ty: lift_to_poly(&Ty::I64),
+        init: None,
     });
     let mut session = LspSession::new(&i, bare(contexts));
 

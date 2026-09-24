@@ -1,12 +1,12 @@
 //! The contract of `examples/**`, which lives outside this crate: every
-//! directory there holds `main.acvus`, `ctx.json` and `expected.txt`, and
-//! the CLI run over the first two writes the third and exits 0. Adding a
-//! directory therefore means adding a test here; `EXAMPLES` is what the
-//! tests cover and `every_example_directory_is_covered` holds it equal to
-//! what the directory contains.
+//! directory there holds `main.acvus` or `main.acvt`, `inits/` with one
+//! `<key>.acvus` per context `main` reads, and `expected.txt`, and the CLI,
+//! running `main` over a space that holds those inits, writes the last and
+//! exits 0. Adding a directory therefore means adding a test here;
+//! `EXAMPLES` is what the tests cover and `every_example_directory_is_covered`
+//! holds it equal to what the directory contains.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const EXAMPLES: [&str; 8] = [
     "collatz",
@@ -19,7 +19,7 @@ const EXAMPLES: [&str; 8] = [
     "word-count",
 ];
 
-const DATA: [&str; 2] = ["ctx.json", "expected.txt"];
+const DATA: [&str; 2] = ["expected.txt", "inits"];
 const SOURCES: [&str; 2] = ["main.acvus", "main.acvt"];
 
 fn source_of(name: &str) -> String {
@@ -38,8 +38,8 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
-fn acvus(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_acvus"))
+fn acvus(config: &Path, args: &[&str]) -> std::process::Output {
+    crate::sandbox::with_config(config)
         .current_dir(root())
         .args(args)
         .output()
@@ -65,20 +65,41 @@ fn sorted_names(dir: &Path) -> Vec<String> {
     names
 }
 
-fn example(name: &str) {
-    let dir = root().join("examples").join(name);
-    let script = source_of(name);
-    let context = format!("examples/{name}/ctx.json");
-    let expected = std::fs::read(dir.join("expected.txt"))
-        .unwrap_or_else(|e| panic!("examples/{name}/expected.txt: {e}"));
-
-    let out = acvus(&["run", &script, "--context", &context]);
+fn succeeds(config: &Path, args: &[&str]) -> std::process::Output {
+    let out = acvus(config, args);
     assert_eq!(
         out.status.code(),
         Some(0),
-        "`acvus run {script}`:\n{}",
+        "`acvus {}`:\n{}",
+        args.join(" "),
         stderr(&out)
     );
+    out
+}
+
+fn example(name: &str) {
+    let dir = root().join("examples").join(name);
+    let script = source_of(name);
+    let expected = std::fs::read(dir.join("expected.txt"))
+        .unwrap_or_else(|e| panic!("examples/{name}/expected.txt: {e}"));
+
+    let sandbox = crate::sandbox::tempdir();
+    let config = sandbox.path().join("config");
+    let store = format!("dir:{}", sandbox.path().join("space").display());
+    succeeds(&config, &["ctl", "use", "examples"]);
+    succeeds(&config, &["ctl", "space", "add", name, &store]);
+    succeeds(&config, &["ctl", "space", "add-script", name, &script]);
+    let inits = sorted_names(&dir.join("inits"));
+    assert!(!inits.is_empty(), "examples/{name}/inits holds no init");
+    for file in inits {
+        let key = file
+            .strip_suffix(".acvus")
+            .unwrap_or_else(|| panic!("examples/{name}/inits/{file} is not an .acvus init"));
+        let path = format!("examples/{name}/inits/{file}");
+        succeeds(&config, &["ctl", "space", "init", name, key, "-f", &path]);
+    }
+
+    let out = succeeds(&config, &["run", "main", "--space", name]);
     assert_eq!(
         out.stdout,
         expected,
@@ -86,14 +107,7 @@ fn example(name: &str) {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&expected)
     );
-
-    let out = acvus(&["check", &script, "--context", &context]);
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "`acvus check {script} --context {context}`:\n{}",
-        stderr(&out)
-    );
+    succeeds(&config, &["check", "main", "--space", name]);
 }
 
 #[test]
