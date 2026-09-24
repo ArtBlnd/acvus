@@ -1,9 +1,8 @@
 //! RFC-0076 rule 1 and its two exceptions: at a runtime that makes values,
-//! `Branded` is the only trait whose impl on `Erased<R, T>` depends on `T`,
+//! `Within` is the only trait whose impl on `Erased<R, T>` depends on `T`,
 //! and `Deref` to the runtime's value is the only trait implemented on
-//! `Owned` alone. An impl of a trait that requires `Branded` states
-//! `Self: Branded` or `Self: Unbranded`, and so exists where `Branded`'s
-//! does, and bounds `T` by nothing else.
+//! `Owned` alone. Every other impl on `Erased` bounds neither `T` nor
+//! `Self`.
 //!
 //! Rust has no bound that forbids a bound, so this reads every trait impl on
 //! `Erased` or `Owned` the workspace writes: each `impl` item, and each
@@ -197,16 +196,12 @@ fn judge(imp: Impl<'_>) -> Option<String> {
         } else if single_ident(bounded).is_some_and(|i| i == "Self")
             || last_segment(bounded).is_some_and(|s| s.ident == "Erased")
         {
-            if trait_name == "Branded"
-                || !matches!(bound_name.as_deref(), Some("Branded" | "Unbranded"))
-            {
-                return Some(format!(
-                    "`Self` is bounded by `{}`",
-                    bound.to_token_stream()
-                ));
-            }
+            return Some(format!(
+                "`Self` is bounded by `{}`",
+                bound.to_token_stream()
+            ));
         } else if is_fn_to(bounded, var) {
-            if trait_name != "Branded" || bound_name.as_deref() != Some("FromUnbranded") {
+            if trait_name != "Within" || bound_name.as_deref() != Some("HoldsNone") {
                 return Some(format!(
                     "`fn() -> {var}` is bounded by `{}`",
                     bound.to_token_stream()
@@ -436,7 +431,7 @@ fn refusals(found: &[Found]) -> Vec<String> {
 }
 
 #[test]
-fn only_branded_on_erased_depends_on_t() {
+fn only_within_on_erased_depends_on_t() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("acvus-extern is in the workspace");
@@ -453,9 +448,9 @@ fn only_branded_on_erased_depends_on_t() {
     }
     let refused = refusals(&found);
     assert!(refused.is_empty(), "{}", refused.join("\n"));
-    // The read reaches `erased.rs`: the exception itself, and an impl whose
-    // trait requires `Branded`.
-    for name in ["Branded", "OneValue", "Stored", "cross_one_value"] {
+    // The read reaches `erased.rs`: the exception itself, and the crossing
+    // impls beside it.
+    for name in ["Within", "OneValue", "Stored", "cross_one_value"] {
         assert!(
             found.iter().any(|f| f.trait_name == name),
             "no impl of `{name}` on `Erased` was read"
@@ -477,8 +472,12 @@ fn a_bound_on_t_is_refused() {
             refused_for: "`T` is bounded by `Clone`",
         },
         Case {
-            source: "impl<R, T: Unbranded> OneValue<R> for Erased<R, T> where R: Runtime {}",
-            refused_for: "`T` is bounded by `Unbranded`",
+            source: "impl<'s, R, T: Within<'s>> OneValue<R> for Erased<R, T> where R: Runtime {}",
+            refused_for: "`T` is bounded by `Within < 's >`",
+        },
+        Case {
+            source: "impl<R, T> OneValue<R> for Erased<R, T> where R: Runtime, Self: crate::Within<'static> {}",
+            refused_for: "`Self` is bounded by `crate :: Within < 'static >`",
         },
         Case {
             source: "impl<R, T> Stored<R> for Erased<R, T> where R: Runtime, Self: Stored<R> {}",
@@ -493,8 +492,8 @@ fn a_bound_on_t_is_refused() {
             refused_for: "the trait's arguments name `T`",
         },
         Case {
-            source: "impl<R, T> Foo for Erased<R, T> where R: Runtime, fn() -> T: FromUnbranded {}",
-            refused_for: "`fn() -> T` is bounded by `FromUnbranded`",
+            source: "impl<R, T> Foo for Erased<R, T> where R: Runtime, fn() -> T: HoldsNone {}",
+            refused_for: "`fn() -> T` is bounded by `HoldsNone`",
         },
         Case {
             source: "impl<R, T> Foo for Erased<R, T> where R: Runtime, T: 'static { fn id() -> TypeId { TypeId::of::<T>() } }",
@@ -537,10 +536,10 @@ fn a_bound_on_t_is_refused() {
         );
     }
     let admitted = [
-        "unsafe impl<R, T> Branded for Erased<R, T> where R: Runtime, T: 'static, fn() -> T: brand::FromUnbranded { type At<'a> = Self; }",
-        "impl<R, T> Stored<R> for Erased<R, T> where R: Runtime, T: 'static, Self: crate::Unbranded {}",
-        "cross_one_value!(Erased<__Rt, T>, [T: 'static] where Self: crate::Branded,);",
-        "impl<R, T> TyArg for Erased<R, T> where R: HoldsNoValues, T: TyArg + Unbranded {}",
+        "unsafe impl<'s, R, T> Within<'s> for Erased<R, T> where R: Runtime, fn() -> T: carrier::HoldsNone {}",
+        "impl<R, T> Stored<R> for Erased<R, T> where R: Runtime {}",
+        "cross_one_value!(Erased<__Rt, T>, T);",
+        "impl<R, T> TyArg for Erased<R, T> where R: HoldsNoValues, T: TyArg + for<'s> Within<'s> {}",
         "impl<R> Deref for Owned<R> where R: Runtime { type Target = R::Value; fn deref(&self) -> &R::Value { self.word() } }",
     ];
     for source in admitted {

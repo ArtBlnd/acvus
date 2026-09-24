@@ -95,23 +95,22 @@ where
 /// (RFC-0047 rule 2).
 pub struct Slice<'a, T, M, Rt>(Elements<Rt>, PhantomData<(&'a (), T, M)>)
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     M: Loan,
     Rt: Runtime;
 
-// SAFETY: `At<'b>` changes the brand alone.
-unsafe impl<'a, T, M, Rt> crate::Branded for Slice<'a, T, M, Rt>
+// SAFETY: a `Slice` is at its own `'s`, and what its elements hold is at `'s`.
+unsafe impl<'s, T, M, Rt> crate::Within<'s> for Slice<'s, T, M, Rt>
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync + crate::Within<'s>,
     M: Loan,
     Rt: Runtime,
 {
-    type At<'b> = Slice<'b, T, M, Rt>;
 }
 
 impl<'b, T, M, Rt> Slice<'b, T, M, Rt>
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     M: Loan,
     Rt: Runtime,
 {
@@ -154,7 +153,7 @@ where
     }
 }
 
-impl<T, M, Rt> Var<kind::Type> for Slice<'static, T, M, Rt>
+impl<'a, T, M, Rt> Var<kind::Type> for Slice<'a, T, M, Rt>
 where
     T: Var<kind::Type>,
     M: Loan,
@@ -162,7 +161,7 @@ where
 {
 }
 
-// SAFETY: the element is its own canonical form's, and the brand is at
+// SAFETY: the element is its own canonical form's, and the lifetime is at
 // `'static`.
 unsafe impl<'a, T, M, Rt> crate::Canonical<kind::Type> for Slice<'a, T, M, Rt>
 where
@@ -177,7 +176,7 @@ where
 // every `T` and `M`.
 unsafe impl<'a, Mk, T, M, Rt> crate::UniformPayload<Mk> for Slice<'a, T, M, Rt>
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     M: Loan,
     Rt: Runtime,
 {
@@ -202,38 +201,45 @@ where
 
 /// A result declared `&[T]` / `&mut [T]` is returned as Rust's slice of a
 /// parameter the caller lent (RFC-0047 rule 3), and crosses as the pair.
-// SAFETY: the pair names exactly the slice the handler returned; nothing else
-// crosses, and the capability is not kept.
-unsafe impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Shared, Rt>
+impl<T, M, Rt> crate::LentBack<Rt> for Slice<'static, T, M, Rt>
 where
     T: TransparentOver<Rt>,
+    M: Loan,
     Rt: Runtime,
 {
-    type Of<'a> = &'a [T];
     type Form = crate::obj::Pair;
+}
 
-    fn into_run(value: &[T], rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
+// SAFETY: the pair names exactly the slice the handler returned; nothing else
+// crosses, and the capability is not kept.
+unsafe impl<'x, T, D, Rt> crate::handler::Gives<crate::RetLent<Slice<'static, T, Shared, Rt>>, Rt>
+    for &'x [D]
+where
+    T: TransparentOver<Rt>,
+    D: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    fn give(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         let words = Words {
-            ptr: value.as_ptr() as u64,
-            len: value.len() as u64,
+            ptr: self.as_ptr() as u64,
+            len: self.len() as u64,
         };
         rt.slice_into_run(words, out)
     }
 }
 
 // SAFETY: as the shared impl's, exclusively.
-unsafe impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Mut, Rt>
+unsafe impl<'x, T, D, Rt> crate::handler::Gives<crate::RetLent<Slice<'static, T, Mut, Rt>>, Rt>
+    for &'x mut [D]
 where
     T: TransparentOver<Rt>,
+    D: TransparentOver<Rt>,
     Rt: Runtime,
 {
-    type Of<'a> = &'a mut [T];
-    type Form = crate::obj::Pair;
-
-    fn into_run(value: &mut [T], rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
+    fn give(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         let words = Words {
-            ptr: value.as_mut_ptr() as u64,
-            len: value.len() as u64,
+            ptr: self.as_mut_ptr() as u64,
+            len: self.len() as u64,
         };
         rt.slice_into_run(words, out)
     }
@@ -244,51 +250,48 @@ where
 /// Rust's slice, at the run's own lifetime, and never names a `Slice`.
 pub struct BySlice<T, M>(PhantomData<fn() -> (T, M)>);
 
-impl<T, M, Rt> crate::handler::Sited<Rt> for BySlice<T, M>
+impl<T, M, Rt> crate::handler::Arg<Rt> for BySlice<T, M>
 where
     T: TransparentOver<Rt>,
     M: Loan,
     Rt: Runtime,
 {
     type Site = ();
+    type Form = crate::obj::Pair;
 
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
-// SAFETY: the slice is read from this parameter's own pair at `T`, which
+// SAFETY: the slice is read from this parameter's own pair at `D`, which
 // `TransparentOver` lays out as the runtime's value; nothing else crosses, and
 // the capability is not kept.
-unsafe impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Shared>
+unsafe impl<'a, 'w, T, D, Rt> crate::handler::Takes<'a, 'w, BySlice<T, Shared>, Rt> for &'a [D]
 where
     T: TransparentOver<Rt>,
+    D: TransparentOver<Rt> + crate::Within<'a>,
     Rt: Runtime,
 {
-    type Out = &'a [T];
-    type Form = crate::obj::Pair;
-
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> &'a [T] {
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> &'a [D] {
         // SAFETY: the caller's contract: `run` is this parameter's pair, and
-        // the container it names is live for `'a` (RFC-0018); `T:
+        // the container it names is live for `'a` (RFC-0018); `D:
         // TransparentOver<Rt>` is the layout.
         let words = unsafe { rt.slice_from_run(run) };
-        unsafe { std::slice::from_raw_parts(words.ptr as *const T, words.len as usize) }
+        unsafe { std::slice::from_raw_parts(words.ptr as *const D, words.len as usize) }
     }
 }
 
 // SAFETY: as the shared impl's, exclusively.
-unsafe impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Mut>
+unsafe impl<'a, 'w, T, D, Rt> crate::handler::Takes<'a, 'w, BySlice<T, Mut>, Rt> for &'a mut [D]
 where
     T: TransparentOver<Rt>,
+    D: TransparentOver<Rt> + crate::Within<'a>,
     Rt: Runtime,
 {
-    type Out = &'a mut [T];
-    type Form = crate::obj::Pair;
-
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> &'a mut [T] {
-        // SAFETY: as the shared form's, and a `&mut [T]` argument is the
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> &'a mut [D] {
+        // SAFETY: as the shared form's, and a `&mut [D]` argument is the
         // only live name of its run (RFC-0047 rule 2).
         let words = unsafe { rt.slice_from_run(run) };
-        unsafe { std::slice::from_raw_parts_mut(words.ptr as *mut T, words.len as usize) }
+        unsafe { std::slice::from_raw_parts_mut(words.ptr as *mut D, words.len as usize) }
     }
 }
 
@@ -305,7 +308,7 @@ where
 /// `TransparentOver`'s diagnostic names `Slice<Erased<Rt, T>, _, Rt>`.
 // SAFETY: the run is the pair the runtime writes and reads for this slice's own
 // elements; nothing else crosses, and the capability is not kept.
-unsafe impl<T, M, Rt> Cross<Rt> for Slice<'static, T, M, Rt>
+unsafe impl<'a, T, M, Rt> Cross<Rt> for Slice<'a, T, M, Rt>
 where
     T: TransparentOver<Rt>,
     M: Loan,

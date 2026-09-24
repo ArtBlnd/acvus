@@ -7,7 +7,7 @@ use acvus_extern::{Crossing, OneValue, Runtime};
 
 struct MyType(i64);
 
-acvus_extern::unbranded!(MyType);
+acvus_extern::within_every!(MyType);
 
 impl<Rt> OneValue<Rt> for MyType
 where

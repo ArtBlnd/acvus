@@ -34,7 +34,7 @@ pub trait Loan: Send + Sync + 'static {
     /// As `Borrowable::deref`, exclusively for `Mut`.
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> Self::Of<'a, T>
     where
-        T: Send + Sync + 'static,
+        T: Send + Sync,
         Rep: Lends<T, Rt>,
         Rt: Runtime;
 
@@ -44,12 +44,6 @@ pub trait Loan: Send + Sync + 'static {
     where
         T: Send + Sync + 'static,
         Rt: Runtime;
-
-    /// # Safety
-    /// As `brand_ref`'s, exclusively for `Mut`.
-    unsafe fn brand<'a, T>(borrow: Self::Of<'a, T>) -> Self::Of<'a, T::At<'a>>
-    where
-        T: crate::Branded + 'a;
 }
 
 pub struct Shared;
@@ -74,7 +68,7 @@ impl Loan for Shared {
 
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a T
     where
-        T: Send + Sync + 'static,
+        T: Send + Sync,
         Rep: Lends<T, Rt>,
         Rt: Runtime,
     {
@@ -89,14 +83,6 @@ impl Loan for Shared {
     {
         // SAFETY: the caller's contract.
         unsafe { rt.value_as_ref::<T>(value) }
-    }
-
-    unsafe fn brand<'a, T>(borrow: &'a T) -> &'a T::At<'a>
-    where
-        T: crate::Branded + 'a,
-    {
-        // SAFETY: the caller's contract.
-        unsafe { crate::brand_ref::<T>(borrow) }
     }
 }
 
@@ -119,7 +105,7 @@ impl Loan for Mut {
 
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T
     where
-        T: Send + Sync + 'static,
+        T: Send + Sync,
         Rep: Lends<T, Rt>,
         Rt: Runtime,
     {
@@ -134,13 +120,5 @@ impl Loan for Mut {
     {
         // SAFETY: the caller's contract, exclusive for this loan.
         unsafe { rt.value_as_mut::<T>(value) }
-    }
-
-    unsafe fn brand<'a, T>(borrow: &'a mut T) -> &'a mut T::At<'a>
-    where
-        T: crate::Branded + 'a,
-    {
-        // SAFETY: the caller's contract.
-        unsafe { crate::brand_mut::<T>(borrow) }
     }
 }

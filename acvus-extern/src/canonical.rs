@@ -44,7 +44,7 @@ where
     /// Its own canonical form, so a type named at its canonical form keys
     /// the same box, and a predicate restated at the canonical form holds
     /// there again.
-    type Canon: Var<K> + Canonical<K, Canon = Self::Canon>;
+    type Canon: Var<K> + Canonical<K, Canon = Self::Canon> + 'static;
 }
 
 macro_rules! same_layout {

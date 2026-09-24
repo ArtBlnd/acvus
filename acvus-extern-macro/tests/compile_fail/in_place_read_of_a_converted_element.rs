@@ -34,7 +34,9 @@ where
     Rt: Runtime,
 {
     unsafe {
-        <ByRef<Vec<i64>, Shared, Uniform> as RestoreShared<Rt>>::restore_shared(rt, at, crossed)
+        <&Vec<i64> as RestoreShared<'_, ByRef<Vec<i64>, Shared, Uniform>, Rt>>::restore_shared(
+            rt, at, crossed,
+        )
     }
     .len()
 }
@@ -44,7 +46,9 @@ where
     Rt: Runtime,
 {
     unsafe {
-        <ByRef<Vec<i64>, Mut, Uniform> as RestoreExclusive<Rt>>::restore_exclusive(rt, at, crossed)
+        <&mut Vec<i64> as RestoreExclusive<'_, ByRef<Vec<i64>, Mut, Uniform>, Rt>>::restore_exclusive(
+            rt, at, crossed,
+        )
     }
     .clear()
 }

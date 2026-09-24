@@ -1,3 +1,17 @@
+error[E0310]: the parameter type `E` may not live long enough
+  --> tests/compile_fail/closure_kept_past_the_call.rs:18:34
+   |
+18 |     *KEPT.lock().unwrap() = Some(Box::new(f));
+   |                                  ^^^^^^^^^^^
+   |                                  |
+   |                                  the parameter type `E` must be valid for the static lifetime...
+   |                                  ...so that the type `E` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+15 |     E: Var<kind::Effect> + 'static,
+   |                          +++++++++
+
 error: lifetime may not live long enough
   --> tests/compile_fail/closure_kept_past_the_call.rs:18:34
    |

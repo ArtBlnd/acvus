@@ -1,3 +1,0 @@
-// expect 1
-// keep's `T` is opaque: filled with `i64`, which has no position, the handler may keep it past the call.
-let a = keep(1); match keep(2) { Some(x) => x, None => 0 }

@@ -47,11 +47,11 @@ help: the trait `Project<__R>` is implemented for `Shape`
   |          ^^^^^
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `ShapeMut<'__x, __R>`
+error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `ShapeMut<'__s, __R>`
  --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
   |
 7 | #[derive(TyArg)]
-  |          ^^^^^ within `ShapeMut<'__x, __R>`, the trait `Project<__R>` is not implemented for `Vec<i64>`
+  |          ^^^^^ within `ShapeMut<'__s, __R>`, the trait `Project<__R>` is not implemented for `Vec<i64>`
   |
   = help: the following other types implement trait `Project<Rt>`:
             `()` implements `Project<__Rt>`
@@ -63,47 +63,16 @@ error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `Shap
             `i32` implements `Project<__Rt>`
             `i64` implements `Project<__Rt>`
           and $N others
-note: required because it appears within the type `ShapeMut<'__x, __R>`
+note: required because it appears within the type `ShapeMut<'__s, __R>`
  --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
   |
 7 | #[derive(TyArg)]
   |          ^^^^^
-note: required by a bound in `Branded`
- --> $WORKSPACE/acvus-extern/src/brand.rs
+note: required by a bound in `Within`
+ --> $WORKSPACE/acvus-extern/src/within.rs
   |
-  | / pub unsafe trait Branded {
-  | |     type At<'a>: 'a;
-  | | }
-  | |_^ required by this bound in `Branded`
-  = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `Vec<i64>: Project<__R>` is not satisfied in `ShapeMut<'__x, __R>`
- --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
-  |
-7 | #[derive(TyArg)]
-  |          ^^^^^ within `ShapeMut<'__x, __R>`, the trait `Project<__R>` is not implemented for `Vec<i64>`
-  |
-  = help: the following other types implement trait `Project<Rt>`:
-            `()` implements `Project<__Rt>`
-            `Shape` implements `Project<__R>`
-            `bool` implements `Project<__Rt>`
-            `char` implements `Project<__Rt>`
-            `f64` implements `Project<__Rt>`
-            `i16` implements `Project<__Rt>`
-            `i32` implements `Project<__Rt>`
-            `i64` implements `Project<__Rt>`
-          and $N others
-note: required because it appears within the type `ShapeMut<'__x, __R>`
- --> tests/compile_fail/projected_payload_without_a_borrow.rs:7:10
-  |
-7 | #[derive(TyArg)]
-  |          ^^^^^
-  = note: required for `ShapeMut<'__x, __R>` to implement `Branded`
-note: required by a bound in `Projected`
- --> $WORKSPACE/acvus-extern/src/projection.rs
-  |
-  | pub trait Projected<Rt>: crate::Branded + Sized
-  |                          ^^^^^^^^^^^^^^ required by this bound in `Projected`
+  | pub unsafe trait Within<'s> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Within`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Vec<i64>: acvus_extern::Borrowed` is not satisfied in `ShapeRef<'static>`
@@ -130,7 +99,7 @@ note: required because it appears within the type `ShapeRef<'static>`
 note: required by a bound in `acvus_extern::Var`
  --> $WORKSPACE/acvus-extern/src/ty_arg.rs
   |
-  | pub trait Var<K>: Canonical<K> + Send + Sync + 'static
+  | pub trait Var<K>: Canonical<K> + Send + Sync
   |                                         ^^^^ required by this bound in `Var`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -159,7 +128,7 @@ note: required because it appears within the type `ShapeRef<'static>`
 note: required by a bound in `acvus_extern::Canonical::Canon`
  --> $WORKSPACE/acvus-extern/src/canonical.rs
   |
-  |     type Canon: Var<K> + Canonical<K, Canon = Self::Canon>;
+  |     type Canon: Var<K> + Canonical<K, Canon = Self::Canon> + 'static;
   |                 ^^^^^^ required by this bound in `Canonical::Canon`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -211,7 +180,7 @@ note: required because it appears within the type `ShapeMut<'static, __R>`
 note: required by a bound in `acvus_extern::Var`
  --> $WORKSPACE/acvus-extern/src/ty_arg.rs
   |
-  | pub trait Var<K>: Canonical<K> + Send + Sync + 'static
+  | pub trait Var<K>: Canonical<K> + Send + Sync
   |                                         ^^^^ required by this bound in `Var`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -235,7 +204,7 @@ note: required because it appears within the type `ShapeMut<'static, __R>`
 note: required by a bound in `acvus_extern::Canonical::Canon`
  --> $WORKSPACE/acvus-extern/src/canonical.rs
   |
-  |     type Canon: Var<K> + Canonical<K, Canon = Self::Canon>;
+  |     type Canon: Var<K> + Canonical<K, Canon = Self::Canon> + 'static;
   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Canonical::Canon`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -262,7 +231,7 @@ note: required by a bound in `Canonical`
   | | where
   | |     K: Kind,
 ... |
-  | |     type Canon: Var<K> + Canonical<K, Canon = Self::Canon>;
+  | |     type Canon: Var<K> + Canonical<K, Canon = Self::Canon> + 'static;
   | | }
   | |_^ required by this bound in `Canonical`
   = note: this error originates in the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)

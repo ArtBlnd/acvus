@@ -32,11 +32,39 @@ help: the following other types implement trait `TransparentOver<Rt>`
    | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Unbranded,
-   | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
+   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
    = note: required for `acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>` to implement `Cross<__R>`
-   = note: required for `ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>` to implement `Arg<__R>`
+   = note: required for `(ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/slice_of_a_payload_type.rs:11:1
+   |
+ 9 | pub struct Rendered(());
+   | ------------------- doesn't satisfy `Rendered: TransparentOver<__R>`
+10 |
+11 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByValue<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
+   | ---------------------------------- doesn't satisfy `_: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Rendered: TransparentOver<__R>`
+           which is required by `ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Shared, __R>>, __R>: Iterator`
+note: the trait `TransparentOver` must be implemented
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   | pub unsafe trait TransparentOver<Rt>: OneValue<Rt>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `Rendered` is not the runtime's value under another name, so a run of the runtime's values is not a `[Rendered]`
@@ -73,9 +101,37 @@ help: the following other types implement trait `TransparentOver<Rt>`
    | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Unbranded,
-   | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
+   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
    = note: required for `acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>` to implement `Cross<__R>`
-   = note: required for `ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>` to implement `Arg<__R>`
+   = note: required for `(ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/slice_of_a_payload_type.rs:19:1
+   |
+ 9 | pub struct Rendered(());
+   | ------------------- doesn't satisfy `Rendered: TransparentOver<__R>`
+...
+19 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByValue<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
+   | ---------------------------------- doesn't satisfy `_: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Rendered: TransparentOver<__R>`
+           which is required by `ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByValue<acvus_extern::Slice<'static, Rendered, acvus_extern::Mut, __R>>, __R>: Iterator`
+note: the trait `TransparentOver` must be implemented
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   | pub unsafe trait TransparentOver<Rt>: OneValue<Rt>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

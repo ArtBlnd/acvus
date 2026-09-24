@@ -6125,13 +6125,22 @@ impl CallForm {
 /// A handler the preparation picks and no test runs: the fixtures below read
 /// the operation's shape, never its result.
 #[cfg(test)]
-fn refuses_to_run(
-    _: &mut acvus_extern::Ctx<'_, crate::runtime::AcvusRuntime>,
-    (a, _, _, _, _): (Value, Value, Value, Value, Value),
-) -> Value {
-    let _ = a;
+fn refuses_to_run<'a, 'w>(
+    _: &'a mut acvus_extern::Ctx<'w, crate::runtime::AcvusRuntime>,
+    _: <WindowArgs as acvus_extern::Parameters<crate::runtime::AcvusRuntime>>::Out<'a, 'w>,
+    _: acvus_extern::Returning<'a, acvus_extern::Val<Value>, crate::runtime::AcvusRuntime>,
+) {
     panic!("the preparation must not run a handler")
 }
+
+#[cfg(test)]
+type WindowArgs = (
+    acvus_extern::ByValue<Value>,
+    acvus_extern::ByValue<Value>,
+    acvus_extern::ByValue<Value>,
+    acvus_extern::ByValue<Value>,
+    acvus_extern::ByValue<Value>,
+);
 
 #[cfg(test)]
 fn nullary_handler() -> ExternHandler {
@@ -6140,7 +6149,7 @@ fn nullary_handler() -> ExternHandler {
         _,
         (),
         acvus_extern::Val<Value>,
-    >(|_, ()| Value::default()))
+    >(|_, (), ret| ret.put(Value::default())))
 }
 
 /// An extern lent its window: five of the runtime's values is past the
@@ -6150,13 +6159,7 @@ fn window_handler() -> ExternHandler {
     ExternHandler::sync(acvus_extern::glue::<
         crate::runtime::AcvusRuntime,
         _,
-        (
-            acvus_extern::ByValue<Value>,
-            acvus_extern::ByValue<Value>,
-            acvus_extern::ByValue<Value>,
-            acvus_extern::ByValue<Value>,
-            acvus_extern::ByValue<Value>,
-        ),
+        WindowArgs,
         acvus_extern::Val<Value>,
     >(refuses_to_run))
 }
@@ -6174,11 +6177,11 @@ fn str_handler() -> ExternHandler {
 }
 
 #[cfg(test)]
-fn refuses_a_str(
-    _: &mut acvus_extern::Ctx<'_, crate::runtime::AcvusRuntime>,
-    (s,): (&str,),
-) -> Value {
-    let _ = s;
+fn refuses_a_str<'a, 'w>(
+    _: &'a mut acvus_extern::Ctx<'w, crate::runtime::AcvusRuntime>,
+    _: <(acvus_extern::ByStr,) as acvus_extern::Parameters<crate::runtime::AcvusRuntime>>::Out<'a, 'w>,
+    _: acvus_extern::Returning<'a, acvus_extern::Val<Value>, crate::runtime::AcvusRuntime>,
+) {
     panic!("the preparation must not run a handler")
 }
 
@@ -7442,7 +7445,7 @@ mod assignment_tests {
             _,
             (acvus_extern::ByValue<Value>,),
             acvus_extern::Val<Value>,
-        >(|_, (v,)| v));
+        >(|_, (v,), ret| ret.put(v.take::<Value>())));
         let window = window_handler();
         [
             (extern_ref(BY_VALUE), Executable::Extern(vec![by_value])),

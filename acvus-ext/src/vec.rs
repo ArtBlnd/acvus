@@ -292,7 +292,7 @@ where
 // by `docs/std/vec.md`, and a registry's namespace is the name a script
 // writes.
 
-type KeyOf<'a, T, E, Rt> = Closure<'a, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>;
+type KeyOf<'a, T, E, Rt> = Closure<'a, (Ref<'a, T, Shared, Rt>,), i64, E, Rt>;
 
 fn keyed_order(keys: Vec<i64>) -> Vec<usize> {
     let mut order: Vec<usize> = (0..keys.len()).collect();
@@ -348,7 +348,7 @@ fn takes_left<'a>(verdict: i64) -> bool {
     verdict <= 0
 }
 
-type Comparator<'a, T, E, Rt> = Closure<'a, (Ref<'static, T, Shared, Rt>, Ref<'static, T, Shared, Rt>), i64, E, Rt>;
+type Comparator<'a, T, E, Rt> = Closure<'a, (Ref<'a, T, Shared, Rt>, Ref<'a, T, Shared, Rt>), i64, E, Rt>;
 
 fn sort_by_now<T, E, Rt>(ctx: &mut Ctx<'_, Rt>, c: &mut Vec<T>, f: Comparator<'_, T, E, Rt>)
 where

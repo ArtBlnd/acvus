@@ -71,7 +71,7 @@ fn next_nrange(it: &mut NRange) -> Option<i64> {
     })
 }
 
-#[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+#[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
 pub struct NMapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -125,7 +125,7 @@ where
     Some(it.0.f.call_now(ctx, (x,)))
 }
 
-#[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+#[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
 pub struct NFilterBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -135,7 +135,7 @@ where
 {
     inner: I,
     next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
-    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
 }
 
 #[derive(ExternType)]
@@ -151,7 +151,7 @@ where
 #[extern_fn(effect = pure, unsafe(lent(I, T)))]
 fn nfilter<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
 ) -> NFilter<'a, I, T, E, Rt>
 where
@@ -199,7 +199,7 @@ where
     acc
 }
 
-#[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+#[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
 pub struct NSlowedBody<'a, I, Rt>
 where
     I: Var<kind::Type>,

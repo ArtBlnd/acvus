@@ -2,7 +2,7 @@
 //! asserted on the declaration it generates.
 use acvus_extern::{
     Alignment, Closure, ClosureFn, Cross, Ctx, ExternFn, Flow, FlowEnd, Flows, Interner, OneValue,
-    PassedByValue, PolyTy, Runtime, TypesOnly, Unbranded, Var, extern_fn, kind,
+    PassedByValue, PolyTy, Runtime, TypesOnly, Var, extern_fn, kind,
 };
 
 #[extern_fn(effect = pure)]
@@ -63,7 +63,7 @@ where
 async fn apply<T, U, E, Rt>(ctx: &mut Ctx<'_, Rt>, t: T, f: Closure<'_, (T,), U, E, Rt>) -> U
 where
     T: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt> + Unbranded,
+    U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {

@@ -42,14 +42,6 @@ where
     unsafe { Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity()) }
 }
 
-// SAFETY: the element is its own `At<'a>`.
-unsafe impl<T> crate::Branded for Vec<T>
-where
-    T: crate::Branded,
-{
-    type At<'a> = Vec<T::At<'a>>;
-}
-
 crate::cross_one_value!(Vec<T>, T: crate::OneValue<__Rt>);
 
 // SAFETY: each element crosses by `T`'s own crossing, or in place where `T` is
@@ -113,11 +105,11 @@ where
     }
 }
 
-crate::cross_whole!(crate::Specialized, Vec<T>, T: Var<kind::Type> + crate::Branded);
+crate::cross_whole!(crate::Specialized, Vec<T>, T: Var<kind::Type>);
 
 impl<T, Rt> crate::BorrowableSpecialized<Rt> for Vec<T>
 where
-    T: Var<kind::Type> + crate::Branded,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     crate::whole_box_in_place!(Vec<T>, Rt);

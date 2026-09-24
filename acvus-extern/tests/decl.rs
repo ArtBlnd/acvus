@@ -521,7 +521,7 @@ async fn apply<T, U, E, Rt>(
 ) -> Boxed<U, E, Rt>
 where
     T: Var<kind::Type> + acvus_extern::PassedByValue<Rt>,
-    U: Var<kind::Type> + OneValue<Rt> + acvus_extern::Unbranded,
+    U: Var<kind::Type> + OneValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -626,7 +626,7 @@ where
 fn count_where<T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     c: &Vec<T>,
-    keep: acvus_extern::Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    keep: acvus_extern::Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
 ) -> u64
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
@@ -944,7 +944,7 @@ fn call_instance<'r, S, R>(
     read: impl FnOnce(S::Ret<'r>) -> R,
 ) -> R
 where
-    S: acvus_extern::CrossesRest<Tiny>,
+    S: acvus_extern::CrossesRest<Tiny> + 'static,
     S::Recv<'r>: acvus_extern::Receiver<Tiny>,
 {
     type Site<S> = acvus_extern::Required<S, Place, acvus_extern::Now, 0>;
@@ -954,7 +954,7 @@ where
     // outlives this call and is the entry `entry_of` built for `S`'s one
     // requirement at the receiver's type.
     let site = unsafe { acvus_extern::CallSite::new(&args, &requires) };
-    let instance = <Site<S> as acvus_extern::Sited<Tiny>>::site(&site, 0);
+    let instance = <Site<S> as acvus_extern::Arg<Tiny>>::site(&site, 0);
     read(instance.call(&mut tiny_ctx(), recv, rest))
 }
 
@@ -2641,12 +2641,14 @@ fn an_absent_result_lands_as_the_operation_wraps_it_and_keeps_its_nesting() {
 
     let site = acvus_extern::SitesNoParameterReads::default();
     let glue =
-        acvus_extern::glue::<Tiny, _, (ByValue<bool>,), Val<Option<Option<i64>>>>(|_, (there,)| {
-            match there {
-                true => Some(None),
-                false => None,
-            }
-        })
+        acvus_extern::glue::<Tiny, _, (ByValue<bool>,), Val<Option<Option<i64>>>>(
+            |_, (there,), ret| {
+                ret.put::<Option<Option<i64>>>(match there.take::<bool>() {
+                    true => Some(None),
+                    false => None,
+                })
+            },
+        )
         .at(&acvus_extern::CallSite::of_args(&site.args(1)));
 
     /// The bound is the assertion that `Option<T>` leaves the handler at
@@ -2693,7 +2695,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
     Registry::new(|i: &Interner| {
         let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("blocking"));
         let heavy = ExternHandler::heavy(acvus_extern::glue::<Tiny, _, (), acvus_extern::Val<V>>(
-            |_, ()| V::Taken,
+            |_, (), ret| ret.put::<V>(V::Taken),
         ));
         acvus_extern::Contribution {
             manifest: acvus_extern::Manifest {
@@ -2822,7 +2824,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
 
     assert_eq!(
         answered(
-            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, ()| 0)
+            acvus_extern::glue::<Tiny, _, (), Val<i64>>(|_, (), ret| ret.put::<i64>(0))
                 .at(&acvus_extern::CallSite::of_args(&site.args(0))),
             Width {
                 args: 0,
@@ -2836,8 +2838,10 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
     assert_eq!(
         answered(
-            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a)
-                .at(&acvus_extern::CallSite::of_args(&site.args(1))),
+            acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,), ret| {
+                ret.put::<i64>(a.take::<i64>())
+            })
+            .at(&acvus_extern::CallSite::of_args(&site.args(1))),
             Width {
                 args: 1,
                 ret: 1,
@@ -2851,7 +2855,7 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     assert_eq!(
         answered(
             acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(
-                |_, (a, b)| a + b
+                |_, (a, b), ret| ret.put::<i64>(a.take::<i64>() + b.take::<i64>())
             )
             .at(&acvus_extern::CallSite::of_args(&site.args(2))),
             Width {
@@ -2875,7 +2879,9 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 _,
                 (ByValue<i64>, ByRef<i64, Shared>, ByValue<i64>),
                 Val<i64>,
-            >(|_, (a, b, c)| a + *b + c)
+>(|_, (a, b, c), ret| {
+                ret.put::<i64>(a.take::<i64>() + *b.take::<&i64>() + c.take::<i64>())
+            })
             .at(&acvus_extern::CallSite::of_args(&site.args(3))),
             Width {
                 args: 3,
@@ -2896,7 +2902,11 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
                 _,
                 (ByValue<i64>, ByValue<i64>, ByValue<i64>, ByValue<i64>,),
                 Val<i64>,
-            >(|_, (a, b, c, d)| a + b + c + d)
+>(|_, (a, b, c, d), ret| {
+                ret.put::<i64>(
+                    a.take::<i64>() + b.take::<i64>() + c.take::<i64>() + d.take::<i64>(),
+                )
+            })
             .at(&acvus_extern::CallSite::of_args(&site.args(4))),
             Width {
                 args: 4,
@@ -2910,8 +2920,8 @@ fn a_glue_reports_the_width_its_types_declare_and_calls_the_same_closure() {
     );
 
     let two_wide =
-        acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(|_, (a, b)| {
-            a * 10 + b
+        acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(|_, (a, b), ret| {
+            ret.put::<i64>(a.take::<i64>() * 10 + b.take::<i64>())
         })
         .at(&acvus_extern::CallSite::of_args(&site.args(2)));
     // SAFETY: the width says two arguments in and one value out.
@@ -2937,7 +2947,9 @@ fn a_glue_clones_into_a_box_that_is_the_same_handler() {
     use acvus_extern::FormKind;
     use acvus_extern::{ByValue, HandlerFactory, Val, Width};
 
-    let glue = acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,)| a * 3);
+    let glue = acvus_extern::glue::<Tiny, _, (ByValue<i64>,), Val<i64>>(|_, (a,), ret| {
+        ret.put::<i64>(a.take::<i64>() * 3)
+    });
     let boxed: Box<dyn HandlerFactory<Tiny>> = Box::new(glue.clone());
     let again = boxed.clone();
 
@@ -3021,8 +3033,16 @@ fn a_plain_declarations_site_table_is_zero_sized() {
     use acvus_extern::{ByValue, SitesNoParameterReads, Val};
 
     let site = SitesNoParameterReads::default();
-    let closure = |_: &mut Ctx<'_, Tiny>, (a, b): (i64, i64)| a + b;
-    let unsited = acvus_extern::glue::<Tiny, _, (ByValue<i64>, ByValue<i64>), Val<i64>>(closure);
+    type Two = (ByValue<i64>, ByValue<i64>);
+    fn add<'a, 'w>(
+        _: &'a mut Ctx<'w, Tiny>,
+        (a, b): <Two as acvus_extern::Parameters<Tiny>>::Out<'a, 'w>,
+        ret: acvus_extern::Returning<'a, Val<i64>, Tiny>,
+    ) {
+        ret.put::<i64>(a.take::<i64>() + b.take::<i64>())
+    }
+    let closure = add;
+    let unsited = acvus_extern::glue::<Tiny, _, Two, Val<i64>>(closure);
     let sited = unsited.at(&acvus_extern::CallSite::of_args(&site.args(2)));
 
     assert_eq!(size_of_val(&closure), 0);
@@ -3048,7 +3068,7 @@ fn a_family_member_with_a_uniform_part() -> Registry<Tiny> {
         let t = PolyTy::Var(0);
         let handler = || {
             ExternHandler::sync(acvus_extern::glue::<Tiny, _, (), acvus_extern::Val<V>>(
-                |_, ()| V::Taken,
+                |_, (), ret| ret.put::<V>(V::Taken),
             ))
         };
         let mut contribution = acvus_extern::Contribution::of(acvus_extern::Manifest {

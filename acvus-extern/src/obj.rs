@@ -6,7 +6,6 @@
 //! holds. `Obj<V>` and `Variant<V>` are the runtime's own object and
 //! variant shapes.
 
-use std::any::TypeId;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -238,7 +237,7 @@ pub enum FormKind {
 }
 
 /// Obligation across artifacts: a parameter of this form takes its datum
-/// from `Sited::Site` instead, so `Parameters::sites` must give it one.
+/// from `Arg::Site` instead, so `Parameters::sites` must give it one.
 pub struct Nothing;
 
 /// One of the runtime's values.
@@ -610,7 +609,7 @@ impl<const W: usize> Form for Run<W> {
 /// keeps no capability past the call. The derives and the library's macros
 /// write every impl a declaration needs, so a hand-written one says
 /// `unsafe impl` and states in its `SAFETY` how it keeps this.
-pub unsafe trait Cross<Rt>: crate::Branded + Sized + Send + Sync + 'static
+pub unsafe trait Cross<Rt>: Sized + Send + Sync
 where
     Rt: Runtime,
 {
@@ -677,12 +676,13 @@ where
     message = "`{Self}` does not cross the boundary as one of the runtime's values",
     note = "a slice crosses as the two registers it occupies and is no value of the language: it is an argument and a result, never a field, a container's element, or a parameter taken by reference (RFC-0047 rule 6)."
 )]
-pub unsafe trait OneValue<Rt, Rep = Uniform>: crate::Branded + Sized + Send + Sync + 'static
+pub unsafe trait OneValue<Rt, Rep = Uniform>: Sized + Send + Sync
 where
     Rt: Runtime,
 {
-    /// `Self` is the runtime's value under another name, with its layout:
-    /// a container of `Self` is a container of values in place.
+    /// `Self` is the runtime's value or another name for it, with its
+    /// layout: a container of `Self` is a container of values in place. A
+    /// runtime's impl for its own value says `true`.
     const STORED_AS_VALUE: bool = false;
 
     fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value;
@@ -711,7 +711,7 @@ where
 #[macro_export]
 macro_rules! cross_one_value {
     ($t:ty, at $rt:ty) => {
-        $crate::unbranded!($t);
+        $crate::within_every!($t);
 
         // SAFETY: every method is the type's own `OneValue` at one word;
         // nothing else crosses, and the capability is not kept.
@@ -843,14 +843,14 @@ macro_rules! passed_as_one_value {
     ($t:ty, at $rt:ty) => {
         // SAFETY: `cross` and `restore` are the type's own `erase` and
         // `materialize`; nothing else crosses, and the capability is not kept.
-        unsafe impl $crate::Passed<$rt> for $t {
-            type As<'a> = Self;
+        unsafe impl<'__p> $crate::Passed<'__p, $rt> for $t {
+            type As = Self;
 
             fn cross(rt: $crate::Crossing<'_, $rt>, passed: Self) -> <$rt as $crate::Runtime>::Value {
                 <Self as $crate::OneValue<$rt>>::erase(passed, rt)
             }
 
-            unsafe fn restore<'a>(rt: $crate::Crossing<'_, $rt>, word: <$rt as $crate::Runtime>::Value) -> Self::As<'a> {
+            unsafe fn restore(rt: $crate::Crossing<'_, $rt>, word: <$rt as $crate::Runtime>::Value) -> Self {
                 // SAFETY: the caller's contract, which is `materialize`'s.
                 unsafe { <Self as $crate::OneValue<$rt>>::materialize(rt, word) }
             }
@@ -858,21 +858,21 @@ macro_rules! passed_as_one_value {
     };
     ($t:ty, [$($g:tt)*] where $($w:tt)+) => {
         // SAFETY: as the first arm's.
-        unsafe impl<$($g)*, __Rt> $crate::Passed<__Rt> for $t
+        unsafe impl<'__p, $($g)*, __Rt> $crate::Passed<'__p, __Rt> for $t
         where
             __Rt: $crate::Runtime,
             $($w)+
         {
-            type As<'a> = Self;
+            type As = Self;
 
             fn cross(rt: $crate::Crossing<'_, __Rt>, passed: Self) -> <__Rt as $crate::Runtime>::Value {
                 <Self as $crate::OneValue<__Rt>>::erase(passed, rt)
             }
 
-            unsafe fn restore<'a>(
+            unsafe fn restore(
                 rt: $crate::Crossing<'_, __Rt>,
                 word: <__Rt as $crate::Runtime>::Value,
-            ) -> Self::As<'a> {
+            ) -> Self {
                 // SAFETY: the caller's contract, which is `materialize`'s.
                 unsafe { <Self as $crate::OneValue<__Rt>>::materialize(rt, word) }
             }
@@ -880,20 +880,20 @@ macro_rules! passed_as_one_value {
     };
     ($t:ty $(, $($g:tt)*)?) => {
         // SAFETY: as the first arm's.
-        unsafe impl<$($($g)*,)? __Rt> $crate::Passed<__Rt> for $t
+        unsafe impl<'__p, $($($g)*,)? __Rt> $crate::Passed<'__p, __Rt> for $t
         where
             __Rt: $crate::Runtime,
         {
-            type As<'a> = Self;
+            type As = Self;
 
             fn cross(rt: $crate::Crossing<'_, __Rt>, passed: Self) -> <__Rt as $crate::Runtime>::Value {
                 <Self as $crate::OneValue<__Rt>>::erase(passed, rt)
             }
 
-            unsafe fn restore<'a>(
+            unsafe fn restore(
                 rt: $crate::Crossing<'_, __Rt>,
                 word: <__Rt as $crate::Runtime>::Value,
-            ) -> Self::As<'a> {
+            ) -> Self {
                 // SAFETY: the caller's contract, which is `materialize`'s.
                 unsafe { <Self as $crate::OneValue<__Rt>>::materialize(rt, word) }
             }
@@ -921,7 +921,7 @@ macro_rules! passed_as_one_value {
 /// `erase` wrote for a `Self`, which is what `Payload` being `Self`'s
 /// canonical form or its transparent payload makes sound; they read nothing
 /// else with the capability and keep no capability past the call.
-pub unsafe trait Stored<Rt>: OneValue<Rt> + crate::Unbranded
+pub unsafe trait Stored<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
 {
@@ -983,7 +983,7 @@ macro_rules! stored_as_canonical {
     note = "a slice whose elements read as `{Self}` in place is `Slice<Erased<Rt, {Self}>, Shared, Rt>` or `Slice<Erased<Rt, {Self}>, Mut, Rt>` (a Rust `&[Erased<Rt, {Self}>]` or `&mut [Erased<Rt, {Self}>]` parameter is the same): each element reads as `&{Self}` by `as_ref(rt)` and as `&mut {Self}` by `as_mut(rt)`, where `{Self}: Stored<Rt>`, as a scalar and an extension type are (RFC-0047).",
     note = "a type that is not `Stored`, as a derived struct or enum is not, has no element read in place: a `Vec` of it taken by value materializes each element."
 )]
-pub unsafe trait TransparentOver<Rt>: OneValue<Rt> + crate::Unbranded
+pub unsafe trait TransparentOver<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
 {
@@ -1067,7 +1067,7 @@ macro_rules! cross_as_stored {
             $crate::whole_box_in_place!($t, __Rt);
         }
 
-        $crate::unbranded!($t);
+        $crate::within_every!($t);
         $crate::cross_one_value!($t);
         $crate::borrowed_as_self!($t);
         $crate::cross_whole!($crate::Uniform, $t);
@@ -1154,7 +1154,7 @@ cross_as_stored!(bool);
 cross_as_stored!(String);
 cross_as_stored!(());
 
-crate::unbranded!(Bottom);
+crate::within_every!(Bottom);
 crate::cross_one_value!(Bottom);
 
 // SAFETY: `Bottom` is uninhabited: `erase` is never reached and `materialize`
@@ -1181,7 +1181,7 @@ where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    T::STORED_AS_VALUE || TypeId::of::<T>() == TypeId::of::<Rt::Value>()
+    T::STORED_AS_VALUE
 }
 
 /// An element a borrowed `Vec` or array is read in place at: an
@@ -1227,14 +1227,6 @@ where
 
 pub(crate) mod sealed {
     pub trait Sealed {}
-}
-
-// SAFETY: an option's payload is its own `At<'a>`.
-unsafe impl<T> crate::Branded for Option<T>
-where
-    T: crate::Branded,
-{
-    type At<'a> = Option<T::At<'a>>;
 }
 
 crate::passed_as_one_value!(Option<T>, T: OneValue<__Rt>);
@@ -1292,15 +1284,6 @@ where
         // value under the `some`.
         Some(unsafe { T::materialize(rt, rt.unwrap_some(value)) })
     }
-}
-
-// SAFETY: each side is its own `At<'a>`.
-unsafe impl<T, E> crate::Branded for Result<T, E>
-where
-    T: crate::Branded,
-    E: crate::Branded,
-{
-    type At<'a> = Result<T::At<'a>, E::At<'a>>;
 }
 
 crate::cross_one_value!(Result<T, E>, T: OneValue<__Rt>, E: OneValue<__Rt>);
@@ -1392,13 +1375,12 @@ where
 // crossings, the concrete one through `Borrowable` and the monomorphized one
 // through the marker; adding either impl makes a case there pass silently.
 
-// SAFETY: the element is its own `At<'a>`, and `N` names no lifetime.
-unsafe impl<T, N> crate::Branded for Arr<T, N>
+// SAFETY: the element holds its carriers at `'s`, and `N` holds no value.
+unsafe impl<'s, T, N> crate::Within<'s> for Arr<T, N>
 where
-    T: crate::Branded,
+    T: crate::Within<'s>,
     N: Var<kind::Length>,
 {
-    type At<'a> = Arr<T::At<'a>, N>;
 }
 
 crate::cross_one_value!(Arr<T, N>, T: OneValue<__Rt>, N: Var<kind::Length>);

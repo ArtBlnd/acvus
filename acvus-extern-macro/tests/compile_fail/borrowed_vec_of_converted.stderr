@@ -17,11 +17,39 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Branded,
-   | |_________________________^
+   | |_______________^
    = note: required for `Vec<Rendered>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Vec<Rendered>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByRef<Vec<Rendered>, acvus_extern::Shared>` to implement `Arg<__R>`
+   = note: required for `(ByRef<Vec<Rendered>, acvus_extern::Shared>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByRef<Vec<Rendered>, acvus_extern::Shared>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_vec_of_converted.rs:14:1
+   |
+12 | pub struct Rendered(());
+   | ------------------- doesn't satisfy `Rendered: InPlaceElement<__R>`
+13 |
+14 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
+   | ----------------------------------- doesn't satisfy `_: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Rendered: InPlaceElement<__R>`
+           which is required by `ByRef<Vec<Rendered>, acvus_extern::Shared>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByRef<Vec<Rendered>, acvus_extern::Shared>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByRef<Vec<Rendered>, acvus_extern::Shared>, __R>: Iterator`
+note: the trait `InPlaceElement` must be implemented
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   | pub unsafe trait InPlaceElement<Rt>: OneValue<Rt> + sealed::Sealed
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -39,11 +67,31 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Branded,
-   | |_________________________^
+   | |_______________^
    = note: required for `Vec<i64>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `Arg<__R>`
+   = note: required for `(ByRef<Vec<i64>, acvus_extern::Shared>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByRef<Vec<i64>, acvus_extern::Shared>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_vec_of_converted.rs:19:1
+   |
+19 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
+   | ----------------------------------- doesn't satisfy `ByRef<Vec<i64>, acvus_extern::Shared>: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `i64: InPlaceElement<__R>`
+           which is required by `ByRef<Vec<i64>, acvus_extern::Shared>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByRef<Vec<i64>, acvus_extern::Shared>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByRef<Vec<i64>, acvus_extern::Shared>, __R>: Iterator`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -61,11 +109,31 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Branded,
-   | |_________________________^
+   | |_______________^
    = note: required for `Vec<i64>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByRef<Vec<i64>, acvus_extern::Mut>` to implement `Arg<__R>`
+   = note: required for `(ByRef<Vec<i64>, acvus_extern::Mut>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByRef<Vec<i64>, acvus_extern::Mut>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_vec_of_converted.rs:24:1
+   |
+24 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
+   | ----------------------------------- doesn't satisfy `ByRef<Vec<i64>, acvus_extern::Mut>: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `i64: InPlaceElement<__R>`
+           which is required by `ByRef<Vec<i64>, acvus_extern::Mut>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByRef<Vec<i64>, acvus_extern::Mut>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByRef<Vec<i64>, acvus_extern::Mut>, __R>: Iterator`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
@@ -83,9 +151,29 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Branded,
-   | |_________________________^
+   | |_______________^
    = note: required for `Arr<i64, ()>` to implement `Borrowable<__R>`
-   = note: required for `ByRef<Arr<i64, ()>, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByRef<Arr<i64, ()>, acvus_extern::Shared>` to implement `Arg<__R>`
+   = note: required for `(ByRef<Arr<i64, ()>, acvus_extern::Shared>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByRef<Arr<i64, ()>, acvus_extern::Shared>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_vec_of_converted.rs:29:1
+   |
+29 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
+   | ----------------------------------- doesn't satisfy `_: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `i64: InPlaceElement<__R>`
+           which is required by `ByRef<Arr<i64, ()>, acvus_extern::Shared>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByRef<Arr<i64, ()>, acvus_extern::Shared>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByRef<Arr<i64, ()>, acvus_extern::Shared>, __R>: Iterator`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

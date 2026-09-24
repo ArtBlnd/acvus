@@ -49,8 +49,8 @@ pub fn substitute(ty: &Type, lookup: &dyn Fn(&Ident) -> Option<Type>) -> Type {
 }
 
 /// `ty` with every lifetime it names at `'static`: the form a marker names a
-/// type at, whose `Branded::At<'a>` the glue hands the handler (RFC-0079
-/// rule 6).
+/// type at, while the glue hands the handler the type it wrote at the call's
+/// lifetime (RFC-0079 rule 6).
 pub fn at_static(ty: &Type) -> Type {
     let mut ty = ty.clone();
     syn::visit_mut::VisitMut::visit_type_mut(&mut Static, &mut ty);

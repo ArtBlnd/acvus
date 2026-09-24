@@ -5,7 +5,7 @@
 //! entry of its own (RFC-0080 rule 2).
 #![forbid(unsafe_code)]
 use acvus_extern::{
-    CallSite, InstanceEntry, InstanceRun, Now, Owned, Pure, Required, Runtime, Sited,
+    CallSite, InstanceEntry, InstanceRun, Now, Owned, Pure, Required, Runtime, Arg,
     extern_signature,
 };
 
@@ -30,7 +30,7 @@ where
         args: &[],
         requires: words,
     };
-    let _ = <Forge<Rt> as Sited<Rt>>::site(&site, 0);
+    let _ = <Forge<Rt> as Arg<Rt>>::site(&site, 0);
 }
 
 fn from_an_entry<Rt>(run: InstanceRun)
@@ -46,7 +46,7 @@ where
         args: &[],
         requires: &words,
     };
-    let _ = <Forge<Rt> as Sited<Rt>>::site(&site, 0);
+    let _ = <Forge<Rt> as Arg<Rt>>::site(&site, 0);
 }
 
 fn main() {}

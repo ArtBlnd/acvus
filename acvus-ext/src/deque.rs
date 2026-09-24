@@ -12,16 +12,16 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Branded, Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
+    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
     QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
-    TransparentOver, TyArg, TyVarBound, Unbranded, UniformPayload, UserDefinedDecl, Var, Visit, extern_fn,
+    TransparentOver, TyArg, TyVarBound, UniformPayload, UserDefinedDecl, Var, Visit, Within, extern_fn,
     extern_registry, kind,
 };
 use acvus_mir::ty::Ty;
 
 use crate::iter::{Items, Refs, sig};
 
-#[derive(Debug, Clone, PartialEq, UniformPayload, Branded)]
+#[derive(Debug, Clone, PartialEq, UniformPayload, Within)]
 pub struct Deque<T>
 where
     T: Var<kind::Type>,
@@ -146,13 +146,13 @@ where
 acvus_extern::stored_as_canonical!(
     Deque<T>, [T, Rt] at Rt
     where
-        T: Var<kind::Type> + Unbranded,
+        T: Var<kind::Type>,
         Rt: Runtime,
 );
 
 impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>
 where
-    T: Var<kind::Type> + Unbranded,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     acvus_extern::whole_box_in_place!(Deque<T>, Rt);
@@ -160,16 +160,16 @@ where
 
 impl<T, Rt> acvus_extern::BorrowableSpecialized<Rt> for Deque<T>
 where
-    T: Var<kind::Type> + Unbranded,
+    T: Var<kind::Type>,
     Rt: Runtime,
 {
     acvus_extern::whole_box_in_place!(Deque<T>, Rt);
 }
 
-acvus_extern::cross_one_value!(Deque<T>, T: Var<kind::Type> + Unbranded);
-acvus_extern::borrowed_as_self!(Deque<T>, T: Var<kind::Type> + Unbranded);
-acvus_extern::cross_whole!(acvus_extern::Uniform, Deque<T>, T: Var<kind::Type> + Unbranded);
-acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Type> + Unbranded);
+acvus_extern::cross_one_value!(Deque<T>, T: Var<kind::Type>);
+acvus_extern::borrowed_as_self!(Deque<T>, T: Var<kind::Type>);
+acvus_extern::cross_whole!(acvus_extern::Uniform, Deque<T>, T: Var<kind::Type>);
+acvus_extern::cross_whole!(acvus_extern::Specialized, Deque<T>, T: Var<kind::Type>);
 
 impl<T> Var<kind::Type> for Deque<T> where T: Var<kind::Type> {}
 

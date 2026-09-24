@@ -1,3 +1,0 @@
-// refuse
-// keep_on_thread's `T` is opaque: a thread holding a value of it past the call would hold a loan.
-let s = "ab".to_string(); keep_on_thread(&s)

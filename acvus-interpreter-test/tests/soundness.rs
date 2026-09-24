@@ -170,25 +170,6 @@ fn hole(none: &Outcome, full: &Outcome) -> Option<String> {
     }
 }
 
-/// RFC-0079 rule 8: an opaque variable filled by a type with a position is
-/// refused by the checker, naming the variable and its declaration.
-#[test]
-fn an_opaque_variable_filled_with_a_reference_is_refused_by_name() {
-    for (program, declaration) in [
-        ("lent-vars/opaque_keep_reference.acvus", "keep"),
-        ("lent-vars/opaque_keep_in_state.acvus", "keep_in_state"),
-        ("lent-vars/opaque_keep_on_thread.acvus", "keep_on_thread"),
-    ] {
-        let source = std::fs::read_to_string(corpus_dir().join(program))
-            .expect("a program is readable");
-        let named = format!("`{declaration}` takes `T` opaque");
-        match outcome(&source, &serde_json::Map::new(), Opt::None) {
-            Outcome::Refused(why) if why.contains(&named) => {}
-            other => panic!("{program}: expected a refusal naming {named:?}, got {other:?}"),
-        }
-    }
-}
-
 #[test]
 fn corpus_child() {
     corpus::child();

@@ -872,7 +872,6 @@ fn generate_extern_fn(
         // type with no storage of its own is refused; nothing else reads
         // a value's payload in place.
         let recv_binding = params.first().map(|p| {
-            let ty = &rt_tys[0];
             let c = crossing(&p.ty, member);
             let at = &arg_idents[0];
             let loan = match p.mode {
@@ -885,19 +884,14 @@ fn generate_extern_fn(
                         <__R as ::acvus_extern::Runtime>::reference(__rt.rt(), &*__ctx.receiver())
                     };
                     let #at = unsafe {
-                        <#loan as ::acvus_extern::Loan>::brand::<#ty>(
-                            <#loan as ::acvus_extern::Loan>::borrow::<#ty, #c, __R>(
-                                __rt.rt(), &__recv_at,
-                            ),
-                        )
+                        ::acvus_extern::receiver_borrowed::<_, #loan, #c, __R>(__rt.rt(), &__recv_at)
                     };
                 },
                 _ => quote! {
+                    let __scope = ();
                     let #at = unsafe {
-                        ::acvus_extern::brand::<#ty>(
-                            <#ty as ::acvus_extern::OneValue<__R, #c>>::materialize(
-                                __rt, *__ctx.receiver(),
-                            ),
+                        ::acvus_extern::receiver_by_value::<_, #c, __R>(
+                            __rt, *__ctx.receiver(), &__scope,
                         )
                     };
                 },
@@ -922,7 +916,12 @@ fn generate_extern_fn(
                 // SAFETY: as the receiver's: the run is this signature's
                 // own, at the types this instance has.
                 let (#(#rest_idents,)*) = unsafe {
-                    #sig_mod::restore::<__R #(, #rest_markers)*>(__rt, __rest, &mut __lent)
+                    #sig_mod::restore(
+                        __rt,
+                        __rest,
+                        &mut __lent,
+                        ::core::marker::PhantomData::<(#(#rest_markers,)*)>,
+                    )
                 };
             }
         });
@@ -958,13 +957,17 @@ fn generate_extern_fn(
             __ctx: &mut ::acvus_extern::Ctx<'_, __R>
         };
         let call = quote! { #callee #turbofish (#ctx_arg #(#passed),*) };
+        let taken = quote! {
+            #(let #arg_idents = #arg_idents.take();)*
+            #(let #inst_idents = #inst_idents.take();)*
+        };
         // An instance whose result is a borrow crosses it through the
         // marker that borrow stands at; an owned result through the
         // signature's own `Returned` (RFC-0068 rule 6).
         let (lent_cross, lent_cross_await) = match &returning {
             Returning::Lent(shape) if !shape.slice => {
                 let carrier = shape.one_carrier(&quote! { #rt_ret }, &quote! { __R });
-                let cross = quote! { <#carrier as ::acvus_extern::Passed<__R>>::cross };
+                let cross = quote! { <#carrier as ::acvus_extern::Passed<'_, __R>>::cross };
                 match shape.option {
                     true => (
                         quote! { (#call).map(|__x| #cross(__rt, __x)) },
@@ -976,20 +979,9 @@ fn generate_extern_fn(
                     ),
                 }
             }
-            // SAFETY: `Returned::cross` erases the result at once.
             _ => (
-                quote! {
-                    <#rt_ret as #sig_mod::Returned<__R>>::cross(
-                        __rt,
-                        unsafe { ::acvus_extern::unbrand::<#rt_ret>(#call) },
-                    )
-                },
-                quote! {
-                    <#rt_ret as #sig_mod::Returned<__R>>::cross(
-                        __rt,
-                        unsafe { ::acvus_extern::unbrand::<#rt_ret>((#call).await) },
-                    )
-                },
+                quote! { <_ as #sig_mod::Returned<__R>>::cross(__rt, #call) },
+                quote! { <_ as #sig_mod::Returned<__R>>::cross(__rt, (#call).await) },
             ),
         };
         if awaits && has_glue {
@@ -1058,10 +1050,9 @@ fn generate_extern_fn(
                     // each value at the declaration's own types.
                     let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                         ::std::boxed::Box::pin(async move {
+                            #taken
                             let __r = (#call).await;
-                            // SAFETY: the result is erased here.
-                            let __r = unsafe { ::acvus_extern::unbrand::<#rt_ret>(__r) };
-                            <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
+                            <_ as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
                         })
                     })
                 )
@@ -1077,10 +1068,9 @@ fn generate_extern_fn(
                     // each value at the declaration's own types.
                     let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                             ::std::boxed::Box::pin(async move {
+                                #taken
                                 let __r = (#call).await;
-                                // SAFETY: the result is erased here.
-                                let __r = unsafe { ::acvus_extern::unbrand::<#rt_ret>(__r) };
-                                <#rt_ret as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
+                                <_ as ::acvus_extern::OneValue<__R>>::erase(__r, __rt)
                             })
                         }
                     )
@@ -1142,7 +1132,10 @@ fn generate_extern_fn(
                         (#(#arg_markers,)* #(#inst_markers,)*),
                         #ret_marker,
                         #entry_ty,
-                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| #call)
+                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*), __ret| {
+                        #taken
+                        __ret.put(#call)
+                    })
                 )
             }
         } else {
@@ -1150,7 +1143,10 @@ fn generate_extern_fn(
                 ::acvus_extern::ExternHandler::#sync_variant({
                     #capture_state
                     ::acvus_extern::glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)*), #ret_marker>(
-                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| #call
+                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*), __ret| {
+                            #taken
+                            __ret.put(#call)
+                        }
                     )
                 })
             }
@@ -1179,7 +1175,7 @@ fn generate_extern_fn(
                                 _,
                                 (::acvus_extern::ByValue<#rt_ty, #from>,),
                                 ::acvus_extern::Val<#rt_ty, #into>,
-                            >(|_, (__v,)| __v)
+                            >(|_, (__v,), __ret| __ret.put::<#rt_ty>(__v.take::<#rt_ty>()))
                         )
                     }
                 };
@@ -1679,6 +1675,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     };
     let payload_ty = &payload.ty;
     let uniform = vars.uniform_type_vars();
+    let non_type = vars.non_type_vars();
     if let Some((through, projection)) = projection_through(payload_ty, &uniform) {
         return Err(syn::Error::new_spanned(
             projection,
@@ -1724,9 +1721,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
     };
     // Each lifetime parameter is a region parameter of the type (RFC-0079
-    // rule 6). The traits a marker names are `'static`, so they hold at the
-    // type with every lifetime at `'static`; `Branded`, `Canonical`,
-    // `UniformPayload` and `Transparent` hold at every lifetime.
+    // rule 6). `TyArg` and `ExternTypeDecl` are the marker's, which names the
+    // type with every lifetime at `'static`; every other impl holds at every
+    // lifetime, since a handler is handed the type at its call's.
     let lifetimes: Vec<syn::Lifetime> = input
         .generics
         .lifetimes()
@@ -1759,7 +1756,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
     };
     let static_self = self_at(quote! { 'static });
-    let branded_at = self_at(quote! { '__at });
+    let within_self = self_at(quote! { '__s });
     // The key and the canonical form name each uniform parameter's
     // canonical form, so every impl that names either restates the struct's
     // predicates at it.
@@ -1781,45 +1778,52 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         .filter_map(|predicate| {
             let mut at_canon = predicate.clone();
             syn::visit_mut::VisitMut::visit_where_predicate_mut(
-                &mut Canonicalize { uniform: &uniform },
+                &mut Canonicalize {
+                    uniform: &uniform,
+                    non_type: &non_type,
+                },
                 &mut at_canon,
             );
             (quote! { #at_canon }.to_string() != quote! { #predicate }.to_string())
                 .then_some(at_canon)
         })
         .collect();
-    let where_predicates = quote! { #(#struct_predicates,)* #(#restated,)* };
+    // A `Chosen` part is its own Rust type in the key (RFC-0076 rule 2), so
+    // it is `'static` wherever the key is named; the glue fills it with one.
+    let chosen = vars.chosen_idents();
+    let where_predicates = quote! { #(#struct_predicates,)* #(#restated,)* #(#chosen: 'static,)* };
     let static_predicates = struct_predicates
         .iter()
         .chain(&restated)
         .map(subst::predicate_at_static);
-    let static_where = quote! { #(#static_predicates,)* };
-    // The type's brand is its payload's: `At` puts the type's own lifetimes
-    // at the brand, which holds where the payload's `At` is the payload with
-    // those lifetimes at the brand. A payload that names no parameter is one
-    // type at every lifetime.
-    let payload_branded = (names_any(payload_ty, &type_param_idents_owned(&input.generics))
-        || names_lifetime(payload_ty, &lifetimes))
-    .then(|| {
-        let at_b = ToBrand {
-            lifetimes: &lifetimes,
-            mapped: &[],
-            at: syn::parse_quote! { '__b },
-        }
-        .apply(payload_ty);
-        let at_static_payload = at_static(payload_ty);
-        (
-            quote! { #payload_ty: for<'__b> ::acvus_extern::Branded<At<'__b> = #at_b>, },
-            quote! { #at_static_payload: for<'__b> ::acvus_extern::Branded<At<'__b> = #at_b>, },
-        )
-    });
-    let (payload_branded, unbranded_vars) = payload_branded.unzip();
+    let static_where = quote! { #(#static_predicates,)* #(#chosen: 'static,)* };
+    let at_s = AtLifetime {
+        lifetimes: &lifetimes,
+        at: syn::parse_quote! { '__s },
+    };
+    let payload_within = {
+        let type_params: Vec<Ident> =
+            input.generics.type_params().map(|tp| tp.ident.clone()).collect();
+        (names_any(payload_ty, &type_params) || at_s.names_lifetime(payload_ty)).then(|| {
+            let payload = at_s.apply(payload_ty);
+            quote! { #payload: ::acvus_extern::Within<'__s>, }
+        })
+    };
+    let within_predicates = struct_predicates
+        .iter()
+        .chain(&restated)
+        .map(|predicate| at_s.apply_predicate(predicate));
     let key_ty = {
         let mut key = payload_ty.clone();
-        syn::visit_mut::VisitMut::visit_type_mut(&mut Canonicalize { uniform: &uniform }, &mut key);
+        syn::visit_mut::VisitMut::visit_type_mut(
+            &mut Canonicalize {
+                uniform: &uniform,
+                non_type: &non_type,
+            },
+            &mut key,
+        );
         at_static(&key)
     };
-    let type_param_idents: Vec<&Ident> = input.generics.type_params().map(|tp| &tp.ident).collect();
     let canon_args = input.generics.params.iter().map(|param| match param {
         GenericParam::Type(tp) if uniform.contains(&tp.ident) => {
             let ident = &tp.ident;
@@ -1827,7 +1831,13 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
         GenericParam::Type(tp) => {
             let ident = &tp.ident;
-            quote! { #ident }
+            match vars.lookup(ident) {
+                Some((kind @ (VarKind::Effect | VarKind::Len | VarKind::Identity), _)) => {
+                    let marker = kind.marker();
+                    quote! { <#ident as ::acvus_extern::Canonical<#marker>>::Canon }
+                }
+                _ => quote! { #ident },
+            }
         }
         GenericParam::Lifetime(_) => quote! { 'static },
         GenericParam::Const(c) => {
@@ -1944,7 +1954,6 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         where
             __R: ::acvus_extern::Runtime,
             #static_where
-            #unbranded_vars
         {
             type Payload = #key_ty;
 
@@ -1963,70 +1972,40 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
     });
-    let passed = match n_regions {
-        0 => quote! {
-            type As<'__a> = Self;
+    let passed = quote! {
+        type As = Self;
 
-            fn cross(__rt: ::acvus_extern::Crossing<'_, __R>, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
-                <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
-            }
+        fn cross(__rt: ::acvus_extern::Crossing<'_, __R>, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
+            <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
+        }
 
-            unsafe fn restore<'__a>(
-                __rt: ::acvus_extern::Crossing<'_, __R>,
-                __word: <__R as ::acvus_extern::Runtime>::Value,
-            ) -> Self::As<'__a> {
-                // SAFETY: the caller's contract, which is `materialize`'s.
-                unsafe { <Self as ::acvus_extern::OneValue<__R>>::materialize(__rt, __word) }
-            }
-        },
-        _ => quote! {
-            type As<'__a> = <Self as ::acvus_extern::Branded>::At<'__a>;
-
-            fn cross(
-                __rt: ::acvus_extern::Crossing<'_, __R>,
-                __passed: Self::As<'_>,
-            ) -> <__R as ::acvus_extern::Runtime>::Value {
-                // SAFETY: the value is erased here.
-                let __passed = unsafe { ::acvus_extern::unbrand::<Self>(__passed) };
-                <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
-            }
-
-            unsafe fn restore<'__a>(
-                __rt: ::acvus_extern::Crossing<'_, __R>,
-                __word: <__R as ::acvus_extern::Runtime>::Value,
-            ) -> Self::As<'__a> {
-                // SAFETY: the caller's contract, which is `materialize`'s,
-                // and what the value names is live for `'__a`.
-                unsafe {
-                    ::acvus_extern::brand::<Self>(
-                        <Self as ::acvus_extern::OneValue<__R>>::materialize(__rt, __word),
-                    )
-                }
-            }
-        },
+        unsafe fn restore(
+            __rt: ::acvus_extern::Crossing<'_, __R>,
+            __word: <__R as ::acvus_extern::Runtime>::Value,
+        ) -> Self {
+            // SAFETY: the caller's contract, which is `materialize`'s.
+            unsafe { <Self as ::acvus_extern::OneValue<__R>>::materialize(__rt, __word) }
+        }
     };
 
     Ok(quote! {
-        impl<#static_params> ::acvus_extern::Var<::acvus_extern::kind::Type> for #static_self
+        impl<#impl_params> ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident #ty_generics
         where
-            #static_where
+            #where_predicates
         {
         }
 
         #uniform_check
 
-        // SAFETY: `At<'__at>` puts each lifetime parameter at `'__at` and
-        // keeps every other parameter. The payload, the one field that is not
-        // `PhantomData`, is bounded here to be, at `'__at`, itself with the
-        // type's lifetimes at `'__at`; a payload that names no parameter is
-        // one type at every lifetime.
-        unsafe impl<#impl_params> ::acvus_extern::Branded for #ident #ty_generics
+        // SAFETY: the type's own lifetimes are at `'__s`, and the payload, the
+        // one field that is not `PhantomData`, is bounded here to hold its
+        // carriers at `'__s` where it names a parameter; a payload that names
+        // none is one type at every lifetime.
+        unsafe impl<'__s, #static_params> ::acvus_extern::Within<'__s> for #within_self
         where
-            #where_predicates
-            #(#type_param_idents: 'static,)*
-            #payload_branded
+            #(#within_predicates,)*
+            #payload_within
         {
-            type At<'__at> = #branded_at;
         }
 
         // SAFETY: the struct is `#[repr(transparent)]` over its payload, which
@@ -2039,8 +2018,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         {
         }
 
-        // SAFETY: the canonical form takes each uniform parameter to its own,
-        // each lifetime to `'static`, and keeps every other, and the payload
+        // SAFETY: the canonical form takes each uniform parameter and each
+        // effect, length and identity parameter to its own, each lifetime to
+        // `'static`, and keeps every other, and the payload
         // is `UniformPayload`, proved above with each type variable held as
         // itself, or asserted to be by `unsafe(uniform_payload)`.
         unsafe impl<#impl_params> ::acvus_extern::Canonical<::acvus_extern::kind::Type>
@@ -2071,11 +2051,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
 
         // SAFETY: every method is the type's own `OneValue` at one word;
         // nothing else crosses, and the capability is not kept.
-        unsafe impl<#static_params __R> ::acvus_extern::Cross<__R> for #static_self
+        unsafe impl<#impl_params __R> ::acvus_extern::Cross<__R> for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
-            #static_where
-            #unbranded_vars
+            #where_predicates
         {
             #one_value_run
         }
@@ -2083,42 +2062,38 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         // SAFETY: `transparent::erase` and `transparent::materialize` box and
         // unbox the payload the struct is transparent over, at the type the
         // derive names; nothing else crosses, and the capability is not kept.
-        unsafe impl<#static_params __R> ::acvus_extern::OneValue<__R> for #static_self
+        unsafe impl<#impl_params __R> ::acvus_extern::OneValue<__R> for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
-            #static_where
-            #unbranded_vars
+            #where_predicates
         {
             #payload_crossing
         }
 
         // SAFETY: as the uniform impl's.
-        unsafe impl<#static_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
-            for #static_self
+        unsafe impl<#impl_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
+            for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
-            #static_where
-            #unbranded_vars
+            #where_predicates
         {
             #payload_crossing
         }
 
         // SAFETY: `cross` and `restore` are the type's own `erase` and
         // `materialize`; nothing else crosses, and the capability is not kept.
-        unsafe impl<#static_params __R> ::acvus_extern::Passed<__R> for #static_self
+        unsafe impl<'__p, #impl_params __R> ::acvus_extern::Passed<'__p, __R> for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
-            #static_where
-            #unbranded_vars
+            #where_predicates
         {
             #passed
         }
 
-        impl<#static_params __R> ::acvus_extern::BorrowableSpecialized<__R> for #static_self
+        impl<#impl_params __R> ::acvus_extern::BorrowableSpecialized<__R> for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
-            #static_where
-            #unbranded_vars
+            #where_predicates
         {
             #payload_in_place
         }
@@ -2134,11 +2109,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         {
         }
 
-        impl<#static_params __R> ::acvus_extern::Borrowable<__R> for #static_self
+        impl<#impl_params __R> ::acvus_extern::Borrowable<__R> for #ident #ty_generics
         where
             __R: ::acvus_extern::Runtime,
-            #static_where
-            #unbranded_vars
+            #where_predicates
         {
             #payload_in_place
         }
@@ -2248,6 +2222,7 @@ where
 /// Takes each uniform type parameter to its canonical form.
 struct Canonicalize<'a> {
     uniform: &'a [Ident],
+    non_type: &'a [(Ident, Type)],
 }
 
 impl syn::visit_mut::VisitMut for Canonicalize<'_> {
@@ -2255,13 +2230,20 @@ impl syn::visit_mut::VisitMut for Canonicalize<'_> {
         if let Type::Path(path) = ty
             && path.qself.is_none()
             && let Some(ident) = path.path.get_ident()
-            && self.uniform.contains(ident)
         {
-            let ident = ident.clone();
-            *ty = syn::parse_quote! {
-                <#ident as ::acvus_extern::Canonical<::acvus_extern::kind::Type>>::Canon
-            };
-            return;
+            if self.uniform.contains(ident) {
+                let ident = ident.clone();
+                *ty = syn::parse_quote! {
+                    <#ident as ::acvus_extern::Canonical<::acvus_extern::kind::Type>>::Canon
+                };
+                return;
+            }
+            if let Some((ident, marker)) = self.non_type.iter().find(|(other, _)| other == ident) {
+                *ty = syn::parse_quote! {
+                    <#ident as ::acvus_extern::Canonical<#marker>>::Canon
+                };
+                return;
+            }
         }
         syn::visit_mut::visit_type_mut(self, ty);
     }
@@ -2358,18 +2340,18 @@ fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::Toke
     })
 }
 
-// -- #[derive(Branded)] ----------------------------------------------
+// -- #[derive(Within)] -----------------------------------------------
 
-#[proc_macro_derive(Branded)]
-pub fn derive_branded(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(Within)]
+pub fn derive_within(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match generate_branded(input) {
+    match generate_within(input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
 }
 
-fn generate_branded(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn generate_within(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let ident = &input.ident;
     let fields: Vec<&syn::Field> = match &input.data {
         syn::Data::Struct(data) => data.fields.iter().collect(),
@@ -2377,7 +2359,7 @@ fn generate_branded(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         syn::Data::Union(_) => {
             return Err(syn::Error::new(
                 ident.span(),
-                "Branded is derived on a struct or an enum",
+                "Within is derived on a struct or an enum",
             ));
         }
     };
@@ -2386,34 +2368,27 @@ fn generate_branded(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         .lifetimes()
         .map(|lt| lt.lifetime.clone())
         .collect();
-    let type_params = type_param_idents_owned(&input.generics);
-    let predicates = struct_predicates(&input.generics);
-    let (kept, mapped): (Vec<Ident>, Vec<Ident>) = type_params
-        .iter()
-        .cloned()
-        .partition(|param| predicates.iter().any(|predicate| names_any(predicate, &[param.clone()])));
-    let to_brand = ToBrand {
+    let at_s = AtLifetime {
         lifetimes: &lifetimes,
-        mapped: &mapped,
-        at: syn::parse_quote! { '__b },
+        at: syn::parse_quote! { '__s },
     };
+    let predicates = struct_predicates(&input.generics)
+        .into_iter()
+        .map(|predicate| at_s.apply_predicate(&predicate));
+    let type_params: Vec<Ident> = input.generics.type_params().map(|tp| tp.ident.clone()).collect();
     let bounded = fields
         .iter()
-        .map(|field| &field.ty)
-        .filter(|ty| names_any(*ty, &type_params) || names_lifetime(*ty, &lifetimes))
-        .filter(|ty| !mapped.iter().any(|param| Vars::is_exactly(ty, param)))
-        .map(|ty| {
-            let at_b = to_brand.apply(ty);
-            quote! { #ty: for<'__b> ::acvus_extern::Branded<At<'__b> = #at_b> }
+        .filter(|field| names_any(&field.ty, &type_params) || at_s.names_lifetime(&field.ty))
+        .map(|field| {
+            let ty = at_s.apply(&field.ty);
+            quote! { #ty: ::acvus_extern::Within<'__s> }
         });
     let self_at = {
         let args = input.generics.params.iter().map(|param| match param {
-            GenericParam::Lifetime(_) => quote! { '__b },
+            GenericParam::Lifetime(_) => quote! { '__s },
             GenericParam::Type(tp) => {
                 let ident = &tp.ident;
-                let ty: Type = syn::parse_quote! { #ident };
-                let at = to_brand.apply(&ty);
-                quote! { #at }
+                quote! { #ident }
             }
             GenericParam::Const(c) => {
                 let ident = &c.ident;
@@ -2425,88 +2400,69 @@ fn generate_branded(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             false => quote! { #ident<#(#args),*> },
         }
     };
-    let params = input.generics.params.iter();
-    let (_, ty_generics, _) = input.generics.split_for_impl();
+    let params = input
+        .generics
+        .params
+        .iter()
+        .filter(|param| !matches!(param, GenericParam::Lifetime(_)));
     Ok(quote! {
-        // SAFETY: `At<'__b>` puts the type's own lifetimes at `'__b`, each
-        // type parameter no predicate names at its own `At<'__b>`, and keeps
-        // every other parameter. Each field that names a parameter is, at
-        // `'__b`, itself so changed: bounded here, or that parameter itself.
-        // A field that names none is one type at every lifetime, built by Rust
-        // code at that type and never read from a box of another.
-        unsafe impl<#(#params,)*> ::acvus_extern::Branded for #ident #ty_generics
+        // SAFETY: the type's own lifetimes are at `'__s`, and each field that
+        // names a parameter is bounded here to hold its carriers at `'__s`. A
+        // field that names none is one type at every lifetime.
+        unsafe impl<'__s, #(#params,)*> ::acvus_extern::Within<'__s> for #self_at
         where
             #(#predicates,)*
-            #(#kept: 'static,)*
-            #(#mapped: ::acvus_extern::Branded,)*
             #(#bounded,)*
         {
-            type At<'__b> = #self_at;
         }
     })
 }
 
-/// A type as `Branded::At<'__b>` gives it: each of `lifetimes` at `at`,
-/// and each of `mapped` at its own `At`.
-struct ToBrand<'a> {
+struct AtLifetime<'a> {
     lifetimes: &'a [syn::Lifetime],
-    mapped: &'a [Ident],
     at: syn::Lifetime,
 }
 
-impl ToBrand<'_> {
+impl AtLifetime<'_> {
     fn apply(&self, ty: &Type) -> Type {
         let mut ty = ty.clone();
         syn::visit_mut::VisitMut::visit_type_mut(&mut &*self, &mut ty);
         ty
     }
-}
 
-impl syn::visit_mut::VisitMut for &ToBrand<'_> {
-    fn visit_type_mut(&mut self, ty: &mut Type) {
-        if let Type::Path(path) = ty
-            && path.qself.is_none()
-            && let Some(ident) = path.path.get_ident()
-            && self.mapped.contains(ident)
-        {
-            let (ident, at) = (ident.clone(), &self.at);
-            *ty = syn::parse_quote! { <#ident as ::acvus_extern::Branded>::At<#at> };
-            return;
+    fn names_lifetime(&self, ty: &Type) -> bool {
+        struct Find<'a> {
+            lifetimes: &'a [syn::Lifetime],
+            found: bool,
         }
-        syn::visit_mut::visit_type_mut(self, ty);
+
+        impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
+            fn visit_lifetime(&mut self, lifetime: &'ast syn::Lifetime) {
+                self.found |= self.lifetimes.contains(lifetime);
+            }
+        }
+
+        let mut find = Find {
+            lifetimes: self.lifetimes,
+            found: false,
+        };
+        syn::visit::Visit::visit_type(&mut find, ty);
+        find.found
     }
 
+    fn apply_predicate(&self, predicate: &syn::WherePredicate) -> syn::WherePredicate {
+        let mut predicate = predicate.clone();
+        syn::visit_mut::VisitMut::visit_where_predicate_mut(&mut &*self, &mut predicate);
+        predicate
+    }
+}
+
+impl syn::visit_mut::VisitMut for &AtLifetime<'_> {
     fn visit_lifetime_mut(&mut self, lifetime: &mut syn::Lifetime) {
         if self.lifetimes.contains(lifetime) {
             *lifetime = self.at.clone();
         }
     }
-}
-
-/// The type parameters `generics` declares.
-fn type_param_idents_owned(generics: &syn::Generics) -> Vec<Ident> {
-    generics.type_params().map(|tp| tp.ident.clone()).collect()
-}
-
-/// Whether `ty` names one of `lifetimes`.
-fn names_lifetime(ty: &Type, lifetimes: &[syn::Lifetime]) -> bool {
-    struct Find<'a> {
-        lifetimes: &'a [syn::Lifetime],
-        found: bool,
-    }
-
-    impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
-        fn visit_lifetime(&mut self, lifetime: &'ast syn::Lifetime) {
-            self.found |= self.lifetimes.contains(lifetime);
-        }
-    }
-
-    let mut find = Find {
-        lifetimes,
-        found: false,
-    };
-    syn::visit::Visit::visit_type(&mut find, ty);
-    find.found
 }
 
 // -- #[derive(TyArg)] ------------------------------------------------
@@ -2659,7 +2615,7 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
     quote! {
         impl ::acvus_extern::Var<::acvus_extern::kind::Type> for #ident {}
 
-        ::acvus_extern::unbranded!(#ident);
+        ::acvus_extern::within_every!(#ident);
 
         // SAFETY: a type with no type parameter reaches none.
         unsafe impl<__M> ::acvus_extern::UniformPayload<__M> for #ident {}
@@ -2709,20 +2665,20 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
 
         // SAFETY: `cross` and `restore` are the type's own `erase` and
         // `materialize`; nothing else crosses, and the capability is not kept.
-        unsafe impl<__R> ::acvus_extern::Passed<__R> for #ident
+        unsafe impl<'__p, __R> ::acvus_extern::Passed<'__p, __R> for #ident
         where
             __R: ::acvus_extern::Runtime,
         {
-            type As<'__a> = Self;
+            type As = Self;
 
             fn cross(__rt: ::acvus_extern::Crossing<'_, __R>, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
                 <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
             }
 
-            unsafe fn restore<'__a>(
+            unsafe fn restore(
                 __rt: ::acvus_extern::Crossing<'_, __R>,
                 __word: <__R as ::acvus_extern::Runtime>::Value,
-            ) -> Self::As<'__a> {
+            ) -> Self {
                 // SAFETY: the caller's contract, which is `materialize`'s.
                 unsafe { <Self as ::acvus_extern::OneValue<__R>>::materialize(__rt, __word) }
             }
@@ -3063,12 +3019,11 @@ impl<'a> ObjectShape<'a> {
                 }
             }
 
-            // SAFETY: `At<'__a>` changes the projection's lifetime alone.
-            unsafe impl<'__x> ::acvus_extern::Branded for #shared<'__x> {
-                type At<'__a> = #shared<'__a>;
-            }
+            // SAFETY: a projection is at its own lifetime, and borrows only
+            // parts of the object the caller lent at it.
+            unsafe impl<'__s> ::acvus_extern::Within<'__s> for #shared<'__s> {}
 
-            impl<'__x, __R> ::acvus_extern::Projected<__R> for #shared<'__x>
+            impl<'__a, __R> ::acvus_extern::Projected<'__a, __R> for #shared<'__a>
             where
                 __R: ::acvus_extern::Runtime,
             {
@@ -3078,7 +3033,7 @@ impl<'a> ObjectShape<'a> {
                     #table_of
                 }
 
-                unsafe fn of<'__a>(
+                unsafe fn of(
                     __rt: &'__a __R,
                     __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
                     __table: &Self::Table,
@@ -3094,12 +3049,11 @@ impl<'a> ObjectShape<'a> {
                 }
             }
 
-            // SAFETY: `At<'__a>` changes the projection's lifetime alone.
-            unsafe impl<'__x> ::acvus_extern::Branded for #exclusive<'__x> {
-                type At<'__a> = #exclusive<'__a>;
-            }
+            // SAFETY: a projection is at its own lifetime, and borrows only
+            // parts of the object the caller lent at it.
+            unsafe impl<'__s> ::acvus_extern::Within<'__s> for #exclusive<'__s> {}
 
-            impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x>
+            impl<'__a, __R> ::acvus_extern::Projected<'__a, __R> for #exclusive<'__a>
             where
                 __R: ::acvus_extern::Runtime,
             {
@@ -3109,7 +3063,7 @@ impl<'a> ObjectShape<'a> {
                     #table_of
                 }
 
-                unsafe fn of<'__a>(
+                unsafe fn of(
                     __rt: &'__a __R,
                     __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
                     __table: &Self::Table,
@@ -3628,12 +3582,11 @@ fn enum_projection(
             }
         }
 
-        // SAFETY: `At<'__a>` changes the projection's lifetime alone.
-        unsafe impl<'__x> ::acvus_extern::Branded for #shared<'__x> {
-            type At<'__a> = #shared<'__a>;
-        }
+        // SAFETY: a projection is at its own lifetime, and borrows only parts
+        // of the variant the caller lent at it.
+        unsafe impl<'__s> ::acvus_extern::Within<'__s> for #shared<'__s> {}
 
-        impl<'__x, __R> ::acvus_extern::Projected<__R> for #shared<'__x>
+        impl<'__a, __R> ::acvus_extern::Projected<'__a, __R> for #shared<'__a>
         where
             __R: ::acvus_extern::Runtime,
         {
@@ -3643,7 +3596,7 @@ fn enum_projection(
                 #table_of
             }
 
-            unsafe fn of<'__a>(
+            unsafe fn of(
                 __rt: &'__a __R,
                 __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
                 __table: &Self::Table,
@@ -3655,15 +3608,14 @@ fn enum_projection(
             }
         }
 
-        // SAFETY: `At<'__a>` changes the projection's lifetime alone.
-        unsafe impl<'__x, __R> ::acvus_extern::Branded for #exclusive<'__x, __R>
+        // SAFETY: as the shared projection's.
+        unsafe impl<'__s, __R> ::acvus_extern::Within<'__s> for #exclusive<'__s, __R>
         where
             __R: ::acvus_extern::Runtime,
         {
-            type At<'__a> = #exclusive<'__a, __R>;
         }
 
-        impl<'__x, __R> ::acvus_extern::Projected<__R> for #exclusive<'__x, __R>
+        impl<'__a, __R> ::acvus_extern::Projected<'__a, __R> for #exclusive<'__a, __R>
         where
             __R: ::acvus_extern::Runtime,
         {
@@ -3673,7 +3625,7 @@ fn enum_projection(
                 #table_of
             }
 
-            unsafe fn of<'__a>(
+            unsafe fn of(
                 __rt: &'__a __R,
                 __reference: &'__a <__R as ::acvus_extern::Runtime>::Value,
                 __table: &Self::Table,
@@ -4232,18 +4184,12 @@ impl RestAt {
         }
     }
 
-    /// The type the instance's own handler takes at this position, as the
-    /// marker `#[extern_fn]` wrote for that parameter projects it.
-    fn restored(self, marker: &Ident, runtime: &Ident, ty: &Type) -> proc_macro2::TokenStream {
+    /// The type the instance's own handler takes at this position: `handler`,
+    /// which the handler's own parameter fixes, at a variable.
+    fn restored(self, handler: &Ident, ty: &Type) -> proc_macro2::TokenStream {
         match self {
-            Self::VariableShared => {
-                quote! { <#marker as ::acvus_extern::RestoreShared<#runtime>>::Out<'__b> }
-            }
-            Self::VariableExclusive => {
-                quote! { <#marker as ::acvus_extern::RestoreExclusive<#runtime>>::Out<'__b> }
-            }
-            Self::VariableValue => {
-                quote! { <#marker as ::acvus_extern::RestoreByValue<#runtime>>::Out<'__b> }
+            Self::VariableShared | Self::VariableExclusive | Self::VariableValue => {
+                quote! { #handler }
             }
             Self::Itself(Mode::Borrow) => quote! { &'__b #ty },
             Self::Itself(Mode::BorrowMut) => quote! { &'__b mut #ty },
@@ -4267,7 +4213,7 @@ impl RestAt {
             Self::VariableShared => quote! { &'__a #ty },
             Self::VariableExclusive => quote! { &'__a mut #ty },
             Self::VariableValue => {
-                quote! { <#ty as ::acvus_extern::Passed<#runtime>>::As<'__a> }
+                quote! { <#ty as ::acvus_extern::Passed<'__a, #runtime>>::As }
             }
             Self::Itself(_) => self.crossed(&ty, runtime),
         }
@@ -4285,7 +4231,9 @@ impl RestAt {
             Self::VariableExclusive => {
                 Some(quote! { #ty: ::core::ops::DerefMut<Target = #value> })
             }
-            Self::VariableValue => Some(quote! { #ty: ::acvus_extern::Passed<#runtime> }),
+            Self::VariableValue => {
+                Some(quote! { #ty: for<'__p> ::acvus_extern::Passed<'__p, #runtime> })
+            }
             Self::Itself(_) => None,
         }
     }
@@ -4302,7 +4250,7 @@ impl RestAt {
                 unsafe {
                     ::acvus_extern::Owned::from_value(
                         __rt.holding(),
-                        <#ty as ::acvus_extern::Passed<#runtime>>::cross(__rt, #arg),
+                        <#ty as ::acvus_extern::Passed<'__a, #runtime>>::cross(__rt, #arg),
                     )
                 }
             },
@@ -4403,6 +4351,13 @@ fn signature_module(
     let rest: Vec<RestAt> = tail.iter().map(|p| RestAt::of(p, vars)).collect();
     let tys: Vec<&Type> = tail.iter().map(|p| &p.ty).collect();
     let markers: Vec<Ident> = (0..rest.len()).map(|at| format_ident!("__M{at}")).collect();
+    let handlers: Vec<Ident> = (0..rest.len()).map(|at| format_ident!("__D{at}")).collect();
+    let variable_handlers: Vec<&Ident> = rest
+        .iter()
+        .zip(&handlers)
+        .filter(|(at, _)| at.at_variable())
+        .map(|(_, handler)| handler)
+        .collect();
     let args: Vec<Ident> = (0..rest.len()).map(|at| format_ident!("__x{at}")).collect();
     let lent: Vec<Ident> = rest
         .iter()
@@ -4417,20 +4372,21 @@ fn signature_module(
         .map(|(at, ty)| at.crossed(ty, runtime));
     let restored = rest
         .iter()
-        .zip(&markers)
+        .zip(&handlers)
         .zip(&tys)
-        .map(|((at, marker), ty)| at.restored(marker, runtime, ty));
+        .map(|((at, handler), ty)| at.restored(handler, ty));
     let mut lent_at = lent.iter();
     let takes: Vec<proc_macro2::TokenStream> = rest
         .iter()
         .zip(&markers)
+        .zip(&handlers)
         .zip(&args)
-        .map(|((at, marker), arg)| match at {
+        .map(|(((at, marker), handler), arg)| match at {
             RestAt::VariableShared => {
                 let slot = lent_at.next().expect("a shared position lends a slot");
                 quote! {
                     unsafe {
-                        <#marker as ::acvus_extern::RestoreShared<#runtime>>::restore_shared(
+                        <#handler as ::acvus_extern::RestoreShared<'__b, #marker, #runtime>>::restore_shared(
                             __rt, #slot, #arg,
                         )
                     }
@@ -4440,7 +4396,7 @@ fn signature_module(
                 let slot = lent_at.next().expect("an exclusive position lends a slot");
                 quote! {
                     unsafe {
-                        <#marker as ::acvus_extern::RestoreExclusive<#runtime>>::restore_exclusive(
+                        <#handler as ::acvus_extern::RestoreExclusive<'__b, #marker, #runtime>>::restore_exclusive(
                             __rt, #slot, #arg,
                         )
                     }
@@ -4448,7 +4404,7 @@ fn signature_module(
             }
             RestAt::VariableValue => quote! {
                 unsafe {
-                    <#marker as ::acvus_extern::RestoreByValue<#runtime>>::restore_by_value(
+                    <#handler as ::acvus_extern::RestoreByValue<'__b, #marker, #runtime>>::restore_by_value(
                         __rt, #arg,
                     )
                 }
@@ -4459,16 +4415,17 @@ fn signature_module(
     let bounds = rest
         .iter()
         .zip(&markers)
-        .filter_map(|(at, marker)| match at {
-            RestAt::VariableShared => {
-                Some(quote! { #marker: ::acvus_extern::RestoreShared<#runtime> })
-            }
-            RestAt::VariableExclusive => {
-                Some(quote! { #marker: ::acvus_extern::RestoreExclusive<#runtime> })
-            }
-            RestAt::VariableValue => {
-                Some(quote! { #marker: ::acvus_extern::RestoreByValue<#runtime> })
-            }
+        .zip(&handlers)
+        .filter_map(|((at, marker), handler)| match at {
+            RestAt::VariableShared => Some(
+                quote! { #handler: ::acvus_extern::RestoreShared<'__b, #marker, #runtime> },
+            ),
+            RestAt::VariableExclusive => Some(
+                quote! { #handler: ::acvus_extern::RestoreExclusive<'__b, #marker, #runtime> },
+            ),
+            RestAt::VariableValue => Some(
+                quote! { #handler: ::acvus_extern::RestoreByValue<'__b, #marker, #runtime> },
+            ),
             RestAt::Itself(_) => None,
         });
     // A type alias names every type parameter it takes (E0091), and a run
@@ -4523,10 +4480,11 @@ fn signature_module(
             /// and the storages it names are live for `'b`.
             #[allow(clippy::needless_lifetimes, unused_variables)]
             #[inline(always)]
-            pub unsafe fn restore<'__a, '__b, #runtime #(, #markers)*>(
+            pub unsafe fn restore<'__a, '__b, #runtime #(, #markers)* #(, #variable_handlers)*>(
                 __rt: ::acvus_extern::Crossing<'_, #runtime>,
                 __rest: Rest<'__a, #runtime>,
                 __lent: &'__b mut Lent<#runtime>,
+                _: ::core::marker::PhantomData<(#(#markers,)*)>,
             ) -> (#(#restored,)*)
             where
                 '__a: '__b,
@@ -4599,24 +4557,24 @@ impl Received {
             },
             RetShape::OptionOfVariable(var) => Self {
                 ty: quote! {
-                    ::core::option::Option<<#var as ::acvus_extern::Passed<#runtime>>::As<'__r>>
+                    ::core::option::Option<<#var as ::acvus_extern::Passed<'__r, #runtime>>::As>
                 },
-                bound: quote! { #var: ::acvus_extern::Passed<#runtime> },
+                bound: quote! { #var: for<'__p> ::acvus_extern::Passed<'__p, #runtime> },
                 read: quote! {
                     // SAFETY: the caller's contract: the requirer's own type
                     // here is what the checker unified the instance's result
                     // with, and the storage a borrow names is the receiver's.
                     __r.map(|__w| unsafe {
-                        <#var as ::acvus_extern::Passed<#runtime>>::restore(__rt, __w)
+                        <#var as ::acvus_extern::Passed<'__r, #runtime>>::restore(__rt, __w)
                     })
                 },
             },
             RetShape::Whole => Self {
-                ty: quote! { <#ret as ::acvus_extern::Passed<#runtime>>::As<'__r> },
-                bound: quote! { #ret: ::acvus_extern::Passed<#runtime> },
+                ty: quote! { <#ret as ::acvus_extern::Passed<'__r, #runtime>>::As },
+                bound: quote! { #ret: for<'__p> ::acvus_extern::Passed<'__p, #runtime> },
                 read: quote! {
                     // SAFETY: as the option shape's.
-                    unsafe { <#ret as ::acvus_extern::Passed<#runtime>>::restore(__rt, __r) }
+                    unsafe { <#ret as ::acvus_extern::Passed<'__r, #runtime>>::restore(__rt, __r) }
                 },
             },
         }
@@ -4715,14 +4673,22 @@ fn signature_call(
         where
             #runtime: ::acvus_extern::Runtime,
             #restore_bound,
-            #(#marker_params: 'static,)*
             #(#kinds,)*
             #(#rest_crossings,)*
         {
             type This = #first;
-            type Recv<'__a> = #recv;
-            type Words<'__a> = #module::Rest<'__a, #runtime>;
-            type Ret<'__r> = #received;
+            type Recv<'__a>
+                = #recv
+            where
+                Self: '__a;
+            type Words<'__a>
+                = #module::Rest<'__a, #runtime>
+            where
+                Self: '__a;
+            type Ret<'__r>
+                = #received
+            where
+                Self: '__r;
             type Now = #module::Now<#runtime>;
             type Later = #module::Later<#runtime>;
 
@@ -4730,7 +4696,10 @@ fn signature_call(
                 __value: <#runtime as ::acvus_extern::Runtime>::Value,
                 __ctx: &mut ::acvus_extern::Ctx<'_, #runtime>,
                 __rest: <Self as ::acvus_extern::Signature<#runtime>>::Words<'__r>,
-            ) -> <Self as ::acvus_extern::Signature<#runtime>>::Ret<'__r> {
+            ) -> <Self as ::acvus_extern::Signature<#runtime>>::Ret<'__r>
+            where
+                Self: '__r,
+            {
                 // SAFETY: the caller's contract: the word addresses the
                 // entry of an instance of this signature.
                 let __entry = unsafe {
@@ -4759,6 +4728,7 @@ fn signature_call(
                 Output = <Self as ::acvus_extern::Signature<#runtime>>::Ret<'__r>,
             > + ::core::marker::Send + '__r
             where
+                Self: '__r,
                 <Self as ::acvus_extern::Signature<#runtime>>::Ret<'__r>: ::core::marker::Send,
             {
                 // SAFETY: the caller's contract.
@@ -4801,18 +4771,23 @@ fn signature_call(
         where
             #runtime: ::acvus_extern::Runtime,
             #restore_bound,
-            #(#marker_params: 'static,)*
             #(#kinds_again,)*
             #(#rest_crossings,)*
             #(#required_bounds,)*
         {
-            type Rest<'__a> = (#(#required,)*);
+            type Rest<'__a>
+                = (#(#required,)*)
+            where
+                Self: '__a;
 
             #[inline(always)]
             fn cross_rest<'__a>(
                 __rt: ::acvus_extern::Crossing<'_, #runtime>,
                 __rest: <Self as ::acvus_extern::CrossesRest<#runtime>>::Rest<'__a>,
-            ) -> <Self as ::acvus_extern::Signature<#runtime>>::Words<'__a> {
+            ) -> <Self as ::acvus_extern::Signature<#runtime>>::Words<'__a>
+            where
+                Self: '__a,
+            {
                 let (#(#rest_args,)*) = __rest;
                 (#(#crossed_args,)*)
             }

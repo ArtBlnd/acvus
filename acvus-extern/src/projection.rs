@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 
 use acvus_mir::ty::Ty;
 
-use crate::handler::{Arg, ArgAt, CallSite, Sited};
+use crate::handler::{Arg, ArgAt, CallSite, Takes};
 use crate::loan::{Loan, Mut, Shared};
 use crate::obj::{FieldAt, Obj, ObjectShape, One, Variant};
 use crate::owned::Owned;
@@ -84,14 +84,15 @@ pub struct VariantAt<const K: usize, P> {
     pub payloads: P,
 }
 
-/// A projection type a handler names in its signature.
+/// A projection type a handler names in its signature, at the lifetime `'a`
+/// of the borrow it is built over.
 ///
 /// The glue's marker holds `Self` at `'static`, and the handler receives it
-/// at `Branded::At<'a>`, as every crossing type. The derive writes one impl
+/// at the call's lifetime, as every crossing type. The derive writes one impl
 /// for `SRef<'_>`, which reads through a shared borrow, and one for
 /// `SMut<'_>`, which reads through an exclusive one, so the choice between
 /// the two is the projection's own.
-pub trait Projected<Rt>: crate::Branded + Sized
+pub trait Projected<'a, Rt>: Sized
 where
     Rt: Runtime,
 {
@@ -102,7 +103,7 @@ where
     /// # Safety
     /// `reference` names a live object storage holding what the owner's
     /// crossing wrote, and it is exclusively named for a `Mut` projection.
-    unsafe fn of<'a>(rt: &'a Rt, reference: &'a Rt::Value, table: &Self::Table) -> Self::At<'a>;
+    unsafe fn of(rt: &'a Rt, reference: &'a Rt::Value, table: &Self::Table) -> Self;
 }
 
 /// The position each field an object projection names holds in the object
@@ -428,37 +429,36 @@ where
 /// value nor a borrow of one.
 pub struct ByProjection<P>(PhantomData<fn() -> P>);
 
-impl<P, Rt> Sited<Rt> for ByProjection<P>
+impl<P, Rt> Arg<Rt> for ByProjection<P>
 where
-    P: Projected<Rt> + 'static,
+    P: Projected<'static, Rt> + 'static,
     Rt: Runtime,
 {
-    type Site = <P as Projected<Rt>>::Table;
+    type Site = <P as Projected<'static, Rt>>::Table;
+    type Form = One;
 
     fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site {
-        <P as Projected<Rt>>::table(site.args[at])
+        <P as Projected<'static, Rt>>::table(site.args[at])
     }
 }
 
-// SAFETY: the projection is `P::of` over this parameter's own word with the
+// SAFETY: the projection is `Q::of` over this parameter's own word with the
 // site's table; the capability lends only its runtime and is not kept.
-unsafe impl<'a, 'w, P, Rt> Arg<'a, 'w, Rt> for ByProjection<P>
+unsafe impl<'a, 'w, P, Q, Rt> Takes<'a, 'w, ByProjection<P>, Rt> for Q
 where
-    P: Projected<Rt> + 'static,
+    P: Projected<'static, Rt> + 'static,
+    Q: Projected<'a, Rt, Table = <P as Projected<'static, Rt>>::Table> + crate::Within<'a>,
     Rt: Runtime,
 {
-    type Out = <P as crate::Branded>::At<'a>;
-    type Form = One;
-
-    unsafe fn take<'s>(
+    unsafe fn take(
         rt: crate::Crossing<'a, Rt>,
         run: &'a [Rt::Value],
-        site: &'s <Self as Sited<Rt>>::Site,
-    ) -> Self::Out {
+        site: &<P as Projected<'static, Rt>>::Table,
+    ) -> Q {
         // SAFETY: the caller's contract: `run[0]` is this parameter's own
         // value, a reference to a live object storage, exclusively named
         // where the projection is a `Mut` (RFC-0018).
-        unsafe { <P as Projected<Rt>>::of(rt.rt(), &run[0], site) }
+        unsafe { Q::of(rt.rt(), &run[0], site) }
     }
 }
 

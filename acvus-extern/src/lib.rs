@@ -18,7 +18,6 @@
 
 extern crate self as acvus_extern;
 
-mod brand;
 mod canonical;
 pub mod core;
 mod crossing;
@@ -46,8 +45,8 @@ mod str;
 mod ty_arg;
 mod uniform;
 mod vec;
+mod within;
 
-pub use brand::{Branded, Unbranded, brand, brand_mut, brand_ref, unbrand};
 pub use canonical::Canonical;
 pub use crossing::{Crossing, Holding};
 pub use ctx::Ctx;
@@ -58,15 +57,15 @@ pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByVal
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
     Borrowable, BorrowableSpecialized, ByRef, ByValue, CallForms, CallSite, DeclaredInstance,
-    DirectOp, ExternHandler, Glue, Handler, HandlerFactory, InRegisters, InWindow, InstanceEntries,
-    Instances, IntoRun, Lends, LentBack, NoInstance, NoInstances, Parameters, REGISTER_FORM,
-    Required, RequiredInstance, Ret, RetLent, Sited, SitesNoParameterReads, Specialized, Uniform,
-    Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
+    DirectOp, ExternHandler, Gives, Glue, Handler, HandlerFactory, InRegisters, InWindow,
+    InstanceEntries, Instances, IntoRun, Lends, LentBack, NoInstance, NoInstances, Parameters,
+    Pending, REGISTER_FORM, Required, RequiredInstance, Ret, RetLent, Returning,
+    SitesNoParameterReads, Specialized, Takes, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
     glue_at_instance,
 };
 pub use instance::{
     CalledAt, CrossesRest, Instance, InstanceEntry, InstanceRun, Later, Now, Receiver, RequirementOf, RestRun,
-    RestoreByValue, RestoreExclusive, RestoreShared, Signature,
+    RestoreByValue, RestoreExclusive, RestoreShared, Signature, receiver_borrowed, receiver_by_value,
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
@@ -97,9 +96,10 @@ pub use ty_arg::{
 };
 pub use uniform::UniformPayload;
 pub use vec::vec_ty;
+pub use within::Within;
 
 pub use acvus_extern_macro::{
-    Branded, ExternType, TyArg, UniformPayload, extern_fn, extern_registry, extern_signature,
+    ExternType, TyArg, UniformPayload, Within, extern_fn, extern_registry, extern_signature,
 };
 
 pub use acvus_mir::graph::{FnKind, Function};

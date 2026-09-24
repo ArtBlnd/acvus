@@ -28,10 +28,32 @@ help: the following other types implement trait `TransparentOver<Rt>`
   | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
   | | where
   | |     R: Runtime,
-  | |     T: 'static,
-  | |     Self: crate::Unbranded,
-  | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
-  = note: required for `BySlice<i64, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+  | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
+  = note: required for `BySlice<i64, acvus_extern::Shared>` to implement `Arg<__R>`
+  = note: required for `(BySlice<i64, acvus_extern::Shared>,)` to implement `Parameters<__R>`
+  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, BySlice<i64, acvus_extern::Shared>, __R>`, but its trait bounds were not satisfied
+ --> tests/compile_fail/borrowed_rust_slice.rs:8:1
+  |
+8 | #[extern_fn(effect = pure)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/acvus-extern/src/handler.rs
+  |
+  | pub struct Pending<'a, 'w, A, Rt>
+  | --------------------------------- doesn't satisfy `_: Iterator`
+  |
+ ::: $WORKSPACE/acvus-extern/src/slice.rs
+  |
+  | pub struct BySlice<T, M>(PhantomData<fn() -> (T, M)>);
+  | ------------------------ doesn't satisfy `BySlice<i64, acvus_extern::Shared>: Arg<__R>`
+  |
+  = note: the following trait bounds were not satisfied:
+          `i64: TransparentOver<__R>`
+          which is required by `BySlice<i64, acvus_extern::Shared>: Arg<__R>`
+          `acvus_extern::Pending<'_, '_, BySlice<i64, acvus_extern::Shared>, __R>: Iterator`
+          which is required by `&mut acvus_extern::Pending<'_, '_, BySlice<i64, acvus_extern::Shared>, __R>: Iterator`
   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `i64` is not the runtime's value under another name, so a run of the runtime's values is not a `[i64]`
@@ -64,8 +86,30 @@ help: the following other types implement trait `TransparentOver<Rt>`
    | / unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
-   | |     T: 'static,
-   | |     Self: crate::Unbranded,
-   | |___________________________^ `Erased<R, T>` implements `TransparentOver<R>`
-   = note: required for `BySlice<i64, acvus_extern::Mut>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   | |_______________^ `Erased<R, T>` implements `TransparentOver<R>`
+   = note: required for `BySlice<i64, acvus_extern::Mut>` to implement `Arg<__R>`
+   = note: required for `(BySlice<i64, acvus_extern::Mut>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, BySlice<i64, acvus_extern::Mut>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_rust_slice.rs:13:1
+   |
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+   |
+  ::: $WORKSPACE/acvus-extern/src/slice.rs
+   |
+   | pub struct BySlice<T, M>(PhantomData<fn() -> (T, M)>);
+   | ------------------------ doesn't satisfy `BySlice<i64, acvus_extern::Mut>: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `i64: TransparentOver<__R>`
+           which is required by `BySlice<i64, acvus_extern::Mut>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, BySlice<i64, acvus_extern::Mut>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, BySlice<i64, acvus_extern::Mut>, __R>: Iterator`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

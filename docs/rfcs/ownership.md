@@ -262,26 +262,27 @@ Status: Proposed
    lifetime it outlives (written or implied by `&'b T`), a closure's result
    from its arguments and captures, and every label of a type the macro
    does not read or of an `Instance`. A carrier reads what it names at its
-   brand; a lifetime in a closure's arguments is what the handler lends,
-   reached from every input. An output (the result; what a `&mut`, a `Mut`
-   carrier, a closure or an unread type lets the callee write) flows from
-   an input where a label of one reaches a label of the other: `Aligned`
-   where both are laid out by types the macro reads position by position,
-   `Any` otherwise and for every write. A result lifetime only `ctx` names
-   is refused; one no parameter names is free and names no loan. Rust
-   checks the handler against the signature, so these are the flows its
-   body performs, but for a kept type variable's value (rule 8). The
-   handler is generic over the call's lifetime, so a carrier (`Ref`,
-   `Slice`, `Closure`) is branded with it and Rust refuses keeping it past
-   the call. An `Instance` names a prepared entry, not a program's storage,
-   and is branded with the run's lifetime instead. A type's brand is its
-   parts': an extension type's is its payload's, so a carrier it holds is
-   behind a region parameter it declares and never a type argument it holds
-   by value, and an `Erased` has a brand only where the type it was erased
-   from is `Unbranded` (RFC-0076 rule 1).
-7. **A box key erases lifetimes.** `Canonical::Canon` fills every lifetime
-   with `'static`; a box is keyed there, and a value is read out at its
-   branded form. Every box key is `'static`.
+   own lifetime; a lifetime in a closure's arguments is what the handler
+   lends, reached from every input. An output (the result; what a `&mut`,
+   a `Mut` carrier, a closure or an unread type lets the callee write)
+   flows from an input where a label of one reaches a label of the other:
+   `Aligned` where both are laid out by types the macro reads position by
+   position, `Any` otherwise and for every write. A result lifetime only
+   `ctx` names is refused; one no parameter names is free and names no
+   loan. Rust checks the handler against the signature, so these are the
+   flows its body performs. The glue takes each parameter at the type the
+   handler wrote under `Within<'a>`, `'a` the call: a carrier (`Ref`,
+   `Slice`, `Closure`) is `Within` at its own lifetime, a compound type
+   where its parts are, so Rust refuses keeping one past the call. An
+   `Instance` is at its `Ctx`'s lifetime. An extension type is `Within`
+   where its payload is, so it holds a carrier behind a region parameter;
+   an `Erased` is `Within` only where its type holds no carrier (RFC-0076
+   rule 1).
+7. **Only a box key is `'static`.** `Canonical::Canon` fills every
+   lifetime with `'static`, takes an effect, length or identity variable to
+   its `Canon`, and is `'static`; no kind's `Var` is. A
+   `Chosen` part keeps its Rust type in the key (RFC-0076 rule 2), so an
+   extension type bounds its `Chosen` parameter `'static` at the key.
 8. **A type variable is opaque or lent.** An extern's type variable, and
    an extension type's type parameter, is opaque unless declared lent. An opaque one is filled only by a type with no position, so the
    handler may keep its values: the checker refuses a use where one

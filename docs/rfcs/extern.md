@@ -734,17 +734,15 @@ value (`vacant`, `from_value`) and written through (`value_mut`) as
 inherent methods, so no safe code breaks an `Erased`'s `T`.
 
 1. At a runtime that makes values, `Erased<R, T>` has no trait impl whose
-   existence or items depend on `T`, with two exceptions: `Branded`'s impl
-   exists only where `T` is `Unbranded` or is `Never`, and its `At<'a>` is
-   `Self`; and `Owned`'s `Deref` (RFC-0068 rule 2). A carrier, and a type
-   that holds one, has no brand there, so an `Erased` at it reaches no
-   handler (RFC-0079 rule 6). An impl of a
-   trait that requires `Branded`
-   (`OneValue`, `Cross`, `Stored`, …) states `Self: Branded` or
-   `Self: Unbranded` and bounds `T` by nothing else, so it exists where
-   `Branded`'s does and no item of it answers by `T`. acvus-extern's
-   `tests/erased_impls.rs` reads every trait impl on `Erased` or `Owned`
-   the workspace writes and refuses any other. What reads `T` for the checker
+   existence or items depend on `T`, with two exceptions: `Within`'s impl
+   exists only where `T` is `Within` at every lifetime, holding no
+   carrier, or is `Never`; and `Owned`'s `Deref` (RFC-0068 rule 2). A
+   carrier, and a type that holds one, has no `Within` there, so an
+   `Erased` at it reaches no handler (RFC-0079 rule 6). Every other impl
+   (`OneValue`, `Cross`, `Stored`, …) bounds neither `T` nor `Self`, so no
+   item of it answers by `T`. acvus-extern's `tests/erased_impls.rs` reads
+   every trait impl on `Erased` or `Owned` the workspace writes and refuses
+   any other. What reads `T` for the checker
    (`TyArg`) holds only at `Erased<TypesOnly, T>`, through `HoldsNoValues`,
    a sealed trait no other crate can name; the macro builds every
    declaration's checker-side types, its own parameters included, at
@@ -812,17 +810,16 @@ payload is the one place a downstream trait can reach `X`, which rule 4
 proves it does not, at a marker no downstream trait can name. An inherent method takes part in no specialization or projection,
 so `Owned`'s construction and mutable access keep rule 1. Rule 1 guards
 against a read of a box, a layout or a run-time dispatch answering by `T`;
-`Branded` does none of these (its `At<'a>` renames lifetimes at the type
-level), and without its exception a derived payload
-holding `Vec<Erased<R, T>>` kept a `Ref<'static, …>` past the call.
+`Within` does none of these (it has no item), and without its exception a
+derived payload holding `Vec<Erased<R, T>>` kept a `Ref<'static, …>` past
+the call.
 
 **Cost.** Rule 1 binds acvus-extern only: the orphan rule lets another
 crate implement its own trait for `Erased<R, i64>` with a bound on `T`,
 and a payload under rule 5 that reads `X` through one breaks the
 obligation its author asserted. `erased_impls.rs` scans only the
 workspace. An `Erased`
-whose `T` names a lifetime has no `OneValue`, `Cross` or `Stored` either,
-since each requires `Branded`. A type
+whose `T` holds a carrier is not `Within`, so it crosses at no glue. A type
 stored as itself states its canonical form, so a concrete type under
 `cross_as_stored!` writes its `Var` and `Canonical` impls.
 
@@ -832,21 +829,20 @@ stored as itself states its canonical form, so a concrete type under
   into one, and `as_ref` then reads a box that does not exist.
 - A trait impl on `Erased<R, Never>` alone for `Owned`'s construction and
   mutable access — an impl whose existence depends on `T`, against rule 1.
-- `Branded` for `Erased` at `At<'a> = Erased<R, T::At<'a>>` — it needs
-  `T: Branded`, which `Never` is not, and it admits an `Erased` of a
-  carrier at the call's brand, which no read can use (`as_ref` asks
-  `Stored`, and so `Unbranded`). Refusing admits fewer types and closes the
+- `Within` for `Erased` wherever `T` is `Within` at the same lifetime — it
+  admits an `Erased` of a carrier at the call's lifetime, which no read can
+  use (`as_ref` asks `Stored`). Refusing admits fewer types and closes the
   same path.
-- `Branded` implemented on `Never` — an impl on its alias conflicts (E0119)
-  with every other crate's `Branded` impl. `Never` is admitted through
+- `Within` implemented on `Never` — an impl on its alias conflicts (E0119)
+  with every other crate's `Within` impl. `Never` is admitted through
   `fn() -> !` instead, a sealed trait's impl disjoint from the one at
-  `fn() -> T` for an `Unbranded` `T`.
+  `fn() -> T` for a `T` that is `Within` at every lifetime.
 - Refusing, in the derive, a type variable named inside `Erased` in a
-  payload unless it is bounded `Unbranded` — it reads names, which
-  RFC-0059 withdrew `returns_slice` for.
-- Requiring every extension type's type variable to be `Unbranded` — it
-  refuses `Refs<'a, HashSet<'static, …>>` (`as_iter_set`), and `Refs`
-  would have to be reshaped.
+  payload unless it holds no carrier — it reads names, which RFC-0059
+  withdrew `returns_slice` for.
+- Requiring every extension type's type variable to hold no carrier — it
+  refuses `Refs<'a, HashSet<'a, …>>` (`as_iter_set`), and `Refs` would have
+  to be reshaped.
 - The language's `!` as the `Never` alias — each trait the language's `!`
   needs, written on the alias, conflicts (E0119) with every other crate's
   impl of that trait.
@@ -935,9 +931,9 @@ Status: Accepted
    `Holding`, as `Owned::erased` takes the glue's `Crossing` (RFC-0068
    rule 1), and the space's `Decode` and `Visit` hand over and lend `Owned`
    holders, not words. A trait whose methods receive a `Crossing` or a
-   `Holding` (`Cross`, `OneValue`, `Passed`, `CallArgs`, `Arg`,
-   `Parameters`, `Ret`, `IntoRun`, `LentBack`, `CrossesRest`, the three
-   `Restore*`, `Stored`, `InPlaceElement`, and a signature's `Returned`) is
+   `Holding` (`Cross`, `OneValue`, `Passed`, `CallArgs`, `Takes`, `Gives`,
+   `Parameters`, `IntoRun`, `CrossesRest`, the three `Restore*`, `Stored`,
+   `InPlaceElement`, and a signature's `Returned`) is
    `unsafe` to implement, since the capability crosses any word at any
    type: its `# Safety` is that the word an impl hands back or reads is
    the value of `Self` at the type the checker settled, that it crosses
@@ -956,7 +952,7 @@ Status: Accepted
    refused. A shared signature's variables reach no handler: each instance
    states its own. The standard library's containers (`Vec`, `Deque`,
    `HashMap`, `HashSet`, arrays, their slices, and `Option` and `Result`,
-   which hold at most one value) and iterator stages are lent. `Branded` and `UniformPayload` state in their `# Safety` that no
+   which hold at most one value) and iterator stages are lent. `Within` and `UniformPayload` state in their `# Safety` that no
    part a region or type parameter reaches sits behind an `UnsafeCell`.
 4. **Effect declarations are outside it.** `pure`, `idempotent` and
    `commutative` are the extern author's own promise, which the checker

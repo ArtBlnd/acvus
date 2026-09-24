@@ -26,7 +26,7 @@ pub enum VarKind {
 
 impl VarKind {
     /// The `kind::` marker naming this kind, as a type.
-    fn marker(self) -> Type {
+    pub fn marker(self) -> Type {
         match self {
             VarKind::Ty => syn::parse_quote! { ::acvus_extern::kind::Type },
             VarKind::Effect => syn::parse_quote! { ::acvus_extern::kind::Effect },
@@ -509,6 +509,10 @@ impl Vars {
         self.0.iter().find(|v| v.chosen).map(|v| &v.ident)
     }
 
+    pub fn chosen_idents(&self) -> Vec<&Ident> {
+        self.0.iter().filter(|v| v.chosen).map(|v| &v.ident).collect()
+    }
+
     /// Every type variable, uniform or `Chosen`.
     pub fn type_var_idents(&self) -> Vec<Ident> {
         self.0
@@ -520,6 +524,14 @@ impl Vars {
 
     /// The type variables a box holds at their run-time fill, which its key
     /// takes to their canonical form: every one not bounded by `Chosen`.
+    pub fn non_type_vars(&self) -> Vec<(Ident, Type)> {
+        self.0
+            .iter()
+            .filter(|v| matches!(v.kind, VarKind::Effect | VarKind::Len | VarKind::Identity))
+            .map(|v| (v.ident.clone(), v.kind.marker()))
+            .collect()
+    }
+
     pub fn uniform_type_vars(&self) -> Vec<Ident> {
         self.0
             .iter()

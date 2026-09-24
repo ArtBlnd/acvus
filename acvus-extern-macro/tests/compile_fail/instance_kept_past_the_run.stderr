@@ -1,3 +1,17 @@
+error[E0310]: the parameter type `I` may not live long enough
+  --> tests/compile_fail/instance_kept_past_the_run.rs:22:34
+   |
+22 |     *KEPT.lock().unwrap() = Some(Box::new(step));
+   |                                  ^^^^^^^^^^^^^^
+   |                                  |
+   |                                  the parameter type `I` must be valid for the static lifetime...
+   |                                  ...so that the type `I` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+18 |     I: Var<kind::Type> + 'static,
+   |                        +++++++++
+
 error: lifetime may not live long enough
   --> tests/compile_fail/instance_kept_past_the_run.rs:22:34
    |

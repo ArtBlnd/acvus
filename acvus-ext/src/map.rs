@@ -49,8 +49,8 @@ use crate::iter::{Items, Refs, sig};
 /// table keeps them: at the key type and the effect the map's own type
 /// carries. A closure is stored at the types it was declared with and is
 /// not re-spelled (RFC-0068 rule 1).
-type HashOf<'a, K, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>,), u64, E, Rt>;
-type EqOf<'a, K, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>, Ref<'static, K, Shared, Rt>), bool, E, Rt>;
+type HashOf<'a, K, E, Rt> = Closure<'a, (Ref<'a, K, Shared, Rt>,), u64, E, Rt>;
+type EqOf<'a, K, E, Rt> = Closure<'a, (Ref<'a, K, Shared, Rt>, Ref<'a, K, Shared, Rt>), bool, E, Rt>;
 
 /// Concrete, and not `Box<dyn>`. `ClosureFn::call_now` takes the context as
 /// `&mut Ctx<'_, Rt>`, a pointer to the one the machine owns; behind a
@@ -58,7 +58,7 @@ type EqOf<'a, K, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>, Ref<'static,
 /// LLVM must assume keeps it, and its sibling-call rule then refuses the
 /// tail jump every operation owes its successor (RFC-0052, enforced by
 /// `acvus-interpreter-test/benches/asm_probe.rs`).
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 enum Keying<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
@@ -110,14 +110,14 @@ where
     }
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 struct Entry<K, V> {
     hash: u64,
     binding: Binding<K, V>,
 }
 
 /// A key and the value it names, each at the type the declaration gave it.
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 struct Binding<K, V> {
     key: K,
     value: V,
@@ -146,11 +146,11 @@ struct Placed<K, V> {
 /// insertion order, and the positions each hash occupies. A set's value
 /// slot is `()`: nothing reads it, and a runtime value written there would
 /// be a value the table owns for no reader.
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct Table<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
-    V: Send + Sync + 'static,
+    V: Send + Sync,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -162,7 +162,7 @@ where
 impl<'a, K, V, E, Rt> Table<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
-    V: Send + Sync + 'static,
+    V: Send + Sync,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -256,7 +256,7 @@ where
 impl<K, V, E, Rt> Table<'_, K, V, E, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
-    V: Send + Sync + 'static,
+    V: Send + Sync,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
@@ -381,12 +381,12 @@ macro_rules! stand_in {
 /// erase into another.
 ///
 /// The table holds the closures or the instances it hashes and compares
-/// with, so the type has one region parameter (RFC-0079 rule 6): every
-/// trait a marker names holds at `'static`, and `Branded` hands the handler
-/// the map at the call's lifetime.
+/// with, so the type has one region parameter (RFC-0079 rule 6): `TyArg` and
+/// `ExternTypeDecl` are the marker's, at `'static`, and every other impl holds
+/// at every lifetime, since the glue hands the handler the map at the call's.
 macro_rules! stored_extern_type {
     ($t:ident<$($k:ident),+>, name: $name:literal) => {
-        impl<$($k,)+ E, Rt> Var<kind::Type> for $t<'static, $($k,)+ E, Rt>
+        impl<'m, $($k,)+ E, Rt> Var<kind::Type> for $t<'m, $($k,)+ E, Rt>
         where
             $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
@@ -394,15 +394,20 @@ macro_rules! stored_extern_type {
         {
         }
 
-        // SAFETY: each type argument is its own canonical form's, and the
-        // region parameter is at `'static`.
+        // SAFETY: each type and effect argument is its own canonical form's,
+        // and the region parameter is at `'static`.
         unsafe impl<'a, $($k,)+ E, Rt> acvus_extern::Canonical<kind::Type> for $t<'a, $($k,)+ E, Rt>
         where
             $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            type Canon = $t<'static, $(<$k as acvus_extern::Canonical<kind::Type>>::Canon,)+ E, Rt>;
+            type Canon = $t<
+                'static,
+                $(<$k as acvus_extern::Canonical<kind::Type>>::Canon,)+
+                <E as acvus_extern::Canonical<kind::Effect>>::Canon,
+                Rt,
+            >;
         }
 
         impl<$($k,)+ E, Rt> TyArg for $t<'static, $($k,)+ E, Rt>
@@ -445,58 +450,58 @@ macro_rules! stored_extern_type {
             }
         }
 
-        impl<$($k,)+ E, Rt> Borrowable<Rt> for $t<'static, $($k,)+ E, Rt>
+        impl<'m, $($k,)+ E, Rt> Borrowable<Rt> for $t<'m, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+            $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::whole_box_in_place!($t<'static, $($k,)+ E, Rt>, Rt);
+            acvus_extern::whole_box_in_place!($t<'m, $($k,)+ E, Rt>, Rt);
         }
 
-        impl<$($k,)+ E, Rt> BorrowableSpecialized<Rt> for $t<'static, $($k,)+ E, Rt>
+        impl<'m, $($k,)+ E, Rt> BorrowableSpecialized<Rt> for $t<'m, $($k,)+ E, Rt>
         where
-            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+            $($k: Var<kind::Type>,)+
             E: Var<kind::Effect>,
             Rt: Runtime,
         {
-            acvus_extern::whole_box_in_place!($t<'static, $($k,)+ E, Rt>, Rt);
+            acvus_extern::whole_box_in_place!($t<'m, $($k,)+ E, Rt>, Rt);
         }
 
         acvus_extern::cross_as_one_value!(
-            $t<'static, $($k,)+ E, Rt>, [$($k,)+ E, Rt] at Rt
+            $t<'m, $($k,)+ E, Rt>, ['m, $($k,)+ E, Rt] at Rt
             where
-                $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+                $($k: Var<kind::Type>,)+
                 E: Var<kind::Effect>,
                 Rt: Runtime,
         );
 
         acvus_extern::cross_whole!(
-            acvus_extern::Uniform, $t<'static, $($k,)+ E, Rt>, [$($k,)+ E, Rt] at Rt
+            acvus_extern::Uniform, $t<'m, $($k,)+ E, Rt>, ['m, $($k,)+ E, Rt] at Rt
             where
-                $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+                $($k: Var<kind::Type>,)+
                 E: Var<kind::Effect>,
                 Rt: Runtime,
         );
 
         acvus_extern::cross_whole!(
-            Specialized, $t<'static, $($k,)+ E, Rt>, [$($k,)+ E, Rt] at Rt
+            Specialized, $t<'m, $($k,)+ E, Rt>, ['m, $($k,)+ E, Rt] at Rt
             where
-                $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+                $($k: Var<kind::Type>,)+
                 E: Var<kind::Effect>,
                 Rt: Runtime,
         );
 
         borrowed_as_self!(
-            $t<'static, $($k,)+ E, Rt>,
-            $($k: Var<kind::Type>,)+ E: Var<kind::Effect>, Rt: Runtime
+            $t<'m, $($k,)+ E, Rt>,
+            'm, $($k: Var<kind::Type>,)+ E: Var<kind::Effect>, Rt: Runtime
         );
     };
 }
 
 // -- The map ------------------------------------------------------------
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct HashMap<'a, K, V, E, Rt>(Table<'a, K, V, E, Rt>, PhantomData<(K, V, E)>)
 where
     K: Var<kind::Type>,
@@ -607,7 +612,7 @@ where
 /// type. A map has two element types and a stage carries one `iter::next`,
 /// so reading the keys and reading the values are two stages, each with a
 /// body of its own.
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct KeysBody<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -615,7 +620,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    map: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>,
+    map: Ref<'a, HashMap<'a, K, V, E, Rt>, Shared, Rt>,
     at: usize,
 }
 
@@ -633,8 +638,8 @@ where
 
 impl<K, V, E, I, Rt> Keys<'_, K, V, E, I, Rt>
 where
-    K: Var<kind::Type> + acvus_extern::Unbranded,
-    V: Var<kind::Type> + acvus_extern::Unbranded,
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -650,7 +655,7 @@ where
 }
 
 /// As `KeysBody`, over the values.
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct ValuesBody<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -658,7 +663,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    map: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>,
+    map: Ref<'a, HashMap<'a, K, V, E, Rt>, Shared, Rt>,
     at: usize,
 }
 
@@ -676,8 +681,8 @@ where
 
 impl<K, V, E, I, Rt> Values<'_, K, V, E, I, Rt>
 where
-    K: Var<kind::Type> + acvus_extern::Unbranded,
-    V: Var<kind::Type> + acvus_extern::Unbranded,
+    K: Var<kind::Type>,
+    V: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -693,7 +698,7 @@ where
 }
 
 #[extern_fn(effect = pure, unsafe(lent(K, V)))]
-fn keys<'a, K, V, E, I, Rt>(m: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>) -> Keys<'a, K, V, E, I, Rt>
+fn keys<'a, K, V, E, I, Rt>(m: Ref<'a, HashMap<'a, K, V, E, Rt>, Shared, Rt>) -> Keys<'a, K, V, E, I, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
     V: Var<kind::Type>,
@@ -710,8 +715,8 @@ fn next_keys<'a, K, V, E, I, Rt>(
     it: &'a mut Keys<'_, K, V, E, I, Rt>,
 ) -> Option<&'a K>
 where
-    K: Var<kind::Type> + acvus_extern::Unbranded + TransparentOver<Rt>,
-    V: Var<kind::Type> + acvus_extern::Unbranded,
+    K: Var<kind::Type> + TransparentOver<Rt>,
+    V: Var<kind::Type>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -720,7 +725,7 @@ where
 }
 
 #[extern_fn(effect = pure, unsafe(lent(K, V)))]
-fn values<'a, K, V, E, I, Rt>(m: Ref<'a, HashMap<'static, K, V, E, Rt>, Shared, Rt>) -> Values<'a, K, V, E, I, Rt>
+fn values<'a, K, V, E, I, Rt>(m: Ref<'a, HashMap<'a, K, V, E, Rt>, Shared, Rt>) -> Values<'a, K, V, E, I, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type> + TransparentOver<Rt>,
@@ -737,8 +742,8 @@ fn next_values<'a, K, V, E, I, Rt>(
     it: &'a mut Values<'_, K, V, E, I, Rt>,
 ) -> Option<&'a V>
 where
-    K: Var<kind::Type> + acvus_extern::Unbranded,
-    V: Var<kind::Type> + acvus_extern::Unbranded + TransparentOver<Rt>,
+    K: Var<kind::Type>,
+    V: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
     I: Var<kind::Identity>,
     Rt: Runtime,
@@ -947,7 +952,7 @@ async fn extend<K, V, E, Rt>(
     }
 }
 
-type KeepOf<'a, K, V, E, Rt> = Closure<'a, (Ref<'static, K, Shared, Rt>, Ref<'static, V, Shared, Rt>), bool, E, Rt>;
+type KeepOf<'a, K, V, E, Rt> = Closure<'a, (Ref<'a, K, Shared, Rt>, Ref<'a, V, Shared, Rt>), bool, E, Rt>;
 
 fn retain_now<K, V, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
@@ -1012,7 +1017,7 @@ where
 /// thing a set does not have is a value to hold.
 type SetTable<'a, K, E, Rt> = Table<'a, K, (), E, Rt>;
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct HashSet<'a, K, E, Rt>(SetTable<'a, K, E, Rt>, PhantomData<(K, E)>)
 where
     K: Var<kind::Type>,
@@ -1098,7 +1103,7 @@ where
 /// the set itself; only the `iter::next` that reads a set by position is
 /// declared here.
 #[extern_fn(instance_of = sig::as_iter, effect = pure, unsafe(lent(K)))]
-fn as_iter_set<'a, K, E, I, Rt>(s: Ref<'a, HashSet<'static, K, E, Rt>, Shared, Rt>) -> Refs<'a, HashSet<'static, K, E, Rt>, I, Rt>
+fn as_iter_set<'a, K, E, I, Rt>(s: Ref<'a, HashSet<'a, K, E, Rt>, Shared, Rt>) -> Refs<'a, HashSet<'a, K, E, Rt>, I, Rt>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
     E: Var<kind::Effect>,
@@ -1111,7 +1116,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure, unsafe(lent(K)))]
 fn next_refs_set<'a, K, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<'_, HashSet<'static, K, E, Rt>, I, Rt>,
+    it: &'a mut Refs<'_, HashSet<'_, K, E, Rt>, I, Rt>,
 ) -> Option<&'a K>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,

@@ -22,5 +22,35 @@ help: the trait `Borrowable<__R>` is not implemented for `Point`
              `Vec<T>` implements `Borrowable<Rt>`
              `bool` implements `Borrowable<__Rt>`
            and $N others
-   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `Arg<__R>`
+   = note: required for `(ByRef<Point, acvus_extern::Shared>,)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByRef<Point, acvus_extern::Shared>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_whole_struct.rs:13:1
+   |
+ 8 | pub struct Point {
+   | ---------------- doesn't satisfy `Point: Borrowable<__R>`
+...
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
+   | ----------------------------------- doesn't satisfy `ByRef<Point, acvus_extern::Shared>: Arg<__R>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Point: Borrowable<__R>`
+           which is required by `ByRef<Point, acvus_extern::Shared>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, ByRef<Point, acvus_extern::Shared>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByRef<Point, acvus_extern::Shared>, __R>: Iterator`
+note: the trait `Borrowable` must be implemented
+  --> $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub trait Borrowable<Rt>: OneValue<Rt>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

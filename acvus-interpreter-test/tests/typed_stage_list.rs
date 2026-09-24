@@ -26,13 +26,7 @@ pub struct Same<A, B>(fn(A) -> B);
 
 // SAFETY: the witness holds the identity function and no value of `A` or
 // `B`.
-unsafe impl<A, B> acvus_extern::Branded for Same<A, B>
-where
-    A: 'static,
-    B: 'static,
-{
-    type At<'a> = Self;
-}
+unsafe impl<'s, A, B> acvus_extern::Within<'s> for Same<A, B> {}
 
 impl<T> Same<T, T> {
     pub fn new() -> Self {
@@ -46,7 +40,7 @@ impl<A, B> Same<A, B> {
     }
 }
 
-#[derive(acvus_extern::Branded)]
+#[derive(acvus_extern::Within)]
 pub enum Stage<'a, In, Out, E, Rt>
 where
     In: Var<kind::Type>,
@@ -58,7 +52,7 @@ where
     Take { remaining: u64, same: Same<In, Out> },
 }
 
-#[derive(acvus_extern::Branded)]
+#[derive(acvus_extern::Within)]
 pub struct Source<T, Rt>
 where
     Rt: Runtime,
@@ -77,7 +71,7 @@ where
 }
 
 /// One stage and the pipeline beneath it.
-#[derive(acvus_extern::Branded)]
+#[derive(acvus_extern::Within)]
 pub struct Stages<S, Rest> {
     stage: S,
     rest: Rest,
@@ -85,11 +79,11 @@ pub struct Stages<S, Rest> {
 
 /// The list of element types a pipeline's elements passed through, as nested
 /// pairs with `()` the empty list. `Body` is the stage stack the list names.
-pub trait TypeList<Rt>: Send + Sync + 'static
+pub trait TypeList<Rt>: Send + Sync
 where
     Rt: Runtime,
 {
-    type Body<'a, O, E>: Send + Sync + 'a
+    type Body<'a, O, E>: Send + Sync
     where
         O: Var<kind::Type>,
         E: Var<kind::Effect>;

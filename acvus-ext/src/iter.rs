@@ -73,7 +73,7 @@ pub mod sig {
     }
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct ItemsBody<T> {
     rest: std::vec::IntoIter<T>,
 }
@@ -135,7 +135,7 @@ macro_rules! next_items_of {
 
 pub(crate) use next_items_of;
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct RefsBody<'a, C, Rt>
 where
     C: Var<kind::Type>,
@@ -171,7 +171,7 @@ where
     pub fn step<'a, T>(
         &'a mut self,
         ctx: &Ctx<'_, Rt>,
-        at: impl FnOnce(&'a C::At<'a>, usize) -> Option<&'a T>,
+        at: impl FnOnce(&'a C, usize) -> Option<&'a T>,
     ) -> Option<&'a T>
     where
         C: Borrowable<Rt>,
@@ -266,7 +266,7 @@ where
     Some(current)
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct MapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -319,13 +319,13 @@ where
     Some(it.0.f.call(ctx, (x,)).await)
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub enum UnorderedDraw<U> {
     Undrawn,
     Drawn(VecDeque<U>),
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct UnorderedBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -403,7 +403,7 @@ where
     futures::future::join_all(calls).await.into()
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct FilterBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -413,7 +413,7 @@ where
 {
     pub(crate) inner: I,
     pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
 }
 
 #[derive(ExternType)]
@@ -460,7 +460,7 @@ where
     }
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct TakeBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -510,7 +510,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct SkipBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -567,7 +567,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct StepByBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -629,7 +629,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct TakeWhileBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -639,7 +639,7 @@ where
 {
     pub(crate) inner: I,
     pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     pub(crate) done: bool,
 }
 
@@ -699,7 +699,7 @@ where
     None
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct SkipWhileBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -709,7 +709,7 @@ where
 {
     pub(crate) inner: I,
     pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    pub(crate) f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     pub(crate) skipping: bool,
 }
 
@@ -766,7 +766,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct ChunksBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -837,7 +837,7 @@ where
 /// element it holds when it meets the next one that differs, one draw
 /// behind its source, because it keeps the element itself and requires no
 /// `core::clone` to keep a copy of it.
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub(crate) enum Held<T> {
     NothingDrawn,
     Drawn(T),
@@ -850,7 +850,7 @@ enum Step<T> {
     End,
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct DedupBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -969,7 +969,7 @@ where
     None
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct ChainBody<'a, A, B, T, E, Rt>
 where
     A: Var<kind::Type>,
@@ -1039,7 +1039,7 @@ where
     it.0.next_second.call_await(ctx, &mut it.0.second, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct FlattenBody<'a, I, C, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -1169,7 +1169,7 @@ where
     next_flatten_at(ctx, it).await
 }
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 pub struct FlatMapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,

@@ -225,7 +225,7 @@ where
 #[extern_fn(effect = pure, unsafe(lent(I, T)))]
 fn filter<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Filter<'a, I, T, E, Rt>
 where
@@ -299,7 +299,7 @@ where
 #[extern_fn(effect = pure, unsafe(lent(I, T)))]
 fn take_while<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> TakeWhile<'a, I, T, E, Rt>
 where
@@ -319,7 +319,7 @@ where
 #[extern_fn(effect = pure, unsafe(lent(I, T)))]
 fn skip_while<'a, I, T, E, Rt>(
     it: I,
-    f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> SkipWhile<'a, I, T, E, Rt>
 where
@@ -580,7 +580,7 @@ where
 fn find_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
@@ -602,7 +602,7 @@ where
 async fn find<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
@@ -709,7 +709,7 @@ where
 fn any_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
@@ -731,7 +731,7 @@ where
 async fn any<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
@@ -752,7 +752,7 @@ where
 fn all_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
@@ -774,7 +774,7 @@ where
 async fn all<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
@@ -912,7 +912,7 @@ where
 fn position_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
@@ -936,7 +936,7 @@ where
 async fn position<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
@@ -1159,7 +1159,7 @@ impl Extreme {
 async fn extreme_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
@@ -1187,7 +1187,7 @@ where
 fn extreme_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
@@ -1215,7 +1215,7 @@ where
 fn min_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
@@ -1231,7 +1231,7 @@ where
 async fn min_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
@@ -1246,7 +1246,7 @@ where
 fn max_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
@@ -1262,7 +1262,7 @@ where
 async fn max_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
-    f: Closure<'_, (Ref<'static, T, Shared, Rt>,), i64, E, Rt>,
+    f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
     next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where

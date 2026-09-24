@@ -34,7 +34,7 @@ where
 
 impl<T, N> Arr<T, N>
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     N: Var<kind::Length>,
 {
     pub fn new(items: Vec<T>) -> Self {
@@ -44,7 +44,7 @@ where
 
 impl<T, N> IntoIterator for Arr<T, N>
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     N: Var<kind::Length>,
 {
     type Item = T;
@@ -61,20 +61,19 @@ where
 {
 }
 
-// SAFETY: the element is its own canonical form's, and a length holds no
-// `Erased`.
+// SAFETY: the element and the length are their own canonical forms'.
 unsafe impl<T, N> Canonical<kind::Type> for Arr<T, N>
 where
     T: Var<kind::Type>,
     N: Var<kind::Length>,
 {
-    type Canon = Arr<T::Canon, N>;
+    type Canon = Arr<T::Canon, N::Canon>;
 }
 
 // SAFETY: an `Arr` is a `Vec<T>`, and a length has no layout.
 unsafe impl<M, T, N> crate::UniformPayload<M> for Arr<T, N>
 where
-    T: Send + Sync + 'static + crate::UniformPayload<M>,
+    T: Send + Sync + crate::UniformPayload<M>,
     N: Var<kind::Length>,
 {
 }

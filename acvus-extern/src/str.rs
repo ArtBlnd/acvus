@@ -4,7 +4,7 @@
 use acvus_mir::ty::{Mutability, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::handler::{Arg, Ret};
+use crate::handler::{Arg, Gives, Ret, Takes};
 use crate::obj::{Cross, Pair};
 use crate::runtime::Runtime;
 use crate::slice::Words;
@@ -96,7 +96,7 @@ impl TyArg for StrView {
     }
 }
 
-crate::unbranded!(StrView);
+crate::within_every!(StrView);
 
 // SAFETY: the run is the pair the runtime writes and reads for this view's own
 // bytes; nothing else crosses, and the capability is not kept.
@@ -126,19 +126,23 @@ where
 /// result written `&str` in Rust.
 pub struct RetStr;
 
-// SAFETY: the pair names exactly the `&str` the handler returned; nothing else
-// crosses, and the capability is not kept.
-unsafe impl<Rt> Ret<Rt> for RetStr
+impl<Rt> Ret<Rt> for RetStr
 where
     Rt: Runtime,
 {
-    type Of<'a> = &'a str;
     type Form = Pair;
+}
 
-    fn into_run(value: &str, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
+// SAFETY: the pair names exactly the `&str` the handler returned; nothing else
+// crosses, and the capability is not kept.
+unsafe impl<'x, Rt> Gives<RetStr, Rt> for &'x str
+where
+    Rt: Runtime,
+{
+    fn give(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         // SAFETY: the result is a borrow of a parameter the caller lent
         // for this call (RFC-0047 rule 3), which outlives the pair.
-        rt.slice_into_run(unsafe { StrView::of(value) }.words(), out)
+        rt.slice_into_run(unsafe { StrView::of(self) }.words(), out)
     }
 }
 
@@ -148,25 +152,23 @@ where
 /// one value, and there is no exclusive twin to fold it with.
 pub struct ByStr;
 
-impl<Rt> crate::handler::Sited<Rt> for ByStr
+impl<Rt> Arg<Rt> for ByStr
 where
     Rt: Runtime,
 {
     type Site = ();
+    type Form = Pair;
 
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
 // SAFETY: the `&str` is read from this parameter's own pair; nothing else
 // crosses, and the capability is not kept.
-unsafe impl<'a, 'w, Rt> Arg<'a, 'w, Rt> for ByStr
+unsafe impl<'a, 'w, Rt> Takes<'a, 'w, ByStr, Rt> for &'a str
 where
     Rt: Runtime,
 {
-    type Out = &'a str;
-    type Form = Pair;
-
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> &'a str {
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> &'a str {
         // SAFETY: the caller's contract: `run` is this parameter's pair and
         // the bytes it names are live for `'a`.
         unsafe { StrView::from_run(rt, run).as_str() }

@@ -94,15 +94,12 @@ where
     at: PhantomData<(&'r (), fn() -> (S, I, T))>,
 }
 
-// SAFETY: `At<'b>` changes the brand alone.
-unsafe impl<'r, S, I, Rt, T> crate::Branded for Instance<'r, S, I, Rt, T>
+// SAFETY: an `Instance` is at its own `'s`, and holds one word the run keeps.
+unsafe impl<'s, S, I, Rt, T> crate::Within<'s> for Instance<'s, S, I, Rt, T>
 where
     S: Signature<Rt>,
-    I: 'static,
     Rt: Runtime,
-    T: 'static,
 {
-    type At<'b> = Instance<'b, S, I, Rt, T>;
 }
 
 // SAFETY: an `Instance` is one `Rt::Value` at every `S`, `I` and `T`.
@@ -172,7 +169,7 @@ where
     #[inline(always)]
     pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
     where
-        S: CrossesRest<Rt>,
+        S: CrossesRest<Rt> + 'r,
         S::Recv<'r>: Receiver<Rt>,
     {
         recv.name_in(ctx);
@@ -197,7 +194,7 @@ where
     #[inline(always)]
     pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
     where
-        S: CrossesRest<Rt>,
+        S: CrossesRest<Rt> + 'r,
         S::Recv<'r>: Receiver<Rt>,
     {
         debug_assert_eq!(
@@ -221,7 +218,7 @@ where
         rest: S::Rest<'a>,
     ) -> impl Future<Output = S::Ret<'a>> + Send + 'a
     where
-        S: CrossesRest<Rt>,
+        S: CrossesRest<Rt> + 'a,
         S::Recv<'a>: Receiver<Rt>,
         S::Ret<'a>: Send,
     {
@@ -246,7 +243,7 @@ pub trait RequirementOf {
 /// parameter takes it. `extern_signature!` writes the impl, so that a
 /// handler which requires a signature restates none of its modes and none
 /// of its widths.
-pub trait Signature<Rt>: Send + Sync + 'static
+pub trait Signature<Rt>: Send + Sync
 where
     Rt: Runtime,
 {
@@ -257,16 +254,22 @@ where
     /// The mode reaches a requiring handler through this projection alone,
     /// so the handler's own `Instance::call` is where a wrong mode is
     /// refused.
-    type Recv<'a>;
+    type Recv<'a>
+    where
+        Self: 'a;
     /// The arguments after the first as the instance's glue takes them: a
     /// position at one of the signature's own type variables as the
     /// runtime's value, since one `fn` type serves every instance
     /// (RFC-0068 rule 6).
-    type Words<'a>;
+    type Words<'a>
+    where
+        Self: 'a;
     /// The result as the requirer receives it: a value as itself; a result
     /// standing at a `Ref<T, M, Rt>` marker as `&'r T` / `&'r mut T`, for
     /// the `'r` of the receiver the call lent (RFC-0068 rule 6).
-    type Ret<'r>;
+    type Ret<'r>
+    where
+        Self: 'r;
 
     /// Obligation across artifacts: `extern_signature!` writes this `fn`
     /// type from the signature's own parameter list, taking the entry
@@ -284,7 +287,9 @@ where
         value: Rt::Value,
         ctx: &mut Ctx<'_, Rt>,
         rest: Self::Words<'r>,
-    ) -> Self::Ret<'r>;
+    ) -> Self::Ret<'r>
+    where
+        Self: 'r;
 
     /// # Safety
     /// As `call_now`'s, without its last clause.
@@ -294,6 +299,7 @@ where
         rest: Self::Words<'a>,
     ) -> impl Future<Output = Self::Ret<'a>> + Send + 'a
     where
+        Self: 'a,
         Self::Ret<'a>: Send;
 }
 
@@ -315,9 +321,13 @@ where
     /// The arguments after the first as the requirer passes them: a
     /// position at one of the signature's own type variables at that
     /// variable, borrowed as the signature takes it.
-    type Rest<'a>;
+    type Rest<'a>
+    where
+        Self: 'a;
 
-    fn cross_rest<'a>(rt: Crossing<'_, Rt>, rest: Self::Rest<'a>) -> Self::Words<'a>;
+    fn cross_rest<'a>(rt: Crossing<'_, Rt>, rest: Self::Rest<'a>) -> Self::Words<'a>
+    where
+        Self: 'a;
 }
 
 #[diagnostic::on_unimplemented(
@@ -371,189 +381,198 @@ where
 }
 
 /// A position a signature takes by `&`, as the instance's own handler
-/// spells it. `Self` is the parameter marker `#[extern_fn]` already writes
-/// for that parameter, so the spelling — a Rust reference read at entry, or
-/// the `Ref` carrier a body that keeps the reference takes (RFC-0018) — and
-/// the representation are read off one type.
+/// spells it: `Self` is that handler's parameter type, and `M` the parameter
+/// marker `#[extern_fn]` already writes for it, so the spelling — a Rust
+/// reference read at entry, or the `Ref` carrier a body that keeps the
+/// reference takes (RFC-0018) — and the representation are read off one
+/// parameter.
 ///
 /// # Safety
 /// What `restore_shared` hands back reads exactly the caller's value at the
 /// type the checker settled for the position; it crosses nothing else with
 /// the capability; and it keeps no capability past the call.
-pub unsafe trait RestoreShared<Rt>
+pub unsafe trait RestoreShared<'b, M, Rt>: Sized
 where
     Rt: Runtime,
 {
-    type Out<'b>
-    where
-        Self: 'b;
-
     /// # Safety
     /// `crossed` is the caller's own value, live for `'b`, and holds what
     /// the instance stands at; `at` is dead.
-    unsafe fn restore_shared<'b>(
+    unsafe fn restore_shared(
         rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
-    ) -> Self::Out<'b>;
+    ) -> Self;
 }
 
 /// As `RestoreShared`, for a position a signature takes by `&mut`.
 ///
 /// # Safety
 /// As `RestoreShared`'s, for `restore_exclusive`.
-pub unsafe trait RestoreExclusive<Rt>
+pub unsafe trait RestoreExclusive<'b, M, Rt>: Sized
 where
     Rt: Runtime,
 {
-    type Out<'b>
-    where
-        Self: 'b;
-
     /// # Safety
     /// As `RestoreShared::restore_shared`'s, and no other name of the
     /// storage is live.
-    unsafe fn restore_exclusive<'b>(
+    unsafe fn restore_exclusive(
         rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
-    ) -> Self::Out<'b>;
+    ) -> Self;
 }
 
 /// As `RestoreShared`, for a position a signature takes by value.
 ///
 /// # Safety
 /// As `RestoreShared`'s, for `restore_by_value`.
-pub unsafe trait RestoreByValue<Rt>
+pub unsafe trait RestoreByValue<'b, M, Rt>: Sized
 where
     Rt: Runtime,
 {
-    type Out<'b>;
-
     /// # Safety
     /// `crossed` was erased from what the instance stands at, and what it
     /// names is live for `'b`.
-    unsafe fn restore_by_value<'b>(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> Self::Out<'b>;
+    unsafe fn restore_by_value(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> Self;
 }
 
-// SAFETY: the reference names the caller's own value, borrowed at `T` through
+// SAFETY: the reference names the caller's own value, borrowed at `D` through
 // `C`'s `Lends`, the type the checker settled for the position; the capability
 // is not kept.
-unsafe impl<T, C, Rt> RestoreShared<Rt> for ByRef<T, Shared, C>
+unsafe impl<'b, T, C, D, Rt> RestoreShared<'b, ByRef<T, Shared, C>, Rt> for &'b D
 where
-    T: crate::Branded + Send + Sync + 'static,
-    C: Lends<T, Rt>,
+    C: Lends<D, Rt>,
+    D: crate::Within<'b>,
     Rt: Runtime,
 {
-    type Out<'b>
-        = &'b T::At<'b>
-    where
-        Self: 'b;
-
     #[inline(always)]
-    unsafe fn restore_shared<'b>(
+    unsafe fn restore_shared(
         rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
-    ) -> &'b T::At<'b> {
+    ) -> &'b D {
         // SAFETY: the caller's contract: `crossed` is live for `'b`.
         *at = unsafe { rt.reference(crossed) };
         // SAFETY: the reference names the storage the caller lent, and what
         // that storage holds is live for `'b`.
-        unsafe { <Shared as Loan>::brand::<T>(<Shared as Loan>::borrow::<T, C, Rt>(rt.rt(), at)) }
+        unsafe { C::deref(rt.rt(), at) }
     }
 }
 
 // SAFETY: the `Ref` is `materialize` of a reference to the caller's own value;
 // nothing else crosses, and the capability is not kept.
-unsafe impl<T, M, C, Rt> RestoreShared<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
+unsafe impl<'b, T, M, C, D, Rt> RestoreShared<'b, ByValue<Ref<'static, T, M, Rt>, C>, Rt> for D
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     M: Loan,
+    D: OneValue<Rt> + crate::Within<'b>,
     Rt: Runtime,
 {
-    type Out<'b>
-        = Ref<'b, T, M, Rt>
-    where
-        Self: 'b;
-
     #[inline(always)]
-    unsafe fn restore_shared<'b>(
+    unsafe fn restore_shared(
         rt: crate::Crossing<'_, Rt>,
         _: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
-    ) -> Ref<'b, T, M, Rt> {
+    ) -> D {
         // SAFETY: the caller's contract: `crossed` is the caller's own
         // value at the type the checker gave this position, the storage
         // outlives the call, and RFC-0018 keeps the reference within it.
-        unsafe {
-            crate::brand::<Ref<'static, T, M, Rt>>(OneValue::materialize(rt, rt.reference(crossed)))
-        }
+        unsafe { OneValue::materialize(rt, rt.reference(crossed)) }
     }
 }
 
 // SAFETY: as the shared impl's, exclusively.
-unsafe impl<T, C, Rt> RestoreExclusive<Rt> for ByRef<T, Mut, C>
+unsafe impl<'b, T, C, D, Rt> RestoreExclusive<'b, ByRef<T, Mut, C>, Rt> for &'b mut D
 where
-    T: crate::Branded + Send + Sync + 'static,
-    C: Lends<T, Rt>,
+    C: Lends<D, Rt>,
+    D: crate::Within<'b>,
     Rt: Runtime,
 {
-    type Out<'b>
-        = &'b mut T::At<'b>
-    where
-        Self: 'b;
-
     #[inline(always)]
-    unsafe fn restore_exclusive<'b>(
+    unsafe fn restore_exclusive(
         rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
-    ) -> &'b mut T::At<'b> {
+    ) -> &'b mut D {
         // SAFETY: as `RestoreShared`'s, exclusively.
         *at = unsafe { rt.reference(crossed) };
         // SAFETY: as `RestoreShared`'s, exclusively.
-        unsafe { <Mut as Loan>::brand::<T>(<Mut as Loan>::borrow::<T, C, Rt>(rt.rt(), at)) }
+        unsafe { C::deref_mut(rt.rt(), at) }
     }
 }
 
 // SAFETY: as the shared impl's, exclusively.
-unsafe impl<T, M, C, Rt> RestoreExclusive<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
+unsafe impl<'b, T, M, C, D, Rt> RestoreExclusive<'b, ByValue<Ref<'static, T, M, Rt>, C>, Rt> for D
 where
-    T: Send + Sync + 'static,
+    T: Send + Sync,
     M: Loan,
+    D: OneValue<Rt> + crate::Within<'b>,
     Rt: Runtime,
 {
-    type Out<'b>
-        = Ref<'b, T, M, Rt>
-    where
-        Self: 'b;
-
     #[inline(always)]
-    unsafe fn restore_exclusive<'b>(
+    unsafe fn restore_exclusive(
         rt: crate::Crossing<'_, Rt>,
         _: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
-    ) -> Ref<'b, T, M, Rt> {
+    ) -> D {
         // SAFETY: as the shared impl's, exclusively.
-        unsafe {
-            crate::brand::<Ref<'static, T, M, Rt>>(OneValue::materialize(rt, rt.reference(crossed)))
-        }
+        unsafe { OneValue::materialize(rt, rt.reference(crossed)) }
     }
 }
 
-// SAFETY: the value is `T`'s own `materialize` of the word the caller crossed;
+// SAFETY: the value is `D`'s own `materialize` of the word the caller crossed;
 // nothing else crosses, and the capability is not kept.
-unsafe impl<T, C, Rt> RestoreByValue<Rt> for ByValue<T, C>
+unsafe impl<'b, T, C, D, Rt> RestoreByValue<'b, ByValue<T, C>, Rt> for D
 where
     T: OneValue<Rt, C>,
+    D: OneValue<Rt, C> + crate::Within<'b>,
     Rt: Runtime,
 {
-    type Out<'b> = T::At<'b>;
-
     #[inline(always)]
-    unsafe fn restore_by_value<'b>(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> T::At<'b> {
+    unsafe fn restore_by_value(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> D {
         // SAFETY: the caller's contract, at the one value an `Owned` holds.
-        unsafe { crate::brand::<T>(<T as OneValue<Rt, C>>::materialize(rt, crossed.into_value(rt.holding()))) }
+        unsafe { <D as OneValue<Rt, C>>::materialize(rt, crossed.into_value(rt.holding())) }
     }
+}
+
+/// The receiver of a mono glue taken by value, at the handler's own type.
+///
+/// # Safety
+/// `value` is the receiver the call named, at the type the checker settled
+/// for it, which is `D` with every lifetime at `'static`; what it names is
+/// live for `'s`.
+#[doc(hidden)]
+#[inline(always)]
+pub unsafe fn receiver_by_value<'s, D, C, Rt>(
+    rt: crate::Crossing<'_, Rt>,
+    value: Rt::Value,
+    _: &'s (),
+) -> D
+where
+    D: OneValue<Rt, C> + crate::Within<'s>,
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract.
+    unsafe { <D as OneValue<Rt, C>>::materialize(rt, value) }
+}
+
+/// The receiver of a mono glue taken by `&` or `&mut`, at the handler's own
+/// type.
+///
+/// # Safety
+/// `reference` names the receiver's storage, which holds what `D` names with
+/// every lifetime at `'static` and is live for `'s`, exclusively so for a
+/// `Mut` loan.
+#[doc(hidden)]
+#[inline(always)]
+pub unsafe fn receiver_borrowed<'s, D, M, C, Rt>(rt: &Rt, reference: &'s Rt::Value) -> M::Of<'s, D>
+where
+    M: Loan,
+    C: Lends<D, Rt>,
+    D: Send + Sync + crate::Within<'s>,
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract.
+    unsafe { M::borrow::<D, C, Rt>(rt, reference) }
 }

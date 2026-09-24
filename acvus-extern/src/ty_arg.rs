@@ -179,7 +179,7 @@ impl Kind for kind::Identity {
 /// No kind has an impl over an unbounded parameter: a type fills a variable
 /// only where this crate wrote the impl, so a type the language does not
 /// know cannot reach a declaration by satisfying `Send + Sync`.
-pub trait Var<K>: Canonical<K> + Send + Sync + 'static
+pub trait Var<K>: Canonical<K> + Send + Sync
 where
     K: Kind,
 {
@@ -325,19 +325,19 @@ impl<const N: usize> TyArg for Nth<kind::Type, N> {
 /// index and whose `SLOT` is `Var`.
 pub struct Spec<T>(PhantomData<fn() -> T>, Bottom);
 
-impl<T> Var<kind::Type> for Spec<T> where T: Var<kind::Type> {}
+impl<T> Var<kind::Type> for Spec<T> where T: Var<kind::Type> + 'static {}
 
 // SAFETY: a stand-in holds no `Erased`.
 unsafe impl<T> Canonical<kind::Type> for Spec<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + 'static,
 {
     type Canon = Self;
 }
 
 impl<T> TyArg for Spec<T>
 where
-    T: TyArg,
+    T: TyArg + 'static,
 {
     const SLOT: SlotRepr = SlotRepr::Member;
 
@@ -376,7 +376,7 @@ impl<const N: usize> TyArg for ChosenNth<N> {
     }
 }
 
-crate::unbranded!(Nth<kind::Type, N>, const N: usize);
+crate::within_every!(Nth<kind::Type, N>, const N: usize);
 crate::cross_one_value!(Nth<kind::Type, N>, const N: usize);
 
 /// The stand-ins appear inside types that ask their element to be
@@ -420,14 +420,8 @@ unsafe impl<const N: usize, Rt> crate::TransparentOver<Rt> for Nth<kind::Type, N
 {
 }
 
-// SAFETY: `At<'a>` is `Self`: a stand-in is uninhabited, so no value of
-// it reaches a handler to be kept.
-unsafe impl<T> crate::Branded for Spec<T>
-where
-    T: Send + Sync + 'static,
-{
-    type At<'a> = Self;
-}
+// SAFETY: a stand-in is uninhabited, so no value of it reaches a handler.
+unsafe impl<'s, T> crate::Within<'s> for Spec<T> {}
 crate::cross_one_value!(Spec<T>, T: Send + Sync + 'static);
 
 // SAFETY: as `Nth<kind::Type, N>`'s.
@@ -448,7 +442,7 @@ where
 // SAFETY: as `Nth<kind::Type, N>`'s.
 unsafe impl<T, Rt> crate::Stored<Rt> for Spec<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + 'static,
     Rt: crate::Runtime,
 {
     crate::stored_as_canonical!(Rt);
@@ -456,7 +450,7 @@ where
 
 impl<T, Rt> crate::Borrowable<Rt> for Spec<T>
 where
-    T: Var<kind::Type>,
+    T: Var<kind::Type> + 'static,
     Rt: crate::Runtime,
 {
     crate::whole_box_in_place!(Self, Rt);
@@ -470,7 +464,7 @@ where
 {
 }
 
-crate::unbranded!(ChosenNth<N>, const N: usize);
+crate::within_every!(ChosenNth<N>, const N: usize);
 crate::cross_one_value!(ChosenNth<N>, const N: usize);
 
 // SAFETY: as `Nth<kind::Type, N>`'s.

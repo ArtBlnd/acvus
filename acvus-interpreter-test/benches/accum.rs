@@ -112,7 +112,7 @@ mod next_design {
         })
     }
 
-    #[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+    #[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
     pub struct NMapBody<'a, I, T, U, E, Rt>
     where
         I: Var<kind::Type>,
@@ -166,7 +166,7 @@ mod next_design {
         Some(it.0.f.call_now(ctx, (x,)))
     }
 
-    #[derive(acvus_extern::UniformPayload, acvus_extern::Branded)]
+    #[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
     pub struct NFilterBody<'a, I, T, E, Rt>
     where
         I: Var<kind::Type>,
@@ -176,7 +176,7 @@ mod next_design {
     {
         inner: I,
         next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
-        f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+        f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     }
 
     #[derive(ExternType)]
@@ -192,7 +192,7 @@ mod next_design {
     #[extern_fn(effect = pure)]
     fn nfilter<'a, I, T, E, Rt>(
         it: I,
-        f: Closure<'a, (Ref<'static, T, Shared, Rt>,), bool, E, Rt>,
+        f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
         next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     ) -> NFilter<'a, I, T, E, Rt>
     where

@@ -386,6 +386,8 @@ acvus_extern::cross_one_value!(Value, at AcvusRuntime);
 // SAFETY: the runtime's own value crosses as itself: `erase` and `materialize`
 // hand the word through unchanged, and the capability is not used.
 unsafe impl acvus_extern::OneValue<AcvusRuntime> for Value {
+    const STORED_AS_VALUE: bool = true;
+
     fn erase(self, _: acvus_extern::Crossing<'_, AcvusRuntime>) -> Value {
         self
     }

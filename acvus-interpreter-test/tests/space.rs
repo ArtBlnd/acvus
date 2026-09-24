@@ -550,7 +550,7 @@ where
     T: Var<kind::Type>,
     I: Var<kind::Identity>;
 
-#[derive(UniformPayload, acvus_extern::Branded)]
+#[derive(UniformPayload, acvus_extern::Within)]
 struct TallyState<T> {
     items: Vec<T>,
     settled: usize,

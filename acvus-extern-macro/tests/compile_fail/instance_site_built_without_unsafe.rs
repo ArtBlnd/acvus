@@ -3,7 +3,7 @@
 //! for the requirements of the declaration it is handed to (RFC-0059
 //! rule 8).
 #![forbid(unsafe_code)]
-use acvus_extern::{CallSite, Now, Owned, Pure, Required, Runtime, Sited, extern_signature};
+use acvus_extern::{CallSite, Now, Owned, Pure, Arg, Required, Runtime, extern_signature};
 
 extern_signature! {
     ns: "q",
@@ -23,7 +23,7 @@ where
     Rt: Runtime,
 {
     let site = CallSite::<Rt>::new(&[], words);
-    let _ = <Forge<Rt> as Sited<Rt>>::site(&site, 0);
+    let _ = <Forge<Rt> as Arg<Rt>>::site(&site, 0);
 }
 
 fn main() {}

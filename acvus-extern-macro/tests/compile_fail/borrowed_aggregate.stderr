@@ -1,33 +1,26 @@
-error[E0277]: `Point` has no storage of its own type, so a parameter cannot borrow one
+error[E0277]: a borrowed aggregate crosses as its projection: write `PointRef<'_>`
   --> tests/compile_fail/borrowed_aggregate.rs:13:1
    |
 13 | #[extern_fn(effect = pure)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter is taken by reference
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter borrows an aggregate
    |
 help: the trait `BorrowedWhole<__R>` is not implemented for `Point`
   --> tests/compile_fail/borrowed_aggregate.rs:8:1
    |
  8 | pub struct Point {
    | ^^^^^^^^^^^^^^^^
-   = note: a borrowed aggregate crosses as its projection: where `Point` is a `#[derive(TyArg)] #[projection]` aggregate, write `PointRef<'_>`, or `PointMut<'_>` for a struct and `PointMut<'_, Rt>` for an enum (RFC-0050 rule 6).
-   = note: an Option has no storage of its own type to borrow: `None` is one value and `Some(v)` is `v`'s own value, so nothing behind a reference is shaped like an `Option<T>`. Take `Option<&T>`, or the option by value.
-   = note: a Rust slice is not one of the language's types: take `Slice<T, Shared, Rt>`, the language's `&[T]` (RFC-0047).
-help: the following other types implement trait `Arg<'a, 'w, Rt>`
-  --> $WORKSPACE/acvus-extern/src/handler.rs
-   |
-   | / unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
-   | | where
-   | |     T: Borrowable<Rt>,
-   | |     M: Loan,
-   | |     Rt: Runtime,
-   | |________________^ `ByRef<T, M>`
-...
-   | / unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
-   | | where
-   | |     T: BorrowableSpecialized<Rt>,
-   | |     M: Loan,
-   | |     Rt: Runtime,
-   | |________________^ `ByRef<T, M, acvus_extern::Specialized>`
+   = note: `#[derive(TyArg)] #[projection]` emits `PointRef<'_>` beside `Point`, one component per declared field or variant, each a borrow of the value in the aggregate's own storage. The exclusive form is `PointMut<'_>` for a struct and `PointMut<'_, Rt>` for an enum. Write the projection in the signature instead of `&Point`.
+   = note: `Point` by value is admitted as well, and materializes the fields.
+   = help: the following other types implement trait `Parameters<Rt>`:
+             ()
+             (A0, A1)
+             (A0, A1, A2)
+             (A0, A1, A2, A3)
+             (A0, A1, A2, A3, A4)
+             (A0, A1, A2, A3, A4, A5)
+             (A0, A1, A2, A3, A4, A5, A6)
+             (A0, A1, A2, A3, A4, A5, A6, A7)
+             (A0,)
 note: required for `Point` to implement `Borrowable<__R>`
   --> tests/compile_fail/borrowed_aggregate.rs:8:12
    |
@@ -37,5 +30,39 @@ note: required for `Point` to implement `Borrowable<__R>`
  8 | pub struct Point {
    |            ^^^^^
    = help: consider manually implementing `Borrowable<__R>` to avoid undesired bounds
-   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `for<'a, 'w> Arg<'a, 'w, __R>`
+   = note: required for `ByRef<Point, acvus_extern::Shared>` to implement `Arg<__R>`
+   = note: required for `(ByRef<Point, acvus_extern::Shared>,)` to implement `Parameters<__R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, ByRef<Point, acvus_extern::Shared>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/borrowed_aggregate.rs:13:1
+   |
+ 8 | pub struct Point {
+   | ---------------- doesn't satisfy `Point: BorrowedWhole<__R>`
+...
+13 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
+   | ----------------------------------- doesn't satisfy `ByRef<Point, acvus_extern::Shared>: Arg<__R>`
+   |
+note: trait bound `Point: BorrowedWhole<__R>` was not satisfied
+  --> tests/compile_fail/borrowed_aggregate.rs:6:10
+   |
+ 6 | #[derive(TyArg)]
+   |          ^^^^^ type parameter would need to implement `Borrowable`
+   = note: the following trait bounds were not satisfied:
+           `acvus_extern::Pending<'_, '_, ByRef<Point, acvus_extern::Shared>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, ByRef<Point, acvus_extern::Shared>, __R>: Iterator`
+note: the trait `BorrowedWhole` must be implemented
+  --> $WORKSPACE/acvus-extern/src/projection.rs
+   |
+   | pub trait BorrowedWhole<Rt>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: consider manually implementing the trait to avoid undesired bounds
+   = note: this error originates in the attribute macro `extern_fn` which comes from the expansion of the derive macro `TyArg` (in Nightly builds, run with -Z macro-backtrace for more info)

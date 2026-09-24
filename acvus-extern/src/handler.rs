@@ -139,19 +139,15 @@ pub struct Uniform;
 /// The crossing of a `Monomorphize` member instance.
 pub struct Specialized;
 
-/// What a parameter's crossing needs from the call site, which the glue
-/// holds and every call of that site reads.
-///
-/// This is not an associated type of `Arg`, and the separate trait is a
-/// decision. `Arg` is parameterized by the call's own lifetime, associated
-/// type projections are invariant, and the table a glue holds is built once
-/// and outlives every call — so passing `&<Self as Arg<'a, Rt>>::Site` from
-/// a `'static` table would unify `'a` with `'static` and the borrow checker
-/// would then demand that the runtime and the argument run outlive the
-/// call. Carrying the datum on a lifetime-free trait is what keeps a site
-/// table one type per parameter instead of one per lifetime the parameter
-/// is read at.
-pub trait Sited<Rt>: Sized
+/// How one Rust parameter takes its argument out of a call's argument run:
+/// the run it occupies and what its crossing needs from the call site,
+/// which the glue holds and every call of that site reads. The mode — by
+/// value, by shared reference, by exclusive reference — is written in Rust
+/// and read by the macro (RFC-0023 rule 5); the width is the type's. The
+/// macro writes the marker at the handler's own parameter type with every
+/// lifetime at `'static`, and the value the handler is handed is `Takes`' at
+/// the type the handler wrote.
+pub trait Arg<Rt>: Sized
 where
     Rt: Runtime,
 {
@@ -159,50 +155,72 @@ where
     /// the per-site glue of a declaration of plain parameters is the
     /// closure and nothing else.
     type Site: Clone + Send + Sync + 'static;
-
-    /// How many of the call's settled argument types this parameter takes.
-    /// A required instance takes none: the site table is where its word is.
-    const ARGUMENTS: usize = 1;
-
-    fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site;
-}
-
-/// How one Rust parameter takes its argument out of a call's argument run.
-/// The mode — by value, by shared reference, by exclusive reference — is
-/// written in Rust and read by the macro (RFC-0023 rule 5); the width is the
-/// type's. `'a` is the call and `'w` the lifetime of the call's `Ctx`: a
-/// carrier is handed out at the first, a required instance at the second
-/// (RFC-0079 rule 6).
-///
-/// # Safety
-/// What `take` hands the body is exactly the value its own `WIDTH` values of
-/// the run hold at the type the checker settled for the parameter; it
-/// crosses nothing else with the capability, a part only through that part's
-/// own crossing; and it keeps no capability past the call.
-pub unsafe trait Arg<'a, 'w, Rt>: Sited<Rt>
-where
-    Rt: Runtime,
-{
-    /// What the closure's parameter is.
-    type Out;
     /// The run this parameter takes out of the call's argument run. A bound
     /// that admits only a parameter which survives the caller suspending
     /// says `Form = One`: the `Pair` a slice is borrows the caller's frame
     /// (RFC-0047 rule 6).
     type Form: Form;
 
+    /// How many of the call's settled argument types this parameter takes.
+    /// A required instance takes none: the site table is where its word is.
+    const ARGUMENTS: usize = 1;
     /// How many of the run's values this parameter consumes.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
 
+    fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site;
+}
+
+/// A handler's parameter type, taken out of the values of a call's argument
+/// run that marker `A` occupies. `'a` is the call: every carrier the value
+/// holds is `Within<'a>`, so the handler cannot keep one past the call
+/// (RFC-0079 rule 6). `'w` is the lifetime of the call's `Ctx`, which a
+/// required instance is handed at.
+///
+/// # Safety
+/// What `take` hands the body is exactly the value its marker's `WIDTH`
+/// values of the run hold at the type the checker settled for the
+/// parameter, which is `Self` with every lifetime at `'static`; it crosses
+/// nothing else with the capability, a part only through that part's own
+/// crossing; and it keeps no capability past the call.
+pub unsafe trait Takes<'a, 'w, A, Rt>: Sized
+where
+    A: Arg<Rt>,
+    Rt: Runtime,
+{
     /// # Safety
     /// `run` is this parameter's own `WIDTH` values of a call's argument
     /// run, and any storage a reference it yields names is live and unmoved
     /// for `'a` — exclusively so for an exclusive reference (RFC-0018).
-    unsafe fn take<'s>(
-        rt: crate::Crossing<'a, Rt>,
-        run: &'a [Rt::Value],
-        site: &'s <Self as Sited<Rt>>::Site,
-    ) -> Self::Out;
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], site: &A::Site) -> Self;
+}
+
+/// One parameter's values of a call's argument run, handed to the closure the
+/// macro writes, which takes them at the handler's own parameter type.
+pub struct Pending<'a, 'w, A, Rt>
+where
+    A: Arg<Rt>,
+    Rt: Runtime,
+{
+    rt: crate::Crossing<'a, Rt>,
+    run: &'a [Rt::Value],
+    site: &'a A::Site,
+    ctx: PhantomData<&'w ()>,
+}
+
+impl<'a, 'w, A, Rt> Pending<'a, 'w, A, Rt>
+where
+    A: Arg<Rt>,
+    Rt: Runtime,
+{
+    #[inline(always)]
+    pub fn take<D>(self) -> D
+    where
+        D: Takes<'a, 'w, A, Rt>,
+    {
+        // SAFETY: a `Pending` is made by `Parameters::take` alone, over this
+        // parameter's own values of a call's run.
+        unsafe { D::take(self.rt, self.run, self.site) }
+    }
 }
 
 /// A parameter taken by value: the crossing builds the Rust value.
@@ -211,44 +229,48 @@ pub struct ByValue<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 /// the storage the caller lent (RFC-0018).
 pub struct ByRef<T, M, C = Uniform>(PhantomData<fn() -> (T, M, C)>);
 
-impl<T, Rt> Sited<Rt> for ByValue<T, Uniform>
+impl<T, Rt> Arg<Rt> for ByValue<T, Uniform>
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
     type Site = ();
+    type Form = <T as Cross<Rt>>::Form;
 
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<T, Rt> Sited<Rt> for ByValue<T, Specialized>
+impl<T, Rt> Arg<Rt> for ByValue<T, Specialized>
 where
     T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
     type Site = ();
+    type Form = One;
 
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Uniform>
+impl<T, M, Rt> Arg<Rt> for ByRef<T, M, Uniform>
 where
     T: Borrowable<Rt>,
     M: Loan,
     Rt: Runtime,
 {
     type Site = ();
+    type Form = One;
 
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<T, M, Rt> Sited<Rt> for ByRef<T, M, Specialized>
+impl<T, M, Rt> Arg<Rt> for ByRef<T, M, Specialized>
 where
     T: BorrowableSpecialized<Rt>,
     M: Loan,
     Rt: Runtime,
 {
     type Site = ();
+    type Form = One;
 
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 }
@@ -257,14 +279,15 @@ where
 /// site holds the checker's answer for it, and the run carries nothing.
 pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
 
-impl<S, I, T, Rt, const NTH: usize> Sited<Rt> for Required<S, I, T, NTH>
+impl<S, I, T, Rt, const NTH: usize> Arg<Rt> for Required<S, I, T, NTH>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt> + 'static,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
 {
     type Site = Instance<'static, S, I, Rt, T>;
+    type Form = Nothing;
 
     const ARGUMENTS: usize = 0;
 
@@ -279,89 +302,80 @@ where
 }
 
 // SAFETY: the instance is the site table's; the capability is not used.
-unsafe impl<'a, 'w, S, I, T, Rt, const NTH: usize> Arg<'a, 'w, Rt> for Required<S, I, T, NTH>
+unsafe impl<'a, 'w, S, I, T, Rt, const NTH: usize> Takes<'a, 'w, Required<S, I, T, NTH>, Rt>
+    for Instance<'w, S, I, Rt, T>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt> + 'static,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
 {
-    type Out = Instance<'w, S, I, Rt, T>;
-    type Form = Nothing;
-
-    unsafe fn take<'s>(
+    unsafe fn take(
         _: crate::Crossing<'a, Rt>,
         _: &'a [Rt::Value],
-        site: &'s Instance<'static, S, I, Rt, T>,
+        site: &Instance<'static, S, I, Rt, T>,
     ) -> Instance<'w, S, I, Rt, T> {
         *site
     }
 }
 
-// SAFETY: the value is `T`'s own `Cross::from_run` of this parameter's run;
-// nothing else crosses, and the capability is not kept.
-unsafe impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Uniform>
+// SAFETY: the value is `D`'s own `Cross::from_run` of this parameter's run,
+// over the form the marker's run has; nothing else crosses, and the
+// capability is not kept.
+unsafe impl<'a, 'w, T, D, Rt> Takes<'a, 'w, ByValue<T, Uniform>, Rt> for D
 where
     T: Cross<Rt>,
+    D: Cross<Rt, Form = <T as Cross<Rt>>::Form> + crate::Within<'a>,
     Rt: Runtime,
 {
-    type Out = T::At<'a>;
-    type Form = <T as Cross<Rt>>::Form;
-
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> D {
         // SAFETY: the caller's contract, which is `Cross::from_run`'s, and
         // what the value names is live for the call (RFC-0018).
-        unsafe { crate::brand::<T>(<T as Cross<Rt>>::from_run(rt, run)) }
+        unsafe { <D as Cross<Rt>>::from_run(rt, run) }
     }
 }
 
-// SAFETY: as the uniform impl's, through `T`'s specialized `OneValue`.
-unsafe impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Specialized>
+// SAFETY: as the uniform impl's, through `D`'s specialized `OneValue`.
+unsafe impl<'a, 'w, T, D, Rt> Takes<'a, 'w, ByValue<T, Specialized>, Rt> for D
 where
     T: OneValue<Rt, Specialized>,
+    D: OneValue<Rt, Specialized> + crate::Within<'a>,
     Rt: Runtime,
 {
-    type Out = T::At<'a>;
-    type Form = One;
-
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> D {
         // SAFETY: as the uniform impl's.
-        unsafe { crate::brand::<T>(<T as OneValue<Rt, Specialized>>::from_run(rt, run)) }
+        unsafe { <D as OneValue<Rt, Specialized>>::from_run(rt, run) }
     }
 }
 
-// SAFETY: the borrow is `M::borrow` of this parameter's own word at `T`, the
-// type the checker settled for it; the capability lends only its runtime and is
-// not kept.
-unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
+// SAFETY: the borrow is `C`'s `Lends` of this parameter's own word at `D`, the
+// type the checker settled for it; the capability lends only its runtime and
+// is not kept.
+unsafe impl<'a, 'w, T, D, C, Rt> Takes<'a, 'w, ByRef<T, crate::Shared, C>, Rt> for &'a D
 where
-    T: Borrowable<Rt>,
-    M: Loan,
+    ByRef<T, crate::Shared, C>: Arg<Rt, Site = ()>,
+    C: Lends<D, Rt>,
+    D: crate::Within<'a>,
     Rt: Runtime,
 {
-    type Out = M::Of<'a, T::At<'a>>;
-    type Form = One;
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> &'a D {
+        // SAFETY: the caller's contract: a live storage of `D` (RFC-0018).
+        unsafe { C::deref(rt.rt(), &run[0]) }
+    }
+}
 
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
-        // SAFETY: the caller's contract: a live storage of `T`, exclusively
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<'a, 'w, T, D, C, Rt> Takes<'a, 'w, ByRef<T, crate::Mut, C>, Rt> for &'a mut D
+where
+    ByRef<T, crate::Mut, C>: Arg<Rt, Site = ()>,
+    C: Lends<D, Rt>,
+    D: crate::Within<'a>,
+    Rt: Runtime,
+{
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> &'a mut D {
+        // SAFETY: the caller's contract: a live storage of `D`, exclusively
         // named at a `Mut` loan (RFC-0018).
-        unsafe { M::brand::<T>(M::borrow::<T, Uniform, Rt>(rt.rt(), &run[0])) }
-    }
-}
-
-// SAFETY: as the uniform impl's, at the specialized representation.
-unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
-where
-    T: BorrowableSpecialized<Rt>,
-    M: Loan,
-    Rt: Runtime,
-{
-    type Out = M::Of<'a, T::At<'a>>;
-    type Form = One;
-
-    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
-        // SAFETY: as the uniform impl's, at the specialized representation.
-        unsafe { M::brand::<T>(M::borrow::<T, Specialized, Rt>(rt.rt(), &run[0])) }
+        unsafe { C::deref_mut(rt.rt(), &run[0]) }
     }
 }
 
@@ -474,18 +488,14 @@ where
 /// body where it escapes; a handler writes the same components either way.
 pub type Out<'a, Rt> = &'a mut [<Rt as Runtime>::Value];
 
-/// How a handler's result crosses into the destination run.
-///
-/// # Safety
-/// The run `into_run` writes is exactly the value of `Of` at the type the
-/// checker settled for the result; it crosses nothing else with the
-/// capability, a part only through that part's own crossing; and it keeps
-/// no capability past the call.
-pub unsafe trait Ret<Rt>: Sized
+/// How a handler's result crosses into the destination run: the run it is
+/// written into. The macro writes the marker at the handler's own result type
+/// with every lifetime at `'static`, and the value is written by `Gives` at
+/// the type the handler returned.
+pub trait Ret<Rt>: Sized
 where
     Rt: Runtime,
 {
-    type Of<'a>;
     /// The run the result is written into. A bound that admits only a result
     /// the caller can take away says `Form = One`: the `Pair` a view or a
     /// slice is borrows the caller's frame (RFC-0047 rule 3), and the `Run<W>` an
@@ -494,12 +504,52 @@ where
 
     /// How many of the runtime's values the result occupies.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
+}
 
-    fn into_run(
-        value: Self::Of<'_>,
+/// A handler's result type, written into the run marker `R` occupies.
+///
+/// # Safety
+/// The run `give` writes is exactly the value of `Self` at the type the
+/// checker settled for the result, which is `Self` with every lifetime at
+/// `'static`; it crosses nothing else with the capability, a part only
+/// through that part's own crossing; and it keeps no capability past the
+/// call.
+pub unsafe trait Gives<R, Rt>: Sized
+where
+    R: Ret<Rt>,
+    Rt: Runtime,
+{
+    fn give(
+        self,
         rt: crate::Crossing<'_, Rt>,
         out: Out<'_, Rt>,
-    ) -> <Self::Form as Returned>::Verdict;
+    ) -> <R::Form as Returned>::Verdict;
+}
+
+/// The destination run of a call's result, handed to the closure the macro
+/// writes, which writes the handler's result into it.
+pub struct Returning<'a, R, Rt>
+where
+    R: Ret<Rt>,
+    Rt: Runtime,
+{
+    rt: crate::Crossing<'a, Rt>,
+    out: Out<'a, Rt>,
+    ret: PhantomData<fn() -> R>,
+}
+
+impl<'a, R, Rt> Returning<'a, R, Rt>
+where
+    R: Ret<Rt>,
+    Rt: Runtime,
+{
+    #[inline(always)]
+    pub fn put<D>(self, value: D) -> <R::Form as Returned>::Verdict
+    where
+        D: Gives<R, Rt>,
+    {
+        value.give(self.rt, self.out)
+    }
 }
 
 /// The arguments of a closure call, written into the callee's parameter
@@ -565,42 +615,35 @@ into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6, A7: 7);
 /// A result that is a borrow of a parameter the caller lent, at the carrier
 /// type the declaration names for it (RFC-0047 rule 3, RFC-0068 rule 4): `Ref`,
 /// `Slice`, and an `Option` of one. The handler returns Rust's borrow with
-/// Rust's lifetime; the crossing writes the word or pair.
-///
-/// # Safety
-/// The word or pair `into_run` writes names exactly the borrow the handler
-/// returned, at the type the checker settled for the result; it crosses
-/// nothing else with the capability; and it keeps no capability past the
-/// call.
-pub unsafe trait LentBack<Rt>: Sized
+/// Rust's lifetime, and its `Gives` writes the word or pair.
+pub trait LentBack<Rt>: Sized
 where
     Rt: Runtime,
 {
-    type Of<'a>;
     type Form: Returned;
-
-    fn into_run(
-        value: Self::Of<'_>,
-        rt: crate::Crossing<'_, Rt>,
-        out: Out<'_, Rt>,
-    ) -> <Self::Form as Returned>::Verdict;
 }
 
-// SAFETY: a present borrow crosses by `L`'s own `LentBack` and an absent one
-// writes nothing; the capability is not kept.
-unsafe impl<L, Rt> LentBack<Rt> for Option<L>
+impl<L, Rt> LentBack<Rt> for Option<L>
 where
     L: LentBack<Rt, Form = One>,
     Rt: Runtime,
 {
-    type Of<'a> = Option<L::Of<'a>>;
     type Form = OptionOf<One>;
+}
 
-    fn into_run(value: Option<L::Of<'_>>, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) -> bool {
-        let Some(lent) = value else {
+// SAFETY: a present borrow crosses by its own `Gives` and an absent one writes
+// nothing; the capability is not kept.
+unsafe impl<L, G, Rt> Gives<RetLent<Option<L>>, Rt> for Option<G>
+where
+    L: LentBack<Rt, Form = One>,
+    G: Gives<RetLent<L>, Rt>,
+    Rt: Runtime,
+{
+    fn give(self, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) -> bool {
+        let Some(lent) = self else {
             return false;
         };
-        L::into_run(lent, rt, out);
+        lent.give(rt, out);
         true
     }
 }
@@ -609,59 +652,63 @@ where
 /// result written as a Rust borrow.
 pub struct RetLent<L>(PhantomData<fn() -> L>);
 
-// SAFETY: the result crosses by `L`'s own `LentBack`; the capability is not
-// kept.
-unsafe impl<L, Rt> Ret<Rt> for RetLent<L>
+impl<L, Rt> Ret<Rt> for RetLent<L>
 where
     L: LentBack<Rt>,
     Rt: Runtime,
 {
-    type Of<'a> = L::Of<'a>;
     type Form = L::Form;
-
-    fn into_run(value: L::Of<'_>, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) -> <L::Form as Returned>::Verdict {
-        L::into_run(value, rt, out)
-    }
 }
 
 /// A result crossing as itself, at whichever width its type declares.
 pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
-// SAFETY: the result crosses by `T`'s own `Cross::into_return_run`; nothing
-// else crosses, and the capability is not kept.
-unsafe impl<T, Rt> Ret<Rt> for Val<T, Uniform>
+impl<T, Rt> Ret<Rt> for Val<T, Uniform>
 where
     T: Cross<Rt>,
     Rt: Runtime,
 {
-    type Of<'a> = T::At<'a>;
     type Form = <T as Cross<Rt>>::ReturnForm;
+}
 
-    fn into_run(
-        value: T::At<'_>,
+// SAFETY: the result crosses by `D`'s own `Cross::into_return_run`, into the
+// form the marker's result has; nothing else crosses, and the capability is
+// not kept.
+unsafe impl<T, D, Rt> Gives<Val<T, Uniform>, Rt> for D
+where
+    T: Cross<Rt>,
+    D: Cross<Rt, ReturnForm = <T as Cross<Rt>>::ReturnForm>,
+    Rt: Runtime,
+{
+    fn give(
+        self,
         rt: crate::Crossing<'_, Rt>,
         out: Out<'_, Rt>,
     ) -> <<T as Cross<Rt>>::ReturnForm as Returned>::Verdict {
-        // SAFETY: the value is erased here, before safe code sees it again.
-        <T as Cross<Rt>>::into_return_run(unsafe { crate::unbrand::<T>(value) }, rt, out)
+        <D as Cross<Rt>>::into_return_run(self, rt, out)
     }
 }
 
-// SAFETY: as the uniform impl's, through `T`'s specialized `OneValue`.
-unsafe impl<T, Rt> Ret<Rt> for Val<T, Specialized>
+impl<T, Rt> Ret<Rt> for Val<T, Specialized>
 where
     T: OneValue<Rt, Specialized>,
     Rt: Runtime,
 {
-    type Of<'a> = T::At<'a>;
     /// The specialized crossing is the value and nothing beside it, so there
     /// is no run for a verdict to be returned beside and no `OptionOf` here
     /// (RFC-0041).
     type Form = One;
+}
 
-    fn into_run(value: T::At<'_>, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) {
-        // SAFETY: as the uniform impl's.
-        <T as OneValue<Rt, Specialized>>::into_run(unsafe { crate::unbrand::<T>(value) }, rt, out)
+// SAFETY: as the uniform impl's, through `D`'s specialized `OneValue`.
+unsafe impl<T, D, Rt> Gives<Val<T, Specialized>, Rt> for D
+where
+    T: OneValue<Rt, Specialized>,
+    D: OneValue<Rt, Specialized>,
+    Rt: Runtime,
+{
+    fn give(self, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) {
+        <D as OneValue<Rt, Specialized>>::into_run(self, rt, out)
     }
 }
 
@@ -917,7 +964,7 @@ where
 {
     type Run: ArgRun;
     type Sites: Clone + Send + Sync + 'static;
-    /// What the Rust body's parameters are, at the call's own lifetime and
+    /// Each parameter's own values of the run, at the call's own lifetime and
     /// at its `Ctx`'s.
     type Out<'a, 'w>;
 
@@ -928,11 +975,11 @@ where
     fn sites(site: &CallSite<'_, Rt>) -> Self::Sites;
 
     /// # Safety
-    /// As `Arg::take`, for each parameter over its own values of `run`.
+    /// As `Takes::take`, for each parameter over its own values of `run`.
     unsafe fn take<'a, 'w>(
         rt: crate::Crossing<'a, Rt>,
         run: &'a [Rt::Value],
-        sites: &Self::Sites,
+        sites: &'a Self::Sites,
     ) -> <Self as Parameters<Rt>>::Out<'a, 'w>;
 }
 
@@ -1161,7 +1208,7 @@ where
 macro_rules! run_of {
     ($rt:ty, $run:ty) => { $run };
     ($rt:ty, $run:ty, $arg:ident $(, $rest:ident)*) => {
-        run_of!($rt, <<$arg as Arg<'static, 'static, $rt>>::Form as Form>::Onto<$run> $(, $rest)*)
+        run_of!($rt, <<$arg as Arg<$rt>>::Form as Form>::Onto<$run> $(, $rest)*)
     };
 }
 
@@ -1170,19 +1217,20 @@ macro_rules! run_of {
 /// one more parameter.
 macro_rules! parameters {
     ($($arg:ident: $out:ident: $at:tt),*) => {
-        // SAFETY: each parameter is taken by its own `Arg` over its own values
-        // of the run; nothing else crosses, and the capability is not kept.
+        // SAFETY: each parameter is handed its own values of the run, which
+        // its own `Takes` crosses; nothing else crosses, and the capability
+        // is not kept.
         unsafe impl<Rt, $($arg,)*> Parameters<Rt> for ($($arg,)*)
         where
             Rt: Runtime,
-            $($arg: for<'a, 'w> Arg<'a, 'w, Rt> + 'static,)*
+            $($arg: Arg<Rt> + 'static,)*
         {
             type Run = run_of!(Rt, InRegisters<0> $(, $arg)*);
-            type Sites = ($(<$arg as Sited<Rt>>::Site,)*);
-            type Out<'a, 'w> = ($(<$arg as Arg<'a, 'w, Rt>>::Out,)*);
+            type Sites = ($(<$arg as Arg<Rt>>::Site,)*);
+            type Out<'a, 'w> = ($(Pending<'a, 'w, $arg, Rt>,)*);
 
-            const ARITY: usize = 0 $(+ <$arg as Sited<Rt>>::ARGUMENTS)*;
-            const WIDTH: usize = 0 $(+ <$arg as Arg<'static, 'static, Rt>>::WIDTH)*;
+            const ARITY: usize = 0 $(+ <$arg as Arg<Rt>>::ARGUMENTS)*;
+            const WIDTH: usize = 0 $(+ <$arg as Arg<Rt>>::WIDTH)*;
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
             fn sites(site: &CallSite<'_, Rt>) -> Self::Sites {
@@ -1196,8 +1244,8 @@ macro_rules! parameters {
                 );
                 let mut _at = 0usize;
                 $(
-                    let $out = <$arg as Sited<Rt>>::site(site, _at);
-                    _at += <$arg as Sited<Rt>>::ARGUMENTS;
+                    let $out = <$arg as Arg<Rt>>::site(site, _at);
+                    _at += <$arg as Arg<Rt>>::ARGUMENTS;
                 )*
                 ($($out,)*)
             }
@@ -1212,16 +1260,16 @@ macro_rules! parameters {
             unsafe fn take<'a, 'w>(
                 rt: crate::Crossing<'a, Rt>,
                 run: &'a [Rt::Value],
-                sites: &Self::Sites,
+                sites: &'a Self::Sites,
             ) -> <Self as Parameters<Rt>>::Out<'a, 'w> {
                 let mut _at = 0usize;
                 $(
-                    let _width = <$arg as Arg<'a, 'w, Rt>>::WIDTH;
-                    // SAFETY: the caller's contract: `run` is this
-                    // declaration's whole argument run, so each parameter's
-                    // own values are the next `WIDTH` of it.
-                    let $out = unsafe {
-                        <$arg as Arg<'a, 'w, Rt>>::take(rt, &run[_at.._at + _width], &sites.$at)
+                    let _width = <$arg as Arg<Rt>>::WIDTH;
+                    let $out = Pending {
+                        rt,
+                        run: &run[_at.._at + _width],
+                        site: &sites.$at,
+                        ctx: PhantomData,
                     };
                     _at += _width;
                 )*
@@ -1232,7 +1280,7 @@ macro_rules! parameters {
         impl<Rt, $($arg,)*> ValueParameters<Rt> for ($($arg,)*)
         where
             Rt: Runtime,
-            $($arg: for<'a, 'w> Arg<'a, 'w, Rt, Form: SurvivesSuspension> + 'static,)*
+            $($arg: Arg<Rt, Form: SurvivesSuspension> + 'static,)*
         {
         }
     };
@@ -1260,7 +1308,11 @@ pub fn glue<Rt, F, A, R>(f: F) -> Glue<Rt, F, A, R>
 where
     Rt: Runtime,
     A: Parameters<Rt>,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(
+        &'a mut Ctx<'w, Rt>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
+        Returning<'a, R, Rt>,
+    ) -> <R::Form as Returned>::Verdict,
     R: Ret<Rt>,
 {
     Glue {
@@ -1277,7 +1329,11 @@ where
     Rt: Runtime,
     A: Parameters<Rt>,
     E: AtInstance<Rt>,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(
+        &'a mut Ctx<'w, Rt>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
+        Returning<'a, R, Rt>,
+    ) -> <R::Form as Returned>::Verdict,
     R: Ret<Rt>,
 {
     Glue {
@@ -1328,7 +1384,11 @@ where
     E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(
+        &'a mut Ctx<'w, Rt>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
+        Returning<'a, R, Rt>,
+    ) -> <R::Form as Returned>::Verdict,
     R: Ret<Rt> + 'static,
 {
     type Args = <A as Parameters<Rt>>::Run;
@@ -1355,7 +1415,12 @@ where
         // SAFETY: the caller's contract, which is `Parameters::take`'s.
         let args = unsafe { <A as Parameters<Rt>>::take(rt, run, &self.sites) };
         let out = <<R as Ret<Rt>>::Form as Returned>::as_mut_slice::<Rt>(out);
-        <R as Ret<Rt>>::into_run((self.f)(ctx, args), rt, out)
+        let returning = Returning {
+            rt,
+            out,
+            ret: PhantomData,
+        };
+        (self.f)(ctx, args, returning)
     }
 }
 
@@ -1365,7 +1430,11 @@ where
     E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(
+        &'a mut Ctx<'w, Rt>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
+        Returning<'a, R, Rt>,
+    ) -> <R::Form as Returned>::Verdict,
     R: Ret<Rt> + 'static,
 {
     fn clone_box(&self) -> Box<dyn HandlerFactory<Rt>> {
@@ -1414,7 +1483,11 @@ where
     E: AtInstance<Rt>,
     A: Parameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(
+        &'a mut Ctx<'w, Rt>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
+        Returning<'a, R, Rt>,
+    ) -> <R::Form as Returned>::Verdict,
     R: Ret<Rt> + 'static,
 {
     fn into_op(self: Box<Self>, shape: Rt::CallShape) -> Rt::Op {
@@ -1432,7 +1505,11 @@ where
     E: AtInstance<Rt>,
     A: ValueParameters<Rt> + 'static,
     F: Clone + Send + Sync + 'static,
-    F: for<'a, 'w> Fn(&'a mut Ctx<'w, Rt>, <A as Parameters<Rt>>::Out<'a, 'w>) -> R::Of<'a>,
+    F: for<'a, 'w> Fn(
+        &'a mut Ctx<'w, Rt>,
+        <A as Parameters<Rt>>::Out<'a, 'w>,
+        Returning<'a, R, Rt>,
+    ) -> <R::Form as Returned>::Verdict,
     R: Ret<Rt, Form: OneRegister> + 'static,
 {
 }

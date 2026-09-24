@@ -831,12 +831,12 @@ fn a_shared_projection_reads_every_field_where_it_lies() {
     let interner = Interner::new();
     let settled = point_ty(&interner);
     let table =
-        <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+        <PointRef<'static> as acvus_extern::Projected<'static, Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
         });
     let point = unsafe {
-        <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        <PointRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
     };
 
     assert_eq!(*point.x, 7);
@@ -864,12 +864,12 @@ fn an_exclusive_projection_writes_through_to_the_object() {
         let interner = Interner::new();
         let settled = point_ty(&interner);
         let table =
-            <PointMut<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+            <PointMut<'static> as acvus_extern::Projected<'static, Counted>>::table(acvus_extern::ArgAt {
                 interner: &interner,
                 ty: &settled,
             });
         let point = unsafe {
-            <PointMut<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+            <PointMut<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
         };
         *point.x = 9;
         point.label.push_str("teen");
@@ -892,12 +892,12 @@ fn a_partial_projection_borrows_the_field_it_names() {
     let interner = Interner::new();
     let settled = point_ty(&interner);
     let table =
-        <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+        <JustLabelRef<'static> as acvus_extern::Projected<'static, Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
         });
     let only = unsafe {
-        <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        <JustLabelRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
     };
     assert_eq!(only.label, "seven");
 }
@@ -954,7 +954,7 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
     let interner = Interner::new();
     let settled = point_ty(&interner);
     let table =
-        <PointRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+        <PointRef<'static> as acvus_extern::Projected<'static, Counted>>::table(acvus_extern::ArgAt {
             interner: &interner,
             ty: &settled,
         });
@@ -962,7 +962,7 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
     let borrowed = allocations_of(|| {
         // SAFETY: `reference` names the live object.
         let point = unsafe {
-            <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+            <PointRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
         };
         *point.x
     });
@@ -978,7 +978,7 @@ fn a_borrowed_crossing_allocates_nothing_and_a_by_value_one_does() {
         let reference = unsafe { rt.reference(&object) };
         // SAFETY: as above.
         let point = unsafe {
-            <PointRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+            <PointRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
         };
         point.label.clone()
     });
@@ -1002,9 +1002,9 @@ fn a_partial_projections_table_names_the_objects_position_and_not_its_own() {
         ty: &settled,
     };
 
-    let whole = <PointRef<'static> as acvus_extern::Projected<Counted>>::table(at);
-    let label_only = <JustLabelRef<'static> as acvus_extern::Projected<Counted>>::table(at);
-    let x_only = <JustXRef<'static> as acvus_extern::Projected<Counted>>::table(at);
+    let whole = <PointRef<'static> as acvus_extern::Projected<'static, Counted>>::table(at);
+    let label_only = <JustLabelRef<'static> as acvus_extern::Projected<'static, Counted>>::table(at);
+    let x_only = <JustXRef<'static> as acvus_extern::Projected<'static, Counted>>::table(at);
 
     assert_eq!(whole.at.map(acvus_extern::FieldAt::index), [0, 1]);
     assert_eq!(label_only.at.map(acvus_extern::FieldAt::index), [0]);
@@ -1048,7 +1048,7 @@ fn shape_ty(i: &Interner) -> acvus_extern::Ty {
 
 fn shape_table() -> acvus_extern::VariantAt<3, ((), acvus_extern::ObjectAt<2, ((), ())>)> {
     let settled = shape_ty(&SYMBOLS);
-    <ShapeRef<'static> as acvus_extern::Projected<Counted>>::table(acvus_extern::ArgAt {
+    <ShapeRef<'static> as acvus_extern::Projected<'static, Counted>>::table(acvus_extern::ArgAt {
         interner: &SYMBOLS,
         ty: &settled,
     })
@@ -1080,7 +1080,7 @@ fn a_shared_enum_projection_names_the_arm_its_tag_names() {
         let reference = unsafe { rt.reference(&value) };
         // SAFETY: `reference` names the live variant `erase` just wrote.
         let shape = unsafe {
-            <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+            <ShapeRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
         };
         let read = match shape {
             ShapeRef::Empty => "Empty".to_owned(),
@@ -1106,7 +1106,7 @@ fn an_enum_projections_nested_payload_borrows_the_objects_own_value() {
     let reference = unsafe { rt.reference(&value) };
     // SAFETY: `reference` names the live variant `erase` just wrote.
     let shape = unsafe {
-        <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+        <ShapeRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
     };
     let ShapeRef::At(point) = shape else {
         panic!("the tag names the `At` arm")
@@ -1135,7 +1135,7 @@ fn an_exclusive_enum_projection_writes_through_its_arm() {
         let reference = unsafe { rt.reference(&value) };
         // SAFETY: `reference` exclusively names the live variant.
         let mut shape = unsafe {
-            <ShapeMut<'static, Counted> as acvus_extern::Projected<Counted>>::of(
+            <ShapeMut<'_, Counted> as acvus_extern::Projected<'_, Counted>>::of(
                 &rt, &reference, &table,
             )
         };
@@ -1162,7 +1162,7 @@ fn set_rewrites_both_words_of_the_variant_it_was_lent() {
         let reference = unsafe { rt.reference(&value) };
         // SAFETY: `reference` exclusively names the live variant.
         let mut shape = unsafe {
-            <ShapeMut<'static, Counted> as acvus_extern::Projected<Counted>>::of(
+            <ShapeMut<'_, Counted> as acvus_extern::Projected<'_, Counted>>::of(
                 &rt, &reference, &table,
             )
         };
@@ -1189,7 +1189,7 @@ fn set_releases_the_payload_it_writes_over() {
         let reference = unsafe { rt.reference(&value) };
         // SAFETY: `reference` exclusively names the live variant.
         let mut shape = unsafe {
-            <ShapeMut<'static, Counted> as acvus_extern::Projected<Counted>>::of(
+            <ShapeMut<'_, Counted> as acvus_extern::Projected<'_, Counted>>::of(
                 &rt, &reference, &table,
             )
         };
@@ -1218,7 +1218,7 @@ fn an_enum_projection_allocates_nothing_and_a_by_value_crossing_does() {
     let borrowed = allocations_of(|| {
         // SAFETY: `reference` names the live variant.
         let shape = unsafe {
-            <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+            <ShapeRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
         };
         match shape {
             ShapeRef::At(point) => *point.x,
@@ -1234,7 +1234,7 @@ fn an_enum_projection_allocates_nothing_and_a_by_value_crossing_does() {
     let by_value = allocations_of(|| {
         // SAFETY: `reference` names the live variant.
         let shape = unsafe {
-            <ShapeRef<'static> as acvus_extern::Projected<Counted>>::of(&rt, &reference, &table)
+            <ShapeRef<'_> as acvus_extern::Projected<'_, Counted>>::of(&rt, &reference, &table)
         };
         match shape {
             ShapeRef::At(point) => point.label.clone(),

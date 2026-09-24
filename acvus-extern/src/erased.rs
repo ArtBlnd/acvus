@@ -20,7 +20,7 @@ use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 /// A store that holds `R::Value` instead owns nothing and must be borrowing.
 ///
 /// `T` is only in the `PhantomData`. At a runtime that makes values no trait
-/// impl here answers by `T`, and only `Branded`'s exists by it: what reads
+/// impl here answers by `T`, and only `Within`'s exists by it: what reads
 /// `T` is an inherent method bounded on that method, and `TyArg` holds at
 /// `TypesOnly` alone. That is the first ground of the third layer in
 /// `Canonical`'s `# Safety`, on which every read of a box at another
@@ -165,37 +165,32 @@ unsafe impl<R, T> Send for Erased<R, T> where R: Runtime {}
 // SAFETY: as `Send`.
 unsafe impl<R, T> Sync for Erased<R, T> where R: Runtime {}
 
-// SAFETY: `At<'a>` is `Self`, which holds where `T` is `Unbranded`: the
-// value was erased from a `T` that names no lifetime, so nothing it holds
-// was lent at a brand. `Never` has no value. A `T` that names a lifetime,
-// a carrier or a type holding one, has no brand here, and an `Erased` at it
-// reaches no handler (RFC-0079 rule 6).
-unsafe impl<R, T> crate::Branded for Erased<R, T>
+// SAFETY: the value was erased from a `T` that holds no carrier at any
+// lifetime, so nothing it holds was lent by a call. `Never` has no value. A
+// `T` that holds a carrier has no impl here, and an `Erased` at it reaches no
+// handler (RFC-0079 rule 6).
+unsafe impl<'s, R, T> crate::Within<'s> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
-    fn() -> T: brand::FromUnbranded,
+    fn() -> T: carrier::HoldsNone,
 {
-    type At<'a> = Self;
 }
 
-/// The one impl on `Erased` whose existence depends on `T` is `Branded`'s
-/// (RFC-0076 rule 1): `Branded` has no item that reads, writes or lays out a
-/// value. An impl of a trait that requires `Branded` states `Self: Branded`
-/// or `Self: Unbranded` and no other bound on `T`; `tests/erased_impls.rs`
-/// refuses any other.
-mod brand {
-    /// `fn() -> T` where `T` is `Unbranded` or is `Never`. `Never` is named
-    /// through `fn() -> !` here because an impl on its alias conflicts
-    /// (E0119) with every other impl of the trait; `T` is under `fn() ->`
-    /// so that the two impls are disjoint, `!` not being `Branded`.
-    pub trait FromUnbranded {}
+/// The one impl on `Erased` whose existence depends on `T` is `Within`'s
+/// (RFC-0076 rule 1): `Within` has no item that reads, writes or lays out a
+/// value. `tests/erased_impls.rs` refuses any other impl that bounds `T`.
+mod carrier {
+    /// `fn() -> T` where `T` is `Within` at every lifetime or is `Never`.
+    /// `Never` is named through `fn() -> !` here because an impl on its alias
+    /// conflicts (E0119) with every other impl of the trait; `T` is under
+    /// `fn() ->` so that the two impls are disjoint, `!` not being `Within`.
+    pub trait HoldsNone {}
 
-    impl<T> FromUnbranded for fn() -> T where T: crate::Unbranded {}
+    impl<T> HoldsNone for fn() -> T where T: for<'s> crate::Within<'s> {}
 
-    impl FromUnbranded for fn() -> ! {}
+    impl HoldsNone for fn() -> ! {}
 }
-crate::cross_one_value!(Erased<__Rt, T>, [T: 'static] where Self: crate::Branded,);
+crate::cross_one_value!(Erased<__Rt, T>, T);
 
 // SAFETY: an `Erased<R, T>` holds the word the crossing made for the `T` the
 // checker settled, so `erase` hands that word back and `materialize` holds the
@@ -204,8 +199,6 @@ crate::cross_one_value!(Erased<__Rt, T>, [T: 'static] where Self: crate::Branded
 unsafe impl<Rep, R, T> OneValue<R, Rep> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
-    Self: crate::Branded,
 {
     const STORED_AS_VALUE: bool = true;
 
@@ -224,8 +217,6 @@ where
 unsafe impl<R, T> Stored<R> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
-    Self: crate::Unbranded,
 {
     crate::stored_as_canonical!(R);
 }
@@ -233,8 +224,6 @@ where
 impl<R, T> crate::Borrowable<R> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
-    Self: crate::Branded,
 {
     unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
         // SAFETY: the caller's contract. The storage a reference names is
@@ -262,8 +251,6 @@ impl<R, T> crate::obj::sealed::Sealed for Erased<R, T> where R: Runtime {}
 unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
-    Self: crate::Branded,
 {
     fn in_place<'v>(_: Holding<'_, R>, values: &'v Vec<Owned<R>>) -> &'v Vec<Self> {
         same_layout!(Vec<Owned<R>>, Vec<Self>);
@@ -286,15 +273,12 @@ where
 unsafe impl<R, T> TransparentOver<R> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
-    Self: crate::Unbranded,
 {
 }
 
 impl<R, T> Var<kind::Type> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
 {
 }
 
@@ -303,7 +287,6 @@ where
 unsafe impl<R, T> Canonical<kind::Type> for Erased<R, T>
 where
     R: Runtime,
-    T: 'static,
 {
     type Canon = Owned<R>;
 }
@@ -312,13 +295,13 @@ where
 // bounded by `Runtime` here.
 unsafe impl<M, R, T> crate::UniformPayload<M> for Erased<R, T> where R: Runtime {}
 
-/// `T` is `Unbranded`, as it is where `Erased` has a brand: `Branded::At`
-/// keeps `T` (RFC-0076 rule 1), so a carrier's marker there would hand a
-/// handler a value it could keep past its brand (RFC-0079 rule 6).
+/// `T` holds no carrier, as it does where `Erased` is `Within`: a carrier's
+/// marker here would declare a parameter the glue cannot hand a handler
+/// (RFC-0079 rule 6).
 impl<R, T> TyArg for Erased<R, T>
 where
     R: HoldsNoValues,
-    T: TyArg + crate::Unbranded,
+    T: TyArg + for<'s> crate::Within<'s>,
 {
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy {
         T::poly_ty(interner, vars)
