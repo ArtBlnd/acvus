@@ -1067,23 +1067,23 @@ enum CompiledShape {
 
 struct EntryInputs {
     shape: ResolvedShape,
-    param_of: Vec<FieldParam>,
+    param_of: Vec<usize>,
     params: usize,
-}
-
-enum FieldParam {
-    At(usize),
-    Unread,
 }
 
 impl EntryInputs {
     fn of(interner: &Interner, shape: ResolvedShape, params: &[(Astr, ValueId)]) -> EntryInputs {
-        let param_of: Vec<FieldParam> = shape
+        let param_of: Vec<usize> = shape
             .fields
             .iter()
-            .map(|(field, _)| match params.iter().position(|(param, _)| param == field) {
-                Some(at) => FieldParam::At(at),
-                None => FieldParam::Unread,
+            .map(|(field, _)| {
+                params.iter().position(|(param, _)| param == field).unwrap_or_else(|| {
+                    panic!(
+                        "the entry's declared input `${}` is no parameter of its module: a typed \
+                         entry's parameters are its declared inputs",
+                        interner.resolve(*field)
+                    )
+                })
             })
             .collect();
         if let Some((param, _)) = params
@@ -1147,11 +1147,8 @@ impl EntryInputs {
             "a run gives one value per field of the entry's shape"
         );
         let mut arguments: Vec<Value> = std::iter::repeat_with(Value::unit).take(self.params).collect();
-        for (param, value) in self.param_of.iter().zip(values) {
-            match param {
-                FieldParam::At(at) => arguments[*at] = value.into_word(crossing),
-                FieldParam::Unread => drop(value),
-            }
+        for (at, value) in self.param_of.iter().zip(values) {
+            arguments[*at] = value.into_word(crossing);
         }
         arguments
     }
@@ -1161,9 +1158,12 @@ trait FieldValue {
     fn into_word(self, crossing: Crossing<'_, AcvusRuntime>) -> Value;
 }
 
-impl FieldValue for Owned<AcvusRuntime> {
+/// A derived struct's field, crossed into its own holder.
+struct CrossedField(Owned<AcvusRuntime>);
+
+impl FieldValue for CrossedField {
     fn into_word(self, crossing: Crossing<'_, AcvusRuntime>) -> Value {
-        self.into_value(crossing.holding())
+        self.0.into_value(crossing.holding())
     }
 }
 
@@ -2232,7 +2232,7 @@ where
             let run = unsafe { lend_run(holding, &mut fields) };
             <I as Gives<Val<I, Uniform>, AcvusRuntime>>::give(self, crossing, run);
         }
-        Ok(of.inputs.arguments(crossing, fields))
+        Ok(of.inputs.arguments(crossing, fields.into_iter().map(CrossedField).collect()))
     }
 }
 
