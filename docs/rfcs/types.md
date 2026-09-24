@@ -227,12 +227,18 @@ Status: Accepted
    (RFC-0039 rule 4).
 2. Arithmetic, comparison and the bit operators take two operands of one
    width and produce it; nothing widens or narrows by itself (conversion is
-   `as`, RFC-0049). Each operation is the Rust release-build operator at
-   that width: `+`, `-`, `*` and negation wrap, a shift takes its amount
-   modulo the width, `/` and `%` panic on a zero divisor and at `MIN / -1`
-   with Rust's texts. Negation takes a signed integer or `f64`.
-3. `/` and `%` are the only integer operations that can fail, so RFC-0007's
-   constraint on moving an operation that can raise binds them alone.
+   `as`, RFC-0049). A shift takes its amount modulo the width, and `/` and
+   `%` panic on a zero divisor and at `MIN / -1` with Rust's texts.
+   Negation takes a signed integer or `f64`.
+3. **Overflow is undefined.** A `+`, `-`, `*` or negation whose exact
+   result does not fit the width gives a program no meaning, and every
+   analysis and pass assumes it does not happen. This implementation traps
+   at the operation that overflows (RFC-0048 rule 8), so an overflowing run
+   ends before its value reaches anything; a pass may move, merge or drop
+   such an operation as if it could not trap. `/` and `%` are the only
+   integer operations whose failure is defined, so RFC-0007's constraint on
+   moving an operation that can raise binds them alone. A script that wants
+   wrapping says so (`wrapping_add` and its family).
 4. An unsuffixed integer literal's type is a variable only an integer type
    fills; the use decides the width (`@b + 1` with `@b: u8` makes `1` a
    `u8`), and where nothing decides it is `i64` (RFC-0042 rule 3). A negated
@@ -249,7 +255,15 @@ both the wire and the language; widening to `i64` would claim negative
 counts. A literal without a width of its own lets a script write
 `max_tokens: 1024` and the field decide.
 
+An overflow undefined in the language lets every analysis reason as
+arithmetic does, `i + 1 > i` included, where wrapping would send each
+interval that could reach the width's end to ⊤; trapping keeps the
+implementation sound where a program breaks the rule.
 **Rejected.**
+- Wrapping arithmetic — every analysis pays for a behaviour no correct
+  script wants.
+- Overflow undefined with no trap — a bound an analysis derived could admit
+  an access the overflow put out of range.
 - A suffix on every literal that is not `i64` as the rule — puts in the
   script the type the struct already states (suffixes exist as an option,
   RFC-0058).
