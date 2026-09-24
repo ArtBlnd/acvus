@@ -17,6 +17,7 @@ use syn::{
 };
 
 mod ensures;
+mod flows;
 mod generics;
 mod law;
 mod subst;
@@ -518,6 +519,18 @@ fn generate_extern_fn(
         .collect();
     let ret = parse_return(&func.sig.output);
     let returning = Returning::of(&ret);
+    let mut roles: Vec<flows::Role> = takes_ctx.then_some(flows::Role::Ctx).into_iter().collect();
+    let mut acvus_index = 0;
+    for p in &rust_params {
+        match p {
+            RustParam::Acvus(_) => {
+                roles.push(flows::Role::Acvus(acvus_index));
+                acvus_index += 1;
+            }
+            RustParam::State(_) | RustParam::Required(_) => roles.push(flows::Role::Other),
+        }
+    }
+    let declared_flows = flows::derive(&func.sig, &roles, &vars, &ret)?;
     if returning.lends() {
         if !params.iter().any(|p| p.mode.lends_its_storage()) {
             return Err(syn::Error::new_spanned(
@@ -704,7 +717,7 @@ fn generate_extern_fn(
                 ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
                 captures: vec![],
                 effect: #effect,
-                flows: ::acvus_extern::Flows::Every.into(),
+                flows: #declared_flows,
             }
         }
     };
@@ -1276,8 +1289,11 @@ fn generate_extern_fn(
         }
     });
     let entries = entries.into_inner();
+    let lifetimes_written = flows::lifetimes_written(&func.sig);
     Ok(quote! {
         #emitted
+
+        #lifetimes_written
 
         #(#entries)*
 

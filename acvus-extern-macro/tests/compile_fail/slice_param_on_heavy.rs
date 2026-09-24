@@ -4,7 +4,7 @@
 use acvus_extern::{Ctx, Runtime, Shared, Slice, Var, extern_fn, kind};
 
 #[extern_fn(effect = pure, heavy)]
-fn count<T, Rt>(ctx: &mut Ctx<'_, Rt>, s: Slice<T, Shared, Rt>) -> u64
+fn count<T, Rt>(ctx: &mut Ctx<'_, Rt>, s: Slice<'_, T, Shared, Rt>) -> u64
 where
     T: Var<kind::Type>,
     Rt: Runtime,

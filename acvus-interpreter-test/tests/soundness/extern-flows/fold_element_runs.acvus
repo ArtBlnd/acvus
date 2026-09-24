@@ -1,0 +1,3 @@
+// expect 2
+// fold's closure is handed references to the vector's elements, and its result keeps the last one.
+let v = vec([1, 2]); let r = as_iter(&v) | fold(None, |a, x| -> Some(x)); match r { Some(p) => *p, None => 0, }

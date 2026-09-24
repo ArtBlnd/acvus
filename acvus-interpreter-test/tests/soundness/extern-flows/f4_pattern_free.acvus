@@ -1,0 +1,3 @@
+// expect 5
+// trim_matches<'a>(s: &'a str, pat: &str) -> &'a str: the result flows from `s` only (RFC-0079 rule 6), so `pat`'s lender is free.
+let a = "hello".to_string(); let b = "x".to_string(); let t = trim_matches(&a, &b); b = "y".to_string(); len(t)

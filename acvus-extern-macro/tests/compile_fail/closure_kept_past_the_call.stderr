@@ -1,7 +1,7 @@
 error: lifetime may not live long enough
   --> tests/compile_fail/closure_kept_past_the_call.rs:18:34
    |
-13 | fn keep<E, Rt>(f: Closure<(), i64, E, Rt>) -> i64
+13 | fn keep<E, Rt>(f: Closure<'_, (), i64, E, Rt>) -> i64
    |                - has type `Closure<'1, (), i64, E, Rt>`
 ...
 18 |     *KEPT.lock().unwrap() = Some(Box::new(f));

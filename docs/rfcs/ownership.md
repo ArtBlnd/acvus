@@ -253,21 +253,32 @@ Status: Proposed
    the union, every input into every output the callee may write: a call's
    precision is spent on its result. A call through a value of function
    type reads the flows from that type, as a direct call does; an extern's
-   are the union until rule 6 reads them.
+   are read off its Rust signature (rule 6).
 6. **An extern's labels are its Rust signature.** `#[extern_fn]` and
-   `#[derive(ExternType)]` take lifetime parameters. A position written
-   with `'a` is labelled `'a`, an elided lifetime is labelled by Rust's
-   elision rules, `'static` names no loan, and a position inside a type
-   variable `T` is labelled `(T, k)`. Rust checks the handler against the
-   same signature, so the labels the checker reads are the flows the body
-   can perform. The handler is generic over the call's lifetime, so a
-   carrier (`Ref`, `Slice`, `Closure`) is branded with it and Rust refuses
-   keeping it past the call. An `Instance` names a prepared entry, not a
-   program's storage, and is branded with the run's lifetime instead. A
-   type's brand is its parts': an extension type's is its payload's, so a
-   carrier it holds is behind a region parameter it declares and never a
-   type argument it holds by value, and an `Erased` has a brand only where
-   the type it was erased from is `Unbranded` (RFC-0076 rule 1).
+   `#[derive(ExternType)]` take lifetime parameters. Each lifetime and type
+   variable a signature names is a label; `'static` names no loan; an
+   elided lifetime follows Rust's elision rules, and the macro denies
+   `elided_lifetimes_in_paths` so none is hidden. A label reaches itself, a
+   lifetime it outlives (written or implied by `&'b T`), a closure's result
+   from its arguments and captures, and every label of a type the macro
+   does not read or of an `Instance`. A carrier reads what it names at its
+   brand; a lifetime in a closure's arguments is what the handler lends,
+   reached from every input. An output (the result; what a `&mut`, a `Mut`
+   carrier, a closure or an unread type lets the callee write) flows from
+   an input where a label of one reaches a label of the other: `Aligned`
+   where both are laid out by types the macro reads position by position,
+   `Any` otherwise and for every write. A result lifetime only `ctx` names
+   is refused; one no parameter names is free and names no loan. Rust
+   checks the handler against the signature, so these are the flows its
+   body performs, but for a kept type variable's value (rule 8). The
+   handler is generic over the call's lifetime, so a carrier (`Ref`,
+   `Slice`, `Closure`) is branded with it and Rust refuses keeping it past
+   the call. An `Instance` names a prepared entry, not a program's storage,
+   and is branded with the run's lifetime instead. A type's brand is its
+   parts': an extension type's is its payload's, so a carrier it holds is
+   behind a region parameter it declares and never a type argument it holds
+   by value, and an `Erased` has a brand only where the type it was erased
+   from is `Unbranded` (RFC-0076 rule 1).
 7. **A box key erases lifetimes.** `Canonical::Canon` fills every lifetime
    with `'static`; a box is keyed there, and a value is read out at its
    branded form. Every box key is `'static`.

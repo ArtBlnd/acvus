@@ -9,7 +9,7 @@ use acvus_extern::{ExternType, Mut, Runtime, Shared, Slice, extern_fn};
 pub struct Rendered(());
 
 #[extern_fn(effect = pure)]
-fn count_rendered<Rt>(xs: Slice<Rendered, Shared, Rt>) -> u64
+fn count_rendered<Rt>(xs: Slice<'_, Rendered, Shared, Rt>) -> u64
 where
     Rt: Runtime,
 {
@@ -17,7 +17,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn count_rendered_mut<Rt>(xs: Slice<Rendered, Mut, Rt>) -> u64
+fn count_rendered_mut<Rt>(xs: Slice<'_, Rendered, Mut, Rt>) -> u64
 where
     Rt: Runtime,
 {

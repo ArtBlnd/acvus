@@ -688,30 +688,16 @@ struct Reach {
     loans: Region,
     via: Vec<ValueId>,
     storages: Vec<LoanStorage>,
-    writable: Vec<LoanStorage>,
 }
 
 impl Reach {
-    /// `kind` is `None` for a value with no type entry.
-    fn take(&mut self, kind: Option<PositionKind>, region: &Region) {
+    fn take(&mut self, region: &Region) {
         for loan in &region.loans {
             if !self.loans.loans.contains(loan) {
                 self.loans.loans.push(*loan);
             }
             if !self.storages.contains(&loan.storage) {
                 self.storages.push(loan.storage);
-            }
-            let written = match kind {
-                Some(PositionKind::Ref(mutability)) => mutability == Mutability::Mut,
-                Some(
-                    PositionKind::Captures(_)
-                    | PositionKind::RegionParam
-                    | PositionKind::InFlight,
-                )
-                | None => loan.mutability == Mutability::Mut,
-            };
-            if written && !self.writable.contains(&loan.storage) {
-                self.writable.push(loan.storage);
             }
         }
     }
@@ -963,17 +949,14 @@ impl RegionAnalysis<'_> {
     }
 
     /// Every loan `values` hold, and every loan the storages those name hold
-    /// now, to any depth; with the storages a callee handed them may write
-    /// into.
+    /// now, to any depth.
     fn reach(&self, state: &State, values: &[ValueId]) -> Reach {
         let mut reach = Reach::default();
         for v in values {
             let held = state.get(*v);
             add_via(&mut reach.via, &held, *v);
-            let kinds = self.val_types.get(v).map(layout);
-            for (k, region) in held.positions.iter().enumerate() {
-                let kind = kinds.as_ref().and_then(|kinds| kinds.get(k).copied());
-                reach.take(kind, region);
+            for region in &held.positions {
+                reach.take(region);
             }
         }
         self.deepen(state, &mut reach);
@@ -990,14 +973,14 @@ impl RegionAnalysis<'_> {
         add_via(&mut reach.via, &state.get(callee), callee);
         let Some(ty) = self.val_types.get(&callee) else {
             for region in &held {
-                reach.take(None, region);
+                reach.take(region);
             }
             self.deepen(state, &mut reach);
             return reach;
         };
         for (kind, region) in layout(ty).into_iter().zip(&held) {
             if let PositionKind::Captures(_) = kind {
-                reach.take(Some(kind), region);
+                reach.take(region);
             }
         }
         self.deepen(state, &mut reach);
@@ -1010,65 +993,24 @@ impl RegionAnalysis<'_> {
         while at < reach.storages.len() {
             let storage = reach.storages[at];
             let holder = state.get(storage.holder());
-            let kinds = self.val_types.get(&storage.holder()).map(layout);
             for k in self.content_range(storage) {
                 let Some(region) = holder.positions.get(k) else {
                     continue;
                 };
-                let kind = kinds.as_ref().and_then(|kinds| kinds.get(k).copied());
-                reach.take(kind, region);
+                reach.take(region);
             }
             at += 1;
         }
     }
 
-    /// The call's outputs besides its result (RFC-0079 rule 5, in this step's
-    /// conservative form): every storage the callee may write into, and what
-    /// each `&mut` position of a value handed to it points at. Each takes
-    /// every loan the callee can reach and keeps what it held.
-    fn write_outputs(&self, state: &mut State, values: &[ValueId], reach: &Reach, changed: &mut Changed) {
-        let unknown_place = WrittenPart {
-            pointee_width: 0,
-            at: &[],
-            values: std::slice::from_ref(&reach.loans),
-        };
-        for storage in &reach.writable {
-            self.storage_write(state, *storage, &unknown_place, changed);
-        }
-        for v in values {
-            let Some(ty) = self.val_types.get(v) else {
-                continue;
-            };
-            for (k, kind) in layout(ty).into_iter().enumerate() {
-                let (PositionKind::Ref(Mutability::Mut), Some(pointee)) = (kind, pointee_at(ty, k))
-                else {
-                    continue;
-                };
-                for position in k + 1..k + 1 + positions(&pointee) {
-                    self.join_at(state, *v, position, &reach.loans, changed);
-                }
-            }
-        }
-    }
-
     /// A call's result and writes (RFC-0079 rule 5), and every loan the call
-    /// hands its callee. An extern's flows are the union of its arguments
-    /// until its lifetimes are read (rule 6); every other callee's are the
-    /// ones its function type states, for a direct call and a call through a
-    /// function value alike.
+    /// hands its callee. Every callee's flows are the ones its function type
+    /// states: a direct call, an extern's (read off its Rust signature, rule
+    /// 6) and a call through a function value alike.
     fn call(&self, state: &mut State, call: &Call, width: usize, changed: &mut Changed) -> (Regions, Reach) {
         let values: Vec<ValueId> = call.args.iter().chain(callee_value(call.callee)).copied().collect();
         let reach = self.reach(state, &values);
-        let result = match call.callee {
-            Callee::Extern { .. } => {
-                let result = Regions::with_via(fill(width, reach.loans.clone()), &reach.via);
-                self.write_outputs(state, &values, &reach, changed);
-                result
-            }
-            Callee::Direct(_) | Callee::Indirect(_) => {
-                self.flowed(state, call, &flows_of(call.callee_ty), width, changed)
-            }
-        };
+        let result = self.flowed(state, call, &flows_of(call.callee_ty), width, changed);
         (result, reach)
     }
 

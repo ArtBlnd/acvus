@@ -1,0 +1,16 @@
+error: hidden lifetime parameters in types are deprecated
+ --> tests/compile_fail/hidden_lifetime_in_a_path.rs:6:19
+  |
+6 | fn peek<Rt>(r: Ref<String, Shared, Rt>) -> i64
+  |                ---^------------------- expected lifetime parameter
+  |
+note: the lint level is defined here
+ --> tests/compile_fail/hidden_lifetime_in_a_path.rs:5:1
+  |
+5 | #[extern_fn(effect = pure)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: indicate the anonymous lifetime
+  |
+6 | fn peek<Rt>(r: Ref<'_, String, Shared, Rt>) -> i64
+  |                    +++

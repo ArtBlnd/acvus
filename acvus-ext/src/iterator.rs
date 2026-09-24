@@ -125,7 +125,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_vec<T, I, Rt>(items: Ref<Vec<T>, Shared, Rt>) -> Refs<Vec<T>, I, Rt>
+fn as_iter_vec<T, I, Rt>(items: Ref<'_, Vec<T>, Shared, Rt>) -> Refs<'_, Vec<T>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     I: Var<kind::Identity>,
@@ -135,7 +135,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_array<T, N, I, Rt>(items: Ref<Arr<T, N>, Shared, Rt>) -> Refs<Arr<T, N>, I, Rt>
+fn as_iter_array<T, N, I, Rt>(items: Ref<'_, Arr<T, N>, Shared, Rt>) -> Refs<'_, Arr<T, N>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     N: Var<kind::Length>,
@@ -200,7 +200,7 @@ where
 /// input order (RFC-0075 rule 2). `E: Suspends` refuses a pipeline that
 /// cannot suspend (RFC-0011 rule 5).
 #[extern_fn(effect = pure)]
-fn unordered<I, T, U, E, Rt>(it: Map<I, T, U, E, Rt>) -> Unordered<I, T, U, E, Rt>
+fn unordered<I, T, U, E, Rt>(it: Map<'_, I, T, U, E, Rt>) -> Unordered<'_, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,

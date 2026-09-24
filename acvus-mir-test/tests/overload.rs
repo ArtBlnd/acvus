@@ -45,7 +45,7 @@ mod fx_a {
     }
 
     #[extern_fn(effect = pure)]
-    pub fn apply_any<A, E, Rt>(f: Closure<(A,), bool, E, Rt>) -> bool
+    pub fn apply_any<A, E, Rt>(f: Closure<'_, (A,), bool, E, Rt>) -> bool
     where
         A: Var<kind::Type>,
         E: Var<kind::Effect>,

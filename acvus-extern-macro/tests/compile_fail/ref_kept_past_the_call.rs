@@ -11,7 +11,7 @@ use acvus_extern::{Ref, Runtime, Shared, extern_fn};
 static KEPT: Mutex<Option<Box<dyn Any + Send + Sync>>> = Mutex::new(None);
 
 #[extern_fn(effect = opaque)]
-fn keep<Rt>(r: Ref<String, Shared, Rt>) -> i64
+fn keep<Rt>(r: Ref<'_, String, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {

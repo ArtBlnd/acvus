@@ -1,0 +1,13 @@
+error: the result names the lifetime `'c`, which only `ctx` lends: a result borrows what an acvus parameter lends it, and `ctx` is none, so no flow can say what `'c` holds (RFC-0079 rule 6). Name `'c` on the parameter the result borrows, or return an owned value.
+ --> tests/compile_fail/result_lifetime_only_ctx_lends.rs:6:56
+  |
+6 | fn from_ctx<'c, Rt>(ctx: &mut Ctx<'c, Rt>, s: &str) -> &'c str
+  |                                                        ^
+
+warning: unused imports: `Ctx` and `Runtime`
+ --> tests/compile_fail/result_lifetime_only_ctx_lends.rs:3:20
+  |
+3 | use acvus_extern::{Ctx, Runtime, extern_fn};
+  |                    ^^^  ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

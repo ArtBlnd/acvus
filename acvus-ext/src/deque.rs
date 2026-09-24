@@ -441,7 +441,7 @@ where
 }
 
 #[extern_fn(instance_of = sig::as_iter, effect = pure)]
-fn as_iter_deque<T, I, Rt>(d: Ref<Deque<T>, Shared, Rt>) -> Refs<Deque<T>, I, Rt>
+fn as_iter_deque<T, I, Rt>(d: Ref<'_, Deque<T>, Shared, Rt>) -> Refs<'_, Deque<T>, I, Rt>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,
     I: Var<kind::Identity>,
@@ -453,7 +453,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_refs_deque<'a, T, I, Rt>(
     ctx: &mut acvus_extern::Ctx<'_, Rt>,
-    it: &'a mut Refs<Deque<T>, I, Rt>,
+    it: &'a mut Refs<'_, Deque<T>, I, Rt>,
 ) -> Option<&'a T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

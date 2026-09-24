@@ -61,7 +61,7 @@ fn tally_int(a: &i64, b: Option<i64>) -> i64 {
 /// The customer: a handler generic in `T` calling the `eq` of its `T`,
 /// with the second argument standing at that same variable.
 #[extern_fn(effect = pure)]
-fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, b: T, eq: Instance<sig::eq<T, Rt>, T, Rt>) -> bool
+fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, b: T, eq: Instance<'_, sig::eq<T, Rt>, T, Rt>) -> bool
 where
     T: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,

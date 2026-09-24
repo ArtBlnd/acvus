@@ -708,7 +708,7 @@ fn step_int(n: &mut i64) -> i64 {
 /// admits since the site resolves an instance from the settled type of a
 /// reference parameter's target.
 #[extern_fn(effect = pure)]
-fn drive<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut I, step_at: Instance<step<I, Rt>, I, Rt>) -> i64
+fn drive<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut I, step_at: Instance<'_, step<I, Rt>, I, Rt>) -> i64
 where
     I: Var<kind::Type> + Borrowable<Rt> + Deref<Target = Rt::Value>,
     Rt: Runtime,
@@ -718,7 +718,7 @@ where
 
 /// A requirer that holds its receiver by shared borrow alone (RFC-0070 rule 4).
 #[extern_fn(effect = pure)]
-fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: &T, b: &T, eq_at: Instance<eq<T, Rt>, T, Rt>) -> bool
+fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: &T, b: &T, eq_at: Instance<'_, eq<T, Rt>, T, Rt>) -> bool
 where
     T: Var<kind::Type> + Borrowable<Rt> + std::ops::Deref<Target = Rt::Value>,
     Rt: Runtime,

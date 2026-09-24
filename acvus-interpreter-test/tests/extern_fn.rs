@@ -1238,7 +1238,7 @@ async fn a_vec_of_an_extension_type_is_read_by_value() {
 /// declaration naming `i64` or `Pure` there names another box, and its
 /// argument is held (`#i64`, `#Pure`), so the two meet as two types.
 #[extern_fn(effect = pure)]
-fn keys_at_pure<K, V, I, Rt>(_k: &mut acvus_ext::Keys<K, V, acvus_extern::Pure, I, Rt>) -> i64
+fn keys_at_pure<K, V, I, Rt>(_k: &mut acvus_ext::Keys<'_, K, V, acvus_extern::Pure, I, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
@@ -1249,7 +1249,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn keys_at_pure_by_value<K, V, I, Rt>(_k: acvus_ext::Keys<K, V, acvus_extern::Pure, I, Rt>) -> i64
+fn keys_at_pure_by_value<K, V, I, Rt>(_k: acvus_ext::Keys<'_, K, V, acvus_extern::Pure, I, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
@@ -1260,7 +1260,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map_at_ints_by_value<Rt>(_m: acvus_ext::HashMap<i64, i64, acvus_extern::Pure, Rt>) -> i64
+fn map_at_ints_by_value<Rt>(_m: acvus_ext::HashMap<'_, i64, i64, acvus_extern::Pure, Rt>) -> i64
 where
     Rt: acvus_extern::Runtime,
 {
@@ -1289,7 +1289,7 @@ fn deque_at_ints_width(d: &acvus_ext::Deque<i64>) -> i64 {
 /// `HashMap<K, V, Pure, Rt>` with its key and value variables: the effect
 /// alone is written concrete.
 #[extern_fn(effect = pure)]
-fn map_at_pure<K, V, Rt>(_m: &acvus_ext::HashMap<K, V, acvus_extern::Pure, Rt>) -> i64
+fn map_at_pure<K, V, Rt>(_m: &acvus_ext::HashMap<'_, K, V, acvus_extern::Pure, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
@@ -1299,7 +1299,7 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map_at_pure_by_value<K, V, Rt>(_m: acvus_ext::HashMap<K, V, acvus_extern::Pure, Rt>) -> i64
+fn map_at_pure_by_value<K, V, Rt>(_m: acvus_ext::HashMap<'_, K, V, acvus_extern::Pure, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,

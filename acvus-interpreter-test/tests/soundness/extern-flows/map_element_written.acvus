@@ -1,0 +1,3 @@
+// refuse
+// map's closure returns the element reference it is handed: the next item borrows the vector, written while it is live.
+let v = vec([1, 2]); let m = as_iter(&v) | map(|x| -> x); let n = next(&mut m); v = vec([3]); match n { Some(p) => *p, None => 0, }

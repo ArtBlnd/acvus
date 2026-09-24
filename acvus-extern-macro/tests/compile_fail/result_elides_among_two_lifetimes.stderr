@@ -1,0 +1,5 @@
+error: the result elides a lifetime, and the parameters do not name exactly one for it to take (Rust's elision rules): name the lifetime of the parameter the result borrows (RFC-0079 rule 6)
+ --> tests/compile_fail/result_elides_among_two_lifetimes.rs:6:32
+  |
+6 | fn either(a: &str, b: &str) -> &str {
+  |                                ^

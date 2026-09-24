@@ -83,8 +83,8 @@ mod fx_q {
     #[extern_fn(instance_of = f, effect = pure)]
     fn f_int<Rt>(
         ctx: &mut Ctx<'_, Rt>,
-        c: Ref<Vec<i64>, Shared, Rt>,
-        other: Ref<Vec<i64>, Shared, Rt>,
+        c: Ref<'_, Vec<i64>, Shared, Rt>,
+        other: Ref<'_, Vec<i64>, Shared, Rt>,
     ) -> bool
     where
         Rt: Runtime,

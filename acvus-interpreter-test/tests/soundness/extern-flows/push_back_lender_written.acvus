@@ -1,0 +1,3 @@
+// refuse
+// push_back(&mut d, &s): the item flows into `d` through its `&mut` (cause A), so writing `s` while `d` is live is refused.
+let s = "ab".to_string(); let d = deque(); push_back(&mut d, &s); s = "c".to_string(); len(&d)

@@ -10,7 +10,7 @@ use acvus_extern::{Erased, Runtime, Shared, Slice, extern_fn};
 static KEPT: Mutex<Option<Box<dyn Any + Send + Sync>>> = Mutex::new(None);
 
 #[extern_fn(effect = opaque)]
-fn keep<Rt>(s: Slice<Erased<Rt, i64>, Shared, Rt>) -> i64
+fn keep<Rt>(s: Slice<'_, Erased<Rt, i64>, Shared, Rt>) -> i64
 where
     Rt: Runtime,
 {

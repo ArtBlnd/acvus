@@ -1,7 +1,7 @@
 error: lifetime may not live long enough
   --> tests/compile_fail/ref_kept_past_the_call.rs:18:34
    |
-14 | fn keep<Rt>(r: Ref<String, Shared, Rt>) -> i64
+14 | fn keep<Rt>(r: Ref<'_, String, Shared, Rt>) -> i64
    |             - has type `acvus_extern::Ref<'1, std::string::String, acvus_extern::Shared, Rt>`
 ...
 18 |     *KEPT.lock().unwrap() = Some(Box::new(r));

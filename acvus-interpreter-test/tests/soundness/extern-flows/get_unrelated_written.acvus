@@ -1,0 +1,3 @@
+// expect 7
+// get(&v, i) borrows `v` only: a write to another value while its result is live is admitted.
+let v = vec([7, 8]); let w = vec([1]); let o = get(&v, 0u64); w = vec([2]); match o { Some(p) => *p, None => 0, }

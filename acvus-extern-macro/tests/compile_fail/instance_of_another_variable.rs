@@ -13,7 +13,7 @@ fn drive<I, J, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: I,
     other: J,
-    step: Instance<advance<I, Rt>, I, Rt>,
+    step: Instance<'_, advance<I, Rt>, I, Rt>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
