@@ -1,0 +1,4 @@
+for range(1 (r31)..r24) -> L1 else L2 stages [L1, L3]
+// L1: free {const, -, index, index, +, const, +, index, +, const, /}
+// L3: cycle Storage(r32) in_order {index_set}
+// control upfront

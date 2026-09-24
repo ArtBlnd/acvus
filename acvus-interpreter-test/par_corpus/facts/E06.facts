@@ -1,0 +1,4 @@
+for slice(r12) -> L1 else L2 stages [L1, L3]
+// L1: free {as_slice, const_str, call replace_all, assign, ref, as_slice, spawn print}
+// L3: cycle Order(r15) any_order law(Order exact commutative) {eval, merge}
+// control upfront

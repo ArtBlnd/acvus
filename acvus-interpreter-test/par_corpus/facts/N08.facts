@@ -1,0 +1,7 @@
+for slice(r21) -> L1 else L2 stages [L1, L6]
+// L1: free {const_str, call to_string, assign, as_slice, ref, concat, assign, take}
+// L6: cycle Storage(r22) in_order law(Fold(r22, #2) exact) {ref, call push}
+// control upfront
+for slice(r27) -> L4 else L5 stages [L4]
+// L4: cycle Storage(r28) in_order law(Op(Concat) exact) {ref, concat, assign}
+// control upfront

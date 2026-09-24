@@ -1,0 +1,4 @@
+for slice(r13) -> L1 else L2 stages [L1, L3]
+// L1: free {take, take, *}
+// L3: cycle Storage(r14) any_order law(Op(Add) exact commutative) {take, +, assign}
+// control upfront

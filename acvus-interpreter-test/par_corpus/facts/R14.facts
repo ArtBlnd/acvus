@@ -1,0 +1,4 @@
+for range(0 (r14)..r9) -> L1 else L2 stages [L1, L5]
+// L1: free {index}
+// L5: cycle Carried(r12)+Carried(r13) in_order {>, index, branch, jump}
+// control upfront

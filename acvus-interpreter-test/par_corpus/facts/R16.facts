@@ -1,0 +1,4 @@
+for slice(r11) -> L1 else L2 stages [L1, L5]
+// L1: free {as_slice, const}
+// L5: cycle Storage(r12) in_order {ref, as_slice, call cmp, >, call to_string, assign, branch}
+// control upfront

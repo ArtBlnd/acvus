@@ -1,0 +1,3 @@
+for slice(r2) -> L1 else L2 stages [L1]
+// L1: cycle Control in_order {branch}
+// control chained through L1

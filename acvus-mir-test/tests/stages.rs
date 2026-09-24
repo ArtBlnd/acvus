@@ -1010,3 +1010,162 @@ fn a_loop_whose_only_effect_folds_away_after_inlining_is_one_free_stage() {
     assert_eq!(facts[1], "control upfront", "{listing}");
     assert!(!listing.contains("spawn"), "{listing}");
 }
+
+// -- A law read from what a cycle computes (RFC-0089 rule 4) ------------
+
+/// The one cycle of `source`'s loop, as `loop_deps` judges it, and the
+/// loop's printed facts.
+fn the_cycle(source: &str) -> (CycleShape, String) {
+    let c = Compiled::of(source);
+    let lines = c.for_lines();
+    let mut cycles: Vec<CycleShape> = c
+        .shapes()
+        .into_iter()
+        .flat_map(|shape| match shape {
+            Shape::Free => Vec::new(),
+            Shape::Cycles(cycles) => cycles,
+        })
+        .collect();
+    let (Some(held), None) = (cycles.pop(), cycles.pop()) else {
+        panic!("the loop holds one cycle:\n{lines}")
+    };
+    (held, lines)
+}
+
+#[test]
+fn a_sum_under_a_branch_that_reads_no_state_is_an_add_law() {
+    let (held, lines) =
+        the_cycle("let v = [5, 3, 8]; let c = 0; for x in &v { if *x > 4 { c = c + *x; }; } c");
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Add))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_sum_under_a_branch_that_reads_the_state_has_no_law() {
+    let (held, lines) =
+        the_cycle("let v = [5, 3, 8]; let c = 0; for x in &v { if c < 7 { c = c + *x; }; } c");
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Carried], Order::InOrder, None),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_compare_and_select_of_the_compared_value_is_a_min_law() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 8]; let m = i64::MAX(); for x in &v { if *x < m { m = *x; }; } m",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Min))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_compare_and_select_of_the_compared_value_on_the_else_side_is_a_max_law() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 8]; let m = i64::MIN(); for x in &v { m = if *x < m { m } else { *x }; } m",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Max))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_select_of_a_value_other_than_the_compared_one_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 8]; let m = i64::MAX(); for x in &v { if *x < m { m = *x + 1; }; } m",
+    );
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Carried], Order::InOrder, None),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_difference_from_the_state_is_an_add_law_and_one_to_the_state_has_none() {
+    let (held, lines) = the_cycle("let v = [5, 3, 8]; let s = 0; for x in &v { s = s - *x; } s");
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Add))
+        ),
+        "{lines}"
+    );
+    let (held, lines) = the_cycle("let v = [5, 3, 8]; let s = 0; for x in &v { s = *x - s; } s");
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Carried], Order::InOrder, None),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_float_difference_keeps_its_order_with_an_inexact_law() {
+    let (held, lines) = the_cycle("let v = [1.5, 2.5]; let s = 0.0; for x in &v { s = s - *x; } s");
+    let inexact = Some(LawShape {
+        law: LawKind::Op(LawOp::Add),
+        exact: false,
+    });
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Carried], Order::InOrder, inexact),
+        "{lines}"
+    );
+}
+
+#[test]
+fn an_appended_text_is_an_in_order_concat_law_and_a_prepended_one_has_none() {
+    let (held, lines) = the_cycle(
+        "let v = vec([\"a\".to_string(), \"b\".to_string()]); let s = \"\".to_string(); \
+         for x in &v { s = s + x; } s.len()",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::Op(LawOp::Concat))
+        ),
+        "{lines}"
+    );
+    let (held, lines) = the_cycle(
+        "let v = vec([\"a\".to_string(), \"b\".to_string()]); let s = \"\".to_string(); \
+         for x in &v { s = x.to_string() + s; } s.len()",
+    );
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Storage], Order::InOrder, None),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_storage_read_again_after_its_store_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3]; let s = 0; let t = 0; for x in &v { s = s + *x; t = t * 0 + s; } s + t",
+    );
+    assert_eq!(held.law, None, "{lines}");
+}

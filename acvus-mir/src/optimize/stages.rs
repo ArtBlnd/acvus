@@ -190,9 +190,10 @@ fn plan(cfg: &CfgBody, facts: &Facts) -> Option<CfgBody> {
 type UnitId = usize;
 
 /// What no stage boundary may cut: a branch with its arms, a loop inside
-/// the body, a join block's parameters with the branch that sends them, and
-/// the instructions that touch a storage the body defines and writes within
-/// one iteration, which that storage orders.
+/// the body, and a join block's parameters with the branch that sends them.
+/// A storage the body defines and drops within one iteration is no token
+/// (RFC-0089 rule 2): it orders the members that touch it within the
+/// iteration, and a boundary may fall between them.
 #[derive(Default)]
 struct Unit {
     members: Vec<Member>,
@@ -207,12 +208,15 @@ struct Units {
     units: Vec<Unit>,
     defined_by: FxHashMap<ValueId, UnitId>,
     by_member: FxHashMap<Member, UnitId>,
+    /// Per storage the body defines and drops within one iteration, the
+    /// members that touch it and whether each writes it.
+    local: Vec<Vec<LocalTouch>>,
 }
 
-#[derive(Default)]
-struct LocalSlot {
-    touchers: Vec<Node>,
-    written: bool,
+#[derive(Clone, Copy)]
+struct LocalTouch {
+    member: Member,
+    writes: bool,
 }
 
 struct Alias {
@@ -232,7 +236,7 @@ impl Units {
         let mut sets = UnionFind {
             parent: FxHashMap::default(),
         };
-        let mut local: FxHashMap<ValueId, LocalSlot> = FxHashMap::default();
+        let mut local: FxHashMap<ValueId, Vec<LocalTouch>> = FxHashMap::default();
         let mut inst_defs: FxHashMap<ValueId, Node> = FxHashMap::default();
         for &block in &region.blocks {
             for (at, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
@@ -251,9 +255,10 @@ impl Units {
                     if facts.slots.target_of(slot).is_some() {
                         continue;
                     }
-                    let held = local.entry(slot).or_default();
-                    held.touchers.push(me);
-                    held.written |= writes.contains(&slot);
+                    local.entry(slot).or_default().push(LocalTouch {
+                        member: Member::Inst(InstAt { block, at }),
+                        writes: writes.contains(&slot),
+                    });
                 }
             }
             if shape.is_branch(block) {
@@ -268,14 +273,12 @@ impl Units {
                         continue;
                     };
                     if facts.slots.target_of(slot).is_none() {
-                        local.entry(slot).or_default().touchers.push(me);
+                        local.entry(slot).or_default().push(LocalTouch {
+                            member: Member::Branch(block),
+                            writes: false,
+                        });
                     }
                 }
-            }
-        }
-        for held in local.values().filter(|held| held.written) {
-            for pair in held.touchers.windows(2) {
-                sets.union(pair[0], pair[1]);
             }
         }
 
@@ -325,6 +328,10 @@ impl Units {
             units: Vec::new(),
             defined_by: FxHashMap::default(),
             by_member: FxHashMap::default(),
+            local: local
+                .into_values()
+                .filter(|touches| touches.iter().any(|touch| touch.writes))
+                .collect(),
         };
         let mut unit_of = |sets: &mut UnionFind, units: &mut Vec<Unit>, node: Node| {
             let root = sets.find(node);
@@ -515,6 +522,24 @@ impl Graph {
             graph
                 .readers_of_param
                 .insert(param, units.with(|unit| unit.uses.contains(&param)));
+        }
+        for touches in &units.local {
+            let mut ordered: Vec<(Position, LocalTouch)> = touches
+                .iter()
+                .map(|touch| (Position::of(shape, touch.member), *touch))
+                .collect();
+            ordered.sort_by_key(|(position, _)| *position);
+            for (i, (_, before)) in ordered.iter().enumerate() {
+                for (_, after) in &ordered[i + 1..] {
+                    let (from, to) = (
+                        units.by_member[&before.member],
+                        units.by_member[&after.member],
+                    );
+                    if (before.writes || after.writes) && from != to {
+                        graph.edge(from, to);
+                    }
+                }
+            }
         }
         graph.element = units
             .units

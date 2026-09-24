@@ -175,12 +175,14 @@ async fn a_product_that_wraps_carries_the_same_bits_in_both_forms() {
     );
 }
 
-/// Division is the one arithmetic that can raise (RFC-0037).
+/// Division is the one arithmetic that can raise (RFC-0037). The
+/// accumulator doubles here too: `acc + a` then `acc + b` alone is a sum,
+/// which RFC-0089 rule 4 reads as a merge through its two steps.
 const REDUCED_WITH_A_DIVISION: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < @n { \
-    acc = acc + (i * @k + @x); \
+    acc = acc * 2 + (i * @k + @x); \
     acc = acc + 10 / (@d - i); \
     i = i + 1; \
 } \
@@ -212,18 +214,12 @@ async fn with_division(n: i64) -> i64 {
 
 #[tokio::test]
 async fn every_iteration_before_the_raise_still_runs() {
-    let completed = Case {
-        n: DIVISOR_REACHES_ZERO_AT,
-        factor: FACTOR,
-        offset: OFFSET,
-    };
-    let divisions: i64 = (0..DIVISOR_REACHES_ZERO_AT)
-        .map(|i| 10 / (DIVISOR_REACHES_ZERO_AT - i))
-        .sum();
-    assert_eq!(
-        with_division(DIVISOR_REACHES_ZERO_AT).await,
-        reference(&completed) + divisions
-    );
+    let completed = (0..DIVISOR_REACHES_ZERO_AT).fold(0i64, |acc, i| {
+        acc.wrapping_mul(2)
+            .wrapping_add(i.wrapping_mul(FACTOR).wrapping_add(OFFSET))
+            .wrapping_add(10 / (DIVISOR_REACHES_ZERO_AT - i))
+    });
+    assert_eq!(with_division(DIVISOR_REACHES_ZERO_AT).await, completed);
 }
 
 #[tokio::test]

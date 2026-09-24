@@ -1,0 +1,4 @@
+for slice(r8) -> L1 else L2 stages [L1, L3]
+// L1: free {take, take, make_array, call vec}
+// L3: cycle Storage(r9) in_order law(Fold(r9, #1) exact) {ref, call extend}
+// control upfront

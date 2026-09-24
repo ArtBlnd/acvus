@@ -1,0 +1,3 @@
+for slice(r7) -> L1 else L5 stages [L1]
+// L1: cycle Order(r10)+Carried(r11)+Control in_order {spawn print, +, eval, branch}
+// control chained through L1

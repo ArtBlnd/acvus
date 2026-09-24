@@ -1,0 +1,8 @@
+for range(0 (r13)..r9) -> L1 else L2 stages [L1, L9]
+// L1: free {const, +}
+// L9: cycle Carried(r12) in_order {const, +, jump, branch, jump, jump}
+// control upfront
+for range(r15..r9) -> L4 else L5 stages [L4, L8]
+// L4: free {index, index, +, const, ==}
+// L8: cycle Carried(r17) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
+// control upfront

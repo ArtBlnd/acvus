@@ -63,7 +63,8 @@ pub(crate) fn as_len(n: u64) -> usize {
     n
 }
 
-/// The empty vec, `Vec::new`. It is `push`'s fold identity.
+/// The empty vec, `Vec::new`. It is the fold identity of `push` and of
+/// `extend`.
 #[extern_fn(effect = pure)]
 fn new<T>() -> Vec<T>
 where
@@ -216,7 +217,10 @@ where
     c.truncate(usize::try_from(len).unwrap_or(usize::MAX));
 }
 
-#[extern_fn(effect = pure)]
+/// Extending `c` by a run of vecs equals extending `c` by the vecs that
+/// extending `new()` by each part of the run builds, in the run's order:
+/// both leave `c`'s items followed by every run item's items in order.
+#[extern_fn(effect = pure, law(fold(combine = extend, identity = new)))]
 fn extend<T>(c: &mut Vec<T>, items: Vec<T>)
 where
     T: Var<kind::Type>,

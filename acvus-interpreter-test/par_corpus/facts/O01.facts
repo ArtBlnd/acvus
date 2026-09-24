@@ -1,0 +1,4 @@
+for range(2 (r2)..30 (r3)) -> L1 else L2 stages [L1, L11]
+// L1: free {const, const, *, <=, %, const, ==, const, const, +}
+// L11: cycle Carried(r1) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
+// control upfront

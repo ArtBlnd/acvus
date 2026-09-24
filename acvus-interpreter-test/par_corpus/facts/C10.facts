@@ -1,0 +1,5 @@
+for slice(r11) -> L1 else L2 stages [L1, L5, L6]
+// L1: free {take, const, ==}
+// L5: cycle Carried(r13) in_order {const, +, branch, jump}
+// L6: cycle Storage(r14) in_order law(Fold(r14, #1) exact) {ref, call push}
+// control upfront

@@ -1,0 +1,8 @@
+for slice(r11) -> L1 else L2 stages [L1, L5, L6, L7, L8, L9]
+// L1: free {take, const, *}
+// L5: cycle Storage(r12) in_order law(Fold(r12, #2) exact) {ref, call push}
+// L6: free {take, const}
+// L7: cycle Storage(r13) any_order law(Op(Add) exact commutative) {take, +, -, assign}
+// L8: free {take}
+// L9: cycle Storage(r14) any_order law(Op(Max) exact commutative) {take, >, take, assign, branch}
+// control upfront

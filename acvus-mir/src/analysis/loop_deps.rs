@@ -13,7 +13,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::affine::AffineValues;
-use crate::analysis::carried::{Carried, CarriedState, MergeOp};
+use crate::analysis::carried::{CarriedState, ExternMerge};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
@@ -21,8 +21,8 @@ use crate::analysis::loops::{Invariants, LoopNest, NaturalLoop, natural_loops_in
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{BinOp, ForSource, InstKind, Label, Stages, ValueId};
-use crate::laws::{FoldLaw, LawTable};
+use crate::ir::{BinOp, Callee, ForSource, InstKind, Label, RefTarget, Stages, ValueId};
+use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
 use crate::ty::Ty;
 
 // -- Stage membership (rule 1) ----------------------------------------
@@ -502,12 +502,40 @@ impl LoopDeps {
         let loop_ = nest.get(id);
         let loans = Loans::build(cfg);
         let affine = AffineValues::of(cfg, loop_, &invariants);
-        let state = CarriedState::of(&loans, loop_, &affine, laws);
+        let carried = CarriedState::of(&loans, loop_, &affine, laws);
+        let Terminator::For { source, .. } = &cfg.blocks[self.header.0].terminator else {
+            panic!("block {} heads the `For` `loop_deps` read", self.header.0)
+        };
+        let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
+        let slots = TargetSlots::of(&loans, *source, &loop_blocks);
+        let read = |state: State| {
+            LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, state).law()
+        };
+        let params = &cfg.blocks[self.header.0].params;
+        let reading = Reading {
+            carried: &carried,
+            read: &|token: Token| match token {
+                Token::Carried(param) | Token::Order(param) => {
+                    let index = params.iter().position(|held| *held == param)?;
+                    read(State::Param { param, index })
+                }
+                Token::Storage(Storage::Slot(slot)) => read(State::Slot(slot)),
+                Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => None,
+            },
+        };
         self.cycles
             .iter()
-            .map(|cycle| judge(cycle, Some(&state)))
+            .map(|cycle| judge(cycle, Some(&reading)))
             .collect()
     }
+}
+
+/// What a cycle's law is read from: a storage's `fold` law as
+/// `analysis::carried` finds it (RFC-0082 rule 6), and what the cycle
+/// computes of a token (rule 4).
+struct Reading<'a> {
+    carried: &'a CarriedState,
+    read: &'a dyn Fn(Token) -> Option<Accumulator>,
 }
 
 #[derive(Default)]
@@ -586,17 +614,38 @@ pub enum Law {
     Order,
 }
 
+/// An operation the language owns, with the laws its own definition gives
+/// it. Each is associative, and each has an identity at its type:
+///
+/// - `Add` and `Mul` over an integer wrap (RFC-0037), which is arithmetic
+///   modulo `2^w`, a commutative ring: both are associative and commutative,
+///   with identities `0` and `1`. Over a float they round, so a regrouping
+///   changes the result and the law is inexact (RFC-0066 rule 5).
+/// - `Min` and `Max` over an integer of one width choose the lesser or the
+///   greater of two values under the width's total order (`BinOp::Min`,
+///   `BinOp::Max`). A lesser-of over a total order is associative
+///   (`min(min(a, b), c)` and `min(a, min(b, c))` are both the least of the
+///   three) and commutative, with the width's `MAX` as identity; `Max` is
+///   its mirror, with `MIN`.
+/// - `Concat` over `String` is the concatenation of byte sequences
+///   (`InstKind::StringConcat`): `(a ++ b) ++ c` and `a ++ (b ++ c)` are the
+///   bytes of `a`, then of `b`, then of `c`, so it is associative with the
+///   empty string as identity. It does not commute: `"a" ++ "b"` is not
+///   `"b" ++ "a"`, and a law over it joins its partials in chunk order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LawOp {
     Add,
     Mul,
+    Min,
+    Max,
+    Concat,
 }
 
 impl LawOp {
-    pub fn bin_op(self) -> BinOp {
+    pub fn commutes(self) -> bool {
         match self {
-            Self::Add => BinOp::Add,
-            Self::Mul => BinOp::Mul,
+            Self::Add | Self::Mul | Self::Min | Self::Max => true,
+            Self::Concat => false,
         }
     }
 }
@@ -626,24 +675,18 @@ pub struct FoldAccumulator {
 
 /// A cycle through several tokens has no one update, and is `InOrder`
 /// with no law. A float law joined in arrival order changes the rounding,
-/// so an inexact law is `InOrder` too.
-fn judge(cycle: &Cycle, state: Option<&CarriedState>) -> Judged {
-    let law = match (&cycle.tokens[..], state) {
+/// so an inexact law is `InOrder` too, and so is a law that does not
+/// commute, whose partials join in chunk order.
+fn judge(cycle: &Cycle, reading: Option<&Reading<'_>>) -> Judged {
+    let law = match (&cycle.tokens[..], reading) {
         ([Token::Storage(Storage::Element)], _) => {
             return Judged {
                 order: Order::Disjoint,
                 law: None,
             };
         }
-        ([Token::Carried(param) | Token::Order(param)], Some(state)) => state
-            .params
-            .iter()
-            .find(|carried| carried.param == *param)
-            .and_then(|carried| match carried.carried {
-                Carried::Merge { op, exact } => Some(accumulator(op, exact)),
-                Carried::Iv | Carried::Recurrence => None,
-            }),
-        ([Token::Storage(Storage::Slot(slot))], Some(state)) => state
+        ([token @ Token::Storage(Storage::Slot(slot))], Some(reading)) => reading
+            .carried
             .storage_merges
             .iter()
             .find(|merge| merge.storage == *slot)
@@ -656,7 +699,9 @@ fn judge(cycle: &Cycle, state: Option<&CarriedState>) -> Judged {
                 }),
                 exact: true,
                 commutative: merge.fold.commutative,
-            }),
+            })
+            .or_else(|| (reading.read)(*token)),
+        ([token], Some(reading)) => (reading.read)(*token),
         _ => None,
     };
     let order = match &law {
@@ -664,35 +709,6 @@ fn judge(cycle: &Cycle, state: Option<&CarriedState>) -> Judged {
         _ => Order::InOrder,
     };
     Judged { order, law }
-}
-
-fn accumulator(op: MergeOp, exact: bool) -> Accumulator {
-    match op {
-        MergeOp::Add => Accumulator {
-            law: Law::Op(LawOp::Add),
-            exact,
-            commutative: true,
-        },
-        MergeOp::Mul => Accumulator {
-            law: Law::Op(LawOp::Mul),
-            exact,
-            commutative: true,
-        },
-        MergeOp::Extern(merge) => Accumulator {
-            law: Law::Call(CallLaw {
-                callee: merge.callee,
-                instance: merge.instance,
-                identity: merge.identity,
-            }),
-            exact,
-            commutative: merge.commutative,
-        },
-        MergeOp::Order => Accumulator {
-            law: Law::Order,
-            exact,
-            commutative: true,
-        },
-    }
 }
 
 // -- The dependence graph within one iteration ----------------------------
@@ -1500,4 +1516,786 @@ fn control_dependence(
         .collect();
     found.sort_by_key(|controlled| controlled.block);
     found
+}
+
+// -- A law read from what a cycle computes (rule 4) -----------------------
+
+/// What a value of one iteration is, in terms of a token's state as the
+/// iteration received it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Form {
+    /// Reads nothing of the state.
+    Free,
+    /// The state as the iteration received it.
+    State,
+    /// The state combined through one law with values that read nothing
+    /// of it, the state on the left.
+    Combined(Step),
+}
+
+/// One law a cycle combines its state through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Step {
+    Op { op: LawOp, exact: bool },
+    Call(ExternMerge),
+    Order,
+}
+
+impl Step {
+    fn accumulator(self) -> Accumulator {
+        match self {
+            Self::Op { op, exact } => Accumulator {
+                law: Law::Op(op),
+                exact,
+                commutative: op.commutes(),
+            },
+            Self::Call(merge) => Accumulator {
+                law: Law::Call(CallLaw {
+                    callee: merge.callee,
+                    instance: merge.instance,
+                    identity: merge.identity,
+                }),
+                exact: true,
+                commutative: merge.commutative,
+            },
+            Self::Order => Accumulator {
+                law: Law::Order,
+                exact: true,
+                commutative: true,
+            },
+        }
+    }
+}
+
+impl Form {
+    /// This form combined once more through `step`, the state still on the
+    /// left: the state or a combination through the same law.
+    fn then(self, step: Step) -> Option<Form> {
+        match self {
+            Self::State => Some(Self::Combined(step)),
+            Self::Combined(previous) if previous == step => Some(Self::Combined(step)),
+            Self::Combined(_) | Self::Free => None,
+        }
+    }
+
+    fn reads_state(self) -> bool {
+        !matches!(self, Self::Free)
+    }
+}
+
+/// The state a cycle's law is read over: a header parameter, or a storage
+/// the body loads and stores whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Param { param: ValueId, index: usize },
+    Slot(ValueId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Def {
+    Inst(InstAt),
+    Param { block: BlockIdx, index: usize },
+}
+
+/// Which of a two-way branch's edges an iteration leaves by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Then,
+    Else,
+}
+
+/// The side of a compare and select that yields a value of the iteration,
+/// not the state.
+struct Select {
+    branch: BlockIdx,
+    chosen: ValueId,
+    chosen_on: Side,
+}
+
+/// Reads, for one token of one loop, whether every iteration's update of
+/// its state is the state combined through one law with values that read
+/// nothing of it, and that nothing else of the iteration reads the state or
+/// a partial of it.
+struct LawReading<'a, 'cfg> {
+    cfg: &'cfg CfgBody,
+    loans: &'a Loans<'cfg>,
+    laws: &'a LawTable,
+    slots: &'a TargetSlots,
+    header: BlockIdx,
+    /// The header and the body: every block an iteration runs.
+    blocks: Vec<BlockIdx>,
+    defs: FxHashMap<ValueId, Def>,
+    deciders: FxHashMap<BlockIdx, Vec<BlockIdx>>,
+    domtree: DomTree,
+    state: State,
+    /// Every value of the iteration that reads the state, and every storage
+    /// the iteration defines and drops that holds such a value.
+    dependent: FxHashSet<ValueId>,
+    /// The values the update reaches the state through, and the compares
+    /// that choose between the state and a value of the iteration.
+    chain: FxHashSet<ValueId>,
+    forms: FxHashMap<ValueId, Option<Form>>,
+}
+
+impl<'a, 'cfg> LawReading<'a, 'cfg> {
+    fn of(
+        loans: &'a Loans<'cfg>,
+        laws: &'a LawTable,
+        slots: &'a TargetSlots,
+        header: BlockIdx,
+        loop_blocks: &[BlockIdx],
+        state: State,
+    ) -> Self {
+        let cfg = loans.cfg();
+        let body: Vec<BlockIdx> = loop_blocks
+            .iter()
+            .copied()
+            .filter(|block| *block != header)
+            .collect();
+        let inside = |block: BlockIdx| body.contains(&block);
+        let deciders: FxHashMap<BlockIdx, Vec<BlockIdx>> = control_dependence(cfg, &body, &inside)
+            .into_iter()
+            .map(|Controlled { block, deciders }| (block, deciders))
+            .collect();
+        let mut blocks = vec![header];
+        blocks.extend(body.iter().copied());
+        let mut defs: FxHashMap<ValueId, Def> = FxHashMap::default();
+        for &block in &blocks {
+            for (at, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
+                for def in inst_info::defs(&inst.kind) {
+                    defs.insert(def, Def::Inst(InstAt { block, at }));
+                }
+            }
+            if block != header {
+                for (index, &param) in cfg.blocks[block.0].params.iter().enumerate() {
+                    defs.insert(param, Def::Param { block, index });
+                }
+            }
+        }
+        let mut reading = LawReading {
+            cfg,
+            loans,
+            laws,
+            slots,
+            header,
+            blocks,
+            defs,
+            deciders,
+            domtree: DomTree::build(cfg),
+            state,
+            dependent: FxHashSet::default(),
+            chain: FxHashSet::default(),
+            forms: FxHashMap::default(),
+        };
+        reading.dependent = reading.values_reading_state();
+        reading
+    }
+
+    fn body(&self) -> impl Iterator<Item = BlockIdx> + '_ {
+        self.blocks
+            .iter()
+            .copied()
+            .filter(|block| *block != self.header)
+    }
+
+    fn inst(&self, at: InstAt) -> &'cfg InstKind {
+        &self.cfg.blocks[at.block.0].insts[at.at].kind
+    }
+
+    fn insts(&self) -> impl Iterator<Item = (InstAt, &'cfg InstKind)> + '_ {
+        let cfg = self.cfg;
+        self.blocks.iter().flat_map(move |&block| {
+            cfg.blocks[block.0]
+                .insts
+                .iter()
+                .enumerate()
+                .map(move |(at, inst)| (InstAt { block, at }, &inst.kind))
+        })
+    }
+
+    fn is_state_slot(&self, target: &RefTarget, path: &[crate::ir::PathSeg]) -> bool {
+        matches!(self.state, State::Slot(slot) if inst_info::storage(target) == Some(slot))
+            && path.is_empty()
+    }
+
+    fn is_local(&self, slot: ValueId) -> bool {
+        self.slots.target_of(slot).is_none()
+    }
+
+    /// The values a branch decides by.
+    fn decision(term: &Terminator) -> Vec<ValueId> {
+        match term {
+            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
+            Terminator::Switch { tag, .. } => vec![*tag],
+            other => inst_info::terminator_uses(other).into_iter().collect(),
+        }
+    }
+
+    /// Every value of the iteration that reads the state: through what it
+    /// reads, through a storage the iteration defines and drops that was
+    /// given such a value, and through a branch that decides by one.
+    fn values_reading_state(&self) -> FxHashSet<ValueId> {
+        let mut dependent: FxHashSet<ValueId> = FxHashSet::default();
+        if let State::Param { param, .. } = self.state {
+            dependent.insert(param);
+        }
+        loop {
+            let mut changed = false;
+            for (at, kind) in self.insts() {
+                let loads_state = match kind {
+                    InstKind::Take { target, .. } | InstKind::Ref { target, .. } => matches!(
+                        self.state,
+                        State::Slot(slot) if inst_info::storage(target) == Some(slot)
+                    ),
+                    _ => false,
+                };
+                let reads_local = match kind {
+                    InstKind::Take { target, .. } | InstKind::Ref { target, .. } => {
+                        inst_info::storage(target).is_some_and(|slot| dependent.contains(&slot))
+                    }
+                    _ => false,
+                };
+                let reads = inst_info::uses(kind)
+                    .into_iter()
+                    .any(|used| dependent.contains(&used));
+                let decided = self.decided_by_state(at.block, &dependent);
+                if !(loads_state || reads_local || reads || decided) {
+                    continue;
+                }
+                for def in inst_info::defs(kind) {
+                    changed |= dependent.insert(def);
+                }
+                // A storage given a value that reads the state holds it.
+                for slot in effect(self.loans, kind)
+                    .writes
+                    .into_iter()
+                    .chain(slots_lent_mutably(self.loans, kind))
+                    .chain(match kind {
+                        InstKind::Assign { target, .. } => inst_info::storage(target),
+                        _ => None,
+                    })
+                {
+                    if Some(slot) != self.state_slot() && (reads || decided) {
+                        changed |= dependent.insert(slot);
+                    }
+                }
+            }
+            for block in self.body().collect::<Vec<_>>() {
+                let term = &self.cfg.blocks[block.0].terminator;
+                let decides_by_state = Self::decision(term)
+                    .iter()
+                    .any(|value| dependent.contains(value));
+                for edge in edges(term) {
+                    let Some(&target) = self.cfg.label_to_block.get(&edge.target) else {
+                        continue;
+                    };
+                    if target == self.header || !self.blocks.contains(&target) {
+                        continue;
+                    }
+                    let params = &self.cfg.blocks[target.0].params;
+                    for (at, &param) in params.iter().enumerate().skip(edge.fills_from) {
+                        let sent = edge.args[at - edge.fills_from];
+                        let decided = decides_by_state || self.decided_by_state(block, &dependent);
+                        if dependent.contains(&sent) || decided {
+                            changed |= dependent.insert(param);
+                        }
+                    }
+                }
+            }
+            if !changed {
+                return dependent;
+            }
+        }
+    }
+
+    fn state_slot(&self) -> Option<ValueId> {
+        match self.state {
+            State::Slot(slot) => Some(slot),
+            State::Param { .. } => None,
+        }
+    }
+
+    /// Whether a branch that decides whether `block` runs reads the state.
+    fn decided_by_state(&self, block: BlockIdx, dependent: &FxHashSet<ValueId>) -> bool {
+        self.deciders
+            .get(&block)
+            .into_iter()
+            .flatten()
+            .any(|decider| {
+                Self::decision(&self.cfg.blocks[decider.0].terminator)
+                    .iter()
+                    .any(|value| dependent.contains(value))
+            })
+    }
+
+    /// The law the state is updated through, where the update reads the
+    /// state only through it and nothing else of the iteration reads the
+    /// state or a partial of it.
+    fn law(mut self) -> Option<Accumulator> {
+        let next = match self.state {
+            State::Param { index, .. } => {
+                let loops = natural_loops_innermost_first(self.cfg, &self.domtree);
+                let loop_ = loops.iter().find(|loop_| loop_.header == self.header)?;
+                let next = loop_.back_arg(self.cfg, index)?;
+                self.form(next)?
+            }
+            State::Slot(slot) => self.stored(slot)?,
+        };
+        let Form::Combined(step) = next else {
+            return None;
+        };
+        let slots = slot_values(self.cfg);
+        // A storage the iteration defines and drops is read only through
+        // the values its reads define, which are checked themselves; any
+        // other storage given a partial is a second target.
+        let partial_read_elsewhere =
+            self.dependent
+                .iter()
+                .any(|value| match slots.contains(value) {
+                    true => Some(*value) != self.state_slot() && !self.is_local(*value),
+                    false => !self.chain.contains(value),
+                });
+        let other_header_args_read_state = self.blocks.iter().any(|&block| {
+            edges(&self.cfg.blocks[block.0].terminator)
+                .into_iter()
+                .filter(|edge| edge.target == self.cfg.blocks[self.header.0].label)
+                .any(|edge| {
+                    edge.args.iter().enumerate().any(|(at, arg)| {
+                        let own = matches!(self.state,
+                            State::Param { index, .. } if at + edge.fills_from == index);
+                        !own && self.dependent.contains(arg)
+                    })
+                })
+        });
+        (!partial_read_elsewhere && !other_header_args_read_state).then(|| step.accumulator())
+    }
+
+    /// The form of the value the storage holds when the iteration ends:
+    /// the one store of it, loaded before it only as the update's operand,
+    /// run where every branch it lies under decides by values that read
+    /// nothing of the state, or as the chosen arm of a compare and select.
+    fn stored(&mut self, slot: ValueId) -> Option<Form> {
+        let mut store: Option<(InstAt, ValueId)> = None;
+        for (at, kind) in self.insts() {
+            let touched = touched_slots(self.loans, kind);
+            let written = written_slots(self.loans, kind);
+            match kind {
+                InstKind::Assign {
+                    target,
+                    path,
+                    value,
+                    restores: false,
+                } if inst_info::storage(target) == Some(slot) => {
+                    if !path.is_empty() || store.is_some() {
+                        return None;
+                    }
+                    store = Some((at, *value));
+                }
+                InstKind::Take {
+                    target,
+                    path,
+                    taken_out: false,
+                    ..
+                }
+                | InstKind::Ref {
+                    target,
+                    path,
+                    mutability: crate::ty::Mutability::Shared,
+                    ..
+                } if inst_info::storage(target) == Some(slot) => {
+                    if !self.is_state_slot(target, path) || written.contains(&slot) {
+                        return None;
+                    }
+                }
+                _ if written.contains(&slot) => return None,
+                // Read through a loan of the state: the reader is a value of
+                // the iteration that reads it, which the chain accounts for.
+                _ if touched.contains(&slot) => {
+                    let through_chain = inst_info::uses(kind)
+                        .into_iter()
+                        .any(|used| self.dependent.contains(&used));
+                    if !through_chain {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let (at, value) = store?;
+        match self
+            .deciders
+            .get(&at.block)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            [] => self.form(value),
+            deciders if self.decide_freely(deciders) => {
+                let form = self.form(value)?;
+                form.reads_state().then_some(form)
+            }
+            [branch] => {
+                let side = self.side_reaching(*branch, at.block)?;
+                self.select(&Select {
+                    branch: *branch,
+                    chosen: value,
+                    chosen_on: side,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether each of `deciders` decides by values that read nothing of
+    /// the state.
+    fn decide_freely(&self, deciders: &[BlockIdx]) -> bool {
+        deciders.iter().all(|decider| {
+            Self::decision(&self.cfg.blocks[decider.0].terminator)
+                .iter()
+                .all(|value| !self.dependent.contains(value))
+        })
+    }
+
+    /// The edge of two-way `branch` whose side reaches `block`.
+    fn side_reaching(&self, branch: BlockIdx, block: BlockIdx) -> Option<Side> {
+        let (Terminator::JumpIf {
+            then_label,
+            else_label,
+            ..
+        }
+        | Terminator::Diamond {
+            then_label,
+            else_label,
+            ..
+        }) = &self.cfg.blocks[branch.0].terminator
+        else {
+            return None;
+        };
+        let reaches = |label: &Label| {
+            let first = self.cfg.label_to_block[label];
+            first == block || self.domtree.dominates(first, block)
+        };
+        match (reaches(then_label), reaches(else_label)) {
+            (true, false) => Some(Side::Then),
+            (false, true) => Some(Side::Else),
+            _ => None,
+        }
+    }
+
+    fn form(&mut self, value: ValueId) -> Option<Form> {
+        if !self.dependent.contains(&value) {
+            return Some(Form::Free);
+        }
+        if let Some(known) = self.forms.get(&value) {
+            return *known;
+        }
+        // A value on the way to itself is no update of one iteration.
+        self.forms.insert(value, None);
+        let form = self.computed_form(value);
+        self.forms.insert(value, form);
+        if form.is_some() {
+            self.chain.insert(value);
+        }
+        form
+    }
+
+    fn computed_form(&mut self, value: ValueId) -> Option<Form> {
+        if matches!(self.state, State::Param { param, .. } if param == value) {
+            return Some(Form::State);
+        }
+        match *self.defs.get(&value)? {
+            Def::Inst(at) => self.inst_form(at),
+            Def::Param { block, index } => self.param_form(block, index),
+        }
+    }
+
+    fn inst_form(&mut self, at: InstAt) -> Option<Form> {
+        let kind = self.inst(at);
+        match kind {
+            InstKind::Take {
+                target,
+                path,
+                taken_out: false,
+                ..
+            }
+            | InstKind::Ref {
+                target,
+                path,
+                mutability: crate::ty::Mutability::Shared,
+                ..
+            } => match inst_info::storage(target) {
+                Some(_) if self.is_state_slot(target, path) => Some(Form::State),
+                Some(slot) if self.is_local(slot) && path.is_empty() => self.held(slot),
+                Some(_) => None,
+                None => {
+                    let RefTarget::Through(reference) = target else {
+                        return None;
+                    };
+                    match path.is_empty() {
+                        true => self.form(*reference),
+                        false => None,
+                    }
+                }
+            },
+            InstKind::BinOp {
+                op, left, right, ..
+            } => {
+                let ty = self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
+                let exact = match ty {
+                    ty if crate::analysis::affine::exact_under_wrapping(ty) => true,
+                    Ty::Float => false,
+                    _ => return None,
+                };
+                let (left, right) = (self.form(*left)?, self.form(*right)?);
+                let law = match op {
+                    BinOp::Add => LawOp::Add,
+                    BinOp::Mul => LawOp::Mul,
+                    // `a - b` is `a + (-b)`, exactly at every width and in
+                    // floats alike.
+                    BinOp::Sub => {
+                        return match right {
+                            Form::Free => left.then(Step::Op {
+                                op: LawOp::Add,
+                                exact,
+                            }),
+                            Form::State | Form::Combined(_) => None,
+                        };
+                    }
+                    _ => return None,
+                };
+                let step = Step::Op { op: law, exact };
+                match (left, right) {
+                    (state, Form::Free) | (Form::Free, state) => state.then(step),
+                    _ => None,
+                }
+            }
+            InstKind::StringConcat { parts, .. } => {
+                let (&first, rest) = parts.split_first()?;
+                let first = self.form(first)?;
+                for part in rest {
+                    if self.form(*part)? != Form::Free {
+                        return None;
+                    }
+                }
+                first.then(Step::Op {
+                    op: LawOp::Concat,
+                    exact: true,
+                })
+            }
+            InstKind::Merge { orders, .. } => {
+                let mut combined: Option<Form> = None;
+                for order in orders {
+                    match self.form(*order)? {
+                        Form::Free => {}
+                        form if combined.is_none() => combined = Some(form),
+                        _ => return None,
+                    }
+                }
+                combined?.then(Step::Order)
+            }
+            InstKind::FunctionCall {
+                callee: callee @ Callee::Extern { id, instance, .. },
+                args,
+                ..
+            } => {
+                let Laws::Binary(BinaryLaws {
+                    associative: true,
+                    commutative,
+                    identity,
+                }) = self.laws.of_callee(callee)
+                else {
+                    return None;
+                };
+                let &[first, second] = args.as_slice() else {
+                    return None;
+                };
+                let step = Step::Call(ExternMerge {
+                    callee: *id,
+                    instance: *instance,
+                    commutative: *commutative,
+                    identity: match identity {
+                        Some(_) => CallIdentity::Declared,
+                        None => CallIdentity::OptionLifted,
+                    },
+                });
+                match (self.form(first)?, self.form(second)?) {
+                    (state, Form::Free) => state.then(step),
+                    (Form::Free, state) if *commutative => state.then(step),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// What a storage the iteration defines and drops holds where it is
+    /// read: the value of its one store.
+    fn held(&mut self, slot: ValueId) -> Option<Form> {
+        let mut stored: Option<ValueId> = None;
+        for (_, kind) in self.insts() {
+            if let InstKind::Assign { target, value, .. } = kind
+                && inst_info::storage(target) == Some(slot)
+            {
+                if stored.is_some() {
+                    return None;
+                }
+                stored = Some(*value);
+            }
+        }
+        self.form(stored?)
+    }
+
+    /// A join's parameter: the values its edges send, chosen by branches
+    /// that decide by values that read nothing of the state, or a compare
+    /// and select.
+    fn param_form(&mut self, block: BlockIdx, index: usize) -> Option<Form> {
+        let label = self.cfg.blocks[block.0].label;
+        let own: Vec<BlockIdx> = self.deciders.get(&block).cloned().unwrap_or_default();
+        let mut sent: Vec<(BlockIdx, Side, ValueId)> = Vec::new();
+        let mut deciders: Vec<BlockIdx> = Vec::new();
+        for from in self.body().collect::<Vec<_>>() {
+            let term = &self.cfg.blocks[from.0].terminator;
+            let is_branch = self.cfg.successors(from).len() > 1;
+            for (at, edge) in edges(term).into_iter().enumerate() {
+                if edge.target != label {
+                    continue;
+                }
+                let position = index.checked_sub(edge.fills_from)?;
+                let side = match at {
+                    0 => Side::Then,
+                    _ => Side::Else,
+                };
+                sent.push((from, side, edge.args[position]));
+                let mut by = self.deciders.get(&from).cloned().unwrap_or_default();
+                if is_branch {
+                    by.push(from);
+                }
+                for decider in by {
+                    if !own.contains(&decider) && !deciders.contains(&decider) {
+                        deciders.push(decider);
+                    }
+                }
+            }
+        }
+        if self.decide_freely(&deciders) {
+            let mut joined: Option<Form> = None;
+            for &(_, _, value) in &sent {
+                let form = self.form(value)?;
+                joined = Some(match (joined, form) {
+                    (None, form) => form,
+                    (Some(Form::State), Form::State) => Form::State,
+                    (Some(Form::State), Form::Combined(step))
+                    | (Some(Form::Combined(step)), Form::State) => Form::Combined(step),
+                    (Some(Form::Combined(held)), Form::Combined(step)) if held == step => {
+                        Form::Combined(step)
+                    }
+                    _ => return None,
+                });
+            }
+            return joined;
+        }
+        let [branch] = deciders[..] else {
+            return None;
+        };
+        let [first, second] = sent[..] else {
+            return None;
+        };
+        let side_of = |(from, side, _): (BlockIdx, Side, ValueId)| match from == branch {
+            true => Some(side),
+            false => self.side_reaching(branch, from),
+        };
+        let (first_side, second_side) = (side_of(first)?, side_of(second)?);
+        if first_side == second_side {
+            return None;
+        }
+        let chosen = match (self.form(first.2)?, self.form(second.2)?) {
+            (Form::Free, Form::State) => (first.2, first_side),
+            (Form::State, Form::Free) => (second.2, second_side),
+            _ => return None,
+        };
+        self.select(&Select {
+            branch,
+            chosen: chosen.0,
+            chosen_on: chosen.1,
+        })
+    }
+
+    /// `if y < s { s = y }` and its mirror images over an integer: the
+    /// branch compares the state with a value of the iteration and chooses
+    /// that value on one side and the state on the other, which is `min`
+    /// or `max` of the two (`LawOp::Min`, `LawOp::Max`).
+    fn select(&mut self, select: &Select) -> Option<Form> {
+        let (Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. }) =
+            &self.cfg.blocks[select.branch.0].terminator
+        else {
+            return None;
+        };
+        let Some(&Def::Inst(at)) = self.defs.get(cond) else {
+            return None;
+        };
+        let InstKind::BinOp {
+            op, left, right, ..
+        } = self.inst(at)
+        else {
+            return None;
+        };
+        let (op, left, right) = (*op, *left, *right);
+        if !matches!(self.cfg.val_types.get(&left), Some(Ty::Int(_))) {
+            return None;
+        }
+        // The compare as `y ? s`, the value of the iteration on the left.
+        let y_first = match (self.form(left)?, self.form(right)?) {
+            (Form::Free, Form::State) => true,
+            (Form::State, Form::Free) => false,
+            _ => return None,
+        };
+        let compared = if y_first { left } else { right };
+        if !self.same_value(compared, select.chosen) {
+            return None;
+        }
+        // Whether `y` is chosen when `y < s` (a minimum) or when `y > s`.
+        let y_less_when_true = match (op, y_first) {
+            (BinOp::Lt | BinOp::Lte, true) | (BinOp::Gt | BinOp::Gte, false) => true,
+            (BinOp::Gt | BinOp::Gte, true) | (BinOp::Lt | BinOp::Lte, false) => false,
+            _ => return None,
+        };
+        let minimum = match select.chosen_on {
+            Side::Then => y_less_when_true,
+            Side::Else => !y_less_when_true,
+        };
+        self.chain.insert(*cond);
+        self.chain.insert(select.chosen);
+        Some(Form::Combined(Step::Op {
+            op: if minimum { LawOp::Min } else { LawOp::Max },
+            exact: true,
+        }))
+    }
+
+    /// Whether two values of the iteration are one value: the same, or two
+    /// copies of one word read through one shared reference, which nothing
+    /// writes while the reference lives (RFC-0018, RFC-0029).
+    fn same_value(&self, a: ValueId, b: ValueId) -> bool {
+        if a == b {
+            return true;
+        }
+        let read = |value: ValueId| match self.defs.get(&value) {
+            Some(Def::Inst(at)) => match self.inst(*at) {
+                InstKind::Take {
+                    target: RefTarget::Through(reference),
+                    path,
+                    taken_out: false,
+                    ..
+                } => Some((*reference, path.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+        let (Some((ra, pa)), Some((rb, pb))) = (read(a), read(b)) else {
+            return false;
+        };
+        let shared = matches!(
+            self.cfg.val_types.get(&ra),
+            Some(Ty::Ref(crate::ty::Mutability::Shared, _))
+        );
+        ra == rb && pa == pb && shared
+    }
 }

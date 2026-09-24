@@ -1,0 +1,6 @@
+for slice(r10) -> L1 else L2 stages [L1, L7, L8, L9]
+// L1: free {take}
+// L7: cycle Carried(r11) any_order law(Op(Min) exact commutative) {<, take, branch, jump}
+// L8: free {take}
+// L9: cycle Carried(r12) any_order law(Op(Max) exact commutative) {>, take, branch, jump}
+// control upfront

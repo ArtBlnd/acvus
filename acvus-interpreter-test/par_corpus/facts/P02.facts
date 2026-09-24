@@ -1,0 +1,4 @@
+for slice(r4) -> L1 else L2 stages [L1, L6]
+// L1: free {take, const, ==}
+// L6: cycle Carried(r7)+Carried(r8) in_order {+, +, jump, jump}
+// control upfront

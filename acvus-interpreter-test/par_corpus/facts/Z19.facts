@@ -1,0 +1,4 @@
+for range(1 (r5)..4 (r6)) -> L1 else L2 stages [L1, L3]
+// L1: free {const, -, assign, ref, const}
+// L3: cycle Storage(r7) in_order {ref, call get, call unwrap, take, ref, *, +, -, call insert}
+// control upfront

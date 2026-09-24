@@ -1,0 +1,4 @@
+for slice(r9) -> L1 else L2 stages [L1, L5]
+// L1: free {take}
+// L5: cycle Order(r11)+Storage(r12) in_order {take, >, take, assign, ref, call to_string, assign, ref, as_slice, spawn print, eval, branch, jump}
+// control upfront

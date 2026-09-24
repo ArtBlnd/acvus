@@ -1,0 +1,4 @@
+for range(0 (r21)..r17) -> L1 else L2 stages [L1, L3]
+// L1: free {index, call as_iter, make_closure, call map, call collect, assign, ref, make_closure, call sort_by, ref, as_slice, const, index, drop}
+// L3: cycle Storage(r22) in_order {index_set}
+// control upfront

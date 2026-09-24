@@ -4,6 +4,7 @@ mod bound_input;
 mod cli;
 mod ctl;
 mod examples;
+mod par_corpus;
 mod parameter_binding;
 mod refusals;
 mod sandbox;

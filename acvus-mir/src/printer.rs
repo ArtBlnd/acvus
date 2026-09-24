@@ -79,6 +79,9 @@ fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer
     let law = match &acc.law {
         Law::Op(LawOp::Add) => "Op(Add)".to_string(),
         Law::Op(LawOp::Mul) => "Op(Mul)".to_string(),
+        Law::Op(LawOp::Min) => "Op(Min)".to_string(),
+        Law::Op(LawOp::Max) => "Op(Max)".to_string(),
+        Law::Op(LawOp::Concat) => "Op(Concat)".to_string(),
         Law::Call(call) => {
             let identity = match call.identity {
                 CallIdentity::Declared => "identity",
