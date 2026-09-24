@@ -330,7 +330,9 @@ fn rust_enum_match_held(n: i64) -> f64 {
 
 /// The array is what `prepare::runs::Sites` refuses, so this row's variant is
 /// realized on the heap where `enum match held`'s takes a run. The Rust
-/// reference carries the same `Vec` so the ratio compares like with like.
+/// reference carries the same `Vec` so the ratio compares like with like: the
+/// `Vec` passes through `black_box`, so LLVM keeps its allocation, the store
+/// into it and the read back through it, which it removes otherwise.
 fn rust_enum_match_heaped(n: i64) -> f64 {
     let mut acc = 0i64;
     let mut i = 0i64;
@@ -340,7 +342,7 @@ fn rust_enum_match_heaped(n: i64) -> f64 {
             1 => E3::B(i + 1),
             _ => E3::C(i + 2),
         };
-        let v = vec![e];
+        let v = black_box(vec![e]);
         match &v[0] {
             E3::A(w) => acc += *w,
             E3::B(w) => acc += *w,
@@ -388,6 +390,7 @@ fn rust_project_via_extern(n: i64) -> f64 {
     acc as f64
 }
 
+/// `rust_enum_match_heaped`'s `Vec`, at `Result`.
 fn rust_result_match_heaped(n: i64) -> f64 {
     let mut acc = 0i64;
     let mut i = 0i64;
@@ -396,7 +399,7 @@ fn rust_result_match_heaped(n: i64) -> f64 {
             0 => Ok(i),
             _ => Err(i + 1),
         };
-        let v = vec![r];
+        let v = black_box(vec![r]);
         match &v[0] {
             Ok(w) => acc += *w,
             Err(w) => acc += *w,
