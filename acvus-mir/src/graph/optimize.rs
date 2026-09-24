@@ -274,16 +274,14 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     optimize::while_to_for::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);
-    // RFC-0066 rule 7: the weak loops' normal form, before `lsr` reduces
-    // the strong ones; after the hoist, which leaves each loop's invariants
-    // above its header.
-    optimize::iv_canon::run(cfg, laws);
-    // RFC-0056: after the hoist, which puts a loop's invariants above the
-    // header and leaves the preheader a block of its own; before the
-    // reorder, which schedules within a block.
-    optimize::lsr::run(cfg, laws);
-    // RFC-0083: after both loop passes, whose arithmetic it simplifies and
-    // merges; before a `dce` of its own, which sweeps what it leaves unread.
+    // RFC-0066 rule 7: every induction variable of a `for` that anything
+    // besides its own step reads is computed from the counter, decided per
+    // variable; after the hoist, which leaves each loop's invariants above
+    // its header.
+    optimize::iv_canon::run(cfg);
+    // RFC-0083: after IV canonicalization, whose arithmetic it simplifies
+    // and merges; before a `dce` of its own, which sweeps what it leaves
+    // unread, the header arguments the canonicalization removed included.
     optimize::gvn::run(cfg);
     optimize::dce::run(cfg);
     // RFC-0088: after that `dce`, which sweeps the arithmetic the loop passes
@@ -291,9 +289,8 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // no instruction; before `forward`, which collapses the header the
     // removal leaves only jumping.
     optimize::empty_loop::run(cfg);
-    // A block that only jumps is its target: after `lsr`, which writes a
-    // reduction into the preheader `code_motion` may have left empty;
-    // before `reorder`, which schedules within a block.
+    // A block that only jumps is its target; before `reorder`, which
+    // schedules within a block.
     optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
     // RFC-0089 rule 8: after every pass that moves or merges a body's
@@ -301,11 +298,16 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // merging, `reorder` within one block -- since a stage is a set of
     // instructions and a pass that moved one across a stage's boundary
     // would put a target's write in a pure stage after the fact; after
-    // `iv_canon`, so a weak loop carries only its counter and its merges.
-    // Before `bce`, which then reads the chain this writes as the order
-    // `validate::bounds` reads again, and before the drops, which it places
-    // in the stage that touches each value.
+    // `iv_canon`, so a canonicalized induction variable is no target.
     optimize::stages::run(cfg, laws);
+    // RFC-0056, RFC-0066 rule 7: after the stages, since it reduces only a
+    // counter expression that one `InOrder` join reads, and gives that join
+    // the derived counter and its step. It adds instructions to the
+    // preheader, the end of that join and nowhere else, and moves none.
+    optimize::lsr::run(cfg);
+    // Before `bce`, which then reads the chain the stage pass wrote as the
+    // order `validate::bounds` reads again, and before the drops, which it
+    // places in the stage that touches each value.
     // RFC-0047 rule 7: after the loop passes, which leave a range `for`
     // whose counter indexes and one hoisted `as_slice`, and after the last
     // pass that moves an instruction, so that `validate::bounds` reads the

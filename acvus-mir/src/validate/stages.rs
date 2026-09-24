@@ -2,16 +2,25 @@
 //! membership and `analysis::loans`, so no loop runs apart on a fact that
 //! stopped holding.
 //!
+//! Rule 3 is also asked of the induction variables: a pure stage reads no
+//! header parameter `analysis::affine` derives as carried. IV
+//! canonicalization computes every such variable that anything besides its
+//! step reads from the counter (RFC-0066 rule 7), so one a pure stage reads
+//! is one it missed, and the stage would wait on the iteration before. A
+//! target's own rule does not refuse it: the reader is on no path to the
+//! variable's next value, so it is outside the variable's update cycle.
+//!
 //! It is asked of the module the pipeline hands on, after every pass and
 //! after the drops, which is the body the machine runs.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::affine::{AffineValues, Derivation};
 use crate::analysis::carried::carries_order;
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::{NaturalLoop, natural_loops_innermost_first};
+use crate::analysis::loops::{Invariants, LoopNest, NaturalLoop, natural_loops_innermost_first};
 use crate::analysis::targets::{TargetSlots, effect, slots_lent_mutably};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{
@@ -59,6 +68,10 @@ pub enum PureEffect {
     ChangesCarried(ValueId),
     OrderedEffect,
     CommitsContext,
+    /// A carried induction variable, which IV canonicalization computes
+    /// from the counter wherever anything besides its step reads it
+    /// (RFC-0066 rule 7), so a pure stage has none to read.
+    ReadsCarriedIv(ValueId),
 }
 
 impl PureEffect {
@@ -71,6 +84,9 @@ impl PureEffect {
             }
             Self::OrderedEffect => "holds an order-carrying instruction".to_string(),
             Self::CommitsContext => "commits a context".to_string(),
+            Self::ReadsCarriedIv(param) => {
+                format!("reads carried induction variable {param:?}")
+            }
         }
     }
 }
@@ -136,6 +152,8 @@ fn check_body(scope: &str, body: &MirBody) -> Vec<ValidationError> {
     let loans = Loans::build(&cfg);
     let domtree = DomTree::build(&cfg);
     let loops = natural_loops_innermost_first(&cfg, &domtree);
+    let invariants = Invariants::of(&cfg);
+    let nest = LoopNest::of(&cfg, &domtree, &invariants);
     let mut errors: Vec<ValidationError> = Vec::new();
     for (at, block) in cfg.blocks.iter().enumerate() {
         let Terminator::For { source, stages, .. } = &block.terminator else {
@@ -144,6 +162,23 @@ fn check_body(scope: &str, body: &MirBody) -> Vec<ValidationError> {
         let header = BlockIdx(at);
         let loop_blocks = loop_blocks_of(&loops, header);
         let inst_index = stated_at[&block.label];
+        let carried_ivs = match nest.by_header(header) {
+            Some(id) => {
+                let affine = AffineValues::of(&cfg, nest.get(id), &invariants);
+                block
+                    .params
+                    .iter()
+                    .copied()
+                    .filter(|param| {
+                        matches!(
+                            affine.get(*param).map(|found| &found.derivation),
+                            Some(Derivation::Carried { .. })
+                        )
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
         let chain = Chain {
             cfg: &cfg,
             loans: &loans,
@@ -151,6 +186,7 @@ fn check_body(scope: &str, body: &MirBody) -> Vec<ValidationError> {
             source: *source,
             stages,
             loop_blocks,
+            carried_ivs,
         };
         errors.extend(chain.check().into_iter().map(|kind| ValidationError {
             scope: scope.to_string(),
@@ -243,6 +279,8 @@ struct Chain<'a> {
     source: ForSource,
     stages: &'a Stages,
     loop_blocks: Vec<BlockIdx>,
+    /// The header parameters `analysis::affine` derives as carried.
+    carried_ivs: Vec<ValueId>,
 }
 
 /// The stage chain once its shape holds: each stage's blocks, entry first.
@@ -597,6 +635,19 @@ impl Form<'_> {
                 }
                 if let Some(param) = self.in_cycle(inst) {
                     note(PureEffect::ChangesCarried(param));
+                }
+                for used in inst_info::uses(kind) {
+                    if self.chain.carried_ivs.contains(&used) {
+                        note(PureEffect::ReadsCarriedIv(used));
+                    }
+                }
+            }
+            for &block in &self.regions[index] {
+                let terminator = &self.chain.cfg.blocks[block.0].terminator;
+                for used in inst_info::terminator_uses(terminator) {
+                    if self.chain.carried_ivs.contains(&used) {
+                        note(PureEffect::ReadsCarriedIv(used));
+                    }
                 }
             }
             refusals.extend(

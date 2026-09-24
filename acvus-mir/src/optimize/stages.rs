@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::affine::AffineValues;
 use crate::analysis::carried::{
-    Carried, CarriedState, Dependence, MergeOp, StorageMerge, carries_order,
+    Carried, CarriedState, MergeOp, StorageMerge, carries_order,
 };
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
@@ -99,10 +99,18 @@ impl Facts {
         let slots = TargetSlots::of(&loans, source, &loop_blocks);
         let affine = AffineValues::of(cfg, loop_, &invariants);
         let state = CarriedState::of(&loans, loop_, &affine, laws);
-        let leaves = state
-            .dependences
+        // Rule 7: a `break` or a `return` leaves from a block of the body,
+        // and the iterations after the one that leaves never run.
+        let leaves = loop_blocks
             .iter()
-            .any(|dependence| matches!(dependence, Dependence::EarlyExit { .. }));
+            .filter(|block| **block != header)
+            .any(|&block| {
+                matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
+                    || cfg
+                        .successors(block)
+                        .iter()
+                        .any(|succ| !loop_.natural.contains(*succ))
+            });
 
         let mut targets: Vec<Target> = Vec::new();
         let mut add = |target: Target| {

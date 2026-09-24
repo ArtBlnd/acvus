@@ -1,7 +1,8 @@
 //! The listing `optimize::lsr` leaves (RFC-0056), and the shapes it
-//! declines. The pass reduces only strong loops (`analysis::carried`), so
-//! every loop here that is meant to be reduced carries a recurrence:
-//! `acc * 2 + …` reads the accumulator outside a merge.
+//! declines. The pass reduces only a counter expression that one `InOrder`
+//! join reads (RFC-0066 rule 7), so every loop here that is meant to be
+//! reduced carries a recurrence: `acc * 2 + …` reads the accumulator outside
+//! a merge, and its join, which reads the expression, is `InOrder`.
 //!
 //! `acvus-interpreter-test/tests/strength_reduction.rs` runs the same two
 //! loops and reads their values; this file is what says the two loops are
@@ -147,11 +148,10 @@ fn the_reduced_body_multiplies_and_the_unreduced_one_still_does() {
 
     assert_eq!(
         where_it_multiplies(&listing),
-        ["L1: 1".to_string(), "L6: 2".to_string()],
-        "the first loop's body keeps only `reduced * 2`, and the reduction's \
-         start `0 * @k + @x` and step `1 * @k` are `@x` and `@k` (RFC-0083), so \
-         nothing multiplies above it; under the `if`, `j * @k` stays beside \
-         `unreduced * 2`:\n{listing}"
+        ["ENTRY: 1".to_string(), "L1: 1".to_string(), "L6: 2".to_string()],
+        "the first loop's body keeps only `reduced * 2`, and the reduction \
+         steps by `@k` and starts at `0 * @k + @x`, computed once above the \
+         header; under the `if`, `j * @k` stays beside `unreduced * 2`:\n{listing}"
     );
 }
 
@@ -214,7 +214,7 @@ fn a_float_product_keeps_its_multiplication() {
     );
 }
 
-const WEAK: &str = "\
+const MERGED: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < @n { \
@@ -223,7 +223,7 @@ while i < @n { \
 } \
 acc";
 
-const STRONG: &str = "\
+const RECURRENCE: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < @n { \
@@ -233,32 +233,33 @@ while i < @n { \
 acc";
 
 #[test]
-fn a_weak_loop_is_left_as_written_and_a_strong_one_is_reduced() {
+fn a_merge_is_left_as_written_and_a_recurrence_is_reduced() {
     let i = Interner::new();
     let names = ctx(&i, &["n", "k", "x"]);
-    let weak = compile_script_optimized(&i, WEAK, &names).expect("it compiles");
-    let strong = compile_script_optimized(&i, STRONG, &names).expect("it compiles");
+    let merged = compile_script_optimized(&i, MERGED, &names).expect("it compiles");
+    let recurrence = compile_script_optimized(&i, RECURRENCE, &names).expect("it compiles");
     assert_eq!(
-        where_it_multiplies_by_context(&weak, "@k"),
+        where_it_multiplies_by_context(&merged, "@k"),
         ["L1: 1".to_string()],
-        "the accumulator is a merge and `i` an induction variable, so the loop \
-         is weak and keeps `i * @k` in its body, with no start or step above \
-         it (RFC-0056); its `i` is IV canonicalization's (RFC-0066 rule 7):\n{weak}"
+        "the accumulator is a merge, joined `AnyOrder`, so the loop keeps \
+         `i * @k` in its body, computed from the counter IV canonicalization \
+         puts in `i`'s place, with no start or step above it (RFC-0066 \
+         rule 7):\n{merged}"
     );
     assert_eq!(
-        where_it_multiplies(&strong),
-        ["L1: 1".to_string()],
-        "`acc * 2` is a recurrence, so the loop is strong and the body keeps \
-         only `acc * 2`. The reduction's start `0 * @k + @x` is `@x` and its \
-         step `1 * @k` is `@k` (RFC-0083), so nothing multiplies above the \
-         header:\n{strong}"
+        where_it_multiplies(&recurrence),
+        ["ENTRY: 1".to_string(), "L1: 1".to_string()],
+        "`acc * 2` is a recurrence, joined `InOrder`, and the join reads \
+         `i * @k + @x`, so the body keeps only `acc * 2`. The counter steps \
+         by 1, so the reduction steps by `@k`, and its start `0 * @k + @x` \
+         is the one product above the header:\n{recurrence}"
     );
 }
 
 /// `max` declares itself associative and commutative (RFC-0082 rule 2), so
-/// the loop merging through it is weak; `saturating_add` over `i64`
-/// declares no law, since it is not associative, so the loop merging
-/// through it carries a recurrence and is strong.
+/// the loop merging through it joins `AnyOrder`; `saturating_add` over
+/// `i64` declares no law, since it is not associative, so the loop merging
+/// through it carries a recurrence, joined `InOrder`.
 const MERGED_BY_LAW: &str = "\
 let acc = 0; \
 let i = 0; \
@@ -286,14 +287,15 @@ fn a_loop_merging_through_a_lawful_extern_is_left_as_written() {
     assert_eq!(
         where_it_multiplies_by_context(&lawful, "@k"),
         ["L1: 1".to_string()],
-        "`max` is a declared merge and `i` an induction variable, so the loop is \
-         weak and keeps `i * @k` in its body:\n{lawful}"
+        "`max` is a declared merge, joined `AnyOrder`, so the loop keeps \
+         `i * @k` in its body:\n{lawful}"
     );
     assert_eq!(
         where_it_multiplies(&lawless),
-        Vec::<String>::new(),
-        "`saturating_add` declares no law, so the loop is strong and reduced: its \
-         body keeps no `i * @k`, and the start `0 * @k + @x` and step `1 * @k` \
-         are `@x` and `@k` (RFC-0083):\n{lawless}"
+        ["ENTRY: 1".to_string()],
+        "`saturating_add` declares no law, so its join is `InOrder` and the \
+         expression it reads is reduced: the body keeps no `i * @k`, and the \
+         reduction steps by `@k` from `0 * @k + @x`, computed above the \
+         header:\n{lawless}"
     );
 }

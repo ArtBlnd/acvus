@@ -1,5 +1,4 @@
-//! What one iteration of a loop hands the next, and whether that orders
-//! the iterations.
+//! What one iteration of a loop hands the next.
 //!
 //! Every header parameter is carried state, and each is exactly one of:
 //!
@@ -23,40 +22,30 @@
 //! short-circuit `Diamond`, and recognizing that form is not settled; until
 //! it is, a loop that merges through one carries a recurrence.
 //!
-//! A loop is weak when every carried parameter is an `Iv` or a `Merge`, no
-//! instruction of the body carries an `Order`, and every storage the body
-//! writes is one its `SliceMut` source lends. Otherwise it is strong, and
-//! [`CarriedState::dependences`] names each reason. The kind of the state
-//! decides, not its count: how many merges a loop carries is a cost, and
-//! cost is the lowerer's.
+//! The kind of the state is what a reader asks, not its count: how many
+//! merges a loop carries is a cost, and cost is the lowerer's. How each
+//! kind is ordered is stated per target by the stages of RFC-0089, which
+//! `optimize::stages` writes from these facts (RFC-0066 rule 6).
 //!
 //! An `Order` is how MIR marks an effect that keeps its place in the run:
 //! a call whose effect is not Pure carries one and a Pure call carries
 //! none (RFC-0013, RFC-0046), so an ordered effect is an instruction that
-//! carries one. A write is what `analysis::loans` says an instruction
-//! writes, and a `Commit` of a context. The source's own storage is the
-//! element write RFC-0057 rule 3 admits: rule 5 holds the container
-//! exclusively for the loop, so the element is the only path to it.
+//! carries one ([`carries_order`]). A write is what `analysis::loans` says
+//! an instruction writes. The source's own storage is the element write
+//! RFC-0057 rule 3 admits: rule 5 holds the container exclusively for the
+//! loop, so the element is the only path to it, and it is no storage merge.
 //!
 //! A merge through storage, `v.push(x)` in a loop, is a write of `v`, and
 //! what kind of merge it is, ordered or not, is the extern's to declare
 //! (RFC-0066 rule 6). Where every write of a storage in the loop is a call
 //! of one extern that declares a `fold` law (RFC-0082 rule 3), and the loop
 //! reads that storage only to lend it to those calls, the storage is a
-//! [`StorageMerge`] and not a dependence. Every other write is strong.
-//!
-//! A loop left from anywhere but its header, by a `break` or a `return`,
-//! is ordered: the iterations after the one that leaves never run.
+//! [`StorageMerge`].
 //!
 //! Inside `anyorder` the lowering gives every effectful call the region's
 //! entry order and merges the order the call yields into the region's
 //! accumulator, a header parameter of type `Order` whose back edges send a
-//! chain of `Merge`s over it: a [`MergeOp::Order`]. A call whose order input
-//! is that accumulator's entry value and whose order output reaches only the
-//! chain is unordered by the author's declaration (RFC-0089 rule 6), and it
-//! is not an ordered effect here. After `spawn_split` such a call is a
-//! `Spawn` that takes the order and the `Eval` that yields it, and the pair
-//! is excused as the one call it was.
+//! chain of `Merge`s over it: a [`MergeOp::Order`].
 
 use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
@@ -65,7 +54,7 @@ use crate::analysis::affine::{AffineValues, Arithmetic, Derivation, exact_under_
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Loop, LoopKind};
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
 use crate::ir::{CallIdentity, Callee, ForSource, InstKind, ValueId};
 use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
@@ -108,36 +97,9 @@ pub struct CarriedParam {
     pub carried: Carried,
 }
 
-/// One reason a loop is strong.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dependence {
-    Recurrence(ValueId),
-    OrderedEffect {
-        block: BlockIdx,
-    },
-    StorageWrite(ValueId),
-    ContextWrite(QualifiedRef),
-    /// A `break` or `return` leaves from `block`, not from the header: the
-    /// iterations after the one that leaves never run, so which runs first
-    /// decides what the loop does.
-    EarlyExit {
-        block: BlockIdx,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Strength {
-    /// The iterations may run in any order.
-    Weak,
-    Strong,
-}
-
 pub struct CarriedState {
     pub params: Vec<CarriedParam>,
     pub storage_merges: Vec<StorageMerge>,
-    pub dependences: Vec<Dependence>,
-    /// By `dst`: RFC-0089 rule 6's order-carrying instructions.
-    pub unordered: Vec<ValueId>,
 }
 
 impl CarriedState {
@@ -167,70 +129,12 @@ impl CarriedState {
             })
             .collect();
 
-        let mut dependences: Vec<Dependence> = params
-            .iter()
-            .filter(|p| p.carried == Carried::Recurrence)
-            .map(|p| Dependence::Recurrence(p.param))
-            .collect();
-        let unordered = body.unordered_calls(&params);
         let lent = lent_by_source(loop_, loans);
         let storage_merges = body.storage_merges(&lent);
-        for block in natural.blocks().filter(|&block| block != natural.header) {
-            let leaves = matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
-                || cfg
-                    .successors(block)
-                    .iter()
-                    .any(|&succ| !natural.contains(succ));
-            if leaves {
-                dependences.push(Dependence::EarlyExit { block });
-            }
-        }
-        for block in natural.blocks() {
-            for inst in &cfg.blocks[block.0].insts {
-                let mut found: Vec<Dependence> = loans
-                    .storage_effect(&inst.kind)
-                    .writes
-                    .into_iter()
-                    .filter(|storage| !lent.contains(storage))
-                    .filter(|storage| !storage_merges.iter().any(|m| m.storage == *storage))
-                    .map(Dependence::StorageWrite)
-                    .collect();
-                if let InstKind::Commit { context, .. } = &inst.kind {
-                    found.push(Dependence::ContextWrite(*context));
-                }
-                let excused = inst_info::defs(&inst.kind)
-                    .iter()
-                    .any(|dst| unordered.contains(dst));
-                if carries_order(&inst.kind) && !excused {
-                    found.push(Dependence::OrderedEffect { block });
-                }
-                for dependence in found {
-                    if !dependences.contains(&dependence) {
-                        dependences.push(dependence);
-                    }
-                }
-            }
-        }
         Self {
             params,
             storage_merges,
-            dependences,
-            unordered,
         }
-    }
-
-    pub fn strength(&self) -> Strength {
-        match self.dependences.is_empty() {
-            true => Strength::Weak,
-            false => Strength::Strong,
-        }
-    }
-
-    /// RFC-0057 rule 3's independence: a weak loop that carries nothing.
-    pub fn runs_apart(&self) -> bool {
-        self.params.is_empty()
-            && self.storage_merges.is_empty()
-            && self.strength() == Strength::Weak
     }
 }
 
@@ -320,76 +224,6 @@ impl<'cfg> Body<'_, 'cfg> {
                 .any(|order| *order == param || self.reaches_through_merges(*order, param)),
             _ => false,
         }
-    }
-
-    /// RFC-0089 rule 6's calls, by the `dst` of each instruction.
-    fn unordered_calls(&self, params: &[CarriedParam]) -> Vec<ValueId> {
-        let natural = &self.loop_.natural;
-        let mut unordered = Vec::new();
-        for (index, carried) in params.iter().enumerate() {
-            let Carried::Merge {
-                op: MergeOp::Order, ..
-            } = carried.carried
-            else {
-                continue;
-            };
-            let (Some(next), Some(init)) = (
-                natural.back_arg(self.cfg(), index),
-                natural.entry_arg(self.cfg(), index),
-            ) else {
-                continue;
-            };
-            let Some(chain) = self.order_chain(next, carried.param) else {
-                continue;
-            };
-            let merged_into_chain = |order: ValueId| {
-                self.reads.count(order) == 1
-                    && chain.iter().any(|link| {
-                        matches!(self.defining(*link),
-                            Some(InstKind::Merge { orders, .. }) if orders.contains(&order))
-                    })
-            };
-            for kind in self.body_insts() {
-                match kind {
-                    InstKind::FunctionCall {
-                        dst,
-                        order: Some(edge),
-                        ..
-                    } if edge.before == init && merged_into_chain(edge.after) => {
-                        unordered.push(*dst);
-                    }
-                    InstKind::Eval {
-                        dst,
-                        src,
-                        order: Some(after),
-                    } if merged_into_chain(*after) && self.reads.count(*src) == 1 => {
-                        let Some(InstKind::Spawn {
-                            dst: handle,
-                            order: Some(before),
-                            ..
-                        }) = self.defining(*src)
-                        else {
-                            continue;
-                        };
-                        if *before == init {
-                            unordered.push(*handle);
-                            unordered.push(*dst);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        unordered
-    }
-
-    fn body_insts(&self) -> impl Iterator<Item = &'cfg InstKind> + '_ {
-        let cfg = self.cfg();
-        self.loop_
-            .natural
-            .blocks()
-            .flat_map(move |block| &cfg.blocks[block.0].insts)
-            .map(|inst| &inst.kind)
     }
 
     fn extern_merge(&self, next: ValueId, param: ValueId) -> Option<ExternMerge> {

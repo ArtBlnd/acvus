@@ -62,7 +62,7 @@ fn index_ops(body: &str) -> usize {
 }
 
 fn loop_head_of(body: &str) -> usize {
-    body.find("L0(")
+    body.find("| L0")
         .unwrap_or_else(|| panic!("a loop head in:\n{body}"))
 }
 
