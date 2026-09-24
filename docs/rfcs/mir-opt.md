@@ -226,22 +226,28 @@ Status: Accepted
 pass runs after SSA construction and before dead-code elimination, so the
 operands it orphans die with the rest of the dead code.
 
-The value is the one the machine computes, at the operand's width. `+`, `-`
-and `*` wrap. A shift takes its amount modulo the width. A comparison reads
-both operands at the width's own signedness. A float comparison compares bit
-patterns (RFC-0037).
+The value is the one the machine computes, at the operand's width
+(RFC-0037). A trapping `+`, `-` or `*`, the source's, gives its exact
+result, and a trapping shift takes an amount below the width; a wrapping
+one, which only a pass writes, wraps and takes a shift's amount modulo the
+width. A comparison reads both operands at the width's own signedness. A
+float comparison compares bit patterns.
 
-Nothing is folded where the machine would panic (a zero divisor, or a
-quotient that leaves the width). The operation stands, and the program
-panics where it did. A float operation whose result is NaN is not folded,
+Nothing is folded where the machine would panic: a trapping operation whose
+exact result does not fit the width, a trapping shift by the width or more,
+a zero divisor, or a quotient that leaves the width. The operation stands,
+and the program panics where it did. A float operation whose result is NaN is not folded,
 because a folded NaN would carry the compiler's bit pattern where the
 machine's belongs.
 
 Two constants that are not adjacent still join when one associative and
-commutative operator at one integer width separates them and the
-intermediate has exactly one use: `(x + 1) + 2` becomes `x + 3`. The
+commutative operator of one kind at one integer width separates them and
+the intermediate has exactly one use: `(x + 1) + 2` becomes `x + 3`. The
 intermediate becomes the joined constant where it stood, so no new
-definition is placed.
+definition is placed. At a trapping `+` or `*` the joined constant is
+folded only where it fits, and then `x + 3` is `(x + 1) + 2` on every run
+where neither traps; the join drops the inner trap, as RFC-0037 rule 3
+lets a pass drop one.
 
 **The optimizer introduces no operator the chain recognizer does not
 claim.** A fold replaces an operation with its constant, or moves a constant
@@ -249,9 +255,10 @@ from one operand of one operator to another. The operators a body holds
 after the fold are the ones the source wrote.
 
 The fold's value and the machine's are one claim, and a test executes it.
-Each edge the surface can write (a wrapping width, the widest constant, a
-negative dividend, a NaN) runs once with foldable operands and once with
-operands from the page, and the two must produce the same register word.
+Each edge the surface can write (an overflowing width, the widest constant,
+a negative dividend, a NaN) runs once with foldable operands and once with
+operands from the page, and the two must produce the same register word or
+the same trap.
 
 **Why.** Scalar replacement (RFC-0050 rule 11) turns a field read into a constant, and
 nothing after it computes `1 + 2`. Refusing wherever the machine would panic
@@ -319,12 +326,19 @@ four operations to three, counting `i`'s own increment. A bare `i * k` goes
 from three to three plus a carried parameter, so it is not reduced. What
 decides this is the count, not the syntax.
 
-**Only wrapping integer arithmetic is reduced.** Modulo `2^width`,
-multiplication distributes over addition exactly, and neither operation can
-raise, so the value and the iteration that raises are unchanged. In floating
-point the accumulated form is a different number, and on mandelbrot's grid
-34 of 20000 pixels reach a different escape count. A multiplication that does
-not run on every iteration is not reduced.
+**Only integer arithmetic is reduced.** Modulo `2^width`, multiplication
+distributes over addition exactly. The reduced `i * k + x` is the program's
+trapping arithmetic (RFC-0037 rule 3), whose result on every run that goes
+past it is the integer one, the same word modulo `2^width`, so the derived
+counter holds the value it held. The start, the step and the latch's
+advance are the pass's own operations, so they wrap: the start runs before
+the first iteration and the advance after the last one, on values the
+program never computed, and a trap there would end a run the program
+defines. The pass drops the program's two operations and their traps, as
+that rule lets a pass drop one, and moves none. In floating point the
+accumulated form is a different number, and on mandelbrot's grid 34 of 20000
+pixels reach a different escape count. A multiplication that does not run
+on every iteration is not reduced.
 
 The pass runs after the stages are written (RFC-0089 rule 6) and before
 `bce`. `code_motion` has put `k` and `x` above the header and left the
@@ -485,9 +499,9 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    range's element is `{at, 1}` and a slice's or an array's index is
    `{0, 1}`. A header parameter entered with `b` whose back edges all send
    `p + c`, `c` invariant, is `{b, c}`. `a·v` and `v + b` of an affine `v`,
-   `a` and `b` invariant, are affine. Only integers are affine, because
-   wrapping `+` and `*` are exact (RFC-0037). The analysis is one loop
-   deep.
+   `a` and `b` invariant, are affine. Only integers are affine: `+` and
+   `*` of either kind are exact modulo `2^width` on every run past them
+   (RFC-0037 rule 3). The analysis is one loop deep.
 
 5. **Carried state.** Each header parameter is exactly one of `Iv`, affine
    by rule 4, or state, anything else. A state's law, when it has one, is
@@ -508,8 +522,9 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    rewrites every `Iv` of a `for` that anything besides its own step reads
    into `base + k·step` in the body, `k` read off the counter, and
    `base + trip·step` where it is read after the loop, from the count the
-   exit edge defines (RFC-0057 rule 9). A rewritten `Iv` is carried no
-   longer, so it is no target and orders nothing. The choice is per
+   exit edge defines (RFC-0057 rule 9). Its arithmetic wraps (RFC-0037
+   rule 3): its operands are right only modulo `2^width`. A rewritten `Iv`
+   is carried no longer, so it is no target and orders nothing. The choice is per
    variable, not per loop, and reads nothing the stage pass decides. After
    the stages are written, strength reduction (RFC-0056) reduces a counter
    expression whose readers all sit in one `InOrder` join, and its step
@@ -753,12 +768,15 @@ trip count, IV canonicalization, the region and the lowerer's split
    gives the same value, and raises the same trap, on every visit, when
    the step is deterministic:
    - `+`, `-`, `*`, `/` and `%` at an integer width. The machine computes
-     each from its two words at the width (RFC-0037): `+`, `-` and `*`
-     wrap; at every width `/` panics with `attempt to divide by zero` on a
-     zero divisor and `%` with `attempt to calculate the remainder with a
-     divisor of zero`; at a signed width `MIN / -1` panics with `attempt
-     to divide with overflow` and `MIN % -1` with `attempt to calculate the
-     remainder with overflow`; an unsigned width has no other failure.
+     each from its two words at the width (RFC-0037): the program's `+`,
+     `-` and `*` trap with Rust's texts where the exact result leaves the
+     width, and a pass's wrap; at every width
+     `/` panics with `attempt to divide by zero` on a zero divisor and `%`
+     with `attempt to calculate the remainder with a divisor of zero`; at a
+     signed width `MIN / -1` panics with `attempt to divide with overflow`
+     and `MIN % -1` with `attempt to calculate the remainder with
+     overflow`; an unsigned width has no other failure. The copy keeps
+     the operation's kind.
    - a call of an extern whose declared effect is `pure` and touches no
      context, the author's promise (RFC-0080 rule 3). Each argument is a
      shared reference defined outside the loop, which the borrow check
@@ -771,24 +789,28 @@ trip count, IV canonicalization, the region and the lowerer's split
 
    Evaluating the steps once, in the header's order, at the end of the
    entering block is exact when moving them ahead of the header's other
-   instructions changes nothing observable. A `/`, a `%` and a call can
-   trap, since `pure` does not say that a call returns: `unwrap` is `pure`
-   and panics. So when the bound holds one, no instruction before its last
-   such step in the header, other than a step of the bound, may have an
-   effect or trap; only a constant, a reference, a cast and a binary
-   operation that is not an integer `/` or `%` qualify. Then the entry
-   raises exactly the trap the first header visit raised, on an entry that
-   runs the body zero times too, and a bound with no trapping step moves
-   freely. One rule covers `/`, `%` and a `pure` call; which of them trap
-   and when does not enter it.
+   instructions changes nothing observable. The entering block ends in the
+   jump to the header, so the copy runs on exactly the paths the first
+   visit ran on (RFC-0048 rule 8). A trapping `+`, `-` or `*`, a `/`, a `%`
+   and a call can trap, since `pure` does not say that a call returns:
+   `unwrap` is `pure` and panics. So when the bound holds one, no
+   instruction before its last such step in the header, other than a step
+   of the bound, may trap; only a constant, a reference, a cast, a `merge`
+   and an arithmetic operation that cannot trap qualify. An effect there does not decline: a trap is not
+   ordered with effects (RFC-0048 rule 8). Then the entry raises exactly
+   the trap the first header visit raised, on an entry that runs the body
+   zero times too, and a bound with no trapping step moves freely. One rule
+   covers the program's arithmetic, `/`, `%` and a `pure` call; which of
+   them trap and when does not enter it.
 
 4. **The two loops are one program at every entry.** Both start at `b` on
    each entry, so the `k`-th visit of the header holds `b + k` in both. The
    range runs its body while its counter is below `n`, by the comparison
-   `i < n` makes at the same width, and advances by one, wrapping as
-   `i + 1` does (RFC-0037). `n ≤ b` runs zero times in both. The advance
-   runs only after the counter compared below `n`, so it never wraps, and
-   `n` at the width's maximum ends both loops at `n`.
+   `i < n` makes at the same width, and advances by one. `n ≤ b` runs zero
+   times in both. Each advance runs only after its counter compared below
+   `n`, so the range's never wraps and the program's `i + 1` never traps
+   (RFC-0037 rule 3), and `n` at the width's maximum ends both loops at
+   `n`.
 
 5. **Placement.** The pass runs after the SSA construction, which makes
    `i` a header parameter, and after the fold, which settles a constant
@@ -804,17 +826,17 @@ the rewrite checkable by reading it: the body and the value after the loop
 are the ones the source wrote.
 **Cost.** Every other form stays a `while`: `i <= n`, a step of two, a
 bound that calls through a reference the header makes, such as
-`while i < v.len()`, a bound whose trapping step follows an effect or
-another trap, and a loop with a `break`. A computed bound costs its instructions above the header, once
+`while i < v.len()`, a bound whose trapping step follows another trap, and
+a loop with a `break`. A computed bound costs its instructions above the header, once
 per entry, and a literal bound one constant. Until IV canonicalization
 replaces `i` with the counter, a body that reads `i` carries both. Every converted loop loses its head's comparison, and in the
 attention kernel each loop that holds another prepares one more back-edge
 move than its `while` did.
 **Rejected.**
 - Converting `i <= n`, or a step other than one, by computing a bound —
-  `n + 1` wraps at the width's maximum, and a step `s` needs the rounded-up
-  quotient of `n − b` by `s`, which is the arithmetic of the scalar
-  evolution RFC-0066 rejects.
+  `n + 1` leaves the width at its maximum, and a step `s` needs the
+  rounded-up quotient of `n − b` by `s`, which is the arithmetic of
+  the scalar evolution RFC-0066 rejects.
 - Converting with a computed exit value — the value after the loop would
   be the pass's arithmetic instead of the body's own `i + 1`, and deriving
   it from the trip count is IV canonicalization's.
@@ -851,9 +873,11 @@ simplifies the integer identities below.
      value the machine carries there: where it fills a loop header's
      parameter it is copied in by a move.
    - `BinOp` at any operand type: the machine computes it from the two
-     words alone (RFC-0037). A division or remainder that traps traps at
-     the dominating copy first, so the copy it replaces is never reached
-     with another outcome.
+     words alone (RFC-0037). A division, a remainder or a trapping `+`, `-`
+     or `*` that traps traps at the dominating copy first, so the copy it
+     replaces is never reached with another outcome. The key is the whole
+     operation, its kind included, so a trapping and a wrapping `+` over
+     the same operands are two entries.
    - `Cast`: total, and a function of its operand's word (RFC-0049).
    - A read of a scalar part of an aggregate held by value: `FieldGet` and
      `ObjectGet` of an object, `TupleIndex` of a tuple, `ArrayIndex` of an
@@ -862,8 +886,8 @@ simplifies the integer identities below.
      two owners of it (RFC-0018).
 
    Nothing else is numbered: a `Take`, a `Ref`, an `Index` and every other
-   read of storage, any `UnaryOp`, whose `Deref` reads storage and whose
-   `-` and `!` no measured program repeats, every call and `Spawn` and
+   read of storage, any `UnaryOp`, whose `-` and `!` no measured program
+   repeats, every call and `Spawn` and
    `Eval` whatever its effect, `ConstStr`, and a constant of a `String`, a
    list or `()`. An operation with an operand named as a storage by a
    `Ref`, a `Take` or an `Assign`, and a constant written to such a name,
@@ -882,13 +906,13 @@ simplifies the integer identities below.
 3. **Simplification.** Before the lookup, an integer `+`, `-` or `*` whose
    operand is a numbered constant is simplified: `x + 0`, `0 + x`, `x - 0`,
    `x * 1` and `1 * x` are `x`, and `x * 0` and `0 * x` are the `0` the
-   operation reads. At width `w` wrapping arithmetic is arithmetic modulo
-   `2^w` (RFC-0037), where `0` is the additive identity and the absorbing
-   element of multiplication, and `1` is the multiplicative identity, at
-   every width and signedness. None of the three operations traps. An
-   integer `min(x, x)` or `max(x, x)` whose operands have one number is `x`
-   (RFC-0088 rule 1). No float operation
-   is simplified: `-0.0 + 0.0` is `0.0`, `inf * 0.0` is NaN, and a
+   operation reads. At width `w` arithmetic is arithmetic modulo `2^w`,
+   where `0` is the additive identity and the absorbing element of
+   multiplication, and `1` is the multiplicative identity, at every width
+   and signedness. Each identity holds at either kind (RFC-0037 rule 3):
+   none of the results leaves the width, so a trapping one never traps
+   there. An integer `min(x, x)` or `max(x, x)` whose operands have one
+   number is `x` (RFC-0088 rule 1). No float operation is simplified: `-0.0 + 0.0` is `0.0`, `inf * 0.0` is NaN, and a
    signaling NaN times `1.0` comes out quiet.
 
 4. **Commutativity.** The operands of a commutative operation are ordered by
@@ -994,11 +1018,13 @@ without the loop, and so needs an integer maximum the MIR did not have.
 5. **The count is exact.** The loop's count is `max(hi − at, 0)` over the
    integers (RFC-0057 rule 9), which lies in `[0, 2^64)` at every width up to
    64. `max` compares at `w`'s signedness, so `max(hi, at) − at` is that count
-   over the integers. A cast to `u64` keeps its operand modulo `2^64`, and a
-   `u64` subtraction wraps modulo `2^64` (RFC-0037), so the difference of the
-   two casts is the count exactly. `max(hi − at, 0)` at `w` is not: at `i8`,
-   `-100..100` has `hi − at` wrap to `-56`, and at `u8`, `5..3` has it wrap
-   to `254`.
+   over the integers. A cast to `u64` keeps its operand modulo `2^64`, and
+   the subtraction is the pass's own, so it wraps modulo `2^64` (RFC-0037
+   rule 3): the difference of the two casts is the count exactly, and at
+   `i8`, `-5..3` passes through a wrap on the way. `max(hi − at, 0)` at `w`
+   is not: at `i8`, `-100..100` has `hi − at` leave the width at `200`, and
+   at `u8`, `5..3` has it leave it at `-2`; a trapping `−` would trap on a
+   loop the program runs, and a wrapping one gives `-56` and `254`.
 
 6. **A slice is declined.** The MIR has no instruction that reads a slice's
    length: the `For` terminator is its only reader. A slice `for` whose body
@@ -1023,8 +1049,8 @@ runs its iterations.
   them out of the source.
 - An instruction that reads a slice's length, now — it is a new operation
   on a borrowed value for the machine and every pass, for one decline.
-- The count `max(hi − at, 0)` at the range's width — it wraps, as rule 5
-  shows.
+- The count `max(hi − at, 0)` at the range's width — it leaves the width,
+  as rule 5 shows.
 - The count in a wider type — the MIR has no integer wider than 64 bits, and
   no 64-bit type holds every difference of two `i64` or two `u64` values.
 - Assuming a loop with no effect ends, so any such loop may go — the

@@ -20,11 +20,22 @@
 //!
 //! Every operand is converted to `p`'s width before the arithmetic. An
 //! integer `Cast` yields the value congruent to its operand modulo `2^w`,
-//! and wrapping `+`, `−` and `*` are arithmetic modulo `2^w` (RFC-0037), so
-//! `(counter as w) − (at as w)` is `k` exactly at `p`'s width. Subtracting at
-//! the range's own width first would not be: at a narrower width the
-//! difference is `k` only modulo that width. The trip count is a `u64`,
-//! which holds `max(hi − at, 0)` exactly at every width up to 64.
+//! and the pass's `+`, `−` and `*` wrap (RFC-0037 rule 3), which is
+//! arithmetic modulo `2^w`, so `(counter as w) − (at as w)` is `k` exactly
+//! at `p`'s width. Subtracting at the range's own width first would not be:
+//! at a narrower width the difference is `k` only modulo that width. The
+//! trip count is a `u64`, which holds `max(hi − at, 0)` exactly at every
+//! width up to 64.
+//!
+//! The written operations wrap because they are the pass's and not the
+//! program's, and their operands are right only modulo `2^w`: a `u8`
+//! counter at 150 is `-106` as an `i8`, so an `i8` variable that starts at
+//! `-100` and steps by one holds `50` there while `-100 + (-106)` leaves
+//! the width. A trapping `+` would end a run the program defines. `p`'s
+//! own step, the program's trapping `+`, gives `base + k·step` over the
+//! integers on every run that goes past it, which is the same word modulo
+//! `2^w`; the pass drops that step, and with it its trap, as RFC-0037 rule
+//! 3 lets a pass drop one.
 //!
 //! A read of `p` outside the loop takes the value it has there. A block the
 //! body block dominates is reached from inside an iteration, by a `break` or
@@ -54,7 +65,7 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, Ty};
 
@@ -309,8 +320,8 @@ impl<'a> BlockHead<'a> {
 
     fn advanced_by(&mut self, iv: &Iv, count: ValueId) -> ValueId {
         let step = self.read(&iv.step, iv.width);
-        let advanced = self.arith(BinOp::Mul, count, step, iv.width);
-        self.arith(BinOp::Add, iv.init, advanced, iv.width)
+        let advanced = self.arith(BinOp::Mul(Overflow::Wrap), count, step, iv.width);
+        self.arith(BinOp::Add(Overflow::Wrap), iv.init, advanced, iv.width)
     }
 
     fn prepend_to(self, block: BlockIdx) {
@@ -333,7 +344,7 @@ fn rewrite_inside(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> FxHashMap<Val
                     ForSource::Range { at, .. } => {
                         let counter = head.at_width(counter, iv.width);
                         let at = head.at_width(at, iv.width);
-                        head.arith(BinOp::Sub, counter, at, iv.width)
+                        head.arith(BinOp::Sub(Overflow::Wrap), counter, at, iv.width)
                     }
                     ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => {
                         head.at_width(counter, iv.width)

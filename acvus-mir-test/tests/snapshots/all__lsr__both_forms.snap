@@ -14,7 +14,7 @@ expression: listing
     13 | L8:
     14 |   r8 = r4 * 2 (r9)
     15 |   r10 = r8 + r5
-    16 |   r11 = r5 + r1
+    16 |   r11 = r5 +% r1
     17 |   jump L0(r10, r11)
     18 | L2:
     19 |   jump L3(0 (r12))

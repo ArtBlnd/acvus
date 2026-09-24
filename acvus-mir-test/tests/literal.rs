@@ -115,12 +115,16 @@ fn an_empty_byte_string_is_still_an_array_of_u8() {
 
 // -- Rule 5: the fold reads a suffixed constant at its width -----------
 
-/// `200u8 + 100u8` wraps at `u8` (RFC-0037's widths, RFC-0055's fold), and
-/// `200u8.wrapping_add(100)` in Rust is 44.
+/// `200u8 + 55u8` is `255` at `u8` (RFC-0037's widths, RFC-0055's fold),
+/// and `200u8 + 100u8` does not fit it, so it is not folded and traps where
+/// it runs.
 #[test]
 fn a_suffixed_constant_folds_at_its_width() {
+    let ir = listing("200u8 + 55u8");
+    assert!(ir.contains("return 255 (r0)"), "{ir}");
+    assert_eq!(returned_ty("200u8 + 55u8"), "u8");
     let ir = listing("200u8 + 100u8");
-    assert!(ir.contains("return 44 (r0)"), "{ir}");
+    assert!(ir.contains("= 200 (r1) + 100 (r2)"), "{ir}");
     assert_eq!(returned_ty("200u8 + 100u8"), "u8");
 }
 

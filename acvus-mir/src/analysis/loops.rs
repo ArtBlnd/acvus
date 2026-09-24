@@ -40,7 +40,9 @@
 //! A term denotes an integer, not a value at a width: a trip count is a
 //! count and does not wrap. `analysis::affine` builds its base and step
 //! from the same atoms and the same operations, and there the integer is
-//! taken at the value's width (RFC-0037).
+//! taken modulo `2^width`, which is the value itself on every run that
+//! reaches it: a program's operation whose result leaves the width ends the
+//! run (RFC-0037 rule 3).
 
 use crate::analysis::domtree::DomTree;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};

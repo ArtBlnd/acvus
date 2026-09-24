@@ -3,8 +3,6 @@
 //!
 //! A replaced operation is left in place with no reader, for `dce`.
 
-use std::mem::Discriminant;
-
 use acvus_ast::Literal;
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -74,8 +72,8 @@ fn commutes(op: BinOp, operand: &Ty) -> bool {
     match operand {
         Ty::Int(_) => matches!(
             op,
-            BinOp::Add
-                | BinOp::Mul
+            BinOp::Add(_)
+                | BinOp::Mul(_)
                 | BinOp::Eq
                 | BinOp::Neq
                 | BinOp::BitAnd
@@ -127,8 +125,11 @@ impl Operands {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Expr {
     Const(Word),
+    /// Keyed by the whole operation, its `Overflow` included: a trapping
+    /// and a wrapping `+` over the same operands are two entries, so a
+    /// replacement never changes which of the two a use reads.
     Binary {
-        op: Discriminant<BinOp>,
+        op: BinOp,
         operands: Operands,
     },
     Cast {
@@ -338,8 +339,7 @@ impl Numbering {
                     true => operands.ordered(),
                     false => operands,
                 };
-                let op = std::mem::discriminant(op);
-                numbered(*dst, Found::Expr(Expr::Binary { op, operands }))
+                numbered(*dst, Found::Expr(Expr::Binary { op: *op, operands }))
             }
             InstKind::Cast { dst, src, to } => {
                 let src = self.operand(*src)?.number;
@@ -396,6 +396,9 @@ impl Numbering {
     /// Only integer identities are simplified. A float `x + 0.0` is `0.0`
     /// where `x` is `-0.0`, and `x * 0.0` is NaN where `x` is infinite.
     ///
+    /// Each identity holds at either `Overflow`: `x + 0`, `x - 0`, `x * 1`
+    /// and `x * 0` fit every width, so a trapping one never traps.
+    ///
     /// The result is the operand's value, not its number, so an `x * 0`
     /// reads the `0` written beside it rather than an equal one above.
     fn simplified(&self, op: BinOp, operands: [Operand; 2], ty: &Ty) -> Option<ValueId> {
@@ -412,10 +415,12 @@ impl Numbering {
             return Some(left.value);
         }
         match (op, int(left), int(right)) {
-            (BinOp::Add | BinOp::Sub, _, Some(0)) | (BinOp::Mul, _, Some(1)) => Some(left.value),
-            (BinOp::Add, Some(0), _) | (BinOp::Mul, Some(1), _) => Some(right.value),
-            (BinOp::Mul, Some(0), _) => Some(left.value),
-            (BinOp::Mul, _, Some(0)) => Some(right.value),
+            (BinOp::Add(_) | BinOp::Sub(_), _, Some(0)) | (BinOp::Mul(_), _, Some(1)) => {
+                Some(left.value)
+            }
+            (BinOp::Add(_), Some(0), _) | (BinOp::Mul(_), Some(1), _) => Some(right.value),
+            (BinOp::Mul(_), Some(0), _) => Some(left.value),
+            (BinOp::Mul(_), _, Some(0)) => Some(right.value),
             _ => None,
         }
     }

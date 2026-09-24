@@ -1,14 +1,18 @@
 //! Arithmetic and logic, one operation per operator at one operand type.
 //!
-//! An integer operation is the same Rust operator in a release build, at
-//! the operand's width, panic messages included (RFC-0037). Every operand
-//! and every result here is a word, so a run is two `word` loads and one
-//! `set_word` store, and the kind byte the frame wrote stands (RFC-0052 rule 5).
+//! A trapping integer operation (`ir::Overflow::Trap`, the source's) is the
+//! same Rust operator in a debug build, at the operand's width, panic
+//! messages included: `+`, `-`, `*` and negation trap where the exact result
+//! does not fit, and a shift where its amount is not below the width
+//! (RFC-0037 rule 3). Each is Rust's `checked_*` and one branch to the trap.
+//! A wrapping one, which only a pass writes, is Rust's `wrapping_*`. `/` and
+//! `%` trap as Rust's do at every build profile. Every operand and every
+//! result here is a word, so a run is two `word` loads and one `set_word`
+//! store, and the kind byte the frame wrote stands (RFC-0052 rule 5).
 
 use std::marker::PhantomData;
 
-use acvus_ast::UnaryOp;
-use acvus_mir::ir::BinOp;
+use acvus_mir::ir::{BinOp, Overflow, UnaryOp};
 use acvus_mir::ty::IntTy;
 
 use crate::code::{Exit, Marked, Op, successor};
@@ -66,11 +70,16 @@ pub struct Unary {
 
 /// One integer width, as the operations at that width read and write it.
 pub trait Int: Copy + PartialOrd + 'static {
+    const BITS: u64;
     const SHIFT_MASK: u64;
 
     fn read(bits: u64) -> Self;
     fn word(self) -> u64;
     fn wide(self) -> i128;
+    fn checked_add(self, other: Self) -> Option<Self>;
+    fn checked_sub(self, other: Self) -> Option<Self>;
+    fn checked_mul(self, other: Self) -> Option<Self>;
+    fn checked_neg(self) -> Option<Self>;
     fn wrapping_add(self, other: Self) -> Self;
     fn wrapping_sub(self, other: Self) -> Self;
     fn wrapping_mul(self, other: Self) -> Self;
@@ -89,6 +98,7 @@ pub trait Int: Copy + PartialOrd + 'static {
 macro_rules! impl_int {
     ($($t:ty => $k:ident),* $(,)?) => {
         $(impl Int for $t {
+            const BITS: u64 = <$t>::BITS as u64;
             const SHIFT_MASK: u64 = <$t>::BITS as u64 - 1;
 
             fn read(bits: u64) -> Self {
@@ -99,6 +109,18 @@ macro_rules! impl_int {
             }
             fn wide(self) -> i128 {
                 self as i128
+            }
+            fn checked_add(self, other: Self) -> Option<Self> {
+                <$t>::checked_add(self, other)
+            }
+            fn checked_sub(self, other: Self) -> Option<Self> {
+                <$t>::checked_sub(self, other)
+            }
+            fn checked_mul(self, other: Self) -> Option<Self> {
+                <$t>::checked_mul(self, other)
+            }
+            fn checked_neg(self) -> Option<Self> {
+                <$t>::checked_neg(self)
             }
             fn wrapping_add(self, other: Self) -> Self {
                 <$t>::wrapping_add(self, other)
@@ -152,15 +174,92 @@ const DIVIDE_BY_ZERO: &str = "attempt to divide by zero";
 const REM_BY_ZERO: &str = "attempt to calculate the remainder with a divisor of zero";
 const DIVIDE_OVERFLOW: &str = "attempt to divide with overflow";
 const REM_OVERFLOW: &str = "attempt to calculate the remainder with overflow";
+const ADD_OVERFLOW: &str = "attempt to add with overflow";
+const SUB_OVERFLOW: &str = "attempt to subtract with overflow";
+const MUL_OVERFLOW: &str = "attempt to multiply with overflow";
+const NEG_OVERFLOW: &str = "attempt to negate with overflow";
+const SHL_OVERFLOW: &str = "attempt to shift left with overflow";
+const SHR_OVERFLOW: &str = "attempt to shift right with overflow";
 
-/// Rust's `<<` and `>>` take the amount modulo the width; `SHIFT_MASK` is
-/// that modulus, so the masked amount is below `64` and reaches `u32`
-/// whole, for an amount of either sign.
+/// The trap of an operation that overflowed, out of the operation's line:
+/// the operation is its checked form and one branch here (RFC-0037 rule 3).
+#[cold]
+#[inline(never)]
+fn overflowed(text: &'static str) -> ! {
+    panic!("{text}")
+}
+
+/// The value a checked operation gave, or its trap.
+#[inline(always)]
+fn or_trap<T>(held: Option<T>, text: &'static str) -> T {
+    match held {
+        Some(value) => value,
+        None => overflowed(text),
+    }
+}
+
+/// A trapping `+`, `-`, `*` and negation on values at their width: the
+/// operations `word`'s and a chain's integer nodes both run, so the two
+/// forms trap alike and with one text.
+pub(crate) mod trapping {
+    use super::*;
+
+    #[inline(always)]
+    pub(crate) fn add<T>(a: T, b: T) -> T
+    where
+        T: Int,
+    {
+        or_trap(a.checked_add(b), ADD_OVERFLOW)
+    }
+
+    #[inline(always)]
+    pub(crate) fn sub<T>(a: T, b: T) -> T
+    where
+        T: Int,
+    {
+        or_trap(a.checked_sub(b), SUB_OVERFLOW)
+    }
+
+    #[inline(always)]
+    pub(crate) fn mul<T>(a: T, b: T) -> T
+    where
+        T: Int,
+    {
+        or_trap(a.checked_mul(b), MUL_OVERFLOW)
+    }
+
+    #[inline(always)]
+    pub(crate) fn neg<T>(a: T) -> T
+    where
+        T: Int,
+    {
+        or_trap(a.checked_neg(), NEG_OVERFLOW)
+    }
+}
+
+/// Rust's `wrapping_shl` and `wrapping_shr` take the amount modulo the
+/// width; `SHIFT_MASK` is that modulus, so the masked amount is below `64`
+/// and reaches `u32` whole, for an amount of either sign.
 fn shift_amount<T>(bits: u64) -> u32
 where
     T: Int,
 {
     (T::read(bits).word() & T::SHIFT_MASK) as u32
+}
+
+/// The amount of a trapping shift, which Rust's `<<` and `>>` check
+/// unsigned: an amount read at the width is below it, or the shift traps
+/// with `text`. A negative amount's word is at least `2^63`, so it traps.
+#[inline(always)]
+fn checked_shift_amount<T>(bits: u64, text: &'static str) -> u32
+where
+    T: Int,
+{
+    let amount = T::read(bits).word();
+    match amount < T::BITS {
+        true => amount as u32,
+        false => overflowed(text),
+    }
 }
 
 /// The word-level integer operations: the operand words, read at `T`, and
@@ -201,9 +300,12 @@ pub mod word {
     }
 
     int_words! {
-        add(a, b) { a.wrapping_add(b).word() }
-        sub(a, b) { a.wrapping_sub(b).word() }
-        mul(a, b) { a.wrapping_mul(b).word() }
+        add(a, b) { trapping::add(a, b).word() }
+        sub(a, b) { trapping::sub(a, b).word() }
+        mul(a, b) { trapping::mul(a, b).word() }
+        wrapping_add(a, b) { a.wrapping_add(b).word() }
+        wrapping_sub(a, b) { a.wrapping_sub(b).word() }
+        wrapping_mul(a, b) { a.wrapping_mul(b).word() }
         div(a, b) {
             assert!(!b.is_zero(), "{DIVIDE_BY_ZERO}");
             a.checked_div(b).unwrap_or_else(|| panic!("{DIVIDE_OVERFLOW}")).word()
@@ -233,11 +335,31 @@ pub mod word {
     where
         T: Int,
     {
-        T::read(left).wrapping_shl(shift_amount::<T>(right)).word()
+        T::read(left)
+            .wrapping_shl(checked_shift_amount::<T>(right, SHL_OVERFLOW))
+            .word()
     }
 
     #[inline]
     pub fn shr<T>(left: u64, right: u64) -> u64
+    where
+        T: Int,
+    {
+        T::read(left)
+            .wrapping_shr(checked_shift_amount::<T>(right, SHR_OVERFLOW))
+            .word()
+    }
+
+    #[inline]
+    pub fn wrapping_shl<T>(left: u64, right: u64) -> u64
+    where
+        T: Int,
+    {
+        T::read(left).wrapping_shl(shift_amount::<T>(right)).word()
+    }
+
+    #[inline]
+    pub fn wrapping_shr<T>(left: u64, right: u64) -> u64
     where
         T: Int,
     {
@@ -246,6 +368,14 @@ pub mod word {
 
     #[inline]
     pub fn neg<T>(operand: u64) -> u64
+    where
+        T: Int,
+    {
+        trapping::neg(T::read(operand)).word()
+    }
+
+    #[inline]
+    pub fn wrapping_neg<T>(operand: u64) -> u64
     where
         T: Int,
     {
@@ -379,6 +509,9 @@ int_ops!(
     Add = add -> as_word,
     Sub = sub -> as_word,
     Mul = mul -> as_word,
+    WrappingAdd = wrapping_add -> as_word,
+    WrappingSub = wrapping_sub -> as_word,
+    WrappingMul = wrapping_mul -> as_word,
     Div = div -> as_word,
     Rem = rem -> as_word,
     BitAnd = bit_and -> as_word,
@@ -386,6 +519,8 @@ int_ops!(
     BitXor = bit_xor -> as_word,
     Shl = shl -> as_word,
     Shr = shr -> as_word,
+    WrappingShl = wrapping_shl -> as_word,
+    WrappingShr = wrapping_shr -> as_word,
     Min = min -> as_word,
     Max = max -> as_word,
     Eq = eq -> as_bool_word,
@@ -396,50 +531,58 @@ int_ops!(
     Gte = gte -> as_bool_word,
 );
 
-pub struct Neg<T, S, D>
-where
-    T: Int,
-    S: Place,
-    D: Place,
-{
-    src: S::At,
-    dst: D::At,
-    next: Box<dyn Op>,
-    at: PhantomData<fn() -> (T, S, D)>,
+macro_rules! int_unary_ops {
+    ($( $op:ident = $f:ident ),* $(,)?) => {
+        $(
+            pub struct $op<T, S, D>
+            where
+                T: Int,
+                S: Place,
+                D: Place,
+            {
+                src: S::At,
+                dst: D::At,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> (T, S, D)>,
+            }
+
+            impl<T, S, D> $op<T, S, D>
+            where
+                T: Int,
+                S: Place,
+                D: Place,
+            {
+                pub fn new(at: UnaryAt<S, D>, next: Box<dyn Op>) -> $op<T, S, D> {
+                    $op {
+                        src: at.src,
+                        dst: at.dst,
+                        next,
+                        at: PhantomData,
+                    }
+                }
+            }
+
+            impl<T, S, D> Op for $op<T, S, D>
+            where
+                T: Int,
+                S: Place,
+                D: Place,
+            {
+                successor!();
+
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+                    let regs = m.regs();
+                    let bits = word::$f::<T>(S::read(regs, self.src, r0));
+                    let carried = D::write(regs, self.dst, bits);
+                    self.next.run(m, carried)
+                }
+            }
+        )*
+    };
 }
 
-impl<T, S, D> Neg<T, S, D>
-where
-    T: Int,
-    S: Place,
-    D: Place,
-{
-    pub fn new(at: UnaryAt<S, D>, next: Box<dyn Op>) -> Neg<T, S, D> {
-        Neg {
-            src: at.src,
-            dst: at.dst,
-            next,
-            at: PhantomData,
-        }
-    }
-}
-
-impl<T, S, D> Op for Neg<T, S, D>
-where
-    T: Int,
-    S: Place,
-    D: Place,
-{
-    successor!();
-
-    #[inline]
-    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let regs = m.regs();
-        let bits = word::neg::<T>(S::read(regs, self.src, r0));
-        let carried = D::write(regs, self.dst, bits);
-        self.next.run(m, carried)
-    }
-}
+int_unary_ops!(Neg = neg, WrappingNeg = wrapping_neg);
 
 macro_rules! float_ops {
     ($( $op:ident = $f:ident -> $result:ident ),* $(,)?) => {
@@ -676,9 +819,12 @@ where
     D: Place,
 {
     match op {
-        BinOp::Add => Box::new(Add::<T, L, R, D>::new(at, next)),
-        BinOp::Sub => Box::new(Sub::<T, L, R, D>::new(at, next)),
-        BinOp::Mul => Box::new(Mul::<T, L, R, D>::new(at, next)),
+        BinOp::Add(Overflow::Trap) => Box::new(Add::<T, L, R, D>::new(at, next)),
+        BinOp::Sub(Overflow::Trap) => Box::new(Sub::<T, L, R, D>::new(at, next)),
+        BinOp::Mul(Overflow::Trap) => Box::new(Mul::<T, L, R, D>::new(at, next)),
+        BinOp::Add(Overflow::Wrap) => Box::new(WrappingAdd::<T, L, R, D>::new(at, next)),
+        BinOp::Sub(Overflow::Wrap) => Box::new(WrappingSub::<T, L, R, D>::new(at, next)),
+        BinOp::Mul(Overflow::Wrap) => Box::new(WrappingMul::<T, L, R, D>::new(at, next)),
         BinOp::Div => Box::new(Div::<T, L, R, D>::new(at, next)),
         BinOp::Mod => Box::new(Rem::<T, L, R, D>::new(at, next)),
         BinOp::Eq => Box::new(Eq::<T, L, R, D>::new(at, next)),
@@ -690,8 +836,10 @@ where
         BinOp::BitAnd => Box::new(BitAnd::<T, L, R, D>::new(at, next)),
         BinOp::BitOr => Box::new(BitOr::<T, L, R, D>::new(at, next)),
         BinOp::Xor => Box::new(BitXor::<T, L, R, D>::new(at, next)),
-        BinOp::Shl => Box::new(Shl::<T, L, R, D>::new(at, next)),
-        BinOp::Shr => Box::new(Shr::<T, L, R, D>::new(at, next)),
+        BinOp::Shl(Overflow::Trap) => Box::new(Shl::<T, L, R, D>::new(at, next)),
+        BinOp::Shr(Overflow::Trap) => Box::new(Shr::<T, L, R, D>::new(at, next)),
+        BinOp::Shl(Overflow::Wrap) => Box::new(WrappingShl::<T, L, R, D>::new(at, next)),
+        BinOp::Shr(Overflow::Wrap) => Box::new(WrappingShr::<T, L, R, D>::new(at, next)),
         BinOp::Min => Box::new(Min::<T, L, R, D>::new(at, next)),
         BinOp::Max => Box::new(Max::<T, L, R, D>::new(at, next)),
         other => panic!("unsupported int binop {other:?}"),
@@ -711,10 +859,11 @@ where
     R: Place,
     D: Place,
 {
+    // At `f64` both `Overflow`s are the IEEE operation.
     match op {
-        BinOp::Add => Box::new(AddF64::<L, R, D>::new(at, next)),
-        BinOp::Sub => Box::new(SubF64::<L, R, D>::new(at, next)),
-        BinOp::Mul => Box::new(MulF64::<L, R, D>::new(at, next)),
+        BinOp::Add(_) => Box::new(AddF64::<L, R, D>::new(at, next)),
+        BinOp::Sub(_) => Box::new(SubF64::<L, R, D>::new(at, next)),
+        BinOp::Mul(_) => Box::new(MulF64::<L, R, D>::new(at, next)),
         BinOp::Div => Box::new(DivF64::<L, R, D>::new(at, next)),
         BinOp::Mod => Box::new(RemF64::<L, R, D>::new(at, next)),
         BinOp::Eq => Box::new(EqF64::<L, R, D>::new(at, next)),
@@ -753,18 +902,19 @@ pub fn bool_binop(op: BinOp, places: place::Binary, next: Box<dyn Op>) -> Box<dy
 
 /// The operation a unary operator at an integer width prepares to.
 pub fn int_unaryop(op: UnaryOp, k: IntTy, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
-    let UnaryOp::Neg = op else {
+    let UnaryOp::Neg(overflow) = op else {
         panic!("unary {op:?} on an integer")
     };
-    at_unary!(places, |at| for_int_ty!(
-        k,
-        |T| Box::new(Neg::<T, S, D>::new(at, next)) as Box<dyn Op>
-    ))
+    at_unary!(places, |at| for_int_ty!(k, |T| match overflow {
+        Overflow::Trap => Box::new(Neg::<T, S, D>::new(at, next)) as Box<dyn Op>,
+        Overflow::Wrap => Box::new(WrappingNeg::<T, S, D>::new(at, next)) as Box<dyn Op>,
+    }))
 }
 
-/// The operation a unary operator at `Float` prepares to.
+/// The operation a unary operator at `Float` prepares to. Both `Overflow`s
+/// are the IEEE negation.
 pub fn float_unaryop(op: UnaryOp, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
-    let UnaryOp::Neg = op else {
+    let UnaryOp::Neg(_) = op else {
         panic!("unary {op:?} on a float")
     };
     at_unary!(places, |at| Box::new(NegF64::<S, D>::new(at, next))
@@ -797,15 +947,61 @@ mod primitive_operator_tests {
     }
 
     #[test]
-    fn addition_subtraction_and_multiplication_past_the_width_wrap() {
-        assert_eq!(i64_op(word::add::<i64>, i64::MAX, 1), i64::MIN);
-        assert_eq!(i64_op(word::sub::<i64>, i64::MIN, 1), i64::MAX);
-        assert_eq!(i64_op(word::mul::<i64>, i64::MIN, -1), i64::MIN);
+    fn wrapping_addition_subtraction_and_multiplication_past_the_width_wrap() {
+        assert_eq!(i64_op(word::wrapping_add::<i64>, i64::MAX, 1), i64::MIN);
+        assert_eq!(i64_op(word::wrapping_sub::<i64>, i64::MIN, 1), i64::MAX);
+        assert_eq!(i64_op(word::wrapping_mul::<i64>, i64::MIN, -1), i64::MIN);
     }
 
     #[test]
-    fn negation_of_the_minimum_is_the_minimum() {
-        assert_eq!(word::neg::<i64>(i64::MIN as u64) as i64, i64::MIN);
+    fn wrapping_negation_of_the_minimum_is_the_minimum() {
+        assert_eq!(word::wrapping_neg::<i64>(i64::MIN as u64) as i64, i64::MIN);
+    }
+
+    #[test]
+    fn trapping_arithmetic_within_the_width_is_the_result() {
+        assert_eq!(i64_op(word::add::<i64>, i64::MAX - 1, 1), i64::MAX);
+        assert_eq!(i64_op(word::sub::<i64>, i64::MIN + 1, 1), i64::MIN);
+        assert_eq!(i64_op(word::mul::<i64>, i64::MIN / 2, 2), i64::MIN);
+        assert_eq!(word::neg::<i64>((i64::MIN + 1) as u64) as i64, i64::MAX);
+        assert_eq!(i64_op(word::shl::<u8>, 1, 7), 128);
+        assert_eq!(i64_op(word::shr::<i64>, -8, 63), -1);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to add with overflow")]
+    fn a_trapping_addition_past_the_width_traps() {
+        i64_op(word::add::<u8>, 255, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn a_trapping_subtraction_past_the_width_traps() {
+        i64_op(word::sub::<i64>, i64::MIN, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to multiply with overflow")]
+    fn a_trapping_multiplication_past_the_width_traps() {
+        i64_op(word::mul::<i64>, i64::MIN, -1);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to negate with overflow")]
+    fn a_trapping_negation_of_the_minimum_traps() {
+        word::neg::<i8>(i8::MIN as u64);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to shift left with overflow")]
+    fn a_trapping_shift_left_by_the_width_traps() {
+        i64_op(word::shl::<u8>, 1, 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to shift right with overflow")]
+    fn a_trapping_shift_right_by_a_negative_amount_traps() {
+        i64_op(word::shr::<i64>, 1, -1);
     }
 
     #[test]
@@ -833,17 +1029,16 @@ mod primitive_operator_tests {
     }
 
     /// Each expected value is the measured output of a `rustc -O` build of
-    /// the same expression; this test runs in debug, where `1i64 << -1`
-    /// panics instead of masking.
+    /// the same expression, which is `wrapping_shl` and `wrapping_shr`.
     #[test]
-    fn a_shift_takes_its_amount_modulo_the_width() {
-        assert_eq!(i64_op(word::shl::<i64>, 1, -1), i64::MIN);
-        assert_eq!(i64_op(word::shl::<i64>, 1, 64), 1);
-        assert_eq!(i64_op(word::shl::<i64>, 1, 65), 2);
-        assert_eq!(i64_op(word::shl::<i64>, 1, i64::MIN), 1);
-        assert_eq!(i64_op(word::shr::<i64>, -1, -1), -1);
-        assert_eq!(i64_op(word::shr::<i64>, 256, 65), 128);
-        assert_eq!(i64_op(word::shl::<u8>, 1, 255), 128);
+    fn a_wrapping_shift_takes_its_amount_modulo_the_width() {
+        assert_eq!(i64_op(word::wrapping_shl::<i64>, 1, -1), i64::MIN);
+        assert_eq!(i64_op(word::wrapping_shl::<i64>, 1, 64), 1);
+        assert_eq!(i64_op(word::wrapping_shl::<i64>, 1, 65), 2);
+        assert_eq!(i64_op(word::wrapping_shl::<i64>, 1, i64::MIN), 1);
+        assert_eq!(i64_op(word::wrapping_shr::<i64>, -1, -1), -1);
+        assert_eq!(i64_op(word::wrapping_shr::<i64>, 256, 65), 128);
+        assert_eq!(i64_op(word::wrapping_shl::<u8>, 1, 255), 128);
     }
 
     #[test]
@@ -868,8 +1063,14 @@ mod primitive_operator_tests {
     }
 
     #[test]
-    fn an_addition_past_the_narrow_width_wraps() {
-        assert_eq!(i64_op(word::add::<u8>, 200, 56), 0);
-        assert_eq!(i64_op(word::add::<u8>, 200, 57), 1);
+    fn a_wrapping_addition_past_the_narrow_width_wraps() {
+        assert_eq!(i64_op(word::wrapping_add::<u8>, 200, 56), 0);
+        assert_eq!(i64_op(word::wrapping_add::<u8>, 200, 57), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to add with overflow")]
+    fn a_trapping_addition_past_the_narrow_width_traps() {
+        i64_op(word::add::<u8>, 200, 56);
     }
 }

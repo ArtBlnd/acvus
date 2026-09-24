@@ -2570,7 +2570,7 @@ impl<'a> Lowerer<'a> {
                                 *span,
                                 InstKind::UnaryOp {
                                     dst,
-                                    op: UnaryOp::Not,
+                                    op: crate::ir::UnaryOp::Not,
                                     operand: eq,
                                 },
                             );
@@ -2613,7 +2613,7 @@ impl<'a> Lowerer<'a> {
                             *span,
                             InstKind::UnaryOp {
                                 dst,
-                                op: UnaryOp::Not,
+                                op: crate::ir::UnaryOp::Not,
                                 operand: eq,
                             },
                         );
@@ -2641,7 +2641,7 @@ impl<'a> Lowerer<'a> {
                                     *span,
                                     InstKind::UnaryOp {
                                         dst,
-                                        op: UnaryOp::Not,
+                                        op: crate::ir::UnaryOp::Not,
                                         operand: call_dst,
                                     },
                                 );
@@ -2729,9 +2729,14 @@ impl<'a> Lowerer<'a> {
                         path: vec![],
                         taken_out: false,
                     },
-                    UnaryOp::Neg | UnaryOp::Not => InstKind::UnaryOp {
+                    UnaryOp::Neg => InstKind::UnaryOp {
                         dst,
-                        op: *op,
+                        op: crate::ir::UnaryOp::Neg(crate::ir::Overflow::Trap),
+                        operand: o,
+                    },
+                    UnaryOp::Not => InstKind::UnaryOp {
+                        dst,
+                        op: crate::ir::UnaryOp::Not,
                         operand: o,
                     },
                 };

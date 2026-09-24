@@ -1,8 +1,8 @@
 use std::fmt;
 
-use acvus_ast::{Literal, UnaryOp};
+use acvus_ast::Literal;
 
-use crate::ir::BinOp;
+use crate::ir::{BinOp, Overflow, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -329,11 +329,17 @@ enum Spelling {
     Call(&'static str),
 }
 
+/// A trapping operation is spelled as the source spells it; a wrapping one,
+/// which only a pass writes, carries `%` after its operator, as Zig spells
+/// its wrapping operators (`+%`, `-%`, `*%`).
 fn fmt_binop(op: BinOp) -> Spelling {
     match op {
-        BinOp::Add => Spelling::Infix("+"),
-        BinOp::Sub => Spelling::Infix("-"),
-        BinOp::Mul => Spelling::Infix("*"),
+        BinOp::Add(Overflow::Trap) => Spelling::Infix("+"),
+        BinOp::Sub(Overflow::Trap) => Spelling::Infix("-"),
+        BinOp::Mul(Overflow::Trap) => Spelling::Infix("*"),
+        BinOp::Add(Overflow::Wrap) => Spelling::Infix("+%"),
+        BinOp::Sub(Overflow::Wrap) => Spelling::Infix("-%"),
+        BinOp::Mul(Overflow::Wrap) => Spelling::Infix("*%"),
         BinOp::Div => Spelling::Infix("/"),
         BinOp::Eq => Spelling::Infix("=="),
         BinOp::Neq => Spelling::Infix("!="),
@@ -346,8 +352,10 @@ fn fmt_binop(op: BinOp) -> Spelling {
         BinOp::Xor => Spelling::Infix("^"),
         BinOp::BitAnd => Spelling::Infix("&"),
         BinOp::BitOr => Spelling::Infix("|"),
-        BinOp::Shl => Spelling::Infix("<<"),
-        BinOp::Shr => Spelling::Infix(">>"),
+        BinOp::Shl(Overflow::Trap) => Spelling::Infix("<<"),
+        BinOp::Shr(Overflow::Trap) => Spelling::Infix(">>"),
+        BinOp::Shl(Overflow::Wrap) => Spelling::Infix("<<%"),
+        BinOp::Shr(Overflow::Wrap) => Spelling::Infix(">>%"),
         BinOp::Mod => Spelling::Infix("%"),
         BinOp::Min => Spelling::Call("min"),
         BinOp::Max => Spelling::Call("max"),
@@ -356,9 +364,9 @@ fn fmt_binop(op: BinOp) -> Spelling {
 
 fn fmt_unaryop(op: UnaryOp) -> &'static str {
     match op {
-        UnaryOp::Neg => "-",
+        UnaryOp::Neg(Overflow::Trap) => "-",
+        UnaryOp::Neg(Overflow::Wrap) => "-%",
         UnaryOp::Not => "!",
-        UnaryOp::Deref => "*",
     }
 }
 

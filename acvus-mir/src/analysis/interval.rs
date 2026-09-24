@@ -22,7 +22,7 @@ use acvus_ast::Literal;
 
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{BinOp, Callee, ForSource, InstKind, PathSeg, RefTarget, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, InstKind, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
 use crate::ty::{IntTy, Mutability, Ty};
 
@@ -745,7 +745,7 @@ impl<'a> Domain<'a> {
             } => self.binop(*dst, *op, *left, *right, facts),
             InstKind::UnaryOp {
                 dst,
-                op: acvus_ast::UnaryOp::Not,
+                op: UnaryOp::Not,
                 operand,
             } => {
                 if let Some(test) = facts.tests.get(operand).copied() {
@@ -790,13 +790,17 @@ impl<'a> Domain<'a> {
             return;
         };
         let (l, r) = (facts.interval(left), facts.interval(right));
+        let by = |x: Interval, k: i128, overflow: Overflow| match overflow {
+            Overflow::Trap => Self::shift_exactly(x, k, ty),
+            Overflow::Wrap => self.shift(x, k, ty),
+        };
         let shifted = match op {
-            BinOp::Add => match (l.constant(), r.constant()) {
-                (_, Some(k)) => self.shift(l, k, ty),
-                (Some(k), None) => self.shift(r, k, ty),
+            BinOp::Add(overflow) => match (l.constant(), r.constant()) {
+                (_, Some(k)) => by(l, k, overflow),
+                (Some(k), None) => by(r, k, overflow),
                 (None, None) => None,
             },
-            BinOp::Sub => r.constant().and_then(|k| self.shift(l, k.checked_neg()?, ty)),
+            BinOp::Sub(overflow) => r.constant().and_then(|k| by(l, k.checked_neg()?, overflow)),
             _ => None,
         };
         if let Some(interval) = shifted {
@@ -804,8 +808,25 @@ impl<'a> Domain<'a> {
         }
     }
 
-    /// `x + k` at width `ty`, which wraps (RFC-0037): `None` where the domain
-    /// cannot show that no value of `x` wraps.
+    /// `x + k` at width `ty` for a trapping `+` or `-`: the exact interval
+    /// met with the width's range. A run whose result leaves the width
+    /// ended at the operation (RFC-0037 rule 3), so every value the result
+    /// holds where it is read is `x + k` over the integers, and within the
+    /// width. An end the domain cannot state stays unbounded.
+    fn shift_exactly(x: Interval, k: i128, ty: IntTy) -> Option<Interval> {
+        let met = |end: Endpoint| match end {
+            Endpoint::Const(c) => Endpoint::Const(c.clamp(ty.min(), ty.max())),
+            symbolic => symbolic,
+        };
+        Some(Interval {
+            lo: x.lo.and_then(|lo| lo.plus(k)).map(met),
+            hi: x.hi.and_then(|hi| hi.plus(k)).map(met),
+        })
+    }
+
+    /// `x + k` at width `ty` for a wrapping `+` or `-`, which a pass wrote
+    /// (RFC-0037 rule 3): `None` where the domain cannot show that no value
+    /// of `x` wraps.
     fn shift(&self, x: Interval, k: i128, ty: IntTy) -> Option<Interval> {
         if k >= 0 {
             let hi = self.at_most_max(x.hi?, k, ty)?;

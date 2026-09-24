@@ -108,6 +108,30 @@ fn one_past_the_counter_stays_checked() {
     checked("let v = vec([1, 2, 3]); let t = 0; for i in 0..v.len() { t = t + v[i + 1]; } t");
 }
 
+/// `i + 1 > i` for the program's trapping `+`, and `n - 1 < n` for its `-`
+/// (RFC-0037 rule 3): `v.len() - 1` is one below the length, since a run in
+/// which it leaves `u64` ended there, so `i + 1` for `i` below it is below
+/// the length. Were the two to wrap, `v.len() - 1` at an empty `v` would be
+/// `u64::MAX`, and neither bound would hold.
+#[test]
+fn one_past_a_counter_below_the_length_less_one_indexes_unchecked() {
+    proven(
+        "let v = vec([1, 2, 3]); let t = 0; \
+         for i in 0..v.len() - 1 { t = t + v[i + 1]; } t",
+    );
+}
+
+/// `i - 1 < i` for a counter whose start the domain does not know: the
+/// counter is below the length, and the program's `-` does not wrap, so
+/// the upper bound moves down with it whatever the lower one is.
+#[test]
+fn one_before_a_counter_from_an_unknown_start_indexes_unchecked() {
+    proven(
+        "let v = vec([1, 2, 3]); let a = v.len() - v.len() + 1; let t = 0; \
+         for i in a..v.len() { t = t + v[i - 1]; } t",
+    );
+}
+
 #[test]
 fn an_index_derived_elsewhere_stays_checked() {
     checked("let v = vec([1, 2, 3]); let n = v.len(); let j = n - n + 5; v[j]");

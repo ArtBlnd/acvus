@@ -511,13 +511,25 @@ fn a_trap_before_a_step_that_traps_is_declined() {
     ));
 }
 
+/// A bound with no step that traps moves ahead of a call. A product is not
+/// such a bound: the program's `*` traps (RFC-0037 rule 3), and the call
+/// before it can trap too, so that bound is declined.
 #[test]
-fn an_effect_before_a_step_that_cannot_trap_is_no_obstacle() {
+fn an_effect_before_a_bound_that_cannot_trap_is_no_obstacle() {
     let source = format!(
         "{WORD_N_AND_M} let d = 0; let s = 0; let i = 0; \
-         while i < {{ d = opaque(n); n * m }} {{ s = s + i + d; i = i + 1; }} s"
+         while i < {{ d = opaque(n); 10 }} {{ s = s + i + d; i = i + 1; }} s"
     );
     let o = Promoted::with_externs(&source, opaque);
     let loop_ = o.sole_loop();
     o.range(loop_);
+}
+
+#[test]
+fn a_call_before_a_product_is_declined() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let s = 0; let i = 0; \
+         while i < {{ d = opaque(n); n * m }} {{ s = s + i + d; i = i + 1; }} s"
+    );
+    assert_still_a_while(&Promoted::with_externs(&source, opaque), &source);
 }

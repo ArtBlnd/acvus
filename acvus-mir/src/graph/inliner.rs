@@ -1273,7 +1273,7 @@ mod tests {
             vec![
                 InstKind::BinOp {
                     dst: v(1),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(0),
                 },
@@ -1529,7 +1529,7 @@ mod tests {
             (0..adds)
                 .map(|n| InstKind::BinOp {
                     dst: ValueId::from_raw(n + 1),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(n),
                     right: v(0),
                 })

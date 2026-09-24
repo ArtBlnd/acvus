@@ -21,12 +21,17 @@
 //!
 //! Until `bb8207f` the criterion was purity instead, and purity is not
 //! infallibility: integer division and remainder panic at zero and at
-//! `MIN / -1` (RFC-0037), and at that time `+` was checked too, so hoisting
-//! `i + 1` out of a loop body made `let i = 250; while i < @n { i = i + 1; }
-//! i` with `n: u8 = 255` overflow where the program returns `255`. The
-//! arithmetic now wraps as Rust's release build does; the hoist would
-//! still return the wrong value, and `/` still panics off the program's
-//! path.
+//! `MIN / -1`, and the program's `+`, `-`, `*`, negation and shifts trap
+//! where they overflow (RFC-0037 rules 2 and 3), so hoisting `i + 1` out of
+//! a loop body made `let i = 250; while i < @n { i = i + 1; } i` with
+//! `n: u8 = 255` overflow where the program returns `255`. An operation that
+//! can trap moves only onto exactly the paths it ran on (RFC-0048 rule 8),
+//! which control equivalence is. It is not ordered with effects: which
+//! effects a run issued before a trap is not stated, so `/` moves past a
+//! call between the two blocks as any operation does. An operation a pass
+//! wrote wraps and cannot trap; it moves as every other operation here that
+//! has no effect does, by the same equivalence, since a move that ran it on
+//! another path would still spend the work there.
 //!
 //! A Spawn is never moved: the work starts at the Spawn, and issuing it on
 //! a path that would not have reached it speculates an effect (RFC-0007).
@@ -605,7 +610,9 @@ enum Hoistable {
 /// change nothing. An unknown kind is not movable.
 fn hoistable(loans: &Loans<'_>, kind: &InstKind) -> Hoistable {
     match kind {
-        // Arithmetic / logic.
+        // Arithmetic / logic. An operation that can trap and one that
+        // cannot move alike: control equivalence keeps the first on exactly
+        // the paths it ran on, and costs the second only work it did.
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => Hoistable::ControlEquivalent,
 
         // A word constant; a heap value is built where it is used.
@@ -1841,7 +1848,7 @@ mod tests {
                 },
                 InstKind::UnaryOp {
                     dst: v(1),
-                    op: acvus_ast::UnaryOp::Not,
+                    op: crate::ir::UnaryOp::Not,
                     operand: v(0),
                 },
                 InstKind::Return {
@@ -1906,7 +1913,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(0),
                 },
@@ -1977,7 +1984,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(0),
                 },
@@ -2052,7 +2059,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(0),
                 },
@@ -2659,13 +2666,13 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(3),
                     right: v(3),
                 },
                 InstKind::BinOp {
                     dst: v(4),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(1),
                     right: v(2),
                 },
@@ -2717,7 +2724,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(5),
                     right: v(5),
                 },
@@ -2730,7 +2737,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(1),
                     right: v(2),
                 },
@@ -2780,7 +2787,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(5),
                     right: v(5),
                 },
@@ -2790,7 +2797,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(1),
                     right: v(4),
                 },
@@ -2838,7 +2845,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(5),
                     right: v(5),
                 },
@@ -2849,7 +2856,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(1),
                     right: v(2),
                 },
@@ -2908,7 +2915,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(5),
                     right: v(5),
                 },
@@ -2918,7 +2925,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(6),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(4),
                     right: v(2),
                 },
@@ -2994,7 +3001,7 @@ mod tests {
         };
         let add = |dst, left, right| InstKind::BinOp {
             dst,
-            op: crate::ir::BinOp::Add,
+            op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
             left,
             right,
         };

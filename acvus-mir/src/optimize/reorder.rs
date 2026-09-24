@@ -698,7 +698,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(4),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(1),
                     right: v(3),
                 },
@@ -819,7 +819,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(7),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(5),
                     right: v(6),
                 },
@@ -858,7 +858,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(1),
                 },
@@ -897,7 +897,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(1),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(0),
                 },

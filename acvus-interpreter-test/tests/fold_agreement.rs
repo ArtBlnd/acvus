@@ -4,13 +4,20 @@
 //! Each case is one edge written twice: once with the operands the pass
 //! can read as constants, and once with the same values arriving through
 //! the page, where it cannot. The two runs must leave the same register
-//! word, so a fold that disagreed with `ops::arith` on a wrap, a negative
-//! dividend or a NaN bit pattern fails here.
+//! word or end with the same trap, so a fold that disagreed with
+//! `ops::arith` on an overflow, a negative dividend or a NaN bit pattern
+//! fails here.
 
-use acvus_interpreter::Value;
-use acvus_interpreter_test::{Context, run_script, typed};
+use std::sync::Arc;
+
+use acvus_interpreter::{HostError, SequentialExecutor, Value};
+use acvus_interpreter_test::{
+    Context, compile_script_mode, execute_compiled, run_script, split_context, typed,
+};
 use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
+
+const ADD_OVERFLOW: &str = "attempt to add with overflow";
 
 /// One edge written twice.
 struct Agreement {
@@ -54,10 +61,37 @@ where
     folded.bits()
 }
 
+/// The text of the trap a run ends with.
+async fn trap_of(i: &Interner, source: &str, context: Context, ret: Ty) -> String {
+    let (context_types, snapshot) = split_context(i, context);
+    let compiled = compile_script_mode(i, source, &context_types, ret);
+    let (_, mut interp) = execute_compiled(i, compiled, snapshot, Arc::new(SequentialExecutor));
+    match interp.execute().await {
+        Err(HostError::Trapped { message }) => message,
+        Ok(value) => panic!("`{source}` does not trap, it runs to {value:?}"),
+        Err(other) => panic!("`{source}` does not trap, it ends with {other:?}"),
+    }
+}
+
+/// The trap both spellings end with.
+async fn trapped_alike<C>(i: &Interner, case: Agreement, ret: Ty, context: C) -> String
+where
+    C: Fn(&Interner) -> Context,
+{
+    let folded = trap_of(i, case.folded, context(i), ret.clone()).await;
+    let through = trap_of(i, case.through_the_page, context(i), ret).await;
+    assert_eq!(
+        folded, through,
+        "`{}` and `{}` disagree",
+        case.folded, case.through_the_page
+    );
+    folded
+}
+
 #[tokio::test]
-async fn an_addition_past_the_width_wraps_the_same_way_folded() {
+async fn an_addition_past_the_width_traps_the_same_way_folded() {
     let i = Interner::new();
-    let byte = agreed(
+    let byte = trapped_alike(
         &i,
         Agreement {
             folded: "250 + 10",
@@ -67,9 +101,9 @@ async fn an_addition_past_the_width_wraps_the_same_way_folded() {
         |i| integers(i, IntTy::U8, &[("a", 250), ("b", 10)]),
     )
     .await;
-    assert_eq!(IntTy::U8.read(byte), 4);
+    assert_eq!(byte, ADD_OVERFLOW);
 
-    let widest = agreed(
+    let widest = trapped_alike(
         &i,
         Agreement {
             folded: "9223372036854775807 + 1",
@@ -79,7 +113,35 @@ async fn an_addition_past_the_width_wraps_the_same_way_folded() {
         |i| integers(i, IntTy::I64, &[("a", i64::MAX as u64), ("b", 1)]),
     )
     .await;
-    assert_eq!(IntTy::I64.read(widest), i128::from(i64::MIN));
+    assert_eq!(widest, ADD_OVERFLOW);
+}
+
+#[tokio::test]
+async fn an_addition_up_to_the_width_is_the_same_word_folded() {
+    let i = Interner::new();
+    let byte = agreed(
+        &i,
+        Agreement {
+            folded: "250 + 5",
+            through_the_page: "@a + @b",
+        },
+        Ty::Int(IntTy::U8),
+        |i| integers(i, IntTy::U8, &[("a", 250), ("b", 5)]),
+    )
+    .await;
+    assert_eq!(IntTy::U8.read(byte), 255);
+
+    let widest = agreed(
+        &i,
+        Agreement {
+            folded: "9223372036854775806 + 1",
+            through_the_page: "@a + @b",
+        },
+        Ty::I64,
+        |i| integers(i, IntTy::I64, &[("a", (i64::MAX - 1) as u64), ("b", 1)]),
+    )
+    .await;
+    assert_eq!(IntTy::I64.read(widest), i128::from(i64::MAX));
 }
 
 #[tokio::test]
@@ -111,9 +173,9 @@ async fn a_negative_dividend_keeps_its_sign_folded() {
 }
 
 #[tokio::test]
-async fn two_constants_joined_across_one_add_wrap_the_same() {
+async fn two_constants_joined_across_one_add_trap_the_same() {
     let i = Interner::new();
-    let byte = agreed(
+    let byte = trapped_alike(
         &i,
         Agreement {
             folded: "@a + 1 + 2",
@@ -123,7 +185,23 @@ async fn two_constants_joined_across_one_add_wrap_the_same() {
         |i| integers(i, IntTy::U8, &[("a", 254), ("b", 3)]),
     )
     .await;
-    assert_eq!(IntTy::U8.read(byte), 1);
+    assert_eq!(byte, ADD_OVERFLOW);
+}
+
+#[tokio::test]
+async fn two_constants_joined_across_one_add_reach_the_width_the_same() {
+    let i = Interner::new();
+    let byte = agreed(
+        &i,
+        Agreement {
+            folded: "@a + 1 + 2",
+            through_the_page: "@a + @b",
+        },
+        Ty::Int(IntTy::U8),
+        |i| integers(i, IntTy::U8, &[("a", 252), ("b", 3)]),
+    )
+    .await;
+    assert_eq!(IntTy::U8.read(byte), 255);
 }
 
 #[tokio::test]

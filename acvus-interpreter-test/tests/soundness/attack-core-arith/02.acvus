@@ -1,3 +1,3 @@
-// expect 1
-// the call settles the width, and u8 addition wraps
+// expect attempt to add with overflow
+// the call settles the width, and a u8 addition past it traps
 let f = |k| -> k + 7; f(250u8)

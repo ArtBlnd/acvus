@@ -13,10 +13,14 @@
 //! - `a·v` and `v + b` of an affine `v`, with `a` and `b` invariant, are
 //!   affine: `{a·base, a·step}` and `{base + b, step}`.
 //!
-//! Only integers are affine. `+` and `*` wrap at the operand's width
-//! (RFC-0037), and arithmetic modulo `2^width` is a ring, so `base + k·step`
-//! is the value exactly however it was accumulated. A float accumulated `k`
-//! times carries the rounding of every step, which is a different number
+//! Only integers are affine, and a `+` or `*` of either kind makes one
+//! (`ir::Overflow`). A wrapping one is arithmetic modulo `2^width`, a
+//! ring; a trapping one gives the integer result on every run that goes
+//! past it, since a run whose result does not fit ends there (RFC-0037
+//! rule 3), and that result is the same word modulo `2^width`. So on every
+//! run that reaches it, `base + k·step` computed modulo `2^width` is the
+//! value exactly however it was accumulated. A float accumulated `k` times
+//! carries the rounding of every step, which is a different number
 //! (RFC-0056), so a float counter is not an induction variable, and
 //! `analysis::carried` classifies it as state.
 //!
@@ -40,8 +44,10 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, InstKind, ValueId};
 use crate::ty::Ty;
 
-/// Whether `+` and `*` at `ty` are arithmetic in a ring: exact under
-/// reassociation and distribution, as wrapping integers are (RFC-0037).
+/// Whether `+` and `*` at `ty` are arithmetic in a ring on every run that
+/// reaches them: exact under reassociation and distribution modulo
+/// `2^width`, as a wrapping integer operation is and as a trapping one is
+/// wherever it does not end the run (RFC-0037 rule 3).
 pub fn exact_under_wrapping(ty: &Ty) -> bool {
     matches!(ty, Ty::Int(_))
 }
@@ -124,7 +130,10 @@ impl AffineValues {
             else {
                 continue;
             };
-            let Some(sum) = arithmetic.get(next).filter(|a| a.op == BinOp::Add) else {
+            let Some(sum) = arithmetic
+                .get(next)
+                .filter(|a| matches!(a.op, BinOp::Add(_)))
+            else {
                 continue;
             };
             let Some(step) = sum.other_than(param) else {
@@ -173,7 +182,7 @@ impl AffineValues {
                     invariant,
                 };
                 let affine = match operation.op {
-                    BinOp::Mul => Affine {
+                    BinOp::Mul(_) => Affine {
                         base: known.base.clone().mul(term.clone()),
                         step: known.step.clone().mul(term),
                         derivation: Derivation::Scaled {
@@ -181,7 +190,7 @@ impl AffineValues {
                             factor: operand,
                         },
                     },
-                    BinOp::Add => Affine {
+                    BinOp::Add(_) => Affine {
                         base: known.base.clone().add(term),
                         step: known.step.clone(),
                         derivation: Derivation::Offset {

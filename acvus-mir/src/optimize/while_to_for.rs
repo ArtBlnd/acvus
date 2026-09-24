@@ -11,10 +11,13 @@
 //! interpreter. `acvus_interpreter::ops::control::Range` runs the body while
 //! `T::read(at) < T::read(hi)` and then advances with `wrapping_add` at `T`;
 //! the `while` compares with `ops::arith::word::lt` at the same `T` and its
-//! `i + 1` wraps at `T` (RFC-0037). Both start at `b` on every entry, so both
-//! loops see `b + k` on their `k`-th header visit. If either operation
-//! changes, the corpus under `acvus-interpreter-test/tests/soundness/
-//! while-to-for` is what disagrees across optimization levels.
+//! `i + 1` is the program's trapping `+` at `T` (RFC-0037 rule 3). Both
+//! advance only from a counter that compared below `n`, so neither leaves
+//! the width: the range never wraps and the `+` never traps. Both start at
+//! `b` on every entry, so both loops see `b + k` on their `k`-th header
+//! visit. If either operation changes, the corpus under
+//! `acvus-interpreter-test/tests/soundness/while-to-for` is what disagrees
+//! across optimization levels.
 //!
 //! The machine reads a range's bounds on the edge that enters the loop,
 //! before the header runs. A bound the header computes is therefore
@@ -29,15 +32,17 @@
 //! gives the same value, and raises the same trap, on every header visit.
 //! The header runs on every entry before any body block, so one evaluation
 //! on the entering edge is that first visit moved ahead of the header's
-//! other instructions. A `/`, a `%` and a call can trap, so a bound holding
-//! one is promoted only when no header instruction before its last such
-//! step, other than a step of the bound, has an effect or can trap: then
-//! the entry raises exactly the trap the first visit raised, and in the
-//! header's order.
+//! other instructions, onto exactly the paths it ran on. A trapping `+`,
+//! `-` or `*`, a `/`, a `%` and a call can trap, so a bound holding one is
+//! promoted only when no header instruction before its last such step,
+//! other than a step of the bound, can trap: then the entry raises exactly
+//! the trap the first visit raised, and in the header's order. An effect
+//! before it does not decline: a trap is not ordered with effects
+//! (RFC-0048 rule 8).
 
 use acvus_ast::{Literal, Span, SuffixedInt};
 
-use crate::ir::BinOp;
+use crate::ir::{BinOp, Overflow, UnaryOp};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -124,13 +129,16 @@ enum Operand {
 }
 
 /// The integer operations a bound may hold. Each is a function of its two
-/// words at the width (RFC-0037): `+`, `-` and `*` wrap, and `/` and `%`
-/// panic on a zero divisor and on the signed minimum divided by `-1`.
+/// words at the width (RFC-0037): a trapping `+`, `-` or `*` traps where its
+/// exact result leaves the width, a wrapping one wraps, and `/` and `%`
+/// panic on a zero divisor and on the signed minimum divided by `-1`. The
+/// copy on the entering edge is the same operation, its `Overflow`
+/// included.
 #[derive(Clone, Copy)]
 enum Arith {
-    Add,
-    Sub,
-    Mul,
+    Add(Overflow),
+    Sub(Overflow),
+    Mul(Overflow),
     Div,
     Rem,
 }
@@ -138,9 +146,9 @@ enum Arith {
 impl Arith {
     fn of(op: BinOp) -> Option<Self> {
         match op {
-            BinOp::Add => Some(Self::Add),
-            BinOp::Sub => Some(Self::Sub),
-            BinOp::Mul => Some(Self::Mul),
+            BinOp::Add(overflow) => Some(Self::Add(overflow)),
+            BinOp::Sub(overflow) => Some(Self::Sub(overflow)),
+            BinOp::Mul(overflow) => Some(Self::Mul(overflow)),
             BinOp::Div => Some(Self::Div),
             BinOp::Mod => Some(Self::Rem),
             _ => None,
@@ -149,19 +157,16 @@ impl Arith {
 
     fn op(self) -> BinOp {
         match self {
-            Self::Add => BinOp::Add,
-            Self::Sub => BinOp::Sub,
-            Self::Mul => BinOp::Mul,
+            Self::Add(overflow) => BinOp::Add(overflow),
+            Self::Sub(overflow) => BinOp::Sub(overflow),
+            Self::Mul(overflow) => BinOp::Mul(overflow),
             Self::Div => BinOp::Div,
             Self::Rem => BinOp::Mod,
         }
     }
 
     fn traps(self) -> bool {
-        match self {
-            Self::Add | Self::Sub | Self::Mul => false,
-            Self::Div | Self::Rem => true,
-        }
+        self.op().can_trap_on_integers()
     }
 }
 
@@ -350,16 +355,26 @@ impl Recognizer<'_> {
             .iter()
             .enumerate()
             .filter(|(position, _)| !steps.iter().any(|step| step.header_position == *position))
-            .all(|(_, inst)| self.neither_acts_nor_traps(&inst.kind))
+            .all(|(_, inst)| self.cannot_trap(&inst.kind))
     }
 
-    fn neither_acts_nor_traps(&self, kind: &InstKind) -> bool {
+    /// Whether `kind` cannot end the run. An effect does not enter: a trap
+    /// is not ordered with effects (RFC-0048 rule 8). Every kind not named
+    /// here is taken to trap.
+    fn cannot_trap(&self, kind: &InstKind) -> bool {
+        let on_integers = |value: &ValueId| matches!(self.cfg.val_types[value], Ty::Int(_));
         match kind {
-            InstKind::Const { .. } | InstKind::Ref { .. } | InstKind::Cast { .. } => true,
+            InstKind::Const { .. }
+            | InstKind::Ref { .. }
+            | InstKind::Cast { .. }
+            | InstKind::Merge { .. } => true,
             InstKind::BinOp { op, left, .. } => {
-                !(matches!(op, BinOp::Div | BinOp::Mod)
-                    && matches!(self.cfg.val_types[left], Ty::Int(_)))
+                !(op.can_trap_on_integers() && on_integers(left))
             }
+            InstKind::UnaryOp { op, operand, .. } => match op {
+                UnaryOp::Neg(Overflow::Trap) => !on_integers(operand),
+                UnaryOp::Neg(Overflow::Wrap) | UnaryOp::Not => true,
+            },
             _ => false,
         }
     }

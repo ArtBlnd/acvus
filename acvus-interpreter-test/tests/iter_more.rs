@@ -369,21 +369,35 @@ async fn a_panic_three_sync_stages_deep_unwinds_out_of_the_pipeline() {
     run_script_mode(&i, source, context, Ty::I64).await;
 }
 
-/// `0 + MAX`, `1 + MAX`, `2 + MAX`, `3 + MAX` are `MAX`, `MIN`, `MIN + 1`,
-/// `MIN + 2`, and their sum modulo `2^64` is `2`.
-#[tokio::test]
-async fn arithmetic_three_sync_stages_deep_wraps_at_each_stage() {
-    let i = Interner::new();
-    let source = "range(0, 4) | map(|x| -> x) | map(|x| -> x) | map(|x| -> x + @big) | sum()";
-    let context: Context = [(
+const THREE_STAGES_DEEP: &str =
+    "range(0, 4) | map(|x| -> x) | map(|x| -> x) | map(|x| -> x + @big) | sum()";
+
+fn big(i: &Interner, value: i64) -> Context {
+    [(
         i.intern("big"),
-        typed(acvus_mir::ty::Ty::I64, Value::int(i64::MAX)),
+        typed(acvus_mir::ty::Ty::I64, Value::int(value)),
     )]
     .into_iter()
-    .collect();
+    .collect()
+}
 
+/// `10 + 0` to `10 + 3`, summed.
+#[tokio::test]
+async fn arithmetic_three_sync_stages_deep_runs_at_each_stage() {
+    let i = Interner::new();
     assert_eq!(
-        run_script_mode(&i, source, context, Ty::I64).await.as_int(),
-        2
+        run_script_mode(&i, THREE_STAGES_DEEP, big(&i, 10), Ty::I64)
+            .await
+            .as_int(),
+        46
     );
+}
+
+/// `1 + MAX` is the program's `+` past the width, and it traps three stages
+/// deep as it does anywhere (RFC-0037 rule 3).
+#[tokio::test]
+#[should_panic(expected = "attempt to add with overflow")]
+async fn arithmetic_three_sync_stages_deep_traps_past_the_width() {
+    let i = Interner::new();
+    run_script_mode(&i, THREE_STAGES_DEEP, big(&i, i64::MAX), Ty::I64).await;
 }

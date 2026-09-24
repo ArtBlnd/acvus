@@ -53,13 +53,19 @@
 //! hoist that puts `k` and `x` above the header. It needs the preheader a
 //! block of its own that jumps to the header, and one latch.
 //!
-//! # Why this is not a rounding change
+//! # Why this is not a rounding change, and introduces no trap
 //!
-//! `(i0 + n*c) * k` and `i0*k + n*(c*k)` are the same integer: `+` and `*`
-//! wrap at the operand's width (RFC-0037), and wrapping arithmetic is
-//! arithmetic modulo `2^width`, where multiplication distributes over
-//! addition exactly. Neither `*` nor `+` can raise — only `/` and `%` can —
-//! so no trap moves and none is introduced.
+//! `(i0 + n*c) * k` and `i0*k + n*(c*k)` are the same integer modulo
+//! `2^width`, where multiplication distributes over addition exactly. The
+//! reduced `i * k + x` is the program's own, trapping operations
+//! (RFC-0037 rule 3): on every run that goes past them their result is the
+//! integer one, the same word modulo `2^width`, so the derived counter
+//! holds it. The start, the step and the latch's advance are operations
+//! this pass writes, and they wrap: the start is computed before the first
+//! iteration and the advance after the last one, on values the program
+//! never computed, so a trapping one could end a run the program defines.
+//! The pass drops the program's two operations and with them their traps,
+//! as that rule lets a pass drop one; it moves none.
 //!
 //! In floating point the two are *not* the same number: the accumulated
 //! form carries the rounding error of every earlier step. The measurement
@@ -80,7 +86,7 @@
 
 use acvus_ast::{Literal, Span};
 
-use crate::ir::BinOp;
+use crate::ir::{BinOp, Overflow};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};
@@ -387,7 +393,7 @@ impl Scope<'_> {
             for (inst, item) in self.cfg.blocks[block.0].insts.iter().enumerate() {
                 let InstKind::BinOp {
                     dst,
-                    op: BinOp::Mul,
+                    op: BinOp::Mul(_),
                     ..
                 } = &item.kind
                 else {
@@ -440,7 +446,7 @@ impl Scope<'_> {
             for (inst, item) in self.cfg.blocks[block.0].insts.iter().enumerate() {
                 let InstKind::BinOp {
                     dst,
-                    op: BinOp::Add,
+                    op: BinOp::Add(_),
                     ..
                 } = &item.kind
                 else {
@@ -589,14 +595,14 @@ impl Emit<'_> {
         match (left, right) {
             (zero, _) | (_, zero) if zero.is(0) => zero,
             (one, other) | (other, one) if one.is(1) => other,
-            (left, right) => self.setup(BinOp::Mul, left, right),
+            (left, right) => self.setup(BinOp::Mul(Overflow::Wrap), left, right),
         }
     }
 
     fn add(&mut self, left: SetupOperand, right: SetupOperand) -> SetupOperand {
         match (left, right) {
             (zero, other) | (other, zero) if zero.is(0) => other,
-            (left, right) => self.setup(BinOp::Add, left, right),
+            (left, right) => self.setup(BinOp::Add(Overflow::Wrap), left, right),
         }
     }
 }
@@ -638,7 +644,7 @@ fn apply(
     let start = emit.value(start);
     let mut preheader_insts = std::mem::take(&mut emit.words);
     preheader_insts.append(&mut emit.setup);
-    let (advanced, advanced_inst) = emit.arith(BinOp::Add, derived, step);
+    let (advanced, advanced_inst) = emit.arith(BinOp::Add(Overflow::Wrap), derived, step);
 
     let preheader = &mut cfg.blocks[frame.preheader.0];
     preheader.insts.extend(preheader_insts);

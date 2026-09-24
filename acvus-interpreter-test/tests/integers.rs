@@ -44,36 +44,56 @@ async fn arithmetic_runs_at_the_operands_width() {
 }
 
 #[tokio::test]
-async fn arithmetic_past_the_width_wraps_at_the_width() {
+#[should_panic(expected = "attempt to add with overflow")]
+async fn an_addition_past_the_width_traps_with_rust_s_text() {
     let i = Interner::new();
-    let v = run_script(
+    run_script(
         &i,
         "@b + 10",
         ctx(&i, "b", IntTy::U8, 250),
         Ty::Int(IntTy::U8),
     )
     .await;
-    assert_eq!(IntTy::U8.read(v.bits()), 4);
-    let v = run_script(
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to multiply with overflow")]
+async fn a_multiplication_past_the_width_traps_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(
         &i,
         "@b * 2",
         ctx(&i, "b", IntTy::U8, 200),
         Ty::Int(IntTy::U8),
     )
     .await;
-    assert_eq!(IntTy::U8.read(v.bits()), 144);
-    let v = run_script(&i, "@b - 1", ctx(&i, "b", IntTy::U8, 0), Ty::Int(IntTy::U8)).await;
-    assert_eq!(IntTy::U8.read(v.bits()), 255);
-    let v = run_script(&i, "-@n", ctx(&i, "n", IntTy::I8, 0x80), Ty::Int(IntTy::I8)).await;
-    assert_eq!(IntTy::I8.read(v.bits()), -128);
-    let v = run_script(
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to subtract with overflow")]
+async fn a_subtraction_below_zero_traps_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(&i, "@b - 1", ctx(&i, "b", IntTy::U8, 0), Ty::Int(IntTy::U8)).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to negate with overflow")]
+async fn negating_the_minimum_traps_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(&i, "-@n", ctx(&i, "n", IntTy::I8, 0x80), Ty::Int(IntTy::I8)).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "attempt to add with overflow")]
+async fn an_addition_past_the_widest_signed_width_traps_with_rust_s_text() {
+    let i = Interner::new();
+    run_script(
         &i,
         "@n + 1",
         ctx(&i, "n", IntTy::I64, i64::MAX as u64),
         Ty::I64,
     )
     .await;
-    assert_eq!(v.as_int(), i64::MIN);
 }
 
 #[tokio::test]
@@ -179,17 +199,18 @@ async fn a_literal_matches_at_the_source_s_width() {
 }
 
 #[tokio::test]
-async fn arithmetic_inside_a_while_wraps_as_the_arithmetic_does() {
+async fn arithmetic_inside_a_while_runs_at_the_width() {
     let i = Interner::new();
     let source = "let acc = @b; let k = 0; while k < 4 { acc = acc + @b; k = k + 1; } acc";
-    let v = run_script_mode(&i, source, ctx(&i, "b", IntTy::U8, 250), Ty::Int(IntTy::U8)).await;
-    assert_eq!(IntTy::U8.read(v.bits()), 226, "250 * 5 mod 256");
+    let v = run_script_mode(&i, source, ctx(&i, "b", IntTy::U8, 51), Ty::Int(IntTy::U8)).await;
+    assert_eq!(IntTy::U8.read(v.bits()), 255, "51 * 5");
 }
 
 /// Code motion on `bb8207f` hoisted `i + 1` into the loop head above the
 /// `JumpIf`, so the exit iteration evaluated `255 + 1`, measured
-/// 2026-09-18. It raised `integer overflow` then; it returns `0` now, and
-/// the returned value is what fails here either way.
+/// 2026-09-18. It raised `integer overflow` then, and the program's `+`
+/// traps again now (RFC-0037 rule 3), so the hoist would fail here as a
+/// trap.
 #[tokio::test]
 async fn an_operation_in_a_loop_body_does_not_run_on_the_exit_iteration() {
     let i = Interner::new();

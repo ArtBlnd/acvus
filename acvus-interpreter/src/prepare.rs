@@ -16,13 +16,13 @@ use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use acvus_ast::{Literal, UnaryOp};
+use acvus_ast::Literal;
 use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width};
 use acvus_mir::analysis::inst_info;
 use acvus_mir::graph::{Access, QualifiedRef};
 use acvus_mir::ir::{
-    BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
-    RefTarget, SwitchKey, TwoWay, ValueId, two_way,
+    BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, Overflow,
+    PathSeg, RefTarget, SwitchKey, TwoWay, UnaryOp, ValueId, two_way,
 };
 use acvus_mir::ty::{CastTy, IntTy, Task, Ty};
 use acvus_utils::{Astr, Interner, LocalIdOps};
@@ -6936,7 +6936,7 @@ mod recognizer_tests {
     fn add(dst: usize, left: usize, right: usize) -> Inst {
         inst(InstKind::BinOp {
             dst: val(dst),
-            op: BinOp::Add,
+            op: BinOp::Add(Overflow::Trap),
             left: val(left),
             right: val(right),
         })
@@ -7554,7 +7554,7 @@ mod assignment_tests {
     fn add(dst: usize, left: usize, right: usize) -> Inst {
         inst(InstKind::BinOp {
             dst: val(dst),
-            op: BinOp::Add,
+            op: BinOp::Add(Overflow::Trap),
             left: val(left),
             right: val(right),
         })
@@ -7935,9 +7935,12 @@ impl ChainRun {
 /// recognizer.
 fn arith_of(op: BinOp) -> Option<Arith> {
     match op {
-        BinOp::Add => Some(Arith::Add),
-        BinOp::Sub => Some(Arith::Sub),
-        BinOp::Mul => Some(Arith::Mul),
+        BinOp::Add(Overflow::Trap) => Some(Arith::Add),
+        BinOp::Sub(Overflow::Trap) => Some(Arith::Sub),
+        BinOp::Mul(Overflow::Trap) => Some(Arith::Mul),
+        BinOp::Add(Overflow::Wrap) => Some(Arith::WrappingAdd),
+        BinOp::Sub(Overflow::Wrap) => Some(Arith::WrappingSub),
+        BinOp::Mul(Overflow::Wrap) => Some(Arith::WrappingMul),
         BinOp::Div => Some(Arith::Div),
         BinOp::Mod => Some(Arith::Rem),
         BinOp::Eq
@@ -7949,8 +7952,8 @@ fn arith_of(op: BinOp) -> Option<Arith> {
         | BinOp::BitAnd
         | BinOp::BitOr
         | BinOp::Xor
-        | BinOp::Shl
-        | BinOp::Shr
+        | BinOp::Shl(_)
+        | BinOp::Shr(_)
         | BinOp::And
         | BinOp::Or
         | BinOp::Min
@@ -7960,6 +7963,16 @@ fn arith_of(op: BinOp) -> Option<Arith> {
 
 /// The comparison a chain's root applies, for the operators that are one.
 ///
+/// The chain node a negation becomes, of either `Overflow`; `!` is not
+/// one. Exhaustive over `UnaryOp` for the reason `arith_of` is.
+fn negation_of(op: UnaryOp) -> Option<Arith> {
+    match op {
+        UnaryOp::Neg(Overflow::Trap) => Some(Arith::Neg),
+        UnaryOp::Neg(Overflow::Wrap) => Some(Arith::WrappingNeg),
+        UnaryOp::Not => None,
+    }
+}
+
 /// Exhaustive over `BinOp` for the same reason `arith_of` is.
 fn compare_of(op: BinOp) -> Option<Compare> {
     match op {
@@ -7969,16 +7982,16 @@ fn compare_of(op: BinOp) -> Option<Compare> {
         BinOp::Gte => Some(Compare::Ge),
         BinOp::Eq => Some(Compare::Eq),
         BinOp::Neq => Some(Compare::Ne),
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
+        BinOp::Add(_)
+        | BinOp::Sub(_)
+        | BinOp::Mul(_)
         | BinOp::Div
         | BinOp::Mod
         | BinOp::BitAnd
         | BinOp::BitOr
         | BinOp::Xor
-        | BinOp::Shl
-        | BinOp::Shr
+        | BinOp::Shl(_)
+        | BinOp::Shr(_)
         | BinOp::And
         | BinOp::Or
         | BinOp::Min
@@ -8025,7 +8038,7 @@ impl Growing<'_> {
             }
             InstKind::UnaryOp { op, operand, .. } => {
                 let same = chain_ty(self.prep.ty(*operand)) == Some(self.ty);
-                (same && matches!(op, UnaryOp::Neg)).then_some(at)
+                (same && negation_of(*op).is_some()).then_some(at)
             }
             _ => None,
         }
@@ -8097,13 +8110,15 @@ impl Growing<'_> {
                     right: Box::new(right),
                 }
             }
-            InstKind::UnaryOp { operand, .. } => {
+            InstKind::UnaryOp { op, operand, .. } => {
+                let negation = negation_of(*op)
+                    .unwrap_or_else(|| panic!("absorbable admitted {op:?}, which is not a node"));
                 let operand = *operand;
                 self.nodes += 1;
                 let left = self.emit(operand);
                 let right = Tree::Unread;
                 Tree::Node {
-                    op: Arith::Neg,
+                    op: negation,
                     left: Box::new(left),
                     right: Box::new(right),
                 }
@@ -8572,7 +8587,7 @@ impl<'a> Prepare<'a> {
             }
             InstKind::UnaryOp {
                 dst, op, operand, ..
-            } if matches!(op, UnaryOp::Neg) => (chain_ty(self.ty(*operand))?, *dst),
+            } if negation_of(*op).is_some() => (chain_ty(self.ty(*operand))?, *dst),
             _ => return None,
         };
 
@@ -8603,11 +8618,13 @@ impl<'a> Prepare<'a> {
                         right,
                     }
                 }
-                InstKind::UnaryOp { operand, .. } => {
+                InstKind::UnaryOp { op, operand, .. } => {
+                    let negation = negation_of(*op)
+                        .unwrap_or_else(|| panic!("a chain root is not a negation: {op:?}"));
                     let left = growing.emit(*operand);
                     let right = Tree::Unread;
                     RootNode {
-                        op: Root::Num(Arith::Neg),
+                        op: Root::Num(negation),
                         left,
                         right,
                     }

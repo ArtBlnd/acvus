@@ -495,16 +495,25 @@ pub enum Step {
     VariantPayload,
 }
 
-/// `ops::chain` applies `Neg` to the left operand alone, and a chain node
-/// carrying it is built with its right leaf unread.
+/// `ops::chain` applies `Neg` and `WrappingNeg` to the left operand alone, and a
+/// chain node carrying either is built with its right leaf unread.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Arith {
+    /// At an integer width the trapping operation (`ir::Overflow::Trap`),
+    /// as `Sub`, `Mul` and `Neg` are; at `f64` the IEEE one.
     Add,
     Sub,
     Mul,
     Div,
     Rem,
     Neg,
+    /// At an integer width the wrapping operation (`ir::Overflow::Wrap`), as
+    /// `WrappingSub`, `WrappingMul` and `WrappingNeg` are; at `f64` the IEEE
+    /// one.
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+    WrappingNeg,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

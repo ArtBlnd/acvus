@@ -83,8 +83,9 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
 7. **Bounds-check elimination is an interval domain and nothing more.** Each
    integer value carries `[lo, hi]`, each endpoint a constant, another SSA
    value, a slice's length or a container's element count, plus a constant.
-   `± constant` is interval arithmetic, ⊤ where the width could wrap; φ is
-   join, widened at a loop header; everything else is ⊤. The edge of a
+   `± constant` is exact interval arithmetic at the program's `+` and `-`
+   (RFC-0037), ⊤ where a pass's could wrap; φ is join, widened at a loop
+   header; everything else is ⊤. The edge of a
    comparison that holds `i < n` sets `i.hi = n − 1`; a range `for` gives its
    counter `[at, hi − 1]`. A call's result reads its callee's postconditions
    (RFC-0082 rule 4): `ret = len(x)` makes it `x`'s length. A slice's length

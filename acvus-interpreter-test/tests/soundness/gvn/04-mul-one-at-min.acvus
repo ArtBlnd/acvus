@@ -1,2 +1,2 @@
-// expect 0
+// expect attempt to add with overflow
 let x = @min; x * 1 + 1 * x

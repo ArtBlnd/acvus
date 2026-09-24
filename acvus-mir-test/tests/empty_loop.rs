@@ -11,7 +11,8 @@ use acvus_mir::analysis::inst_info;
 use acvus_mir::cfg::{Block, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{
-    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
+    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Overflow, Stages,
+    ValueId,
 };
 use acvus_mir::optimize::{empty_loop, fold, gvn};
 use acvus_mir::printer::dump_with;
@@ -236,7 +237,7 @@ fn summed_after_numbering(first: Operation, second: Operation) -> Numbered {
     };
     let first = apply(first);
     let second = apply(second);
-    let sum = hand.binop(BinOp::Add, first, second);
+    let sum = hand.binop(BinOp::Add(Overflow::Trap), first, second);
     hand.returns(sum);
     let mut cfg = hand.cfg(&interner, 0);
     gvn::run(&mut cfg);
@@ -306,7 +307,7 @@ fn min_or_max_of_one_value_is_that_value() {
         let a = hand.param(Ty::I64);
         let b = hand.param(Ty::I64);
         let same = hand.binop(op, a, a);
-        let sum = hand.binop(BinOp::Add, same, b);
+        let sum = hand.binop(BinOp::Add(Overflow::Trap), same, b);
         hand.returns(sum);
         let mut cfg = hand.cfg(&interner, 0);
         gvn::run(&mut cfg);
@@ -525,7 +526,7 @@ fn an_empty_range_that_defines_its_count_is_max_casts_a_subtraction_and_a_jump()
         },
         InstKind::BinOp {
             dst: trip,
-            op: BinOp::Sub,
+            op: BinOp::Sub(Overflow::Wrap),
             left: sub_left,
             right: sub_right,
         },
@@ -558,7 +559,7 @@ fn a_u64_range_is_not_cast() {
             ..
         },
         InstKind::BinOp {
-            op: BinOp::Sub,
+            op: BinOp::Sub(Overflow::Wrap),
             left,
             right,
             ..

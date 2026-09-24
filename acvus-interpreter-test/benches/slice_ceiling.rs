@@ -339,19 +339,19 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
     let [query, keys] = operands();
     b.push(InstKind::BinOp {
         dst: c.product,
-        op: acvus_mir::ir::BinOp::Mul,
+        op: acvus_mir::ir::BinOp::Mul(acvus_mir::ir::Overflow::Trap),
         left: query.element,
         right: keys.element,
     })
     .push(InstKind::BinOp {
         dst: c.sum,
-        op: acvus_mir::ir::BinOp::Add,
+        op: acvus_mir::ir::BinOp::Add(acvus_mir::ir::Overflow::Trap),
         left: c.accumulator,
         right: c.product,
     })
     .push(InstKind::BinOp {
         dst: c.next_index,
-        op: acvus_mir::ir::BinOp::Add,
+        op: acvus_mir::ir::BinOp::Add(acvus_mir::ir::Overflow::Trap),
         left: c.index,
         right: c.one,
     })

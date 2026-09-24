@@ -398,7 +398,7 @@ mod tests {
                 },
                 InstKind::BinOp {
                     dst: v(2),
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v(0),
                     right: v(1),
                 },

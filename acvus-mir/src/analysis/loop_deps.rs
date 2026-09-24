@@ -2091,12 +2091,17 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
                     _ => return None,
                 };
                 let (left, right) = (self.form(*left)?, self.form(*right)?);
+                // An integer `+` or `*` of either kind is one law: on every
+                // run that goes past a trapping one its result is the
+                // integer one, and modulo `2^width` that is the wrapping
+                // one's (RFC-0037 rule 3). What joins the partials is an
+                // operation the lowerer writes, so it wraps.
                 let law = match op {
-                    BinOp::Add => LawOp::Add,
-                    BinOp::Mul => LawOp::Mul,
+                    BinOp::Add(_) => LawOp::Add,
+                    BinOp::Mul(_) => LawOp::Mul,
                     // `a - b` is `a + (-b)`, exactly at every width and in
                     // floats alike.
-                    BinOp::Sub => {
+                    BinOp::Sub(_) => {
                         return match right {
                             Form::Free => left.then(Step::Op {
                                 op: LawOp::Add,

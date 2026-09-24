@@ -1,4 +1,4 @@
-use acvus_ast::{Literal, Span, UnaryOp};
+use acvus_ast::{Literal, Span};
 use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -15,18 +15,41 @@ pub enum Intrinsic {
 
 acvus_utils::declare_local_id!(pub ValueId);
 
+/// What an integer `+`, `-`, `*`, `<<`, `>>` or negation does where its
+/// exact result does not fit its width, or where a shift's amount is the
+/// width or more (RFC-0037 rule 3).
+///
+/// It is a required field of each operation that has the question, and of
+/// no other, so a match on one of them names which kind it handles, and a
+/// pass reads the kind here rather than working out where the operation
+/// came from. At `f64` the question does not arise: both kinds are the IEEE
+/// operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Overflow {
+    /// The source's operation. The program means nothing where it
+    /// overflows, and a run that reaches such an overflow ends there with
+    /// Rust's text. Only the lowering writes it; a pass that rewrites an
+    /// operation into an equal one keeps it, and no pass writes it anew.
+    Trap,
+    /// An operation a pass writes, which the program never asked for: the
+    /// result modulo `2^width`, and a shift's amount modulo the width, as
+    /// Rust's `wrapping_*`.
+    Wrap,
+}
+
 /// A binary operation of the MIR: the source's operators, and `Min` and
 /// `Max`, which no source expression lowers to and only a pass writes.
 ///
 /// It is its own enum, and not `acvus_ast::BinOp`, so that the parser
 /// cannot write `Min` or `Max`: the parser's type has no such variant, and
 /// the lowering reaches this enum through `From<acvus_ast::BinOp>`, which
-/// yields neither.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// yields neither. The same conversion is where a source operator becomes
+/// an [`Overflow::Trap`] operation, the one kind the source writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
+    Add(Overflow),
+    Sub(Overflow),
+    Mul(Overflow),
     Div,
     Eq,
     Neq,
@@ -39,8 +62,8 @@ pub enum BinOp {
     Xor,
     BitAnd,
     BitOr,
-    Shl,
-    Shr,
+    Shl(Overflow),
+    Shr(Overflow),
     Mod,
     /// The lesser of two integers of one width, compared at that width's
     /// signedness. Total at every width: it neither wraps nor traps.
@@ -49,12 +72,42 @@ pub enum BinOp {
     Max,
 }
 
+impl BinOp {
+    /// Whether the operation on two integers can end the run: a trapping
+    /// `+`, `-`, `*` or shift, and `/` and `%` (RFC-0037 rules 2 and 3).
+    /// Such an operation moves only onto exactly the paths it ran on
+    /// (RFC-0048 rule 8). On any other operand type no operation traps.
+    pub fn can_trap_on_integers(self) -> bool {
+        match self {
+            BinOp::Add(overflow)
+            | BinOp::Sub(overflow)
+            | BinOp::Mul(overflow)
+            | BinOp::Shl(overflow)
+            | BinOp::Shr(overflow) => overflow == Overflow::Trap,
+            BinOp::Div | BinOp::Mod => true,
+            BinOp::Eq
+            | BinOp::Neq
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Lte
+            | BinOp::Gte
+            | BinOp::And
+            | BinOp::Or
+            | BinOp::Xor
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Min
+            | BinOp::Max => false,
+        }
+    }
+}
+
 impl From<acvus_ast::BinOp> for BinOp {
     fn from(op: acvus_ast::BinOp) -> BinOp {
         match op {
-            acvus_ast::BinOp::Add => BinOp::Add,
-            acvus_ast::BinOp::Sub => BinOp::Sub,
-            acvus_ast::BinOp::Mul => BinOp::Mul,
+            acvus_ast::BinOp::Add => BinOp::Add(Overflow::Trap),
+            acvus_ast::BinOp::Sub => BinOp::Sub(Overflow::Trap),
+            acvus_ast::BinOp::Mul => BinOp::Mul(Overflow::Trap),
             acvus_ast::BinOp::Div => BinOp::Div,
             acvus_ast::BinOp::Eq => BinOp::Eq,
             acvus_ast::BinOp::Neq => BinOp::Neq,
@@ -67,11 +120,26 @@ impl From<acvus_ast::BinOp> for BinOp {
             acvus_ast::BinOp::Xor => BinOp::Xor,
             acvus_ast::BinOp::BitAnd => BinOp::BitAnd,
             acvus_ast::BinOp::BitOr => BinOp::BitOr,
-            acvus_ast::BinOp::Shl => BinOp::Shl,
-            acvus_ast::BinOp::Shr => BinOp::Shr,
+            acvus_ast::BinOp::Shl => BinOp::Shl(Overflow::Trap),
+            acvus_ast::BinOp::Shr => BinOp::Shr(Overflow::Trap),
             acvus_ast::BinOp::Mod => BinOp::Mod,
         }
     }
+}
+
+/// A one-operand operation of the MIR.
+///
+/// It is its own enum, and not `acvus_ast::UnaryOp`, for the reason
+/// [`BinOp`] is: negation carries its [`Overflow`], which the parser does
+/// not know, and a dereference is a `Take` in the MIR (RFC-0018), so the
+/// enum has no variant for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnaryOp {
+    /// `-x`: a signed integer or `f64`. A trapping negation of the width's
+    /// minimum ends the run.
+    Neg(Overflow),
+    /// `!b` on a `Bool`.
+    Not,
 }
 
 /// Decision not to build, RFC-0051: no `Float` and no `Bytes` key. Equality

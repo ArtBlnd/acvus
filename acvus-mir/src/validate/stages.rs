@@ -87,7 +87,7 @@ mod tests {
     use crate::analysis::inst_info;
     use crate::analysis::loop_deps::{LoopDeps, Order, Token};
     use crate::cfg::{BlockIdx, Terminator};
-    use crate::ir::{BinOp, DebugInfo, ExitTrip, ForSource, Inst, Stages, ValueId};
+    use crate::ir::{BinOp, DebugInfo, ExitTrip, ForSource, Inst, Overflow, Stages, ValueId};
     use crate::laws::LawTable;
     use crate::ty::{Task, Ty};
     use acvus_ast::Literal;
@@ -175,7 +175,7 @@ mod tests {
                 label: PURE,
                 params: vec![v(I)],
             },
-            binop(T, I, I, BinOp::Add),
+            binop(T, I, I, BinOp::Add(Overflow::Trap)),
             InstKind::Jump {
                 label: S_JOIN,
                 args: vec![],
@@ -184,7 +184,7 @@ mod tests {
                 label: S_JOIN,
                 params: vec![],
             },
-            binop(S_NEXT, H_S, T, BinOp::Add),
+            binop(S_NEXT, H_S, T, BinOp::Add(Overflow::Trap)),
             InstKind::Jump {
                 label: P_JOIN,
                 args: vec![],
@@ -193,7 +193,7 @@ mod tests {
                 label: P_JOIN,
                 params: vec![],
             },
-            binop(P_NEXT, H_P, I, BinOp::Mul),
+            binop(P_NEXT, H_P, I, BinOp::Mul(Overflow::Trap)),
             InstKind::Jump {
                 label: HEADER,
                 args: vec![v(S_NEXT), v(P_NEXT)],
@@ -202,7 +202,7 @@ mod tests {
                 label: EXIT,
                 params: vec![],
             },
-            binop(SUM, H_S, H_P, BinOp::Add),
+            binop(SUM, H_S, H_P, BinOp::Add(Overflow::Trap)),
             InstKind::Return {
                 value: v(SUM),
                 order: None,
@@ -410,9 +410,9 @@ mod tests {
     fn a_cycle_split_across_two_stages_is_refused() {
         let module = body(|insts| {
             let t = position(insts, defines(T));
-            insts.insert(t + 1, binop(SPARE, H_S, T, BinOp::Add));
+            insts.insert(t + 1, binop(SPARE, H_S, T, BinOp::Add(Overflow::Trap)));
             let next = position(insts, defines(S_NEXT));
-            insts[next] = binop(S_NEXT, SPARE, I, BinOp::Add);
+            insts[next] = binop(S_NEXT, SPARE, I, BinOp::Add(Overflow::Trap));
         });
         let found = refusals(&module);
         assert!(
@@ -431,7 +431,7 @@ mod tests {
     fn a_stage_reading_a_carried_value_before_its_cycle_is_refused() {
         let module = body(|insts| {
             let t = position(insts, defines(T));
-            insts.insert(t + 1, binop(SPARE, H_P, I, BinOp::Add));
+            insts.insert(t + 1, binop(SPARE, H_P, I, BinOp::Add(Overflow::Trap)));
         });
         let found = refusals(&module);
         assert!(

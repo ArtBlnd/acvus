@@ -23,8 +23,9 @@ fn optimized(source: &str, context: fn(&Interner) -> FxHashMap<Astr, Ty>) -> Str
 ///
 /// IV canonicalization computes `acc`, an induction variable of the promoted
 /// `for`, after the loop as its step times the trip count, so the folded
-/// constant is found as that step. This test looks where RFC-0066 rule 7
-/// writes it, and moves with that pass.
+/// constant is found as that step, in the wrapping `*%` the pass writes.
+/// This test looks where RFC-0066 rule 7 writes it, and moves with that
+/// pass.
 #[test]
 fn two_constants_under_one_add_are_one_constant() {
     let listing = optimized(
@@ -32,7 +33,7 @@ fn two_constants_under_one_add_are_one_constant() {
          while i < @n { acc = acc + p.x + p.y; i = i + 1; } acc",
         signed_n,
     );
-    assert!(listing.contains("* 3 ("), "no folded step: {listing}");
+    assert!(listing.contains("*% 3 ("), "no folded step: {listing}");
     assert!(
         !listing.contains(" 1 (") && !listing.contains(" 2 ("),
         "an addend stood beside the folded constant: {listing}"

@@ -68,6 +68,7 @@ mod num_std;
 mod object_field_drop;
 mod one_name_one_type;
 mod operators;
+mod overflow_trap;
 mod option_form;
 mod option_methods;
 mod option_payload_drop;

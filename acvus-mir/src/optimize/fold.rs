@@ -1,11 +1,14 @@
 //! A constant expression folds (RFC-0055).
 //!
 //! The values this pass computes are the values `acvus-interpreter`'s
-//! `ops::arith` computes at run time, at the operand's width: `+`, `-` and
-//! `*` wrap, a shift takes its amount modulo the width, a comparison reads
+//! `ops::arith` computes at run time, at the operand's width (RFC-0037): a
+//! trapping `+`, `-` or `*` traps where its exact result does not fit and a
+//! trapping shift where its amount is not below the width, a wrapping one
+//! wraps and takes a shift's amount modulo the width, a comparison reads
 //! both operands at the width's own signedness, and `/` and `%` panic on a
-//! zero divisor and on a quotient that leaves the width. Change an
-//! operation there and the matching function here moves with it;
+//! zero divisor and on a quotient that leaves the width. An operation that
+//! would trap is not folded: it stays, and traps if it is reached. Change
+//! an operation there and the matching function here moves with it;
 //! `acvus-interpreter-test/tests/fold_agreement.rs` runs both.
 //!
 //! The pass introduces no operator the body did not already hold. It
@@ -18,25 +21,46 @@
 //! compares bit patterns here, so a folded NaN would carry the compiler's
 //! pattern where the machine's belongs.
 
-use acvus_ast::{Literal, UnaryOp};
+use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{BinOp, InstKind, ValueId};
+use crate::ir::{BinOp, InstKind, Overflow, UnaryOp, ValueId};
 use crate::ty::{CastTy, IntTy, Ty, WordTy};
 
 pub fn run(cfg: &mut CfgBody) {
     while rewrite_once(cfg) {}
 }
 
-const ASSOCIATIVE: [BinOp; 5] = [
-    BinOp::Add,
-    BinOp::Mul,
-    BinOp::BitAnd,
-    BinOp::BitOr,
-    BinOp::Xor,
-];
+/// Whether two constants under `op` at one integer width join.
+///
+/// A trapping `+` or `*` joins as well: the joined constant is folded only
+/// where it fits the width, and then `x + (a + b)` is the integer
+/// `(x + a) + b` on every run where neither of the two traps, and fits
+/// wherever that does. The join drops the inner operation's trap, as
+/// RFC-0037 rule 3 lets a pass drop one. Two operations join only at one
+/// kind.
+fn associative(op: BinOp) -> bool {
+    match op {
+        BinOp::Add(_) | BinOp::Mul(_) | BinOp::BitAnd | BinOp::BitOr | BinOp::Xor => true,
+        BinOp::Sub(_)
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Shl(_)
+        | BinOp::Shr(_)
+        | BinOp::Eq
+        | BinOp::Neq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte
+        | BinOp::And
+        | BinOp::Or
+        | BinOp::Min
+        | BinOp::Max => false,
+    }
+}
 
 /// Where an instruction sits in the body.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -340,7 +364,7 @@ fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     let Some(k) = int_width(cfg, left) else {
         return false;
     };
-    if !ASSOCIATIVE.contains(&op) {
+    if !associative(op) {
         return false;
     }
     let Some(outer) = facts.split(left, right) else {
@@ -419,18 +443,29 @@ fn int_result(op: BinOp, k: IntTy, a: i128, b: i128) -> Option<Literal> {
     let word = |bits: u64| Some(Literal::Int(k.read(bits)));
     let wrap = |v: i128| word(register_word(v));
     let held = |v: bool| Some(Literal::Bool(v));
+    // The exact result, read from the operands at the width: a product of
+    // two `u64`s can leave `i128`, and then it leaves the width too.
+    let (at_a, at_b) = (k.read(register_word(a)), k.read(register_word(b)));
+    let exact = |v: Option<i128>| v.filter(|v| k.holds(*v)).map(Literal::Int);
+    let shift = |overflow: Overflow| match overflow {
+        Overflow::Trap => trapping_shift_amount(k, at_b),
+        Overflow::Wrap => Some(shift_amount(k, b)),
+    };
     match op {
-        BinOp::Add => wrap(a.wrapping_add(b)),
-        BinOp::Sub => wrap(a.wrapping_sub(b)),
-        BinOp::Mul => wrap(a.wrapping_mul(b)),
+        BinOp::Add(Overflow::Trap) => exact(at_a.checked_add(at_b)),
+        BinOp::Sub(Overflow::Trap) => exact(at_a.checked_sub(at_b)),
+        BinOp::Mul(Overflow::Trap) => exact(at_a.checked_mul(at_b)),
+        BinOp::Add(Overflow::Wrap) => wrap(a.wrapping_add(b)),
+        BinOp::Sub(Overflow::Wrap) => wrap(a.wrapping_sub(b)),
+        BinOp::Mul(Overflow::Wrap) => wrap(a.wrapping_mul(b)),
         BinOp::Div => quotient(k, a, b).map(Literal::Int),
         BinOp::Mod => quotient(k, a, b).map(|_| Literal::Int(a % b)),
         BinOp::BitAnd => wrap(a & b),
         BinOp::BitOr => wrap(a | b),
         BinOp::Xor => wrap(a ^ b),
-        BinOp::Shl => word(register_word(a).wrapping_shl(shift_amount(k, b))),
-        BinOp::Shr if k.signed() => wrap(a >> shift_amount(k, b)),
-        BinOp::Shr => word(register_word(a).wrapping_shr(shift_amount(k, b))),
+        BinOp::Shl(overflow) => word(register_word(a).wrapping_shl(shift(overflow)?)),
+        BinOp::Shr(overflow) if k.signed() => wrap(a >> shift(overflow)?),
+        BinOp::Shr(overflow) => word(register_word(a).wrapping_shr(shift(overflow)?)),
         BinOp::Eq => held(a == b),
         BinOp::Neq => held(a != b),
         BinOp::Lt => held(a < b),
@@ -457,20 +492,27 @@ fn register_word(v: i128) -> u64 {
     v as u64
 }
 
-/// The shift amount `ops::arith::shift_amount` takes: the right operand's
-/// register word modulo the width. A width is at most 64, so the mask
-/// keeps only the low six bits of that word.
+/// The shift amount a wrapping shift takes (`ops::arith::shift_amount`):
+/// the right operand's register word modulo the width. A width is at most
+/// 64, so the mask keeps only the low six bits of that word.
 fn shift_amount(k: IntTy, b: i128) -> u32 {
     (register_word(b) as u32) & (k.bits() - 1)
+}
+
+/// The shift amount a trapping shift takes, where it runs: an amount below
+/// the width. A negative amount is not below it, as Rust's own check reads
+/// the amount unsigned.
+fn trapping_shift_amount(k: IntTy, b: i128) -> Option<u32> {
+    u32::try_from(b).ok().filter(|amount| *amount < k.bits())
 }
 
 fn float_result(op: BinOp, a: f64, b: f64) -> Option<Literal> {
     let num = |v: f64| (!v.is_nan()).then_some(Literal::Float(v));
     let held = |v: bool| Some(Literal::Bool(v));
     match op {
-        BinOp::Add => num(a + b),
-        BinOp::Sub => num(a - b),
-        BinOp::Mul => num(a * b),
+        BinOp::Add(_) => num(a + b),
+        BinOp::Sub(_) => num(a - b),
+        BinOp::Mul(_) => num(a * b),
         BinOp::Div => num(a / b),
         BinOp::Mod => num(a % b),
         BinOp::Eq => held(a.to_bits() == b.to_bits()),
@@ -482,8 +524,8 @@ fn float_result(op: BinOp, a: f64, b: f64) -> Option<Literal> {
         BinOp::BitAnd
         | BinOp::BitOr
         | BinOp::Xor
-        | BinOp::Shl
-        | BinOp::Shr
+        | BinOp::Shl(_)
+        | BinOp::Shr(_)
         | BinOp::And
         | BinOp::Or
         | BinOp::Min
@@ -503,24 +545,66 @@ mod unreachable_from_source {
         Some(Literal::Int(v))
     }
 
+    const TRAP: Overflow = Overflow::Trap;
+    const WRAP: Overflow = Overflow::Wrap;
+
     #[test]
-    fn a_shift_takes_its_amount_modulo_the_width() {
+    fn a_wrapping_shift_takes_its_amount_modulo_the_width() {
         assert_eq!(
-            int_result(BinOp::Shl, IntTy::U8, 200, 9),
+            int_result(BinOp::Shl(WRAP), IntTy::U8, 200, 9),
             int(i128::from(200u8.wrapping_shl(9)))
         );
         assert_eq!(
-            int_result(BinOp::Shr, IntTy::I8, -8, 1),
+            int_result(BinOp::Shr(WRAP), IntTy::I8, -8, 1),
             int(i128::from((-8i8).wrapping_shr(1)))
         );
         assert_eq!(
-            int_result(BinOp::Shr, IntTy::I8, -8, -1),
+            int_result(BinOp::Shr(WRAP), IntTy::I8, -8, -1),
             int(i128::from((-8i8).wrapping_shr(7)))
         );
         assert_eq!(
-            int_result(BinOp::Shr, IntTy::U8, 200, 1),
+            int_result(BinOp::Shr(WRAP), IntTy::U8, 200, 1),
             int(i128::from(200u8.wrapping_shr(1)))
         );
+    }
+
+    /// Rust's `<<` and `>>` check the amount alone: bits shifted out are
+    /// not an overflow, an amount not below the width is.
+    #[test]
+    fn a_trapping_shift_folds_below_the_width_and_not_from_it() {
+        assert_eq!(
+            int_result(BinOp::Shl(TRAP), IntTy::U8, 200, 1),
+            int(i128::from(200u8 << 1))
+        );
+        assert_eq!(
+            int_result(BinOp::Shr(TRAP), IntTy::I8, -8, 1),
+            int(i128::from(-8i8 >> 1))
+        );
+        assert_eq!(int_result(BinOp::Shl(TRAP), IntTy::U8, 1, 8), None);
+        assert_eq!(int_result(BinOp::Shr(TRAP), IntTy::I64, 1, 64), None);
+        assert_eq!(int_result(BinOp::Shr(TRAP), IntTy::I8, -8, -1), None);
+    }
+
+    #[test]
+    fn a_trapping_operation_folds_only_where_its_exact_result_fits() {
+        assert_eq!(int_result(BinOp::Add(TRAP), IntTy::U8, 1, 2), int(3));
+        assert_eq!(int_result(BinOp::Add(TRAP), IntTy::U8, 200, 100), None);
+        assert_eq!(int_result(BinOp::Sub(TRAP), IntTy::U8, 0, 1), None);
+        assert_eq!(int_result(BinOp::Mul(TRAP), IntTy::I8, -64, 2), int(-128));
+        assert_eq!(int_result(BinOp::Mul(TRAP), IntTy::I8, 64, 2), None);
+        let max = i128::from(u64::MAX);
+        assert_eq!(int_result(BinOp::Mul(TRAP), IntTy::U64, max, max), None);
+        assert_eq!(
+            int_result(BinOp::Add(TRAP), IntTy::I64, i128::from(i64::MAX), 0),
+            int(i128::from(i64::MAX))
+        );
+    }
+
+    #[test]
+    fn a_wrapping_operation_folds_by_wrapping() {
+        assert_eq!(int_result(BinOp::Add(WRAP), IntTy::U8, 200, 100), int(44));
+        assert_eq!(int_result(BinOp::Sub(WRAP), IntTy::U8, 0, 1), int(255));
+        assert_eq!(int_result(BinOp::Mul(WRAP), IntTy::I8, 64, 2), int(-128));
     }
 
     #[test]
@@ -555,9 +639,9 @@ fn bool_result(op: BinOp, a: bool, b: bool) -> Option<Literal> {
         BinOp::Xor => Some(Literal::Bool(a ^ b)),
         BinOp::And => Some(Literal::Bool(a && b)),
         BinOp::Or => Some(Literal::Bool(a || b)),
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
+        BinOp::Add(_)
+        | BinOp::Sub(_)
+        | BinOp::Mul(_)
         | BinOp::Div
         | BinOp::Mod
         | BinOp::Lt
@@ -566,8 +650,8 @@ fn bool_result(op: BinOp, a: bool, b: bool) -> Option<Literal> {
         | BinOp::Gte
         | BinOp::BitAnd
         | BinOp::BitOr
-        | BinOp::Shl
-        | BinOp::Shr
+        | BinOp::Shl(_)
+        | BinOp::Shr(_)
         | BinOp::Min
         | BinOp::Max => None,
     }

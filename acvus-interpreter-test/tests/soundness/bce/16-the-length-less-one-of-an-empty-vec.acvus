@@ -1,0 +1,2 @@
+// expect attempt to subtract with overflow
+let v = vec([1]); v.pop(); let t = 0; for i in 0..v.len() - 1 { t = t + v[i + 1]; } t

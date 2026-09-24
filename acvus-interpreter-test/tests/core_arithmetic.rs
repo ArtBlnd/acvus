@@ -131,7 +131,11 @@ fn decimal_division_by_zero_fails_the_run() {
 #[test]
 fn an_integer_literal_meets_an_open_operand() {
     runs_to("let f = |k| -> k + 7; f(3)", "10");
-    runs_to("let f = |k| -> k + 7; f(250u8)", "1");
+    runs_to("let f = |k| -> k + 7; f(248u8)", "255");
+    fails_at_run_with(
+        "let f = |k| -> k + 7; f(250u8)",
+        "attempt to add with overflow",
+    );
     runs_to("let f = |k| -> k * 2; let n = f(3); n - 1", "5");
 }
 

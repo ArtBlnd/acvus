@@ -15,7 +15,7 @@ use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::BinOp;
+use acvus_mir::ir::{BinOp, Overflow};
 use acvus_mir::ir::{
     ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
 };
@@ -198,7 +198,7 @@ fn scaled(c: &Compiled, insts: &[Inst], count: ValueId) -> Option<Scaled> {
     insts.iter().find_map(|inst| match &inst.kind {
         InstKind::BinOp {
             dst,
-            op: BinOp::Mul,
+            op: BinOp::Mul(Overflow::Wrap),
             left,
             right,
         } if *left == count => Some(Scaled {
@@ -256,9 +256,15 @@ fn a_second_counter_is_computed_from_the_first() {
         "the range starts at 0:\n{}",
         full.listing
     );
-    let subtracts = insts
-        .iter()
-        .any(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Sub, .. }));
+    let subtracts = insts.iter().any(|inst| {
+        matches!(
+            inst.kind,
+            InstKind::BinOp {
+                op: BinOp::Sub(_),
+                ..
+            }
+        )
+    });
     assert!(
         !subtracts,
         "`k = counter − 0` is the counter (RFC-0083):\n{}",
@@ -268,7 +274,7 @@ fn a_second_counter_is_computed_from_the_first() {
         scaled(&full, insts, counter).unwrap_or_else(|| panic!("`k · 2`:\n{}", full.listing));
     assert_eq!(advanced.factor, 2);
     assert!(
-        binop(insts, BinOp::Add, base, advanced.product).is_some(),
+        binop(insts, BinOp::Add(Overflow::Wrap), base, advanced.product).is_some(),
         "the body computes `base + k·2`:\n{}",
         full.listing
     );
@@ -283,10 +289,10 @@ fn a_second_counter_is_computed_from_the_first() {
     let advanced =
         scaled(&full, insts, trip_i64).unwrap_or_else(|| panic!("`trip · 2`:\n{}", full.listing));
     assert_eq!(advanced.factor, 2);
-    let exit_j = binop(insts, BinOp::Add, base, advanced.product)
+    let exit_j = binop(insts, BinOp::Add(Overflow::Wrap), base, advanced.product)
         .unwrap_or_else(|| panic!("the exit computes `base + trip·2`:\n{}", full.listing));
     let reads_exit_j = insts.iter().any(|inst| {
-        matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, right, .. } if *right == exit_j)
+        matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add(Overflow::Trap), right, .. } if *right == exit_j)
     });
     assert!(
         reads_exit_j,
@@ -352,7 +358,15 @@ fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_i
         .blocks()
         .filter(|block| *block != loop_.natural.header)
         .flat_map(|block| full.insts(block))
-        .filter(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Mul, .. }))
+        .filter(|inst| {
+            matches!(
+                inst.kind,
+                InstKind::BinOp {
+                    op: BinOp::Mul(_),
+                    ..
+                }
+            )
+        })
         .count();
     assert_eq!(products, 1, "only `acc * 2` multiplies:\n{}", full.listing);
     assert_eq!(full.exit_trip(loop_), ExitTrip::Absent);

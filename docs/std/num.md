@@ -17,17 +17,20 @@ the parse error type lives.
 
 ## The integer rule
 
-The language's own arithmetic is Rust's in a release build, at the width
-(RFC-0037, RFC-0058): `+`, `-`, `*` and negation wrap, a shift takes its
-amount modulo the width, and `/` and `%` trap on a zero divisor and at
-`MIN / -1` with Rust's own texts. `127i8 + 1i8` is `-128`.
+The language's own arithmetic is Rust's in a debug build, at the width
+(RFC-0037, RFC-0058): an overflow is undefined in the language, and this
+implementation traps with Rust's own texts where `+`, `-`, `*` or negation
+leaves the width or a shift's amount is the width or more; `/` and `%` trap
+on a zero divisor and at `MIN / -1`. `127i8 + 1i8` traps with `attempt to
+add with overflow`.
 
-Where Rust's own choice is a debug-build panic, the function here follows
-the language's rule instead: `abs`, `pow`, `div_euclid` and `rem_euclid`
-wrap. The `checked_*`, `wrapping_*`, `saturating_*` and `overflowing_*`
-families are how a script asks for the other answers explicitly. `next_power_of_two` is the
-one exception and traps at every build profile, because Rust's release
-answer there is `0` — a substituted failure, not an arithmetic one.
+The functions here are named, and each keeps the answer its row states:
+`abs`, `pow`, `div_euclid` and `rem_euclid` wrap where Rust's debug build
+panics, as Rust's release build does. The `checked_*`,
+`wrapping_*`, `saturating_*` and `overflowing_*` families are how a script
+asks for each answer explicitly. `next_power_of_two` traps at every build
+profile, because Rust's release answer there is `0` — a substituted
+failure, not an arithmetic one.
 
 ## What `std` has and this module does not
 

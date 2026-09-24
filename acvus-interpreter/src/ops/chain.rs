@@ -13,7 +13,7 @@ use crate::code::{
     Arith, ChainBounds, Code, Compare, Entry, Exit, ExprChain, Op, Root, Shape, Where, successor,
 };
 use crate::machine::Machine;
-use crate::ops::arith::{Int, for_int_ty};
+use crate::ops::arith::{Int, for_int_ty, trapping};
 use crate::ops::cast::AsNum;
 use crate::ops::place::Place;
 use crate::regs::{FrameState, Regs};
@@ -22,18 +22,24 @@ use crate::value::Value;
 
 /// One numeric type a chain runs at: the integer widths and `f64`.
 ///
-/// Integer arithmetic wraps and `/` and `%` keep their two panics, exactly
-/// as the one-operator-per-operation form does — the chain calls the same
-/// `Int` methods, so the panic texts are the same constants.
+/// Integer `add`, `sub`, `mul` and `neg` trap where they overflow and the
+/// `wrapping_` ones wrap (RFC-0037 rule 3), and `/` and `%` keep their two
+/// panics, exactly as the one-operator-per-operation form does — the chain
+/// calls the same functions, so the panic texts are the same constants. At
+/// `f64` both kinds are the IEEE operation.
 pub trait Num: Copy + 'static {
     fn read(bits: u64) -> Self;
     fn word(self) -> u64;
     fn add(self, other: Self) -> Self;
     fn sub(self, other: Self) -> Self;
     fn mul(self, other: Self) -> Self;
+    fn wrapping_add(self, other: Self) -> Self;
+    fn wrapping_sub(self, other: Self) -> Self;
+    fn wrapping_mul(self, other: Self) -> Self;
     fn div(self, other: Self) -> Self;
     fn rem(self, other: Self) -> Self;
     fn neg(self) -> Self;
+    fn wrapping_neg(self) -> Self;
     fn compare(self, other: Self, how: Compare) -> bool;
 
     fn of_i8(v: i8) -> Self;
@@ -103,14 +109,26 @@ macro_rules! impl_num_for_int {
             }
             #[inline(always)]
             fn add(self, other: Self) -> Self {
-                <$t as Int>::wrapping_add(self, other)
+                trapping::add(self, other)
             }
             #[inline(always)]
             fn sub(self, other: Self) -> Self {
-                <$t as Int>::wrapping_sub(self, other)
+                trapping::sub(self, other)
             }
             #[inline(always)]
             fn mul(self, other: Self) -> Self {
+                trapping::mul(self, other)
+            }
+            #[inline(always)]
+            fn wrapping_add(self, other: Self) -> Self {
+                <$t as Int>::wrapping_add(self, other)
+            }
+            #[inline(always)]
+            fn wrapping_sub(self, other: Self) -> Self {
+                <$t as Int>::wrapping_sub(self, other)
+            }
+            #[inline(always)]
+            fn wrapping_mul(self, other: Self) -> Self {
                 <$t as Int>::wrapping_mul(self, other)
             }
             #[inline(always)]
@@ -133,6 +151,10 @@ macro_rules! impl_num_for_int {
             }
             #[inline(always)]
             fn neg(self) -> Self {
+                trapping::neg(self)
+            }
+            #[inline(always)]
+            fn wrapping_neg(self) -> Self {
                 <$t as Int>::wrapping_neg(self)
             }
             #[inline(always)]
@@ -176,6 +198,18 @@ impl Num for f64 {
         self * other
     }
     #[inline(always)]
+    fn wrapping_add(self, other: Self) -> Self {
+        self + other
+    }
+    #[inline(always)]
+    fn wrapping_sub(self, other: Self) -> Self {
+        self - other
+    }
+    #[inline(always)]
+    fn wrapping_mul(self, other: Self) -> Self {
+        self * other
+    }
+    #[inline(always)]
     fn div(self, other: Self) -> Self {
         self / other
     }
@@ -185,6 +219,10 @@ impl Num for f64 {
     }
     #[inline(always)]
     fn neg(self) -> Self {
+        -self
+    }
+    #[inline(always)]
+    fn wrapping_neg(self) -> Self {
         -self
     }
 
@@ -406,9 +444,13 @@ where
         Arith::Add => left.add(right),
         Arith::Sub => left.sub(right),
         Arith::Mul => left.mul(right),
+        Arith::WrappingAdd => left.wrapping_add(right),
+        Arith::WrappingSub => left.wrapping_sub(right),
+        Arith::WrappingMul => left.wrapping_mul(right),
         Arith::Div => left.div(right),
         Arith::Rem => left.rem(right),
         Arith::Neg => left.neg(),
+        Arith::WrappingNeg => left.wrapping_neg(),
     }
 }
 
@@ -581,13 +623,13 @@ macro_rules! instances {
 #[cfg(not(feature = "chain-alphabet-add-sub-mul"))]
 instances!(
     concrete: [Add => add, Mul => mul],
-    generic: [Sub, Div, Rem, Neg],
+    generic: [Sub, Div, Rem, Neg, WrappingAdd, WrappingSub, WrappingMul, WrappingNeg],
 );
 
 #[cfg(feature = "chain-alphabet-add-sub-mul")]
 instances!(
     concrete: [Add => add, Sub => sub, Mul => mul],
-    generic: [Div, Rem, Neg],
+    generic: [Div, Rem, Neg, WrappingAdd, WrappingSub, WrappingMul, WrappingNeg],
 );
 
 fn wrong_shape(shape: Shape, nodes: usize) -> ! {

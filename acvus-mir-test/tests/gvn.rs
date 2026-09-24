@@ -7,7 +7,7 @@ use acvus_ast::Literal;
 use acvus_mir::analysis::affine::for_body;
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::{BinOp, Callee, InstKind};
+use acvus_mir::ir::{BinOp, Callee, InstKind, Overflow};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::Ty;
 use acvus_mir_test::compile_script_module_at;
@@ -118,9 +118,9 @@ fn an_expression_a_dominating_block_computed_is_read_from_there() {
     let contexts = [int("a"), int("b"), ("c", Ty::Bool)];
     let none = Compiled::of(source, &contexts, Opt::None);
     let full = Compiled::of(source, &contexts, Opt::Full);
-    assert_eq!(none.binops(BinOp::Mul), 3, "{}", none.listing);
+    assert_eq!(none.binops(BinOp::Mul(Overflow::Trap)), 3, "{}", none.listing);
     assert_eq!(
-        full.binops(BinOp::Mul),
+        full.binops(BinOp::Mul(Overflow::Trap)),
         1,
         "the entry's `x * y` dominates both arms:\n{}",
         full.listing
@@ -131,7 +131,7 @@ fn an_expression_a_dominating_block_computed_is_read_from_there() {
 fn expressions_in_sibling_branches_stay_apart() {
     let source = "let x = @a; let y = @b; if @c { x * y + 1 } else { x * y - 1 }";
     let full = Compiled::of(source, &[int("a"), int("b"), ("c", Ty::Bool)], Opt::Full);
-    let arms = full.blocks_with(BinOp::Mul);
+    let arms = full.blocks_with(BinOp::Mul(Overflow::Trap));
     assert_eq!(
         arms.len(),
         2,
@@ -145,9 +145,9 @@ fn expressions_in_sibling_branches_stay_apart() {
 fn commuted_operands_are_one_expression() {
     let source = "let x = @a; let y = @b; (x + y) * (y + x) - x * y + y * x";
     let full = Compiled::of(source, &[int("a"), int("b")], Opt::Full);
-    assert_eq!(full.binops(BinOp::Add), 2, "`x + y` once, and the last `+`:\n{}", full.listing);
+    assert_eq!(full.binops(BinOp::Add(Overflow::Trap)), 2, "`x + y` once, and the last `+`:\n{}", full.listing);
     assert_eq!(
-        full.binops(BinOp::Mul),
+        full.binops(BinOp::Mul(Overflow::Trap)),
         2,
         "the square, and `x * y` once:\n{}",
         full.listing
@@ -160,13 +160,13 @@ fn a_float_identity_is_not_simplified() {
          1.0 / (s + p + q) > 0.0";
     let full = Compiled::of(source, &[("f", Ty::Float)], Opt::Full);
     assert_eq!(
-        full.binops(BinOp::Mul),
+        full.binops(BinOp::Mul(Overflow::Trap)),
         2,
         "`z * 1.0` and `z * 0.0` stand:\n{}",
         full.listing
     );
     assert_eq!(
-        full.binops(BinOp::Add),
+        full.binops(BinOp::Add(Overflow::Trap)),
         3,
         "`z + 0.0` is `0.0` at `z = -0.0`, so it stands beside the two sums:\n{}",
         full.listing
@@ -177,7 +177,7 @@ fn a_float_identity_is_not_simplified() {
 fn an_integer_identity_is_its_operand() {
     let source = "let x = @a; (x + 0) * 1 + (0 * x) - 0";
     let full = Compiled::of(source, &[int("a")], Opt::Full);
-    let arithmetic = [BinOp::Add, BinOp::Sub, BinOp::Mul]
+    let arithmetic = [BinOp::Add(Overflow::Trap), BinOp::Sub(Overflow::Trap), BinOp::Mul(Overflow::Trap)]
         .into_iter()
         .map(|op| full.binops(op))
         .sum::<usize>();
@@ -229,7 +229,7 @@ fn an_equal_constant_is_written_again_where_it_is_read() {
         })
         .collect();
     assert_eq!(
-        full.binops(BinOp::Add),
+        full.binops(BinOp::Add(Overflow::Trap)),
         1,
         "the arm's `x + 7` is the entry's:\n{}",
         full.listing

@@ -9,11 +9,11 @@ expression: listing
      4 |   r1 = max(r0, 0 (r2))
      5 |   r3 = r1 as u64
      6 |   r4 = 0 (r2) as u64
-     7 |   r5 = r3 - r4
+     7 |   r5 = r3 -% r4
      8 |   jump L2(r5)
      9 | L2(r6: u64):
     10 |   r7 = r6 as i64
-    12 |   r8 = r7 * 3 (r9)
+    12 |   r8 = r7 *% 3 (r9)
     13 |   commit @n = r0 (not written)
     14 |   return r8
 

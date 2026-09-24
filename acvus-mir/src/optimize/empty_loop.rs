@@ -1,12 +1,13 @@
 //! A `for` whose body does nothing is a jump to its exit (RFC-0088).
 //!
 //! A range's trip count is `(max(hi, at) as u64) − (at as u64)` and not
-//! `max(hi − at, 0)` at the range's width `w`, because the second wraps: at
-//! `i8`, `-100..100` has `hi − at` wrap to `-56`. The `max` compares at `w`'s
-//! own signedness, so `max(hi, at) − at` is the count over the integers,
-//! which lies in `[0, 2^64)`. An integer `Cast` keeps its operand modulo
-//! `2^64` and a `u64` subtraction wraps modulo `2^64` (RFC-0037), so the
-//! difference of the two casts is that count exactly.
+//! `max(hi − at, 0)` at the range's width `w`, because the second leaves the
+//! width: at `i8`, `-100..100` has `hi − at` at `200`. The `max` compares at
+//! `w`'s own signedness, so `max(hi, at) − at` is the count over the
+//! integers, which lies in `[0, 2^64)`. An integer `Cast` keeps its operand
+//! modulo `2^64`, and the subtraction is this pass's, so it wraps modulo
+//! `2^64` (RFC-0037 rule 3): the difference of the two casts is that count
+//! exactly, and at `-5..3` the casts' own difference wraps on the way.
 //!
 //! A slice is declined, not an omission: the MIR has no instruction that
 //! reads a slice's length, and one is not added for this pass.
@@ -17,7 +18,7 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::loops::{NaturalLoop, natural_loops_innermost_first};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{
-    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId,
+    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId,
 };
 use crate::optimize::dce;
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
@@ -197,7 +198,7 @@ impl HeaderTail<'_> {
                 let trip = self.fresh(Ty::U64);
                 self.push(InstKind::BinOp {
                     dst: trip,
-                    op: BinOp::Sub,
+                    op: BinOp::Sub(Overflow::Wrap),
                     left: reached,
                     right: at,
                 });

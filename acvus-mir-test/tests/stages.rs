@@ -13,7 +13,7 @@ use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ir::{BinOp, InstKind, ValueId};
+use acvus_mir::ir::{BinOp, InstKind, Overflow, ValueId};
 use acvus_mir::laws::LawTable;
 use acvus_mir::printer::dump_with_facts;
 use acvus_mir::ty::{Effect, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
@@ -150,7 +150,7 @@ impl Compiled {
             .filter(|(_, blocks)| {
                 blocks.iter().any(|block| {
                     self.cfg.blocks[block.0].insts.iter().any(|inst| {
-                        matches!(&inst.kind, InstKind::BinOp { op: BinOp::Mul, left, right, .. }
+                        matches!(&inst.kind, InstKind::BinOp { op: BinOp::Mul(_), left, right, .. }
                             if words.contains(left) || words.contains(right))
                     })
                 })
@@ -636,7 +636,7 @@ fn a_counter_expression_an_in_order_stage_alone_reads_is_reduced_inside_that_sta
     let stage = c.stage_blocks().len() - 1;
     let advanced_in_stage = c.stage_blocks()[stage].iter().any(|block| {
         c.cfg.blocks[block.0].insts.iter().any(|inst| {
-            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, right, .. }
+            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add(Overflow::Wrap), left, right, .. }
                 if *left == derived || *right == derived)
         })
     });
@@ -908,7 +908,7 @@ fn a_reduced_counter_advances_at_the_end_membership_gives_its_stage() {
     };
     let advances = |cfg: &CfgBody, block: BlockIdx| {
         cfg.blocks[block.0].insts.iter().any(|inst| {
-            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, .. } if *left == derived)
+            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add(Overflow::Wrap), left, .. } if *left == derived)
         })
     };
     let stage = c.shapes().len() - 1;
@@ -984,7 +984,7 @@ fn an_any_order_cycle_s_update_lies_where_membership_puts_it() {
     };
     let updating = c.stages_where(|cfg, block| {
         cfg.blocks[block.0].insts.iter().any(|inst| {
-            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, right, .. }
+            matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add(Overflow::Trap), left, right, .. }
                 if *left == s || *right == s)
         })
     });

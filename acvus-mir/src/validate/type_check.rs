@@ -18,9 +18,9 @@ use crate::ir::{
 use crate::ir::{ExternInstance, ForSource, IndexMode};
 use crate::ty::{CastTy, Mutability, Ty, TypeArg};
 use crate::validate::move_check::is_move_only;
-use acvus_ast::{Literal, Span, UnaryOp};
+use acvus_ast::{Literal, Span};
 
-use crate::ir::BinOp;
+use crate::ir::{BinOp, UnaryOp};
 use acvus_utils::{Astr, LocalIdOps};
 use rustc_hash::FxHashMap;
 
@@ -1388,16 +1388,6 @@ impl CheckCtx {
                 let operand_ty = ty!(*operand);
                 let dst_ty = ty!(*dst);
                 match op {
-                    UnaryOp::Deref => errors.push(ValidationError {
-                        scope: self.scope_name.clone(),
-                        inst_index: pc,
-                        span,
-                        kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "UnaryOp(Deref)".to_string(),
-                            expected_constructor: "Load".to_string(),
-                            actual: operand_ty.clone(),
-                        },
-                    }),
                     UnaryOp::Not => {
                         self.assert_match(
                             pc,
@@ -1418,7 +1408,7 @@ impl CheckCtx {
                             errors,
                         );
                     }
-                    UnaryOp::Neg => {
+                    UnaryOp::Neg(_) => {
                         self.assert_match(
                             pc,
                             span,
@@ -2673,7 +2663,7 @@ mod tests {
         let module = make_module(
             vec![inst(InstKind::BinOp {
                 dst: v2,
-                op: crate::ir::BinOp::Add,
+                op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                 left: v0,
                 right: v1,
             })],

@@ -75,6 +75,40 @@ fn an_addition_after_a_merge_rises_above_the_branch() {
     assert!(at(body, " + ") < at(body, IF_TERMINATOR), "{ir}");
 }
 
+/// A division can trap, so it moves only onto exactly the paths it ran on,
+/// and it is not ordered with effects (RFC-0048 rule 8): written after the
+/// branch that pushes, it rises into the entry, above the branch and the
+/// push in it.
+#[test]
+fn a_division_after_a_merge_rises_above_an_effect_in_the_branch() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let a = @a; let b = @b; let v = vec([1]); if @c { v.push(2); }; \
+         a / b + v.len() as i64",
+        &ctx(&i, &[("a", Ty::I64), ("b", Ty::I64), ("c", Ty::Bool)]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert!(at(body, " / ") < at(body, IF_TERMINATOR), "{ir}");
+    assert!(at(body, " / ") < at(body, "&mut v"), "{ir}");
+}
+
+/// The same division inside the branch runs only where the branch is taken,
+/// so it stays below the test.
+#[test]
+fn a_division_behind_a_branch_stays_behind_it() {
+    let i = Interner::new();
+    let ir = compile_script_mode_optimized(
+        &i,
+        "let a = @a; let b = @b; let x = 0; if @c { x = a / b; }; x",
+        &ctx(&i, &[("a", Ty::I64), ("b", Ty::I64), ("c", Ty::Bool)]),
+    )
+    .unwrap();
+    let body = main_body(&ir);
+    assert!(at(body, IF_TERMINATOR) < at(body, " / "), "{ir}");
+}
+
 // -- Loop depth -----------------------------------------------------
 
 fn loop_tests_before(body: &str, needle: &str) -> usize {

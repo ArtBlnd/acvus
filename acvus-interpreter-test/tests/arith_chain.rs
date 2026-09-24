@@ -73,8 +73,8 @@ async fn a_chain_runs_at_each_integer_width() {
     let widths = [
         Width {
             ty: IntTy::I8,
-            n: 100,
-            expected: -58,
+            n: 50,
+            expected: 98,
         },
         Width {
             ty: IntTy::I16,

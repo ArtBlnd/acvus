@@ -11,11 +11,12 @@
 //! joined `AnyOrder`, and the pass reduces only what an `InOrder` join reads
 //! (RFC-0066 rule 7).
 //!
-//! `*` and `+` wrap at the operand's width (RFC-0037), so no product of an
-//! induction variable can raise and there is no trap to move. What the
-//! overflow case measures is therefore the wrap: the two forms must carry
-//! the same two's-complement bits past `i64::MAX`. The iteration a loop
-//! stops on is measured separately, with a division, which does raise.
+//! The program's `*` and `+` trap where they leave the width (RFC-0037
+//! rule 3), so each case here is one whose recurrence stays inside `i64`.
+//! The pass's own start, step and advance wrap: the edge case is a counter
+//! whose advance after the last iteration passes `i64::MAX`, a value the
+//! program never computes, and the two forms must still agree. The
+//! iteration a loop stops on is measured separately, with a division.
 
 use acvus_interpreter::Value;
 use acvus_interpreter_test::*;
@@ -40,19 +41,10 @@ fn ctx(i: &Interner, entries: &[(&str, i64)]) -> Context {
         .collect()
 }
 
-/// The sum at the width and the wrap RFC-0037 gives `*` and `+`.
-fn reference(case: &Case) -> i64 {
-    (0..case.n).fold(0i64, |acc, i| {
-        acc.wrapping_add(i.wrapping_mul(case.factor).wrapping_add(case.offset))
-    })
-}
-
-/// `acc * 2 + (i * k + x)` over the iterations, at the same width and wrap.
+/// `acc * 2 + (i * k + x)` over the iterations. A case is one whose
+/// program does not overflow, and Rust's own operators here say so.
 fn doubling_reference(case: &Case) -> i64 {
-    (0..case.n).fold(0i64, |acc, i| {
-        acc.wrapping_mul(2)
-            .wrapping_add(i.wrapping_mul(case.factor).wrapping_add(case.offset))
-    })
+    (0..case.n).fold(0i64, |acc, i| acc * 2 + (i * case.factor + case.offset))
 }
 
 const BOTH_FORMS: &str = "\
@@ -115,12 +107,12 @@ async fn the_reduced_form_and_the_unreduced_one_agree() {
             offset: -11,
         },
         Case {
-            n: 64,
+            n: 40,
             factor: -9,
             offset: 0,
         },
         Case {
-            n: 100,
+            n: 50,
             factor: 1,
             offset: 1,
         },
@@ -139,39 +131,30 @@ async fn the_reduced_form_and_the_unreduced_one_agree() {
     }
 }
 
-const WRAPS_ON_THE_FIFTH_ITERATION: i64 = 3_000_000_000_000_000_000;
+/// The second iteration's product is `5 · 10^18`, inside `i64`; the
+/// reduced counter's advance after it is `10^19 + 1`, past `i64::MAX`.
+const PASSES_THE_WIDTH_ON_THE_LAST_ADVANCE: i64 = 5_000_000_000_000_000_000;
 
 #[tokio::test]
-async fn a_product_that_wraps_carries_the_same_bits_in_both_forms() {
-    for n in [3i64, 4, 5, 6, 9] {
-        let case = Case {
-            n,
-            factor: WRAPS_ON_THE_FIFTH_ITERATION,
-            offset: 1,
-        };
-        assert_eq!(
-            run_case(BOTH_FORMS, &case).await,
-            0,
-            "n={n}: the two forms disagree past i64::MAX"
-        );
-        assert_eq!(
-            run_case(REDUCED_ONLY, &case).await,
-            doubling_reference(&case),
-            "n={n}: the reduced loop does not wrap as `*` and `+` do"
-        );
-    }
-    let five = Case {
-        n: 5,
-        factor: WRAPS_ON_THE_FIFTH_ITERATION,
+async fn a_counter_advanced_past_the_width_after_the_last_iteration_agrees() {
+    let case = Case {
+        n: 2,
+        factor: PASSES_THE_WIDTH_ON_THE_LAST_ADVANCE,
         offset: 1,
     };
-    let unwrapped: i128 = (0..five.n)
-        .map(|i| i as i128 * five.factor as i128 + five.offset as i128)
-        .sum();
-    assert_ne!(
-        reference(&five) as i128,
-        unwrapped,
-        "the case is an overflow case only if it overflows"
+    assert!(
+        case.factor.checked_mul(case.n).is_none(),
+        "the advance after the last iteration leaves the width"
+    );
+    assert_eq!(
+        run_case(BOTH_FORMS, &case).await,
+        0,
+        "the two forms disagree where the advance passes i64::MAX"
+    );
+    assert_eq!(
+        run_case(REDUCED_ONLY, &case).await,
+        doubling_reference(&case),
+        "the reduced loop does not compute the recurrence"
     );
 }
 
@@ -215,9 +198,7 @@ async fn with_division(n: i64) -> i64 {
 #[tokio::test]
 async fn every_iteration_before_the_raise_still_runs() {
     let completed = (0..DIVISOR_REACHES_ZERO_AT).fold(0i64, |acc, i| {
-        acc.wrapping_mul(2)
-            .wrapping_add(i.wrapping_mul(FACTOR).wrapping_add(OFFSET))
-            .wrapping_add(10 / (DIVISOR_REACHES_ZERO_AT - i))
+        acc * 2 + (i * FACTOR + OFFSET) + 10 / (DIVISOR_REACHES_ZERO_AT - i)
     });
     assert_eq!(with_division(DIVISOR_REACHES_ZERO_AT).await, completed);
 }

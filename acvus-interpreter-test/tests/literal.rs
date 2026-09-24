@@ -39,11 +39,19 @@ async fn text(source: &str) -> String {
 async fn a_suffixed_literal_is_its_width_at_run_time() {
     assert_eq!(int_at("1u64", IntTy::U64).await, 1);
     assert_eq!(int_at("255u8", IntTy::U8).await, i128::from(255u8));
-    assert_eq!(int_at("0u8 - 1u8", IntTy::U8).await, i128::from(255u8));
+    assert_eq!(int_at("1u8 - 1u8", IntTy::U8).await, 0);
     assert_eq!(
-        int_at("(0i8 - 127i8) - 2i8", IntTy::I8).await,
-        i128::from((-127i8).wrapping_sub(2))
+        int_at("(0i8 - 127i8) - 1i8", IntTy::I8).await,
+        i128::from(i8::MIN)
     );
+}
+
+/// A width is where the program's arithmetic stops: past it, the run traps
+/// (RFC-0037 rule 3).
+#[tokio::test]
+#[should_panic(expected = "attempt to subtract with overflow")]
+async fn a_suffixed_literal_s_width_is_where_subtraction_traps() {
+    int_at("(0i8 - 127i8) - 2i8", IntTy::I8).await;
 }
 
 /// A minus that touches an integer literal is part of it, so each width's

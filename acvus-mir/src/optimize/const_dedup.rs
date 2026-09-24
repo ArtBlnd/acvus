@@ -370,7 +370,7 @@ mod tests {
                 span: span(),
                 kind: InstKind::BinOp {
                     dst: v3,
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v1,
                     right: v2,
                 },
@@ -417,7 +417,7 @@ mod tests {
                 span: span(),
                 kind: InstKind::BinOp {
                     dst: v2,
-                    op: crate::ir::BinOp::Add,
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
                     left: v0,
                     right: v1,
                 },

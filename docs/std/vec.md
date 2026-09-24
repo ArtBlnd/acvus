@@ -5,9 +5,10 @@ language's answer is not Rust's. The operations over a container's
 *elements* are `docs/std/slice.md`'s, reached through the `as_slice` view.
 
 A `Vec<T>` is Rust's `Vec<T>`. Indices are `u64`; where Rust panics on an
-index, the language traps with Rust's own message. Integer overflow is what
-the language does everywhere else: `i64` arithmetic wraps, as `num::abs`
-and `num::pow` do (`acvus-ext/src/num.rs`, RFC-0058).
+index, the language traps with Rust's own message. Integer overflow is
+the language's (RFC-0037 rule 3): the program's `+`, `-` and `*` trap where
+they leave the width, and a named function's row in `docs/std/num.md`
+states its own answer.
 
 `as_slice` and `as_slice_mut` are the view. They are the coercion the
 compiler inserts behind `&v` at a `&[T]` parameter, behind `a[i]` and behind
