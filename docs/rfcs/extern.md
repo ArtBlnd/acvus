@@ -1086,11 +1086,11 @@ glue at the type the checker settled.
      source (RFC-0012 rule 7), so the source an init makes becomes the
      context's without a join of two sources; inside a script, a store of
      another source into the context stays refused.
-   - A `Fetch` of a key the storage lacks runs that key's init at that
-     point, stores its result and loads it (no value is cloned), then
-     the run goes on; a key with neither a
-     value nor an init ends the run there with `Unfilled`, naming the key.
-     No init replaces a value.
+   - A load of a key the storage lacks, a run's `Fetch` or a host's
+     `with` or `with_mut`, runs that key's init at that point, stores its
+     result and loads it, cloning nothing; a key with neither a value
+     nor an init is `Unfilled`, naming the key. `insert` stores and loads
+     nothing, so no init replaces a value.
    - A context whose type the graph leaves open closes to `!` at the freeze
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
    - A value no script names is not a context. The host keeps it itself.
@@ -1145,10 +1145,11 @@ glue at the type the checker settled.
 4. **The type is checked before the closure runs.**
    - A page compares the closure parameter's acvus type with the solved
      type of `key`, and `Output` compares it with `R`. A mismatch, a key the
-     graph does not have, or a key no init fills and no run has stored yet
-     is an error before any value is touched. Every error a host meets is
-     one `HostError`, a storage's failure during a run among them: the run
-     ends there and releases nothing (RFC-0048 rule 8). Page operations are
+     graph does not have, or an `Unfilled` key is an error before any value
+     is touched. Every error a host meets is
+     one `HostError`, a run's trap (`Trapped`, an init's included) and a
+     storage's failure among them: the run ends there and releases nothing
+     (RFC-0048 rule 8). Page operations are
      not ordered with effects (RFC-0025 rule 10), so the effects before
      it are not stated: the host handles it.
    - A loaded holder whose type differs from the solved one, as after a
