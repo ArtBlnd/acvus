@@ -23,7 +23,8 @@ use acvus_ast::report::Label;
 /// pipeline.
 pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    for checking in Bodies::of(module).all() {
+    let promoted = Promoted::of(module);
+    for checking in Bodies::of(&promoted).all() {
         checking.check_exclusion(&mut errors);
     }
     errors
@@ -40,7 +41,8 @@ pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
 /// whose outputs the inference never saw.
 pub fn check_outputs_and_borrows(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    let bodies = Bodies::of(module);
+    let promoted = Promoted::of(module);
+    let bodies = Bodies::of(&promoted);
     let made = closure_flows(module);
     for (label, checking) in &bodies.closures {
         for flows in made.get(label).into_iter().flatten() {
@@ -77,26 +79,54 @@ fn closure_flows(module: &MirModule) -> FxHashMap<ClosureLabel, Vec<Flows>> {
     made
 }
 
-struct Bodies {
-    main: Option<Checking>,
-    closures: Vec<(ClosureLabel, Checking)>,
+/// Each body of a module as a CFG, the ones with no blocks left out: they
+/// hold nothing to check.
+struct Promoted {
+    main: Option<CfgBody>,
+    closures: Vec<(ClosureLabel, CfgBody)>,
 }
 
-impl Bodies {
+impl Promoted {
     fn of(module: &MirModule) -> Self {
+        let promoted = |body: &MirBody| {
+            let cfg = promote(body.clone());
+            match cfg.blocks.is_empty() {
+                true => None,
+                false => Some(cfg),
+            }
+        };
         Self {
-            main: Checking::of("main".to_string(), &module.main),
+            main: promoted(&module.main),
             closures: module
                 .closures
                 .iter()
-                .filter_map(|(label, closure)| {
-                    Some((*label, Checking::of(format!("closure({label:?})"), closure)?))
-                })
+                .filter_map(|(label, closure)| Some((*label, promoted(closure)?)))
+                .collect(),
+        }
+    }
+}
+
+struct Bodies<'cfg> {
+    main: Option<Checking<'cfg>>,
+    closures: Vec<(ClosureLabel, Checking<'cfg>)>,
+}
+
+impl<'cfg> Bodies<'cfg> {
+    fn of(promoted: &'cfg Promoted) -> Self {
+        Self {
+            main: promoted
+                .main
+                .as_ref()
+                .map(|cfg| Checking::of("main".to_string(), cfg)),
+            closures: promoted
+                .closures
+                .iter()
+                .map(|(label, cfg)| (*label, Checking::of(format!("closure({label:?})"), cfg)))
                 .collect(),
         }
     }
 
-    fn all(&self) -> impl Iterator<Item = &Checking> {
+    fn all(&self) -> impl Iterator<Item = &Checking<'cfg>> {
         self.main
             .iter()
             .chain(self.closures.iter().map(|(_, checking)| checking))
@@ -104,10 +134,9 @@ impl Bodies {
 }
 
 /// One body under the borrow check, with the analyses every rule reads.
-struct Checking {
+struct Checking<'cfg> {
     scope: String,
-    cfg: CfgBody,
-    loans: Loans,
+    loans: Loans<'cfg>,
     sites: HolderSites,
 }
 
@@ -127,32 +156,31 @@ struct Output {
     at: ValueId,
 }
 
-impl Checking {
-    fn of(scope: String, body: &MirBody) -> Option<Self> {
-        let cfg = promote(body.clone());
-        if cfg.blocks.is_empty() {
-            return None;
-        }
-        let loans = Loans::build(&cfg);
-        let sites = HolderSites::of(&cfg, &loans);
-        Some(Self {
+impl<'cfg> Checking<'cfg> {
+    fn of(scope: String, cfg: &'cfg CfgBody) -> Self {
+        let loans = Loans::build(cfg);
+        let sites = HolderSites::of(&loans);
+        Self {
             scope,
-            cfg,
             loans,
             sites,
-        })
+        }
+    }
+
+    fn cfg(&self) -> &'cfg CfgBody {
+        self.loans.cfg()
     }
 
     /// Every loan in the body's outputs: its result's positions, and what it
     /// wrote into the storage a parameter or a capture names from outside.
     fn outputs(&self) -> Vec<Output> {
         let mut outputs = Vec::new();
-        for block in &self.cfg.blocks {
+        for block in &self.cfg().blocks {
             let Terminator::Return { value, .. } = block.terminator else {
                 continue;
             };
             let regions = self.loans.regions(value);
-            let width = self.cfg.val_types.get(&value).map_or(0, positions);
+            let width = self.cfg().val_types.get(&value).map_or(0, positions);
             for position in 0..width {
                 for loan in regions.position(position) {
                     outputs.push(Output {
@@ -165,12 +193,12 @@ impl Checking {
             }
         }
         let entries = self
-            .cfg
+            .cfg()
             .params
             .iter()
             .enumerate()
             .map(|(index, (_, value))| (FlowEnd::Param(index), *value))
-            .chain(self.cfg.captures.iter().map(|(_, value)| (FlowEnd::Captures, *value)));
+            .chain(self.cfg().captures.iter().map(|(_, value)| (FlowEnd::Captures, *value)));
         for (end, entry) in entries {
             for loan in self.loans.written_into(entry) {
                 outputs.push(Output {
@@ -189,12 +217,12 @@ impl Checking {
     /// an output outlives the storage: `ReferenceToLocalLeavesBody`.
     fn check_outputs(&self, flows: &Flows, errors: &mut Vec<ValidationError>) {
         let result_width = self
-            .cfg
+            .cfg()
             .blocks
             .iter()
             .find_map(|block| match block.terminator {
                 Terminator::Return { value, .. } => {
-                    Some(self.cfg.val_types.get(&value).map_or(0, positions))
+                    Some(self.cfg().val_types.get(&value).map_or(0, positions))
                 }
                 _ => None,
             });
@@ -206,7 +234,7 @@ impl Checking {
             at,
         } in self.outputs()
         {
-            let found = match self.loans.held(&loan, &self.cfg.val_types) {
+            let found = match self.loans.held(&loan) {
                 Held::Local(local) => Refused::Local(local),
                 Held::Input(input) if self.admits(flows, end, position, input, result_width) => {
                     continue;
@@ -222,7 +250,7 @@ impl Checking {
             refused.push(found);
             let kind = match found {
                 Refused::Local(local) => ValidationErrorKind::ReferenceToLocalLeavesBody {
-                    storage: self.cfg.debug.get(local).cloned(),
+                    storage: self.cfg().debug.get(local).cloned(),
                 },
                 Refused::NotStated { to, from } => ValidationErrorKind::FlowNotStated { to, from },
             };
@@ -254,10 +282,10 @@ impl Checking {
         }
         let input_width = match input.end {
             FlowEnd::Param(index) => self
-                .cfg
+                .cfg()
                 .params
                 .get(index)
-                .and_then(|(_, value)| self.cfg.val_types.get(value))
+                .and_then(|(_, value)| self.cfg().val_types.get(value))
                 .map(positions),
             FlowEnd::Captures => Some(1),
             FlowEnd::Result => None,
@@ -377,7 +405,7 @@ struct Reached {
     via: Via,
 }
 
-fn reached(touched: &Touched, loans: &Loans, regions: &RegionsAt<'_>) -> Reached {
+fn reached(touched: &Touched, loans: &Loans<'_>, regions: &RegionsAt<'_>) -> Reached {
     match touched {
         Touched::Place(RefTarget::Var(s) | RefTarget::Param(s)) => Reached {
             storage: vec![Loan {
@@ -425,7 +453,7 @@ enum UseKind {
 /// The values an indirect call names as the lambda it calls: the callee
 /// register, the storage a lambda was assigned into and read back out of, and
 /// so on to the storage itself.
-fn called_by(loans: &Loans, kind: &InstKind) -> Vec<ValueId> {
+fn called_by(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {
     let callee = match kind {
         InstKind::FunctionCall {
             callee: Callee::Indirect(f),
@@ -491,10 +519,10 @@ struct HolderSites {
 }
 
 impl HolderSites {
-    fn of(cfg: &CfgBody, loans: &Loans) -> Self {
+    fn of(loans: &Loans<'_>) -> Self {
         let mut borrowed: FxHashMap<ValueId, Took> = FxHashMap::default();
         let mut named = Vec::new();
-        for block in &cfg.blocks {
+        for block in &loans.cfg().blocks {
             for inst in &block.insts {
                 match &inst.kind {
                     InstKind::Ref { dst, .. } => {
@@ -588,10 +616,10 @@ impl HolderSites {
     }
 }
 
-impl Checking {
+impl Checking<'_> {
     fn check_exclusion(&self, errors: &mut Vec<ValidationError>) {
         let holders: FxHashSet<ValueId> = self
-            .cfg
+            .cfg()
             .val_types
             .keys()
             .filter(|v| self.loans.regions(**v).holds_any())
@@ -600,10 +628,10 @@ impl Checking {
         if holders.is_empty() {
             return;
         }
-        let live = liveness::analyze_with(&self.cfg, &self.loans);
+        let live = liveness::analyze_with(&self.loans);
 
         let mut found: Vec<Conflict> = Vec::new();
-        for (bi, block) in self.cfg.blocks.iter().enumerate() {
+        for (bi, block) in self.cfg().blocks.iter().enumerate() {
             // Holders live before each instruction, by a backward walk from
             // the block's live-out set.
             let mut live_before: Vec<FxHashSet<ValueId>> =
@@ -634,7 +662,7 @@ impl Checking {
             // not by every loan it takes anywhere in the body.
             let mut regions = self.loans.at_entry(BlockIdx(bi));
             for (ii, inst) in block.insts.iter().enumerate() {
-                for (target, touch) in touches(&inst.kind, &self.cfg.val_types) {
+                for (target, touch) in touches(&inst.kind, &self.cfg().val_types) {
                     let reach = reached(&target, &self.loans, &regions);
                     let mut holders: Vec<ValueId> = live_before[ii]
                         .iter()
@@ -664,7 +692,7 @@ impl Checking {
                             kind: ValidationErrorKind::BorrowConflict {
                                 storage: match &target {
                                     Touched::Place(target) => inst_info::storage(target)
-                                        .and_then(|slot| self.cfg.debug.get(slot).cloned()),
+                                        .and_then(|slot| self.cfg().debug.get(slot).cloned()),
                                     Touched::Held { .. } => None,
                                 },
                                 touch: touch.stated(),

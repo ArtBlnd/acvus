@@ -127,16 +127,11 @@ pub struct CarriedState {
 }
 
 impl CarriedState {
-    pub fn of(
-        cfg: &CfgBody,
-        loop_: &Loop,
-        affine: &AffineValues,
-        loans: &Loans,
-        laws: &LawTable,
-    ) -> Self {
+    pub fn of(loans: &Loans<'_>, loop_: &Loop, affine: &AffineValues, laws: &LawTable) -> Self {
+        let cfg = loans.cfg();
         let natural = &loop_.natural;
         let body = Body {
-            cfg,
+            loans,
             loop_,
             laws,
             reads: Reads::in_loop(cfg, loop_),
@@ -164,7 +159,7 @@ impl CarriedState {
             .map(|p| Dependence::Recurrence(p.param))
             .collect();
         let lent = lent_by_source(loop_, loans);
-        let storage_merges = body.storage_merges(loans, &lent);
+        let storage_merges = body.storage_merges(&lent);
         for block in natural.blocks().filter(|&block| block != natural.header) {
             let leaves = matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
                 || cfg
@@ -220,19 +215,23 @@ impl CarriedState {
     }
 }
 
-struct Body<'a> {
-    cfg: &'a CfgBody,
+struct Body<'a, 'cfg> {
+    loans: &'a Loans<'cfg>,
     loop_: &'a Loop,
     laws: &'a LawTable,
     reads: Reads,
     arithmetic: Arithmetic,
 }
 
-impl Body<'_> {
+impl<'cfg> Body<'_, 'cfg> {
+    fn cfg(&self) -> &'cfg CfgBody {
+        self.loans.cfg()
+    }
+
     /// `Carried::Merge` when header parameter `param`, at `index`, is one.
     fn merge(&self, index: usize, param: ValueId) -> Option<Carried> {
         let natural = &self.loop_.natural;
-        let next = natural.back_arg(self.cfg, index)?;
+        let next = natural.back_arg(self.cfg(), index)?;
         let merge = match self.arithmetic.get(next) {
             Some(operation) => {
                 if !operation.one_operand_is(param) {
@@ -243,7 +242,7 @@ impl Body<'_> {
                     BinOp::Mul => MergeOp::Mul,
                     _ => return None,
                 };
-                let exact = match &self.cfg.val_types[&next] {
+                let exact = match &self.cfg().val_types[&next] {
                     ty if exact_under_wrapping(ty) => true,
                     Ty::Float => false,
                     _ => return None,
@@ -291,17 +290,18 @@ impl Body<'_> {
         self.loop_
             .natural
             .blocks()
-            .flat_map(|block| &self.cfg.blocks[block.0].insts)
+            .flat_map(|block| &self.cfg().blocks[block.0].insts)
             .map(|inst| &inst.kind)
             .find(|kind| inst_info::defs(kind).contains(&value))
     }
 
-    fn storage_merges(&self, loans: &Loans, lent: &[ValueId]) -> Vec<StorageMerge> {
+    fn storage_merges(&self, lent: &[ValueId]) -> Vec<StorageMerge> {
+        let loans = self.loans;
         let insts: Vec<&InstKind> = self
             .loop_
             .natural
             .blocks()
-            .flat_map(|block| &self.cfg.blocks[block.0].insts)
+            .flat_map(|block| &self.cfg().blocks[block.0].insts)
             .map(|inst| &inst.kind)
             .collect();
         let mut written: Vec<ValueId> = Vec::new();
@@ -314,16 +314,12 @@ impl Body<'_> {
         }
         written
             .into_iter()
-            .filter_map(|storage| self.storage_merge(storage, &insts, loans))
+            .filter_map(|storage| self.storage_merge(storage, &insts))
             .collect()
     }
 
-    fn storage_merge(
-        &self,
-        storage: ValueId,
-        insts: &[&InstKind],
-        loans: &Loans,
-    ) -> Option<StorageMerge> {
+    fn storage_merge(&self, storage: ValueId, insts: &[&InstKind]) -> Option<StorageMerge> {
+        let loans = self.loans;
         let mut merge: Option<StorageMerge> = None;
         let mut lenders: Vec<ValueId> = Vec::new();
         for kind in insts {
@@ -331,7 +327,7 @@ impl Body<'_> {
             if !effect.writes.contains(&storage) {
                 continue;
             }
-            let found = self.fold_call(kind, storage, loans)?;
+            let found = self.fold_call(kind, storage)?;
             lenders.push(found.lender);
             match merge {
                 Some(merged) if merged != found.merge => return None,
@@ -352,7 +348,8 @@ impl Body<'_> {
         merge.filter(|_| only_lent_to_the_folds)
     }
 
-    fn fold_call(&self, kind: &InstKind, storage: ValueId, loans: &Loans) -> Option<FoldCall> {
+    fn fold_call(&self, kind: &InstKind, storage: ValueId) -> Option<FoldCall> {
+        let loans = self.loans;
         let InstKind::FunctionCall { callee, args, .. } = kind else {
             return None;
         };
@@ -419,7 +416,7 @@ impl Reads {
 }
 
 /// The storages a `SliceMut` source lends the loop mutably.
-fn lent_by_source(loop_: &Loop, loans: &Loans) -> Vec<ValueId> {
+fn lent_by_source(loop_: &Loop, loans: &Loans<'_>) -> Vec<ValueId> {
     let LoopKind::For {
         source: ForSource::SliceMut(slice),
     } = loop_.kind

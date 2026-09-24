@@ -1709,7 +1709,9 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
 
 // -- The result -----------------------------------------------------
 
-pub struct Loans {
+/// The regions of the values of the CFG `cfg`.
+pub struct Loans<'cfg> {
+    cfg: &'cfg CfgBody,
     regions: FxHashMap<ValueId, Regions>,
     entry: Vec<State>,
     given: Vec<Vec<Given>>,
@@ -1744,8 +1746,8 @@ static NOTHING: Regions = Regions {
     via: Via::new(),
 };
 
-impl Loans {
-    pub fn build(cfg: &CfgBody) -> Self {
+impl<'cfg> Loans<'cfg> {
+    pub fn build(cfg: &'cfg CfgBody) -> Self {
         let analysis = RegionAnalysis {
             val_types: &cfg.val_types,
             cfg,
@@ -1786,11 +1788,17 @@ impl Loans {
             given.push(block_given);
         }
         Self {
+            cfg,
             regions,
             entry: result.block_entry,
             given,
             storage: analysis.entry,
         }
+    }
+
+    /// The CFG these regions are of.
+    pub fn cfg(&self) -> &'cfg CfgBody {
+        self.cfg
     }
 
     /// The regions at the entry of `block`, to be walked through its
@@ -1829,10 +1837,10 @@ impl Loans {
     /// name it (RFC-0079 rule 9). A loan on a parameter's own slot, which a
     /// by-value parameter's reference names, is the body's storage: the
     /// slot is gone once the body returns.
-    pub fn held(&self, loan: &Loan, val_types: &FxHashMap<ValueId, Ty>) -> Held {
+    pub fn held(&self, loan: &Loan) -> Held {
         match loan.storage {
             LoanStorage::Local(value) => Held::Local(value),
-            LoanStorage::Param { index, value } => match val_types.get(&value) {
+            LoanStorage::Param { index, value } => match self.cfg.val_types.get(&value) {
                 Some(Ty::Ref(..) | Ty::Fn { .. }) => Held::Input(HeldInput {
                     end: FlowEnd::Param(index),
                     position: 0,
@@ -2179,10 +2187,7 @@ mod tests {
             .keys()
             .find(|v| **v != cfg.params[0].1 && **v != returned)
             .expect("the reborrow");
-        let held: Vec<Held> = loans
-            .holds(dst)
-            .map(|loan| loans.held(loan, &cfg.val_types))
-            .collect();
+        let held: Vec<Held> = loans.holds(dst).map(|loan| loans.held(loan)).collect();
         assert_eq!(
             held,
             [Held::Input(HeldInput {

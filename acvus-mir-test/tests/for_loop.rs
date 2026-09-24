@@ -219,7 +219,7 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
         let loop_ = nest.get(nest.by_header(header).expect("the header heads a loop"));
         let affine = AffineValues::of(&cfg, loop_, &invariants);
         let loans = Loans::build(&cfg);
-        let state = CarriedState::of(&cfg, loop_, &affine, &loans, &lowered.laws);
+        let state = CarriedState::of(&loans, loop_, &affine, &lowered.laws);
         assert_eq!(state.runs_apart(), apart, "{source}");
     }
 }

@@ -38,7 +38,6 @@ struct Compiled {
     cfg: CfgBody,
     nest: LoopNest,
     invariants: Invariants,
-    loans: Loans,
     laws: LawTable,
 }
 
@@ -52,14 +51,12 @@ impl Compiled {
         let cfg = promote(module.main);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
-        let loans = Loans::build(&cfg);
         Self {
             interner,
             listing,
             cfg,
             nest,
             invariants,
-            loans,
             laws: compiled.laws,
         }
     }
@@ -72,7 +69,7 @@ impl Compiled {
 
     fn state(&self, loop_: &Loop) -> CarriedState {
         let affine = AffineValues::of(&self.cfg, loop_, &self.invariants);
-        CarriedState::of(&self.cfg, loop_, &affine, &self.loans, &self.laws)
+        CarriedState::of(&Loans::build(&self.cfg), loop_, &affine, &self.laws)
     }
 
     fn carried(&self, loop_: &Loop) -> Vec<Carried> {

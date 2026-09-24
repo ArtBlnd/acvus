@@ -46,11 +46,11 @@ impl SemiLattice for Liveness {
 // -- Transfer function -----------------------------------------------
 
 /// Backward liveness: kill defs, gen uses.
-struct LivenessAnalysis<'l> {
-    loans: &'l Loans,
+struct LivenessAnalysis<'l, 'cfg> {
+    loans: &'l Loans<'cfg>,
 }
 
-impl DataflowAnalysis for LivenessAnalysis<'_> {
+impl DataflowAnalysis for LivenessAnalysis<'_, '_> {
     type Key = ValueId;
     type Domain = Liveness;
 
@@ -140,11 +140,12 @@ impl LivenessResult {
 
 /// Run liveness analysis on a CfgBody.
 pub fn analyze(cfg: &CfgBody) -> LivenessResult {
-    analyze_with(cfg, &Loans::build(cfg))
+    analyze_with(&Loans::build(cfg))
 }
 
-/// `analyze`, with `loans` the `Loans::build(cfg)` the caller already has.
-pub fn analyze_with(cfg: &CfgBody, loans: &Loans) -> LivenessResult {
+/// `analyze`, of the CFG `loans` is of.
+pub fn analyze_with(loans: &Loans<'_>) -> LivenessResult {
+    let cfg = loans.cfg();
     if cfg.blocks.is_empty() {
         return LivenessResult {
             live_in: vec![],

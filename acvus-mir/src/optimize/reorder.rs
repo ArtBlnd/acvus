@@ -28,7 +28,7 @@ use smallvec::SmallVec;
 
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::cfg::CfgBody;
+use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
 use crate::optimize::context_ops::{context_read, context_written};
@@ -37,8 +37,13 @@ use crate::ty::Ty;
 /// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
 pub fn run(cfg: &mut CfgBody) {
     let loans = Loans::build(cfg);
-    for block in &mut cfg.blocks {
-        reorder_block(&mut block.insts, &cfg.val_types, &loans);
+    let reordered: Vec<Option<Vec<Inst>>> = (0..cfg.blocks.len())
+        .map(|block| reordered_block(&loans, BlockIdx(block)))
+        .collect();
+    for (block, insts) in cfg.blocks.iter_mut().zip(reordered) {
+        if let Some(insts) = insts {
+            block.insts = insts;
+        }
     }
 }
 
@@ -61,17 +66,19 @@ enum Priority {
     Scheduled(usize, u8),
 }
 
-/// Reorder instructions within a single basic block, in-place.
-fn reorder_block(insts: &mut Vec<Inst>, val_types: &FxHashMap<ValueId, Ty>, loans: &Loans) {
+/// The instructions of a single basic block, reordered; `None` for a block
+/// with nothing to reorder.
+fn reordered_block(loans: &Loans<'_>, block: BlockIdx) -> Option<Vec<Inst>> {
+    let insts = &loans.cfg().blocks[block.0].insts;
     let n = insts.len();
     if n <= 1 {
-        return;
+        return None;
     }
 
-    let deps = build_dependency_graph(insts, val_types, loans);
+    let deps = build_dependency_graph(loans, block);
     let priorities = compute_priorities(insts, &deps);
 
-    *insts = priority_topo_sort(insts, &deps, &priorities);
+    Some(priority_topo_sort(insts, &deps, &priorities))
 }
 
 // -- Page order -------------------------------------------------------
@@ -150,11 +157,10 @@ fn touches(insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> Vec<Option<Tou
 // -- Dependency graph -----------------------------------------------
 
 /// Build dependency edges: `deps[i]` = instructions that must execute before `i`.
-fn build_dependency_graph(
-    insts: &[Inst],
-    val_types: &FxHashMap<ValueId, Ty>,
-    loans: &Loans,
-) -> Vec<SmallVec<[usize; 4]>> {
+fn build_dependency_graph(loans: &Loans<'_>, block: BlockIdx) -> Vec<SmallVec<[usize; 4]>> {
+    let cfg = loans.cfg();
+    let insts = &cfg.blocks[block.0].insts;
+    let val_types = &cfg.val_types;
     let n = insts.len();
     let mut deps: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
 

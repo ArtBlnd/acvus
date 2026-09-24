@@ -182,7 +182,8 @@ struct Stores {
 }
 
 impl Stores {
-    fn of(cfg: &CfgBody, loans: &Loans) -> Self {
+    fn of(loans: &Loans<'_>) -> Self {
+        let cfg = loans.cfg();
         let occupancy = Occupancy::of(cfg);
         let mut this = Self {
             conditional: FxHashSet::default(),
@@ -203,7 +204,7 @@ impl Stores {
                     continue;
                 }
                 this.conditional.insert(at);
-                for reader in readers_from(cfg, loans, at, slot) {
+                for reader in readers_from(loans, at, slot) {
                     if reader.inst == cfg.blocks[reader.block].insts.len() {
                         this.read_at_terminator.push(at);
                     } else {
@@ -223,7 +224,8 @@ impl Stores {
 
 /// Every point that may read `slot` on a path out of the store at `from`,
 /// up to the next store into `slot` or the body's end.
-fn readers_from(cfg: &CfgBody, loans: &Loans, from: Point, slot: ValueId) -> Vec<Point> {
+fn readers_from(loans: &Loans<'_>, from: Point, slot: ValueId) -> Vec<Point> {
+    let cfg = loans.cfg();
     let mut seen: FxHashSet<Point> = FxHashSet::default();
     let mut work = vec![from.next()];
     let mut readers = Vec::new();
@@ -262,7 +264,10 @@ fn readers_from(cfg: &CfgBody, loans: &Loans, from: Point, slot: ValueId) -> Vec
 
 /// The storage a set of values reaches through the loans they hold: the
 /// slots a use of one of them touches.
-fn storage_reached(loans: &Loans, values: impl IntoIterator<Item = ValueId>) -> FxHashSet<ValueId> {
+fn storage_reached(
+    loans: &Loans<'_>,
+    values: impl IntoIterator<Item = ValueId>,
+) -> FxHashSet<ValueId> {
     let mut reached = FxHashSet::default();
     let mut work: Vec<ValueId> = values.into_iter().collect();
     while let Some(v) = work.pop() {
@@ -283,7 +288,8 @@ fn storage_reached(loans: &Loans, values: impl IntoIterator<Item = ValueId>) -> 
 ///
 /// A store `Stores::conditional` holds is asked of its readers instead, and
 /// this answer does not apply to it.
-fn is_root(kind: &InstKind, loans: &Loans, val_types: &FxHashMap<ValueId, Ty>) -> bool {
+fn is_root(kind: &InstKind, loans: &Loans<'_>) -> bool {
+    let val_types = &loans.cfg().val_types;
     if !loans.storage_effect(kind).writes.is_empty() {
         return true;
     }
@@ -394,7 +400,7 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 pub fn run(cfg: &mut CfgBody) {
     let def_map = build_def_map(cfg);
     let loans = Loans::build(cfg);
-    let stores = Stores::of(cfg, &loans);
+    let stores = Stores::of(&loans);
 
     // Live instruction set.
     let mut live_insts: FxHashSet<Point> = FxHashSet::default();
@@ -410,7 +416,7 @@ pub fn run(cfg: &mut CfgBody) {
                 block: bi,
                 inst: ii,
             };
-            if !stores.conditional.contains(&at) && is_root(&inst.kind, &loans, &cfg.val_types) {
+            if !stores.conditional.contains(&at) && is_root(&inst.kind, &loans) {
                 live_insts.insert(at);
                 worklist.extend(inst_info::uses(&inst.kind));
             }

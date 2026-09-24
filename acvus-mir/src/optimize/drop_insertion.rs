@@ -35,7 +35,7 @@ use crate::validate::move_check::{emptied_by, is_move_only};
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     let loans = Loans::build(cfg);
-    let liveness = liveness::analyze_with(cfg, &loans);
+    let liveness = liveness::analyze_with(&loans);
 
     // Build label -> block index mapping.
     let label_to_block: FxHashMap<Label, usize> = cfg
@@ -47,6 +47,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     // -- Phase 1: within-block drops --------------------------------
 
+    let mut block_drops: Vec<Vec<BlockDrop>> = Vec::with_capacity(cfg.blocks.len());
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
         let block = &cfg.blocks[bi];
@@ -56,7 +57,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
         for (ii, inst) in block.insts.iter().enumerate() {
             for u in loans.uses_with_storage(&inst.kind) {
                 if !liveness.is_live_out(block_idx, u)
-                    && is_last_use_in_block(block, ii, u, &loans)
+                    && is_last_use_in_block(&loans, block_idx, ii, u)
                     && needs_drop(u, val_types)
                     && !ends_ownership(&inst.kind, u, val_types)
                 {
@@ -70,7 +71,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
         // Values defined in this block that are never used, or whose last use
         // is the terminator and it consumes them (no Drop needed).
-        let term_uses = terminator_uses_with_storage(&block.terminator, &loans);
+        let term_uses = terminator_uses_with_storage(&loans, block_idx);
         let already_dropped: FxHashSet<ValueId> = drops.iter().map(|drop| drop.value).collect();
 
         // Collect all defs in this block, each once: a storage an `Assign`
@@ -108,7 +109,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                     continue;
                 }
 
-                if !is_used_in_block(block, v, &loans) {
+                if !is_used_in_block(&loans, block_idx, v) {
                     // Unused def - each value it is given dies where it is
                     // given, so a drop follows every definition; a block
                     // parameter is defined before the block's first
@@ -134,8 +135,15 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
         // Sort by insertion point (reverse order to preserve indices when inserting).
         drops.sort_by(|a, b| b.at.cmp(&a.at));
+        block_drops.push(drops);
+    }
 
-        let block = &mut cfg.blocks[bi];
+    // The registers each block leaves empty, for phase 2.
+    let emptied: Vec<FxHashSet<ValueId>> = (0..cfg.blocks.len())
+        .map(|bi| emptied_in(&loans, BlockIdx(bi), val_types))
+        .collect();
+
+    for (block, drops) in cfg.blocks.iter_mut().zip(block_drops) {
         for BlockDrop { at, value } in drops {
             let drop_inst = Inst {
                 span: acvus_ast::Span::ZERO,
@@ -153,7 +161,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     for bi in 0..cfg.blocks.len() {
         let live_out = liveness.live_out.get(bi).cloned().unwrap_or_default();
-        let emptied = emptied_in(&cfg.blocks[bi], val_types, &loans);
+        let emptied = &emptied[bi];
         let edges = terminator_edges(&cfg.blocks[bi].terminator);
 
         for edge in edges {
@@ -420,31 +428,26 @@ fn retarget(term: &mut Terminator, slot: EdgeSlot, to: Label) {
 }
 
 /// Check if `val` is used after `at_idx` within the block (instructions + terminator).
-fn is_last_use_in_block(
-    block: &crate::cfg::Block,
-    at_idx: usize,
-    val: ValueId,
-    loans: &Loans,
-) -> bool {
-    for inst in &block.insts[at_idx + 1..] {
+fn is_last_use_in_block(loans: &Loans<'_>, block: BlockIdx, at_idx: usize, val: ValueId) -> bool {
+    for inst in &loans.cfg().blocks[block.0].insts[at_idx + 1..] {
         if loans.uses_with_storage(&inst.kind).contains(&val) {
             return false;
         }
     }
-    if terminator_uses_with_storage(&block.terminator, loans).contains(&val) {
+    if terminator_uses_with_storage(loans, block).contains(&val) {
         return false;
     }
     true
 }
 
 /// Check if `val` is used by any instruction or terminator in the block.
-fn is_used_in_block(block: &crate::cfg::Block, val: ValueId, loans: &Loans) -> bool {
-    for inst in &block.insts {
+fn is_used_in_block(loans: &Loans<'_>, block: BlockIdx, val: ValueId) -> bool {
+    for inst in &loans.cfg().blocks[block.0].insts {
         if loans.uses_with_storage(&inst.kind).contains(&val) {
             return true;
         }
     }
-    terminator_uses_with_storage(&block.terminator, loans).contains(&val)
+    terminator_uses_with_storage(loans, block).contains(&val)
 }
 
 /// The values a terminator keeps alive: the ones it uses, plus the storage
@@ -452,8 +455,8 @@ fn is_used_in_block(block: &crate::cfg::Block, val: ValueId, loans: &Loans) -> b
 /// through a reference -- `Terminator::Switch`'s key among them (RFC-0051) --
 /// is the last use of that place, so the drop belongs after the block, not
 /// before the read.
-fn terminator_uses_with_storage(term: &Terminator, loans: &Loans) -> FxHashSet<ValueId> {
-    let mut uses = terminator_use_set(term);
+fn terminator_uses_with_storage(loans: &Loans<'_>, block: BlockIdx) -> FxHashSet<ValueId> {
+    let mut uses = terminator_use_set(&loans.cfg().blocks[block.0].terminator);
     let direct: Vec<ValueId> = uses.iter().copied().collect();
     uses.extend(loans.storage_behind(&direct));
     uses
@@ -582,12 +585,12 @@ pub(crate) fn ends_ownership(
 /// The registers a block leaves empty: the payload left them, and nothing
 /// wrote to them afterwards.
 fn emptied_in(
-    block: &Block,
+    loans: &Loans<'_>,
+    block: BlockIdx,
     val_types: &FxHashMap<ValueId, Ty>,
-    loans: &Loans,
 ) -> FxHashSet<ValueId> {
     let mut emptied = FxHashSet::default();
-    for inst in &block.insts {
+    for inst in &loans.cfg().blocks[block.0].insts {
         if let Some(register) = emptied_by(&inst.kind, val_types) {
             emptied.insert(register);
             continue;

@@ -25,7 +25,6 @@ struct Analyzed {
     cfg: CfgBody,
     nest: LoopNest,
     invariants: Invariants,
-    loans: Loans,
     laws: LawTable,
 }
 
@@ -49,12 +48,10 @@ impl Analyzed {
         dce::run(&mut cfg);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
-        let loans = Loans::build(&cfg);
         Self {
             cfg,
             nest,
             invariants,
-            loans,
             laws,
         }
     }
@@ -73,10 +70,9 @@ impl Analyzed {
 
     fn state(&self, loop_: &Loop) -> CarriedState {
         CarriedState::of(
-            &self.cfg,
+            &Loans::build(&self.cfg),
             loop_,
             &self.affine(loop_),
-            &self.loans,
             &self.laws,
         )
     }

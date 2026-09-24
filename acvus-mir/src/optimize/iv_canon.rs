@@ -53,7 +53,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
         };
         let affine = AffineValues::of(cfg, loop_, &Invariants::of(cfg));
         let loans = Loans::build(cfg);
-        let state = CarriedState::of(cfg, loop_, &affine, &loans, laws);
+        let state = CarriedState::of(&loans, loop_, &affine, laws);
         if state.strength() != Strength::Weak {
             continue;
         }

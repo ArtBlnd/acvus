@@ -135,7 +135,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let postdom = PostDomTree::build(cfg);
     let depth = LoopDepth::of(cfg, &domtree);
     let loans = Loans::build(cfg);
-    let writes = StorageWrites::of(cfg, &loans);
+    let writes = StorageWrites::of(&loans);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
@@ -280,7 +280,7 @@ fn names_the_same(a: &InstKind, b: &InstKind) -> bool {
     }
 }
 
-fn backing_storages(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
+fn backing_storages(loans: &Loans<'_>, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
     let through = match kind {
         InstKind::Index { slice, .. } => *slice,
         InstKind::Ref {
@@ -324,7 +324,7 @@ impl At {
 fn dedup_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
     let loans = Loans::build(cfg);
-    let writes = StorageWrites::of(cfg, &loans);
+    let writes = StorageWrites::of(&loans);
 
     let named: Vec<At> = cfg
         .blocks
@@ -507,8 +507,9 @@ struct StorageWrites {
 }
 
 impl StorageWrites {
-    fn of(cfg: &CfgBody, loans: &Loans) -> Self {
-        let live = crate::analysis::liveness::analyze_with(cfg, loans);
+    fn of(loans: &Loans<'_>) -> Self {
+        let cfg = loans.cfg();
+        let live = crate::analysis::liveness::analyze_with(loans);
         let held_mutably = |value: ValueId| {
             loans
                 .holds(value)
@@ -602,7 +603,7 @@ enum Hoistable {
 /// `ControlEquivalent` kind. Control equivalence already fixes the set of
 /// paths it runs on, so a failability test here would reject moves that
 /// change nothing. An unknown kind is not movable.
-fn hoistable(loans: &Loans, kind: &InstKind) -> Hoistable {
+fn hoistable(loans: &Loans<'_>, kind: &InstKind) -> Hoistable {
     match kind {
         // Arithmetic / logic.
         InstKind::BinOp { .. } | InstKind::UnaryOp { .. } => Hoistable::ControlEquivalent,
@@ -950,14 +951,15 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
     let loans = Loans::build(cfg);
     let CfgBody {
         blocks, val_types, ..
-    } = cfg;
+    } = loans.cfg();
     let mut merged: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+    let mut replaced: Vec<At> = Vec::new();
 
-    for block in blocks.iter_mut() {
+    for (bi, block) in blocks.iter().enumerate() {
         let mut borrows_of: FxHashMap<ValueId, Vec<(BorrowKey<'_>, ValueId)>> =
             FxHashMap::default();
 
-        for inst in block.insts.iter_mut() {
+        for (ii, inst) in block.insts.iter().enumerate() {
             for storage in taken_exclusively(&loans, &inst.kind) {
                 borrows_of.remove(&storage);
             }
@@ -981,7 +983,10 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
             match earlier {
                 Some(earlier) => {
                     merged.insert(dst, earlier);
-                    inst.kind = InstKind::Nop;
+                    replaced.push(At {
+                        block: BlockIdx(bi),
+                        inst: ii,
+                    });
                 }
                 None => held.push((key, dst)),
             }
@@ -990,6 +995,10 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
 
     if merged.is_empty() {
         return false;
+    }
+
+    for at in &replaced {
+        cfg.blocks[at.block.0].insts[at.inst].kind = InstKind::Nop;
     }
 
     // A merged value is read wherever the block it was defined in dominates,
@@ -1015,7 +1024,7 @@ fn merge_pass(cfg: &mut CfgBody) -> bool {
 /// and `validate::borrow_check` refuses a shared loan held across it
 /// (`conflicts(Shared, Touch::Reference(Mut))`). So the exclusive takes are
 /// the writes and the `&mut` borrows together.
-fn taken_exclusively(loans: &Loans, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
+fn taken_exclusively(loans: &Loans<'_>, kind: &InstKind) -> SmallVec<[ValueId; 2]> {
     let mut taken = loans.storage_effect(kind).writes;
     if let InstKind::Ref {
         target,
