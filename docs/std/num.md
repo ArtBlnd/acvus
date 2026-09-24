@@ -24,16 +24,13 @@ amount modulo the width, and `/` and `%` trap on a zero divisor and at
 
 Where Rust's own choice is a debug-build panic, the function here follows
 the language's rule instead: `abs`, `pow`, `div_euclid` and `rem_euclid`
-wrap. The `checked_*`, `wrapping_*` and `saturating_*` families are how a
-script asks for the other answers explicitly. `next_power_of_two` is the
+wrap. The `checked_*`, `wrapping_*`, `saturating_*` and `overflowing_*`
+families are how a script asks for the other answers explicitly. `next_power_of_two` is the
 one exception and traps at every build profile, because Rust's release
 answer there is `0` — a substituted failure, not an arithmetic one.
 
 ## What `std` has and this module does not
 
-- **`overflowing_*`.** Its result is `(T, bool)` and a Rust tuple does not
-  cross the extern boundary, so it is not declared. A script that wants
-  both halves calls `checked_*` and `wrapping_*`.
 - **`abs_diff`'s result type.** Rust returns the unsigned counterpart of
   the argument — `i64::abs_diff` gives a `u64`. One type variable cannot
   say "the unsigned counterpart of `T`", so the result is `u64` at every
@@ -72,6 +69,13 @@ difference column carries behaviour only.
 | `wrapping_rem` | `wrapping_rem(a: T, b: T) -> T`, T ∈ int | `T::wrapping_rem` | none |
 | `wrapping_neg` | `wrapping_neg(a: T) -> T`, T ∈ int | `T::wrapping_neg` | none |
 | `wrapping_pow` | `wrapping_pow(base: T, exp: u32) -> T`, T ∈ int | `T::wrapping_pow` | none |
+| `overflowing_add` | `overflowing_add(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_add` | none |
+| `overflowing_sub` | `overflowing_sub(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_sub` | none |
+| `overflowing_mul` | `overflowing_mul(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_mul` | none |
+| `overflowing_div` | `overflowing_div(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_div` | none |
+| `overflowing_rem` | `overflowing_rem(a: T, b: T) -> (T, bool)`, T ∈ int | `T::overflowing_rem` | none |
+| `overflowing_neg` | `overflowing_neg(a: T) -> (T, bool)`, T ∈ int | `T::overflowing_neg` | none |
+| `overflowing_pow` | `overflowing_pow(base: T, exp: u32) -> (T, bool)`, T ∈ int | `T::overflowing_pow` | none |
 | `saturating_add` | `saturating_add(a: T, b: T) -> T`, T ∈ int | `T::saturating_add` | none |
 | `saturating_sub` | `saturating_sub(a: T, b: T) -> T`, T ∈ int | `T::saturating_sub` | none |
 | `saturating_mul` | `saturating_mul(a: T, b: T) -> T`, T ∈ int | `T::saturating_mul` | none |

@@ -77,7 +77,7 @@ pub use name::{DeclarationForm, DeclaredType, NameKind, Named};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, InPlaceElement, Inline, Nothing, Obj, ObjectShape, One,
     OneRegister, OneValue, OptionOf, Pair, RetForms, Returned, Run, Stored, SurvivesSuspension,
-    TransparentOver, Variant,
+    TransparentOver, Tup, Variant,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{

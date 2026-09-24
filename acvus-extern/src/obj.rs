@@ -209,6 +209,12 @@ impl<V> Variant<V> {
     }
 }
 
+/// The language's tuple. A Rust tuple crosses as `Tup<Owned<Rt>>`, and the
+/// interpreter's `Tuple` must be that same type by alias: a crossing keys the
+/// box by its `TypeId`, so spelling either side differently still compiles
+/// while every tuple that crosses misses the interpreter's tuple vtable.
+pub struct Tup<V>(pub Vec<V>);
+
 /// The run of the runtime's values a crossing occupies, as a type, so that a
 /// bound can name it and the width is read off the type rather than repeated
 /// as a number.
@@ -1367,6 +1373,76 @@ where
         }
     }
 }
+
+fn erase_tuple<Rt, const N: usize>(rt: crate::Crossing<'_, Rt>, items: [Owned<Rt>; N]) -> Rt::Value
+where
+    Rt: Runtime,
+{
+    // SAFETY: the language's tuple is `Tup<Owned<Rt>>` (the interpreter's
+    // `Tuple` is that type by alias), and `open_tuple` is the only reader.
+    unsafe { rt.erase::<Tup<Owned<Rt>>>(Tup(Vec::from(items))) }
+}
+
+/// # Safety
+/// `value` holds the language's tuple, the `Tup<Owned<Rt>>` `erase_tuple`
+/// writes.
+///
+/// # Panics
+/// When the tuple's width is not `N`. A tuple type fixes its arity, so the
+/// checker admits no value of another width where a tuple of `N` is settled.
+unsafe fn open_tuple<Rt, const N: usize>(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> [Owned<Rt>; N]
+where
+    Rt: Runtime,
+{
+    // SAFETY: the caller's contract.
+    let Tup(items) = unsafe { rt.materialize::<Tup<Owned<Rt>>>(value) };
+    let width = items.len();
+    let Ok(items) = <[Owned<Rt>; N]>::try_from(items) else {
+        panic!(
+            "a tuple of {width} elements crossed into a tuple of {N}: the checker admits only \
+             tuples of the settled arity"
+        )
+    };
+    items
+}
+
+macro_rules! cross_tuple {
+    ($($T:ident $v:ident),+) => {
+        crate::cross_one_value!(($($T,)+), [$($T),+] where $($T: OneValue<__Rt>,)+);
+
+        // SAFETY: each element crosses by its own crossing inside the
+        // runtime's `Tup<Owned<Rt>>`, the language's tuple; nothing else
+        // crosses, and the capability is not kept.
+        unsafe impl<$($T,)+ Rep, Rt> OneValue<Rt, Rep> for ($($T,)+)
+        where
+            $($T: OneValue<Rt, Rep>,)+
+            Rt: Runtime,
+        {
+            fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value {
+                let ($($v,)+) = self;
+                erase_tuple(rt, [$(Owned::erased::<$T, Rep>(rt, $v)),+])
+            }
+
+            unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
+                // SAFETY: the caller's contract, and `erase` boxes a
+                // `Tup<Owned<Rt>>` of this arity.
+                let [$($v),+] = unsafe { open_tuple(rt, value) };
+                // SAFETY: the caller's contract, forwarded: `erase` erased
+                // each element from its own type.
+                unsafe { ($(<$T as OneValue<Rt, Rep>>::materialize(rt, $v.into_value(rt.holding())),)+) }
+            }
+        }
+    };
+}
+
+cross_tuple!(A a);
+cross_tuple!(A a, B b);
+cross_tuple!(A a, B b, C c);
+cross_tuple!(A a, B b, C c, D d);
+cross_tuple!(A a, B b, C c, D d, E e);
+cross_tuple!(A a, B b, C c, D d, E e, F f);
+cross_tuple!(A a, B b, C c, D d, E e, F f, G g);
+cross_tuple!(A a, B b, C c, D d, E e, F f, G g, H h);
 
 // A `Result` has no `BorrowableSpecialized` impl, and that is a decision: a
 // crossed `Result` is the flat heap variant, so no storage anywhere is shaped

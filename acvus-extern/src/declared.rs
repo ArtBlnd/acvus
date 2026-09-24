@@ -69,6 +69,10 @@ declared_tuple!(A);
 declared_tuple!(A, B);
 declared_tuple!(A, B, C);
 declared_tuple!(A, B, C, D);
+declared_tuple!(A, B, C, D, E);
+declared_tuple!(A, B, C, D, E, F);
+declared_tuple!(A, B, C, D, E, F, G);
+declared_tuple!(A, B, C, D, E, F, G, H);
 
 impl<T, const N: usize> Declared for [T; N]
 where
