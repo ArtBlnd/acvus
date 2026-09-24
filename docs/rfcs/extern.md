@@ -1116,20 +1116,28 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
    projection, and a `Ctx` that carries the runtime, written first as a
    handler writes it (RFC-0023 rule 2). There is no second
    crossing and no host-only view.
-   - Running the entry gives an `Output<R>`. It owns the value, releases it
-     when dropped, and offers `with(|p| …)` and `with_mut(|p| …)`.
-   - A page (RFC-0033) is built from a compilation's solved context types.
-     It offers `with(key, |p| …)` and `with_mut(key, |p| …)`, and
+   - A page is a program's view of one storage, opened by the program and
+     borrowing it, so no page exists without a compilation and none serves
+     another. Opening checks every stored type against the solved one and
+     runs the init of each context an entry fetches before assigning that
+     the storage lacks (rule 1); an open page holds every such context, so
+     no run meets an absent one. A run takes the page exclusively.
+   - Running the entry gives an `Output<R>`, which borrows the program as a
+     page does. It owns the value, releases it when dropped, and offers
+     `with(|p| …)` and `with_mut(|p| …)`; no value leaves it except through
+     a closure.
+   - A page offers `with(key, |p| …)`, `with_mut(key, |p| …)`, and
      `insert::<T>(key, value: T)`, which moves `value` in through the glue
-     an extern's return uses.
+     an extern's return uses, and `commit`, which hands what the runs left
+     to the storage.
    - A type a handler parameter cannot take, a host cannot take either, and
      the gap is closed on the extern side.
 
 4. **The type is checked before the closure runs.**
    - A page compares the closure parameter's acvus type with the solved
      type of `key`, and `Output` compares it with `R`. A mismatch, a key the
-     graph does not have, or a key that holds no value yet is an error
-     before any value is touched.
+     graph does not have, or a key no init fills and no run has stored yet
+     is an error before any value is touched.
    - The comparison is of types the compilation settled. It reads no tag on
      the value, which an untagged runtime does not have.
    - The contexts a run wrote are read the same way, after the run.
@@ -1153,8 +1161,9 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      read a word at a kind, and a run's raw writes belong to the runtime and
      the glue. Raw writes are reached only under the runtime's `tooling`
      feature, which a host turns on only by naming it.
-   - A storage behind a page (`RuntimeContext`) moves whole holders and
-     never reads inside one.
+   - A storage behind a page moves whole holders and never reads inside
+     one; its errors reach the host when the page opens or commits, never
+     inside a run.
    - The CLI, which declares `!` and prints whatever a file returns, is the
      runtime's own tooling. It reads by the settled `Ty` inside the
      workspace. No public reader by `Ty` is offered.
