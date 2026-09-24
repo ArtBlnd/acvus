@@ -641,10 +641,13 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
      combine inside a chunk and join the partials; a cycle without one
      still runs in its order.
 
-5. **Exits and effects.** A loop is left only from the header or from a
-   stage whose cycle is `InOrder`. An operation with an effect runs only
-   once its iteration holds the control token, so no effect is issued
-   ahead of an exit; one without an effect may run ahead and be discarded.
+5. **Exits and effects.** An exit other than the header's is the control
+   token's cycle: the stage it leaves from passes the control token to the
+   next iteration, in order, and every cycle in that stage joins it, so an
+   exiting stage is never free and never out of order. An operation with
+   an effect runs only once its iteration holds the control token, so no
+   effect is issued ahead of an exit; one without an effect may run ahead
+   and be discarded.
    A run apart reports the trap least in the order (iteration, stage), and
    a trap releases nothing (RFC-0048 rule 8). The lowerer runs an `Array`
    source in place until the release of elements scattered over chunks
