@@ -96,12 +96,11 @@ pub fn optimize(
         .map(|(qref, module)| Undropped::optimized(interner, laws, qref, module, opt))
         .collect();
     settle_inputs(&mut undropped);
-    assert_arity(&undropped);
 
     for module in undropped {
         let qref = module.qref;
-        let module = module.finished();
         inputs.insert(qref, required_inputs(&module.main));
+        let module = module.finished();
 
         let mut errors = validate::type_check::check_types(&module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
@@ -129,29 +128,20 @@ pub fn optimize(
 /// A name every read of which a fold removed is absent here: it constrains
 /// nothing, so its type closes to `!` and it is not required (RFC-0071
 /// rule 5).
-fn required_inputs(body: &MirBody) -> Vec<ContextInfo> {
-    let mut read: FxHashSet<ValueId> = FxHashSet::default();
-    for inst in &body.insts {
-        read.extend(inst_info::uses(&inst.kind));
-        if let InstKind::Ref { target, .. } | InstKind::Take { target, .. } = &inst.kind {
-            read.extend(inst_info::storage(target));
-        }
-    }
-    body.params
+fn required_inputs(cfg: &CfgBody) -> Vec<ContextInfo> {
+    let read = values_read(cfg);
+    cfg.params
         .iter()
         .filter(|(_, slot)| read.contains(slot))
         .map(|(name, slot)| ContextInfo {
             name: QualifiedRef::root(*name),
-            ty: input_ty(body, *slot),
+            ty: cfg
+                .val_types
+                .get(slot)
+                .cloned()
+                .expect("lowering gives every parameter of a body its type"),
         })
         .collect()
-}
-
-fn input_ty(body: &MirBody, slot: ValueId) -> Ty {
-    body.val_types
-        .get(&slot)
-        .cloned()
-        .expect("lowering gives every parameter of a body its type")
 }
 
 fn named_callees(module: &MirModule) -> Vec<QualifiedRef> {
@@ -268,10 +258,6 @@ impl Undropped {
         }
     }
 
-    fn bodies(&self) -> impl Iterator<Item = &CfgBody> {
-        std::iter::once(&self.main).chain(self.closures.iter().map(|(_, body)| body))
-    }
-
     fn bodies_mut(&mut self) -> impl Iterator<Item = &mut CfgBody> {
         std::iter::once(&mut self.main).chain(self.closures.iter_mut().map(|(_, body)| body))
     }
@@ -383,47 +369,6 @@ fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usiz
         stripped = true;
     }
     stripped
-}
-
-/// The machine's synchronous call binds the argument run without counting
-/// it against the callee's parameters, so the count is held here, where
-/// every call and every callee are in view.
-fn assert_arity(undropped: &[Undropped]) {
-    let taken: FxHashMap<QualifiedRef, usize> = undropped
-        .iter()
-        .map(|module| (module.qref, module.main.params.len()))
-        .collect();
-    for module in undropped {
-        let insts = module
-            .bodies()
-            .flat_map(|body| &body.blocks)
-            .flat_map(|block| &block.insts);
-        for inst in insts {
-            let (InstKind::FunctionCall {
-                callee: Callee::Direct(callee),
-                args,
-                ..
-            }
-            | InstKind::Spawn {
-                callee: Callee::Direct(callee),
-                args,
-                ..
-            }) = &inst.kind
-            else {
-                continue;
-            };
-            let Some(&params) = taken.get(callee) else {
-                continue;
-            };
-            assert_eq!(
-                args.len(),
-                params,
-                "{:?} calls {callee:?} with {} arguments, and it takes {params}",
-                module.qref,
-                args.len()
-            );
-        }
-    }
 }
 
 /// Which inputs a body requires is a fact about the language and not an

@@ -2718,21 +2718,6 @@ impl<'src> Solver<'src> {
         }))
     }
 
-    /// A negated integer literal is a signed one (RFC-0037): its variable
-    /// loses the unsigned widths. Whether the variable was a literal's.
-    pub fn require_signed(&mut self, var: TypeBoundId) -> bool {
-        let root = self.terms.find_ty_root(var);
-        if let TypeBound::Unresolved {
-            bound: TyVarBound::Integer { signed, among },
-        } = &mut self.terms.ty_bounds[root.0 as usize]
-        {
-            *signed = true;
-            among.retain(|k| k.signed());
-            return true;
-        }
-        false
-    }
-
     pub fn fresh_effect_var(&mut self) -> EffectTerm<Infer> {
         EffectTerm::Var(self.terms.alloc_effect_var())
     }
@@ -2874,14 +2859,6 @@ impl<'src> Solver<'src> {
     fn trial_settle_join(&self, a: &InferTy, b: &InferTy) -> Result<(), Mismatch> {
         let mut trial = self.terms.clone();
         trial.join(a, b, Position::Value, JoinKind::Decision, self.registry)
-    }
-
-    /// Whether `unify(a, b)` would succeed, on a copy of the terms.
-    pub fn would_unify(&self, a: &InferTy, b: &InferTy) -> bool {
-        let mut trial = self.terms.clone();
-        trial
-            .join(a, b, Position::Value, JoinKind::Flow, self.registry)
-            .is_ok()
     }
 
     pub fn unify_effect(
@@ -4966,77 +4943,6 @@ impl<'src> Solver<'src> {
         )
     }
 
-    /// An `InferTy` with every open variable renamed fresh: a let-bound
-    /// type used again.
-    pub fn instantiate_infer(&mut self, ty: &InferTy) -> InferTy {
-        let resolved = self.terms.resolve_ty(ty);
-        let mut maps = InferMaps::default();
-        let Terms {
-            ty_bounds,
-            effect_vars,
-            len_vars,
-            identity_vars,
-            repr_vars,
-            ..
-        } = &mut self.terms;
-        resolved.map(
-            &mut |root: TypeBoundId| {
-                let bound = match &ty_bounds[root.0 as usize] {
-                    TypeBound::Resolved { bound, .. } | TypeBound::Unresolved { bound } => {
-                        bound.clone()
-                    }
-                    TypeBound::Forward(_) => unreachable!("resolve_ty yields roots"),
-                };
-                TyTerm::Var(
-                    *maps
-                        .ty
-                        .entry(root)
-                        .or_insert_with(|| alloc_ty_var(ty_bounds, bound)),
-                )
-            },
-            &mut |root: IdentityVarId| {
-                IdentityTerm::Var(
-                    *maps
-                        .identity
-                        .entry(root)
-                        .or_insert_with(|| alloc_identity_var(identity_vars)),
-                )
-            },
-            &mut |root: EffectVarId| {
-                EffectTerm::Var(
-                    *maps
-                        .effect
-                        .entry(root)
-                        .or_insert_with(|| alloc_effect_var(effect_vars, EffectVarBound::Any)),
-                )
-            },
-            &mut |root: LenVarId| {
-                LenTerm::Var(
-                    *maps
-                        .len
-                        .entry(root)
-                        .or_insert_with(|| alloc_len_var(len_vars)),
-                )
-            },
-            &mut |root: ReprVarId| {
-                let owner = match &repr_vars[root.0 as usize] {
-                    ReprBound::Unbound(owner) => *owner,
-                    ReprBound::Uniform | ReprBound::Specialized(_) | ReprBound::Forward(_) => {
-                        unreachable!("resolve_ty yields open roots")
-                    }
-                };
-                Repr::Var(
-                    *maps
-                        .repr
-                        .entry(root)
-                        .or_insert_with(|| alloc_repr_var(repr_vars, owner)),
-                )
-            },
-            // A use of a let-bound function type calls the one body the
-            // binding holds, so it keeps that body's flows.
-            &mut |root: FlowVarId| FlowTerm::Var(root),
-        )
-    }
 }
 
 /// The placeholders one instantiation of a `PolyTy` has renamed so far.
@@ -5053,16 +4959,6 @@ struct PolyMaps {
     effect: FxHashMap<u32, EffectVarId>,
     len: FxHashMap<u32, LenVarId>,
     repr: FxHashMap<u32, ReprVarId>,
-}
-
-/// The variables one re-instantiation of an `InferTy` has renamed so far.
-#[derive(Default)]
-struct InferMaps {
-    ty: FxHashMap<TypeBoundId, TypeBoundId>,
-    identity: FxHashMap<IdentityVarId, IdentityVarId>,
-    effect: FxHashMap<EffectVarId, EffectVarId>,
-    len: FxHashMap<LenVarId, LenVarId>,
-    repr: FxHashMap<ReprVarId, ReprVarId>,
 }
 
 /// The identity variables of a polymorphic type that occur in its

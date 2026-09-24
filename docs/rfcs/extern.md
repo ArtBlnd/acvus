@@ -497,7 +497,7 @@ crossing, never read from tokens.
    declaration's argument width is the sum of its parameters' widths, added
    in the library from the types. A slice or a view crosses through
    `Runtime::slice_into_run` / `slice_from_run`, because only a runtime knows
-   what one of its values is made of. A `#[derive(TyArg)]` struct is one heap
+   its values' makeup. A `#[derive(TyArg)]` struct is one heap
    value as a field, an element or a by-value parameter, and its own
    components as a result: its `ReturnForm` is `Run<W>`, with `W` the field
    count the derive writes as a literal.
@@ -516,10 +516,10 @@ crossing, never read from tokens.
    impl too.
 3. **Argument modes are one trait.** `Arg<'a, Rt>` carries `type Out`,
    `type Form` and `unsafe fn take(rt, run, site) -> Out`. What a parameter
-   needs from its call site — nothing for most; an object projection's field
-   positions, an enum projection's tag words, a required instance's entry —
-   is `Sited<Rt>::Site`, on a lifetime-free trait so that a site table built
-   once is one type per parameter and not one per lifetime it is read at. The
+   needs from its call site (an object projection's field positions, an enum
+   projection's tag words, a required instance's entry; nothing for most) is
+   `Sited<Rt>::Site`, on a lifetime-free trait so that a site table is one
+   type per parameter, not one per lifetime. The
    macro names the marker from the Rust parameter's spelling (RFC-0023 rule
    5): `ByValue<T, C>`, `ByRef<T, M, C>` with `M` = `Shared` | `Mut` and `C`
    = `Uniform` | `Specialized`, `ByStr`, `BySlice<T, M>`, `ByProjection<P>`,
@@ -556,14 +556,14 @@ crossing, never read from tokens.
    otherwise — and `out` the destination run; the verdict is `()`, or
    `bool` for a result that may be absent. `Runtime::op<H>`, `fused<H>` and
    `async_extern_op<H>` take the handler by value under its own type, and the
-   host builds an operation holding it as a type parameter, so a call is a
-   static call and the handler's body is what the operation runs. The one
+   operation holds it as a type parameter, so a call is static and runs the
+   handler's body. The one
    `dyn` on the synchronous path is taken at preparation, in `into_op`.
    Which form an operation takes is a fact of the handler's type: `ArgRun`
    (`InRegisters<0>` … `InRegisters<4>`, `InWindow`) and `Returned` each name
-   their form, and `select` hands the handler to the one method of the host's
+   their form, and `select` hands the handler to the method of the host's
    `CallForms` / `RetForms` that form names, so a handler instantiates its own
-   form and no other.
+   form alone.
 
    The library implements the handler for closures: `Glue<Rt, F, A, R, S,
    E>` over a tuple `A` of `Arg` markers and a result marker `R`, one impl
@@ -577,9 +577,8 @@ crossing, never read from tokens.
    register — because a call the caller
    waits for outlives the frame its arguments were lent from.
 
-   A call that crosses a thread — heavy, awaited, spawned — keeps a shared
-   `dyn`: it is sent to a pool rather than run in the caller's frame, and the
-   send, not the call, is its cost. A fused run keeps its `dyn` over nodes
+   A call that crosses a thread (heavy, awaited, spawned) keeps a shared
+   `dyn`: its cost is the send to a pool, not the call. A fused run keeps its `dyn` over nodes
    rather than handlers, because its calls reach different declarations
    (RFC-0044). A host with no registers to lay a call in implements the three
    entries with `direct_call_forms!` and gets `DirectOp`: the handler behind a
@@ -587,7 +586,7 @@ crossing, never read from tokens.
 5. **Object, enum and transparent glue are library functions.**
    `#[derive(TyArg)]` calls `acvus_extern::derive::object` for a struct and
    `derive::variant` for an enum, so the layout (RFC-0050 rules 4 and 8)
-   lives in those files alone and a layout change touches no macro.
+   lives in those files alone.
    `#[derive(ExternType)]`'s pointer cast is `derive::transparent::{erase,
    materialize, deref, deref_mut}`, guarded by `unsafe trait
    Transparent<P>`, which the derive implements only for a
@@ -598,26 +597,21 @@ crossing, never read from tokens.
 6. **Async stays boxed.** `AsyncCall::call(&self, rt, run) ->
    BoxFuture<'static, Rt::Value>` is one `Pin<Box<dyn Future>>` per call,
    owning the runtime and a copy of the argument run so the future outlives
-   the frame. Storing the future in the operation needs an `async` block's
-   type named in an associated type, which is `impl_trait_in_assoc_type`,
+   the frame. Storing it in the operation needs `impl_trait_in_assoc_type`,
    unstable on the pinned toolchain.
 7. **The host reads the handler's width.** `prepare` reads
    `HandlerFactory::width()`, sites the factory with each argument's settled
    type, and builds the `CallShape` the form names; it counts nothing of its
-   own. Both halves count the runtime's values, not parameters: a
-   `&str` or slice parameter is two, so a declaration whose arguments total
-   `REGISTER_FORM` — four — values or fewer takes a register form with one
-   register per value, and a wider one is lent its window.
-   `HandlerFactory::arity` counts parameters, which is what a site table is
-   indexed by. `Width::absent` is the one fact about the result a caller
+   own. Both halves count the runtime's values, not parameters (a `&str` or
+   slice parameter is two): a declaration of at most `REGISTER_FORM`, four,
+   values takes a register form with one register per value, and a wider
+   one is lent its window.
+   `HandlerFactory::arity` counts parameters, which index a site table. `Width::absent` is the one fact about the result a caller
    holding no handler type needs: whether the call answers a verdict.
 
 **Why.** A macro that decides ABI facts by counting tokens puts every layout
 change in a proc macro rather than the library, and answers wrongly for an
-alias or a type parameter. A handler behind a `dyn` in the operation is an
-indirect call and a body the operation cannot inline; state behind
-`Arc<dyn Any>` pays a downcast on every call for a type known when the
-registry was built.
+alias or a type parameter.
 
 **Cost.** One operation instance per handler and form, so the binary grows
 with the declarations. A handler called from one operation is inlined there,
@@ -627,12 +621,12 @@ its tail call.
 **Rejected.**
 - `Box<dyn Handler>` or `Arc<dyn Handler>` in the operation — one indirect
   call per call and a Rust body the operation cannot inline.
-- Every form instantiated for every handler — the forms a width does not
-  name are dead code that still costs size and tail calls; forms as types
-  make the dead instance unwritable.
+- Every form instantiated for every handler — dead forms still cost size
+  and tail calls; forms as types make the dead instance unwritable.
 - `fn` pointers with `Arc<dyn Any>` state — a `fn` pointer cannot close over
-  typed state, so the state is erased and re-checked per call, and every
-  statefulness × arity pair is a form enumerated by hand.
+  typed state, so a type known when the registry was built is downcast on
+  every call, and every statefulness × arity pair is a form enumerated by
+  hand.
 - Token detection (`returns_slice`, `names_option`, `by_value_variant`) —
   see Why.
 - A panicking one-value crossing for a slice — "has none" is a missing impl,
@@ -1041,8 +1035,7 @@ Status: Proposed
    exact. A storage `s` every write of which in the loop is a call of one
    instance of an extern with a `fold` law, lending `s` through its first
    argument and no other, and which the loop reads only to lend it to those
-   calls, is a merge through storage: it does not make the loop strong,
-   and it is carried state. `analysis::interval` reads a postcondition
+   calls, is a merge through storage, and it is carried state. `analysis::interval` reads a postcondition
    through a call's callee (RFC-0047 rule 7). The merge names the extern
    instance, and its identity and `combine` are for the split of RFC-0066
    rule 10,

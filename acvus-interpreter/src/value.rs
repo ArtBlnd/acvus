@@ -734,9 +734,6 @@ macro_rules! value_constructors {
             $v fn as_bool(&self) -> bool {
                 self.bits() != 0
             }
-            $v fn as_byte(&self) -> u8 {
-                self.bits() as u8
-            }
 
             $v fn string(s: impl Into<String>) -> Self {
                 large(&STRING, || s.into())
@@ -910,17 +907,8 @@ macro_rules! value_constructors {
                 large(&HANDLE, || launched)
             }
 
-            $v fn is_object(&self) -> bool {
-                self.composite() == Some(Composite::Object)
-            }
             $v fn is_array(&self) -> bool {
                 self.composite() == Some(Composite::Array)
-            }
-            $v fn is_tuple(&self) -> bool {
-                self.composite() == Some(Composite::Tuple)
-            }
-            $v fn is_variant(&self) -> bool {
-                self.composite() == Some(Composite::Variant)
             }
             $v fn is_string(&self) -> bool {
                 self.composite() == Some(Composite::String)
@@ -1248,7 +1236,7 @@ mod tests {
         let alive = Arc::new(());
         let tag = Value::tag(interner.intern("A"));
         let v = Value::variant_with(tag, || counted(&alive));
-        assert!(v.is_variant());
+        assert_eq!(v.composite(), Some(Composite::Variant));
         assert_eq!(Arc::strong_count(&alive), 2);
         // SAFETY: `variant_with` wrote a variant.
         let held = unsafe { v.as_variant() };
@@ -1284,7 +1272,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&alive), 1);
 
         let t = Value::tuple_with(|| vec![counted(&alive), int(7)]);
-        assert!(t.is_tuple());
+        assert_eq!(t.composite(), Some(Composite::Tuple));
         // SAFETY: `tuple_with` wrote a tuple.
         let items = unsafe { t.as_tuple() };
         assert_eq!(items[1].as_int(), 7);
@@ -1300,7 +1288,7 @@ mod tests {
         let shape = ObjectShape::in_order([interner.intern("a"), interner.intern("b")].into());
 
         let o = Value::object_with(&shape, || [int(4), counted(&alive)].into());
-        assert!(o.is_object());
+        assert_eq!(o.composite(), Some(Composite::Object));
         // SAFETY: `object_with` wrote an object.
         unsafe {
             assert!(Arc::ptr_eq(o.as_shape(), &shape));

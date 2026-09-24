@@ -534,32 +534,6 @@ fn propagate_from_successors<A: DataflowAnalysis>(
 
 // -- ValueId propagation helpers ------------------------------------
 
-/// Standard forward propagation for ValueId-keyed analyses:
-/// map args -> params, then join flow-through values.
-pub fn value_propagate_forward<D: SemiLattice>(
-    source_exit: &DataflowState<ValueId, D>,
-    params: &[ValueId],
-    first: usize,
-    args: &[ValueId],
-    target_entry: &mut DataflowState<ValueId, D>,
-) -> bool {
-    let mut changed = false;
-
-    for (param, arg) in params.iter().skip(first).zip(args.iter()) {
-        let arg_val = source_exit.get(*arg);
-        let entry = target_entry.values.entry(*param).or_insert_with(D::bottom);
-        if entry.join_mut(&arg_val) {
-            changed = true;
-        }
-    }
-
-    if target_entry.join_from(source_exit) {
-        changed = true;
-    }
-
-    changed
-}
-
 /// Standard backward propagation for ValueId-keyed analyses:
 /// map live params -> args, then join flow-through values.
 pub fn value_propagate_backward<D: SemiLattice>(

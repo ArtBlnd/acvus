@@ -92,6 +92,7 @@ pub struct IncrementalGraph {
 
 impl IncrementalGraph {
     pub fn new(interner: &Interner, graph: CompilationGraph) -> Self {
+        let solved = solve_contexts(interner, &graph, &extract(interner, &graph));
         let CompilationGraph {
             functions,
             contexts,
@@ -108,7 +109,7 @@ impl IncrementalGraph {
             access,
             functions: functions.iter().map(|f| (f.qref, f.clone())).collect(),
             contexts: contexts.iter().map(|c| (c.qref, c.clone())).collect(),
-            solved: contexts.to_vec(),
+            solved,
             entries,
             extract_cache: FxHashMap::default(),
             call_edges: FxHashMap::default(),
@@ -124,7 +125,8 @@ impl IncrementalGraph {
         for qref in qrefs {
             this.run_extract(qref);
         }
-        this.rebuild_graph();
+        this.order_sccs();
+        this.infer_all();
         this
     }
 
@@ -174,10 +176,7 @@ impl IncrementalGraph {
             // SCC structure may have changed - full rebuild.
             self.rebuild_graph();
         } else if self.resolve_contexts() {
-            self.infer_cache = vec![None; self.scc_order.len()];
-            self.lower_cache.clear();
-            self.run_infer();
-            self.settle();
+            self.infer_all();
         } else {
             // SCC unchanged - only re-infer the affected SCC + propagate.
             self.dirty_propagate(qref);
@@ -462,6 +461,12 @@ impl IncrementalGraph {
     // -- Internal: Graph rebuild (SCC) -------------------------------
 
     fn rebuild_graph(&mut self) {
+        self.order_sccs();
+        self.resolve_contexts();
+        self.infer_all();
+    }
+
+    fn order_sccs(&mut self) {
         let local_qrefs: Vec<QualifiedRef> = self
             .functions
             .values()
@@ -476,12 +481,13 @@ impl IncrementalGraph {
                 self.fn_to_scc.insert(fid, idx);
             }
         }
+    }
 
-        // Rebuild all infer caches.
+    fn infer_all(&mut self) {
         self.infer_cache = vec![None; self.scc_order.len()];
         self.lower_cache.clear();
-
-        self.recompile();
+        self.run_infer();
+        self.settle();
     }
 
     // -- Internal: Infer ---------------------------------------------
@@ -676,12 +682,6 @@ impl IncrementalGraph {
     }
 
     // -- Internal: Lower + optimize -----------------------------------
-
-    fn recompile(&mut self) {
-        self.resolve_contexts();
-        self.run_infer();
-        self.settle();
-    }
 
     /// The modules are optimized at `Opt::Full`, the level `acvus check`
     /// reads the required inputs at: a constant a bound `$` puts behind a

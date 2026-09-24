@@ -1040,7 +1040,7 @@ pub(crate) fn stated<S>((mut stmts, last): (Vec<Stmt<S>>, Expr<S>)) -> Vec<Stmt<
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
 /// The callee covers `ns::f`, where the name is written, and not the call.
-pub fn build_call<S>(func: Expr<S>, args: Vec<Expr<S>>, span: Span) -> Expr<S> {
+pub(crate) fn build_call<S>(func: Expr<S>, args: Vec<Expr<S>>, span: Span) -> Expr<S> {
     let func = match func {
         Expr::Variant {
             enum_name: Some(namespace),

@@ -638,7 +638,11 @@ where
         ty: &argument,
     }];
     let sites = <(F::Marker,) as Parameters<Rt>>::sites(&CallSite::of_args(&args));
-    let width = <F::Marker as Arg<Rt>>::WIDTH;
+    let width = const {
+        let width = <F::Marker as Arg<Rt>>::WIDTH;
+        assert!(width <= WIDEST, "a lent parameter takes at most a pair's registers");
+        width
+    };
     let mut run = [Rt::Value::default(); WIDEST];
     // SAFETY: the caller's contract: the storage is live and unmoved while
     // the reference is used, which is this call.

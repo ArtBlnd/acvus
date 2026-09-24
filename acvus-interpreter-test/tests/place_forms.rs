@@ -1,20 +1,18 @@
 use std::time::Duration;
 
-use acvus_interpreter_test::corpus::{self, Outcome, Stage};
+use acvus_interpreter_test::corpus::{self, Init, Outcome, Stage};
 use acvus_mir::graph::optimize::Opt;
 
 const LIMIT: Duration = Duration::from_secs(30);
 
-type Contexts = serde_json::Map<String, serde_json::Value>;
-
-fn outcome(source: &str, contexts: &Contexts, opt: Opt) -> Outcome {
-    acvus_interpreter_test::attempt_within!(source, contexts = contexts, opt, Stage::Run, LIMIT)
+fn outcome(source: &str, inits: &[Init], opt: Opt) -> Outcome {
+    acvus_interpreter_test::attempt_within!(source, inits = inits, opt, Stage::Run, LIMIT)
         .unwrap_or_else(|lapse| panic!("at {opt:?}, {lapse:?}: {source}"))
 }
 
-fn runs_with_to(source: &str, contexts: &Contexts, value: &str) {
+fn runs_with_to(source: &str, inits: &[Init], value: &str) {
     for opt in [Opt::None, Opt::Full] {
-        match outcome(source, contexts, opt) {
+        match outcome(source, inits, opt) {
             Outcome::Value(got) => assert_eq!(got, value, "at {opt:?}: {source}"),
             other => panic!("at {opt:?}, expected {value}, got {other:?}: {source}"),
         }
@@ -22,12 +20,14 @@ fn runs_with_to(source: &str, contexts: &Contexts, value: &str) {
 }
 
 fn runs_to(source: &str, value: &str) {
-    runs_with_to(source, &Contexts::new(), value);
+    runs_with_to(source, &[], value);
 }
 
-fn nested_context() -> Contexts {
-    serde_json::from_str(r#"{ "c": { "a": { "b": 1, "s": "x" } } }"#)
-        .expect("the context is a JSON object")
+fn nested_context() -> [Init; 1] {
+    [Init {
+        key: "c".to_owned(),
+        source: r#"{ a: { b: 1, s: "x".to_string(), }, }"#.to_owned(),
+    }]
 }
 
 #[test]
@@ -54,12 +54,12 @@ fn a_field_chain_of_a_local_is_a_place() {
 
 #[test]
 fn a_field_chain_of_a_context_is_a_place() {
-    let contexts = nested_context();
-    runs_with_to("@c.a.b", &contexts, "1");
-    runs_with_to("@c.a.b = 5; @c.a.b", &contexts, "5");
-    runs_with_to("let r = &@c.a; r.b", &contexts, "1");
-    runs_with_to("let r = &mut @c.a; r.b = 9; @c.a.b", &contexts, "9");
-    runs_with_to("@c.a.s == \"x\"", &contexts, "true");
+    let inits = nested_context();
+    runs_with_to("@c.a.b", &inits, "1");
+    runs_with_to("@c.a.b = 5; @c.a.b", &inits, "5");
+    runs_with_to("let r = &@c.a; r.b", &inits, "1");
+    runs_with_to("let r = &mut @c.a; r.b = 9; @c.a.b", &inits, "9");
+    runs_with_to("@c.a.s == \"x\"", &inits, "true");
 }
 
 #[test]

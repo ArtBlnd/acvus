@@ -407,11 +407,6 @@ where
 pub(crate) fn call_module_rooted(rt: &AcvusRuntime, id: QualifiedRef) -> Value {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
     let body = prepared.main.as_ref();
-    assert!(
-        body.params.is_empty(),
-        "{id:?} is run with no arguments, and it takes {}",
-        body.params.len()
-    );
     let mut store = Store::new();
     let (regs, _) = store.bind(body);
     run_frame(body, &id, regs, rt, false, |callee| {

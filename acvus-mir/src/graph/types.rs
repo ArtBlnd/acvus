@@ -199,10 +199,6 @@ impl Bindings {
         Ok(())
     }
 
-    pub fn unbind(&mut self, name: Astr) {
-        self.by_name.remove(&name);
-    }
-
     pub fn get(&self, name: Astr) -> Option<&BoundValue> {
         self.by_name.get(&name)
     }

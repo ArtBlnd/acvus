@@ -685,15 +685,6 @@ impl CodeRef {
         CodeRef(std::ptr::NonNull::from(code.as_ref()))
     }
 
-    /// # Safety
-    /// `address` came from `CodeRef::address`.
-    #[cfg(feature = "tooling")]
-    pub unsafe fn from_address(address: usize) -> CodeRef {
-        // SAFETY: the caller's contract: an address `CodeRef::address` gave
-        // is a `NonNull<Code>`.
-        CodeRef(unsafe { std::ptr::NonNull::new_unchecked(address as *mut Code) })
-    }
-
     /// The `Code` for as long as the type's obligation holds: the borrow is
     /// unbounded because no value that holds a `CodeRef` outlives it.
     pub fn code<'c>(self) -> &'c Code {

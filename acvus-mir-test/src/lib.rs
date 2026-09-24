@@ -204,19 +204,6 @@ pub fn user_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     )])
 }
 
-pub fn users_list_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
-    FxHashMap::from_iter([(
-        interner.intern("users"),
-        Ty::Array(
-            Box::new(Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-                (interner.intern("name"), Ty::String),
-                (interner.intern("age"), Ty::I64),
-            ])))),
-            acvus_mir::ty::LenTerm::Known(3),
-        ),
-    )])
-}
-
 pub fn items_context(interner: &Interner) -> FxHashMap<Astr, Ty> {
     FxHashMap::from_iter([(
         interner.intern("items"),

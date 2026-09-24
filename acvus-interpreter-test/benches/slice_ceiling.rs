@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Owned};
-use acvus_interpreter::code::{Body, Code, Op, substitute};
+use acvus_interpreter::code::{Body, Op, substitute};
 use acvus_interpreter::{
     AcvusRuntime, Executable, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,

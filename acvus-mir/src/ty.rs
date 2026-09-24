@@ -2242,14 +2242,6 @@ impl TyTerm<Concrete> {
         }
     }
 
-    /// Extract the element type from a collection type.
-    pub fn elem_of(&self) -> Option<&Ty> {
-        match self {
-            Ty::Array(elem, _) => Some(elem),
-            _ => None,
-        }
-    }
-
     /// Whether a value of this type is data: something a host can keep
     /// from one run to the next (RFC-0014). A function, a spawn handle, an
     /// order, or a reference is not data, and neither is a type that holds
@@ -3711,10 +3703,6 @@ where
         self.home
     }
 
-    pub fn with_home(self, home: Home<V>) -> Self {
-        Self { home, ..self }
-    }
-
     /// A field of this object the other lacks. The one that is interned
     /// first, so that two runs of one program refuse it in the same words.
     pub fn missing_from(&self, other: &Self) -> Option<Astr> {
@@ -4689,18 +4677,6 @@ pub fn no_flow_var<W: Phase>(v: Infallible) -> FlowTerm<W> {
 /// Infallible because `Concrete` has `TyVar = Infallible` (uninhabitable).
 pub fn lift_ty<W: Phase>(ty: &Ty) -> TyTerm<W> {
     ty.map(
-        &mut |v: Infallible| match v {},
-        &mut |v: Infallible| match v {},
-        &mut |v: Infallible| match v {},
-        &mut |v: Infallible| match v {},
-        &mut |v: Infallible| match v {},
-        &mut no_flow_var,
-    )
-}
-
-/// Lift a concrete argument into any phase.
-pub fn lift_arg<W: Phase>(arg: &TypeArg<Concrete>) -> TypeArg<W> {
-    arg.map(
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},

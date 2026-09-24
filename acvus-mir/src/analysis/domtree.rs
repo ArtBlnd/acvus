@@ -131,14 +131,6 @@ impl DomTree {
         }
     }
 
-    /// All blocks strictly dominated by `a` (excluding `a` itself).
-    pub fn dominated_by(&self, a: BlockIdx) -> Vec<BlockIdx> {
-        (0..self.idom.len())
-            .filter(|&b| b != a.0 && self.dominates(a, BlockIdx(b)))
-            .map(BlockIdx)
-            .collect()
-    }
-
     /// Depth in the dominator tree (entry = 0). Unreachable blocks return 0.
     pub fn depth(&self, block: BlockIdx) -> usize {
         let mut d = 0;

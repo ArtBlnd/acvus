@@ -321,9 +321,9 @@ struct Lines<'u> {
     index: LineIndex,
 }
 
-/// `run` holds the machine alone: a script's own `print` happens inside
-/// that number, and reading or committing the context file happens outside
-/// it.
+/// `run` holds the entry's run: a script's own `print` happens inside that
+/// number, and so do the loads, stores and inits its fetches and commits
+/// make; the page's commit after the run happens outside it.
 ///
 /// A compile that failed reports no time at all. Its diagnostics are the
 /// answer to what the command did, a list of the stages that got as far as

@@ -6,8 +6,8 @@
 //! A hole the branch has not closed yet is listed in `KNOWN` with the words
 //! it shows. The list only shrinks: a listed program that keeps the contract
 //! fails the test until its entry is removed, and a hole not listed fails it
-//! too. A directory's `ctx.json` declares the contexts of its programs: each
-//! key a context at its value's type, holding that value.
+//! too. A directory's `inits/<key>.acvus` declares a context of its
+//! programs: the key holds what that script runs to, at its type.
 //!
 //! Beside the standard registries a program can call `opaque(x)` and
 //! `opaque_async(x)`, which answer `x` at effect `opaque`.
@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use acvus_interpreter_test::corpus::{self, Attempt, Outcome, Scheduler, Stage};
+use acvus_interpreter_test::corpus::{self, Attempt, Init, Outcome, Scheduler, Stage};
 use acvus_mir::graph::optimize::Opt;
 
 /// A program the branch still gets wrong, and the words that show it.
@@ -50,6 +50,8 @@ const TRAPS: &[&str] = &[
     "substring: ",
 ];
 
+const INITS: &str = "inits";
+
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/soundness")
 }
@@ -61,7 +63,7 @@ fn programs(dir: &Path, found: &mut Vec<PathBuf>) {
         .collect();
     entries.sort();
     for path in entries {
-        if path.is_dir() {
+        if path.is_dir() && !path.ends_with(INITS) {
             programs(&path, found);
         } else if path
             .extension()
@@ -83,22 +85,31 @@ fn parses_as_written(program: &Path, source: &str) -> bool {
     }
 }
 
-fn contexts_of(program: &Path) -> serde_json::Map<String, serde_json::Value> {
-    let declared = program.with_file_name("ctx.json");
-    match std::fs::read_to_string(&declared) {
-        Ok(json) => serde_json::from_str(&json).expect("a ctx.json is a JSON object"),
-        Err(_) => serde_json::Map::new(),
-    }
+fn inits_of(program: &Path) -> Vec<Init> {
+    let dir = program.with_file_name(INITS);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut inits: Vec<Init> = entries
+        .map(|entry| {
+            let path = entry.expect("an init entry").path();
+            let key = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_else(|| panic!("{} is named by its key", path.display()))
+                .to_owned();
+            let source = std::fs::read_to_string(&path).expect("an init is readable");
+            Init { key, source }
+        })
+        .collect();
+    inits.sort_by(|a, b| a.key.cmp(&b.key));
+    inits
 }
 
-fn outcome(
-    source: &str,
-    contexts: &serde_json::Map<String, serde_json::Value>,
-    opt: Opt,
-) -> Outcome {
+fn outcome(source: &str, inits: &[Init], opt: Opt) -> Outcome {
     match acvus_interpreter_test::attempt_within!(
         source,
-        contexts = contexts,
+        inits = inits,
         opt,
         Stage::Run,
         LIMIT
@@ -108,12 +119,7 @@ fn outcome(
     }
 }
 
-fn outcome_on(
-    source: &str,
-    contexts: &serde_json::Map<String, serde_json::Value>,
-    opt: Opt,
-    scheduler: Scheduler,
-) -> Outcome {
+fn outcome_on(source: &str, inits: &[Init], opt: Opt, scheduler: Scheduler) -> Outcome {
     let attempt = Attempt {
         opt,
         stage: Stage::Run,
@@ -121,7 +127,7 @@ fn outcome_on(
     };
     match acvus_interpreter_test::attempt_within!(
         source,
-        contexts = contexts,
+        inits = inits,
         attempt = attempt,
         LIMIT
     ) {
@@ -219,9 +225,9 @@ fn every_program_is_refused_or_runs_to_one_value() {
                             if !parses_as_written(program, &source) {
                                 return None;
                             }
-                            let contexts = contexts_of(program);
-                            let none = outcome(&source, &contexts, Opt::None);
-                            let full = outcome(&source, &contexts, Opt::Full);
+                            let inits = inits_of(program);
+                            let none = outcome(&source, &inits, Opt::None);
+                            let full = outcome(&source, &inits, Opt::Full);
                             let name = program
                                 .strip_prefix(corpus_dir())
                                 .expect("a program is under the corpus")
@@ -305,9 +311,9 @@ fn lent_spawns_keep_the_contract_on_tokio() {
             .map(|program| {
                 scope.spawn(move || {
                     let source = std::fs::read_to_string(program).expect("a program is readable");
-                    let contexts = contexts_of(program);
+                    let inits = inits_of(program);
                     let expected = expected(&source).expect("a lent-spawn program states its outcome");
-                    let sequential = outcome(&source, &contexts, Opt::None);
+                    let sequential = outcome(&source, &inits, Opt::None);
                     let name = program
                         .strip_prefix(corpus_dir())
                         .expect("a program is under the corpus")
@@ -315,8 +321,8 @@ fn lent_spawns_keep_the_contract_on_tokio() {
                         .to_string();
                     let mut wrong = Vec::new();
                     for run in 0..TOKIO_RUNS {
-                        let none = outcome_on(&source, &contexts, Opt::None, Scheduler::Tokio);
-                        let full = outcome_on(&source, &contexts, Opt::Full, Scheduler::Tokio);
+                        let none = outcome_on(&source, &inits, Opt::None, Scheduler::Tokio);
+                        let full = outcome_on(&source, &inits, Opt::Full, Scheduler::Tokio);
                         let why = hole(&none, &full)
                             .or_else(|| contradicts(&expected, &none))
                             .or_else(|| traps_otherwise(&expected, &none))
