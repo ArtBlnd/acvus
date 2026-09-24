@@ -622,6 +622,9 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
      iteration has it from the start when every exit is the header's, and
      otherwise receives it from the stage its predecessor could leave from.
 
+   A slot an iteration defines and drops within itself carries nothing to
+   the next one and is no token.
+
 3. **No cycle crosses a boundary.** A dependence cycle through a token lies
    inside one stage. A stage that holds one is that token's join; a stage
    that holds none is free. `validate` checks this, rule 5 and rule 1's
@@ -638,8 +641,13 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
    - A law is specialization, not permission: `Op`, `Call` (an associative
      extern, lifted over `Option` when it states no identity), `Fold`
      (RFC-0082 rule 3) or `Order` (RFC-0007 rule 7). The lowerer may
-     combine inside a chunk and join the partials; a cycle without one
-     still runs in its order.
+     combine inside a chunk and join the partials, in chunk order when the
+     law does not commute; a cycle without one still runs in its order.
+   - A law is read from what the cycle computes, not from how it is
+     spelled: through a branch whose other arm leaves the token as it was
+     (the law's identity stands in), through a compare and select that is
+     a declared `min` or `max`, and through a storage the cycle loads,
+     combines and stores whole.
 
 5. **Exits and effects.** An exit other than the header's is the control
    token's cycle: the stage it leaves from passes the control token to the
