@@ -1,4 +1,4 @@
 for slice(r6) -> L1 else L2 stages [L1, L3]
-// L1: free {take}
-// L3: cycle Order(r9) any_order law(Order exact commutative) {call indirect, merge}
+// L1: free {take, call indirect}
+// L3: cycle Order(r9) any_order law(Order exact commutative) {merge}
 // control upfront

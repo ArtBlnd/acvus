@@ -12,18 +12,18 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::affine::AffineValues;
-use crate::analysis::carried::{CarriedState, ExternMerge};
 use crate::analysis::domtree::DomTree;
-use crate::analysis::inst_info;
+use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Invariants, LoopNest, NaturalLoop, natural_loops_innermost_first};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{BinOp, Callee, ForSource, InstKind, Label, RefTarget, Stages, ValueId};
-use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
-use crate::ty::Ty;
+use crate::laws::{
+    ExternInstance, LawTable, ResolvedBinary, ResolvedFold, ResolvedIdentity, ResolvedLaws,
+};
+use crate::ty::{Mutability, Ty};
 
 // -- Stage membership (rule 1) ----------------------------------------
 
@@ -501,8 +501,6 @@ impl LoopDeps {
         };
         let loop_ = nest.get(id);
         let loans = Loans::build(cfg);
-        let affine = AffineValues::of(cfg, loop_, &invariants);
-        let carried = CarriedState::of(&loans, loop_, &affine, laws);
         let Terminator::For { source, .. } = &cfg.blocks[self.header.0].terminator else {
             panic!("block {} heads the `For` `loop_deps` read", self.header.0)
         };
@@ -511,17 +509,26 @@ impl LoopDeps {
         let read = |state: State| {
             LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, state).law()
         };
+        let folds = FoldReading {
+            loans: &loans,
+            laws,
+            reads: Reads::of(cfg, loop_blocks.iter().copied()),
+            insts: loop_blocks
+                .iter()
+                .flat_map(|block| &cfg.blocks[block.0].insts)
+                .map(|inst| &inst.kind)
+                .collect(),
+        };
         let params = &cfg.blocks[self.header.0].params;
-        let reading = Reading {
-            carried: &carried,
-            read: &|token: Token| match token {
-                Token::Carried(param) | Token::Order(param) => {
-                    let index = params.iter().position(|held| *held == param)?;
-                    read(State::Param { param, index })
-                }
-                Token::Storage(Storage::Slot(slot)) => read(State::Slot(slot)),
-                Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => None,
-            },
+        let reading = |token: Token| match token {
+            Token::Carried(param) | Token::Order(param) => {
+                let index = params.iter().position(|held| *held == param)?;
+                read(State::Param { param, index })
+            }
+            Token::Storage(Storage::Slot(slot)) => {
+                folds.law(slot).or_else(|| read(State::Slot(slot)))
+            }
+            Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => None,
         };
         self.cycles
             .iter()
@@ -530,12 +537,92 @@ impl LoopDeps {
     }
 }
 
-/// What a cycle's law is read from: a storage's `fold` law as
-/// `analysis::carried` finds it (RFC-0082 rule 6), and what the cycle
-/// computes of a token (rule 4).
-struct Reading<'a> {
-    carried: &'a CarriedState,
-    read: &'a dyn Fn(Token) -> Option<Accumulator>,
+/// RFC-0082 rule 6: a storage every write of which in the loop is a call of
+/// one instance of an extern with a `fold` law, lending the storage through
+/// its first argument and no other, and which the loop reads only to lend it
+/// to those calls, has that instance's `Fold` law.
+struct FoldReading<'a, 'cfg> {
+    loans: &'a Loans<'cfg>,
+    laws: &'a LawTable,
+    reads: Reads,
+    insts: Vec<&'cfg InstKind>,
+}
+
+impl FoldReading<'_, '_> {
+    fn law(&self, storage: ValueId) -> Option<Accumulator> {
+        let mut found: Option<FoldCall> = None;
+        let mut lenders: Vec<ValueId> = Vec::new();
+        for kind in &self.insts {
+            if !self.loans.storage_effect(kind).writes.contains(&storage) {
+                continue;
+            }
+            let call = self.fold_call(kind, storage)?;
+            lenders.push(call.lender);
+            match &found {
+                Some(held) if held.callee != call.callee => return None,
+                Some(_) => {}
+                None => found = Some(call),
+            }
+        }
+        let only_lent_to_the_folds = self.insts.iter().all(|kind| {
+            let effect = self.loans.storage_effect(kind);
+            if !effect.reads.contains(&storage) || effect.writes.contains(&storage) {
+                return true;
+            }
+            match kind {
+                InstKind::Ref { dst, .. } => lenders.contains(dst) && self.reads.count(*dst) == 1,
+                _ => false,
+            }
+        });
+        let FoldCall { callee, fold, .. } = found.filter(|_| only_lent_to_the_folds)?;
+        Some(Accumulator {
+            law: Law::Fold(FoldAccumulator {
+                storage,
+                callee,
+                fold,
+            }),
+            exact: true,
+            commutative: fold.commutative,
+        })
+    }
+
+    fn fold_call(&self, kind: &InstKind, storage: ValueId) -> Option<FoldCall> {
+        let InstKind::FunctionCall {
+            callee: callee @ Callee::Extern { id, instance, .. },
+            args,
+            ..
+        } = kind
+        else {
+            return None;
+        };
+        let ResolvedLaws::Fold(fold) = self.laws.of_callee(callee) else {
+            return None;
+        };
+        let (&lender, rest) = args.split_first()?;
+        let lends = |value: ValueId, mutability: Mutability| {
+            self.loans
+                .holds(value)
+                .any(|loan| loan.storage.slot() == Some(storage) && loan.mutability == mutability)
+        };
+        let lent_by_the_state_alone = lends(lender, Mutability::Mut)
+            && !rest
+                .iter()
+                .any(|&arg| lends(arg, Mutability::Mut) || lends(arg, Mutability::Shared));
+        lent_by_the_state_alone.then_some(FoldCall {
+            lender,
+            callee: ExternInstance {
+                id: *id,
+                instance: *instance,
+            },
+            fold: *fold,
+        })
+    }
+}
+
+struct FoldCall {
+    lender: ValueId,
+    callee: ExternInstance,
+    fold: ResolvedFold,
 }
 
 #[derive(Default)]
@@ -604,7 +691,6 @@ pub struct Accumulator {
     pub commutative: bool,
 }
 
-/// `analysis::carried` is the recognizer every law enters through.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Law {
     Op(LawOp),
@@ -652,14 +738,13 @@ impl LawOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallLaw {
-    pub callee: QualifiedRef,
-    pub instance: usize,
+    pub callee: ExternInstance,
     pub identity: CallIdentity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CallIdentity {
-    Declared,
+    Declared(ResolvedIdentity),
     /// The extern declares no identity, so a chunk's monoid is `Option` of
     /// the type with `None` as its identity; the lowerer writes the lifting.
     OptionLifted,
@@ -668,16 +753,15 @@ pub enum CallIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FoldAccumulator {
     pub storage: ValueId,
-    pub callee: QualifiedRef,
-    pub instance: usize,
-    pub fold: FoldLaw,
+    pub callee: ExternInstance,
+    pub fold: ResolvedFold,
 }
 
 /// A cycle through several tokens has no one update, and is `InOrder`
 /// with no law. A float law joined in arrival order changes the rounding,
 /// so an inexact law is `InOrder` too, and so is a law that does not
 /// commute, whose partials join in chunk order.
-fn judge(cycle: &Cycle, reading: Option<&Reading<'_>>) -> Judged {
+fn judge(cycle: &Cycle, reading: Option<&dyn Fn(Token) -> Option<Accumulator>>) -> Judged {
     let law = match (&cycle.tokens[..], reading) {
         ([Token::Storage(Storage::Element)], _) => {
             return Judged {
@@ -685,23 +769,7 @@ fn judge(cycle: &Cycle, reading: Option<&Reading<'_>>) -> Judged {
                 law: None,
             };
         }
-        ([token @ Token::Storage(Storage::Slot(slot))], Some(reading)) => reading
-            .carried
-            .storage_merges
-            .iter()
-            .find(|merge| merge.storage == *slot)
-            .map(|merge| Accumulator {
-                law: Law::Fold(FoldAccumulator {
-                    storage: merge.storage,
-                    callee: merge.callee,
-                    instance: merge.instance,
-                    fold: merge.fold,
-                }),
-                exact: true,
-                commutative: merge.fold.commutative,
-            })
-            .or_else(|| (reading.read)(*token)),
-        ([token], Some(reading)) => (reading.read)(*token),
+        ([token], Some(reading)) => reading(*token),
         _ => None,
     };
     let order = match &law {
@@ -1146,9 +1214,6 @@ impl Graph {
                 .flat_map(|value| self.definers(*value).iter().copied())
                 .collect();
             let mut members = self.between(&starts, &ends);
-            if is_order {
-                self.add_merged(cfg, &mut members);
-            }
             if members.is_empty() {
                 // The next value reads nothing of the state, so the readers
                 // of one iteration wait on the definers of the one before:
@@ -1242,34 +1307,6 @@ impl Graph {
             });
         }
         found
-    }
-
-    /// RFC-0007 rule 7: a `merge` joins the operations whose `Order`s it
-    /// reads, so they belong to the cycle of the `Order` it advances.
-    fn add_merged(&self, cfg: &CfgBody, members: &mut FxHashSet<usize>) {
-        loop {
-            let mut added: Vec<usize> = Vec::new();
-            for &at in members.iter() {
-                let Member::Inst(InstAt { block, at: inst }) = self.members[at] else {
-                    continue;
-                };
-                let InstKind::Merge { orders, .. } = &cfg.blocks[block.0].insts[inst].kind else {
-                    continue;
-                };
-                for order in orders {
-                    added.extend(
-                        self.definers(*order)
-                            .iter()
-                            .copied()
-                            .filter(|definer| !members.contains(definer)),
-                    );
-                }
-            }
-            if added.is_empty() {
-                return;
-            }
-            members.extend(added);
-        }
     }
 }
 
@@ -1523,25 +1560,31 @@ fn control_dependence(
 /// What a value of one iteration is, in terms of a token's state as the
 /// iteration received it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Form {
+enum Form<'a> {
     /// Reads nothing of the state.
     Free,
     /// The state as the iteration received it.
     State,
     /// The state combined through one law with values that read nothing
     /// of it, the state on the left.
-    Combined(Step),
+    Combined(Step<'a>),
 }
 
 /// One law a cycle combines its state through.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Step {
-    Op { op: LawOp, exact: bool },
-    Call(ExternMerge),
+enum Step<'a> {
+    Op {
+        op: LawOp,
+        exact: bool,
+    },
+    Call {
+        callee: ExternInstance,
+        law: &'a ResolvedBinary,
+    },
     Order,
 }
 
-impl Step {
+impl Step<'_> {
     fn accumulator(self) -> Accumulator {
         match self {
             Self::Op { op, exact } => Accumulator {
@@ -1549,14 +1592,16 @@ impl Step {
                 exact,
                 commutative: op.commutes(),
             },
-            Self::Call(merge) => Accumulator {
+            Self::Call { callee, law } => Accumulator {
                 law: Law::Call(CallLaw {
-                    callee: merge.callee,
-                    instance: merge.instance,
-                    identity: merge.identity,
+                    callee,
+                    identity: match &law.identity {
+                        Some(identity) => CallIdentity::Declared(identity.clone()),
+                        None => CallIdentity::OptionLifted,
+                    },
                 }),
                 exact: true,
-                commutative: merge.commutative,
+                commutative: law.commutative,
             },
             Self::Order => Accumulator {
                 law: Law::Order,
@@ -1567,10 +1612,10 @@ impl Step {
     }
 }
 
-impl Form {
+impl<'a> Form<'a> {
     /// This form combined once more through `step`, the state still on the
     /// left: the state or a combination through the same law.
-    fn then(self, step: Step) -> Option<Form> {
+    fn then(self, step: Step<'a>) -> Option<Form<'a>> {
         match self {
             Self::State => Some(Self::Combined(step)),
             Self::Combined(previous) if previous == step => Some(Self::Combined(step)),
@@ -1634,7 +1679,7 @@ struct LawReading<'a, 'cfg> {
     /// The values the update reaches the state through, and the compares
     /// that choose between the state and a value of the iteration.
     chain: FxHashSet<ValueId>,
-    forms: FxHashMap<ValueId, Option<Form>>,
+    forms: FxHashMap<ValueId, Option<Form<'a>>>,
 }
 
 impl<'a, 'cfg> LawReading<'a, 'cfg> {
@@ -1874,7 +1919,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
     /// the one store of it, loaded before it only as the update's operand,
     /// run where every branch it lies under decides by values that read
     /// nothing of the state, or as the chosen arm of a compare and select.
-    fn stored(&mut self, slot: ValueId) -> Option<Form> {
+    fn stored(&mut self, slot: ValueId) -> Option<Form<'a>> {
         let mut store: Option<(InstAt, ValueId)> = None;
         for (at, kind) in self.insts() {
             let touched = touched_slots(self.loans, kind);
@@ -1981,7 +2026,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
         }
     }
 
-    fn form(&mut self, value: ValueId) -> Option<Form> {
+    fn form(&mut self, value: ValueId) -> Option<Form<'a>> {
         if !self.dependent.contains(&value) {
             return Some(Form::Free);
         }
@@ -1998,7 +2043,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
         form
     }
 
-    fn computed_form(&mut self, value: ValueId) -> Option<Form> {
+    fn computed_form(&mut self, value: ValueId) -> Option<Form<'a>> {
         if matches!(self.state, State::Param { param, .. } if param == value) {
             return Some(Form::State);
         }
@@ -2008,7 +2053,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
         }
     }
 
-    fn inst_form(&mut self, at: InstAt) -> Option<Form> {
+    fn inst_form(&mut self, at: InstAt) -> Option<Form<'a>> {
         let kind = self.inst(at);
         match kind {
             InstKind::Take {
@@ -2082,7 +2127,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
                 })
             }
             InstKind::Merge { orders, .. } => {
-                let mut combined: Option<Form> = None;
+                let mut combined: Option<Form<'a>> = None;
                 for order in orders {
                     match self.form(*order)? {
                         Form::Free => {}
@@ -2097,26 +2142,26 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
                 args,
                 ..
             } => {
-                let Laws::Binary(BinaryLaws {
-                    associative: true,
-                    commutative,
-                    identity,
-                }) = self.laws.of_callee(callee)
+                let ResolvedLaws::Binary(
+                    law @ ResolvedBinary {
+                        associative: true,
+                        commutative,
+                        ..
+                    },
+                ) = self.laws.of_callee(callee)
                 else {
                     return None;
                 };
                 let &[first, second] = args.as_slice() else {
                     return None;
                 };
-                let step = Step::Call(ExternMerge {
-                    callee: *id,
-                    instance: *instance,
-                    commutative: *commutative,
-                    identity: match identity {
-                        Some(_) => CallIdentity::Declared,
-                        None => CallIdentity::OptionLifted,
+                let step = Step::Call {
+                    callee: ExternInstance {
+                        id: *id,
+                        instance: *instance,
                     },
-                });
+                    law,
+                };
                 match (self.form(first)?, self.form(second)?) {
                     (state, Form::Free) => state.then(step),
                     (Form::Free, state) if *commutative => state.then(step),
@@ -2129,7 +2174,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
 
     /// What a storage the iteration defines and drops holds where it is
     /// read: the value of its one store.
-    fn held(&mut self, slot: ValueId) -> Option<Form> {
+    fn held(&mut self, slot: ValueId) -> Option<Form<'a>> {
         let mut stored: Option<ValueId> = None;
         for (_, kind) in self.insts() {
             if let InstKind::Assign { target, value, .. } = kind
@@ -2147,7 +2192,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
     /// A join's parameter: the values its edges send, chosen by branches
     /// that decide by values that read nothing of the state, or a compare
     /// and select.
-    fn param_form(&mut self, block: BlockIdx, index: usize) -> Option<Form> {
+    fn param_form(&mut self, block: BlockIdx, index: usize) -> Option<Form<'a>> {
         let label = self.cfg.blocks[block.0].label;
         let own: Vec<BlockIdx> = self.deciders.get(&block).cloned().unwrap_or_default();
         let mut sent: Vec<(BlockIdx, Side, ValueId)> = Vec::new();
@@ -2177,7 +2222,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
             }
         }
         if self.decide_freely(&deciders) {
-            let mut joined: Option<Form> = None;
+            let mut joined: Option<Form<'a>> = None;
             for &(_, _, value) in &sent {
                 let form = self.form(value)?;
                 joined = Some(match (joined, form) {
@@ -2223,7 +2268,7 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
     /// branch compares the state with a value of the iteration and chooses
     /// that value on one side and the state on the other, which is `min`
     /// or `max` of the two (`LawOp::Min`, `LawOp::Max`).
-    fn select(&mut self, select: &Select) -> Option<Form> {
+    fn select(&mut self, select: &Select) -> Option<Form<'a>> {
         let (Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. }) =
             &self.cfg.blocks[select.branch.0].terminator
         else {

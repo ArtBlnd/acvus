@@ -18,7 +18,7 @@
 //! is the value exactly however it was accumulated. A float accumulated `k`
 //! times carries the rounding of every step, which is a different number
 //! (RFC-0056), so a float counter is not an induction variable, and
-//! `analysis::carried` classifies it as a merge or a recurrence.
+//! `analysis::carried` classifies it as state.
 //!
 //! The analysis is one loop deep. A value affine in an inner loop whose
 //! base moves with the outer loop's counter is affine in the inner loop

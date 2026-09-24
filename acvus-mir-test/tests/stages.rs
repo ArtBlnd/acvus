@@ -240,6 +240,12 @@ fn kind_name(kind: &InstKind) -> &'static str {
 }
 
 #[derive(Debug, PartialEq)]
+struct FreeEffect {
+    kind: &'static str,
+    control: Control,
+}
+
+#[derive(Debug, PartialEq)]
 enum Shape {
     Free,
     Cycles(Vec<CycleShape>),
@@ -739,12 +745,13 @@ fn a_print_outside_anyorder_is_an_in_order_cycle_holding_its_spawn_and_eval() {
 }
 
 /// Table row, `anyorder { … io::print … }`: the spawn, which takes the
-/// block's entry `Order`, sits in a free stage, and the cycle of the loop's
-/// `Order` holds the eval and the merge alone, `any_order` by the law of
-/// `merge`. Rule 5 lets the spawn run once its iteration holds the control
-/// token, which it holds from the start.
+/// block's entry `Order`, and the eval, whose `Order` the merge reads, sit
+/// in a free stage before the cycle (rule 6), and the cycle of the loop's
+/// `Order` holds the merge alone, `any_order` by the law of `merge`. Rule 5
+/// lets both run once their iteration holds the control token, which it
+/// holds from the start.
 #[test]
-fn an_anyorder_print_spawns_in_a_free_stage_and_joins_by_eval_and_merge() {
+fn an_anyorder_print_spawns_and_evaluates_in_a_free_stage_and_joins_by_merge() {
     let c =
         Compiled::with_io("let v = [1, 2, 3]; anyorder { for x in &v { io::print(\"a\"); } } 0");
     let shapes = c.shapes();
@@ -770,24 +777,69 @@ fn an_anyorder_print_spawns_in_a_free_stage_and_joins_by_eval_and_merge() {
     );
     assert_eq!(
         c.held_by_cycles_of(shapes.len() - 1),
-        ["eval", "merge"],
+        ["merge"],
         "{}",
         c.for_lines()
     );
     let deps = c.deps();
-    let spawns: Vec<Control> = deps
+    let mut effects: Vec<FreeEffect> = deps
         .effects_in_free_stages()
         .iter()
-        .filter(|wait| match wait.member {
-            Member::Inst(at) => matches!(
-                c.cfg.blocks[at.block.0].insts[at.at].kind,
-                InstKind::Spawn { .. }
-            ),
-            Member::Term(_) => false,
+        .filter_map(|wait| match wait.member {
+            Member::Inst(at) => Some(FreeEffect {
+                kind: kind_name(&c.cfg.blocks[at.block.0].insts[at.at].kind),
+                control: wait.control,
+            }),
+            Member::Term(_) => None,
         })
-        .map(|wait| wait.control)
         .collect();
-    assert_eq!(spawns, [Control::Upfront], "{}", c.for_lines());
+    effects.sort_unstable_by_key(|effect| effect.kind);
+    assert_eq!(
+        effects,
+        [
+            FreeEffect {
+                kind: "eval",
+                control: Control::Upfront
+            },
+            FreeEffect {
+                kind: "spawn",
+                control: Control::Upfront
+            }
+        ],
+        "{}",
+        c.for_lines()
+    );
+}
+
+/// The same print in a loop that can `break`: the loop leaves from its
+/// body, so the control token is chained, and the spawn and the eval lie in
+/// the stage the loop leaves from, the join of that token (rule 5). No
+/// effect sits in a free stage.
+#[test]
+fn an_anyorder_print_in_a_loop_that_breaks_keeps_its_effects_in_the_exiting_stage() {
+    let c = Compiled::with_io(
+        "let v = [1, 2, 3]; anyorder { for x in &v { if *x == 2 { break; }; io::print(\"a\"); } } 0",
+    );
+    let deps = c.deps();
+    assert!(
+        matches!(deps.control, Control::Chained { .. }),
+        "{}",
+        c.for_lines()
+    );
+    assert_eq!(deps.effects_in_free_stages(), [], "{}", c.for_lines());
+    let Control::Chained { cycle } = deps.control else {
+        panic!("{}", c.for_lines())
+    };
+    let exiting = deps.cycles[cycle]
+        .stage()
+        .expect("no cycle crosses a boundary");
+    let effects = c.stages_where(|cfg, block| {
+        cfg.blocks[block.0]
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::Spawn { .. } | InstKind::Eval { .. }))
+    });
+    assert_eq!(effects, [exiting], "{}", c.for_lines());
 }
 
 /// A write through the element is the element's `Disjoint` cycle; one

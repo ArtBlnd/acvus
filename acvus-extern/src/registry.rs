@@ -4,7 +4,7 @@
 use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::laws::{FoldLaw, Identity, Laws, Postcondition};
+use acvus_mir::laws::{BinaryLaws, Identity, LawRole, Laws, Postcondition, Unresolved};
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
     ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg,
@@ -1073,44 +1073,50 @@ impl LawSite<'_> {
             Laws::Binary(_) => "law",
             Laws::Fold(_) => "fold",
         };
-        let PolyTy::Fn { params, ret, .. } = self.ty else {
+        let PolyTy::Fn { ret, .. } = self.ty else {
             return Err(self.unshaped(law));
         };
-        match laws {
-            Laws::None => Ok(()),
-            Laws::Binary(binary) => match &binary.identity {
-                None => Ok(()),
-                Some(Identity::Extern(named)) => self.returning(
-                    named,
-                    "identity",
-                    ret,
-                    "a registered extern of no argument returning the result type",
-                ),
-                Some(Identity::Const(constant)) => match is_value_of(constant, ret) {
-                    true => Ok(()),
-                    false => Err(CombineError::IdentityNotOfResultType {
-                        function: written(self.interner, self.function),
-                        constant: constant.clone(),
-                        ty: (**ret).clone(),
-                    }),
-                },
-            },
-            Laws::Fold(FoldLaw {
-                combine, identity, ..
-            }) => {
-                let Some(PolyTy::Ref(acvus_mir::ty::Mutability::Mut, state)) =
-                    params.first().map(|p| &p.ty)
-                else {
-                    return Err(self.unshaped(law));
+        if let Laws::Binary(BinaryLaws {
+            identity: Some(Identity::Const(constant)),
+            ..
+        }) = laws
+            && !is_value_of(constant, ret)
+        {
+            return Err(CombineError::IdentityNotOfResultType {
+                function: written(self.interner, self.function),
+                constant: constant.clone(),
+                ty: (**ret).clone(),
+            });
+        }
+        let resolved =
+            acvus_mir::laws::resolve(laws, self.ty, |named| self.declared.get(&named).copied());
+        match resolved {
+            Ok(_) => Ok(()),
+            Err(Unresolved::UnfitDeclaration) => Err(self.unshaped(law)),
+            Err(Unresolved::NoFittingInstance { role, named }) => {
+                let (law, expected) = match role {
+                    LawRole::Identity => (
+                        "identity",
+                        "a registered extern with one instance of no argument returning the \
+                         result type",
+                    ),
+                    LawRole::FoldCombine => (
+                        "fold combine",
+                        "a registered extern with one instance `g(s: &mut S, part: S)` over the \
+                         folded state `S`",
+                    ),
+                    LawRole::FoldIdentity => (
+                        "fold identity",
+                        "a registered extern with one instance of no argument returning the \
+                         folded state",
+                    ),
                 };
-                let state = state.ty();
-                self.combining(combine, &state)?;
-                self.returning(
-                    identity,
-                    "fold identity",
-                    &state,
-                    "a registered extern of no argument returning the folded state",
-                )
+                Err(CombineError::LawNamesUnfitExtern {
+                    function: written(self.interner, self.function),
+                    law,
+                    named: written(self.interner, named),
+                    expected,
+                })
             }
         }
     }
@@ -1119,74 +1125,6 @@ impl LawSite<'_> {
         CombineError::LawOnUnfitSignature {
             function: written(self.interner, self.function),
             law,
-        }
-    }
-
-    fn named(
-        &self,
-        named: &QualifiedRef,
-        law: &'static str,
-        expected: &'static str,
-    ) -> Result<&PolyTy, CombineError> {
-        let refused = || CombineError::LawNamesUnfitExtern {
-            function: written(self.interner, self.function),
-            law,
-            named: written(self.interner, *named),
-            expected,
-        };
-        let function = self.declared.get(named).ok_or_else(refused)?;
-        match &function.kind {
-            FnKind::Extern { .. } => Ok(&function.ty),
-            FnKind::Local(..) => Err(refused()),
-        }
-    }
-
-    fn returning(
-        &self,
-        named: &QualifiedRef,
-        law: &'static str,
-        value: &PolyTy,
-        expected: &'static str,
-    ) -> Result<(), CombineError> {
-        let ty = self.named(named, law, expected)?;
-        match ty {
-            PolyTy::Fn { params, ret, .. }
-                if params.is_empty() && unify_patterns(ret, value).is_some() =>
-            {
-                Ok(())
-            }
-            _ => Err(CombineError::LawNamesUnfitExtern {
-                function: written(self.interner, self.function),
-                law,
-                named: written(self.interner, *named),
-                expected,
-            }),
-        }
-    }
-
-    fn combining(&self, named: &QualifiedRef, state: &PolyTy) -> Result<(), CombineError> {
-        const EXPECTED: &str =
-            "a registered extern `g(s: &mut S, part: S)` over the folded state `S`";
-        let takes_two_states = match self.named(named, "fold combine", EXPECTED)? {
-            PolyTy::Fn { params, ret, .. } if **ret == PolyTy::Unit => match params.as_slice() {
-                [into, part] => match &into.ty {
-                    PolyTy::Ref(acvus_mir::ty::Mutability::Mut, into) => {
-                        *into.ty() == part.ty && unify_patterns(&part.ty, state).is_some()
-                    }
-                    _ => false,
-                },
-                _ => false,
-            },
-            _ => false,
-        };
-        match takes_two_states {
-            true => Ok(()),
-            false => Err(CombineError::LawNamesUnfitExtern {
-                function: written(self.interner, self.function),
-                law: "fold combine",
-                named: written(self.interner, *named),
-                expected: EXPECTED,
-            }),
         }
     }
 }

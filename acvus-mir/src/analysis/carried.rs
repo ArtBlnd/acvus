@@ -1,94 +1,18 @@
-//! What one iteration of a loop hands the next.
-//!
-//! Every header parameter is carried state, and each is exactly one of:
-//!
-//! - [`Carried::Iv`]: affine in the loop (`analysis::affine`).
-//! - [`Carried::Merge`]: every back edge sends `p ⊕ x`, and inside the loop
-//!   `p` is read only as that `⊕`'s operand and `p ⊕ x` only by the back
-//!   edges. The iterations then contribute their `x`s and nothing reads a
-//!   partial result, so the state is a reduction.
-//! - [`Carried::Recurrence`]: anything else.
-//!
-//! A merge is exact when `⊕` is associative and commutative at its type:
-//! integer `+` and `*`, which wrap (RFC-0037). Float `+` and `*` round, so a
-//! float merge is inexact: regrouping it gives a different number, and
-//! whether to regroup is the lowerer's, by its reassociation policy
-//! (RFC-0066). Integer and float `+` and `*` reach MIR as `InstKind::BinOp`,
-//! the instruction an operator on a language-owned type is (RFC-0020), and
-//! that is how they are recognized. A call of an extern that declares
-//! itself associative (RFC-0082 rule 2), such as `num::min`, is an exact
-//! merge on the extern's word: the analysis reads the declaration and does
-//! not discover the law. `&&` and `||` reach MIR as the lowering's
-//! short-circuit `Diamond`, and recognizing that form is not settled; until
-//! it is, a loop that merges through one carries a recurrence.
-//!
-//! The kind of the state is what a reader asks, not its count: how many
-//! merges a loop carries is a cost, and cost is the lowerer's. How each
-//! kind orders its cycle is `analysis::loop_deps`'s to judge from these
-//! facts (RFC-0089 rule 4).
-//!
-//! An `Order` is how MIR marks an effect that keeps its place in the run:
-//! a call whose effect is not Pure carries one and a Pure call carries
-//! none (RFC-0013, RFC-0046), so an ordered effect is an instruction that
-//! carries one ([`carries_order`]). A write is what `analysis::loans` says
-//! an instruction writes. The source's own storage is the element write
-//! RFC-0057 rule 3 admits: rule 5 holds the container exclusively for the
-//! loop, so the element is the only path to it, and it is no storage merge.
-//!
-//! A merge through storage, `v.push(x)` in a loop, is a write of `v`, and
-//! what kind of merge it is, ordered or not, is the extern's to declare
-//! (RFC-0066 rule 6). Where every write of a storage in the loop is a call
-//! of one extern that declares a `fold` law (RFC-0082 rule 3), and the loop
-//! reads that storage only to lend it to those calls, the storage is a
-//! [`StorageMerge`].
-//!
-//! Inside `anyorder` the lowering gives every effectful call the region's
-//! entry order and merges the order the call yields into the region's
-//! accumulator, a header parameter of type `Order` whose back edges send a
-//! chain of `Merge`s over it: a [`MergeOp::Order`].
+//! This module reads no law, by decision. Whether a carried state combines
+//! through a law, and which one, is read in `analysis::loop_deps` from what
+//! the cycle over the state computes, so that a law has one reader
+//! (RFC-0066 rule 5, RFC-0089 rule 4) and no second recognizer here can
+//! disagree with it.
 
-use crate::ir::BinOp;
-
-use crate::analysis::affine::{AffineValues, Arithmetic, Derivation, exact_under_wrapping};
-use crate::analysis::inst_info::{self, Reads};
-use crate::analysis::loans::Loans;
-use crate::analysis::loops::{Loop, LoopKind};
+use crate::analysis::affine::{AffineValues, Derivation};
+use crate::analysis::loops::Loop;
 use crate::cfg::CfgBody;
-use crate::graph::QualifiedRef;
-use crate::analysis::loop_deps::CallIdentity;
-use crate::ir::{Callee, ForSource, InstKind, ValueId};
-use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
-use crate::ty::{Mutability, Ty};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MergeOp {
-    Add,
-    Mul,
-    Extern(ExternMerge),
-    Order,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ExternMerge {
-    pub callee: QualifiedRef,
-    pub instance: usize,
-    pub commutative: bool,
-    pub identity: CallIdentity,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StorageMerge {
-    pub storage: ValueId,
-    pub callee: QualifiedRef,
-    pub instance: usize,
-    pub fold: FoldLaw,
-}
+use crate::ir::ValueId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Carried {
     Iv,
-    Merge { op: MergeOp, exact: bool },
-    Recurrence,
+    State,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,284 +23,21 @@ pub struct CarriedParam {
 
 pub struct CarriedState {
     pub params: Vec<CarriedParam>,
-    pub storage_merges: Vec<StorageMerge>,
 }
 
 impl CarriedState {
-    pub fn of(loans: &Loans<'_>, loop_: &Loop, affine: &AffineValues, laws: &LawTable) -> Self {
-        let cfg = loans.cfg();
-        let natural = &loop_.natural;
-        let body = Body {
-            loans,
-            loop_,
-            laws,
-            reads: Reads::of(cfg, loop_.natural.blocks()),
-            arithmetic: Arithmetic::in_loop(cfg, loop_),
-        };
-        let params: Vec<CarriedParam> = cfg.blocks[natural.header.0]
+    pub fn of(cfg: &CfgBody, loop_: &Loop, affine: &AffineValues) -> Self {
+        let params = cfg.blocks[loop_.natural.header.0]
             .params
             .iter()
-            .enumerate()
-            .map(|(index, &param)| {
-                let carried = match affine.get(param).map(|a| &a.derivation) {
+            .map(|&param| CarriedParam {
+                param,
+                carried: match affine.get(param).map(|a| &a.derivation) {
                     Some(Derivation::Carried { .. }) => Carried::Iv,
-                    _ => match body.merge(index, param) {
-                        Some(merge) => merge,
-                        None => Carried::Recurrence,
-                    },
-                };
-                CarriedParam { param, carried }
+                    _ => Carried::State,
+                },
             })
             .collect();
-
-        let lent = lent_by_source(loop_, loans);
-        let storage_merges = body.storage_merges(&lent);
-        Self {
-            params,
-            storage_merges,
-        }
-    }
-}
-
-struct Body<'a, 'cfg> {
-    loans: &'a Loans<'cfg>,
-    loop_: &'a Loop,
-    laws: &'a LawTable,
-    reads: Reads,
-    arithmetic: Arithmetic,
-}
-
-impl<'cfg> Body<'_, 'cfg> {
-    fn cfg(&self) -> &'cfg CfgBody {
-        self.loans.cfg()
-    }
-
-    /// `Carried::Merge` when header parameter `param`, at `index`, is one.
-    fn merge(&self, index: usize, param: ValueId) -> Option<Carried> {
-        let natural = &self.loop_.natural;
-        let next = natural.back_arg(self.cfg(), index)?;
-        let merge = match self.arithmetic.get(next) {
-            Some(operation) => {
-                if !operation.one_operand_is(param) {
-                    return None;
-                }
-                let op = match operation.op {
-                    BinOp::Add => MergeOp::Add,
-                    BinOp::Mul => MergeOp::Mul,
-                    _ => return None,
-                };
-                let exact = match &self.cfg().val_types[&next] {
-                    ty if exact_under_wrapping(ty) => true,
-                    Ty::Float => false,
-                    _ => return None,
-                };
-                Carried::Merge { op, exact }
-            }
-            None if self.order_chain(next, param).is_some() => Carried::Merge {
-                op: MergeOp::Order,
-                exact: true,
-            },
-            None => Carried::Merge {
-                op: MergeOp::Extern(self.extern_merge(next, param)?),
-                exact: true,
-            },
-        };
-        let read_only_as_operand = self.reads.count(param) == 1;
-        let read_only_by_back_edges = self.reads.count(next) == natural.latches.len();
-        (read_only_as_operand && read_only_by_back_edges).then_some(merge)
-    }
-
-    /// The `Merge`s from `next` down to `param`, an `Order`, where each link
-    /// is read by the next one alone and `param` is an operand of the last.
-    fn order_chain(&self, next: ValueId, param: ValueId) -> Option<Vec<ValueId>> {
-        if self.cfg().val_types.get(&param) != Some(&Ty::Order) {
-            return None;
-        }
-        let mut chain = vec![next];
-        let mut at = next;
-        loop {
-            let InstKind::Merge { orders, .. } = self.defining(at)? else {
-                return None;
-            };
-            if orders.contains(&param) {
-                return Some(chain);
-            }
-            let linked: Vec<ValueId> = orders
-                .iter()
-                .copied()
-                .filter(|order| self.reaches_through_merges(*order, param))
-                .collect();
-            let [link] = linked[..] else {
-                return None;
-            };
-            if self.reads.count(link) != 1 {
-                return None;
-            }
-            chain.push(link);
-            at = link;
-        }
-    }
-
-    fn reaches_through_merges(&self, value: ValueId, param: ValueId) -> bool {
-        match self.defining(value) {
-            Some(InstKind::Merge { orders, .. }) => orders
-                .iter()
-                .any(|order| *order == param || self.reaches_through_merges(*order, param)),
-            _ => false,
-        }
-    }
-
-    fn extern_merge(&self, next: ValueId, param: ValueId) -> Option<ExternMerge> {
-        let InstKind::FunctionCall { callee, args, .. } = self.defining(next)? else {
-            return None;
-        };
-        let Callee::Extern { id, instance, .. } = callee else {
-            return None;
-        };
-        let Laws::Binary(BinaryLaws {
-            associative: true,
-            commutative,
-            identity,
-        }) = self.laws.of_callee(callee)
-        else {
-            return None;
-        };
-        let &[first, second] = args.as_slice() else {
-            return None;
-        };
-        let param_is_first = first == param && second != param;
-        let param_is_second = second == param && first != param;
-        (param_is_first || (*commutative && param_is_second)).then_some(ExternMerge {
-            callee: *id,
-            instance: *instance,
-            commutative: *commutative,
-            identity: match identity {
-                Some(_) => CallIdentity::Declared,
-                None => CallIdentity::OptionLifted,
-            },
-        })
-    }
-
-    fn defining(&self, value: ValueId) -> Option<&InstKind> {
-        self.loop_
-            .natural
-            .blocks()
-            .flat_map(|block| &self.cfg().blocks[block.0].insts)
-            .map(|inst| &inst.kind)
-            .find(|kind| inst_info::defs(kind).contains(&value))
-    }
-
-    fn storage_merges(&self, lent: &[ValueId]) -> Vec<StorageMerge> {
-        let loans = self.loans;
-        let insts: Vec<&InstKind> = self
-            .loop_
-            .natural
-            .blocks()
-            .flat_map(|block| &self.cfg().blocks[block.0].insts)
-            .map(|inst| &inst.kind)
-            .collect();
-        let mut written: Vec<ValueId> = Vec::new();
-        for kind in &insts {
-            for storage in loans.storage_effect(kind).writes {
-                if !lent.contains(&storage) && !written.contains(&storage) {
-                    written.push(storage);
-                }
-            }
-        }
-        written
-            .into_iter()
-            .filter_map(|storage| self.storage_merge(storage, &insts))
-            .collect()
-    }
-
-    fn storage_merge(&self, storage: ValueId, insts: &[&InstKind]) -> Option<StorageMerge> {
-        let loans = self.loans;
-        let mut merge: Option<StorageMerge> = None;
-        let mut lenders: Vec<ValueId> = Vec::new();
-        for kind in insts {
-            let effect = loans.storage_effect(kind);
-            if !effect.writes.contains(&storage) {
-                continue;
-            }
-            let found = self.fold_call(kind, storage)?;
-            lenders.push(found.lender);
-            match merge {
-                Some(merged) if merged != found.merge => return None,
-                Some(_) => {}
-                None => merge = Some(found.merge),
-            }
-        }
-        let only_lent_to_the_folds = insts.iter().all(|kind| {
-            let effect = loans.storage_effect(kind);
-            if !effect.reads.contains(&storage) || effect.writes.contains(&storage) {
-                return true;
-            }
-            match kind {
-                InstKind::Ref { dst, .. } => lenders.contains(dst) && self.reads.count(*dst) == 1,
-                _ => false,
-            }
-        });
-        merge.filter(|_| only_lent_to_the_folds)
-    }
-
-    fn fold_call(&self, kind: &InstKind, storage: ValueId) -> Option<FoldCall> {
-        let loans = self.loans;
-        let InstKind::FunctionCall { callee, args, .. } = kind else {
-            return None;
-        };
-        let Callee::Extern { id, instance, .. } = callee else {
-            return None;
-        };
-        let Laws::Fold(fold) = self.laws.of_callee(callee) else {
-            return None;
-        };
-        let (&lender, rest) = args.split_first()?;
-        let lends = |value: ValueId, mutability: Mutability| {
-            loans
-                .holds(value)
-                .any(|loan| loan.storage.slot() == Some(storage) && loan.mutability == mutability)
-        };
-        let lent_by_the_state_alone = lends(lender, Mutability::Mut)
-            && !rest
-                .iter()
-                .any(|&arg| lends(arg, Mutability::Mut) || lends(arg, Mutability::Shared));
-        lent_by_the_state_alone.then_some(FoldCall {
-            lender,
-            merge: StorageMerge {
-                storage,
-                callee: *id,
-                instance: *instance,
-                fold: *fold,
-            },
-        })
-    }
-}
-
-struct FoldCall {
-    lender: ValueId,
-    merge: StorageMerge,
-}
-
-/// The storages a `SliceMut` source lends the loop mutably.
-fn lent_by_source(loop_: &Loop, loans: &Loans<'_>) -> Vec<ValueId> {
-    let LoopKind::For {
-        source: ForSource::SliceMut(slice),
-    } = loop_.kind
-    else {
-        return Vec::new();
-    };
-    loans
-        .names(slice)
-        .iter()
-        .filter(|loan| loan.mutability == Mutability::Mut)
-        .filter_map(|loan| loan.storage.slot())
-        .collect()
-}
-
-pub fn carries_order(kind: &InstKind) -> bool {
-    match kind {
-        InstKind::FunctionCall { order, .. } => order.is_some(),
-        InstKind::Spawn { order, .. } | InstKind::Eval { order, .. } => order.is_some(),
-        _ => false,
+        Self { params }
     }
 }

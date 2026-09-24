@@ -84,15 +84,15 @@ fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer
         Law::Op(LawOp::Concat) => "Op(Concat)".to_string(),
         Law::Call(call) => {
             let identity = match call.identity {
-                CallIdentity::Declared => "identity",
+                CallIdentity::Declared(_) => "identity",
                 CallIdentity::OptionLifted => "option-lifted",
             };
-            format!("Call({}, {identity})", ctx.fmt_fn_id(call.callee))
+            format!("Call({}, {identity})", ctx.fmt_fn_id(call.callee.id))
         }
         Law::Fold(fold) => format!(
             "Fold({}, {})",
             vn.fmt_val(fold.storage),
-            ctx.fmt_fn_id(fold.callee)
+            ctx.fmt_fn_id(fold.callee.id)
         ),
         Law::Order => "Order".to_string(),
     };

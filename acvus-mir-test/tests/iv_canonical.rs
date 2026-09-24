@@ -8,9 +8,9 @@
 
 use acvus_ast::{Literal, Span};
 use acvus_mir::analysis::affine::{AffineValues, for_body};
-use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp};
+use acvus_mir::analysis::carried::{Carried, CarriedState};
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loans::Loans;
+use acvus_mir::analysis::loop_deps::{Accumulator, Law, LawOp, LoopDeps, Token};
 use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
@@ -71,11 +71,36 @@ impl Compiled {
 
     fn state(&self, loop_: &Loop) -> CarriedState {
         let affine = AffineValues::of(&self.cfg, loop_, &self.invariants);
-        CarriedState::of(&Loans::build(&self.cfg), loop_, &affine, &self.laws)
+        CarriedState::of(&self.cfg, loop_, &affine)
     }
 
     fn carried(&self, loop_: &Loop) -> Vec<Carried> {
         self.state(loop_).params.iter().map(|p| p.carried).collect()
+    }
+
+    /// The law `loop_deps` judges on the cycle over each carried state.
+    fn state_laws(&self, loop_: &Loop) -> Vec<Option<Accumulator>> {
+        let states: Vec<ValueId> = self
+            .state(loop_)
+            .params
+            .iter()
+            .filter(|p| p.carried == Carried::State)
+            .map(|p| p.param)
+            .collect();
+        let deps = LoopDeps::of(&self.cfg, loop_.natural.header)
+            .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing));
+        let judged = deps.judge(&self.cfg, &self.laws);
+        deps.cycles
+            .iter()
+            .zip(judged)
+            .filter(|(cycle, _)| {
+                cycle
+                    .tokens
+                    .iter()
+                    .any(|token| matches!(token, Token::Carried(param) if states.contains(param)))
+            })
+            .map(|(_, judged)| judged.law)
+            .collect()
     }
 
     fn ivs(&self, loop_: &Loop) -> usize {
@@ -133,11 +158,12 @@ impl Compiled {
     }
 }
 
-fn exact_add() -> Carried {
-    Carried::Merge {
-        op: MergeOp::Add,
+fn exact_add() -> Option<Accumulator> {
+    Some(Accumulator {
+        law: Law::Op(LawOp::Add),
         exact: true,
-    }
+        commutative: true,
+    })
 }
 
 fn binop(insts: &[Inst], op: BinOp, left: ValueId, right: ValueId) -> Option<ValueId> {
@@ -208,10 +234,11 @@ fn a_second_counter_is_computed_from_the_first() {
     };
     assert_eq!(
         full.carried(loop_),
-        [exact_add()],
+        [Carried::State],
         "the header carries the sum and not `j`:\n{}",
         full.listing
     );
+    assert_eq!(full.state_laws(loop_), [exact_add()], "{}", full.listing);
 
     let LoopKind::For {
         source: ForSource::Range { at, .. },
@@ -283,7 +310,8 @@ fn a_merge_is_still_carried_and_an_iv_read_only_inside_asks_for_no_count() {
     let [loop_] = full.loops_by_header()[..] else {
         panic!("one loop:\n{}", full.listing);
     };
-    assert_eq!(full.carried(loop_), [exact_add()], "{}", full.listing);
+    assert_eq!(full.carried(loop_), [Carried::State], "{}", full.listing);
+    assert_eq!(full.state_laws(loop_), [exact_add()], "{}", full.listing);
     assert_eq!(
         full.exit_trip(loop_),
         ExitTrip::Absent,
@@ -400,10 +428,10 @@ fn nested_loops_are_each_judged_by_their_own_state() {
         panic!("two loops:\n{}", full.listing);
     };
     assert!(outer.natural.contains(inner.natural.header));
-    for (loop_, carried) in [(outer, vec![]), (inner, vec![exact_add()])] {
+    for (loop_, laws) in [(outer, vec![]), (inner, vec![exact_add()])] {
         assert_eq!(
-            full.carried(loop_),
-            carried,
+            full.state_laws(loop_),
+            laws,
             "the outer loop carries nothing and the inner one its sum:\n{}",
             full.listing
         );
@@ -420,7 +448,18 @@ fn nested_loops_are_each_judged_by_their_own_state() {
         panic!("two loops:\n{}", full.listing);
     };
     assert_eq!(full.exit_trip(outer), ExitTrip::Absent);
-    assert_eq!(full.carried(inner), vec![exact_add()], "{}", full.listing);
+    assert_eq!(
+        full.carried(inner),
+        vec![Carried::State],
+        "{}",
+        full.listing
+    );
+    assert_eq!(
+        full.state_laws(inner),
+        vec![exact_add()],
+        "{}",
+        full.listing
+    );
     assert_eq!(full.exit_trip(inner), ExitTrip::Defined);
 }
 

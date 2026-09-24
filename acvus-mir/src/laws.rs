@@ -13,6 +13,7 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::{FnKind, Function, QualifiedRef};
 use crate::ir::Callee;
+use crate::ty::{Mutability, PolyTy, matches_pattern};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Laws {
@@ -95,10 +96,195 @@ pub enum Subject {
     Ret,
 }
 
+/// An extern and one of its instances, numbered as `Callee::Extern`
+/// numbers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExternInstance {
+    pub id: QualifiedRef,
+    pub instance: usize,
+}
+
+/// An instance's [`Laws`] with each extern they name taken at the instance
+/// whose types are the declaring instance's.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum ResolvedLaws {
+    #[default]
+    None,
+    Binary(ResolvedBinary),
+    Fold(ResolvedFold),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedBinary {
+    pub associative: bool,
+    pub commutative: bool,
+    pub identity: Option<ResolvedIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedIdentity {
+    Const(Literal),
+    Extern(ExternInstance),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedFold {
+    pub combine: ExternInstance,
+    pub identity: ExternInstance,
+    pub commutative: bool,
+}
+
+/// Which extern of a law [`resolve`] looks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LawRole {
+    /// A binary law's `identity = e`: `e() -> T` at the declaration's `T`.
+    Identity,
+    /// A fold's `combine = g`: `g(s: &mut S, part: S)` at the declaration's
+    /// `S`.
+    FoldCombine,
+    /// A fold's `identity = e`: `e() -> S` at the declaration's `S`.
+    FoldIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unresolved {
+    /// The declaring instance's type is not the signature its law is
+    /// stated over.
+    UnfitDeclaration,
+    /// `named` is no extern, or none of its instances, or more than one,
+    /// has the type `role` asks at the declaring instance's types.
+    NoFittingInstance { role: LawRole, named: QualifiedRef },
+}
+
+/// `laws`, declared on an instance of type `declaring`, with each extern
+/// they name taken at the instance a call at `declaring`'s types chooses:
+/// its one concrete instance those types have the shape of, and otherwise
+/// its generic instance. A name picks the extern and the types pick its
+/// instance: `num::min` over `i32` names `i32::MAX`, and a fold on `push`
+/// at `Vec<T>` combines through `extend` at `Vec<T>`.
+pub fn resolve<'a>(
+    laws: &Laws,
+    declaring: &PolyTy,
+    function: impl Fn(QualifiedRef) -> Option<&'a Function>,
+) -> Result<ResolvedLaws, Unresolved> {
+    let PolyTy::Fn { params, ret, .. } = declaring else {
+        return match laws {
+            Laws::None => Ok(ResolvedLaws::None),
+            Laws::Binary(_) | Laws::Fold(_) => Err(Unresolved::UnfitDeclaration),
+        };
+    };
+    let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
+        let unfit = Unresolved::NoFittingInstance { role, named };
+        let found = function(named).ok_or(unfit)?;
+        let FnKind::Extern { instances, .. } = &found.kind else {
+            return Err(unfit);
+        };
+        let at = |instance: usize| ExternInstance {
+            id: named,
+            instance,
+        };
+        let concrete: Vec<usize> = instances
+            .concrete
+            .iter()
+            .enumerate()
+            .filter(|(_, instance)| wanted.fits(&instance.ty))
+            .map(|(instance, _)| instance)
+            .collect();
+        match concrete[..] {
+            [instance] => Ok(at(instance)),
+            [] if wanted.fits(&found.ty) => match &instances.generic {
+                Some(_) => Ok(at(instances.generic_index())),
+                // The solver calls an extern that lists no instance at all
+                // through its scheme, as instance 0 (`fixed_generic` in
+                // `solver.rs`).
+                None if instances.concrete.is_empty() => Ok(at(0)),
+                None => Err(unfit),
+            },
+            _ => Err(unfit),
+        }
+    };
+    match laws {
+        Laws::None => Ok(ResolvedLaws::None),
+        Laws::Binary(BinaryLaws {
+            associative,
+            commutative,
+            identity,
+        }) => Ok(ResolvedLaws::Binary(ResolvedBinary {
+            associative: *associative,
+            commutative: *commutative,
+            identity: match identity {
+                None => None,
+                Some(Identity::Const(constant)) => Some(ResolvedIdentity::Const(constant.clone())),
+                Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
+                    LawRole::Identity,
+                    *named,
+                    &Wanted::Returning((**ret).clone()),
+                )?)),
+            },
+        })),
+        Laws::Fold(FoldLaw {
+            combine,
+            identity,
+            commutative,
+        }) => {
+            let Some(PolyTy::Ref(Mutability::Mut, state)) = params.first().map(|p| &p.ty) else {
+                return Err(Unresolved::UnfitDeclaration);
+            };
+            let state = state.ty().into_owned();
+            Ok(ResolvedLaws::Fold(ResolvedFold {
+                combine: instance_of(
+                    LawRole::FoldCombine,
+                    *combine,
+                    &Wanted::Combining(state.clone()),
+                )?,
+                identity: instance_of(LawRole::FoldIdentity, *identity, &Wanted::Returning(state))?,
+                commutative: *commutative,
+            }))
+        }
+    }
+}
+
+/// The type a law asks of an extern it names, at the declaring instance's
+/// types.
+enum Wanted {
+    /// `e() -> T`.
+    Returning(PolyTy),
+    /// `g(s: &mut S, part: S)`.
+    Combining(PolyTy),
+}
+
+impl Wanted {
+    /// Whether a call at the wanted types has the shape of an instance of
+    /// type `candidate`.
+    fn fits(&self, candidate: &PolyTy) -> bool {
+        let PolyTy::Fn { params, ret, .. } = candidate else {
+            return false;
+        };
+        match (self, params.as_slice()) {
+            (Self::Returning(value), []) => matches_pattern(value, ret),
+            (Self::Combining(state), [into, part]) if **ret == PolyTy::Unit => match &into.ty {
+                PolyTy::Ref(Mutability::Mut, into) => matches_pattern(
+                    &PolyTy::Tuple(vec![state.clone(), state.clone()]),
+                    &PolyTy::Tuple(vec![into.ty().into_owned(), part.ty.clone()]),
+                ),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+/// One instance's type and what its declaration states.
+struct DeclaredAt<'a> {
+    ty: &'a PolyTy,
+    laws: &'a Laws,
+    ensures: &'a [Postcondition],
+}
+
 /// What one instance of an extern declares.
 #[derive(Debug, Default)]
 struct Declared {
-    laws: Laws,
+    laws: ResolvedLaws,
     ensures: Vec<Postcondition>,
 }
 
@@ -108,42 +294,58 @@ pub struct LawTable {
 }
 
 impl LawTable {
+    /// # Panics
+    /// If a law names an extern with no instance of the types it asks:
+    /// `acvus_extern::Externs::combine` refuses such a registry by the same
+    /// [`resolve`].
     pub fn of<'a>(functions: impl IntoIterator<Item = &'a Function>) -> Self {
-        let by_instance = functions
+        let functions: FxHashMap<QualifiedRef, &Function> = functions
             .into_iter()
-            .filter_map(|function| match &function.kind {
-                // The solver calls an extern that lists no instance at all
-                // through its scheme, as instance 0 (`fixed_generic` in
-                // `solver.rs`), and such a function has nowhere to state a
-                // law.
-                FnKind::Extern { instances, .. }
-                    if instances.concrete.is_empty() && instances.generic.is_none() =>
-                {
-                    Some((function.qref, vec![Declared::default()]))
+            .map(|function| (function.qref, function))
+            .collect();
+        let by_instance = functions
+            .values()
+            .filter_map(|function| {
+                let FnKind::Extern { instances, .. } = &function.kind else {
+                    return None;
+                };
+                let declared_at = instances
+                    .concrete
+                    .iter()
+                    .map(|instance| DeclaredAt {
+                        ty: &instance.ty,
+                        laws: &instance.laws,
+                        ensures: &instance.ensures,
+                    })
+                    .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
+                        ty: &function.ty,
+                        laws: &generic.laws,
+                        ensures: &generic.ensures,
+                    }));
+                let mut declared: Vec<Declared> = declared_at
+                    .map(|DeclaredAt { ty, laws, ensures }| Declared {
+                        laws: resolve(laws, ty, |named| functions.get(&named).copied())
+                            .unwrap_or_else(|unresolved| {
+                                panic!(
+                                    "a law of {:?} does not resolve ({unresolved:?}), and \
+                                     combining the registries refuses it",
+                                    function.qref
+                                )
+                            }),
+                        ensures: ensures.to_vec(),
+                    })
+                    .collect();
+                if declared.is_empty() {
+                    declared.push(Declared::default());
                 }
-                FnKind::Extern { instances, .. } => {
-                    let declared = instances
-                        .concrete
-                        .iter()
-                        .map(|instance| Declared {
-                            laws: instance.laws.clone(),
-                            ensures: instance.ensures.clone(),
-                        })
-                        .chain(instances.generic.as_ref().map(|g| Declared {
-                            laws: g.laws.clone(),
-                            ensures: g.ensures.clone(),
-                        }))
-                        .collect();
-                    Some((function.qref, declared))
-                }
-                FnKind::Local(..) => None,
+                Some((function.qref, declared))
             })
             .collect();
         Self { by_instance }
     }
 
-    pub fn of_callee(&self, callee: &Callee) -> &Laws {
-        static NONE: Laws = Laws::None;
+    pub fn of_callee(&self, callee: &Callee) -> &ResolvedLaws {
+        static NONE: ResolvedLaws = ResolvedLaws::None;
         match self.declared(callee) {
             Some(declared) => &declared.laws,
             None => &NONE,
