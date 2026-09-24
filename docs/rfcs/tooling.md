@@ -14,17 +14,18 @@ Status: Accepted
    `.acvt` a template (RFC-0071) — and `-e <expr>` runs an expression. The mode
    chooses the pipeline, not the grammar (RFC-0045). `acvus lsp` serves an
    editor over stdio (RFC-0086) and takes no file.
-2. **Contexts come from scripts.** A context's type is the graph's
-   (RFC-0090 rule 1), and it gets its first value from an init script that
-   stores it. The runner reads no context data. A run that fetches a context
-   its space does not hold is refused before it starts (RFC-0025 rule 2),
-   and the message names the init to run.
+2. **Contexts come from inits.** A context's type is the graph's, and its
+   first value is its init (RFC-0090 rule 1): `ctl space init <space>
+   <key> -e <expr> | -f <file>` stores one per key in the space. The runner
+   reads no context data. A run fills each context it fetches that the
+   space lacks by running that key's init first, and a key with no init
+   refuses the run before it starts, naming the command that adds one.
 3. **A space holds its scripts.** `--space <name>` names a space the active
    ctl context maps to a location (rule 9). The space stores the sources of
-   its scripts beside its contexts, so a location carries code and data
-   together. A run on a space compiles every script the space holds into one
-   graph with several entries (RFC-0054), so a context has one type in every
-   run, and runs the one named. A script the space does not hold is refused.
+   its scripts and inits beside its contexts, so a location carries code and
+   data together. A run on a space compiles every script and init it holds
+   into one graph with several entries (RFC-0054), so a context has one type
+   in every run, and runs the one named. A script the space does not hold is refused.
    After a run, the space commits the run's writes.
 4. Every `name=<literal>` after the file binds the input `$name` to the
    value a literal writes (RFC-0087 rule 1), in the script's own syntax, and
