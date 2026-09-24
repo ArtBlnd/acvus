@@ -20,7 +20,7 @@ use crate::solver::{CaptureRead, MatchMode};
 use crate::structural::StructuralSignature;
 use crate::ty::{CastTy, Effect, InputParam, Mutability, Param, Task, Ty, TypeArg};
 use crate::typeck::{
-    CallTarget, CapturedName, ParamOrigin, Passing, StructuralCall, TypeResolution,
+    CallTarget, Captured, CapturedName, ParamOrigin, Passing, StructuralCall, TypeResolution,
 };
 
 /// The name of a template's accumulator. A source name cannot collide with
@@ -35,6 +35,7 @@ pub struct Lowerer<'a> {
     /// while a name is already bound shadows it: a fresh slot, and the outer
     /// binding is untouched and visible again when the scope ends.
     scopes: Vec<FxHashMap<Astr, Local>>,
+    inputs: FxHashMap<Astr, InputStorage>,
     /// Frozen type resolution from typeck.
     resolution: Freeze<TypeResolution>,
     /// The `ret` of the graph `Function` whose body this is (RFC-0054).
@@ -65,6 +66,34 @@ pub struct Lowerer<'a> {
     /// (RFC-0057 rule 4).
     loops: Vec<Loop>,
     callee_inputs: &'a FxHashMap<QualifiedRef, Vec<InputParam>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InputStorage {
+    FunctionParam(ValueId),
+    ClosureCapture(ValueId),
+}
+
+impl InputStorage {
+    fn target(self) -> RefTarget {
+        match self {
+            InputStorage::FunctionParam(reg) => RefTarget::Param(reg),
+            InputStorage::ClosureCapture(slot) => RefTarget::Var(slot),
+        }
+    }
+
+    fn slot(self) -> ValueId {
+        match self {
+            InputStorage::FunctionParam(held) | InputStorage::ClosureCapture(held) => held,
+        }
+    }
+}
+
+fn capture_origin(of: Captured) -> ValOrigin {
+    match of {
+        Captured::Local(name) => ValOrigin::Named(name),
+        Captured::Input(name) => ValOrigin::ExternParam(name),
+    }
 }
 
 /// Where the innermost loop's two jumps go.
@@ -414,6 +443,7 @@ impl<'a> Lowerer<'a> {
             resolution.coercion_map.iter().cloned().collect();
         let initial_scope = FxHashMap::default();
         let mut body = MirBody::new();
+        let mut inputs = FxHashMap::default();
 
         // Allocate param_regs for extern params (LLVM-style: params are SSA values).
         // param_regs[i] holds the initial value of extern_params[i].
@@ -422,6 +452,7 @@ impl<'a> Lowerer<'a> {
             let reg = body.val_factory.next();
             body.val_types.insert(reg, param.ty.clone());
             body.params.push((param.name, reg));
+            inputs.insert(param.name, InputStorage::FunctionParam(reg));
         }
         body.task = resolution.effect.task;
 
@@ -429,6 +460,7 @@ impl<'a> Lowerer<'a> {
             body,
             interner,
             scopes: vec![initial_scope],
+            inputs,
             resolution,
             ret,
             coercion_lookup,
@@ -1853,10 +1885,7 @@ impl<'a> Lowerer<'a> {
     fn storage(&mut self, storage: Storage) -> RefTarget {
         match storage {
             Storage::Local(name) => RefTarget::Var(self.var_slot(name)),
-            Storage::Input(name) => match self.try_param_slot(name) {
-                Some(param) => RefTarget::Param(param),
-                None => RefTarget::Var(self.var_slot(name)),
-            },
+            Storage::Input(name) => self.input_storage(name).target(),
             Storage::Context(qref) => RefTarget::Var(self.context_slot(qref)),
         }
     }
@@ -2011,15 +2040,19 @@ impl<'a> Lowerer<'a> {
     /// `$name` at `ty`: the body's parameter, or inside a lambda the capture
     /// the checker recorded for it.
     fn read_input(&mut self, name: Astr, ty: Ty, span: Span) -> ValueId {
-        if let Some(param_reg) = self.try_param_slot(name) {
-            let dst = self.emit_take(span, RefTarget::Param(param_reg), vec![], ty);
-            self.set_origin(dst, ValOrigin::ExternParam(name));
-            return dst;
-        }
-        let slot = self.var_slot(name);
-        let dst = self.emit_take(span, RefTarget::Var(slot), vec![], ty);
-        self.set_origin(dst, ValOrigin::Named(name));
+        let target = self.input_storage(name).target();
+        let dst = self.emit_take(span, target, vec![], ty);
+        self.set_origin(dst, ValOrigin::ExternParam(name));
         dst
+    }
+
+    /// The checker admits a `$` read only as an input of the named function,
+    /// and `TypeChecker::read_input` records it as a capture of every lambda
+    /// around the read, so each body being lowered holds every `$` it reads.
+    fn input_storage(&self, name: Astr) -> InputStorage {
+        *self.inputs.get(&name).unwrap_or_else(|| {
+            panic!("input {name:?} read where the checker admitted no input of that name")
+        })
     }
 
     /// A call to a local function passes, after its arguments, the caller's
@@ -2060,17 +2093,6 @@ impl<'a> Lowerer<'a> {
             effect,
             flows,
         }
-    }
-
-    /// Look up the param_reg for an extern parameter by name.
-    /// Returns None if not found (e.g., inside a lambda where the param was captured).
-    fn try_param_slot(&self, name: Astr) -> Option<ValueId> {
-        for (pname, preg) in &self.body.params {
-            if *pname == name {
-                return Some(*preg);
-            }
-        }
-        None
     }
 
     fn set_val_type(&mut self, val: ValueId, ty: Ty) {
@@ -2828,21 +2850,20 @@ impl<'a> Lowerer<'a> {
                 let capture_regs: Vec<ValueId> = captured
                     .iter()
                     .map(|capture| {
-                        let name = capture.name;
-                        let taken = if let Some(param_reg) = self.try_param_slot(name) {
-                            let ty = self.slot_type(param_reg);
-                            let dst =
-                                self.emit_take(*span, RefTarget::Param(param_reg), vec![], ty);
-                            self.set_origin(dst, ValOrigin::ExternParam(name));
-                            dst
-                        } else {
-                            let slot = self.var_slot(name);
-                            let ty = self.slot_type(slot);
-                            let dst = self.emit_take(*span, RefTarget::Var(slot), vec![], ty);
-                            self.set_origin(dst, ValOrigin::Named(name));
-                            dst
+                        let dst = match capture.of {
+                            Captured::Local(name) => {
+                                let slot = self.var_slot(name);
+                                let ty = self.slot_type(slot);
+                                self.emit_take(*span, RefTarget::Var(slot), vec![], ty)
+                            }
+                            Captured::Input(name) => {
+                                let held = self.input_storage(name);
+                                let ty = self.slot_type(held.slot());
+                                self.emit_take(*span, held.target(), vec![], ty)
+                            }
                         };
-                        taken
+                        self.set_origin(dst, capture_origin(capture.of));
+                        dst
                     })
                     .collect();
                 // Create closure body.
@@ -2865,7 +2886,7 @@ impl<'a> Lowerer<'a> {
                     sub_body
                         .debug
                         .val_origins
-                        .insert(reg, ValOrigin::Named(capture.name));
+                        .insert(reg, capture_origin(capture.of));
                     let given = self
                         .body
                         .val_types
@@ -2893,6 +2914,7 @@ impl<'a> Lowerer<'a> {
                 // Swap state.
                 let saved_body = std::mem::replace(&mut self.body, sub_body);
                 let saved_scopes = std::mem::replace(&mut self.scopes, vec![FxHashMap::default()]);
+                let saved_inputs = std::mem::take(&mut self.inputs);
                 let saved_order_slot = self.order_slot;
                 let saved_anyorder = self.anyorder;
                 let saved_context_slots = std::mem::take(&mut self.context_slots);
@@ -2920,7 +2942,14 @@ impl<'a> Lowerer<'a> {
                         }
                         CaptureRead::Lent => (*capture_reg, register.cap_ty),
                     };
-                    let slot = self.define_var(capture.name, bound_ty);
+                    let slot = match capture.of {
+                        Captured::Local(name) => self.define_var(name, bound_ty),
+                        Captured::Input(name) => {
+                            let slot = self.alloc_slot(bound_ty, ValOrigin::ExternParam(name));
+                            self.inputs.insert(name, InputStorage::ClosureCapture(slot));
+                            slot
+                        }
+                    };
                     self.emit_assign(*span, RefTarget::Var(slot), vec![], bound);
                 }
                 for (p, param_reg) in params.iter().zip(closure_param_regs.iter()) {
@@ -2944,6 +2973,7 @@ impl<'a> Lowerer<'a> {
 
                 let mut closure_body_mir = std::mem::replace(&mut self.body, saved_body);
                 self.scopes = saved_scopes;
+                self.inputs = saved_inputs;
                 self.order_slot = saved_order_slot;
                 self.anyorder = saved_anyorder;
                 self.context_slots = saved_context_slots;
@@ -2952,7 +2982,7 @@ impl<'a> Lowerer<'a> {
 
                 closure_body_mir.captures = captured
                     .iter()
-                    .map(|capture| capture.name)
+                    .map(|capture| capture.of.name())
                     .zip(closure_capture_regs)
                     .collect();
                 closure_body_mir.params = params

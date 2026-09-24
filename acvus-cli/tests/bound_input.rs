@@ -340,3 +340,73 @@ fn an_operator_is_not_a_literal_and_is_a_usage_error() {
         "error: $x: `a+b` is not a value a literal writes\n"
     );
 }
+
+struct NamesakeProbe {
+    variant: &'static str,
+    source: &'static str,
+    prints_with_n_100: &'static str,
+}
+
+const NAMESAKE_PROBES: &[NamesakeProbe] = &[
+    NamesakeProbe {
+        variant: "a capture of a local named like the input",
+        source: "let n = 5; let f = |x| -> x + n; f(0)",
+        prints_with_n_100: "5\n",
+    },
+    NamesakeProbe {
+        variant: "a capture of the local and of the input in one closure",
+        source: "let n = 5; let f = |x| -> x + n + $n; f(0)",
+        prints_with_n_100: "105\n",
+    },
+    NamesakeProbe {
+        variant: "a closure parameter named like the input",
+        source: "let f = |n| -> n + 1; f(5)",
+        prints_with_n_100: "6\n",
+    },
+    NamesakeProbe {
+        variant: "the input read beside a closure parameter of its name",
+        source: "let f = |n| -> n + $n; f(5)",
+        prints_with_n_100: "105\n",
+    },
+    NamesakeProbe {
+        variant: "a nested closure capturing the local",
+        source: "let n = 5; let f = |x| -> { let g = |y| -> y + n; g(x) }; f(0)",
+        prints_with_n_100: "5\n",
+    },
+    NamesakeProbe {
+        variant: "a nested closure capturing the local and the input",
+        source: "let n = 5; let f = |x| -> { let g = |y| -> y + n + $n; g(x) }; f(0)",
+        prints_with_n_100: "105\n",
+    },
+    NamesakeProbe {
+        variant: "a shadowing `let n` in the closure, read as the local",
+        source: "let f = |x| -> { let n = 7; n + x }; f(0)",
+        prints_with_n_100: "7\n",
+    },
+    NamesakeProbe {
+        variant: "a shadowing `let n` in the closure beside a read of the input",
+        source: "let f = |x| -> { let n = 7; $n + x }; f(0)",
+        prints_with_n_100: "100\n",
+    },
+];
+
+#[test]
+fn a_binding_of_n_leaves_every_local_named_n_to_the_program() {
+    let dir = tempfile::tempdir().unwrap();
+    for opt in ["full", "none"] {
+        for probe in NAMESAKE_PROBES {
+            let out = acvus(
+                dir.path(),
+                &["run", "--opt", opt, "-e", probe.source, "n=100"],
+            );
+            assert_eq!(
+                (out.status.code(), text(&out.stdout)),
+                (Some(0), probe.prints_with_n_100.to_string()),
+                "{} at --opt {opt}: `{}` with n=100; stderr: {}",
+                probe.variant,
+                probe.source,
+                text(&out.stderr)
+            );
+        }
+    }
+}
