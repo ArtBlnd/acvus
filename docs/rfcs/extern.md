@@ -1090,12 +1090,13 @@ glue at the type the checker settled.
    - A value no script names is not a context. The host keeps it itself.
 
 2. **The entry's inputs and result are declared by Rust types.**
-   - A compilation takes the entry's inputs as a Rust type `I`: a derived
-     struct whose fields name the `$` inputs the entry reads (RFC-0071 rule
-     4) and give their types, in the order the entry takes them, or `()` for
-     none (RFC-0054 rule 6). A `$` the entry reads that `I` does not name is
-     refused at compile, and so is a field a binding already fixes. A run
-     takes an `I`, and it crosses as an extern's returned value does.
+   - The entry's inputs are a shape: named fields, each typed by a Rust
+     type's declaration — a derived struct `I`, `()` (RFC-0054 rule 6), or
+     a shape built from data, each field still a Rust `T`. A `$` the entry
+     reads that the shape lacks is refused at compile, as is a field a
+     binding fixes. A run takes an `I` or one `T` per field, each checked
+     against its field before any value is touched and crossed as an
+     extern's return is.
    - A compilation takes the entry's return type as a Rust type `R`. Its
      `Ty` is read by the derive an extern's parameter uses, and it is the
      entry's declaration (RFC-0054 rule 1). The declaration and `R` cannot

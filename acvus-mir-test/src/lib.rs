@@ -1285,9 +1285,10 @@ fn multi_fn_module_at(
 /// `inputs` is read off the code that survived the passes, which is what
 /// makes it the set RFC-0071 rule 5 calls required.
 #[derive(Debug)]
-pub struct BoundTemplate {
+pub struct BoundModule {
     pub ir: String,
     pub inputs: Vec<ShownInput>,
+    pub helper_ir_by_name: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1301,14 +1302,48 @@ pub fn compile_template_bound(
     source: &str,
     bound: &[(&str, acvus_mir::graph::BoundValue)],
     opt: Opt,
-) -> Result<BoundTemplate, String> {
-    let test_qref = QualifiedRef::root(interner.intern("test"));
+) -> Result<BoundModule, String> {
     let ast = acvus_ast::parse(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
+    compile_bound(interner, ParsedAst::Template(ast), &[], bound, opt)
+}
+
+/// A script entry `test` reading its inputs from its body, beside
+/// `helpers` whose inputs are their declared parameters, with `bound`
+/// bound; the result is `test`'s module.
+pub fn compile_script_bound(
+    interner: &Interner,
+    source: &str,
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    bound: &[(&str, acvus_mir::graph::BoundValue)],
+    opt: Opt,
+) -> Result<BoundModule, String> {
+    let ast =
+        acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
+    compile_bound(interner, ParsedAst::Script(ast), helpers, bound, opt)
+}
+
+fn compile_bound(
+    interner: &Interner,
+    target: ParsedAst,
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    bound: &[(&str, acvus_mir::graph::BoundValue)],
+    opt: Opt,
+) -> Result<BoundModule, String> {
+    let test_qref = QualifiedRef::root(interner.intern("test"));
     let mut functions = vec![inferred_function(
         test_qref,
-        FnKind::Local(ParsedAst::Template(ast), acvus_mir::graph::Inputs::FromReads),
+        FnKind::Local(target, acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
+    for (name, source, params) in helpers {
+        let ast = acvus_ast::parse_script(interner, source)
+            .map_err(|e| format!("parse error in helper '{name}': {e:?}"))?;
+        functions.push(inferred_function(
+            QualifiedRef::root(interner.intern(name)),
+            FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::Declared),
+            params.clone(),
+        ));
+    }
     let type_registry = extend_with_std(interner, &mut functions);
     let mut bindings = Bindings::default();
     for (name, value) in bound {
@@ -1368,8 +1403,20 @@ pub fn compile_template_bound(
             ty: input.ty.display(interner).to_string(),
         })
         .collect();
-    Ok(BoundTemplate {
+    let helper_ir_by_name = helpers
+        .iter()
+        .map(|(name, _, _)| {
+            let qref = QualifiedRef::root(interner.intern(name));
+            let module = opt_result
+                .modules
+                .get(&qref)
+                .ok_or_else(|| format!("no module produced for helper '{name}'"))?;
+            Ok((name.to_string(), dump_with(interner, module)))
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(BoundModule {
         ir: dump_with(interner, module),
         inputs,
+        helper_ir_by_name,
     })
 }
