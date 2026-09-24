@@ -20,6 +20,7 @@ fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect()
 }
@@ -68,16 +69,20 @@ fn template_document(interner: &Interner, name: &str) -> Document {
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs: acvus_mir::graph::Inputs::FromReads,
     }
 }
 
 fn template(interner: &Interner, name: &str, source: &str) -> Function {
-    let Document { qref, ty, .. } = template_document(interner, name);
+    let Document {
+        qref, ty, inputs, ..
+    } = template_document(interner, name);
     Function {
         qref,
-        kind: FnKind::Local(ParsedAst::Template(
-            acvus_ast::parse(interner, source).expect("parse failed"),
-        )),
+        kind: FnKind::Local(
+            ParsedAst::Template(acvus_ast::parse(interner, source).expect("parse failed")),
+            inputs,
+        ),
         ty,
     }
 }
@@ -85,14 +90,16 @@ fn template(interner: &Interner, name: &str, source: &str) -> Function {
 /// Compile via batch pipeline, return error messages (sorted).
 fn batch_errors(interner: &Interner, environment: &CompilationGraph, source: &str) -> Vec<String> {
     let Parsed { ast, errors } = Parsed::template(acvus_ast::parse(interner, source));
-    let Document { qref, ty, .. } = template_document(interner, "test");
+    let Document {
+        qref, ty, inputs, ..
+    } = template_document(interner, "test");
     let functions: Vec<Function> = environment
         .functions
         .iter()
         .cloned()
         .chain(std::iter::once(Function {
             qref,
-            kind: FnKind::Local(ast),
+            kind: FnKind::Local(ast, inputs),
             ty,
         }))
         .collect();
@@ -328,6 +335,7 @@ fn namespace_context_isolation() {
     contexts.push(Context {
         qref: QualifiedRef::qualified(i.intern("node_a"), i.intern("value")),
         ty: lift_to_poly(&Ty::I64),
+        init: None,
     });
     let mut session = LspSession::new(&i, bare(contexts));
 

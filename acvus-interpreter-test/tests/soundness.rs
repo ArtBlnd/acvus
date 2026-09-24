@@ -6,8 +6,8 @@
 //! A hole the branch has not closed yet is listed in `KNOWN` with the words
 //! it shows. The list only shrinks: a listed program that keeps the contract
 //! fails the test until its entry is removed, and a hole not listed fails it
-//! too. A directory's `ctx.json` declares the contexts of its programs, as
-//! `acvus run --context` reads it.
+//! too. A directory's `ctx.json` declares the contexts of its programs: each
+//! key a context at its value's type, holding that value.
 //!
 //! Beside the standard registries a program can call `opaque(x)` and
 //! `opaque_async(x)`, which answer `x` at effect `opaque`.

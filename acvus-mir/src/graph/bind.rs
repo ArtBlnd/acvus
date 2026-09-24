@@ -56,7 +56,8 @@ pub enum BoundValue {
 }
 
 impl BoundValue {
-    /// The value in acvus literal syntax, as `--bind` reads it back.
+    /// The value in acvus literal syntax, as `acvus run name=<literal>` reads
+    /// it back.
     pub fn display<'a>(&'a self, interner: &'a Interner) -> BoundValueDisplay<'a> {
         BoundValueDisplay {
             value: self,

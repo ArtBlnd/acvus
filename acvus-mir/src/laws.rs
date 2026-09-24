@@ -136,7 +136,7 @@ impl LawTable {
                         .collect();
                     Some((function.qref, declared))
                 }
-                FnKind::Local(_) => None,
+                FnKind::Local(..) => None,
             })
             .collect();
         Self { by_instance }

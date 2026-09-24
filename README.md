@@ -10,24 +10,43 @@ runs it.
 ## Run
 
 ```sh
-cargo run -p acvus-cli -- run   script.acvus  --context ctx.json [--opt none|full] [--time]
-cargo run -p acvus-cli -- run   -e '@items | map(|x| -> x.name) | join(", ")' --context ctx.json
+cargo run -p acvus-cli -- run   script.acvus  [name=literal]... [--opt none|full] [--time]
+cargo run -p acvus-cli -- run   -e '[1, 2, 3] | map(|x| -> x * 2) | sum'
 cargo run -p acvus-cli -- check script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- mir   script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time]
-cargo run -p acvus-cli -- space store/
 ```
 
-`--context` is a JSON file whose keys are the script's `@names`. A `.acvus`
-file is a script, a `.acvt` file a template; both go through the same
-stages.
+A `.acvus` file is a script, a `.acvt` file a template; both go through the
+same stages. `name=literal` binds the input `$name` to a value written in
+the script's own syntax.
+
+A script that names an `@context` runs in a space, which `acvus ctl` keeps:
+the space holds its scripts, one init per context, and the contexts
+themselves. A context's type is what the space's scripts and its init solve
+it to; its first value is its init, run when a run fetches the context and
+the space lacks it.
+
+```sh
+acvus ctl use work                          # a ctl context: names spaces
+acvus ctl space add notes dir:notes         # map a space to a directory
+acvus ctl space add-script notes turn.acvus # the space keeps the source
+acvus ctl space init notes log -e 'deque()' # the init of @log
+acvus run turn --space notes                # fills @log from its init, runs, commits
+acvus ctl space fill notes                  # runs every init the space lacks
+acvus ctl space ls notes                    # scripts, inits and contexts
+```
+
+`--space` names a space, or `acvus ctl space mark <space>` names it for
+every command under the working directory. `acvus ctl` with no arguments
+lists its commands.
 
 Each command stops where its job stops. `check` and `mir` run parse,
 typecheck, lowering, optimization and validation: `check` prints nothing,
 `mir` prints the optimized program. `ops` and `run` add the interpreter's
 `prepare`: `ops` prints the operations it prepares, `main` and every closure
 body, block by block, and `run` executes them. A program `check` admits
-reaches the machine: an `@name` no context declares, a field no path stores,
+reaches the machine: a field no path stores,
 a result that is or holds a reference, and a type the solve leaves open are
 all refused by `check`, with a diagnostic.
 
@@ -199,7 +218,7 @@ acvus-ext           the standard library
 acvus-ext-net       HTTP
 pomollu-core        TOML specs compiled into the same graph
 acvus-lsp           language server
-acvus-cli           `acvus run | check | mir | ops | space`
+acvus-cli           `acvus run | check | mir | ops | ctl | lsp`
 ```
 
 `acvus-mir` knows nothing about the interpreter; `acvus-interpreter`
@@ -208,10 +227,14 @@ depends on it, never the reverse.
 ## Examples
 
 Each directory under [`examples/`](examples/) holds `main.acvus`, the
-`ctx.json` it reads and the `expected.txt` it prints:
+init of each context it reads under `inits/`, and the `expected.txt` it
+prints:
 
 ```sh
-cargo run -p acvus-cli -- run examples/collatz/main.acvus --context examples/collatz/ctx.json
+acvus ctl space add collatz dir:collatz-space
+acvus ctl space add-script collatz examples/collatz/main.acvus
+acvus ctl space init collatz start -f examples/collatz/inits/start.acvus
+acvus run main --space collatz
 ```
 
 ```

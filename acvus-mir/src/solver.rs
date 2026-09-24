@@ -4529,7 +4529,7 @@ impl<'src> Solver<'src> {
 
     /// A polymorphic type with every identity a variable: for unifying
     /// with a type whose sources are already minted.
-    fn instantiate_open(&mut self, ty: &PolyTy) -> InferTy {
+    pub(crate) fn instantiate_open(&mut self, ty: &PolyTy) -> InferTy {
         self.terms.instantiate_open(ty, self.registry)
     }
 

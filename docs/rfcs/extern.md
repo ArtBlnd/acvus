@@ -441,6 +441,13 @@ compilation holds the body to it.**
    runtime carries with the value. It is spelled by the host, never
    defaulted. `types_match` reads a declared `!` on the expected side; a `!`
    value satisfying any slot is a separate site.
+6. **A compilation declares the entry's inputs as it declares its
+   return.** The declared inputs are the entry's parameters, and a body reads
+   a `$` only as one of them or as a binding (RFC-0071 rule 5). A
+   declaration of none declares none. Taking the inputs from the body's `$`
+   reads instead is spelled by the host, as `!` is: it serves an analysis that
+   reports what a body requires, and an entry compiled that way runs only
+   once a binding fixes every `$` it reads.
 
 What the entry's result is at run time — one runtime value — is RFC-0062 and
 RFC-0064.
@@ -1070,14 +1077,30 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
    - A context enters the graph as a variable (RFC-0025). Its type is solved
      with the rest of the graph from every body that stores or reads it, and
      structural types meet as they do anywhere else.
-   - A store is always admitted where the solved type holds it. Initializing
-     a context is a script that stores it (`@log = [];`), compiled into the
-     same graph as the scripts that read it.
+   - A store is always admitted where the solved type holds it.
+   - A context's first value is its init: an expression or a script the
+     host gives for that one key, which returns the value and names no
+     context. It is compiled into the same graph, its result declared at the
+     context's type, so its value joins the solve. A declared type names no
+     source (RFC-0012 rule 7), so the source an init makes becomes the
+     context's without a join of two sources; inside a script, a store of
+     another source into the context stays refused.
+   - Before a run, every context the entry fetches before assigning
+     (RFC-0025 rule 2) that the page lacks is filled by running its init; a
+     key with neither a value nor an init refuses the run before it starts,
+     naming the key. An init never runs on a page that holds its key, so no
+     init replaces a value.
    - A context whose type the graph leaves open closes to `!` at the freeze
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
    - A value no script names is not a context. The host keeps it itself.
 
-2. **The entry's result is declared by Rust type.**
+2. **The entry's inputs and result are declared by Rust types.**
+   - A compilation takes the entry's inputs as a Rust type `I`: a derived
+     struct whose fields name the `$` inputs the entry reads (RFC-0071 rule
+     4) and give their types, in the order the entry takes them, or `()` for
+     none (RFC-0054 rule 6). A `$` the entry reads that `I` does not name is
+     refused at compile, and so is a field a binding already fixes. A run
+     takes an `I`, and it crosses as an extern's returned value does.
    - A compilation takes the entry's return type as a Rust type `R`. Its
      `Ty` is read by the derive an extern's parameter uses, and it is the
      entry's declaration (RFC-0054 rule 1). The declaration and `R` cannot
@@ -1142,8 +1165,8 @@ user takes on nothing. A host that reads the value word writes, again, the
 walk only the runtime can check, and a reinterpretation at a wrong type is a
 transmute. A context's type written in data is a second statement of what
 the scripts already say, and two statements can disagree. Solved in the
-graph, the type has one source, and the stores that initialize it are
-checked like every other store. An extern handler already crosses the
+graph, the type has one source, and an init is checked against it like a
+store. An extern handler already crosses the
 boundary soundly with values lent and not kept, and a host that lends into a
 closure needs nothing more, so one crossing serves both and a gap in one is a
 gap in the other. Anything the host keeps is copied in Rust, where Rust
@@ -1157,9 +1180,12 @@ checks it.
 **Rejected.**
 - A context type declared by the host or by data such as a manifest — a
   second source that can disagree with the scripts.
-- An initializer that returns the context's value — its result type would be
-  inferred from its own body with nothing to refuse it (RFC-0054). A store
-  is checked against the type the whole graph solves.
+- An initializer that stores the context — a store of a new source into a
+  context whose type carries an identity is refused (RFC-0012 rule 3), and
+  the compiler cannot know whether the page already holds a value it would
+  replace.
+- A `context` declaration in the language — a body must lower whether or not
+  its contexts were ever given a value; a first value is the host's concern.
 - `as_typed::<T>()` on a result value — it is a `Value -> T`, and it checks
   a kind after the run (RFC-0054).
 - Returning the value word with documented accessors — every host rewrites

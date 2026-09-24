@@ -10,7 +10,7 @@ use acvus_lsp::{
     Host, HostDiagnostic, Listing, Location, LspSession, Mode, RecordingReader, RenameRefusal,
     Sites, Vfs, Workspace,
 };
-use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
+use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, Inputs, QualifiedRef};
 use acvus_mir::ty::{
     Effect, ParamTerm, PolyBuilder, PolyParam, Ty, TyTerm, TypeRegistry, lift_to_poly,
 };
@@ -21,6 +21,7 @@ fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect()
 }
@@ -51,7 +52,13 @@ fn with_std(interner: &Interner, contexts: Vec<Context>) -> CompilationGraph {
     environment(contexts, functions, types)
 }
 
-fn document(interner: &Interner, name: &str, mode: Mode, params: Vec<PolyParam>) -> Document {
+fn document(
+    interner: &Interner,
+    name: &str,
+    mode: Mode,
+    inputs: Inputs,
+    params: Vec<PolyParam>,
+) -> Document {
     let mut pb = PolyBuilder::new();
     Document {
         qref: QualifiedRef::root(interner.intern(name)),
@@ -63,6 +70,7 @@ fn document(interner: &Interner, name: &str, mode: Mode, params: Vec<PolyParam>)
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs,
     }
 }
 
@@ -74,7 +82,10 @@ fn open(
 ) -> (LspSession, DocId) {
     let mut session = LspSession::new(interner, environment);
     let id = session
-        .open(document(interner, "test", mode, vec![]), source)
+        .open(
+            document(interner, "test", mode, Inputs::FromReads, vec![]),
+            source,
+        )
         .expect("the session opens no other document");
     (session, id)
 }
@@ -205,7 +216,10 @@ fn an_input_is_referred_to_by_every_read_of_it() {
     let mut session = LspSession::new(&i, bare(vec![]));
     let source = "let y = $x; $x + y";
     let doc = session
-        .open(document(&i, "test", Mode::Script, params), source)
+        .open(
+            document(&i, "test", Mode::Script, Inputs::Declared, params),
+            source,
+        )
         .expect("the session opens no other document");
     accepted(&session, doc);
     let found = session
@@ -342,7 +356,10 @@ fn a_rename_of_a_context_a_function_or_an_input_is_refused() {
     let mut session = LspSession::new(&i, bare(vec![]));
     let source = "$x + 1";
     let doc = session
-        .open(document(&i, "test", Mode::Script, params), source)
+        .open(
+            document(&i, "test", Mode::Script, Inputs::Declared, params),
+            source,
+        )
         .expect("the session opens no other document");
     accepted(&session, doc);
     assert_eq!(session.rename(doc, 0, "y"), Err(RenameRefusal::Input));
@@ -427,7 +444,7 @@ impl Host for Documents {
             .iter()
             .map(|name| DocumentSpec {
                 path: self.root.join(format!("{name}.acvt")),
-                document: document(interner, name, Mode::Template, vec![]),
+                document: document(interner, name, Mode::Template, Inputs::FromReads, vec![]),
             })
             .collect();
         Listing {

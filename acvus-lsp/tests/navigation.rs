@@ -21,6 +21,7 @@ fn root_contexts(interner: &Interner, ctx: &[(&str, Ty)]) -> Vec<Context> {
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect()
 }
@@ -63,6 +64,7 @@ fn script_reading_int_x(interner: &Interner, name: &str) -> Document {
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs: acvus_mir::graph::Inputs::Declared,
     }
 }
 
@@ -78,6 +80,7 @@ fn document(interner: &Interner, name: &str, mode: Mode) -> Document {
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs: acvus_mir::graph::Inputs::FromReads,
     }
 }
 

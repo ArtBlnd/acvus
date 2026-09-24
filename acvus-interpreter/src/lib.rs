@@ -27,6 +27,7 @@ mod code;
 pub mod executor;
 mod flight;
 mod host;
+mod init;
 mod interpreter;
 pub mod journal;
 #[cfg(feature = "tooling")]
@@ -66,8 +67,12 @@ mod vtable;
 
 pub use executor::{AsyncJob, BlockingJob, Done, Executor, Handle, SequentialExecutor, TokioExecutor};
 pub use host::{
-    Contexts, Entry, EntryError, Host, Output, OutputError, Page, PageError, Program, Refusal, Source,
+    Contexts, Entry, EntryError, EntryPart, Host, Origin, Output, OutputError, Page, PageError,
+    Program, Refusal, Source,
 };
+pub use init::InitRefusal;
+#[cfg(feature = "tooling")]
+pub use init::{DeclaredInits, GraphParts, InitSource, Inits};
 pub use journal::{Held, InMemoryContext, RuntimeContext};
 pub use runtime::AcvusRuntime;
 pub use space::{

@@ -24,6 +24,7 @@ pub(crate) fn make_graph(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: crate::ty::lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -37,7 +38,7 @@ pub(crate) fn make_graph(
         functions: Freeze::new(vec![
             Function {
                 qref: test_qref,
-                kind: FnKind::Local(parsed),
+                kind: FnKind::Local(parsed, crate::graph::Inputs::FromReads),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(pb.fresh_ty_var()),

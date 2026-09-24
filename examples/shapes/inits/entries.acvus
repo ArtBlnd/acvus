@@ -1,0 +1,7 @@
+[
+    { kind: "circle".to_string(), a: 2.0, b: 0.0, },
+    { kind: "square".to_string(), a: 3.0, b: 0.0, },
+    { kind: "rect".to_string(), a: 2.0, b: 5.0, },
+    { kind: "hexagon".to_string(), a: 1.0, b: 0.0, },
+    { kind: "square".to_string(), a: 1.5, b: 0.0, },
+]

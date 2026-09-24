@@ -14,16 +14,23 @@ Status: Accepted
    `.acvt` a template (RFC-0071) — and `-e <expr>` runs an expression. The mode
    chooses the pipeline, not the grammar (RFC-0045). `acvus lsp` serves an
    editor over stdio (RFC-0086) and takes no file.
-2. `--context <file.json>` is data: each top-level key is a context, and its
-   type is the value's type. A value whose type the data does not fix — an
-   empty array, `null` — is an error, not a guess.
-3. After a run, every context write is reported on stderr as
-   `write @name = <json>`; `--commit` rewrites the context file with the new
-   values.
-4. `--bind name=<literal>` binds the input `$name` to the value a literal
-   writes (RFC-0087 rule 1), in the script's own syntax, and a `-` before a
-   float literal is its sign. Anything else — a name, a call, an operator —
-   is a usage error.
+2. **Contexts come from inits.** A context's type is the graph's, and its
+   first value is its init (RFC-0090 rule 1): `ctl space init <space>
+   <key> -e <expr> | -f <file>` stores one per key in the space. The runner
+   reads no context data. A run fills each context it fetches that the
+   space lacks by running that key's init first, and a key with no init
+   refuses the run before it starts, naming the command that adds one.
+3. **A space holds its scripts.** `--space <name>` names a space the active
+   ctl context maps to a location (rule 9). The space stores the sources of
+   its scripts and inits beside its contexts, so a location carries code and
+   data together. A run on a space compiles every script and init it holds
+   into one graph with several entries (RFC-0054), so a context has one type
+   in every run, and runs the one named. A script the space does not hold is refused.
+   After a run, the space commits the run's writes.
+4. Every `name=<literal>` after the file binds the input `$name` to the
+   value a literal writes (RFC-0087 rule 1), in the script's own syntax, and
+   a `-` before a float literal is its sign. Anything else — a name, a call,
+   an operator — is a usage error.
 5. stdout carries the result and nothing else: a template's text as it is, a
    script's value as JSON, a bare string without quotes.
 6. Every diagnostic — parse, inference, lowering, validation — goes to stderr
@@ -31,18 +38,32 @@ Status: Accepted
    caught at the top of the process and printed as `error: <message>` with no
    span (RFC-0044).
 7. Exit status: 0 on success, 1 when compilation fails, 2 when the run fails,
-   64 for a usage error.
+   64 for a usage error. A refusal names the command that resolves it.
 8. Which registries the runner registers is this host's choice, as it is any
    host's.
+9. **`acvus ctl` keeps where spaces are and how runs run.** Its config holds
+   named contexts; each maps space names to locations and one is active, so
+   one name may mean different locations in different contexts. A location
+   is `dir:<path>`, and other kinds join the same enumeration. `ctl set`
+   stores a run default (the executor, the optimization level, timing) on a
+   context or a space; a flag overrides the space, the space the context,
+   the context the built-in default, and `ctl show` prints each effective
+   value with its source. Without `--space`, the nearest `.acvus/` above the
+   working directory names the space; with neither, a script that names no
+   context runs alone.
 
 **Why.** One runner with one diagnostic shape is what a script author reads
-first, and the same rendering serves the LSP. The context's type is the
-data's type: what the script reads is what the file holds.
+first, and the same rendering serves the LSP. A context's type is what the
+scripts that use it solve to, so no second declaration can disagree with
+them; a space that holds its scripts runs the same wherever it is stored.
 
 **Rejected.**
-- Guessing a type where JSON is silent — a guessed type is one the script did
-  not ask for.
-- JSON for `--bind` — it has no enum, tuple, `char` or `Option`, and a
+- Context data (`--context ctx.json`) — its type is the data's, which can
+  disagree with the scripts, and JSON cannot write an empty array's element
+  type, an enum or an `Option`.
+- A space that records script paths — the code would stay on one machine
+  while its data moves.
+- JSON for inputs — it has no enum, tuple, `char` or `Option`, and a
   variant written as an object could not be told from an object.
 
 ## RFC-0078: A parse recovers past an error, and a tree that holds one cannot be lowered

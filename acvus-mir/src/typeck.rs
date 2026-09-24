@@ -12,7 +12,7 @@ use crate::error::{
     DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
 };
 use crate::graph::bind::{DeferredJoin, Typed, type_bound};
-use crate::graph::{Bindings, BoundValue, QualifiedRef};
+use crate::graph::{Bindings, BoundValue, Inputs, QualifiedRef};
 use crate::ir::{Callee, CastKind, Chosen, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::place::{
     Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
@@ -30,7 +30,7 @@ use crate::ty::generalize_patterns;
 use crate::ty::{
     CastTy, Effect, EffectTerm, Flows, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability,
     ObjectTy, ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View,
-    Viewed, lift_ty,
+    Viewed,
 };
 use crate::variant::VariantPayload;
 
@@ -1610,17 +1610,6 @@ struct PendingConversion {
     base: Option<AstId>,
 }
 
-/// What a `$name` the body has not already bound means here.
-#[derive(Clone, Copy)]
-enum FreeParam {
-    /// The parameters are the ones bound before the body was checked, and a
-    /// `$name` outside them names nothing.
-    Bound,
-    /// No parameter list is declared, so the body's `$` uses are its
-    /// parameters, in the order it reads them, at types the solve closes.
-    Discovered,
-}
-
 pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// Interner for string interning.
     interner: &'a Interner,
@@ -1734,7 +1723,7 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     decision_callees: FxHashMap<DecisionId, QualifiedRef>,
     /// Where a source begins if this instance decision is what mints it.
     source_begins_by_decision: FxHashMap<DecisionId, Span>,
-    free_param: FreeParam,
+    inputs: Inputs,
     lambda_stack: Vec<LambdaScope>,
     lambda_captures: FxHashMap<AstId, Vec<(Astr, CaptureSource)>>,
     capture_moves: Vec<CaptureMove>,
@@ -1806,7 +1795,12 @@ impl<'a, 's, 'src, S> TypeChecker<'a, 's, 'src, S>
 where
     S: Slot,
 {
-    pub fn new(interner: &'a Interner, env: &'a TypeEnv, solver: &'s mut Solver<'src>) -> Self {
+    pub fn new(
+        interner: &'a Interner,
+        env: &'a TypeEnv,
+        solver: &'s mut Solver<'src>,
+        inputs: Inputs,
+    ) -> Self {
         let body_effect = solver.fresh_effect_var();
         Self {
             interner,
@@ -1860,7 +1854,7 @@ where
             source_begins_by_decision: FxHashMap::default(),
             errors: Vec::new(),
             context_uses: FxHashMap::default(),
-            free_param: FreeParam::Bound,
+            inputs,
             lambda_stack: Vec::new(),
             lambda_captures: FxHashMap::default(),
             capture_moves: Vec::new(),
@@ -1913,13 +1907,8 @@ where
 
     /// Bind the parameters the function's declaration names: a `$name` in the
     /// body names the declared parameter of that name, and the declared order
-    /// is the order the call passes its arguments in. A declaration naming no
-    /// parameter leaves the body's `$` uses to be its parameters instead.
+    /// is the order the call passes its arguments in.
     pub fn with_declared_params(mut self, declared: Vec<ParamTerm<Infer>>) -> Self {
-        self.free_param = match declared.is_empty() {
-            true => FreeParam::Discovered,
-            false => FreeParam::Bound,
-        };
         self.param_types
             .extend(declared.into_iter().map(|param| ExternParam {
                 name: param.name,
@@ -2054,7 +2043,7 @@ where
     pub fn check_script(
         mut self,
         script: &acvus_ast::Script<S>,
-        expected_tail: Option<&Ty>,
+        expected_tail: Option<InferTy>,
         crossing: ResultCrossing,
     ) -> Checked<S::Resolution>
     where
@@ -2064,7 +2053,7 @@ where
         // `return` joins against it exactly as the tail does; undeclared, it
         // is the fresh variable the tail resolves.
         let return_ty = match expected_tail {
-            Some(declared) => lift_ty(declared),
+            Some(declared) => declared,
             None => self.solver.fresh_ty_var(),
         };
         self.return_ty = Some(return_ty.clone());
@@ -2438,8 +2427,8 @@ where
     {
         self.solver.trial(|solver| {
             let opened = solver.decisions_opened();
-            let mut trial =
-                TypeChecker::new(self.interner, self.env, solver).with_namespace(self.namespace);
+            let mut trial = TypeChecker::new(self.interner, self.env, solver, self.inputs)
+                .with_namespace(self.namespace);
             trial.type_map = self.type_map.clone();
             admit(&mut trial)
                 && trial.errors.is_empty()
@@ -7442,8 +7431,8 @@ where
                                 self.resolved.record(*id, Resolved::Input(name.name));
                                 param.ty.clone()
                             }
-                            None => match self.free_param {
-                                FreeParam::Discovered => {
+                            None => match self.inputs {
+                                Inputs::FromReads => {
                                     let ty = self.solver.fresh_ty_var();
                                     self.param_types.push(ExternParam {
                                         name: name.name,
@@ -7453,7 +7442,7 @@ where
                                     self.resolved.record(*id, Resolved::Input(name.name));
                                     ty
                                 }
-                                FreeParam::Bound => {
+                                Inputs::Declared => {
                                     self.error(
                                         MirErrorKind::UndefinedVariable {
                                             name: format!("${}", self.interner.resolve(name.name)),
@@ -9424,7 +9413,7 @@ mod tests {
             functions: qref_functions,
             machine: FxHashMap::default(),
         };
-        let checker = TypeChecker::new(interner, &env, &mut solver);
+        let checker = TypeChecker::new(interner, &env, &mut solver, Inputs::Declared);
         let resolution = checker
             .check_template(&template)
             .resolution
@@ -9462,7 +9451,7 @@ mod tests {
             functions: FxHashMap::default(),
             machine: FxHashMap::default(),
         };
-        let checked = TypeChecker::new(&interner, &env, &mut solver).check_script(
+        let checked = TypeChecker::new(&interner, &env, &mut solver, Inputs::Declared).check_script(
             &script,
             None,
             ResultCrossing::Registers,

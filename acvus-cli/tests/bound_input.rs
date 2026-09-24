@@ -1,9 +1,9 @@
-//! `--bind` at the CLI's contract: a bound `$` is a constant and the text it
+//! `name=<literal>` at the CLI's contract: a bound `$` is a constant and the text it
 //! decides against is not written, while a `$` no binding fixed and the code
 //! still reads is a compile-time refusal (RFC-0071 rule 5).
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 const BY_MODE: &str = "\
 % match $mode
@@ -15,7 +15,7 @@ Explain the code below.
 ";
 
 fn acvus(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_acvus"))
+    crate::sandbox::acvus()
         .current_dir(dir)
         .args(args)
         .output()
@@ -36,7 +36,7 @@ fn a_bound_input_renders_the_arm_it_chose() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         written(dir.path()),
-        &["run", "prompt.acvt", "--bind", "mode=\"review\""],
+        &["run", "prompt.acvt", "mode=\"review\""],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "Review the code below.\n");
@@ -47,7 +47,7 @@ fn another_binding_renders_the_other_arm() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         written(dir.path()),
-        &["run", "prompt.acvt", "--bind", "mode=\"explain\""],
+        &["run", "prompt.acvt", "mode=\"explain\""],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "Explain the code below.\n");
@@ -61,7 +61,7 @@ fn an_input_no_binding_fixed_refuses_the_run() {
     assert_eq!(text(&out.stdout), "");
     assert_eq!(
         text(&out.stderr),
-        "error: `$mode` is required and not bound\n"
+        "error: `$mode` is required and not bound; `mode=<literal>` binds it\n"
     );
 }
 
@@ -74,7 +74,7 @@ fn check_reports_the_inputs_a_run_would_still_need() {
 
     let out = acvus(
         written(dir.path()),
-        &["check", "prompt.acvt", "--bind", "mode=\"review\""],
+        &["check", "prompt.acvt", "mode=\"review\""],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stderr), "");
@@ -96,12 +96,12 @@ fn a_binding_that_computes_its_value_is_a_usage_error() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         written(dir.path()),
-        &["run", "prompt.acvt", "--bind", "x=f()"],
+        &["run", "prompt.acvt", "x=f()"],
     );
     assert_eq!(out.status.code(), Some(64));
     assert_eq!(
         text(&out.stderr),
-        "error: --bind x: `f()` is not a value a literal writes\n"
+        "error: $x: `f()` is not a value a literal writes\n"
     );
 }
 
@@ -110,12 +110,12 @@ fn a_binding_whose_value_has_no_type_is_a_usage_error() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         written(dir.path()),
-        &["run", "prompt.acvt", "--bind", "xs=[1, \"a\"]"],
+        &["run", "prompt.acvt", "xs=[1, \"a\"]"],
     );
     assert_eq!(out.status.code(), Some(64));
     assert_eq!(
         text(&out.stderr),
-        "error: --bind xs: the elements of an array in the value have no one type\n"
+        "error: $xs: the elements of an array in the value have no one type\n"
     );
 }
 
@@ -125,9 +125,9 @@ fn an_unbound_input_of_an_expression_is_refused_rather_than_read() {
     let out = acvus(dir.path(), &["run", "-e", "$x + 1"]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "");
-    assert_eq!(text(&out.stderr), "error: `$x` is required and not bound\n");
+    assert_eq!(text(&out.stderr), "error: `$x` is required and not bound; `x=<literal>` binds it\n");
 
-    let bound = acvus(dir.path(), &["run", "-e", "$x + 1", "--bind", "x=41"]);
+    let bound = acvus(dir.path(), &["run", "-e", "$x + 1", "x=41"]);
     assert_eq!(bound.status.code(), Some(0), "{}", text(&bound.stderr));
     assert_eq!(text(&bound.stdout), "42\n");
 }
@@ -155,7 +155,7 @@ fn an_input_lent_to_a_str_parameter_is_a_string_that_prepares() {
             let binding = format!("input={input}");
             let out = acvus(
                 dir.path(),
-                &["run", "lends.acvt", "--opt", opt, "--bind", &binding],
+                &["run", "lends.acvt", "--opt", opt, &binding],
             );
             assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
             assert_eq!(text(&out.stdout), shown);
@@ -170,7 +170,7 @@ fn run_bound(source: &str, binding: &str) -> Output {
     std::fs::write(dir.path().join("t.acvt"), source).expect("write a fixture");
     let unbound = acvus(dir.path(), &["check", "t.acvt"]);
     assert_eq!(unbound.status.code(), Some(0), "{}", text(&unbound.stderr));
-    acvus(dir.path(), &["run", "t.acvt", "--bind", binding])
+    acvus(dir.path(), &["run", "t.acvt", binding])
 }
 
 fn prints(out: Output, expected: &str) {
@@ -231,7 +231,7 @@ fn a_bound_array_is_traversed() {
     prints(
         acvus(
             dir.path(),
-            &["run", "t.acvt", "--bind", "names=[\"a\", \"b\"]"],
+            &["run", "t.acvt", "names=[\"a\", \"b\"]"],
         ),
         "- a\n- b\n",
     );
@@ -263,7 +263,7 @@ fn runs_at_both_levels(source: &str, bindings: &[&str], expected: &str) {
     for opt in ["none", "full"] {
         let mut args = vec!["run", "t.acvt", "--opt", opt];
         for binding in bindings {
-            args.extend(["--bind", binding]);
+            args.extend([binding]);
         }
         let out = acvus(dir.path(), &args);
         assert_eq!(out.status.code(), Some(0), "at {opt}: {}", text(&out.stderr));
@@ -301,5 +301,42 @@ fn a_bound_object_runs_the_arm_its_nested_pattern_chose() {
         ARM_BY_NESTED_PATTERN,
         &["o={k: Some(M::R(3)), t: (2, \"x\"),}", "b=\"B\""],
         "B\n",
+    );
+}
+
+// -- Every literal kind after the source (RFC-0031 rule 4) ---------------
+
+#[test]
+fn each_kind_of_literal_binds_as_the_script_writes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("$n * 2", "n=21", "42\n"),
+        ("$f * 2.0", "f=-1.5", "-3.0\n"),
+        ("$s.to_string()", "s=\"jun\"", "jun\n"),
+        ("match $o { Some(x) => { x }, None => { 0 } }", "o=Some(7)", "7\n"),
+        ("$xs[1]", "xs=[1, 2]", "2\n"),
+        ("$p.age + 1", "p={ name: \"jun\", age: 3, }", "4\n"),
+        (
+            "match $m { M::R => { 1 }, M::D => { 2 } }",
+            "m=M::D",
+            "2\n",
+        ),
+    ];
+    for (expr, binding, shown) in cases {
+        let out = acvus(dir.path(), &["run", "-e", expr, binding]);
+        assert_eq!(out.status.code(), Some(0), "{binding}: {}", text(&out.stderr));
+        assert_eq!(text(&out.stdout), shown, "{binding}");
+    }
+}
+
+#[test]
+fn an_operator_is_not_a_literal_and_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(dir.path(), &["run", "-e", "$x", "x=a+b"]);
+    assert_eq!(out.status.code(), Some(64));
+    assert_eq!(text(&out.stdout), "");
+    assert_eq!(
+        text(&out.stderr),
+        "error: $x: `a+b` is not a value a literal writes\n"
     );
 }

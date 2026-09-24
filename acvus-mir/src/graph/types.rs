@@ -26,7 +26,7 @@ pub use acvus_utils::QualifiedRef;
 #[derive(Debug, Clone)]
 pub enum FnKind {
     /// Has a parsed AST. MIR typechecks and compiles.
-    Local(ParsedAst),
+    Local(ParsedAst, Inputs),
     /// Black box. Runtime provides the value. `bounds[i]` is the declared
     /// bound of type variable `i` of the function's type, `effect_bounds[i]`
     /// of effect variable `i`.
@@ -36,6 +36,18 @@ pub enum FnKind {
         instances: crate::ty::Instances,
         requires: Vec<crate::ty::RequirementSig>,
     },
+}
+
+/// What a `$` a local function's body reads may name, beside the parameters
+/// its type declares (RFC-0054 rule 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inputs {
+    /// A declared parameter or a binding, and nothing else; a type that
+    /// declares no parameter declares none.
+    Declared,
+    /// Also any other name, which becomes one more parameter, after the
+    /// declared ones and in the order the body first reads it.
+    FromReads,
 }
 
 /// Parsed AST for local functions.
@@ -128,6 +140,10 @@ pub struct Context {
     pub qref: QualifiedRef,
     /// The context's polymorphic type. `Var` = to be inferred.
     pub ty: PolyTy,
+    /// The local function whose result is the context's first value
+    /// (RFC-0090 rule 1). `infer` checks its body against `ty` with every
+    /// identity open, so the source the init makes is the value's.
+    pub init: Option<QualifiedRef>,
 }
 
 impl Context {

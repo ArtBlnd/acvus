@@ -19,9 +19,10 @@ fn errors(i: &Interner, source: &str) -> Vec<String> {
     } = Externs::combine(acvus_ext::std_registries::<TypesOnly>(), i).expect("registries combine");
     functions.push(Function {
         qref: QualifiedRef::root(i.intern("script")),
-        kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(i, source).expect("parse"),
-        )),
+        kind: FnKind::Local(
+            ParsedAst::Script(acvus_ast::parse_script(i, source).expect("parse")),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),

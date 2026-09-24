@@ -48,9 +48,9 @@ static ALLOCATOR: Counting = Counting;
 
 fn program(i: &Interner) -> Program {
     let host = Host::new(i, acvus_ext::std_registries::<AcvusRuntime>())
-        .entry::<()>("init", Source::Script("@log = vec([]);"))
-        .entry::<()>("one", Source::Script(r#"@log.push("one".to_string());"#))
-        .entry::<()>("two", Source::Script(r#"@log.push("two".to_string());"#));
+        .entry::<(), ()>("init", Source::Script("@log = vec([]);"))
+        .entry::<(), ()>("one", Source::Script(r#"@log.push("one".to_string());"#))
+        .entry::<(), ()>("two", Source::Script(r#"@log.push("two".to_string());"#));
     match host.compile(Arc::new(SequentialExecutor)) {
         Ok(program) => program,
         Err(refusals) => panic!("the program is refused: {refusals:?}"),
@@ -65,9 +65,9 @@ fn page_of(program: &Program, pairs: usize) -> InMemoryContext {
         .expect("a current-thread runtime");
     let names = std::iter::once("init").chain(std::iter::repeat_n(["one", "two"], pairs).flatten());
     for name in names {
-        let entry = program.entry::<()>(name).expect("the entry returns `()`");
+        let entry = program.entry::<(), ()>(name).expect("the entry returns `()`");
         runtime
-            .block_on(entry.run(&page))
+            .block_on(entry.run(&page, ()))
             .expect("the page holds the graph's contexts");
     }
     Arc::into_inner(page).expect("no run holds the page after it returns")

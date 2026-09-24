@@ -1,0 +1,5 @@
+error: type mismatch: expected i64, got String
+  --> 26-a-context-stored-at-two-types.acvus:2:1
+  |
+2 | @x = "a".to_string();
+  | ^^^^^^^^^^^^^^^^^^^^^

@@ -2,7 +2,7 @@
 //! stderr in the diagnostic shape, and the exit status of each outcome.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use acvus_interpreter_test::Context;
 use acvus_interpreter_test::listing::{script_listing_with_externs, text as listing_text};
@@ -10,7 +10,7 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 fn acvus(dir: &Path, args: &[&str]) -> Output {
-    let out = Command::new(env!("CARGO_BIN_EXE_acvus"))
+    let out = crate::sandbox::acvus()
         .current_dir(dir)
         .args(args)
         .output()
@@ -37,47 +37,24 @@ fn text(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn a_script_prints_its_value_as_json_and_reports_its_writes() {
+fn a_script_prints_its_value_as_json() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
         "sum.acvus",
-        "let it = as_iter(&@items);\nlet total = 0;\nwhile let Some(x) = next(&mut it) { total = total + *x; }\n@count = @count + 1;\n{ total: total, tag: \"ok\".to_string(), }\n",
+        "let items = [1, 2, 3];\nlet it = as_iter(&items);\nlet total = 0;\nwhile let Some(x) = next(&mut it) { total = total + *x; }\n{ total: total, tag: \"ok\".to_string(), }\n",
     );
-    write(
-        dir.path(),
-        "ctx.json",
-        "{\"items\": [1, 2, 3], \"count\": 7}",
-    );
-    let out = acvus(dir.path(), &["run", "sum.acvus", "--context", "ctx.json"]);
+    let out = acvus(dir.path(), &["run", "sum.acvus"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "{\"tag\":\"ok\",\"total\":6}\n");
-    assert_eq!(text(&out.stderr), "write @count = 8\n");
-}
-
-#[test]
-fn commit_rewrites_the_context_file_with_the_writes() {
-    let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "bump.acvus", "@count = @count + 1;\n@count\n");
-    write(dir.path(), "ctx.json", "{\"count\": 1, \"name\": \"n\"}");
-    let out = acvus(
-        dir.path(),
-        &["run", "bump.acvus", "--context", "ctx.json", "--commit"],
-    );
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    let ctx: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join("ctx.json")).unwrap())
-            .unwrap();
-    assert_eq!(ctx["count"], 2);
-    assert_eq!(ctx["name"], "n");
+    assert_eq!(text(&out.stderr), "");
 }
 
 #[test]
 fn a_template_prints_its_text_and_an_expression_prints_its_value() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "hi.acvt", "Hello {{ @name }}!");
-    write(dir.path(), "hi.json", "{\"name\": \"acvus\"}");
-    let out = acvus(dir.path(), &["run", "hi.acvt", "--context", "hi.json"]);
+    write(dir.path(), "hi.acvt", "Hello {{ $name }}!");
+    let out = acvus(dir.path(), &["run", "hi.acvt", "name=\"acvus\""]);
     assert_eq!(text(&out.stdout), "Hello acvus!");
     assert_eq!(text(&out.stderr), "");
     let out = acvus(dir.path(), &["run", "-e", "let xs = [1, 2]; xs.len() * 10"]);
@@ -148,19 +125,6 @@ fn a_runtime_error_is_the_operations_panic_message_with_status_2() {
         text(&out.stderr),
         "error: index out of bounds: the len is 3 but the index is 9\n"
     );
-}
-
-#[test]
-fn a_context_value_without_a_type_is_refused_before_anything_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "x.acvus", "1\n");
-    write(dir.path(), "empty.json", "{\"items\": []}");
-    let out = acvus(dir.path(), &["run", "x.acvus", "--context", "empty.json"]);
-    assert_eq!(out.status.code(), Some(64));
-    assert!(text(&out.stderr).contains("@items: an empty array has no element type"));
-    write(dir.path(), "null.json", "{\"x\": null}");
-    let out = acvus(dir.path(), &["run", "x.acvus", "--context", "null.json"]);
-    assert!(text(&out.stderr).contains("@x: null has no type"));
 }
 
 #[test]
@@ -263,9 +227,9 @@ fn exits(dir: &Path, command: &str, script: &str, code: i32) {
 }
 
 /// `check` and `mir` stop where checking stops; `ops` and `run` prepare, and
-/// what only `prepare` refuses is theirs alone. An undeclared `@name` is
-/// such a refusal: nothing before `prepare` rejects it, so `check` accepts
-/// the script and the interpreter refuses it at `EXIT_RUN`.
+/// what only a run refuses is its alone. A source that names a context runs
+/// only over a space, so a run with none is a usage error the other three
+/// commands do not see.
 #[test]
 fn each_command_exits_by_the_stage_that_refused_the_script() {
     let dir = tempfile::tempdir().unwrap();
@@ -294,10 +258,10 @@ fn each_command_exits_by_the_stage_that_refused_the_script() {
         },
         Exits {
             script: "context.acvus",
-            check: 1,
-            mir: 1,
-            ops: 1,
-            run: 1,
+            check: 0,
+            mir: 0,
+            ops: 0,
+            run: 64,
         },
         Exits {
             script: "panic.acvus",
@@ -435,49 +399,9 @@ fn a_template_is_checked_as_a_script_is() {
     );
 
     write(dir.path(), "ok.acvt", "Hello {{ @name }}!\n");
-    write(dir.path(), "ctx.json", "{\"name\": \"acvus\"}");
-    let out = acvus(dir.path(), &["check", "ok.acvt", "--context", "ctx.json"]);
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(text(&out.stdout), "");
     let out = acvus(dir.path(), &["check", "ok.acvt"]);
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(
-        text(&out.stderr),
-        "error: `@name` is not a declared context\n  --> ok.acvt:1:10\n  |\n1 | Hello {{ @name }}!\n  |          ^^^^^\n"
-    );
-}
-
-#[test]
-fn a_space_directory_keeps_contexts_between_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "bump.acvus", "@n = @n + 10;\n@n\n");
-    write(dir.path(), "seed.json", "{\"n\": 1}");
-    let out = acvus(
-        dir.path(),
-        &[
-            "run",
-            "bump.acvus",
-            "--space",
-            "store",
-            "--context",
-            "seed.json",
-        ],
-    );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    assert_eq!(text(&out.stdout), "11\n");
-    assert!(
-        text(&out.stderr).contains("commit @n = "),
-        "{}",
-        text(&out.stderr)
-    );
-    let out = acvus(dir.path(), &["run", "bump.acvus", "--space", "store"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    assert_eq!(text(&out.stdout), "21\n");
-    let out = acvus(dir.path(), &["space", "store"]);
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-    let listing = text(&out.stdout);
-    assert!(listing.starts_with("@n: i64 = "), "{listing}");
-    assert!(listing.contains("2 nodes"), "{listing}");
+    assert_eq!(text(&out.stdout), "");
 }
 
 struct Stage {
@@ -506,12 +430,8 @@ fn stages(stderr: &str) -> Vec<Stage> {
 #[test]
 fn time_reports_every_stage_the_command_ran_after_its_output() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "bump.acvus", "@count = @count + 1;\n@count\n");
-    write(dir.path(), "ctx.json", "{\"count\": 7}");
-    let out = acvus(
-        dir.path(),
-        &["run", "bump.acvus", "--context", "ctx.json", "--time"],
-    );
+    write(dir.path(), "bump.acvus", "let count = 7;\ncount = count + 1;\ncount\n");
+    let out = acvus(dir.path(), &["run", "bump.acvus", "--time"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "8\n");
 
@@ -523,10 +443,9 @@ fn time_reports_every_stage_the_command_ran_after_its_output() {
         "{err}"
     );
     assert!(timed.iter().all(|s| s.ms >= 0.0), "{err}");
-    assert_eq!(err.lines().next(), Some("write @count = 8"), "{err}");
     assert!(
-        err.lines().skip(1).all(|l| l.starts_with("time: ")),
-        "the times come after everything else the command printed: {err}"
+        err.lines().all(|l| l.starts_with("time: ")),
+        "the command printed nothing on stderr but its times: {err}"
     );
 
     let compile = err
@@ -557,10 +476,7 @@ fn time_reports_every_stage_the_command_ran_after_its_output() {
     );
     assert!(subs.iter().all(|s| s.ms >= 0.0), "{compile}");
 
-    let out = acvus(
-        dir.path(),
-        &["check", "bump.acvus", "--context", "ctx.json", "--time"],
-    );
+    let out = acvus(dir.path(), &["check", "bump.acvus", "--time"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     let err = text(&out.stderr);
     assert_eq!(
@@ -863,10 +779,9 @@ fn a_comment_line_of_a_template_leaves_nothing_in_the_output() {
     write(
         dir.path(),
         "hi.acvt",
-        "% // the context carries the name\nHello {{ @name }}!",
+        "% // the input carries the name\nHello {{ $name }}!",
     );
-    write(dir.path(), "hi.json", "{\"name\": \"world\"}");
-    let out = acvus(dir.path(), &["run", "hi.acvt", "--context", "hi.json"]);
+    let out = acvus(dir.path(), &["run", "hi.acvt", "name=\"world\""]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "Hello world!");
 }
@@ -994,7 +909,7 @@ fn a_level_the_compiler_does_not_have_is_a_usage_error() {
         vec!["run", "ok.acvus", "--opt", "fast"],
         vec!["run", "ok.acvus", "--opt"],
     ] {
-        let out = Command::new(env!("CARGO_BIN_EXE_acvus"))
+        let out = crate::sandbox::acvus()
             .current_dir(dir.path())
             .args(&args)
             .output()
@@ -1014,11 +929,6 @@ fn a_level_the_compiler_does_not_have_is_a_usage_error() {
 fn what_the_machine_cannot_run_the_checker_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let refused = [
-        (
-            "context.acvus",
-            "@n + 1\n",
-            "`@n` is not a declared context",
-        ),
         (
             "namespace.acvus",
             "let xs = [1];\nnope::len(&xs)\n",
@@ -1093,7 +1003,7 @@ fn lsp_serves_the_client_s_root_over_stdio_and_exits_after_shutdown() {
     let root = url::Url::from_file_path(dir.path()).expect("a temporary path is absolute");
     let script = url::Url::from_file_path(dir.path().join("bad.acvus"))
         .expect("a temporary path is absolute");
-    let mut server = Command::new(env!("CARGO_BIN_EXE_acvus"))
+    let mut server = crate::sandbox::acvus()
         .arg("lsp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1157,7 +1067,7 @@ fn lsp_exits_with_1_after_a_refused_initialize_while_the_client_holds_stdin_open
     use std::process::Stdio;
     use std::time::Instant;
 
-    let mut server = Command::new(env!("CARGO_BIN_EXE_acvus"))
+    let mut server = crate::sandbox::acvus()
         .arg("lsp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

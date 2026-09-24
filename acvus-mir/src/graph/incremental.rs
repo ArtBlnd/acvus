@@ -13,9 +13,10 @@ use crate::laws::LawTable;
 use crate::ty::{PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
 use crate::typeck::ProbeProduct;
 
-use super::extract::{ParsedSource, extract_one};
+use super::extract::{ParsedSource, extract, extract_one};
 use super::infer::{
-    FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, tarjan_scc,
+    FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, solve_contexts,
+    tarjan_scc,
 };
 use super::lower::{close_fetched_first, lower_one};
 use super::optimize::{Opt, optimize};
@@ -59,6 +60,9 @@ pub struct IncrementalGraph {
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
     contexts: FxHashMap<QualifiedRef, Context>,
+    /// `contexts` with each open one at the type the whole graph solves it
+    /// to, which every component is inferred against.
+    solved: Vec<Context>,
     /// The same fact `CompilationGraph::entries` carries, for a graph built
     /// by accumulation: empty until a host says which bodies it starts.
     entries: Vec<QualifiedRef>,
@@ -101,6 +105,7 @@ impl IncrementalGraph {
             bindings,
             functions: functions.iter().map(|f| (f.qref, f.clone())).collect(),
             contexts: contexts.iter().map(|c| (c.qref, c.clone())).collect(),
+            solved: contexts.to_vec(),
             entries,
             extract_cache: FxHashMap::default(),
             call_edges: FxHashMap::default(),
@@ -150,7 +155,7 @@ impl IncrementalGraph {
             return;
         };
         match &mut func.kind {
-            FnKind::Local(existing) => *existing = ast,
+            FnKind::Local(existing, _) => *existing = ast,
             FnKind::Extern { .. } => return,
         }
 
@@ -165,6 +170,11 @@ impl IncrementalGraph {
         if edges_changed {
             // SCC structure may have changed - full rebuild.
             self.rebuild_graph();
+        } else if self.resolve_contexts() {
+            self.infer_cache = vec![None; self.scc_order.len()];
+            self.lower_cache.clear();
+            self.run_infer();
+            self.settle();
         } else {
             // SCC unchanged - only re-infer the affected SCC + propagate.
             self.dirty_propagate(qref);
@@ -322,7 +332,7 @@ impl IncrementalGraph {
         let local_qrefs: Vec<QualifiedRef> = self
             .functions
             .values()
-            .filter(|f| f.qref != qref && matches!(f.kind, FnKind::Local(_)))
+            .filter(|f| f.qref != qref && matches!(f.kind, FnKind::Local(..)))
             .map(|f| f.qref)
             .chain(std::iter::once(qref))
             .collect();
@@ -347,7 +357,7 @@ impl IncrementalGraph {
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
             .iter()
-            .filter(|(member, f)| **member != qref && matches!(f.kind, FnKind::Local(_)))
+            .filter(|(member, f)| **member != qref && matches!(f.kind, FnKind::Local(..)))
             .map(|(&member, f)| (member, f))
             .chain(std::iter::once((qref, &probed)))
             .collect();
@@ -370,7 +380,7 @@ impl IncrementalGraph {
             &self.bindings,
             &fn_by_id,
             &parsed_for_scc,
-            &self.known_context_types(),
+            &self.solved,
             &resolved_fn_types,
             &super::infer::declared_bounds(self.functions.values()),
             &mut sources,
@@ -409,7 +419,7 @@ impl IncrementalGraph {
     fn root_fn_names(&self) -> FxHashMap<Astr, QualifiedRef> {
         self.functions
             .iter()
-            .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(_)))
+            .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(..)))
             .map(|(&q, _)| (q.name, q))
             .collect()
     }
@@ -450,7 +460,7 @@ impl IncrementalGraph {
         let local_qrefs: Vec<QualifiedRef> = self
             .functions
             .values()
-            .filter(|f| matches!(f.kind, FnKind::Local(_)))
+            .filter(|f| matches!(f.kind, FnKind::Local(..)))
             .map(|f| f.qref)
             .collect();
 
@@ -472,13 +482,12 @@ impl IncrementalGraph {
     // -- Internal: Infer ---------------------------------------------
 
     fn run_infer(&mut self) {
-        let known_ctx = self.known_context_types();
         let mut resolved_fn_types = self.extern_fn_types();
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
             .iter()
-            .filter(|(_, f)| matches!(f.kind, FnKind::Local(_)))
+            .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
             .map(|(&qref, f)| (qref, f))
             .collect();
 
@@ -515,7 +524,7 @@ impl IncrementalGraph {
                 &self.bindings,
                 &fn_by_id,
                 &parsed_owned,
-                &known_ctx,
+                &self.solved,
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
@@ -542,13 +551,12 @@ impl IncrementalGraph {
         let _old_result = self.infer_cache[start_scc].take();
 
         // Re-run infer from this SCC onwards.
-        let known_ctx = self.known_context_types();
         let mut resolved_fn_types = self.extern_fn_types();
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
             .iter()
-            .filter(|(_, f)| matches!(f.kind, FnKind::Local(_)))
+            .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
             .map(|(&qref, f)| (qref, f))
             .collect();
 
@@ -605,7 +613,7 @@ impl IncrementalGraph {
                 &self.bindings,
                 &fn_by_id,
                 &parsed_for_scc,
-                &known_ctx,
+                &self.solved,
                 &resolved_fn_types,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
@@ -652,6 +660,7 @@ impl IncrementalGraph {
     // -- Internal: Lower + optimize -----------------------------------
 
     fn recompile(&mut self) {
+        self.resolve_contexts();
         self.run_infer();
         self.settle();
     }
@@ -773,10 +782,24 @@ impl IncrementalGraph {
             .collect()
     }
 
-    fn known_context_types(&self) -> FxHashMap<QualifiedRef, PolyTy> {
-        self.contexts
-            .values()
-            .map(|ctx| (ctx.qref, ctx.ty.clone()))
-            .collect()
+    /// Solve the open contexts from every body the graph holds now, as
+    /// `infer` does; whether a type changed, in which case every component
+    /// is inferred again.
+    fn resolve_contexts(&mut self) -> bool {
+        let graph = CompilationGraph {
+            functions: Freeze::new(self.functions.values().cloned().collect()),
+            contexts: Freeze::new(self.contexts.values().cloned().collect()),
+            types: self.types.clone(),
+            bindings: self.bindings.clone(),
+            entries: self.entries.clone(),
+        };
+        let solved = solve_contexts(&self.interner, &graph, &extract(&self.interner, &graph));
+        let same = |a: &[Context], b: &[Context]| {
+            a.len() == b.len()
+                && a.iter().all(|a| b.iter().any(|b| a.qref == b.qref && a.ty == b.ty))
+        };
+        let changed = !same(&self.solved, &solved);
+        self.solved = solved;
+        changed
     }
 }

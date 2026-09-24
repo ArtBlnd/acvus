@@ -26,6 +26,7 @@ fn compile_analysis(
         .map(|(name, ty)| Context {
             qref: QualifiedRef::root(interner.intern(name)),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect();
 
@@ -38,6 +39,7 @@ fn compile_analysis(
             contexts.push(Context {
                 qref: QualifiedRef::root(ast_qref.name),
                 ty: pb.fresh_ty_var(),
+                init: None,
             });
         }
     }
@@ -48,7 +50,10 @@ fn compile_analysis(
     let mut pb = PolyBuilder::new();
     let mut functions: Vec<Function> = vec![Function {
         qref: test_qref,
-        kind: FnKind::Local(ParsedAst::Template(template)),
+        kind: FnKind::Local(
+            ParsedAst::Template(template),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),

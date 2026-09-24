@@ -167,9 +167,10 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let mut pb = PolyBuilder::new();
     let script = Function {
         qref: QualifiedRef::root(i.intern("script")),
-        kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(i, source).expect("parse"),
-        )),
+        kind: FnKind::Local(
+            ParsedAst::Script(acvus_ast::parse_script(i, source).expect("parse")),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),
@@ -395,13 +396,16 @@ fn s6_a_field_store_grows_the_object_for_every_use() {
     let mut pb = PolyBuilder::new();
     let script = Function {
         qref: QualifiedRef::root(i.intern("script")),
-        kind: FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(
-                &i,
-                "let x = { a: 1, }; let y = if true { x.b = 0; fab(x) } else { fab(x) }; y",
-            )
-            .expect("parse"),
-        )),
+        kind: FnKind::Local(
+            ParsedAst::Script(
+                acvus_ast::parse_script(
+                    &i,
+                    "let x = { a: 1, }; let y = if true { x.b = 0; fab(x) } else { fab(x) }; y",
+                )
+                .expect("parse"),
+            ),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(pb.fresh_ty_var()),

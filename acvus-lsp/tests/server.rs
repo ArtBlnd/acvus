@@ -40,6 +40,7 @@ fn document(interner: &Interner, name: &str, mode: Mode) -> Document {
             effect: Effect::OPAQUE.into(),
             flows: acvus_mir::ty::Flows::Every.into(),
         },
+        inputs: acvus_mir::graph::Inputs::FromReads,
     }
 }
 
@@ -71,6 +72,7 @@ fn environment(interner: &Interner, x: Ty) -> CompilationGraph {
         contexts: Freeze::new(vec![Context {
             qref: QualifiedRef::root(interner.intern("x")),
             ty: lift_to_poly(&x),
+            init: None,
         }]),
         types: Freeze::default(),
         bindings: Bindings::default(),

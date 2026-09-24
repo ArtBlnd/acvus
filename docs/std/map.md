@@ -110,8 +110,8 @@ is left.
 
 ## A map is not held by a space
 
-`Deque` declares `ExternTypeDecl::space` and commits with `--commit`. A map
-does not, and that is a decision. `Journaled::decode_state` builds the whole
+`Deque` declares `ExternTypeDecl::space`, so a run over a space commits it.
+A map does not, and that is a decision. `Journaled::decode_state` builds the whole
 value back from canonical bytes; a closure has no canonical bytes, which is
 `acvus-interpreter`'s layout answering that a value of a function type is not
 held by a space; and a map that lost its hasher on reload would answer every

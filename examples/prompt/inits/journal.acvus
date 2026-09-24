@@ -1,0 +1,5 @@
+[
+    { role: "user".to_string(), content: "why does this loop allocate?".to_string(), },
+    { role: "assistant".to_string(), content: "the accumulator is rebuilt every turn".to_string(), },
+    { role: "user".to_string(), content: "show me the fix".to_string(), },
+]

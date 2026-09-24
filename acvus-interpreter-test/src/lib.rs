@@ -222,6 +222,7 @@ where
         .map(|(name, ty)| acvus_mir::graph::Context {
             qref: QualifiedRef::root(*name),
             ty: lift_declaration(ty, &mut pb),
+            init: None,
         })
         .collect();
 
@@ -229,7 +230,7 @@ where
     let mut functions = Vec::new();
     functions.push(Function {
         qref: entry_qref,
-        kind: FnKind::Local(main),
+        kind: FnKind::Local(main, acvus_mir::graph::Inputs::FromReads),
         ty: TyTerm::Fn {
             params: vec![],
             ret: Box::new(lift_declaration(&ret, &mut pb)),
@@ -251,7 +252,7 @@ where
         };
         functions.push(Function {
             qref: QualifiedRef::root(interner.intern(helper.name)),
-            kind: FnKind::Local(ParsedAst::Script(parsed)),
+            kind: FnKind::Local(ParsedAst::Script(parsed), acvus_mir::graph::Inputs::Declared),
             ty: TyTerm::Fn {
                 params: helper.params.clone(),
                 ret: Box::new(pb.fresh_ty_var()),
@@ -1398,7 +1399,7 @@ pub mod corpus {
     }
 
     /// [`attempt`] with the contexts a JSON object declares: each key is a
-    /// context, its type the value's type, as `acvus run --context` reads it.
+    /// context, its type the value's type, holding the value.
     pub fn attempt_in(
         source: &str,
         contexts: &serde_json::Map<String, serde_json::Value>,

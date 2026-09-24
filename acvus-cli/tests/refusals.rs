@@ -4,7 +4,6 @@
 //! byte, so a change of wording is a red test rather than a silent drift.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// The corpus is the evidence that every refusal names a fix, so it does
 /// not shrink below the size that evidence was gathered at.
@@ -44,7 +43,7 @@ fn text(stream: Vec<u8>) -> Result<String, std::string::FromUtf8Error> {
 }
 
 fn refusal_of(program: &Path) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_acvus"))
+    let out = crate::sandbox::acvus()
         .current_dir(corpus_dir())
         .args(["check", named(program)])
         .output()

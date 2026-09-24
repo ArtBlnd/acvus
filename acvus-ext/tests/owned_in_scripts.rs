@@ -54,6 +54,7 @@ async fn run_parsed(
         .map(|(name, (ty, _))| Context {
             qref: QualifiedRef::root(*name),
             ty: lift_to_poly(ty),
+            init: None,
         })
         .collect();
 
@@ -62,7 +63,7 @@ async fn run_parsed(
         let mut pb = acvus_mir::ty::PolyBuilder::new();
         functions.push(Function {
             qref: entry_qref,
-            kind: FnKind::Local(ast),
+            kind: FnKind::Local(ast, acvus_mir::graph::Inputs::FromReads),
             ty: acvus_mir::ty::PolyTy::Fn {
                 params: vec![],
                 ret: Box::new(pb.fresh_ty_var()),

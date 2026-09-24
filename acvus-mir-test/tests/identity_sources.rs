@@ -125,16 +125,21 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
     };
     let get = inferred_function(
         QualifiedRef::root(i.intern("get")),
-        FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(&i, "mk()").expect("parse"),
-        )),
+        FnKind::Local(
+            ParsedAst::Script(acvus_ast::parse_script(&i, "mk()").expect("parse")),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         vec![],
     );
     let main = inferred_function(
         QualifiedRef::root(i.intern("main")),
-        FnKind::Local(ParsedAst::Script(
-            acvus_ast::parse_script(&i, "let x = get(); let y = mk(); same(x, y)").expect("parse"),
-        )),
+        FnKind::Local(
+            ParsedAst::Script(
+                acvus_ast::parse_script(&i, "let x = get(); let y = mk(); same(x, y)")
+                    .expect("parse"),
+            ),
+            acvus_mir::graph::Inputs::FromReads,
+        ),
         vec![],
     );
     let mut graph = IncrementalGraph::new(
