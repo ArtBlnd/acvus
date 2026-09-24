@@ -1,13 +1,14 @@
 //! Hover and go-to-definition through the session's and the workspace's
 //! public API.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use acvus_ast::Span;
 use acvus_extern::{Externs, TypesOnly};
 use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Definition, Document, DocumentSpec, Environment, Host,
-    HostDiagnostic, Hover, Listing, Location, LspErrorCategory, LspSession, Mode, OpenRefusal,
-    Sites, Vfs, Workspace,
+    HostDiagnostic, Hover, Listing, Location, LspErrorKind, LspSession, Mode, OpenRefusal,
+    RecordingReader, Sites, Vfs, Workspace,
 };
 use acvus_mir::graph::{Bindings, CompilationGraph, Context, Function, QualifiedRef};
 use acvus_mir::ty::{
@@ -123,7 +124,7 @@ fn hover_on_a_use_shows_its_type() {
     );
     let at = nth(source, "s", 1);
     let hover = session.hover(doc, at).expect("the use has a type");
-    assert_eq!(hover.span, (at, at + 1));
+    assert_eq!(hover.span, Span::new(at, at + 1));
     assert_eq!(hover.ty, string_display(&i));
 }
 
@@ -143,14 +144,14 @@ fn hover_works_on_a_refused_body() {
     );
     let at = nth(source, "s", 1);
     let hover = session.hover(doc, at).expect("the use has a type");
-    assert_eq!(hover.span, (at, at + 1));
+    assert_eq!(hover.span, Span::new(at, at + 1));
     assert_eq!(hover.ty, string_display(&i));
     // `+` beside text is the concatenation whatever the other operand is,
     // so the checker records `String` for the refused sum.
     let plus = session
         .hover(doc, nth(source, "+", 0))
         .expect("the refused expression has a recorded type");
-    assert_eq!(plus.span, (at, source.len()));
+    assert_eq!(plus.span, Span::new(at, source.len()));
     assert_eq!(plus.ty, string_display(&i));
 }
 
@@ -176,8 +177,37 @@ fn a_poisoned_expression_shows_error() {
     let times = session
         .hover(doc, nth(source, "*", 0))
         .expect("the refused expression has a recorded type");
-    assert_eq!(times.span, (at, source.len()));
+    assert_eq!(times.span, Span::new(at, source.len()));
     assert_eq!(times.ty, "<error>");
+}
+
+#[test]
+fn a_cursor_right_after_a_use_hovers_and_defines_it() {
+    let i = Interner::new();
+    let source = "% let v = @name\n{{ v }}";
+    let (session, doc) = open(
+        &i,
+        bare(root_contexts(&i, &[("name", Ty::String)])),
+        Mode::Template,
+        source,
+    );
+    assert!(session.diagnostics(doc).is_empty());
+    let binder = nth(source, "v", 0);
+    let used = nth(source, "v", 1);
+    let after_use = used + 1;
+    assert_eq!(
+        session.hover(doc, after_use),
+        Some(Hover {
+            span: Span::new(used, after_use),
+            ty: string_display(&i),
+        })
+    );
+    assert_eq!(
+        session.definition(doc, after_use),
+        Some(Definition::Local {
+            span: Span::new(binder, binder + 1),
+        })
+    );
 }
 
 #[test]
@@ -189,7 +219,7 @@ fn a_use_goes_to_its_let() {
     assert_eq!(
         session.definition(doc, nth(source, "s", 1)),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
 }
@@ -204,7 +234,7 @@ fn a_binder_goes_to_itself() {
         assert_eq!(
             session.definition(doc, binder),
             Some(Definition::Local {
-                span: (binder, binder + 1)
+                span: Span::new(binder, binder + 1)
             })
         );
     }
@@ -238,11 +268,11 @@ fn a_second_document_of_one_function_is_refused() {
     assert_eq!(
         session.definition(first, used),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
     let hover = session.hover(first, used).expect("the use has a type");
-    assert_eq!(hover.span, (used, used + 1));
+    assert_eq!(hover.span, Span::new(used, used + 1));
     assert_eq!(hover.ty, Ty::I64.display(&i).to_string());
     // The refusal took no id: the next document is numbered after `first`.
     let other = session
@@ -259,7 +289,7 @@ fn a_second_document_of_one_function_is_refused() {
     assert_eq!(
         session.definition(reopened, used),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
 }
@@ -279,7 +309,7 @@ fn a_shadowed_name_goes_to_the_later_binder() {
         panic!("expected a local definition, got {definition:?}");
     };
     let binder = nth(source, "s", 1);
-    assert_eq!(span, (binder, binder + 1));
+    assert_eq!(span, Span::new(binder, binder + 1));
 }
 
 #[test]
@@ -296,14 +326,14 @@ fn a_lambda_parameter_and_a_capture() {
     assert_eq!(
         session.definition(doc, nth(source, "x", 1)),
         Some(Definition::Local {
-            span: (param, param + 1)
+            span: Span::new(param, param + 1)
         })
     );
     let outer = nth(source, "n", 0);
     assert_eq!(
         session.definition(doc, nth(source, "n", 1)),
         Some(Definition::Local {
-            span: (outer, outer + 1)
+            span: Span::new(outer, outer + 1)
         })
     );
 }
@@ -318,7 +348,7 @@ fn a_call_of_a_local_lambda_goes_to_its_let() {
     assert_eq!(
         definition,
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
 }
@@ -337,7 +367,7 @@ fn a_match_arm_binder() {
     assert_eq!(
         session.definition(doc, nth(source, "v", 1)),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
 }
@@ -361,14 +391,14 @@ fn template_context_hover_and_statement_binding() {
     let hover = session
         .hover(doc, context + 1)
         .expect("the context has a type");
-    assert_eq!(hover.span, (context, context + "@name".len()));
+    assert_eq!(hover.span, Span::new(context, context + "@name".len()));
     assert_eq!(hover.ty, string_display(&i));
     let definition = session.definition(doc, nth(source, "x", 1));
     let Some(Definition::Local { span }) = definition else {
         panic!("expected a local definition, got {definition:?}");
     };
     let binder = nth(source, "x", 0);
-    assert_eq!(span, (binder, binder + 1));
+    assert_eq!(span, Span::new(binder, binder + 1));
 }
 
 #[test]
@@ -428,7 +458,7 @@ fn a_binding_whose_value_does_not_parse_is_poison_and_still_defined() {
     assert_eq!(
         session.definition(doc, nth(source, "s", 1)),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
 }
@@ -446,13 +476,13 @@ fn hover_and_definition_answer_beside_a_broken_line() {
     assert_eq!(session.diagnostics(doc).len(), 1);
     let at = nth(source, "s", 1);
     let hover = session.hover(doc, at).expect("the use has a type");
-    assert_eq!(hover.span, (at, at + 1));
+    assert_eq!(hover.span, Span::new(at, at + 1));
     assert_eq!(hover.ty, string_display(&i));
     let binder = nth(source, "s", 0);
     assert_eq!(
         session.definition(doc, at),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
 }
@@ -466,7 +496,7 @@ struct TwoDocuments {
 impl Host for TwoDocuments {
     type Compilation = ();
 
-    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+    fn compilations(&mut self, interner: &Interner, _reader: &RecordingReader<'_>) -> Listing<()> {
         let spec = |name: &str| DocumentSpec {
             path: self.root.join(format!("{name}.acvt")),
             document: document(interner, name, Mode::Template),
@@ -482,7 +512,12 @@ impl Host for TwoDocuments {
                 documents: vec![spec("greet"), spec("caller")],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
     }
 
     fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
@@ -502,12 +537,12 @@ fn a_call_goes_to_the_document_that_defines_the_function() {
     std::fs::write(&caller, source).expect("write caller");
     let workspace = Workspace::new(&i, TwoDocuments { root });
     let diagnostics = workspace.diagnostics();
-    assert!(diagnostics.values().all(Vec::is_empty), "{diagnostics:?}");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(
         workspace.definition(&caller, nth(source, "greet", 0)),
         Some(Location {
             path: greet,
-            span: (0, 0),
+            span: Span::new(0, 0),
         })
     );
     let hover = workspace
@@ -524,7 +559,7 @@ struct OneFunctionTwice {
 impl Host for OneFunctionTwice {
     type Compilation = ();
 
-    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+    fn compilations(&mut self, interner: &Interner, _reader: &RecordingReader<'_>) -> Listing<()> {
         let spec = |file: &str| DocumentSpec {
             path: self.root.join(file),
             document: document(interner, "greet", Mode::Template),
@@ -540,7 +575,12 @@ impl Host for OneFunctionTwice {
                 documents: vec![spec("first.acvt"), spec("second.acvt")],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
     }
 
     fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
@@ -560,11 +600,11 @@ fn a_second_document_of_one_function_is_a_host_refusal() {
     std::fs::write(&second, "{{ 2 }}").expect("write second");
     let workspace = Workspace::new(&i, OneFunctionTwice { root });
     let diagnostics = workspace.diagnostics();
-    assert_eq!(diagnostics[&first], [], "{diagnostics:?}");
+    assert!(!diagnostics.contains_key(&first), "{diagnostics:?}");
     let [refusal] = diagnostics[&second].as_slice() else {
         panic!("one refusal on the second document: {diagnostics:?}");
     };
-    assert_eq!(refusal.category, LspErrorCategory::Host);
+    assert_eq!(refusal.kind, LspErrorKind::Host(None));
     assert_eq!(
         refusal.message,
         format!(
@@ -581,12 +621,12 @@ fn a_second_document_of_one_function_is_a_host_refusal() {
         workspace.definition(&first, nth(source, "x", 1)),
         Some(Location {
             path: first.clone(),
-            span: (binder, binder + 1),
+            span: Span::new(binder, binder + 1),
         })
     );
     let used = nth(source, "x", 1);
     let hover = workspace.hover(&first, used).expect("the use has a type");
-    assert_eq!(hover.span, (used, used + 1));
+    assert_eq!(hover.span, Span::new(used, used + 1));
 }
 
 struct SitedHost {
@@ -598,14 +638,14 @@ impl SitedHost {
     fn context_site(&self) -> Location {
         Location {
             path: self.root.join("decl.txt"),
-            span: (3, 9),
+            span: Span::new(3, 9),
         }
     }
 
     fn input_site(&self) -> Location {
         Location {
             path: self.root.join("decl.txt"),
-            span: (12, 15),
+            span: Span::new(12, 15),
         }
     }
 }
@@ -613,7 +653,7 @@ impl SitedHost {
 impl Host for SitedHost {
     type Compilation = ();
 
-    fn compilations(&mut self, interner: &Interner, _vfs: &Vfs) -> Listing<()> {
+    fn compilations(&mut self, interner: &Interner, _reader: &RecordingReader<'_>) -> Listing<()> {
         let sites = match self.with_sites {
             true => Sites {
                 contexts: [(
@@ -642,7 +682,12 @@ impl Host for SitedHost {
                 }],
             }],
             refusals: Vec::new(),
+            links: Vec::new(),
         }
+    }
+
+    fn read(&self, vfs: &Vfs, path: &Path) -> Result<String, String> {
+        vfs.read(path).map_err(|error| error.to_string())
     }
 
     fn check(&self, _compilation: &(), _checked: &Checked<'_>) -> Vec<HostDiagnostic> {
@@ -658,7 +703,7 @@ fn sited(interner: &Interner, with_sites: bool) -> (tempfile::TempDir, Workspace
     std::fs::write(root.join("main.acvus"), READS_NAME_AND_X).expect("write main");
     let workspace = Workspace::new(interner, SitedHost { root, with_sites });
     let diagnostics = workspace.diagnostics();
-    assert!(diagnostics.values().all(Vec::is_empty), "{diagnostics:?}");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
     (dir, workspace)
 }
 
@@ -700,7 +745,7 @@ fn references_include_a_site_only_as_the_declaration() {
         let start = nth(source, needle, n);
         Location {
             path: main.clone(),
-            span: (start, start + needle.len()),
+            span: Span::new(start, start + needle.len()),
         }
     };
     let names = vec![at("@name", 0), at("@name", 1)];
@@ -751,7 +796,7 @@ fn a_string_literal_binding_is_a_str_reference() {
         assert_eq!(
             session.hover(doc, at),
             Some(Hover {
-                span: (at, at + 1),
+                span: Span::new(at, at + 1),
                 ty: str_ref.display(&i).to_string(),
             })
         );
@@ -772,13 +817,13 @@ fn a_for_binding_use_goes_to_the_binding() {
     assert_eq!(
         session.definition(doc, nth(source, "k", 1)),
         Some(Definition::Local {
-            span: (binder, binder + 1)
+            span: Span::new(binder, binder + 1)
         })
     );
     assert_eq!(
         session.hover(doc, binder),
         Some(Hover {
-            span: (binder, binder + 1),
+            span: Span::new(binder, binder + 1),
             ty: Ty::I64.display(&i).to_string(),
         })
     );
@@ -803,7 +848,7 @@ fn hover_on_a_let_binder_shows_the_bound_type() {
     assert_eq!(
         session.hover(doc, binder),
         Some(Hover {
-            span: (binder, binder + 1),
+            span: Span::new(binder, binder + 1),
             ty: string_display(&i),
         })
     );
@@ -815,7 +860,7 @@ fn hover_on_a_let_binder_shows_the_bound_type() {
     assert_eq!(
         session.hover(doc, binder),
         Some(Hover {
-            span: (binder, binder + 1),
+            span: Span::new(binder, binder + 1),
             ty: str_ref.display(&i).to_string(),
         })
     );
@@ -839,7 +884,7 @@ fn hover_on_a_binder_in_a_refused_body() {
     assert_eq!(
         session.hover(doc, binder),
         Some(Hover {
-            span: (binder, binder + 1),
+            span: Span::new(binder, binder + 1),
             ty: string_display(&i),
         })
     );
@@ -857,9 +902,30 @@ fn hover_on_a_match_arm_binder() {
     );
     let binder = nth(source, "v", 0);
     let at_binder = session.hover(doc, binder).expect("the binder has a type");
-    assert_eq!(at_binder.span, (binder, binder + 1));
+    assert_eq!(at_binder.span, Span::new(binder, binder + 1));
     let at_use = session
         .hover(doc, nth(source, "v", 1))
         .expect("the use has a type");
     assert_eq!(at_binder.ty, at_use.ty);
+}
+
+// NOTE: twenty pairs, since which of two functions without an edge is
+// checked first follows the graph's hash order.
+#[test]
+fn a_caller_opened_before_its_callee_is_checked_after_it() {
+    for pair in 0..20 {
+        let i = Interner::new();
+        let mut session = LspSession::new(&i, bare(vec![]));
+        let caller = session
+            .open(
+                document(&i, &format!("caller{pair}"), Mode::Template),
+                &format!("{{{{ callee{pair}() }}}}"),
+            )
+            .expect("the caller is the first document of its function");
+        let callee = session
+            .open(document(&i, &format!("callee{pair}"), Mode::Template), "hi")
+            .expect("the callee is the first document of its function");
+        assert_eq!(session.diagnostics(callee), [], "pair {pair}");
+        assert_eq!(session.diagnostics(caller), [], "pair {pair}");
+    }
 }

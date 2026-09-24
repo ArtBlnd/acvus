@@ -69,20 +69,25 @@ pub struct Document {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LspError {
-    pub category: LspErrorCategory,
+    pub kind: LspErrorKind,
     pub message: String,
-    pub span: Option<(usize, usize)>,
-    /// The other places the refusal points at, which a protocol layer sends
-    /// as `relatedInformation`.
     pub related: Vec<Label>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LspErrorCategory {
-    Parse,
-    Type,
-    Unreadable,
-    Host,
+pub enum LspErrorKind {
+    Parse(Span),
+    Type(Span),
+    Host(Option<Span>),
+}
+
+impl LspError {
+    pub fn span(&self) -> Option<Span> {
+        match self.kind {
+            LspErrorKind::Parse(span) | LspErrorKind::Type(span) => Some(span),
+            LspErrorKind::Host(span) => span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,15 +136,21 @@ pub enum CompletionKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completions {
+    pub replaces: Span,
+    pub items: Vec<CompletionItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hover {
-    pub span: (usize, usize),
+    pub span: Span,
     pub ty: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Definition {
     Local {
-        span: (usize, usize),
+        span: Span,
     },
     /// A function whose body is in the graph.
     Function(QualifiedRef),
@@ -150,7 +161,7 @@ pub enum Definition {
 /// Replace the source at `span` with `text`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
-    pub span: (usize, usize),
+    pub span: Span,
     pub text: String,
 }
 
@@ -244,7 +255,7 @@ impl RenamePlan {
         let edits = renamed
             .iter()
             .map(|name| Edit {
-                span: (name.span.start, name.span.end),
+                span: name.span,
                 text: match name.shorthand {
                     true => format!("{}: {new_name}", &source[name.span.start..name.span.end]),
                     false => new_name.to_string(),
@@ -269,14 +280,14 @@ impl RenamePlan {
             let grown: usize = self
                 .edits
                 .iter()
-                .filter(|edit| edit.span.1 <= at)
+                .filter(|edit| edit.span.end <= at)
                 .map(|edit| edit.text.len())
                 .sum();
             let shrunk: usize = self
                 .edits
                 .iter()
-                .filter(|edit| edit.span.1 <= at)
-                .map(|edit| edit.span.1 - edit.span.0)
+                .filter(|edit| edit.span.end <= at)
+                .map(|edit| edit.span.end - edit.span.start)
                 .sum();
             at + grown - shrunk
         };
@@ -464,16 +475,11 @@ impl LspSession {
     /// The names that can be written where the identifier at `cursor`
     /// is, starting with what is typed of it up to `cursor`. In a template
     /// only a `%` line and a `{{ }}` tag hold names.
-    pub fn completions(&self, id: DocId, cursor: usize) -> Vec<CompletionItem> {
-        let Some(Open {
+    pub fn completions(&self, id: DocId, cursor: usize) -> Option<Completions> {
+        let Open {
             document, source, ..
-        }) = self.documents.get(&id)
-        else {
-            return vec![];
-        };
-        let Some(site) = CompletionSite::at(source, cursor, document.mode) else {
-            return vec![];
-        };
+        } = self.documents.get(&id)?;
+        let site = CompletionSite::at(source, cursor, document.mode)?;
         let interner = self.graph.interner();
         let mut items = match site.after {
             Sigil::None => match self.probe(document, source, &site) {
@@ -578,7 +584,10 @@ impl LspSession {
                 .then_with(|| a.kind.cmp(&b.kind))
                 .then_with(|| a.label.cmp(&b.label))
         });
-        items
+        Some(Completions {
+            replaces: site.word,
+            items,
+        })
     }
 
     /// The functions a bare name reaches, one item per name, or the ones
@@ -647,14 +656,15 @@ impl LspSession {
         self.graph.probe(body, marked)
     }
 
-    /// The type of the innermost node at `offset` that has one.
+    /// The type of the innermost node a cursor at `offset` is on that has
+    /// one.
     pub fn hover(&self, id: DocId, offset: usize) -> Option<Hover> {
         let (nodes, view) = self.checked_body(id)?;
         let interner = self.graph.interner();
-        nodes.at(offset).into_iter().find_map(|node| {
+        nodes.at_cursor(offset).into_iter().find_map(|node| {
             let ty = view.types.get(&node.id)?;
             Some(Hover {
-                span: (node.span.start, node.span.end),
+                span: node.span,
                 ty: ty.display(interner).to_string(),
             })
         })
@@ -674,9 +684,7 @@ impl LspSession {
                     .find(|name| name.id == binder)
                     .expect("a binder is a name of the body its uses are in")
                     .span;
-                Some(Definition::Local {
-                    span: (span.start, span.end),
-                })
+                Some(Definition::Local { span })
             }
             Resolved::Function(qref) => match self.graph.function(qref)?.kind {
                 FnKind::Local(_) => Some(Definition::Function(qref)),
@@ -697,7 +705,7 @@ impl LspSession {
         id: DocId,
         offset: usize,
         include_declaration: bool,
-    ) -> Option<Vec<(usize, usize)>> {
+    ) -> Option<Vec<Span>> {
         let referent = self.referent(id, offset)?;
         Some(self.references_to(id, referent, include_declaration))
     }
@@ -716,7 +724,7 @@ impl LspSession {
         id: DocId,
         referent: Resolved,
         include_declaration: bool,
-    ) -> Vec<(usize, usize)> {
+    ) -> Vec<Span> {
         let Some((nodes, view)) = self.checked_body(id) else {
             return vec![];
         };
@@ -728,12 +736,12 @@ impl LspSession {
             Resolved::Function(qref) => include_declaration && self.function_ref(id) == Some(qref),
             Resolved::Local(_) | Resolved::Context(_) | Resolved::Input(_) => false,
         };
-        let mut spans: Vec<(usize, usize)> = nodes
+        let mut spans: Vec<Span> = nodes
             .names()
             .iter()
             .filter(|name| refers(name))
-            .map(|name| (name.span.start, name.span.end))
-            .chain(declared_here.then_some((0, 0)))
+            .map(|name| name.span)
+            .chain(declared_here.then_some(Span::new(0, 0)))
             .collect();
         spans.sort_unstable();
         spans.dedup();
@@ -755,19 +763,32 @@ impl LspSession {
         Ok(plan.edits)
     }
 
+    pub fn rename_target(&self, id: DocId, offset: usize) -> Result<Span, RenameRefusal> {
+        self.renamed_local(id, offset).map(|local| local.written)
+    }
+
+    fn renamed_local(&self, id: DocId, offset: usize) -> Result<RenamedLocal, RenameRefusal> {
+        let (nodes, view) = self.checked_body(id).ok_or(RenameRefusal::NotAName)?;
+        let name = nodes.name_at(offset).ok_or(RenameRefusal::NotAName)?;
+        match view.resolved.get(&name.id) {
+            Some(Resolved::Local(binder)) => Ok(RenamedLocal {
+                written: name.span,
+                binder: *binder,
+            }),
+            Some(Resolved::Function(_)) => Err(RenameRefusal::Function),
+            Some(Resolved::Context(_)) => Err(RenameRefusal::Context),
+            Some(Resolved::Input(_)) => Err(RenameRefusal::Input),
+            None => Err(RenameRefusal::NotAName),
+        }
+    }
+
     pub(crate) fn plan_rename(
         &self,
         id: DocId,
         offset: usize,
         new_name: &str,
     ) -> Result<RenamePlan, RenameRefusal> {
-        let binder = match self.referent(id, offset) {
-            Some(Resolved::Local(binder)) => binder,
-            Some(Resolved::Function(_)) => return Err(RenameRefusal::Function),
-            Some(Resolved::Context(_)) => return Err(RenameRefusal::Context),
-            Some(Resolved::Input(_)) => return Err(RenameRefusal::Input),
-            None => return Err(RenameRefusal::NotAName),
-        };
+        let RenamedLocal { binder, .. } = self.renamed_local(id, offset)?;
         if KEYWORDS.contains(&new_name) {
             return Err(RenameRefusal::Keyword(new_name.to_string()));
         }
@@ -877,7 +898,11 @@ impl Resolution {
     }
 }
 
-/// `edits` are in source order and do not overlap.
+struct RenamedLocal {
+    written: Span,
+    binder: AstId,
+}
+
 /// A function's name as a script writes it: `ns::name`, or the bare name.
 pub(crate) fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
     match qref.namespace {
@@ -886,13 +911,14 @@ pub(crate) fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
     }
 }
 
+/// `edits` are in source order and do not overlap.
 fn apply(source: &str, edits: &[Edit]) -> String {
     let mut applied = String::with_capacity(source.len());
     let mut copied = 0;
     for edit in edits {
-        applied.push_str(&source[copied..edit.span.0]);
+        applied.push_str(&source[copied..edit.span.start]);
         applied.push_str(&edit.text);
-        copied = edit.span.1;
+        copied = edit.span.end;
     }
     applied.push_str(&source[copied..]);
     applied
@@ -1080,26 +1106,16 @@ fn shown_types(types: &[&PolyTy], interner: &Interner) -> String {
 
 fn refusal_to_lsp(refusal: &Refusal, interner: &Interner) -> LspError {
     LspError {
-        category: LspErrorCategory::Type,
+        kind: LspErrorKind::Type(refusal.span()),
         message: format!("{}", refusal.display(interner)),
-        span: {
-            let s = refusal.span();
-            if s.start != 0 || s.end != 0 {
-                Some((s.start, s.end))
-            } else {
-                None
-            }
-        },
         related: refusal.labels().to_vec(),
     }
 }
 
 pub(crate) fn parse_error_to_lsp(error: &acvus_ast::ParseError) -> LspError {
     LspError {
-        category: LspErrorCategory::Parse,
+        kind: LspErrorKind::Parse(error.span),
         message: error.kind.to_string(),
-        span: (error.span.start != 0 || error.span.end != 0)
-            .then_some((error.span.start, error.span.end)),
         related: Vec::new(),
     }
 }

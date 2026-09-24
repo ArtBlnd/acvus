@@ -2,6 +2,7 @@
 name = "acvus-mir"
 version = "0.1.0"
 edition = "2024"
+license-file.workspace = true
 
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }

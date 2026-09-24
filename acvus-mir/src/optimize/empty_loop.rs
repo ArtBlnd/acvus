@@ -1,4 +1,4 @@
-//! A `for` whose body does nothing is a jump to its exit (RFC-0087).
+//! A `for` whose body does nothing is a jump to its exit (RFC-0088).
 //!
 //! A range's trip count is `(max(hi, at) as u64) − (at as u64)` and not
 //! `max(hi − at, 0)` at the range's width `w`, because the second wraps: at

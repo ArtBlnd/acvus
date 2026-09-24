@@ -1,68 +1,229 @@
 Acvus License
+Version 2.0
+
 Copyright (c) 2026 Jun Ryoung Ju (junryoungju@gmail.com)
 
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the "Software"),
-to use, copy, modify, merge, publish, and distribute the Software, subject
-to the following conditions:
 
-NO-SELL RESTRICTION
+1. DEFINITIONS
 
-The rights granted above do not include the right to Sell the Software.
-"Sell" means offering the Software, or a product or service that
-incorporates or is substantially built upon the Software, to third
-parties in exchange for or in connection with monetary compensation of
-any kind — whether direct or indirect — including but not limited to:
+"Licensor" means the copyright holder named above.
 
-  (a) licensing or sublicensing the Software as a product;
-  (b) providing the Software as a hosted or managed service;
-  (c) incorporating the Software into a product or service in
-      connection with which any monetary inflow is received —
-      regardless of whether the operation is profitable — including
-      but not limited to fees, subscriptions, advertising revenue,
-      data monetization, grants, or any other form of payment;
-  (d) receiving donations, sponsorships, or crowdfunding contributions
-      whose primary purpose is to fund development or distribution of
-      the Software or a derivative work.
+"Software" means the work, in source code and object code, together with
+its documentation, that the Licensor makes available under this License.
 
-Use of the Software as a library or tool to produce output (such as
-rendered templates, compiled scripts, or orchestration results) — where
-the Software itself is not incorporated into the product or service
-being offered — is explicitly permitted, including in commercial
-contexts.
+"Modification" means any change to, addition to, or deletion from the
+files of the Software, and any new file that contains a substantial
+portion of the Software's code. A work that merely uses the Software
+through its interfaces — including by linking to it, embedding it, or
+defining host function bindings (such as extern functions) for it — is
+not a Modification, but such a work remains subject to Section 3. A
+separate work that explains, quotes, or teaches the Software is not a
+Modification.
 
-NETWORK USE IS DISTRIBUTION
+"Program" means source code, a template, a script, or a spec written in
+the Acvus language, or in any other language whose programs the
+Software parses, checks, compiles, or executes, including a language
+whose front end lowers its programs to the intermediate representation
+of the Software or of any language the Software embeds. "A language
+built on the Software" means such a language, other than the Acvus
+language itself.
 
-If you modify the Software and make the functionality of the modified
-version available to third parties over a computer network — whether as
-a service, an API, or any other form of remote interaction — you must
-also make the complete corresponding source code of the modified version
-available under this same license.
+"Value" means data that carries no computation of its own: numbers,
+booleans, characters, text, bytes, arrays, tuples, objects, and variants
+of these, and values of types a host defines that hold only such data.
+A Value contains no expression, function, or statement. It remains a
+Value when the Software type-checks it, rejects it, stores it, or embeds
+it as a constant in a Program. Text is a Value unless it is itself
+parsed as a Program.
 
-This obligation applies solely to modifications of the Software itself.
-Source code authored by users of the Software — including but not limited
-to templates, scripts, configuration files, and orchestration specs
-processed by the Software — is not subject to this requirement.
+"User Content" means Programs and Values, other than those included in
+the Software, together with the output the Software produces from them.
 
-SHARE-ALIKE RESTRICTION
+"Language Product" and "Sell" have the meanings given in Section 3.
 
-Any derivative work — including but not limited to forks, modifications,
-and works that incorporate a substantial portion of the Software — must
-be distributed under this same license, including the No-Sell
-Restriction, the Network Use Is Distribution clause, and this
-Share-Alike Restriction. You may not apply additional restrictions or
-alternative license terms to derivative works that would remove or
-weaken the conditions stated herein.
 
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
+2. GRANT OF RIGHTS
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
+2.1 Copyright. Subject to the conditions of this License, the Licensor
+grants you a worldwide, royalty-free, non-exclusive license to use,
+copy, modify, merge, publish, and distribute the Software, and to run
+it for any purpose, including commercial purposes, except as
+restricted by Section 3.
 
-For commercial licensing inquiries, contact: junryoungju@gmail.com
+2.2 Patents. The Licensor also grants you a license, on the same terms
+and under the same conditions, under any patent claims the Licensor can
+license that would be infringed by the Software as provided by the
+Licensor.
+
+2.3 Recipients. Each person who receives the Software, directly or
+indirectly, automatically receives a license from the Licensor under
+this License. No right to sublicense is granted.
+
+
+3. NO-SELL RESTRICTION (LANGUAGE PRODUCTS)
+
+3.1 Restriction. You may not Sell a Language Product unless you have
+obtained a separate commercial license from the Licensor. This
+restriction is meant to reach only products that sell the language
+itself.
+
+3.2 Language Product. A "Language Product" is a product or service,
+offered to third parties, that is obtained so that Programs can be
+written for it and checked, compiled, or run by the Software: without
+its users' Programs, it would have no purpose of its own. Whatever
+serves only to write, check, run, or grade Programs — editors, tooling,
+and host function bindings (such as extern functions) that only
+Programs call — is part of the language it sells, not a purpose of its
+own, however much of it there is. For example:
+
+  (a) These are Language Products: a compiler explorer, a playground,
+      an online IDE, a notebook, an editor, or a language server; a
+      service that hosts and runs its users' Programs; a scripting,
+      rule, or template engine offered to developers; a game framework
+      or engine in which game developers write their games as Programs;
+      a coding test or contest whose submissions are Programs; a game
+      in which writing Programs is itself the play; and the Software,
+      or a language built on it, offered under another name.
+
+  (b) These are not Language Products: a game, including one made with
+      a framework built on the Software, and the mods its players
+      write; an application in which user-written Programs are one
+      feature among others; a platform where users play or converse
+      with what others have scripted; and a product whose Programs are
+      written by whoever offers it and whose users supply only Values —
+      messages, settings, records, or uploaded data — even where the
+      Software type-checks them, or where one of those Programs
+      interprets text its users write.
+
+3.3 Sell. "Sell" means to offer a Language Product to third parties for
+any fee, subscription, license charge, advertising revenue, or other
+compensation, whether or not the offering is profitable, or to offer it
+free of charge as part of, bundled with, or to promote something for
+which compensation is received. Voluntary donations on which nothing
+depends are not compensation. Tooling offered free of charge to write
+Programs for a product that is not a Language Product, or to teach the
+Software, is not Sold.
+
+3.4 Permitted Uses. For clarity, the following are permitted without a
+commercial license, including in commercial contexts:
+
+  (a) using the Software in any product or service that is not a
+      Language Product;
+
+  (b) selling or otherwise commercially exploiting User Content,
+      including output produced by the Software;
+
+  (c) internal use within an organization, including use by its
+      employees and contractors acting on its behalf;
+
+  (d) being paid to author User Content for another party, or to build
+      a work that uses the Software for a single client, which owns it
+      and uses it only internally, provided that you do not offer that
+      work, or one substantially the same, to anyone else; and
+
+  (e) offering or distributing a Language Product free of charge,
+      subject to Sections 5 and 6.
+
+3.5 Questions. If you are unsure whether what you offer is a Language
+Product, ask the Licensor (Section 12).
+
+3.6 Scope. This Section applies to the Software wherever it is
+included, regardless of the license under which any other part of a
+product or service is distributed.
+
+
+4. USER CONTENT
+
+User Content is not a derivative work of the Software for the purposes
+of this License. Its authors may license it under any terms of their
+choice, and it is not subject to Sections 5 or 6.
+
+
+5. SHARE-ALIKE (MODIFICATIONS)
+
+5.1 If you distribute the Software or any Modification, in source or
+object form, you must do so under this License, and you must make the
+complete source code of every Modification you distribute available to
+every recipient under this License, at no charge — for example, through
+a publicly accessible repository.
+
+5.2 Other parts of a larger work that includes the Software, but that
+are not the Software or a Modification, may be licensed under terms of
+your choice. Those terms do not apply to the Software, and Section 3
+continues to apply to the Software as part of that work.
+
+5.3 You may not impose any terms on the Software or any Modification
+that remove or weaken the conditions of this License.
+
+
+6. NETWORK USE IS DISTRIBUTION
+
+If you run a Modification and make its functionality available to third
+parties over a computer network — whether as a service, an API, or any
+other form of remote interaction — you must offer those third parties
+the complete source code of that Modification under this License, at no
+charge, by a prominent notice in the user interface or accompanying
+documentation that states where the source code can be obtained.
+
+This Section applies only to Modifications. It does not apply to User
+Content or to the unmodified Software.
+
+
+7. CONTRIBUTIONS
+
+Unless you state otherwise in writing, any contribution you
+intentionally submit to the Licensor for inclusion in the Software is
+licensed to the Licensor under this License, and you additionally grant
+the Licensor a perpetual, worldwide, irrevocable, royalty-free right to
+license your contribution under any other terms, including commercial
+license terms. You represent that you have the right to grant these
+licenses.
+
+
+8. NOTICES
+
+You must include the above copyright notice and this License in all
+copies or substantial portions of the Software. Files you have modified
+must carry a prominent notice stating that you changed them.
+
+
+9. TERMINATION
+
+9.1 If you violate this License, your rights under it terminate
+automatically.
+
+9.2 If this is your first violation and you cure it within 30 days
+after receiving written notice of it from the Licensor, your rights are
+reinstated as if the violation had not occurred.
+
+9.3 If you initiate litigation alleging that the Software infringes a
+patent, the patent license granted to you under Section 2.2 terminates
+on the date the litigation is filed.
+
+9.4 Termination of your rights does not terminate the licenses of
+persons who received the Software from you and remain in compliance
+with this License.
+
+
+10. NO WARRANTY; LIMITATION OF LIABILITY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+11. GOVERNING LAW
+
+This License is governed by the laws of the Republic of Korea. The
+Seoul Central District Court shall have exclusive jurisdiction over any
+dispute arising under this License in the first instance.
+
+
+12. COMMERCIAL LICENSING
+
+To Sell a Language Product, or for any other commercial licensing
+inquiry, contact: junryoungju@gmail.com

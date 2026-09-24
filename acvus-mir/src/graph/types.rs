@@ -5,11 +5,11 @@
 //!
 //! MIR receives **parsed ASTs**, not source strings. Parsing happens outside.
 
-use acvus_ast::Literal;
 use acvus_utils::{Astr, Freeze};
 use rustc_hash::FxHashMap;
 
-use crate::ty::{Mutability, PolyTy, Ty, TyTerm, TypeArg, TypeRegistry};
+use super::bind::{BindingRefused, BoundValue};
+use crate::ty::{PolyTy, Ty, TypeRegistry};
 
 // -- Identifiers -----------------------------------------------------
 
@@ -142,10 +142,11 @@ pub struct ContextInfo {
 
 /// The `$` names a host fixed before this compilation: each is a constant in
 /// every body that reads it, and none of them is an input the host must still
-/// supply (RFC-0071 rule 5).
+/// supply (RFC-0071 rule 5). Every value held here types on its own
+/// (RFC-0087 rule 3).
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
-    by_name: FxHashMap<Astr, Literal>,
+    by_name: FxHashMap<Astr, BoundValue>,
 }
 
 impl Bindings {
@@ -153,46 +154,33 @@ impl Bindings {
         self.by_name.is_empty()
     }
 
-    pub fn bind(&mut self, name: Astr, value: Literal) {
+    /// Refuses a value that has no type, before any body is checked
+    /// (RFC-0087 rule 3).
+    pub fn bind(&mut self, name: Astr, value: BoundValue) -> Result<(), BindingRefused> {
+        super::bind::admit(&value)?;
         self.by_name.insert(name, value);
+        Ok(())
     }
 
     pub fn unbind(&mut self, name: Astr) {
         self.by_name.remove(&name);
     }
 
-    pub fn get(&self, name: Astr) -> Option<&Literal> {
+    pub fn get(&self, name: Astr) -> Option<&BoundValue> {
         self.by_name.get(&name)
     }
 
     /// By name, so that what two runs of one compilation write is one
     /// program: the order this yields is the order the constants enter the
     /// body.
-    pub fn iter(&self) -> impl Iterator<Item = (Astr, &Literal)> {
-        let mut held: Vec<(Astr, &Literal)> = self
+    pub fn iter(&self) -> impl Iterator<Item = (Astr, &BoundValue)> {
+        let mut held: Vec<(Astr, &BoundValue)> = self
             .by_name
             .iter()
             .map(|(name, value)| (*name, value))
             .collect();
         held.sort_by_key(|(name, _)| name.bits());
         held.into_iter()
-    }
-}
-
-/// The type a bound `$` is checked at. Text is `&str` rather than `String`
-/// because the constant lowering writes for it is the one a string literal
-/// writes, so a bound `$mode` stands wherever `"review"` stands.
-pub fn bound_input_ty(value: &Literal) -> Option<Ty> {
-    match value.desugared() {
-        Literal::Int(_) => Some(Ty::I64),
-        Literal::Float(_) => Some(Ty::Float),
-        Literal::Bool(_) => Some(Ty::Bool),
-        Literal::Char(_) => Some(Ty::Char),
-        Literal::String(_) => Some(Ty::Ref(
-            Mutability::Shared,
-            Box::new(TypeArg::uniform(TyTerm::Str)),
-        )),
-        Literal::IntOf(_) | Literal::Bytes(_) | Literal::List(_) | Literal::Unit => None,
     }
 }
 

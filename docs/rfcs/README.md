@@ -113,7 +113,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0066: a loop is analyzed and normalized in MIR, and the lowerer decides its shape (Proposed)
 - RFC-0081: a `while` that counts by one to an invariant bound is a range `for` (Proposed)
 - RFC-0083: a pure operation computed on every path to it is the value computed first (Proposed)
-- RFC-0087: a `for` whose body does nothing is a jump to its exit (Proposed)
+- RFC-0088: a `for` whose body does nothing is a jump to its exit (Proposed)
 
 ### [ownership.md](ownership.md)
 
@@ -145,11 +145,15 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0049: `expr as T` is Rust's `as`, and inside a chain it is a leaf
 - RFC-0058: A literal says its type
 - RFC-0071: A template is a script whose text lines are output
+- RFC-0087: A bound `$` holds any value a literal writes, and its uses decide its enums (Proposed)
 
 ### [tooling.md](tooling.md)
 
 - RFC-0031: `acvus` runs one file as one function, the result alone on stdout
 - RFC-0078: A parse recovers past an error, and a tree that holds one cannot be lowered
+- RFC-0084: A workspace lists its compilations again exactly when a file its listing read changes (Proposed)
+- RFC-0085: In the editor a host answers as its batch path does (Proposed)
+- RFC-0086: `acvus_lsp::serve` speaks the Language Server Protocol for any host (Proposed)
 
 ### [types.md](types.md)
 

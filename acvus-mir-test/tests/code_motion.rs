@@ -85,7 +85,7 @@ fn loop_tests_before(body: &str, needle: &str) -> usize {
 /// this multiplication into the header and run it once per iteration.
 ///
 /// The loop sums `s` so that it stays a loop: a body left doing nothing is
-/// removed (RFC-0087), and there would be no header to stay out of.
+/// removed (RFC-0088), and there would be no header to stay out of.
 #[test]
 fn a_multiplication_after_a_loop_stays_after_it() {
     let i = Interner::new();

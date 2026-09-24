@@ -282,7 +282,7 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // merges; before a `dce` of its own, which sweeps what it leaves unread.
     optimize::gvn::run(cfg);
     optimize::dce::run(cfg);
-    // RFC-0087: after that `dce`, which sweeps the arithmetic the loop passes
+    // RFC-0088: after that `dce`, which sweeps the arithmetic the loop passes
     // left in a body that nothing reads, so a body that does nothing holds
     // no instruction; before `forward`, which collapses the header the
     // removal leaves only jumping.

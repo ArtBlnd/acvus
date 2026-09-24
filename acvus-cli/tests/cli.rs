@@ -1065,3 +1065,136 @@ fn a_literal_arm_through_a_reference_runs() {
         assert_eq!(text(&out.stdout), "10\n", "at opt {level}");
     }
 }
+
+#[test]
+fn lsp_takes_no_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = acvus(dir.path(), &["lsp", "extra"]);
+    assert_eq!(out.status.code(), Some(64));
+    assert!(
+        text(&out.stderr).contains("error: lsp takes no arguments, not `extra`"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
+fn framed(message: serde_json::Value) -> Vec<u8> {
+    let body = message.to_string();
+    format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+}
+
+#[test]
+fn lsp_serves_the_client_s_root_over_stdio_and_exits_after_shutdown() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bad.acvus", "1 + \"a\"\n");
+    let root = url::Url::from_file_path(dir.path()).expect("a temporary path is absolute");
+    let script = url::Url::from_file_path(dir.path().join("bad.acvus"))
+        .expect("a temporary path is absolute");
+    let mut server = Command::new(env!("CARGO_BIN_EXE_acvus"))
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let messages = [
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "processId": null, "rootUri": root.as_str(), "capabilities": {} } }),
+        serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown" }),
+        serde_json::json!({ "jsonrpc": "2.0", "method": "exit" }),
+    ];
+    let mut stdin = server.stdin.take().expect("stdin is piped");
+    for message in messages {
+        stdin
+            .write_all(&framed(message))
+            .expect("the server reads stdin");
+    }
+    drop(stdin);
+    let out = server.wait_with_output().expect("the server exits");
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let sent: Vec<serde_json::Value> = stdout
+        .split("Content-Length: ")
+        .skip(1)
+        .map(|framed| {
+            let (_, body) = framed.split_once("\r\n\r\n").expect("a header ends");
+            serde_json::from_str(body).expect("a message is JSON")
+        })
+        .collect();
+    let initialized = sent
+        .iter()
+        .find(|message| message["id"] == 1)
+        .expect("initialize is answered");
+    assert_eq!(
+        initialized["result"]["capabilities"]["positionEncoding"],
+        "utf-16"
+    );
+    let published: Vec<&serde_json::Value> = sent
+        .iter()
+        .filter(|message| message["method"] == "textDocument/publishDiagnostics")
+        .collect();
+    assert_eq!(published.len(), 1, "{stdout}");
+    assert_eq!(published[0]["params"]["uri"], script.as_str());
+    assert_eq!(
+        published[0]["params"]["diagnostics"][0]["source"], "acvus",
+        "{stdout}"
+    );
+}
+
+/// A bound on the wait for a process that exits at once, generous for a
+/// loaded machine; not a measurement.
+const LSP_EXIT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
+const LSP_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+#[test]
+fn lsp_exits_with_1_after_a_refused_initialize_while_the_client_holds_stdin_open() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let mut server = Command::new(env!("CARGO_BIN_EXE_acvus"))
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let mut stdin = server.stdin.take().expect("stdin is piped");
+    stdin
+        .write_all(&framed(serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+            "method": "initialize", "params": { "processId": null, "capabilities": {} } })))
+        .expect("the server reads stdin");
+    stdin.flush().expect("stdin flushes");
+
+    let deadline = Instant::now() + LSP_EXIT_PATIENCE;
+    let status = loop {
+        if let Some(status) = server.try_wait().expect("the server's status reads") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            server.kill().expect("the server is killed");
+            server.wait().expect("the killed server is reaped");
+            panic!("`acvus lsp` did not exit after a refused initialize");
+        }
+        std::thread::sleep(LSP_EXIT_POLL);
+    };
+    drop(stdin);
+
+    let mut stderr = String::new();
+    server
+        .stderr
+        .take()
+        .expect("stderr is piped")
+        .read_to_string(&mut stderr)
+        .expect("stderr reads");
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error: the client gave neither a root URI nor a workspace folder"),
+        "{stderr}"
+    );
+}

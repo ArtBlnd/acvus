@@ -1,5 +1,5 @@
 //! Integer `min` and `max` as the passes read them, and the `for` whose body
-//! does nothing, which `optimize::empty_loop` removes (RFC-0087).
+//! does nothing, which `optimize::empty_loop` removes (RFC-0088).
 //!
 //! The source cannot write `min` or `max`, so the fold and value-numbering
 //! tests build their bodies by hand. The programs compiled from source also

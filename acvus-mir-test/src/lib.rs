@@ -1248,7 +1248,7 @@ pub struct ShownInput {
 pub fn compile_template_bound(
     interner: &Interner,
     source: &str,
-    bound: &[(&str, acvus_ast::Literal)],
+    bound: &[(&str, acvus_mir::graph::BoundValue)],
     opt: Opt,
 ) -> Result<BoundTemplate, String> {
     let test_qref = QualifiedRef::root(interner.intern("test"));
@@ -1261,7 +1261,9 @@ pub fn compile_template_bound(
     let type_registry = extend_with_std(interner, &mut functions);
     let mut bindings = Bindings::default();
     for (name, value) in bound {
-        bindings.bind(interner.intern(name), value.clone());
+        bindings
+            .bind(interner.intern(name), value.clone())
+            .map_err(|refused| format!("[bind] ${name}: {refused}"))?;
     }
     let graph = CompilationGraph {
         functions: Freeze::new(functions),

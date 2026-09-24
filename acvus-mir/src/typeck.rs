@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 use crate::error::{
     DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
 };
-use crate::graph::QualifiedRef;
+use crate::graph::bind::{DeferredJoin, Typed, type_bound};
+use crate::graph::{Bindings, BoundValue, QualifiedRef};
 use crate::ir::{Callee, CastKind, Chosen, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::place::{
     Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
@@ -979,6 +980,17 @@ struct ExternParam {
     first_read: Option<Span>,
 }
 
+/// A `$name` the host bound, typed in this body before it was checked
+/// (RFC-0087 rule 2). Its enum positions join the variants the value holds
+/// once the body is checked, and a join the uses refuse is reported at the
+/// first read, which is the only place those uses reach the input.
+struct BoundInput {
+    name: Astr,
+    value: BoundValue,
+    deferred: Vec<DeferredJoin>,
+    first_read: Option<Span>,
+}
+
 /// How one candidate of a method call takes the receiver, seen as the type
 /// that candidate's mode gives it (RFC-0043).
 struct ReceiverAdmission {
@@ -1625,6 +1637,7 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// Extern parameters in Signature order, which is the order iteration
     /// must keep.
     param_types: smallvec::SmallVec<[ExternParam; 4]>,
+    bound_inputs: Vec<BoundInput>,
     /// Solver state (borrowed - may be shared across compilations).
     solver: &'s mut Solver<'src>,
     /// Accumulated type map (internal, uses InferTy during inference).
@@ -1804,6 +1817,7 @@ where
             env,
             namespace: None,
             param_types: smallvec::smallvec![],
+            bound_inputs: Vec::new(),
             solver,
             type_map: FxHashMap::default(),
             coercions: Vec::new(),
@@ -1915,22 +1929,55 @@ where
         self
     }
 
-    /// Give the `$` names a host has already bound the type their constant
-    /// has, so the body is checked against the value it will hold rather
-    /// than against an open variable. A name the declaration already bound
-    /// keeps the declared type.
-    pub fn with_bound_inputs(mut self, bound: Vec<(Astr, InferTy)>) -> Self {
-        let fresh: Vec<ExternParam> = bound
-            .into_iter()
-            .filter(|(name, _)| !self.param_types.iter().any(|p| p.name == *name))
-            .map(|(name, ty)| ExternParam {
+    /// Give the `$` names a host has already bound the type their value
+    /// has (RFC-0087 rule 2), so the body is checked against the value it
+    /// will hold rather than against an open variable. A name the
+    /// declaration already bound keeps the declared type.
+    pub fn with_bound_inputs(mut self, bindings: &Bindings) -> Self {
+        for (name, value) in bindings.iter() {
+            if self.param_types.iter().any(|p| p.name == name) {
+                continue;
+            }
+            let Typed { ty, deferred } = type_bound(self.solver, value)
+                .expect("`Bindings::bind` holds only a value that types (RFC-0087 rule 3)");
+            self.param_types.push(ExternParam {
                 name,
                 ty,
                 first_read: None,
-            })
-            .collect();
-        self.param_types.extend(fresh);
+            });
+            self.bound_inputs.push(BoundInput {
+                name,
+                value: value.clone(),
+                deferred,
+                first_read: None,
+            });
+        }
         self
+    }
+
+    /// Each bound input's enum positions join the variants its value holds,
+    /// now that the body's uses have typed them (RFC-0087 rule 4).
+    fn join_bound_variants(&mut self) {
+        for bound in std::mem::take(&mut self.bound_inputs) {
+            for DeferredJoin { var, variant } in &bound.deferred {
+                let uses = self.type_as_written(var);
+                if self.solver.unify(variant, var).is_ok() {
+                    continue;
+                }
+                let at = bound.first_read.expect(
+                    "a join fails only on a variable a read constrained, and the read recorded its span",
+                );
+                self.error(
+                    MirErrorKind::BindingTypeMismatch {
+                        name: self.interner.resolve(bound.name).to_string(),
+                        value: bound.value.clone(),
+                        ty: uses,
+                    },
+                    at,
+                );
+                break;
+            }
+        }
     }
 
     /// The type a report shows (RFC-0043): as written, a variable
@@ -4548,6 +4595,7 @@ where
     /// their heads and settles their candidates, and the second answers the
     /// conversions the settled candidates take them by.
     fn solve_body(&mut self) {
+        self.join_bound_variants();
         let mut unsettled = std::mem::take(&mut self.refused_in_body);
         unsettled.extend(self.solver.solve());
         let mut refused: FxHashSet<DecisionId> =
@@ -7384,6 +7432,11 @@ where
                 self.probe_scope(*id, *span, name.name);
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
+                        if let Some(bound) =
+                            self.bound_inputs.iter_mut().find(|b| b.name == name.name)
+                        {
+                            bound.first_read.get_or_insert(*span);
+                        }
                         let ty = match self.param_types.iter().find(|p| p.name == name.name) {
                             Some(param) => {
                                 self.resolved.record(*id, Resolved::Input(name.name));

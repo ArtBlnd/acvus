@@ -773,7 +773,7 @@ simplifies the integer identities below.
    element of multiplication, and `1` is the multiplicative identity, at
    every width and signedness. None of the three operations traps. An
    integer `min(x, x)` or `max(x, x)` whose operands have one number is `x`
-   (RFC-0087 rule 1). No float operation
+   (RFC-0088 rule 1). No float operation
    is simplified: `-0.0 + 0.0` is `0.0`, `inf * 0.0` is NaN, and a
    signaling NaN times `1.0` comes out quiet.
 
@@ -827,7 +827,7 @@ gains or loses a move.
   write reaches it in between, and a call's declared effect does not say
   that it returns (RFC-0081 rule 3).
 
-## RFC-0087: a `for` whose body does nothing is a jump to its exit
+## RFC-0088: a `for` whose body does nothing is a jump to its exit
 
 Status: Proposed
 

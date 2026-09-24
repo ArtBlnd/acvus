@@ -7,4 +7,5 @@ pub mod lower;
 pub mod optimize;
 pub mod types;
 
+pub use bind::{BindingRefused, BoundValue, BoundValueDisplay, NotABoundValue};
 pub use types::*;

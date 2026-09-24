@@ -2,6 +2,7 @@
 name = "acvus-cli"
 version = "0.1.0"
 edition = "2024"
+license-file.workspace = true
 # `tests/all.rs` names every file under `tests/` as a module, so this crate
 # links one test binary instead of one per file. Linking, not compiling, is
 # the cost a workspace test run is made of: sccache caches compilation, and
@@ -28,6 +29,7 @@ acvus-interpreter = { path = "../acvus-interpreter", features = ["probe"] }
 acvus-lsp = { path = "../acvus-lsp" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
+lsp-server = "0.10.0"
 rustc-hash = { workspace = true }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -38,3 +40,4 @@ serde_json = "1"
 # The other compile path onto the same walk: `ops` output is asserted against
 # the listing the interpreter's tests read.
 acvus-interpreter-test = { path = "../acvus-interpreter-test" }
+url = "2"
