@@ -9,8 +9,8 @@ expression: ir
      3 | L1:
      5 |   jump L2(false (r2))
      6 | L2(r3: Bool):
-     7 |   commit @a = r0
-     8 |   commit @b = r1
+     7 |   commit @a = r0 (not written)
+     8 |   commit @b = r1 (not written)
      9 |   return r3
 
     ; r0 (@a) : Bool

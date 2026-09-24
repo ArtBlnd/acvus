@@ -23,7 +23,7 @@ expression: listing
     22 | L6(r13: i64):
     23 |   jump L0(r13)
     24 | L2:
-    25 |   commit @n = r0
+    25 |   commit @n = r0 (not written)
     26 |   return r2
 
     ; r0 (@n) : i64

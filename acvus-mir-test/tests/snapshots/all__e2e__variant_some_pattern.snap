@@ -31,7 +31,7 @@ expression: ir
     23 | L0(r12: Unit, r13: &i64):
     24 |   r14 = take <template>
     25 |   r15 = take @opt
-    26 |   commit @opt = r15
+    26 |   commit @opt = r15 (not written)
     27 |   return r14
 
     ; r0 (v20) : &i64

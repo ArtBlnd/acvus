@@ -81,19 +81,19 @@ expression: raw
     37 |   assign $order = r26
     38 |   r27 = take s3
     39 |   r28 = take @offset
-    40 |   commit @offset = r28
+    40 |   commit @offset = r28 (not written)
     41 |   r29 = take @stage2
     42 |   commit @stage2 = r29
     43 |   r30 = take @scale
-    44 |   commit @scale = r30
+    44 |   commit @scale = r30 (not written)
     45 |   r31 = take @stage3
     46 |   commit @stage3 = r31
     47 |   r32 = take @source_id
-    48 |   commit @source_id = r32
+    48 |   commit @source_id = r32 (not written)
     49 |   r33 = take @stage1
     50 |   commit @stage1 = r33
     51 |   r34 = take @precision
-    52 |   commit @precision = r34
+    52 |   commit @precision = r34 (not written)
     53 |   r35 = take $order
     54 |   return r27 [r35]
 

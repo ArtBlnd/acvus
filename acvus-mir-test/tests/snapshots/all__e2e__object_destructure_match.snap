@@ -50,7 +50,7 @@ expression: ir
     47 | L0(r22: Unit, r23: String):
     48 |   r24 = take <template>
     49 |   r25 = take @user
-    50 |   commit @user = r25
+    50 |   commit @user = r25 (not written)
     51 |   return r24
 
     ; r0 (v30) : String

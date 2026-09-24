@@ -38,9 +38,9 @@ expression: opt
     29 |   r23 = take @output.score
     30 |   r24 = take @output
     31 |   commit @output = r24
-    32 |   commit @min_score = r0
+    32 |   commit @min_score = r0 (not written)
     33 |   r25 = take @user
-    34 |   commit @user = r25
+    34 |   commit @user = r25 (not written)
     35 |   return r23
 
     ; r0 (@min_score) : i64

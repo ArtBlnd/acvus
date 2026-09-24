@@ -356,7 +356,7 @@ fn measure(rt: &Runtime, case: &Case) -> Row {
         let snapshot = snapshot_of(&interner, &json);
         let (_shared, mut interp) =
             execute_compiled(&interner, cr, snapshot, Arc::new(SequentialExecutor));
-        let (value, execute) = timed(|| rt.block_on(interp.execute()).expect("the page holds every context the run fetches first"));
+        let (value, execute) = timed(|| rt.block_on(interp.execute()).expect("the seeds hold every context the run fetches"));
         Phases {
             compile,
             setup,
@@ -446,7 +446,7 @@ fn execute_only(rt: &Runtime, case: &Case, kernel: Kernel) -> Duration {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
+        let value = rt.block_on(interp.execute()).expect("the seeds hold every context the run fetches");
         (value, start.elapsed())
     };
 

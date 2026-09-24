@@ -2648,6 +2648,9 @@ pub struct TypeEnv {
     /// Each local function's inputs, which a call passes from the caller's
     /// own `$` of each name (RFC-0071 rule 4).
     pub inputs: FxHashMap<QualifiedRef, Vec<InputParam>>,
+    /// How a context is reached: under `Access::Async` a body's own access
+    /// of a context is `Async` (RFC-0090 rule 3).
+    pub access: crate::graph::Access,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2829,6 +2832,7 @@ impl TypeEnv {
             functions: FxHashMap::default(),
             machine: FxHashMap::default(),
             inputs: FxHashMap::default(),
+            access: crate::graph::Access::Sync,
         }
     }
 }

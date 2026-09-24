@@ -2849,6 +2849,7 @@ mod tests {
                 InstKind::Commit {
                     context: ctx,
                     value: v(5),
+                    wrote: true,
                 },
                 InstKind::BinOp {
                     dst: v(6),
@@ -2907,6 +2908,7 @@ mod tests {
                 InstKind::Commit {
                     context: ctx,
                     value: v(5),
+                    wrote: true,
                 },
                 InstKind::BinOp {
                     dst: v(2),

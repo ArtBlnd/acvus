@@ -1132,7 +1132,6 @@ mod tests {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: crate::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     }
 

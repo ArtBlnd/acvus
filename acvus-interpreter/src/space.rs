@@ -4,7 +4,7 @@
 //! state node. A nested extension value has its own chain, named from its
 //! parent's node by head, so a log is structural.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use acvus_extern::{Holding, NodeHash, Owned, SpaceError, SpaceResult};
@@ -13,7 +13,7 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 use crate::host::{Codec, Storage, StorageError};
-use crate::journal::Held;
+use crate::port::Held;
 use crate::layout::{self, Nested};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -719,11 +719,15 @@ struct Stored {
 }
 
 /// A page's storage over a space (RFC-0033): a context loads at the type its
-/// head records, and a commit moves the head of every context the page
-/// handed over since its last commit.
+/// head records, a store waits in the storage until `commit` moves the head
+/// of every context stored since the last commit, and a restore of a holder
+/// the space gave writes nothing.
 pub struct SpaceStorage<'s> {
     space: &'s Space,
-    handed: BTreeMap<String, Held>,
+    stored: BTreeMap<String, Held>,
+    /// The keys whose stored holder a load gave out, which a restore puts
+    /// back among the stored.
+    lent: BTreeSet<String>,
     committed: Vec<Committed>,
 }
 
@@ -738,7 +742,8 @@ impl<'s> SpaceStorage<'s> {
     pub fn new(space: &'s Space) -> Self {
         SpaceStorage {
             space,
-            handed: BTreeMap::new(),
+            stored: BTreeMap::new(),
+            lent: BTreeSet::new(),
             committed: Vec::new(),
         }
     }
@@ -755,7 +760,8 @@ impl<'s> SpaceStorage<'s> {
 
 impl Storage for SpaceStorage<'_> {
     fn load(&mut self, key: &str, codec: &Codec<'_>) -> Result<Option<Held>, StorageError> {
-        if let Some(held) = self.handed.remove(key) {
+        if let Some(held) = self.stored.remove(key) {
+            self.lent.insert(key.to_owned());
             return Ok(Some(held));
         }
         let Some(Stored { ty, value }) = self.space.load_stored(codec.rt(), key)? else {
@@ -767,23 +773,35 @@ impl Storage for SpaceStorage<'_> {
         Ok(Some(Held::new(value, Arc::new(ty), codec.rt().shared.compilation)))
     }
 
-    fn store(&mut self, key: &str, held: Held) {
-        self.handed.insert(key.to_owned(), held);
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        self.lent.remove(key);
+        self.stored.insert(key.to_owned(), held);
+        Ok(())
+    }
+
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        if self.lent.remove(key) {
+            self.stored.entry(key.to_owned()).or_insert(held);
+        }
+        Ok(())
     }
 
     fn commit(&mut self, codec: &Codec<'_>) -> Result<(), StorageError> {
         self.committed.clear();
-        for (id, held) in &mut self.handed {
+        while let Some((id, mut held)) = self.stored.pop_first() {
             let ty = held.ty().clone();
             // SAFETY: `Space::commit` edits an extension's payload in place
             // through its hooks, as `commit_nested` does, and writes no word
             // into the value.
             let value = unsafe { held.value_mut() };
-            let head = self.space.commit(codec.rt(), id, &ty, value)?;
-            self.committed.push(Committed {
-                id: id.clone(),
-                head,
-            });
+            let head = match self.space.commit(codec.rt(), &id, &ty, value) {
+                Ok(head) => head,
+                Err(error) => {
+                    self.stored.insert(id, held);
+                    return Err(error.into());
+                }
+            };
+            self.committed.push(Committed { id, head });
         }
         Ok(())
     }

@@ -30,9 +30,9 @@ expression: listing
     29 |   jump L3(r18)
     30 | L5:
     31 |   r19 = r4 - r12
-    32 |   commit @x = r0
-    33 |   commit @k = r1
-    34 |   commit @n = r2
+    32 |   commit @x = r0 (not written)
+    33 |   commit @k = r1 (not written)
+    34 |   commit @n = r2 (not written)
     35 |   return r19
 
     ; r0 (@x) : i64

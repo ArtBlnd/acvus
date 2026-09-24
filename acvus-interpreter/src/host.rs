@@ -6,9 +6,9 @@
 //!
 //! ```compile_fail
 //! use acvus_interpreter::{MemoryStorage, Program};
-//! async fn cross(a: &Program, b: &Program) {
+//! async fn cross(a: &Program, b: &Program, storage: &mut MemoryStorage) {
 //!     a.scope(async |a| {
-//!         let mut page = a.open(MemoryStorage::new()).await.unwrap();
+//!         let mut page = a.open(storage);
 //!         b.scope(async |b| {
 //!             let entry = b.entry::<(), i64>("main").unwrap();
 //!             let _ = entry.run(&mut page, ()).await;
@@ -21,9 +21,9 @@
 //!
 //! ```
 //! use acvus_interpreter::{HostError, MemoryStorage, Program};
-//! async fn same(a: &Program) -> Result<i64, HostError> {
+//! async fn same(a: &Program, storage: &mut MemoryStorage) -> Result<i64, HostError> {
 //!     a.scope(async |a| {
-//!         let mut page = a.open(MemoryStorage::new()).await?;
+//!         let mut page = a.open(storage);
 //!         let entry = a.entry::<(), i64>("main")?;
 //!         entry.run(&mut page, ()).await?.with(|n: &i64| *n)
 //!     })
@@ -35,8 +35,56 @@
 //!
 //! ```compile_fail
 //! use acvus_interpreter::{MemoryStorage, Program};
-//! async fn kept(a: &Program) {
-//!     let _page = a.scope(async |a| a.open(MemoryStorage::new()).await).await;
+//! async fn kept(a: &Program, storage: &mut MemoryStorage) {
+//!     let _page = a.scope(async |a| a.open(storage)).await;
+//! }
+//! ```
+//!
+//! A program compiled for synchronous access opens only a synchronous
+//! storage, and one compiled with `Host::async_access` opens a storage whose
+//! access waits (RFC-0090 rule 3):
+//!
+//! ```compile_fail
+//! use acvus_interpreter::{AsyncStorage, Codec, Held, Program, StorageError};
+//! struct Remote;
+//! impl AsyncStorage for Remote {
+//!     async fn load(&mut self, _: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
+//!         Ok(None)
+//!     }
+//!     async fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!         Ok(())
+//!     }
+//!     async fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!         Ok(())
+//!     }
+//!     async fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
+//!         Ok(())
+//!     }
+//! }
+//! async fn opened(program: &Program, remote: &mut Remote) {
+//!     program.scope(async |s| { let _ = s.open(remote); }).await;
+//! }
+//! ```
+//!
+//! ```
+//! use acvus_interpreter::{AsyncAccess, AsyncStorage, Codec, Held, Program, StorageError};
+//! struct Remote;
+//! impl AsyncStorage for Remote {
+//!     async fn load(&mut self, _: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
+//!         Ok(None)
+//!     }
+//!     async fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!         Ok(())
+//!     }
+//!     async fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!         Ok(())
+//!     }
+//!     async fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
+//!         Ok(())
+//!     }
+//! }
+//! async fn opened(program: &Program<AsyncAccess>, remote: &mut Remote) {
+//!     program.scope(async |s| { let _ = s.open(remote); }).await;
 //! }
 //! ```
 //!
@@ -52,9 +100,9 @@
 //!
 //! ```compile_fail
 //! use acvus_interpreter::{MemoryStorage, Page};
-//! fn kept<'a>(page: &'a Page<'_, MemoryStorage>) -> Vec<&'a str> {
+//! async fn kept<'a>(page: &'a mut Page<'_, '_, MemoryStorage>) -> Vec<&'a str> {
 //!     let mut kept = Vec::new();
-//!     let _ = page.with("name", |s: &str| kept.push(s));
+//!     let _ = page.with("name", |s: &str| kept.push(s)).await;
 //!     kept
 //! }
 //! ```
@@ -67,8 +115,8 @@
 //! fn kept(output: &Output<'_, String>) -> Result<String, HostError> {
 //!     output.with(|s: &str| s.to_owned())
 //! }
-//! fn pushed(page: &mut Page<'_, MemoryStorage>) -> Result<(), HostError> {
-//!     page.with_mut("name", |s: &mut String| s.push('!'))
+//! async fn pushed(page: &mut Page<'_, '_, MemoryStorage>) -> Result<(), HostError> {
+//!     page.with_mut("name", |s: &mut String| s.push('!')).await
 //! }
 //! ```
 //!
@@ -91,8 +139,13 @@
 //!     fn load(&mut self, key: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
 //!         Ok(self.0.remove(key))
 //!     }
-//!     fn store(&mut self, key: &str, held: Held) {
+//!     fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
 //!         self.0.insert(key.to_owned(), held);
+//!         Ok(())
+//!     }
+//!     fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+//!         self.0.entry(key.to_owned()).or_insert(held);
+//!         Ok(())
 //!     }
 //!     fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
 //!         Ok(())
@@ -149,15 +202,16 @@ let _ = <acvus_interpreter::AcvusRuntime as Runtime>::Value::int(3);
 ```
 
 ```compile_fail,E0616
-fn page(rt: &acvus_interpreter::AcvusRuntime) {
-    let _ = &rt.page;
+fn port(rt: &acvus_interpreter::AcvusRuntime) {
+    let _ = &rt.port;
 }
 ```
 "#
 )]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -171,7 +225,7 @@ use acvus_extern::{
 };
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
-    Bindings, BoundValue, CompilationGraph, Context, ContextInfo, FnKind, Function, Inputs,
+    Access as GraphAccess, Bindings, BoundValue, CompilationGraph, Context, ContextInfo, FnKind, Function, Inputs,
     NotABoundValue, Parsed, ParsedAst, QualifiedRef, RecoveredAst, extract, infer, lower,
     optimize,
 };
@@ -184,9 +238,9 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::init::{DeclaredInits, GraphParts, InitSource, Inits};
-use crate::interpreter::{Absent, Executable, Interpreter, InterpreterContext, lookup_module};
-use crate::journal::{Held, RuntimeContext};
+use crate::init::{DeclaredInits, GraphParts, InitSource};
+use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
+use crate::port::{Gate, Held, Port, refusal_of, serve};
 use crate::prepare::{PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -234,6 +288,18 @@ pub struct Refusal {
     /// The words the primary marker carries; `None` repeats the message.
     pub primary: Option<String>,
     pub labels: Vec<Label>,
+    /// What was refused, for a refusal a host resolves in its own terms
+    /// (RFC-0031 rule 7).
+    pub cause: Option<Cause>,
+}
+
+/// A refusal a host resolves in its own terms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cause {
+    /// The entry of the refusal's origin has a name a script calls as a
+    /// bare name, which reaches these extern functions, each written with
+    /// its namespace (RFC-0043).
+    Shadows { externs: Vec<String> },
 }
 
 impl Refusal {
@@ -244,6 +310,7 @@ impl Refusal {
             span: None,
             primary: None,
             labels: Vec::new(),
+            cause: None,
         }
     }
 }
@@ -272,10 +339,10 @@ pub enum HostError {
     Refused(Vec<Refusal>),
     NotInGraph { what: Named },
     Mismatched { what: Part, held: String, asked: String },
-    /// A context an entry fetches before assigning it that the page lacks,
-    /// with no init to fill it.
+    /// A run fetched a context the storage lacks, and the context has no
+    /// init to fill it (RFC-0090 rule 1).
     Unfilled { key: String },
-    /// A context no init filled and no run has stored yet (RFC-0090 rule 4).
+    /// A host asked for a context the storage lacks (RFC-0090 rule 4).
     Unstored { key: String },
     Storage(StorageError),
 }
@@ -319,10 +386,10 @@ impl fmt::Display for HostError {
             ),
             HostError::Unfilled { key } => write!(
                 f,
-                "the storage holds no value for `@{key}`, which an entry fetches first, and `@{key}` has no init"
+                "the storage holds no value for `@{key}`, which the run fetched, and `@{key}` has no init"
             ),
             HostError::Unstored { key } => {
-                write!(f, "the page holds no value for `@{key}`: no init filled it and no run stored it")
+                write!(f, "the storage holds no value for `@{key}`: no init filled it and no run stored it")
             }
             HostError::Storage(error) => write!(f, "the storage refused: {error}"),
         }
@@ -334,12 +401,6 @@ impl std::error::Error for HostError {}
 impl From<StorageError> for HostError {
     fn from(error: StorageError) -> Self {
         HostError::Storage(error)
-    }
-}
-
-impl From<Absent> for HostError {
-    fn from(Absent { key }: Absent) -> Self {
-        HostError::Unfilled { key }
     }
 }
 
@@ -377,27 +438,75 @@ pub struct Codec<'a> {
 }
 
 impl<'a> Codec<'a> {
+    pub(crate) fn of(rt: &'a AcvusRuntime) -> Self {
+        Codec { rt }
+    }
+
     pub(crate) fn rt(&self) -> &'a AcvusRuntime {
         self.rt
     }
 }
 
-/// Where a page's contexts persist between pages. A page loads every
-/// context of its compilation when it opens, and hands a storage each
-/// context it changed when it commits, taking the holder back after the
-/// storage's `commit`; a storage's errors reach the host at those two
-/// points and never inside a run (RFC-0090 rule 6).
-pub trait Storage {
-    /// Move out the holder stored for `key`.
+/// Where a page's contexts live. A page holds no value: the storage is
+/// read at a load and written at a store, where a run or the host makes one
+/// (RFC-0090 rule 3). `load` moves a holder out, and `store` or `restore`
+/// hands one back.
+pub trait Storage: Send {
     fn load(&mut self, key: &str, codec: &Codec<'_>) -> Result<Option<Held>, StorageError>;
-    fn store(&mut self, key: &str, held: Held);
+    /// Take a holder whose value may have changed since it was loaded, or
+    /// one no load gave.
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError>;
+    /// Take back a holder `load` gave whose value nothing changed. A holder
+    /// stored for `key` since that load is newer and stays.
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError>;
+    /// Make what the storage holds durable.
     fn commit(&mut self, codec: &Codec<'_>) -> Result<(), StorageError>;
 }
 
-/// A storage that keeps holders in memory for the life of the page.
+/// A storage whose access can wait. A program compiled with
+/// `Host::async_access` opens one; every synchronous `Storage` is one.
+pub trait AsyncStorage: Send {
+    fn load(
+        &mut self,
+        key: &str,
+        codec: &Codec<'_>,
+    ) -> impl Future<Output = Result<Option<Held>, StorageError>> + Send;
+    fn store(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send;
+    fn restore(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send;
+    fn commit(&mut self, codec: &Codec<'_>) -> impl Future<Output = Result<(), StorageError>> + Send;
+}
+
+impl<S> AsyncStorage for S
+where
+    S: Storage,
+{
+    fn load(
+        &mut self,
+        key: &str,
+        codec: &Codec<'_>,
+    ) -> impl Future<Output = Result<Option<Held>, StorageError>> + Send {
+        std::future::ready(Storage::load(self, key, codec))
+    }
+
+    fn store(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send {
+        std::future::ready(Storage::store(self, key, held))
+    }
+
+    fn restore(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send {
+        std::future::ready(Storage::restore(self, key, held))
+    }
+
+    fn commit(&mut self, codec: &Codec<'_>) -> impl Future<Output = Result<(), StorageError>> + Send {
+        std::future::ready(Storage::commit(self, codec))
+    }
+}
+
+/// A storage whose holders are the data: it is not durable, and `commit`
+/// changes nothing. A key keeps its slot while its holder is lent, so a load
+/// and the restore after it allocate nothing.
 #[derive(Default)]
 pub struct MemoryStorage {
-    holders: HashMap<String, Held>,
+    holders: HashMap<String, Option<Held>>,
 }
 
 impl MemoryStorage {
@@ -408,16 +517,63 @@ impl MemoryStorage {
 
 impl Storage for MemoryStorage {
     fn load(&mut self, key: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
-        Ok(self.holders.remove(key))
+        Ok(self.holders.get_mut(key).and_then(Option::take))
     }
 
-    fn store(&mut self, key: &str, held: Held) {
-        self.holders.insert(key.to_owned(), held);
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        match self.holders.get_mut(key) {
+            Some(slot) => *slot = Some(held),
+            None => {
+                self.holders.insert(key.to_owned(), Some(held));
+            }
+        }
+        Ok(())
+    }
+
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        match self.holders.get_mut(key) {
+            Some(slot) => {
+                slot.get_or_insert(held);
+            }
+            None => {
+                self.holders.insert(key.to_owned(), Some(held));
+            }
+        }
+        Ok(())
     }
 
     fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
         Ok(())
     }
+}
+
+// -- Access --------------------------------------------------------------
+
+/// A program's access to its storage, fixed when it compiles (RFC-0090
+/// rule 3): `SyncAccess` opens a `Storage`, `AsyncAccess` an `AsyncStorage`.
+pub trait Access: sealed::Sealed {
+    #[doc(hidden)]
+    const GRAPH: GraphAccess;
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub struct SyncAccess;
+
+pub struct AsyncAccess;
+
+impl sealed::Sealed for SyncAccess {}
+
+impl sealed::Sealed for AsyncAccess {}
+
+impl Access for SyncAccess {
+    const GRAPH: GraphAccess = GraphAccess::Sync;
+}
+
+impl Access for AsyncAccess {
+    const GRAPH: GraphAccess = GraphAccess::Async;
 }
 
 // -- The graph environment ----------------------------------------------
@@ -489,6 +645,7 @@ macro_rules! tooling_graph {
                 contexts: Freeze::new(contexts),
                 types: Freeze::new(environment.types),
                 bindings: Bindings::default(),
+                access: acvus_mir::graph::Access::Sync,
                 entries,
             })
         }
@@ -550,6 +707,9 @@ impl DeclaredInputs {
 enum EntryDeclaration {
     Typed { inputs: DeclaredInputs, declared: PolyTy },
     Untyped,
+    /// A body scripts call and no host runs: its return is what its body
+    /// settles, and its `$` inputs are the ones it reads (RFC-0071 rule 4).
+    Function,
 }
 
 struct EntryDecl {
@@ -561,7 +721,12 @@ struct EntryDecl {
 /// The entries, inits and bindings of one compilation graph, so a context's
 /// type is solved from every body that stores, reads or initializes it
 /// (RFC-0090 rule 1).
-pub struct Host {
+pub struct Host<A = SyncAccess> {
+    parts: HostParts,
+    access: PhantomData<fn() -> A>,
+}
+
+struct HostParts {
     interner: Interner,
     registries: Vec<Registry<AcvusRuntime>>,
     bindings: Bindings,
@@ -573,26 +738,44 @@ pub struct Host {
     parse: Duration,
 }
 
-impl Host {
+impl Host<SyncAccess> {
     pub fn new(registries: Vec<Registry<AcvusRuntime>>) -> Self {
         Host {
-            interner: Interner::new(),
-            registries,
-            bindings: Bindings::default(),
-            entries: Vec::new(),
-            inits: Vec::new(),
-            parse_refusals: Vec::new(),
-            refusals: Vec::new(),
-            opt: Opt::Full,
-            parse: Duration::ZERO,
+            parts: HostParts {
+                interner: Interner::new(),
+                registries,
+                bindings: Bindings::default(),
+                entries: Vec::new(),
+                inits: Vec::new(),
+                parse_refusals: Vec::new(),
+                refusals: Vec::new(),
+                opt: Opt::Full,
+                parse: Duration::ZERO,
+            },
+            access: PhantomData,
         }
     }
 
+    /// Compile for a storage whose access can wait: every fetch and commit
+    /// of a context is `Async` (RFC-0090 rule 3).
+    pub fn async_access(self) -> Host<AsyncAccess> {
+        Host {
+            parts: self.parts,
+            access: PhantomData,
+        }
+    }
+}
+
+impl<A> Host<A>
+where
+    A: Access,
+{
     fn parsed(&mut self, origin: Origin, source: Source<'_>) -> ParsedAst {
+        let parts = &mut self.parts;
         let started = Instant::now();
-        let Parsed { ast, errors } = source.parse(&self.interner);
-        self.parse += started.elapsed();
-        self.parse_refusals.extend(errors.iter().map(|e| Refusal {
+        let Parsed { ast, errors } = source.parse(&parts.interner);
+        parts.parse += started.elapsed();
+        parts.parse_refusals.extend(errors.iter().map(|e| Refusal {
             span: span_of(e.span),
             ..Refusal::of(Some(origin.clone()), e.kind.to_string())
         }));
@@ -601,7 +784,7 @@ impl Host {
 
     pub fn init(mut self, key: &str, source: Source<'_>) -> Self {
         let ast = self.parsed(Origin::Init(key.to_owned()), source);
-        self.inits.push(InitSource {
+        self.parts.inits.push(InitSource {
             key: key.to_owned(),
             ast,
         });
@@ -614,28 +797,29 @@ impl Host {
         R: Declared,
     {
         let origin = Some(Origin::Entry(name.to_owned()));
-        let asked = I::declared(&self.interner);
-        let Some(inputs) = DeclaredInputs::of(&self.interner, asked.clone()) else {
+        let interner = &self.parts.interner;
+        let asked = I::declared(interner);
+        let Some(inputs) = DeclaredInputs::of(interner, asked.clone()) else {
             let message = format!(
                 "the inputs of the entry `{name}` are declared as {}, which is neither `()` \
                  nor a struct of named fields",
-                asked.display(&self.interner)
+                asked.display(interner)
             );
-            self.refusals.push(Refusal::of(origin, message));
+            self.parts.refusals.push(Refusal::of(origin, message));
             return self;
         };
-        let declared = R::declared(&self.interner);
+        let declared = R::declared(interner);
         self.declare_entry(name, source, EntryDeclaration::Typed { inputs, declared })
     }
 
     fn declare_entry(mut self, name: &str, source: Source<'_>, declaration: EntryDeclaration) -> Self {
         let origin = Origin::Entry(name.to_owned());
-        if self.entries.iter().any(|entry| entry.name == name) {
+        if self.parts.entries.iter().any(|entry| entry.name == name) {
             let message = format!("the entry `{name}` is given twice");
-            self.refusals.push(Refusal::of(Some(origin.clone()), message));
+            self.parts.refusals.push(Refusal::of(Some(origin.clone()), message));
         }
         let ast = self.parsed(origin, source);
-        self.entries.push(EntryDecl {
+        self.parts.entries.push(EntryDecl {
             name: name.to_owned(),
             ast,
             declaration,
@@ -649,7 +833,7 @@ impl Host {
         let refused = |message: String| {
             HostError::Refused(vec![Refusal::of(Some(Origin::Binding(name.to_owned())), message)])
         };
-        let interner = &self.interner;
+        let interner = &self.parts.interner;
         let expr = acvus_ast::parse_expr(interner, literal)
             .map_err(|e| refused(format!("${name}: `{literal}` does not parse: {e:?}")))?;
         let written = |span: Span| &literal[span.start..span.end];
@@ -664,26 +848,36 @@ impl Host {
                 written(second)
             )),
         })?;
-        self.bindings
+        self.parts
+            .bindings
             .bind(interner.intern(name), value)
             .map_err(|e| refused(format!("${name}: {e}")))?;
         Ok(self)
     }
 
-    pub fn compile<E>(self, executor: E) -> Result<Program, HostError>
+    pub fn compile<E>(self, executor: E) -> Result<Program<A>, HostError>
     where
         E: Executor + 'static,
     {
-        compile(self, Arc::new(executor)).map_err(HostError::Refused)
+        compile(self.parts, A::GRAPH, Arc::new(executor))
+            .map(|compiled| Program {
+                compiled,
+                access: PhantomData,
+            })
+            .map_err(HostError::Refused)
     }
 }
 
 macro_rules! host_tooling {
     ($v:vis) => {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-        impl Host {
-            $v fn opt(self, opt: Opt) -> Self {
-                Host { opt, ..self }
+        impl<A> Host<A>
+        where
+            A: Access,
+        {
+            $v fn opt(mut self, opt: Opt) -> Self {
+                self.parts.opt = opt;
+                self
             }
 
             /// An entry that declares `!` and whose `$` inputs are the ones
@@ -691,6 +885,12 @@ macro_rules! host_tooling {
             /// (RFC-0054 rule 5, RFC-0090 rule 6).
             $v fn untyped_entry(self, name: &str, source: Source<'_>) -> Self {
                 self.declare_entry(name, source, EntryDeclaration::Untyped)
+            }
+
+            /// A body the entries call by name and no host runs: the CLI's
+            /// scripts beside the one it runs (RFC-0054 rule 1).
+            $v fn function(self, name: &str, source: Source<'_>) -> Self {
+                self.declare_entry(name, source, EntryDeclaration::Function)
             }
         }
     };
@@ -710,7 +910,8 @@ struct Declaration {
 struct LocalFunction {
     kind: FnKind,
     ty: PolyTy,
-    shape: EntryShape,
+    /// `None` for a function no host runs.
+    shape: Option<EntryShape>,
 }
 
 struct CompiledEntry {
@@ -750,8 +951,8 @@ impl CompileTimes {
     }
 }
 
-fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refusal>> {
-    let Host {
+fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) -> Result<Compiled, Vec<Refusal>> {
+    let HostParts {
         interner,
         registries,
         bindings,
@@ -787,8 +988,10 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
         fn_types,
     } = environment;
 
+    let mut open = PolyBuilder::new();
     let mut named: FxHashSet<QualifiedRef> = FxHashSet::default();
     let mut declared: FxHashMap<QualifiedRef, Declaration> = FxHashMap::default();
+    let mut scripts: FxHashMap<QualifiedRef, String> = FxHashMap::default();
     let mut functions: Vec<Function> = Vec::with_capacity(entries.len() + extern_fns.len());
     for EntryDecl {
         name,
@@ -798,9 +1001,21 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
     {
         let qref = QualifiedRef::root(interner.intern(&name));
         let origin = Some(Origin::Entry(name.clone()));
-        if extern_fns.iter().any(|f| f.qref == qref) {
-            let message = format!("the entry `{name}` has the name of an extern function");
-            refusals.push(Refusal::of(origin.clone(), message));
+        let shadowed = bare_callable(interner, &extern_fns, &types, qref);
+        if !shadowed.is_empty() {
+            let listed: Vec<String> = shadowed.iter().map(|name| format!("`{name}`")).collect();
+            let what = match declaration {
+                EntryDeclaration::Function => "function",
+                EntryDeclaration::Typed { .. } | EntryDeclaration::Untyped => "entry",
+            };
+            let message = format!(
+                "the {what} `{name}` would shadow {}, which a script calls as `{name}`",
+                listed.join(", ")
+            );
+            refusals.push(Refusal {
+                cause: Some(Cause::Shadows { externs: shadowed }),
+                ..Refusal::of(origin.clone(), message)
+            });
         }
         named.extend(context_refs(&ast));
         let local = match declaration {
@@ -832,23 +1047,40 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
                 LocalFunction {
                     kind: FnKind::Local(ast, Inputs::Declared),
                     ty,
-                    shape,
+                    shape: Some(shape),
                 }
             }
             EntryDeclaration::Untyped => LocalFunction {
                 kind: FnKind::Local(ast, Inputs::FromReads),
                 ty: untyped_entry_ty(),
-                shape: EntryShape::Untyped,
+                shape: Some(EntryShape::Untyped),
+            },
+            EntryDeclaration::Function => LocalFunction {
+                kind: FnKind::Local(ast, Inputs::FromReads),
+                ty: TyTerm::Fn {
+                    params: vec![],
+                    ret: Box::new(open.fresh_ty_var()),
+                    captures: vec![],
+                    effect: Effect::OPAQUE.into(),
+                    flows: Flows::Every.into(),
+                },
+                shape: None,
             },
         };
         let LocalFunction { kind, ty, shape } = local;
-        declared.insert(qref, Declaration { name, shape });
+        scripts.insert(qref, name.clone());
+        if let Some(shape) = shape {
+            declared.insert(qref, Declaration { name, shape });
+        }
         functions.push(Function { qref, kind, ty });
     }
-    let entry_refs: Vec<QualifiedRef> = functions.iter().map(|f| f.qref).collect();
+    let entry_refs: Vec<QualifiedRef> = functions
+        .iter()
+        .map(|f| f.qref)
+        .filter(|qref| declared.contains_key(qref))
+        .collect();
     functions.extend(extern_fns);
 
-    let mut open = PolyBuilder::new();
     let contexts = open_contexts(&mut open, named);
     let mut parts = GraphParts {
         open,
@@ -879,10 +1111,11 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
         contexts: Freeze::new(contexts),
         types: Freeze::new(types),
         bindings,
+        access,
         entries: entry_refs,
     };
-    let origin_of = |qref: &QualifiedRef| match declared.get(qref) {
-        Some(declaration) => Some(Origin::Entry(declaration.name.clone())),
+    let origin_of = |qref: &QualifiedRef| match scripts.get(qref) {
+        Some(name) => Some(Origin::Entry(name.clone())),
         None => declared_inits
             .key_of(qref)
             .map(|key| Origin::Init(key.to_owned())),
@@ -900,6 +1133,7 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             span: span_of(e.span),
             primary: e.primary(),
             labels: e.labels.clone(),
+            cause: None,
         })
     }));
 
@@ -914,6 +1148,7 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             span: span_of(e.span),
             primary: e.primary(),
             labels: e.labels.clone(),
+            cause: None,
         })
     }));
     if !refusals.is_empty() {
@@ -936,6 +1171,7 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             span: span_of(e.span),
             primary: None,
             labels: e.labels().to_vec(),
+            cause: None,
         })
     }));
     if !refusals.is_empty() {
@@ -955,6 +1191,7 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             externs: &executables,
             context_names: &context_names,
             instances: &instances,
+            access,
         };
         optimized
             .modules
@@ -984,10 +1221,6 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             (name, entry)
         })
         .collect();
-    let shared = InterpreterContext::new(interner, executables, executor)
-        .with_fn_types(fn_types)
-        .with_context_names(context_names)
-        .with_space(space);
     let solved: BTreeMap<String, Arc<Ty>> = graph
         .contexts
         .iter()
@@ -998,16 +1231,36 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             (interner.resolve(c.qref.name).to_owned(), Arc::new(ty.clone()))
         })
         .collect();
-    let fetched_first: BTreeSet<String> = compiled_entries
-        .values()
-        .flat_map(|entry| lookup_module(&shared, &entry.qref).fetched_first.iter())
-        .map(|key| key.to_string())
+    let init_functions: Vec<(String, QualifiedRef)> = declared_inits
+        .functions()
+        .map(|(key, function)| (key.to_owned(), function))
         .collect();
+    let shared = InterpreterContext::new(interner, executables, executor)
+        .with_fn_types(fn_types)
+        .with_context_names(context_names)
+        .with_space(space)
+        .with_inits(declared_inits.solved(&solved));
+    if access == GraphAccess::Sync {
+        refusals.extend(
+            init_functions
+                .iter()
+                .filter(|(_, function)| lookup_module(&shared, function).main.may_suspend)
+                .map(|(key, _)| {
+                    let message = format!(
+                        "the init of `@{key}` can wait, and a program compiled for synchronous access \
+                         runs an init inside the fetch that finds its key absent, which cannot wait; \
+                         compile with `Host::async_access`"
+                    );
+                    Refusal::of(Some(Origin::Init(key.clone())), message)
+                }),
+        );
+        if !refusals.is_empty() {
+            return Err(refusals);
+        }
+    }
     let rt = shared.runtime_over_an_empty_page();
-    Ok(Program {
-        inits: declared_inits.solved(&solved),
+    Ok(Compiled {
         solved,
-        fetched_first,
         rt,
         shared,
         entries: compiled_entries,
@@ -1020,6 +1273,28 @@ fn compile(host: Host, executor: Arc<dyn Executor>) -> Result<Program, Vec<Refus
             prepare,
         },
     })
+}
+
+/// The extern functions a script's bare `name` reaches (RFC-0021,
+/// RFC-0043): every one of that name, in any namespace or at the root, that
+/// the registries declared a function rather than a machine coercion; each
+/// written with its namespace, in name order.
+fn bare_callable(
+    interner: &Interner,
+    extern_fns: &[Function],
+    types: &acvus_mir::ty::TypeRegistry,
+    name: QualifiedRef,
+) -> Vec<String> {
+    let mut reached: Vec<String> = extern_fns
+        .iter()
+        .filter(|f| f.qref.name == name.name && types.machine_view(f.qref).is_none())
+        .map(|f| match f.qref.namespace {
+            Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(f.qref.name)),
+            None => interner.resolve(f.qref.name).to_owned(),
+        })
+        .collect();
+    reached.sort();
+    reached
 }
 
 enum InputsCrossing {
@@ -1056,40 +1331,23 @@ impl InputsCrossing {
 
 // -- Program -------------------------------------------------------------
 
-pub struct Program {
+/// What one compilation made, whatever access it was compiled for.
+struct Compiled {
     shared: InterpreterContext,
     rt: AcvusRuntime,
     entries: HashMap<String, CompiledEntry>,
-    inits: Inits,
     solved: BTreeMap<String, Arc<Ty>>,
-    fetched_first: BTreeSet<String>,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     times: CompileTimes,
 }
 
-impl Program {
-    /// Every context of the compilation, in key order.
-    pub fn contexts(&self) -> impl Iterator<Item = &str> {
-        self.solved.keys().map(String::as_str)
+impl Compiled {
+    fn interner(&self) -> &Interner {
+        &self.shared.interner
     }
 
-    /// The type the compilation solved for `key`, as the language writes it.
-    pub fn context_type(&self, key: &str) -> Option<String> {
-        let ty = self.solved.get(key)?;
-        Some(ty.display(&self.shared.interner).to_string())
-    }
-
-    /// Run `f` with this program's pages and entries, which are good for
-    /// that call alone.
-    pub async fn scope<F, T>(&self, f: F) -> T
-    where
-        F: for<'p> AsyncFnOnce(Scope<'p>) -> T,
-    {
-        f(Scope {
-            program: self,
-            brand: PhantomData,
-        })
-        .await
+    fn codec(&self) -> Codec<'_> {
+        Codec::of(&self.rt)
     }
 
     fn solved_type(&self, key: &str) -> Result<&Arc<Ty>, HostError> {
@@ -1106,28 +1364,51 @@ impl Program {
         }
     }
 
-    /// Refuse a holder a storage gives for `key` at another type than the
-    /// solved one, before its word is read (RFC-0090 rule 4).
-    fn accept_held(&self, key: &str, held: &Held) -> Result<(), HostError> {
-        if held.made_by() != self.shared.compilation {
-            let message = format!("the storage gave `@{key}` a holder another compilation made");
-            return Err(HostError::Storage(StorageError::new(message)));
-        }
-        let solved = self.solved_type(key)?;
-        if held.ty().same_erased(solved) {
-            return Ok(());
-        }
-        Err(HostError::Mismatched {
-            what: Part::Context(key.to_owned()),
-            held: held.ty().display(self.interner()).to_string(),
-            asked: solved.display(self.interner()).to_string(),
-        })
-    }
-
     fn compiled(&self, name: &str) -> Result<&CompiledEntry, HostError> {
         self.entries.get(name).ok_or_else(|| HostError::NotInGraph {
             what: Named::Entry(name.to_owned()),
         })
+    }
+
+    async fn run_over(&self, entry: QualifiedRef, port: Arc<Port>, args: Vec<Value>) -> Result<Value, HostError> {
+        Interpreter::on_port(self.shared.clone(), entry, port, args)
+            .ended_or_ran()
+            .await
+    }
+}
+
+pub struct Program<A = SyncAccess> {
+    compiled: Compiled,
+    access: PhantomData<fn() -> A>,
+}
+
+impl<A> Program<A>
+where
+    A: Access,
+{
+    /// Every context of the compilation, in key order.
+    pub fn contexts(&self) -> impl Iterator<Item = &str> {
+        self.compiled.solved.keys().map(String::as_str)
+    }
+
+    /// The type the compilation solved for `key`, as the language writes it.
+    pub fn context_type(&self, key: &str) -> Option<String> {
+        let ty = self.compiled.solved.get(key)?;
+        Some(ty.display(self.compiled.interner()).to_string())
+    }
+
+    /// Run `f` with this program's pages and entries, which are good for
+    /// that call alone.
+    pub async fn scope<F, T>(&self, f: F) -> T
+    where
+        F: for<'p> AsyncFnOnce(Scope<'p, A>) -> T,
+    {
+        f(Scope {
+            program: &self.compiled,
+            access: PhantomData,
+            brand: PhantomData,
+        })
+        .await
     }
 }
 
@@ -1150,18 +1431,22 @@ pub struct InputListing {
 macro_rules! program_tooling {
     ($v:vis) => {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-        impl Program {
+        impl<A> Program<A>
+        where
+            A: Access,
+        {
             $v fn interner(&self) -> &Interner {
-                &self.shared.interner
+                self.compiled.interner()
             }
 
             $v fn times(&self) -> &CompileTimes {
-                &self.times
+                &self.compiled.times
             }
 
             $v fn listing(&self, name: &str) -> Result<Listing<'_>, HostError> {
-                let compiled = self.compiled(name)?;
-                let interner = self.interner();
+                let program = &self.compiled;
+                let compiled = program.compiled(name)?;
+                let interner = program.interner();
                 let mut required: Vec<&ContextInfo> = compiled.required.iter().collect();
                 required.sort_by_key(|input| input.name.name.bits());
                 let inputs = required
@@ -1174,7 +1459,7 @@ macro_rules! program_tooling {
                 Ok(Listing {
                     inputs,
                     mir: acvus_mir::printer::dump(interner, &compiled.module),
-                    prepared: lookup_module(&self.shared, &compiled.qref),
+                    prepared: lookup_module(&program.shared, &compiled.qref),
                 })
             }
         }
@@ -1186,61 +1471,47 @@ tooling_vis!(program_tooling);
 
 /// One `Program::scope` call's view of its program. The lifetime brands
 /// every page and entry the scope makes.
-pub struct Scope<'p> {
-    program: &'p Program,
+pub struct Scope<'p, A = SyncAccess> {
+    program: &'p Compiled,
+    access: PhantomData<fn() -> A>,
     brand: Brand<'p>,
 }
 
-impl Clone for Scope<'_> {
+impl<A> Clone for Scope<'_, A> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl Copy for Scope<'_> {}
+impl<A> Copy for Scope<'_, A> {}
 
-impl<'p> Scope<'p> {
-    /// A page over `storage`: every context the storage holds is loaded and
-    /// checked against its solved type, and the init of each context an
-    /// entry fetches before assigning that the storage lacks runs (RFC-0090
-    /// rules 1, 3).
-    pub async fn open<S>(self, mut storage: S) -> Result<Page<'p, S>, HostError>
+impl<'p> Scope<'p, SyncAccess> {
+    /// A page over `storage`, which it borrows. Opening reads nothing
+    /// (RFC-0090 rule 3).
+    pub fn open<'s, S>(self, storage: &'s mut S) -> Page<'p, 's, S, SyncAccess>
     where
         S: Storage,
     {
-        let program = self.program;
-        let codec = Codec { rt: &program.rt };
-        let journal = RuntimeContext::empty();
-        for key in program.solved.keys() {
-            let Some(held) = storage.load(key, &codec)? else {
-                continue;
-            };
-            program.accept_held(key, &held)?;
-            journal.set_unchanged(key, held);
-        }
-        let unfilled = program
-            .fetched_first
-            .iter()
-            .find(|key| !journal.holds(key) && !program.inits.has(key));
-        if let Some(key) = unfilled {
-            return Err(HostError::Unfilled { key: key.clone() });
-        }
-        let journal = Arc::new(journal);
-        let fetched_first = |key: &str| program.fetched_first.contains(key);
-        let filled = program
-            .inits
-            .fill_lacking(&program.shared, &journal, fetched_first)
-            .await?;
-        Ok(Page {
-            program,
-            storage,
-            journal,
-            filled,
-            brand: PhantomData,
-        })
+        Page::over(self.program, storage)
     }
+}
 
-    pub fn entry<I, R>(self, name: &str) -> Result<Entry<'p, I, R>, HostError>
+impl<'p> Scope<'p, AsyncAccess> {
+    /// A page over `storage`, which it borrows. Opening reads nothing
+    /// (RFC-0090 rule 3).
+    pub fn open<'s, S>(self, storage: &'s mut S) -> Page<'p, 's, S, AsyncAccess>
+    where
+        S: AsyncStorage,
+    {
+        Page::over(self.program, storage)
+    }
+}
+
+impl<'p, A> Scope<'p, A>
+where
+    A: Access,
+{
+    pub fn entry<I, R>(self, name: &str) -> Result<Entry<'p, I, R, A>, HostError>
     where
         I: Declared + Cross<AcvusRuntime>,
         R: Declared,
@@ -1277,6 +1548,7 @@ impl<'p> Scope<'p> {
             compiled,
             crossed,
             declared: PhantomData,
+            access: PhantomData,
             brand: PhantomData,
         })
     }
@@ -1285,11 +1557,14 @@ impl<'p> Scope<'p> {
 macro_rules! scope_tooling {
     ($v:vis) => {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-        impl<'p> Scope<'p> {
+        impl<'p, A> Scope<'p, A>
+        where
+            A: Access,
+        {
             /// An entry the tooling runs whatever it declares, whose result
             /// it reads by the settled type; one that still requires a `$`
             /// input is refused.
-            $v fn untyped_entry(self, name: &str) -> Result<UntypedEntry<'p>, HostError> {
+            $v fn untyped_entry(self, name: &str) -> Result<UntypedEntry<'p, A>, HostError> {
                 let program = self.program;
                 let compiled = program.compiled(name)?;
                 if !compiled.required.is_empty() {
@@ -1306,8 +1581,8 @@ macro_rules! scope_tooling {
                     });
                 }
                 Ok(UntypedEntry {
-                    program,
                     compiled,
+                    access: PhantomData,
                     brand: PhantomData,
                 })
             }
@@ -1319,59 +1594,86 @@ tooling_vis!(scope_tooling);
 // -- Page ----------------------------------------------------------------
 
 /// A program's view of one storage (RFC-0090 rule 3), made by
-/// `Scope::open`.
-pub struct Page<'p, S> {
-    program: &'p Program,
-    storage: S,
-    journal: Arc<RuntimeContext>,
+/// `Scope::open`. It holds no value: each method below and each run reads
+/// and writes the storage where it loads and stores.
+pub struct Page<'p, 's, S, A = SyncAccess> {
+    program: &'p Compiled,
+    storage: &'s mut S,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     filled: Vec<String>,
+    access: PhantomData<fn() -> A>,
     brand: Brand<'p>,
 }
 
-impl<'p, S> Page<'p, S>
+impl<'p, 's, S, A> Page<'p, 's, S, A>
 where
-    S: Storage,
+    S: AsyncStorage,
+    A: Access,
 {
+    fn over(program: &'p Compiled, storage: &'s mut S) -> Self {
+        Page {
+            program,
+            storage,
+            filled: Vec::new(),
+            access: PhantomData,
+            brand: PhantomData,
+        }
+    }
+
+    /// Load `key`'s holder and check it before its word is read (RFC-0090
+    /// rule 4); a refused holder goes back to the storage.
+    async fn loaded(&mut self, key: &str) -> Result<Held, HostError> {
+        let program = self.program;
+        let solved = program.solved_type(key)?;
+        let codec = program.codec();
+        let Some(held) = AsyncStorage::load(&mut *self.storage, key, &codec).await? else {
+            return Err(HostError::Unstored { key: key.to_owned() });
+        };
+        let Some(refused) = refusal_of(&program.rt, key, &held, solved) else {
+            return Ok(held);
+        };
+        AsyncStorage::restore(&mut *self.storage, key, held).await?;
+        Err(refused)
+    }
+
     /// Lend `key`'s value to `f`, whose parameter crosses as a handler's
-    /// shared one does (RFC-0090 rule 3).
-    pub fn with<Q, F, O>(&self, key: &str, f: F) -> Result<O, HostError>
+    /// shared one does (RFC-0090 rule 3), and hand the holder back.
+    pub async fn with<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
         F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
         let program = self.program;
-        program.solved_type(key)?;
-        let holders = self.journal.read();
-        let Some(held) = holders.get(key) else {
-            return Err(HostError::Unstored { key: key.to_owned() });
-        };
-        held.lend(&program.rt, program.interner(), f)
-            .map_err(|asked| program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked))
+        let held = self.loaded(key).await?;
+        let lent = held
+            .lend(&program.rt, program.interner(), f)
+            .map_err(|asked| program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked));
+        AsyncStorage::restore(&mut *self.storage, key, held).await?;
+        lent
     }
 
     /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
-    /// handler's does, shared or exclusive.
-    pub fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    /// handler's does, shared or exclusive, and store what it left.
+    pub async fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
     {
         let program = self.program;
-        program.solved_type(key)?;
-        let lent = {
-            let mut holders = self.journal.write();
-            let Some(held) = holders.get_mut(key) else {
-                return Err(HostError::Unstored { key: key.to_owned() });
-            };
-            held.lend_mut(&program.rt, program.interner(), f).map_err(|asked| {
-                program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked)
-            })?
-        };
-        self.journal.mark_changed(key);
-        Ok(lent)
+        let mut held = self.loaded(key).await?;
+        match held.lend_mut(&program.rt, program.interner(), f) {
+            Ok(lent) => {
+                AsyncStorage::store(&mut *self.storage, key, held).await?;
+                Ok(lent)
+            }
+            Err(asked) => {
+                let refused = program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked);
+                AsyncStorage::restore(&mut *self.storage, key, held).await?;
+                Err(refused)
+            }
+        }
     }
 
-    pub fn insert<T>(&mut self, key: &str, value: T) -> Result<(), HostError>
+    pub async fn insert<T>(&mut self, key: &str, value: T) -> Result<(), HostError>
     where
         T: Declared + OneValue<AcvusRuntime>,
     {
@@ -1383,62 +1685,99 @@ where
         }
         // SAFETY: `value` crosses at `T`, the type the page holds `key` at.
         let value = Owned::erased(unsafe { Crossing::new(&program.rt) }, value);
-        let made_by = program.shared.compilation;
-        self.journal.set_changed(key, Held::new(value, Arc::clone(solved), made_by));
+        let held = Held::new(value, Arc::clone(solved), program.shared.compilation);
+        AsyncStorage::store(&mut *self.storage, key, held).await?;
         Ok(())
     }
 
-    /// Hand the storage every context changed since the last commit, commit
-    /// the storage, and take each holder back.
-    pub fn commit(&mut self) -> Result<(), HostError> {
-        let program = self.program;
-        let codec = Codec { rt: &program.rt };
-        let mut handed = Vec::new();
-        for key in self.journal.take_changed() {
-            let Some(held) = self.journal.take(&key) else {
-                continue;
-            };
-            self.storage.store(&key, held);
-            handed.push(key);
-        }
-        let committed = self.storage.commit(&codec);
-        for key in &handed {
-            if committed.is_err() {
-                self.journal.mark_changed(key);
-            }
-            let Some(held) = self.storage.load(key, &codec)? else {
-                let message = format!("the storage gave back nothing for `@{key}`, which the page handed it");
-                return Err(HostError::Storage(StorageError::new(message)));
-            };
-            program.accept_held(key, &held)?;
-            self.journal.set_unchanged(key, held);
-        }
-        committed.map_err(HostError::Storage)
+    /// Make what the storage holds durable (RFC-0090 rule 3).
+    pub async fn commit(&mut self) -> Result<(), HostError> {
+        let codec = self.program.codec();
+        AsyncStorage::commit(&mut *self.storage, &codec).await?;
+        Ok(())
     }
 
     pub fn storage(&self) -> &S {
-        &self.storage
+        self.storage
+    }
+}
+
+/// Closes a run's gate when the run returns or is dropped, before the
+/// page's borrow of the storage ends.
+struct Closing(Arc<Port>);
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+impl<'p, 's, S> Page<'p, 's, S, SyncAccess>
+where
+    S: Storage,
+{
+    async fn run(&mut self, entry: QualifiedRef, args: Vec<Value>) -> Result<Value, HostError> {
+        let storage: &mut dyn Storage = &mut *self.storage;
+        // SAFETY: `closing` closes the gate when this future returns or is
+        // dropped, while `self` still borrows the storage exclusively.
+        let port = Port::gate(unsafe { Gate::open(storage) });
+        let closing = Closing(Arc::clone(&port));
+        let ran = self.program.run_over(entry, Arc::clone(&port), args).await;
+        drop(closing);
+        self.filled.extend(port.take_filled());
+        ran
+    }
+}
+
+impl<'p, 's, S> Page<'p, 's, S, AsyncAccess>
+where
+    S: AsyncStorage,
+{
+    async fn run(&mut self, entry: QualifiedRef, args: Vec<Value>) -> Result<Value, HostError> {
+        let program = self.program;
+        let (port, requests) = Port::queue();
+        let codec = program.codec();
+        let run = program.run_over(entry, Arc::clone(&port), args);
+        let ran = serve(&mut *self.storage, &codec, requests, run).await;
+        self.filled.extend(port.take_filled());
+        ran
     }
 }
 
 macro_rules! page_tooling {
     ($v:vis) => {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-        impl<S> Page<'_, S>
-        where
-            S: Storage,
-        {
-            /// The keys whose init ran when the page opened, in key order.
+        impl<S, A> Page<'_, '_, S, A> {
+            /// The keys whose init a run on this page ran, in the order it
+            /// ran them.
             $v fn filled(&self) -> &[String] {
                 &self.filled
             }
+        }
 
-            /// Run every init whose key the page lacks; the keys filled, in
-            /// key order.
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl<S> Page<'_, '_, S, SyncAccess>
+        where
+            S: Storage,
+        {
+            /// Run the init of every key the storage lacks and store its
+            /// result; the keys filled, in key order.
             $v async fn fill(&mut self) -> Result<Vec<String>, HostError> {
                 let program = self.program;
-                let every = |_: &str| true;
-                let filled = program.inits.fill_lacking(&program.shared, &self.journal, every).await?;
+                let mut keys: Vec<&str> = program.shared.inits.keys().map(|key| &**key).collect();
+                keys.sort_unstable();
+                let mut filled = Vec::new();
+                for key in keys {
+                    let codec = program.codec();
+                    if let Some(held) = Storage::load(&mut *self.storage, key, &codec)? {
+                        Storage::restore(&mut *self.storage, key, held)?;
+                        continue;
+                    }
+                    let init = &program.shared.inits[key];
+                    let value = self.run(init.function, Vec::new()).await?;
+                    Storage::store(&mut *self.storage, key, init.held(value, &program.rt))?;
+                    filled.push(key.to_owned());
+                }
                 Ok(filled)
             }
         }
@@ -1448,28 +1787,22 @@ tooling_vis!(page_tooling);
 
 // -- Entry and Output ----------------------------------------------------
 
-pub struct Entry<'p, I, R> {
-    program: &'p Program,
+pub struct Entry<'p, I, R, A = SyncAccess> {
+    program: &'p Compiled,
     compiled: &'p CompiledEntry,
     crossed: InputsCrossing,
     declared: PhantomData<fn(I) -> R>,
+    access: PhantomData<fn() -> A>,
     brand: Brand<'p>,
 }
 
-impl<'p, I, R> Entry<'p, I, R>
+impl<'p, I, R, A> Entry<'p, I, R, A>
 where
     I: Cross<AcvusRuntime>,
     I::ReturnForm: Returned<Verdict = ()>,
 {
-    pub async fn run<S>(&self, page: &mut Page<'p, S>, inputs: I) -> Result<Output<'p, R>, HostError>
-    where
-        S: Storage,
-    {
-        let program = self.program;
-        let mut interpreter =
-            Interpreter::on_page(program.shared.clone(), self.compiled.qref, Arc::clone(&page.journal));
-        let accepted = interpreter.accept_page()?;
-        let args = match self.crossed {
+    fn arguments(&self, inputs: I) -> Vec<Value> {
+        match self.crossed {
             InputsCrossing::Nothing => Vec::new(),
             InputsCrossing::Fields { width } => {
                 let mut run: Vec<Value> = std::iter::repeat_with(Value::unit).take(width).collect();
@@ -1477,21 +1810,51 @@ where
                 // one the entry was compiled against, and `I`'s crossing
                 // writes one value per parameter, at that parameter's type and
                 // in the order the module takes them.
-                let crossing = unsafe { Crossing::new(&program.rt) };
+                let crossing = unsafe { Crossing::new(&self.program.rt) };
                 <I as Gives<Val<I, Uniform>, AcvusRuntime>>::give(inputs, crossing, &mut run);
                 run
             }
-        };
-        let value = accepted.run(args).await;
-        Ok(Output {
+        }
+    }
+
+    fn output(&self, value: Value) -> Output<'p, R> {
+        Output {
             // SAFETY: the run moved its result out to this caller, and no
             // other holder owns it.
             value: unsafe { Owned::from_value(Holding::new(), value) },
-            program,
+            program: self.program,
             compiled: self.compiled,
             result: PhantomData,
             brand: PhantomData,
-        })
+        }
+    }
+}
+
+impl<'p, I, R> Entry<'p, I, R, SyncAccess>
+where
+    I: Cross<AcvusRuntime>,
+    I::ReturnForm: Returned<Verdict = ()>,
+{
+    pub async fn run<S>(&self, page: &mut Page<'p, '_, S, SyncAccess>, inputs: I) -> Result<Output<'p, R>, HostError>
+    where
+        S: Storage,
+    {
+        let value = page.run(self.compiled.qref, self.arguments(inputs)).await?;
+        Ok(self.output(value))
+    }
+}
+
+impl<'p, I, R> Entry<'p, I, R, AsyncAccess>
+where
+    I: Cross<AcvusRuntime>,
+    I::ReturnForm: Returned<Verdict = ()>,
+{
+    pub async fn run<S>(&self, page: &mut Page<'p, '_, S, AsyncAccess>, inputs: I) -> Result<Output<'p, R>, HostError>
+    where
+        S: AsyncStorage,
+    {
+        let value = page.run(self.compiled.qref, self.arguments(inputs)).await?;
+        Ok(self.output(value))
     }
 }
 
@@ -1499,7 +1862,7 @@ where
 /// for `R` (RFC-0090 rule 3).
 pub struct Output<'p, R> {
     value: Owned<AcvusRuntime>,
-    program: &'p Program,
+    program: &'p Compiled,
     compiled: &'p CompiledEntry,
     result: PhantomData<fn() -> R>,
     brand: Brand<'p>,
@@ -1544,9 +1907,9 @@ impl<R> Output<'_, R> {
 }
 
 /// An entry the runtime's tooling runs and reads by the settled type.
-pub struct UntypedEntry<'p> {
-    program: &'p Program,
+pub struct UntypedEntry<'p, A = SyncAccess> {
     compiled: &'p CompiledEntry,
+    access: PhantomData<fn() -> A>,
     brand: Brand<'p>,
 }
 
@@ -1559,18 +1922,12 @@ pub struct UntypedOutput<'p> {
 macro_rules! untyped_run {
     ($v:vis) => {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-        impl<'p> UntypedEntry<'p> {
-            $v async fn run<S>(&self, page: &mut Page<'p, S>) -> Result<UntypedOutput<'p>, HostError>
+        impl<'p> UntypedEntry<'p, SyncAccess> {
+            $v async fn run<S>(&self, page: &mut Page<'p, '_, S, SyncAccess>) -> Result<UntypedOutput<'p>, HostError>
             where
                 S: Storage,
             {
-                let program = self.program;
-                let mut interpreter = Interpreter::on_page(
-                    program.shared.clone(),
-                    self.compiled.qref,
-                    Arc::clone(&page.journal),
-                );
-                let value = interpreter.accept_page()?.run(Vec::new()).await;
+                let value = page.run(self.compiled.qref, Vec::new()).await?;
                 Ok(UntypedOutput {
                     // SAFETY: the run moved its result out to this caller,
                     // and no other holder owns it.

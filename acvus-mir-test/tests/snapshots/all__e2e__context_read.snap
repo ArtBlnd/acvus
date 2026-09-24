@@ -15,7 +15,7 @@ expression: ir
      7 |   append r3 r2
      8 |   r4 = take <template>
      9 |   r5 = take @count
-    10 |   commit @count = r5
+    10 |   commit @count = r5 (not written)
     11 |   return r4
 
     ; r0 (@count) : i64

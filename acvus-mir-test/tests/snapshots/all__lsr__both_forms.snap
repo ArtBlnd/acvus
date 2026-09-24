@@ -36,9 +36,9 @@ expression: listing
     37 |   jump L3(r24)
     38 | L5:
     39 |   r25 = r4 - r13
-    40 |   commit @x = r0
-    41 |   commit @k = r1
-    42 |   commit @n = r2
+    40 |   commit @x = r0 (not written)
+    41 |   commit @k = r1 (not written)
+    42 |   commit @n = r2 (not written)
     43 |   return r25
 
     ; r0 (@x) : i64

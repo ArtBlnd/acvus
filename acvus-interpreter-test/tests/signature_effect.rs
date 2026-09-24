@@ -297,6 +297,7 @@ fn prepared_entry(source: &str) -> Body {
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepared = prepare_module(module, &ctx);
     Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"))

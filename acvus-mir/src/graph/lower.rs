@@ -3,14 +3,12 @@
 //! Takes InferResult (Complete outcomes) + cached ASTs and produces MirModule per function.
 //! Reuses the existing MIR lowerer - this is just the orchestration layer.
 
-use std::collections::BTreeSet;
-
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 use crate::error::MirError;
-use crate::ir::{Callee, InstKind, MirBody, MirModule};
-use crate::ty::{InputParam, Ty};
+use crate::ir::MirModule;
+use crate::ty::InputParam;
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::infer::{FnInferOutcome, InferResult};
@@ -83,8 +81,6 @@ pub fn lower(
         }
         modules.insert(func.qref, lowered.module);
     }
-    close_fetched_first(&mut modules);
-
     LowerResult { modules, errors }
 }
 
@@ -97,120 +93,6 @@ where
     outcomes
         .map(|(qref, outcome)| (*qref, outcome.meta().inputs.clone()))
         .collect()
-}
-
-/// RFC-0025 rule 2 across calls. A module's own `fetched_first` holds the
-/// contexts `main` fetches at entry. A call adds what its callee may fetch
-/// first, less the contexts `main` commits around it: that `Commit` takes
-/// `main`'s variable, so `main` fetched it or assigned it before the call,
-/// and a variable moved out there is refused (RFC-0025 rule 3). A callee with
-/// a body adds its own `fetched_first`; any other callee, and every function
-/// value passed, adds what its summary touches; a call with no summary
-/// touches every context some body names (RFC-0025 rule 8).
-pub fn close_fetched_first(modules: &mut FxHashMap<QualifiedRef, MirModule>) {
-    let contexts: BTreeSet<QualifiedRef> = modules
-        .values()
-        .flat_map(|module| std::iter::once(&module.main).chain(module.closures.values()))
-        .flat_map(|body| committed(body))
-        .collect();
-    let mut fetched_first: FxHashMap<QualifiedRef, BTreeSet<QualifiedRef>> = modules
-        .iter()
-        .map(|(qref, module)| (*qref, module.fetched_first.iter().copied().collect()))
-        .collect();
-    loop {
-        let mut grown = false;
-        for (qref, module) in modules.iter() {
-            let calls = calls_fetch_first(&module.main, &fetched_first, &contexts);
-            let own = fetched_first
-                .get_mut(qref)
-                .expect("every module has an entry");
-            for context in calls {
-                grown |= own.insert(context);
-            }
-        }
-        if !grown {
-            break;
-        }
-    }
-    for (qref, module) in modules.iter_mut() {
-        let added: Vec<QualifiedRef> = fetched_first[qref]
-            .iter()
-            .filter(|context| !module.fetched_first.contains(context))
-            .copied()
-            .collect();
-        module.fetched_first.extend(added);
-    }
-}
-
-/// The contexts `body` names: each one it commits at its exits.
-fn committed(body: &MirBody) -> impl Iterator<Item = QualifiedRef> + '_ {
-    body.insts.iter().filter_map(|inst| match &inst.kind {
-        InstKind::Commit { context, .. } => Some(*context),
-        _ => None,
-    })
-}
-
-/// What the calls of `body` may fetch first that `body` does not commit
-/// around them.
-fn calls_fetch_first(
-    body: &MirBody,
-    fetched_first: &FxHashMap<QualifiedRef, BTreeSet<QualifiedRef>>,
-    contexts: &BTreeSet<QualifiedRef>,
-) -> BTreeSet<QualifiedRef> {
-    let named: BTreeSet<QualifiedRef> = committed(body).collect();
-    let summary_touch = |ty: &Ty| -> BTreeSet<QualifiedRef> {
-        match ty.effect() {
-            Some(effect) => effect.reads.union(&effect.writes).copied().collect(),
-            None => contexts.clone(),
-        }
-    };
-    let mut out = BTreeSet::new();
-    for inst in &body.insts {
-        let (InstKind::FunctionCall {
-            callee,
-            callee_ty,
-            args,
-            ..
-        }
-        | InstKind::Spawn {
-            callee,
-            callee_ty,
-            args,
-            ..
-        }) = &inst.kind
-        else {
-            continue;
-        };
-        let passed: BTreeSet<QualifiedRef> = args
-            .iter()
-            .map(|arg| {
-                body.val_types
-                    .get(arg)
-                    .expect("every register of a lowered body has a type")
-            })
-            .filter(|ty| matches!(ty, Ty::Fn { .. }))
-            .flat_map(|ty| summary_touch(ty))
-            .collect();
-        let bracketed: BTreeSet<QualifiedRef> = summary_touch(callee_ty)
-            .union(&passed)
-            .copied()
-            .filter(|context| named.contains(context))
-            .collect();
-        let called: BTreeSet<QualifiedRef> = match callee {
-            Callee::Direct(qref) => match fetched_first.get(qref) {
-                Some(own) => own.clone(),
-                None => summary_touch(callee_ty),
-            },
-            Callee::Extern { .. } => BTreeSet::new(),
-            Callee::Indirect(_) => summary_touch(callee_ty),
-        };
-        out.extend(
-            called
-                .union(&passed)
-                .filter(|context| !bracketed.contains(context)),
-        );
-    }
-    out
 }
 
 /// A lowered body and what lowering refused in it. The module is pre-SSA:
@@ -298,6 +180,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         }
     }

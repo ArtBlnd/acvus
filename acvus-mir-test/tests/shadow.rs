@@ -53,6 +53,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);

@@ -280,7 +280,7 @@ fn run_once(rt: &Runtime, source: &str) -> (Duration, i64) {
     let (_shared, mut interp) =
         execute_compiled(&interner, cr, HashMap::new(), Arc::new(TokioExecutor));
     let start = Instant::now();
-    let value: Value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
+    let value: Value = rt.block_on(interp.execute()).expect("the seeds hold every context the run fetches");
     let elapsed = start.elapsed();
     (elapsed, value.as_int())
 }

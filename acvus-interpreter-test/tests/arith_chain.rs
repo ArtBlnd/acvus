@@ -39,6 +39,7 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     assert_eq!(cr.modules.len(), 1, "these scripts are one module");
     let (_, module) = cr.modules.iter().next().expect("one module");

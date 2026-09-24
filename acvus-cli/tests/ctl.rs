@@ -131,6 +131,46 @@ fn a_run_on_an_empty_space_fills_the_context_from_its_init_and_commits_it() {
 }
 
 #[test]
+fn a_script_named_like_a_bare_extern_name_is_refused_naming_rm_script() {
+    let sandbox = Sandbox::new();
+    sandbox.write("vec.acvus", "1\n");
+    sandbox.write("uses.acvus", "vec([1, 2]).len()\n");
+    sandbox.ok(&["ctl", "use", "work"]);
+    sandbox.ok(&["ctl", "space", "add", "s", "dir:store"]);
+    sandbox.ok(&["ctl", "space", "add-script", "s", "vec.acvus", "uses.acvus"]);
+
+    let clash = sandbox.refused(&["run", "uses", "--space", "s"], 1);
+    assert!(
+        clash.contains(
+            "the script `vec` would shadow `std::vec`, which a script calls as `vec`; `acvus ctl space rm-script s vec` removes it, and `acvus ctl space add-script s <file>` stores it under another name"
+        ),
+        "{clash}"
+    );
+
+    sandbox.ok(&["ctl", "space", "rm-script", "s", "vec"]);
+    assert_eq!(sandbox.ok(&["run", "uses", "--space", "s"]), "2\n");
+}
+
+#[test]
+fn a_script_that_calls_another_script_passes_it_the_input_it_was_run_with() {
+    let sandbox = Sandbox::new();
+    sandbox.write("main.acvus", "callee()\n");
+    sandbox.write("callee.acvus", "$n + 1\n");
+    sandbox.ok(&["ctl", "use", "work"]);
+    sandbox.ok(&["ctl", "space", "add", "s", "dir:store"]);
+    sandbox.ok(&["ctl", "space", "add-script", "s", "main.acvus", "callee.acvus"]);
+
+    assert_eq!(sandbox.ok(&["run", "main", "--space", "s", "n=41"]), "42\n");
+    let unbound = sandbox.acvus(&["run", "main", "--space", "s"]);
+    assert_ne!(unbound.status.code(), Some(0));
+    assert!(
+        text(&unbound.stderr).contains("`$n` is required and not bound; `n=<literal>` binds it"),
+        "{}",
+        text(&unbound.stderr)
+    );
+}
+
+#[test]
 fn an_init_is_stored_from_an_expression_or_a_file_and_removed() {
     let sandbox = Sandbox::new();
     let init = sandbox.write("elsewhere/greeting.acvus", "let g = \"hi\".to_string();\ng\n");
@@ -169,10 +209,10 @@ fn an_init_is_stored_from_an_expression_or_a_file_and_removed() {
 #[test]
 fn fill_runs_every_init_the_space_lacks_and_commits() {
     let sandbox = Sandbox::new();
-    sandbox.write("sum.acvus", "@a + @b\n");
+    sandbox.write("total.acvus", "@a + @b\n");
     sandbox.ok(&["ctl", "use", "work"]);
     sandbox.ok(&["ctl", "space", "add", "s", "dir:store"]);
-    sandbox.ok(&["ctl", "space", "add-script", "s", "sum.acvus"]);
+    sandbox.ok(&["ctl", "space", "add-script", "s", "total.acvus"]);
     sandbox.ok(&["ctl", "space", "init", "s", "a", "-e", "1"]);
     sandbox.ok(&["ctl", "space", "init", "s", "b", "-e", "2"]);
 
@@ -188,7 +228,7 @@ fn fill_runs_every_init_the_space_lacks_and_commits() {
         sandbox.ok(&["ctl", "space", "fill", "s"]),
         "space `s` holds every context it has an init of\n"
     );
-    assert_eq!(sandbox.ok(&["run", "sum", "--space", "s"]), "3\n");
+    assert_eq!(sandbox.ok(&["run", "total", "--space", "s"]), "3\n");
 }
 
 #[test]

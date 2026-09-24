@@ -7,7 +7,7 @@ expression: ir
      1 |   assign @count = r0
      2 |   r1 = take @count
      3 |   r2 = take @count
-     4 |   commit @count = r2
+     4 |   commit @count = r2 (not written)
      5 |   return r1
 
     ; r0 (@count) : i64

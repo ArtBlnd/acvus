@@ -30,7 +30,7 @@ expression: ir
     22 |   jump L0(() (r10))
     23 | L0(r11: Unit):
     24 |   r12 = take <template>
-    25 |   commit @role = r1
+    25 |   commit @role = r1 (not written)
     26 |   return r12
 
     ; r0 (v18) : String

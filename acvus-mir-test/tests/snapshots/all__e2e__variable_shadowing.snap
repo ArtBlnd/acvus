@@ -18,7 +18,7 @@ expression: ir
      9 |   append r5 r4
     10 |   r6 = take <template>
     11 |   r7 = take @name
-    12 |   commit @name = r7
+    12 |   commit @name = r7 (not written)
     13 |   return r6
 
     ; r0 (v13) : &str

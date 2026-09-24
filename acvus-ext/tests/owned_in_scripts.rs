@@ -79,6 +79,7 @@ async fn run_parsed(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![entry_qref],
     };
 
@@ -126,6 +127,7 @@ async fn run_parsed(
         externs: &exec_fns,
         context_names: &context_names,
         instances: &acvus_extern::NoInstances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules
@@ -147,7 +149,7 @@ async fn run_parsed(
         InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
     let page = snapshot;
     let mut interp = Interpreter::new(shared, entry_qref, page);
-    interp.execute().await.expect("the page holds every context the run fetches first")
+    interp.execute().await.expect("the seeds hold every context the run fetches")
 }
 
 // -- An extension type whose `Drop` counts -------------------------------

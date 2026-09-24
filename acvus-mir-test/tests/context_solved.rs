@@ -46,11 +46,19 @@ impl Solved {
             .collect()
     }
 
-    fn fetched_first(&self, body: &str) -> Vec<String> {
+    /// Each commit of `main`, in body order: its context and whether it
+    /// stores.
+    fn commits(&self, body: &str) -> Vec<(String, bool)> {
         self.module(body)
-            .fetched_first
+            .main
+            .insts
             .iter()
-            .map(|context| self.i.resolve(context.name).to_owned())
+            .filter_map(|inst| match &inst.kind {
+                InstKind::Commit { context, wrote, .. } => {
+                    Some((self.i.resolve(context.name).to_owned(), *wrote))
+                }
+                _ => None,
+            })
             .collect()
     }
 }
@@ -95,6 +103,7 @@ fn solve(bodies: &[Body], contexts: &[&str]) -> Solved {
         ),
         types: Freeze::new(types),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
     let ext = extract::extract(&i, &graph);
@@ -145,13 +154,11 @@ fn an_initializer_and_its_turn_solve_one_type_in_either_order() {
 fn an_initializer_does_not_fetch_what_it_assigns_and_its_turn_does() {
     let solved = solve(&[INIT_LOG, PUSH_LOG], &["log"]);
     assert_eq!(solved.fetches("init"), Vec::<String>::new());
-    assert_eq!(solved.fetched_first("init"), Vec::<String>::new());
     assert_eq!(solved.fetches("turn"), ["log"]);
-    assert_eq!(solved.fetched_first("turn"), ["log"]);
 }
 
 #[test]
-fn a_caller_that_assigns_before_calling_covers_its_callees_fetch() {
+fn a_caller_that_assigns_before_calling_fetches_only_after_the_call() {
     let solved = solve(
         &[
             Body {
@@ -169,10 +176,9 @@ fn a_caller_that_assigns_before_calling_covers_its_callees_fetch() {
         ],
         &["x"],
     );
-    assert_eq!(solved.fetched_first("read_x"), ["x"]);
-    assert_eq!(solved.fetched_first("main"), Vec::<String>::new());
+    assert_eq!(solved.fetches("read_x"), ["x"]);
     assert_eq!(solved.fetches("main"), ["x"], "the fetch after the call");
-    assert_eq!(solved.fetched_first("call_only"), ["x"]);
+    assert_eq!(solved.fetches("call_only"), Vec::<String>::new());
 }
 
 #[test]
@@ -203,4 +209,31 @@ fn a_context_no_body_constrains_closes_to_never() {
         &["xs"],
     );
     assert_eq!(solved.ty("xs"), "Array<!, 0>");
+}
+
+#[test]
+fn a_commit_stores_only_where_the_body_may_have_written_since_the_fetch() {
+    let solved = solve(
+        &[
+            Body {
+                name: "set_x",
+                source: "@x = 1;",
+            },
+            Body {
+                name: "main",
+                source: "let y = @x; set_x(); @x = y + 1; set_x(); let z = @x; z",
+            },
+        ],
+        &["x"],
+    );
+    assert_eq!(
+        solved.commits("main"),
+        [
+            ("x".to_owned(), false),
+            ("x".to_owned(), true),
+            ("x".to_owned(), false),
+        ],
+        "a read before the first call, the write before the second, nothing after it"
+    );
+    assert_eq!(solved.commits("set_x"), [("x".to_owned(), true)]);
 }

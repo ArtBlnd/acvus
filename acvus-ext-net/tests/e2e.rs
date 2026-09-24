@@ -53,7 +53,7 @@ async fn ran(source: &str, opt: Opt) -> String {
         .unwrap_or_else(|r| panic!("refused:\n  {}", r.messages.join("\n  ")));
     let executor: Arc<dyn Executor> = Arc::new(SequentialExecutor);
     let (_, mut interp) = execute_compiled(&i, cr, HashMap::new(), executor);
-    let value = interp.execute().await.expect("the page holds every context the run fetches first");
+    let value = interp.execute().await.expect("the seeds hold every context the run fetches");
     // SAFETY: the script's declared return type is `String`.
     unsafe { value.as_str() }.to_owned()
 }
@@ -100,6 +100,7 @@ fn reissue_of(source: &str) -> Reissue {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![entry],
     };
     let ext = extract::extract(&i, &graph);

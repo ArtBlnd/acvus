@@ -199,7 +199,7 @@ impl FrameCells {
         let cells = FrameCells::within(store, &rt.tally, &rt.flight);
         let within = AcvusRuntime::new(
             Arc::clone(&rt.shared),
-            Arc::clone(&rt.page),
+            Arc::clone(&rt.port),
             Arc::clone(&rt.flight),
             Arc::clone(&cells.tally),
         );

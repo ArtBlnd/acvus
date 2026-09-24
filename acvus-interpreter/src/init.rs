@@ -1,19 +1,17 @@
 //! A context's first value is its init: a body the host gives for that one
-//! key, compiled into the graph beside the entries and run when a page opens
-//! over a storage that lacks a context an entry fetches first (RFC-0090
-//! rule 1).
+//! key, compiled into the graph beside the entries and run by a `Fetch` that
+//! finds the storage lacks the key (RFC-0090 rule 1).
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use acvus_extern::{Holding, Owned};
 use acvus_mir::graph::{Context, FnKind, Function, Inputs, ParsedAst, QualifiedRef};
 use acvus_mir::ty::{Effect, Flows, PolyBuilder, Ty, TyTerm};
 use acvus_utils::Interner;
+use rustc_hash::FxHashMap;
 
-use crate::interpreter::{Absent, Interpreter, InterpreterContext};
-use crate::journal::{Held, RuntimeContext};
+use crate::interpreter::Init;
 
 pub(crate) struct InitSource {
     pub(crate) key: String,
@@ -138,58 +136,20 @@ impl DeclaredInits {
             .map(|(key, _)| key.as_str())
     }
 
-    pub(crate) fn solved(self, solved: &BTreeMap<String, Arc<Ty>>) -> Inits {
-        let by_key = self
-            .by_key
+    pub(crate) fn functions(&self) -> impl Iterator<Item = (&str, QualifiedRef)> {
+        self.by_key.iter().map(|(key, function)| (key.as_str(), *function))
+    }
+
+    pub(crate) fn solved(self, solved: &BTreeMap<String, Arc<Ty>>) -> FxHashMap<Box<str>, Init> {
+        self.by_key
             .into_iter()
             .map(|(key, function)| {
                 let Some(ty) = solved.get(&key) else {
                     panic!("`declare` made `@{key}` a context of the graph")
                 };
                 let ty = Arc::clone(ty);
-                (key, Init { function, ty })
+                (key.into_boxed_str(), Init { function, ty })
             })
-            .collect();
-        Inits { by_key }
-    }
-}
-
-struct Init {
-    function: QualifiedRef,
-    ty: Arc<Ty>,
-}
-
-pub(crate) struct Inits {
-    by_key: BTreeMap<String, Init>,
-}
-
-impl Inits {
-    pub(crate) fn has(&self, key: &str) -> bool {
-        self.by_key.contains_key(key)
-    }
-
-    pub(crate) async fn fill_lacking<W>(
-        &self,
-        shared: &InterpreterContext,
-        page: &Arc<RuntimeContext>,
-        wanted: W,
-    ) -> Result<Vec<String>, Absent>
-    where
-        W: Fn(&str) -> bool,
-    {
-        let mut filled = Vec::new();
-        for (key, init) in &self.by_key {
-            if !wanted(key) || page.holds(key) {
-                continue;
-            }
-            let mut run = Interpreter::on_page(shared.clone(), init.function, Arc::clone(page));
-            let value = run.accept_page()?.run(Vec::new()).await;
-            // SAFETY: the run moved its result out to this caller, and no
-            // other holder owns it.
-            let value = unsafe { Owned::from_value(Holding::new(), value) };
-            page.set_changed(key, Held::new(value, Arc::clone(&init.ty), shared.compilation));
-            filled.push(key.to_owned());
-        }
-        Ok(filled)
+            .collect()
     }
 }

@@ -62,8 +62,8 @@ expression: ir
     59 |   jump L0(() (r27))
     60 | L0(r28: Unit):
     61 |   r29 = take <template>
-    62 |   commit @a = r2
-    63 |   commit @b = r3
+    62 |   commit @a = r2 (not written)
+    63 |   commit @b = r3 (not written)
     64 |   return r29
 
     ; r0 (v38) : i64

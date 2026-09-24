@@ -70,7 +70,7 @@ fn allocations_of_the_run(source: &str) -> (usize, Value) {
     let value = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime")
-        .block_on(interp.execute()).expect("the page holds every context the run fetches first");
+        .block_on(interp.execute()).expect("the seeds hold every context the run fetches");
     let after = ALLOCATIONS.with(std::cell::Cell::get);
     (after - before, value)
 }
@@ -113,7 +113,7 @@ fn allocations_through_a_body(source: &str) -> (usize, Value) {
     let value = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime")
-        .block_on(interp.execute()).expect("the page holds every context the run fetches first");
+        .block_on(interp.execute()).expect("the seeds hold every context the run fetches");
     let after = ALLOCATIONS.with(std::cell::Cell::get);
     (after - before, value)
 }

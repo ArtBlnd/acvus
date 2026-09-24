@@ -43,7 +43,7 @@ expression: raw
     45 |   r26 = take @output
     46 |   commit @output = r26
     47 |   r27 = take @input
-    48 |   commit @input = r27
+    48 |   commit @input = r27 (not written)
     49 |   r28 = take @low
     50 |   commit @low = r28
     51 |   r29 = take @high

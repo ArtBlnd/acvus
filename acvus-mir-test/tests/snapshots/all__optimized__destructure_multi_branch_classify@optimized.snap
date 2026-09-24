@@ -65,7 +65,7 @@ expression: opt
     54 |   r32 = take @output
     55 |   commit @output = r32
     56 |   r33 = take @user
-    57 |   commit @user = r33
+    57 |   commit @user = r33 (not written)
     58 |   return r31
 
     ; r0 (@user) : {age: i64, name: String}

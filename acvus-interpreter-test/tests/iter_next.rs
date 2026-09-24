@@ -303,6 +303,7 @@ fn prepared_entry(source: &str, opt: Opt) -> Body {
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepared = prepare_module(module, &ctx);
     Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"))
@@ -329,7 +330,7 @@ async fn run_i64_at(source: &str, opt: Opt) -> i64 {
         std::collections::HashMap::new(),
         Arc::new(acvus_interpreter::SequentialExecutor),
     );
-    interp.execute().await.expect("the page holds every context the run fetches first").as_int()
+    interp.execute().await.expect("the seeds hold every context the run fetches").as_int()
 }
 
 const SOURCE_ONLY: &str = "nsum(nrange(0, 5))";

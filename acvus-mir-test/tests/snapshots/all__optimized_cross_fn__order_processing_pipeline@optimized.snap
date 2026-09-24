@@ -113,15 +113,15 @@ expression: opt
    104 |   drop r80
    105 |   r81 = string_clone r78
    106 |   r82 = spawn #1(r81) [r83 ->]
-   107 |   commit @item_count = r0
+   107 |   commit @item_count = r0 (not written)
    108 |   commit @total_out = r24
    109 |   commit @shipping = r23
-   110 |   commit @tax_rate = r2
-   111 |   commit @default_ship = r3
+   110 |   commit @tax_rate = r2 (not written)
+   111 |   commit @default_ship = r3 (not written)
    112 |   commit @receipt_out = r78
-   113 |   commit @discount_rate = r4
-   114 |   commit @customer = r5
-   115 |   commit @free_ship_min = r6
+   113 |   commit @discount_rate = r4 (not written)
+   114 |   commit @customer = r5 (not written)
+   115 |   commit @free_ship_min = r6 (not written)
    116 |   r84 = eval r82 [-> r85]
    117 |   return r24 [r85]
 

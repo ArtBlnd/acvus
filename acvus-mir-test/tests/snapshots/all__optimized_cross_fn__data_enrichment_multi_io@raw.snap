@@ -159,15 +159,15 @@ expression: raw
     51 |   r35 = take @result_label
     52 |   commit @result_label = r35
     53 |   r36 = take @weight
-    54 |   commit @weight = r36
+    54 |   commit @weight = r36 (not written)
     55 |   r37 = take @alert_count
     56 |   commit @alert_count = r37
     57 |   r38 = take @result_score
     58 |   commit @result_score = r38
     59 |   r39 = take @threshold
-    60 |   commit @threshold = r39
+    60 |   commit @threshold = r39 (not written)
     61 |   r40 = take @user_id
-    62 |   commit @user_id = r40
+    62 |   commit @user_id = r40 (not written)
     63 |   r41 = take $order
     64 |   return r34 [r41]
 

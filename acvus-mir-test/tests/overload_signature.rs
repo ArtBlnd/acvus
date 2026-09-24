@@ -141,6 +141,7 @@ fn check_functions(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(reg),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);

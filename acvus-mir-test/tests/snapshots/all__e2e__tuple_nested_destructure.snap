@@ -23,7 +23,7 @@ expression: ir
     14 |   append r9 r8
     16 |   r10 = take <template>
     17 |   r11 = take @data
-    18 |   commit @data = r11
+    18 |   commit @data = r11 (not written)
     19 |   return r10
 
     ; r0 (v18) : &String

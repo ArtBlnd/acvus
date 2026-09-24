@@ -12,7 +12,7 @@ expression: opt
      8 |   r4 = r2 + 1 (r5)
      9 |   jump L0(r4)
     10 | L2:
-    11 |   commit @n = r0
+    11 |   commit @n = r0 (not written)
     12 |   return r2
 
     ; r0 (@n) : i64

@@ -393,6 +393,10 @@ pub enum Pending {
         dst: SlicePair,
         fut: BoxFuture<'static, Words>,
     },
+    /// A wait that defines no register: a commit under waited access.
+    Unit {
+        fut: BoxFuture<'static, ()>,
+    },
 }
 
 pub enum Konst {
@@ -851,8 +855,6 @@ pub struct Prepared {
     pub main: Arc<Body>,
     pub closures: FxHashMap<Label, Arc<Code>>,
     pub instances: crate::prepare::InstanceEntryStore,
-    /// The page keys of `MirModule::fetched_first`.
-    pub fetched_first: Vec<Box<str>>,
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ expression: ir
      2 |   r1 = take @obj.val
      4 |   r2 = r1 + 1 (r3)
      5 |   r4 = take @obj
-     6 |   commit @obj = r4
+     6 |   commit @obj = r4 (not written)
      7 |   return r2
 
     ; r0 (@obj) : {val: i64}

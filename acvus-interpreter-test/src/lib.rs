@@ -287,6 +287,7 @@ where
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![entry_qref],
     };
 
@@ -379,6 +380,7 @@ pub fn execute_compiled(
         externs: &functions,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = cr
         .modules
@@ -418,7 +420,7 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
 
     let (_shared, mut interp) =
         execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    let result = interp.execute().await.expect("the page holds every context the run fetches first");
+    let result = interp.execute().await.expect("the seeds hold every context the run fetches");
 
     // A template yields a String; an empty one yields unit.
     match &result {
@@ -442,7 +444,7 @@ pub async fn run_script(interner: &Interner, source: &str, context: Context, ret
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script(interner, source, &context_types, ret);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    interp.execute().await.expect("the page holds every context the run fetches first")
+    interp.execute().await.expect("the seeds hold every context the run fetches")
 }
 
 /// Compile and execute a **script-mode** (keyword syntax: let/for/while/if), returning the result Value.
@@ -455,7 +457,7 @@ pub async fn run_script_mode(
     let (context_types, snapshot) = split_context(interner, context);
     let cr = compile_script_mode(interner, source, &context_types, ret);
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, Arc::new(SequentialExecutor));
-    interp.execute().await.expect("the page holds every context the run fetches first")
+    interp.execute().await.expect("the seeds hold every context the run fetches")
 }
 
 /// Compile and execute a script with ExternFn registries, returning (result, context writes).
@@ -554,7 +556,7 @@ where
         declare_types,
     );
     let (_, mut interp) = execute_compiled(interner, cr, snapshot, executor);
-    let value = interp.execute().await.expect("the page holds every context the run fetches first");
+    let value = interp.execute().await.expect("the seeds hold every context the run fetches");
     let writes = interp.take_writes();
     Ran { value, writes }
 }
@@ -1480,6 +1482,7 @@ pub mod corpus {
                 externs: &functions,
                 context_names: &cr.context_names,
                 instances: &cr.instances,
+                access: acvus_mir::graph::Access::Sync,
             };
             catch_unwind(AssertUnwindSafe(|| {
                 cr.modules
@@ -1522,7 +1525,7 @@ pub mod corpus {
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
         let mut interp = Interpreter::new(shared, cr.entry_qref, snapshot);
-        match catch_unwind(AssertUnwindSafe(|| runtime.block_on(interp.execute()).expect("the page holds every context the run fetches first"))) {
+        match catch_unwind(AssertUnwindSafe(|| runtime.block_on(interp.execute()).expect("the seeds hold every context the run fetches"))) {
             Ok(value) => Outcome::Value(render(&interner, &value).to_string()),
             Err(panic) => Outcome::RunPanicked(message(panic.as_ref())),
         }

@@ -19,7 +19,7 @@ expression: listing
     18 |   r11 = r3 + r9
     19 |   jump L0(r11, r7)
     20 | L2:
-    21 |   commit @n = r0
+    21 |   commit @n = r0 (not written)
     22 |   return r3
 
     ; r0 (@n) : i64

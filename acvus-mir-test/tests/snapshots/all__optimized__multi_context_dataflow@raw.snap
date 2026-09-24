@@ -25,11 +25,11 @@ expression: raw
     19 |   r13 = take @output
     20 |   commit @output = r13
     21 |   r14 = take @a
-    22 |   commit @a = r14
+    22 |   commit @a = r14 (not written)
     23 |   r15 = take @scale
-    24 |   commit @scale = r15
+    24 |   commit @scale = r15 (not written)
     25 |   r16 = take @b
-    26 |   commit @b = r16
+    26 |   commit @b = r16 (not written)
     27 |   return r12
 
     ; r0 (@a) : i64

@@ -8,7 +8,9 @@
 //! path from it, the context is committed again before being read.
 //!
 //! A read is a `Fetch` of the context, a call, or a Return (contexts are
-//! externally observable after return); a write is a `Commit`.
+//! externally observable after return); a write is a `Commit` that wrote. A
+//! `Commit` that did not write hands the fetched value back and overwrites
+//! nothing, so it removes no earlier commit (RFC-0025 rule 2).
 
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
@@ -17,6 +19,18 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::InstKind;
 use crate::optimize::context_ops::{context_read, context_written};
+
+/// The context a `Commit` that wrote stores.
+fn context_stored(kind: &InstKind) -> Option<QualifiedRef> {
+    match kind {
+        InstKind::Commit {
+            context,
+            wrote: true,
+            ..
+        } => Some(*context),
+        _ => None,
+    }
+}
 
 // -- Per-block context gen/kill sets ---------------------------------
 
@@ -50,9 +64,11 @@ fn analyze_block(
         if let Some(qref) = context_read(&inst.kind) {
             kills.remove(&qref);
             reads.insert(qref);
-        } else if let Some(qref) = context_written(&inst.kind) {
+        } else if let Some(qref) = context_stored(&inst.kind) {
             reads.remove(&qref);
             kills.insert(qref);
+        } else if context_written(&inst.kind).is_some() {
+            // A commit that did not write overwrites nothing.
         } else if matches!(
             &inst.kind,
             InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
@@ -167,7 +183,9 @@ pub fn run(cfg: &mut CfgBody) {
                 if !live.contains(&qref) {
                     dead_insts.insert((bi, ii));
                 }
-                live.remove(&qref);
+                if context_stored(&inst.kind).is_some() {
+                    live.remove(&qref);
+                }
             } else if matches!(
                 &inst.kind,
                 InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
@@ -241,7 +259,11 @@ mod tests {
     }
 
     fn commit(context: QualifiedRef, value: ValueId) -> InstKind {
-        InstKind::Commit { context, value }
+        InstKind::Commit {
+            context,
+            value,
+            wrote: true,
+        }
     }
 
     fn fetch(context: QualifiedRef, dst: ValueId) -> InstKind {
@@ -275,6 +297,35 @@ mod tests {
             1,
             "first dead commit should be removed"
         );
+    }
+
+    /// `commit @x = v0; commit @x = v1 (not written); return v1`: the second
+    /// commit stores nothing, so the first is the one that writes `@x`.
+    #[test]
+    fn a_commit_that_did_not_write_removes_no_earlier_commit() {
+        let i = Interner::new();
+        let ctx = QualifiedRef::root(i.intern("x"));
+        let mut val_types = FxHashMap::default();
+        val_types.insert(v(0), Ty::I64);
+        val_types.insert(v(1), Ty::I64);
+        let body = make_body(
+            vec![
+                commit(ctx, v(0)),
+                InstKind::Commit {
+                    context: ctx,
+                    value: v(1),
+                    wrote: false,
+                },
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
+            ],
+            val_types,
+        );
+        let mut cfg = cfg::promote(body);
+        run(&mut cfg);
+        assert_eq!(count_commits(&cfg), 2, "the commit that wrote is kept");
     }
 
     /// `commit @x = v0; v1 = fetch @x; return v1`: the commit is read.

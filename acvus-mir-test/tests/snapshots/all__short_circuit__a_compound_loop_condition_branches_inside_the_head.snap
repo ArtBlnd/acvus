@@ -17,8 +17,8 @@ expression: ir
     14 |   r7 = r3 + 1 (r8)
     15 |   jump L0(r7)
     16 | L2:
-    17 |   commit @a = r0
-    18 |   commit @max = r1
+    17 |   commit @a = r0 (not written)
+    18 |   commit @max = r1 (not written)
     19 |   return r3
 
     ; r0 (@a) : Bool

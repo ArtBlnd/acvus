@@ -1916,8 +1916,17 @@ where
         }
     }
 
-    /// A context access of the body: joined into its effect (RFC-0025 rule 5).
+    /// A context access of the body: joined into its effect (RFC-0025 rule
+    /// 5). Under `Access::Async` the access may wait, so it is `Async`
+    /// (RFC-0046, RFC-0090 rule 3).
     fn note_access(&mut self, access: Effect, span: Span) {
+        let access = match self.env.access {
+            crate::graph::Access::Sync => access,
+            crate::graph::Access::Async => Effect {
+                task: access.task.join(Task::Async),
+                ..access
+            },
+        };
         self.note_call_effect(&EffectTerm::Known(access), span);
     }
 
@@ -9496,6 +9505,7 @@ mod tests {
             functions: qref_functions,
             machine: FxHashMap::default(),
             inputs: FxHashMap::default(),
+            access: crate::graph::Access::Sync,
         };
         let checker = TypeChecker::new(interner, &env, &mut solver, Inputs::Declared);
         let resolution = checker
@@ -9535,6 +9545,7 @@ mod tests {
             functions: FxHashMap::default(),
             machine: FxHashMap::default(),
             inputs: FxHashMap::default(),
+            access: crate::graph::Access::Sync,
         };
         let checked = TypeChecker::new(&interner, &env, &mut solver, Inputs::Declared)
             .check_script(&script, None, ResultCrossing::Registers);

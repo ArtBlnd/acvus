@@ -121,6 +121,7 @@ fn prepared_entry(source: &str, ret: Ty) -> (Body, MirBody) {
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepared = prepare_module(module, &ctx);
     let main = Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"));
@@ -415,7 +416,7 @@ async fn executed_in(source: &str, ret: Ty) -> (Duration, i64) {
     let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), ret);
     let (_shared, mut interp) = execute_compiled(&i, cr, HashMap::new(), Arc::new(TokioExecutor));
     let start = Instant::now();
-    let value: Value = interp.execute().await.expect("the page holds every context the run fetches first");
+    let value: Value = interp.execute().await.expect("the seeds hold every context the run fetches");
     (start.elapsed(), value.as_int())
 }
 

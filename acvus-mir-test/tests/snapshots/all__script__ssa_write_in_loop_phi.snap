@@ -29,7 +29,7 @@ expression: ir
     23 |   r12 = take @acc
     24 |   commit @acc = r12
     25 |   r13 = take @items
-    26 |   commit @items = r13
+    26 |   commit @items = r13 (not written)
     27 |   return r11
 
     ; r0 (@acc) : i64

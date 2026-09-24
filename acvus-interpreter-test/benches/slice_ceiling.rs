@@ -503,7 +503,6 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
         closures: FxHashMap::default(),
         ret: Ty::Float,
         flows: acvus_mir::ty::Flows::Every,
-        fetched_first: Vec::new(),
     };
     let mut prepared = prepare_module(
         &module,
@@ -512,6 +511,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
             externs: &functions,
             context_names: &context_names,
             instances: &acvus_extern::NoInstances,
+            access: acvus_mir::graph::Access::Sync,
         },
     );
     if shape == Shape::Unchecked {
@@ -531,7 +531,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
     let start = Instant::now();
     let value = runtime
         .block_on(interpreter.execute())
-        .expect("the page holds every context the run fetches first");
+        .expect("the seeds hold every context the run fetches");
     Timing {
         elapsed: start.elapsed(),
         value: black_box(value.as_float()),

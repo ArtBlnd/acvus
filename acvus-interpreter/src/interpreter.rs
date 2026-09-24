@@ -15,11 +15,15 @@ use crate::flight::{Flight, Flying, Tally};
 #[cfg(feature = "tooling")]
 use std::collections::HashMap;
 
+use acvus_extern::{Holding, Owned};
+use futures::FutureExt;
+
 use crate::executor::AsyncJob;
-#[cfg(feature = "tooling")]
-use crate::journal::{ContextWrite, Held};
-use crate::journal::RuntimeContext;
+use crate::host::HostError;
 use crate::machine::call_module;
+#[cfg(feature = "tooling")]
+use crate::port::ContextWrite;
+use crate::port::{Held, Port, ended};
 use crate::runtime::{AcvusRuntime, ExternHandler};
 use crate::value::Value;
 
@@ -56,10 +60,27 @@ impl Compilation {
     }
 }
 
+/// A context's init: the body a `Fetch` runs where the storage lacks the
+/// context, and the type its result is held at (RFC-0090 rule 1).
+pub(crate) struct Init {
+    pub(crate) function: QualifiedRef,
+    pub(crate) ty: Arc<Ty>,
+}
+
+impl Init {
+    pub(crate) fn held(&self, value: Value, rt: &AcvusRuntime) -> Held {
+        // SAFETY: the init's run moved its result out to this caller, and no
+        // other holder owns it.
+        let value = unsafe { Owned::from_value(Holding::new(), value) };
+        Held::new(value, Arc::clone(&self.ty), rt.shared.compilation)
+    }
+}
+
 /// Readonly shared state - clone is cheap (Freeze/Arc internally).
 #[derive(Clone)]
 pub struct InterpreterContext {
     pub(crate) compilation: Compilation,
+    pub(crate) inits: Freeze<FxHashMap<Box<str>, Init>>,
     pub interner: Interner,
     pub functions: Freeze<FxHashMap<QualifiedRef, Executable>>,
     pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
@@ -77,6 +98,7 @@ impl InterpreterContext {
     ) -> Self {
         Self {
             compilation: Compilation::next(),
+            inits: Freeze::new(FxHashMap::default()),
             interner: interner.clone(),
             functions: Freeze::new(functions),
             fn_types: Freeze::new(FxHashMap::default()),
@@ -101,13 +123,15 @@ impl InterpreterContext {
         self
     }
 
+    pub(crate) fn with_inits(mut self, inits: FxHashMap<Box<str>, Init>) -> Self {
+        self.inits = Freeze::new(inits);
+        self
+    }
+
+    /// A runtime that reaches no storage: a run on it that touches a context
+    /// ends with `HostError::Storage`.
     pub fn runtime_over_an_empty_page(&self) -> AcvusRuntime {
-        AcvusRuntime::new(
-            Arc::new(self.clone()),
-            Arc::new(RuntimeContext::empty()),
-            Flight::new(),
-            Tally::outermost(),
-        )
+        AcvusRuntime::new(Arc::new(self.clone()), Port::nothing(), Flight::new(), Tally::outermost())
     }
 }
 
@@ -132,7 +156,7 @@ pub(crate) fn lookup_module<'a>(
 pub struct Interpreter {
     shared: Arc<InterpreterContext>,
     entry: QualifiedRef,
-    page: Arc<RuntimeContext>,
+    port: Arc<Port>,
     flight: Arc<Flight>,
     tally: Arc<Tally>,
     args: Vec<Value>,
@@ -152,21 +176,22 @@ impl Interpreter {
             .into_iter()
             .map(|(key, (ty, value))| (key, Held::new(value, Arc::new(ty), compilation)))
             .collect();
-        Self::on_page(shared, entry, Arc::new(RuntimeContext::new(holders)))
+        Self::on_port(shared, entry, Port::seeded(holders), Vec::new())
     }
 
-    pub(crate) fn on_page(
+    pub(crate) fn on_port(
         shared: InterpreterContext,
         entry: QualifiedRef,
-        page: Arc<RuntimeContext>,
+        port: Arc<Port>,
+        args: Vec<Value>,
     ) -> Self {
         Self {
             shared: Arc::new(shared),
             entry,
-            page,
+            port,
             flight: Flight::new(),
             tally: Tally::outermost(),
-            args: Vec::new(),
+            args,
             _flying: None,
         }
     }
@@ -174,14 +199,11 @@ impl Interpreter {
     /// The deferred run a `Spawn` of a module issues: the spawning run's
     /// runtime, whose frame the new run's frames run within, and the
     /// arguments it passed.
-    ///
-    /// The spawning run's page check covered what this one fetches first: a
-    /// spawn is a call whose callee's `fetched_first` joins the spawner's.
     pub(crate) fn spawned(rt: &AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> AsyncJob {
         let mut run = Self {
             shared: Arc::clone(&rt.shared),
             entry,
-            page: Arc::clone(&rt.page),
+            port: Arc::clone(&rt.port),
             flight: Arc::clone(&rt.flight),
             tally: Arc::clone(&rt.tally),
             args,
@@ -193,16 +215,14 @@ impl Interpreter {
     fn runtime(&self) -> AcvusRuntime {
         AcvusRuntime::new(
             Arc::clone(&self.shared),
-            Arc::clone(&self.page),
+            Arc::clone(&self.port),
             Arc::clone(&self.flight),
             Arc::clone(&self.tally),
         )
     }
 
-    /// Execute the entry module and return its value. The page keeps every
-    /// context the run assigned. A run whose page does not hold a context it
-    /// fetches before assigning it is refused before it starts
-    /// (RFC-0025 rule 2).
+    /// Execute the entry module and return its value, or the error the run
+    /// ended with where a storage access refused it (RFC-0090 rule 4).
     ///
     /// # Panics
     /// The entry's result is a view: a host reads one `Value` by kind
@@ -211,18 +231,17 @@ impl Interpreter {
     /// OneValue` refuses it there, so reaching this assert means a program
     /// arrived without passing the checker.
     #[cfg(feature = "tooling")]
-    pub async fn execute(&mut self) -> Result<Value, Absent> {
-        Ok(self.accept_page()?.run(Vec::new()).await)
+    pub async fn execute(&mut self) -> Result<Value, HostError> {
+        self.ended_or_ran().await
     }
 
-    pub(crate) fn accept_page(&mut self) -> Result<Accepted<'_>, Absent> {
-        let module = lookup_module(&self.shared, &self.entry);
-        match module.fetched_first.iter().find(|key| !self.page.holds(key)) {
-            Some(key) => Err(Absent {
-                key: key.to_string(),
-            }),
-            None => Ok(Accepted(self)),
-        }
+    /// The run to its result, or to the `HostError` it ended with; a run
+    /// that fails otherwise goes on unwinding.
+    pub(crate) async fn ended_or_ran(&mut self) -> Result<Value, HostError> {
+        std::panic::AssertUnwindSafe(self.run())
+            .catch_unwind()
+            .await
+            .map_err(ended)
     }
 
     async fn run(&mut self) -> Value {
@@ -236,24 +255,10 @@ impl Interpreter {
         call_module(self.runtime(), self.entry, args).await
     }
 
+    /// The final value of every context the run stored, drained from the
+    /// seeded holders.
     #[cfg(feature = "tooling")]
     pub fn take_writes(&self) -> Vec<ContextWrite> {
-        self.page.take_writes()
-    }
-}
-
-/// A context the entry fetches before assigning it, which the page does not
-/// hold (RFC-0025 rule 2).
-#[derive(Debug)]
-pub struct Absent {
-    pub key: String,
-}
-
-pub(crate) struct Accepted<'i>(&'i mut Interpreter);
-
-impl Accepted<'_> {
-    pub(crate) async fn run(self, args: Vec<Value>) -> Value {
-        self.0.args = args;
-        self.0.run().await
+        self.port.take_writes()
     }
 }

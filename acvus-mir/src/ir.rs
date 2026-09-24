@@ -736,9 +736,13 @@ pub enum InstKind {
         context: QualifiedRef,
     },
     /// Move `value` into the page as the context's whole value (RFC-0025).
+    /// `wrote` holds where the body may have written the variable since its
+    /// fetch (RFC-0025 rules 2, 4); a commit that did not write hands the
+    /// value back and stores nothing.
     Commit {
         context: QualifiedRef,
         value: ValueId,
+        wrote: bool,
     },
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
@@ -1287,8 +1291,4 @@ pub struct MirModule {
     /// the body (RFC-0079 rule 5); a closure's are on the function type of
     /// the `MakeClosure` that makes it.
     pub flows: crate::ty::Flows,
-    /// The contexts a run of this module may fetch before assigning them,
-    /// its callees' included (RFC-0025 rule 2). A run starts only on a page
-    /// that holds each one.
-    pub fetched_first: Vec<QualifiedRef>,
 }

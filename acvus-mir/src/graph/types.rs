@@ -225,12 +225,23 @@ impl Bindings {
 
 // -- Compilation graph -----------------------------------------------
 
+/// How a host reaches the storage behind its contexts, declared when it
+/// compiles (RFC-0090 rule 3). Under `Async` every access of a context may
+/// wait, so a body that touches one is `Async` (RFC-0046); under `Sync` an
+/// access returns at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Sync,
+    Async,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompilationGraph {
     pub functions: Freeze<Vec<Function>>,
     pub contexts: Freeze<Vec<Context>>,
     pub types: Freeze<TypeRegistry>,
     pub bindings: Bindings,
+    pub access: Access,
     /// Obligation across artifacts: each of these bodies' results crosses to
     /// the host, which `acvus_interpreter::Interpreter::execute` and
     /// `acvus_interpreter::Output` read, and RFC-0054 fixes each one's

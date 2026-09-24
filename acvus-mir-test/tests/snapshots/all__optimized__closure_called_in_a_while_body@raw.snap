@@ -23,7 +23,7 @@ expression: raw
     18 | L2:
     19 |   r9 = take i
     20 |   r10 = take @n
-    21 |   commit @n = r10
+    21 |   commit @n = r10 (not written)
     22 |   return r9
 
     ; r0 (@n) : i64

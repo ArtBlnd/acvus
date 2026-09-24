@@ -38,7 +38,7 @@ expression: ir
     33 | L0(r15: Unit, r16: String):
     34 |   r17 = take <template>
     35 |   r18 = take @user
-    36 |   commit @user = r18
+    36 |   commit @user = r18 (not written)
     37 |   return r17
 
     ; r0 (v22) : String

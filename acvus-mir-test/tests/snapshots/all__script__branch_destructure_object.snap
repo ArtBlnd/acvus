@@ -11,7 +11,7 @@ expression: ir
      5 |   r4 = take @user.name
      6 |   r5 = take @user.age
      8 |   r6 = take @user
-     9 |   commit @user = r6
+     9 |   commit @user = r6 (not written)
     10 |   r7 = string_clone r4
     11 |   commit @out = r7
     12 |   return r4

@@ -30,7 +30,6 @@ mod flight;
 mod host;
 mod init;
 mod interpreter;
-mod journal;
 #[cfg(feature = "tooling")]
 pub mod layout;
 #[cfg(not(feature = "tooling"))]
@@ -50,6 +49,7 @@ pub mod machine;
 #[cfg(not(feature = "tooling"))]
 mod machine;
 mod ops;
+mod port;
 #[cfg(feature = "tooling")]
 pub mod prepare;
 #[cfg(not(feature = "tooling"))]
@@ -68,15 +68,15 @@ mod vtable;
 
 pub use executor::{AsyncJob, BlockingJob, Done, Executor, Handle, SequentialExecutor, TokioExecutor};
 pub use host::{
-    Codec, Entry, Host, HostError, MemoryStorage, Named, Origin, Output, Page, Part, Program,
-    Refusal, Scope, Source, Storage, StorageError,
+    Access, AsyncAccess, AsyncStorage, Cause, Codec, Entry, Host, HostError, MemoryStorage, Named,
+    Origin, Output, Page, Part, Program, Refusal, Scope, Source, Storage, StorageError, SyncAccess,
 };
 #[cfg(feature = "tooling")]
 pub use host::{
     CompileTimes, InputListing, Listing, UntypedEntry, UntypedOutput, context_refs, environment,
     untyped_entry_ty,
 };
-pub use journal::Held;
+pub use port::Held;
 pub use runtime::AcvusRuntime;
 pub use space::{
     Commit, Committed, DirStore, Head, Identity, Log, MemoryStore, Mode, Node, NodeKind, Plain,
@@ -86,9 +86,9 @@ pub use space::{
 #[cfg(feature = "tooling")]
 pub use code::{Code, CodeBody, Prepared};
 #[cfg(feature = "tooling")]
-pub use interpreter::{Absent, Args, Executable, Interpreter, InterpreterContext};
+pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
 #[cfg(feature = "tooling")]
-pub use journal::ContextWrite;
+pub use port::ContextWrite;
 #[cfg(feature = "tooling")]
 pub use layout::Hooks as SpaceHooksByType;
 #[cfg(feature = "tooling")]

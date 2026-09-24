@@ -67,7 +67,6 @@ fn inline_module(
         closures,
         ret: module.ret.clone(),
         flows: module.flows.clone(),
-        fetched_first: module.fetched_first.clone(),
     }
 }
 
@@ -916,9 +915,14 @@ fn remap_inst(
             dst: r(*dst),
             context: *context,
         },
-        InstKind::Commit { context, value } => InstKind::Commit {
+        InstKind::Commit {
+            context,
+            value,
+            wrote,
+        } => InstKind::Commit {
             context: *context,
             value: r(*value),
+            wrote: *wrote,
         },
 
         // Scalar field access
@@ -1259,7 +1263,6 @@ mod tests {
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
             flows: crate::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     }
 
@@ -1587,7 +1590,6 @@ mod tests {
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: crate::ty::Ty::Unit,
             flows: crate::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     }
 

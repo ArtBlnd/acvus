@@ -788,7 +788,7 @@ fn prepare_run(
 fn run_once(rt: &Runtime, interner: &Interner, case: &Case, corpus: &Arc<Corpus>) -> Run {
     let (_shared, mut interp) = prepare_run(interner, case, corpus);
     let start = Instant::now();
-    let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
+    let value = rt.block_on(interp.execute()).expect("the seeds hold every context the run fetches");
     let elapsed = start.elapsed();
     Run {
         elapsed,

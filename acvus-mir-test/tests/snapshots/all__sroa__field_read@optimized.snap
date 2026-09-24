@@ -14,7 +14,7 @@ expression: listing
      9 | L2(r6: u64):
     10 |   r7 = r6 as i64
     12 |   r8 = r7 * 3 (r9)
-    13 |   commit @n = r0
+    13 |   commit @n = r0 (not written)
     14 |   return r8
 
     ; r0 (@n) : i64

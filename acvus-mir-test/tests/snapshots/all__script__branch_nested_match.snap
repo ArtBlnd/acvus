@@ -11,8 +11,8 @@ expression: ir
      5 |   r5 = fetch @a
      6 |   r6 = fetch @b
      7 |   r7 = r5 + r6
-    10 |   commit @a = r5
-    11 |   commit @b = r6
+    10 |   commit @a = r5 (not written)
+    11 |   commit @b = r6 (not written)
     12 |   commit @out = r7
     13 |   return r7
 

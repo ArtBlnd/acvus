@@ -62,7 +62,7 @@ expression: ir
      1 |   r1 = undef
      2 |   r2 = fetch @offset
      3 |   r3 = r4 + r2
-     4 |   commit @offset = r2
+     4 |   commit @offset = r2 (not written)
      5 |   return r3
 
     ; r0 (v9) : i64

@@ -75,6 +75,7 @@ fn compile_analysis(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
 

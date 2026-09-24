@@ -9,7 +9,7 @@ expression: ir
      3 |   r2 = take @obj.y
      4 |   r3 = r1 + r2
      5 |   r4 = take @obj
-     6 |   commit @obj = r4
+     6 |   commit @obj = r4 (not written)
      7 |   return r3
 
     ; r0 (@obj) : {x: i64, y: i64}

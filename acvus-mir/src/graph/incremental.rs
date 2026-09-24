@@ -18,7 +18,7 @@ use super::infer::{
     FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, solve_contexts,
     tarjan_scc,
 };
-use super::lower::{close_fetched_first, inputs_of, lower_one};
+use super::lower::{inputs_of, lower_one};
 use super::optimize::{Opt, optimize};
 use super::types::*;
 
@@ -56,6 +56,7 @@ pub struct IncrementalGraph {
     sources: Sources,
     types: Freeze<TypeRegistry>,
     bindings: Bindings,
+    access: Access,
 
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
@@ -96,6 +97,7 @@ impl IncrementalGraph {
             contexts,
             types,
             bindings,
+            access,
             entries,
         } = graph;
         let mut this = Self {
@@ -103,6 +105,7 @@ impl IncrementalGraph {
             sources: Sources::new(),
             types,
             bindings,
+            access,
             functions: functions.iter().map(|f| (f.qref, f.clone())).collect(),
             contexts: contexts.iter().map(|c| (c.qref, c.clone())).collect(),
             solved: contexts.to_vec(),
@@ -387,6 +390,7 @@ impl IncrementalGraph {
             &mut sources,
             &self.types,
             probe,
+            self.access,
         ))
     }
 
@@ -534,6 +538,7 @@ impl IncrementalGraph {
                 &mut self.sources,
                 &self.types,
                 None,
+                self.access,
             );
 
             resolved_fn_types.extend(
@@ -628,6 +633,7 @@ impl IncrementalGraph {
                 &mut self.sources,
                 &self.types,
                 None,
+                self.access,
             );
 
             // Early cutoff: if types didn't change, don't propagate.
@@ -730,13 +736,12 @@ impl IncrementalGraph {
 
         // A body lowering refused is not optimized, as `acvus check` does not
         // optimize a graph a stage before it refused.
-        let mut modules: FxHashMap<QualifiedRef, MirModule> = self
+        let modules: FxHashMap<QualifiedRef, MirModule> = self
             .lower_cache
             .iter()
             .filter(|(_, entry)| entry.refusals.is_empty())
             .map(|(&qref, entry)| (qref, entry.module.clone()))
             .collect();
-        close_fetched_first(&mut modules);
         let laws = LawTable::of(self.functions.values());
         let result = optimize(&self.interner, &laws, modules, Opt::Full);
 
@@ -810,6 +815,7 @@ impl IncrementalGraph {
             contexts: Freeze::new(self.contexts.values().cloned().collect()),
             types: self.types.clone(),
             bindings: self.bindings.clone(),
+            access: self.access,
             entries: self.entries.clone(),
         };
         let solved = solve_contexts(&self.interner, &graph, &extract(&self.interner, &graph));

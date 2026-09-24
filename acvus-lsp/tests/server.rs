@@ -76,6 +76,7 @@ fn environment(interner: &Interner, x: Ty) -> CompilationGraph {
         }]),
         types: Freeze::default(),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     }
 }

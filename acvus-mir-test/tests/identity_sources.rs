@@ -149,6 +149,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
             contexts: Freeze::default(),
             types: Freeze::new(iterator_registry(&i)),
             bindings: Bindings::default(),
+            access: acvus_mir::graph::Access::Sync,
             entries: Vec::new(),
         },
     );

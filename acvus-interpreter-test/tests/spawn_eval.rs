@@ -93,7 +93,6 @@ async fn spawn_eval_basic() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     };
 
@@ -145,7 +144,6 @@ async fn spawn_eval_basic() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     };
 
@@ -157,6 +155,7 @@ async fn spawn_eval_basic() {
         externs: &no_externs,
         context_names: &no_contexts,
         instances: &acvus_extern::NoInstances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepare = |module| {
         Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
@@ -173,7 +172,7 @@ async fn spawn_eval_basic() {
     let result = interp
         .execute()
         .await
-        .expect("the page holds every context the run fetches first");
+        .expect("the seeds hold every context the run fetches");
 
     assert_eq!(result.as_int(), 42);
 }
@@ -226,7 +225,6 @@ async fn spawn_eval_multi_args() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     };
 
@@ -283,7 +281,6 @@ async fn spawn_eval_multi_args() {
             closures: FxHashMap::default(),
             ret: Ty::I64,
             flows: acvus_mir::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     };
 
@@ -295,6 +292,7 @@ async fn spawn_eval_multi_args() {
         externs: &no_externs,
         context_names: &no_contexts,
         instances: &acvus_extern::NoInstances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepare = |module| {
         Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
@@ -311,7 +309,7 @@ async fn spawn_eval_multi_args() {
     let result = interp
         .execute()
         .await
-        .expect("the page holds every context the run fetches first");
+        .expect("the seeds hold every context the run fetches");
 
     assert_eq!(result.as_int(), 42);
 }

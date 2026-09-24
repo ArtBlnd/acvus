@@ -59,7 +59,7 @@ expression: ir
      2 |   r2 = fetch @threshold
      3 |   r3 = take (*r4)
      4 |   r5 = r3 > r2
-     5 |   commit @threshold = r2
+     5 |   commit @threshold = r2 (not written)
      6 |   return r5
 
     ; r0 (v10) : i64

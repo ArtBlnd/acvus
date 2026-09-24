@@ -85,6 +85,7 @@ mod tests {
             contexts: Freeze::new(vec![]),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         };
         (graph, fn_qref)
@@ -126,6 +127,7 @@ mod tests {
             contexts: Freeze::new(vec![]),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         };
         let result = extract(&i, &graph);

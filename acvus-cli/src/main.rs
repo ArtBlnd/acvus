@@ -504,7 +504,7 @@ async fn fill_space(args: &[String]) -> Result<(), Stop> {
         source: SpaceSource::Flag,
     })?;
     let units = space_units(&space)?;
-    let program = match compile::compile(&units, &[], cli_registries(), Opt::Full, SequentialExecutor) {
+    let program = match compile::compile(&units, None, &[], cli_registries(), Opt::Full, SequentialExecutor) {
         Ok(program) => program,
         Err(Refused::Usage(message)) => return Err(Stop::usage(message)),
         Err(Refused::Diagnostics(diagnostics)) => {
@@ -518,15 +518,13 @@ async fn fill_space(args: &[String]) -> Result<(), Stop> {
     let contexts = space.location.open_contexts().map_err(Stop::run)?;
     program
         .scope(async |scope| -> Result<(), Stop> {
-            let storage = SpaceStorage::new(&contexts);
-            let mut page = scope.open(storage).await.map_err(|e| page_refusal(&space.name, e))?;
-            let mut filled = page.filled().to_vec();
-            filled.extend(page.fill().await.map_err(|e| page_refusal(&space.name, e))?);
-            filled.sort();
+            let mut storage = SpaceStorage::new(&contexts);
+            let mut page = scope.open(&mut storage);
+            let filled = page.fill().await.map_err(|e| page_refusal(&space.name, e))?;
             for key in &filled {
                 eprintln!("init @{key}");
             }
-            commit(&mut page)?;
+            commit(&mut page).await?;
             if filled.is_empty() {
                 println!("space `{name}` holds every context it has an init of");
             }
@@ -585,6 +583,7 @@ fn lone_file(path: &Path) -> Result<Sources, Stop> {
     Ok(Sources {
         units: vec![Unit {
             role: Role::Entry(LONE_ENTRY.to_string()),
+            space: None,
             path: path.display().to_string(),
             mode,
             text,
@@ -596,6 +595,7 @@ fn lone_file(path: &Path) -> Result<Sources, Stop> {
 fn expr_unit(entry: &str, text: &str) -> Unit {
     Unit {
         role: Role::Entry(entry.to_string()),
+        space: None,
         path: "<expr>".to_string(),
         mode: Mode::Expr,
         text: text.to_string(),
@@ -610,12 +610,14 @@ fn space_units(space: &ResolvedSpace<'_>) -> Result<Vec<Unit>, Stop> {
     let scripts = scripts.into_iter().map(|script| Unit {
         path: format!("{}/{}.{}", space.name, script.name, script.kind.extension()),
         role: Role::Entry(script.name.as_str().to_string()),
+        space: Some(space.name.clone()),
         mode: script.kind.mode(),
         text: script.text,
     });
     let inits = inits.into_iter().map(|init| Unit {
         path: format!("{}/inits/{}.{}", space.name, init.key, init.kind.extension()),
         role: Role::Init(init.key.as_str().to_string()),
+        space: Some(space.name.clone()),
         mode: init.kind.mode(),
         text: init.text,
     });
@@ -682,7 +684,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
         Parallel::Tokio => Box::new(TokioExecutor),
         Parallel::Sequential => Box::new(SequentialExecutor),
     };
-    let program = match compile::compile(&units, &args.bindings, cli_registries(), opt, executor) {
+    let program = match compile::compile(&units, Some(target), &args.bindings, cli_registries(), opt, executor) {
         Ok(program) => program,
         Err(Refused::Usage(message)) => return Err(Stop::usage(message)),
         Err(Refused::Diagnostics(diagnostics)) => {
@@ -793,9 +795,9 @@ fn page_refusal(space: &str, error: HostError) -> Stop {
     }
 }
 
-/// Commit every context the page changed, one `commit` line each on stderr.
-fn commit(page: &mut Page<'_, SpaceStorage<'_>>) -> Result<(), Stop> {
-    page.commit().map_err(|e| Stop::run(e.to_string()))?;
+/// Commit every context the runs stored, one `commit` line each on stderr.
+async fn commit(page: &mut Page<'_, '_, SpaceStorage<'_>>) -> Result<(), Stop> {
+    page.commit().await.map_err(|e| Stop::run(e.to_string()))?;
     for committed in page.storage().committed() {
         eprintln!("commit @{} = {}", committed.id, hex(&committed.head));
     }
@@ -830,8 +832,12 @@ impl Run<'_> {
                 .program
                 .scope(async |scope| -> Result<(), Stop> {
                     let entry = scope.untyped_entry(self.entry).map_err(|e| Stop::run(e.to_string()))?;
-                    let mut page = scope.open(MemoryStorage::new()).await.map_err(|e| Stop::run(e.to_string()))?;
-                    let printed = self.run_on(&entry, &mut page, timings).await?;
+                    let mut storage = MemoryStorage::new();
+                    let mut page = scope.open(&mut storage);
+                    let printed = self
+                        .run_on(&entry, &mut page, timings)
+                        .await
+                        .map_err(|e| Stop::run(e.to_string()))?;
                     printed.print();
                     Ok(())
                 })
@@ -841,13 +847,14 @@ impl Run<'_> {
         self.program
             .scope(async |scope| -> Result<(), Stop> {
                 let entry = scope.untyped_entry(self.entry).map_err(|e| Stop::run(e.to_string()))?;
-                let storage = SpaceStorage::new(&contexts);
-                let mut page = scope.open(storage).await.map_err(|e| page_refusal(&space.name, e))?;
+                let mut storage = SpaceStorage::new(&contexts);
+                let mut page = scope.open(&mut storage);
+                let ran = self.run_on(&entry, &mut page, timings).await;
                 for key in page.filled() {
                     eprintln!("init @{key}");
                 }
-                let printed = self.run_on(&entry, &mut page, timings).await?;
-                commit(&mut page)?;
+                let printed = ran.map_err(|e| page_refusal(&space.name, e))?;
+                commit(&mut page).await?;
                 printed.print();
                 Ok(())
             })
@@ -857,14 +864,14 @@ impl Run<'_> {
     async fn run_on<'p, S>(
         &self,
         entry: &UntypedEntry<'p>,
-        page: &mut Page<'p, S>,
+        page: &mut Page<'p, '_, S>,
         timings: &mut Option<Timings>,
-    ) -> Result<Printed, Stop>
+    ) -> Result<Printed, HostError>
     where
         S: Storage,
     {
         let watch = Stopwatch::start(self.timed);
-        let output = entry.run(page).await.map_err(|e| Stop::run(e.to_string()))?;
+        let output = entry.run(page).await?;
         if let Some(timings) = timings {
             timings.run = watch.stop();
         }

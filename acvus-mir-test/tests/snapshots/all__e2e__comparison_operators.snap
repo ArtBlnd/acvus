@@ -18,8 +18,8 @@ expression: ir
     10 |   r7 = ref &mut <template>
     11 |   append r7 r6
     12 |   r8 = take <template>
-    13 |   commit @a = r2
-    14 |   commit @b = r3
+    13 |   commit @a = r2 (not written)
+    14 |   commit @b = r3 (not written)
     15 |   return r8
 
     ; r0 (v17) : i64

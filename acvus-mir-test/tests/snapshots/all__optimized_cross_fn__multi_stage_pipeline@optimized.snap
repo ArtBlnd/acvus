@@ -8,10 +8,10 @@ expression: opt
      2 |   r2 = fetch @source_id
      3 |   r3 = spawn #0(r2) [r4 ->]
      4 |   r5 = fetch @precision
-     7 |   commit @offset = r0
-     8 |   commit @scale = r1
-     9 |   commit @source_id = r2
-    10 |   commit @precision = r5
+     7 |   commit @offset = r0 (not written)
+     8 |   commit @scale = r1 (not written)
+     9 |   commit @source_id = r2 (not written)
+    10 |   commit @precision = r5 (not written)
     11 |   r6 = eval r3 [-> r7]
     12 |   r8 = r6 * r1
     13 |   r9 = r8 / 1000 (r10)

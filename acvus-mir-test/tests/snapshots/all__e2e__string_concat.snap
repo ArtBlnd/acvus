@@ -20,9 +20,9 @@ expression: ir
     12 |   append r7 r6
     13 |   r8 = take <template>
     14 |   r9 = take @hello
-    15 |   commit @hello = r9
+    15 |   commit @hello = r9 (not written)
     16 |   r10 = take @world
-    17 |   commit @world = r10
+    17 |   commit @world = r10 (not written)
     18 |   return r8
 
     ; r0 (@hello) : String

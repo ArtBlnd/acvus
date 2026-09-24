@@ -376,11 +376,12 @@ async fn a_page_over_a_space_loads_from_it_and_commits_its_ops() {
         .expect("the script compiles");
     program
         .scope(async |s| {
-            let mut page = s.open(SpaceStorage::new(&space)).await.expect("the space holds `@d`");
+            let mut storage = SpaceStorage::new(&space);
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<(), u64>("main").expect("the entry returns `u64`");
-            let output = entry.run(&mut page, ()).await.expect("the page holds `@d`");
+            let output = entry.run(&mut page, ()).await.expect("the space holds `@d`");
             assert_eq!(output.with(|n: &u64| *n).expect("a `u64`"), 2);
-            page.commit().expect("the space takes the ops");
+            page.commit().await.expect("the space takes the ops");
             let committed = page.storage().committed();
             assert_eq!(committed.len(), 1);
             assert_eq!(committed[0].id, "d");

@@ -237,23 +237,23 @@ expression: raw
     76 |   assign $order = r49
     77 |   r50 = take final_total
     78 |   r51 = take @item_count
-    79 |   commit @item_count = r51
+    79 |   commit @item_count = r51 (not written)
     80 |   r52 = take @total_out
     81 |   commit @total_out = r52
     82 |   r53 = take @shipping
     83 |   commit @shipping = r53
     84 |   r54 = take @tax_rate
-    85 |   commit @tax_rate = r54
+    85 |   commit @tax_rate = r54 (not written)
     86 |   r55 = take @default_ship
-    87 |   commit @default_ship = r55
+    87 |   commit @default_ship = r55 (not written)
     88 |   r56 = take @receipt_out
     89 |   commit @receipt_out = r56
     90 |   r57 = take @discount_rate
-    91 |   commit @discount_rate = r57
+    91 |   commit @discount_rate = r57 (not written)
     92 |   r58 = take @customer
-    93 |   commit @customer = r58
+    93 |   commit @customer = r58 (not written)
     94 |   r59 = take @free_ship_min
-    95 |   commit @free_ship_min = r59
+    95 |   commit @free_ship_min = r59 (not written)
     96 |   r60 = take $order
     97 |   return r50 [r60]
 

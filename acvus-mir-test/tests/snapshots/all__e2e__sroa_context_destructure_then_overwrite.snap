@@ -9,7 +9,7 @@ expression: ir
      3 |   r2 = take @b.x
      5 |   commit @a = 0 (r3)
      6 |   r4 = take @b
-     7 |   commit @b = r4
+     7 |   commit @b = r4 (not written)
      8 |   return 0 (r3)
 
     ; r0 (v10) : i64

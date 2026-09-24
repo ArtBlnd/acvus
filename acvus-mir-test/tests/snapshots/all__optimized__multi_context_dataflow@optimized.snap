@@ -10,9 +10,9 @@ expression: opt
      4 |   r4 = r3 * r1
      5 |   r5 = r4 + r0
      6 |   commit @output = r5
-     7 |   commit @a = r0
-     8 |   commit @scale = r1
-     9 |   commit @b = r2
+     7 |   commit @a = r0 (not written)
+     8 |   commit @scale = r1 (not written)
+     9 |   commit @b = r2 (not written)
     10 |   return r5
 
     ; r0 (@a) : i64

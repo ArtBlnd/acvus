@@ -176,6 +176,7 @@ mod tests {
     fn batch(units: &[compile::Unit]) -> Result<(), Vec<String>> {
         let refused = compile::compile(
             units,
+            Some(0),
             &[],
             crate::cli_registries(),
             Opt::Full,
@@ -263,6 +264,7 @@ mod tests {
 
         let units = [compile::Unit {
             role: compile::Role::Entry("main".to_string()),
+            space: None,
             path: script.display().to_string(),
             mode: compile::Mode::Script,
             text: source.to_string(),
@@ -290,6 +292,7 @@ mod tests {
 
         let units = [compile::Unit {
             role: compile::Role::Entry("main".to_string()),
+            space: None,
             path: script.display().to_string(),
             mode: compile::Mode::Script,
             text: source.to_string(),
@@ -448,6 +451,7 @@ mod tests {
             let mode = compile_mode(mode_of(source).expect("an example is a script or a template"));
             let units = [compile::Unit {
                 role: compile::Role::Entry("main".to_string()),
+                space: None,
                 path: source.display().to_string(),
                 mode,
                 text: std::fs::read_to_string(source).expect("an example reads"),

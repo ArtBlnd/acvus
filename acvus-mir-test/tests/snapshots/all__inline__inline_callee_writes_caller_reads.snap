@@ -6,7 +6,7 @@ expression: ir
      0 |   r0 = fetch @count
      1 |   assign @count = r0
      2 |   r1 = take @count
-     3 |   commit @count = r1
+     3 |   commit @count = r1 (not written)
      4 |   r2 = fetch @count
      5 |   assign @count = r2
      6 |   r3 = take @count
@@ -22,7 +22,7 @@ expression: ir
     17 |   r10 = take @count
     18 |   r11 = r9 + r10
     19 |   r12 = take @count
-    20 |   commit @count = r12
+    20 |   commit @count = r12 (not written)
     21 |   return r11
 
     ; r0 (@count) : i64

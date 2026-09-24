@@ -16,22 +16,23 @@ use crate::value::{Kind, Value, VariantValue};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
-/// One run as a `Runtime`: the state its functions read, the page its
-/// contexts live on (RFC-0014), the `Flight` its spawned tasks count in, and
-/// the `Tally` of the frame a spawn through it counts in. `Interpreter`
+/// One run as a `Runtime`: the state its functions read, the port its
+/// contexts are loaded and stored through (RFC-0090 rule 3), the `Flight`
+/// its spawned tasks count in, and the `Tally` of the frame a spawn through
+/// it counts in. `Interpreter`
 /// makes the first three and a spawned run is handed its parent's; each
 /// suspending frame runs on a copy naming its own tally. A closure value
 /// carries none of them (RFC-0069 rule 1): every caller of one holds a
 /// `&AcvusRuntime`.
 /// The compilation a run reads is the runtime's and its tooling's, and the
-/// page is the runtime's alone (RFC-0090 rule 6): a handler holds an
+/// port is the runtime's alone (RFC-0090 rule 6): a handler holds an
 /// `&AcvusRuntime` (`Ctx::rt`) and reaches neither.
 macro_rules! acvus_runtime {
     ($v:vis) => {
         #[derive(Clone)]
         pub struct AcvusRuntime {
             $v shared: Arc<InterpreterContext>,
-            pub(crate) page: Arc<crate::journal::RuntimeContext>,
+            pub(crate) port: Arc<crate::port::Port>,
             pub(crate) flight: Arc<Flight>,
             pub(crate) tally: Arc<Tally>,
         }
@@ -42,13 +43,13 @@ tooling_vis!(acvus_runtime);
 impl AcvusRuntime {
     pub(crate) fn new(
         shared: Arc<InterpreterContext>,
-        page: Arc<crate::journal::RuntimeContext>,
+        port: Arc<crate::port::Port>,
         flight: Arc<Flight>,
         tally: Arc<Tally>,
     ) -> AcvusRuntime {
         AcvusRuntime {
             shared,
-            page,
+            port,
             flight,
             tally,
         }

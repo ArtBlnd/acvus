@@ -19,7 +19,7 @@ expression: ir
     10 |   append r5 r4
     12 |   r6 = take <template>
     13 |   r7 = take @pair
-    14 |   commit @pair = r7
+    14 |   commit @pair = r7 (not written)
     15 |   return r6
 
     ; r0 (v14) : String

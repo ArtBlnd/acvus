@@ -57,8 +57,6 @@ pub struct Lowerer<'a> {
     result: Option<ValueId>,
     context_slots: BTreeMap<QualifiedRef, ValueId>,
     page_ops: PageOps,
-    /// The contexts `main` fetches at entry.
-    main_fetches: Vec<QualifiedRef>,
     /// The places the calls being lowered have taken out for their
     /// callees, innermost call last (RFC-0041).
     taken_out: Vec<PlaceRestore>,
@@ -441,7 +439,6 @@ impl<'a> Lowerer<'a> {
             result: None,
             context_slots: BTreeMap::new(),
             page_ops: PageOps::default(),
-            main_fetches: Vec::new(),
             taken_out: Vec::new(),
             loops: Vec::new(),
             callee_inputs,
@@ -466,7 +463,7 @@ impl<'a> Lowerer<'a> {
         }
         let result = self.emit_take(template.span, RefTarget::Var(slot), vec![], Ty::String);
         self.emit_return(template.span, result);
-        self.main_fetches = self.skip_assigned_fetches();
+        self.skip_assigned_fetches();
         self.build_module()
     }
 
@@ -482,14 +479,15 @@ impl<'a> Lowerer<'a> {
             None => self.emit_unit(script.span),
         };
         self.emit_return(script.span, val);
-        self.main_fetches = self.skip_assigned_fetches();
+        self.skip_assigned_fetches();
         self.build_module()
     }
 
-    /// RFC-0025 rule 2 on the body just lowered; the contexts it still
-    /// fetches at entry.
-    fn skip_assigned_fetches(&mut self) -> Vec<QualifiedRef> {
+    /// RFC-0025 rule 2 on the body just lowered: each commit's `wrote`, and
+    /// no entry fetch of a context every path assigns first.
+    fn skip_assigned_fetches(&mut self) {
         let ops = std::mem::take(&mut self.page_ops);
+        entry_fetch::decide_writes(&mut self.body, &ops);
         entry_fetch::skip_assigned_fetches(&mut self.body, ops)
     }
 
@@ -556,10 +554,19 @@ impl<'a> Lowerer<'a> {
         fetched
     }
 
+    /// `wrote` is decided once the whole body is lowered, from the body's
+    /// own writes of the variable (`entry_fetch::decide_writes`).
     fn commit_from(&mut self, span: Span, context: QualifiedRef, slot: ValueId) {
         let ty = self.slot_type(slot);
         let value = self.emit_take(span, RefTarget::Var(slot), vec![], ty);
-        self.emit_inst(span, InstKind::Commit { context, value });
+        self.emit_inst(
+            span,
+            InstKind::Commit {
+                context,
+                value,
+                wrote: true,
+            },
+        );
     }
 
     /// The summary of a call (RFC-0025 rule 5): the callee's, joined with that of
@@ -1614,7 +1621,6 @@ impl<'a> Lowerer<'a> {
             closures: self.closures,
             ret: self.ret,
             flows: self.resolution.flows.clone(),
-            fetched_first: self.main_fetches,
         }
     }
 
@@ -2934,7 +2940,7 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or(Ty::error());
                 self.emit_return(*span, result_reg);
-                let _fetched_where_called: Vec<QualifiedRef> = self.skip_assigned_fetches();
+                self.skip_assigned_fetches();
 
                 let mut closure_body_mir = std::mem::replace(&mut self.body, saved_body);
                 self.scopes = saved_scopes;
@@ -3410,11 +3416,15 @@ impl<'a> Lowerer<'a> {
                 span,
                 place,
                 lent,
+                mutability,
                 back,
                 ..
             } = restore;
             let value = self.emit_take(span, lent.target, lent.path, lent.ty);
             let restored = self.emit_extern_cast(span, &back, value);
+            if mutability == Mutability::Shared {
+                self.page_ops.handed_back(restored);
+            }
             self.emit_inst(
                 span,
                 InstKind::Assign {

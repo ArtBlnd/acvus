@@ -153,6 +153,7 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
 
     let mut found = Vec::new();

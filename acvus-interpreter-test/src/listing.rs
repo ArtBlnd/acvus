@@ -37,6 +37,7 @@ pub fn prepared_script_with_externs(
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     Arc::new(prepare_module(module, &ctx))
@@ -70,6 +71,7 @@ pub fn prepared_script(
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
     Arc::new(prepare_module(module, &ctx))

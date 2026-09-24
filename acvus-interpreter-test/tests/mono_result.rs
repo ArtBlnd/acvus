@@ -67,7 +67,7 @@ fn compile_and_run(i: &Interner, source: &str, opt: Opt) -> Result<Value, Refusa
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime");
-    Ok(runtime.block_on(interp.execute()).expect("the page holds every context the run fetches first"))
+    Ok(runtime.block_on(interp.execute()).expect("the seeds hold every context the run fetches"))
 }
 
 /// The text a program yields at both optimization levels. Disagreement is the

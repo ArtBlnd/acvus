@@ -12,7 +12,7 @@ expression: ir
      6 | L0:
      8 |   jump L1(1 (r5))
      9 | L1(r6: i64):
-    11 |   commit @val = r2
+    11 |   commit @val = r2 (not written)
     12 |   commit @out = r6
     13 |   return r6
 

@@ -9,7 +9,7 @@ expression: ir
      4 |   r2 = call #0(r1, 10 (r3))
      5 |   r4 = call #1(r2)
      6 |   r5 = take @items
-     7 |   commit @items = r5
+     7 |   commit @items = r5 (not written)
      8 |   return r4
 
     ; r0 (@items) : Array<i64, 3>

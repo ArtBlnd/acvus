@@ -16,7 +16,7 @@ expression: ir
      8 |   r5 = ref &mut <template>
      9 |   append r5 r4
     10 |   r6 = take <template>
-    11 |   commit @f = r1
+    11 |   commit @f = r1 (not written)
     12 |   return r6
 
     ; r0 (v13) : Float

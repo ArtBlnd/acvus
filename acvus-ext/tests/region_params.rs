@@ -51,6 +51,7 @@ fn the_resolved_type_of_a_borrowed_source_carries_the_count() {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(types),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![entry],
     };
     let ext = extract::extract(&i, &graph);

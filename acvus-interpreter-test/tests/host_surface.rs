@@ -11,9 +11,9 @@ use acvus_extern::{
     extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::{
-    AcvusRuntime, Codec, Head, Held, Host, HostError, MemoryStorage, Named, Origin, Page, Part,
-    Plain, Program, Refusal, Scope, SequentialExecutor, Source, Space, SpaceStorage, Storage,
-    StorageError, Store,
+    AcvusRuntime, AsyncAccess, AsyncStorage, Cause, Codec, Head, Held, Host, HostError,
+    MemoryStorage, Named, Origin, Page, Part, Plain, Program, Refusal, Scope, SequentialExecutor,
+    Source, Space, SpaceStorage, Storage, StorageError, Store,
 };
 
 type Rt = AcvusRuntime;
@@ -86,9 +86,15 @@ static INIT_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 static INIT_COUNTED: Mutex<()> = Mutex::new(());
 
-#[extern_fn(effect = opaque)]
-fn init_ran() {
+/// Pure, so an init that calls it cannot wait and runs under synchronous
+/// access; it counts the inits that ran.
+#[extern_fn(effect = pure)]
+fn init_ran<T>(made: T) -> T
+where
+    T: Var<kind::Type>,
+{
     INIT_RUNS.fetch_add(1, Ordering::SeqCst);
+    made
 }
 
 /// A value that is one source: `history()` begins a new one at every call.
@@ -127,7 +133,7 @@ fn registries() -> Vec<Registry<AcvusRuntime>> {
     registries.push(extern_registry! {
         ns: "host",
         types: [Tracked, History<_>],
-        fns: [profile, tracked, bump, coin, init_ran, history, record, recorded],
+        fns: [profile, tracked, bump, coin, init_ran, history, record, recorded, pause, mark],
     });
     registries
 }
@@ -147,43 +153,63 @@ fn solved(program: &Program, key: &str) -> String {
     program.context_type(key).expect("the graph has the context")
 }
 
-async fn open<'p>(scope: Scope<'p>) -> Page<'p, MemoryStorage> {
-    scope.open(MemoryStorage::new()).await.expect("the storage opens")
-}
-
 /// `@log`'s strings, each copied in Rust out of the element the page lends.
-fn log_of<S>(page: &Page<'_, S>) -> Result<Vec<String>, HostError>
+async fn log_of<S>(page: &mut Page<'_, '_, S>) -> Result<Vec<String>, HostError>
 where
     S: Storage,
 {
     page.with("log", |ctx: &mut Ctx<'_, Rt>, xs: &[Erased<Rt, String>]| {
         xs.iter().map(|x| x.as_ref(ctx.rt).to_owned()).collect()
     })
+    .await
 }
 
-fn int_of<S>(page: &Page<'_, S>, key: &str) -> Result<i64, HostError>
+async fn int_of<S>(page: &mut Page<'_, '_, S>, key: &str) -> Result<i64, HostError>
 where
     S: Storage,
 {
-    page.with(key, |n: &i64| *n)
+    page.with(key, |n: &i64| *n).await
 }
 
-async fn run_unit<'p, S>(scope: Scope<'p>, page: &mut Page<'p, S>, name: &str)
+async fn run_unit<'p, S>(scope: Scope<'p>, page: &mut Page<'p, '_, S>, name: &str)
 where
     S: Storage,
 {
     let entry = scope.entry::<(), ()>(name).expect("the entry returns `()`");
-    entry.run(page, ()).await.expect("the page holds the graph's contexts");
+    entry.run(page, ()).await.expect("the storage holds what the run fetches");
 }
 
 async fn stored_by(program: &Program, space: &Space, name: &str) {
     program
         .scope(async |s| {
-            let mut page = s.open(SpaceStorage::new(space)).await.expect("the space opens");
+            let mut storage = SpaceStorage::new(space);
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, name).await;
-            page.commit().expect("the space takes what the run stored");
+            page.commit().await.expect("the space takes what the run stored");
         })
         .await
+}
+
+/// What running `name` on a page over an empty memory storage ended with.
+async fn ran_on_empty<R>(program: &Program, name: &str) -> Result<(), HostError>
+where
+    R: Declared,
+{
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let entry = s.entry::<(), R>(name)?;
+            entry.run(&mut page, ()).await.map(|_| ())
+        })
+        .await
+}
+
+fn unfilled_key(ran: Result<(), HostError>) -> String {
+    let Err(HostError::Unfilled { key }) = ran else {
+        panic!("a run fetched a context the storage lacks, and no init fills it: {ran:?}")
+    };
+    key
 }
 
 const INIT_LOG: &str = "@log = vec([]);";
@@ -209,11 +235,12 @@ async fn a_script_stores_the_context_its_turn_scripts_push_to() {
     assert_eq!(solved(&program, "log"), "Vec<String>");
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             run_unit(s, &mut page, "turn").await;
             run_unit(s, &mut page, "turn").await;
-            let log = log_of(&page).expect("`@log` holds a `Vec<String>`");
+            let log = log_of(&mut page).await.expect("`@log` holds a `Vec<String>`");
             assert_eq!(log, ["x", "x"]);
         })
         .await
@@ -242,10 +269,12 @@ async fn an_enum_context_two_entries_store_is_read_through_its_projection() {
     assert_eq!(solved(&program, "job"), "Job{Busy(i64), Idle}");
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             let idle = page
                 .with("job", |job: JobRef<'_>| matches!(job, JobRef::Idle))
+                .await
                 .expect("`@job` holds a `Job`");
             assert!(idle);
             run_unit(s, &mut page, "turn").await;
@@ -254,6 +283,7 @@ async fn an_enum_context_two_entries_store_is_read_through_its_projection() {
                     JobRef::Busy(n) => Some(*n),
                     JobRef::Idle => None,
                 })
+                .await
                 .expect("`@job` holds a `Job`");
             assert_eq!(busy, Some(7));
         })
@@ -266,9 +296,10 @@ async fn a_context_the_graph_leaves_open_closes_to_never_and_no_rust_type_reads_
     assert_eq!(solved(&program, "xs"), "Array<!, 0>");
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
-            let read = page.with("xs", |_: &[Erased<Rt, String>]| ());
+            let read = page.with("xs", |_: &[Erased<Rt, String>]| ()).await;
             let Err(HostError::Mismatched {
                 what: Part::Context(key),
                 held,
@@ -289,17 +320,18 @@ async fn a_store_only_context_no_run_stored_yet_is_unstored_and_the_page_is_unch
     let program = store_log_program();
     program
         .scope(async |s| {
-            let mut page = open(s).await;
-            assert!(matches!(log_of(&page), Err(HostError::Unstored { .. })));
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            assert!(matches!(log_of(&mut page).await, Err(HostError::Unstored { .. })));
             assert!(matches!(
-                page.with_mut("log", |_: &mut [Erased<Rt, String>]| ()),
+                page.with_mut("log", |_: &mut [Erased<Rt, String>]| ()).await,
                 Err(HostError::Unstored { .. })
             ));
             assert!(matches!(
-                page.with("elsewhere", |_: &[Erased<Rt, String>]| ()),
+                page.with("elsewhere", |_: &[Erased<Rt, String>]| ()).await,
                 Err(HostError::NotInGraph { what: Named::Context(_) })
             ));
-            assert!(matches!(log_of(&page), Err(HostError::Unstored { .. })));
+            assert!(matches!(log_of(&mut page).await, Err(HostError::Unstored { .. })));
         })
         .await
 }
@@ -309,21 +341,22 @@ async fn a_read_or_an_insert_at_a_wrong_type_is_refused_and_the_page_is_unchange
     let program = log_program();
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             run_unit(s, &mut page, "turn").await;
 
             assert!(matches!(
-                page.with("log", |_: &[Erased<Rt, i64>]| ()),
+                page.with("log", |_: &[Erased<Rt, i64>]| ()).await,
                 Err(HostError::Mismatched { .. })
             ));
-            assert!(matches!(page.insert("log", 5_i64), Err(HostError::Mismatched { .. })));
+            assert!(matches!(page.insert("log", 5_i64).await, Err(HostError::Mismatched { .. })));
             assert!(matches!(
-                page.insert("elsewhere", vec!["y".to_owned()]),
+                page.insert("elsewhere", vec!["y".to_owned()]).await,
                 Err(HostError::NotInGraph { .. })
             ));
 
-            let log = log_of(&page).expect("`@log` still holds its `Vec<String>`");
+            let log = log_of(&mut page).await.expect("`@log` still holds its `Vec<String>`");
             assert_eq!(log, ["x"]);
         })
         .await
@@ -334,18 +367,22 @@ async fn a_host_insert_is_what_the_next_run_reads() {
     let program = log_program();
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             page.insert("log", vec!["from the host".to_owned()])
+                .await
                 .expect("`@log` is a `Vec<String>`");
             run_unit(s, &mut page, "turn").await;
-            let log = log_of(&page).expect("`@log` holds a `Vec<String>`");
+            let log = log_of(&mut page).await.expect("`@log` holds a `Vec<String>`");
             assert_eq!(log, ["from the host", "x"]);
         })
         .await
 }
 
+/// Opening reads nothing, so a context a space holds at another type is met
+/// where it is loaded.
 #[tokio::test]
-async fn a_space_that_stores_a_context_at_another_type_opens_no_page() {
+async fn a_space_that_stores_a_context_at_another_type_is_refused_where_it_is_loaded() {
     let space = Space::new(Plain);
     let text = compiled(host().entry::<(), ()>("init", Source::Script(r#"@n = "a".to_string();"#)));
     stored_by(&text, &space, "init").await;
@@ -353,14 +390,16 @@ async fn a_space_that_stores_a_context_at_another_type_opens_no_page() {
     let number = compiled(host().entry::<(), ()>("init", Source::Script("@n = 1;")));
     number
         .scope(async |s| {
-            let opened = s.open(SpaceStorage::new(&space)).await.map(|_| ());
+            let mut storage = SpaceStorage::new(&space);
+            let mut page = s.open(&mut storage);
+            let read = int_of(&mut page, "n").await;
             let Err(HostError::Mismatched {
                 what: Part::Context(key),
                 held,
                 asked,
-            }) = opened
+            }) = read
             else {
-                panic!("a space storing `@n` as `String` opened for an `i64` `@n`: {opened:?}")
+                panic!("a space storing `@n` as `String` was read as an `i64` `@n`: {read:?}")
             };
             assert_eq!(key, "n");
             assert_eq!(held, "String");
@@ -369,10 +408,9 @@ async fn a_space_that_stores_a_context_at_another_type_opens_no_page() {
         .await
 }
 
-/// A page belongs to one program, so a context held at another type is met
-/// where the page opens, before any entry of the program can run.
+/// The run that fetches a context held at another type ends at that fetch.
 #[tokio::test]
-async fn a_storage_that_holds_a_context_at_another_type_runs_nothing() {
+async fn a_storage_that_holds_a_context_at_another_type_ends_the_run_that_fetches_it() {
     let space = Space::new(Plain);
     let other = compiled(host().entry::<(), ()>("init", Source::Script(r#"@n = "a".to_string();"#)));
     stored_by(&other, &space, "init").await;
@@ -384,8 +422,11 @@ async fn a_storage_that_holds_a_context_at_another_type_runs_nothing() {
     );
     program
         .scope(async |s| {
-            let opened = s.open(SpaceStorage::new(&space)).await.map(|_| ());
-            assert!(matches!(opened, Err(HostError::Mismatched { .. })), "{opened:?}");
+            let mut storage = SpaceStorage::new(&space);
+            let mut page = s.open(&mut storage);
+            let main = s.entry::<(), i64>("main").expect("the entry returns `i64`");
+            let ran = main.run(&mut page, ()).await.map(|_| ());
+            assert!(matches!(ran, Err(HostError::Mismatched { .. })), "{ran:?}");
         })
         .await
 }
@@ -395,7 +436,8 @@ async fn a_string_result_is_read_and_edited_through_its_output() {
     let program = compiled(host().entry::<(), String>("main", Source::Script(r#""hello".to_string()"#)));
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<(), String>("main").expect("the entry returns `String`");
             let mut output = entry.run(&mut page, ()).await.expect("the graph has no context");
             let kept: String = output.with(|s: &str| s.to_owned()).expect("the result is a `String`");
@@ -417,7 +459,8 @@ async fn a_structural_result_is_read_and_edited_through_its_projection() {
     ));
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<(), Profile>("main").expect("the entry returns `Profile`");
             let mut output = entry.run(&mut page, ()).await.expect("the graph has no context");
             let read = |p: ProfileRef<'_>| (p.name.clone(), *p.age);
@@ -499,7 +542,8 @@ async fn dropping_an_output_releases_its_value_once() {
     ));
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<(), Tracked>("main").expect("the entry returns `Tracked`");
             let output = entry.run(&mut page, ()).await.expect("the graph has no context");
             assert_eq!(output.with(|t: &Tracked| t.0.len()).expect("the result is a `Tracked`"), ELEMENTS);
@@ -528,13 +572,11 @@ fn a_container_is_declared_from_its_parts() {
     assert_eq!(shown(<Mode as Declared>::declared(&i)), "Mode{Busy, Idle}");
 }
 
-// -- RFC-0025 rule 2: what a run fetches first ---------------------------
+// -- RFC-0025 rule 2: a run fetches where it runs -----------------------
 
 const PUSH_DEQUE: &str = r#"@log.push_back("x".to_string());"#;
 const STORE_DEQUE: &str = r#"@log = deque(); @log.push_back("x".to_string());"#;
 
-/// `@log` is a `Deque<String>` here, which a space holds, so one program
-/// stores it and another opens over it.
 fn fresh_log_program() -> Program {
     compiled(
         host()
@@ -548,39 +590,24 @@ fn store_deque_program() -> Program {
     compiled(host().entry::<(), ()>("init", Source::Script(STORE_DEQUE)))
 }
 
-async fn size_of<'p, S>(scope: Scope<'p>, page: &mut Page<'p, S>) -> u64
+async fn size_of<'p, S>(scope: Scope<'p>, page: &mut Page<'p, '_, S>) -> u64
 where
     S: Storage,
 {
     let size = scope.entry::<(), u64>("size").expect("`size` returns `u64`");
-    let output = size.run(page, ()).await.expect("the page holds `@log`");
+    let output = size.run(page, ()).await.expect("the storage holds `@log`");
     output.with(|n: &u64| *n).expect("a `u64`")
-}
-
-fn unfilled_key(opened: Result<(), HostError>) -> String {
-    let Err(HostError::Unfilled { key }) = opened else {
-        panic!("the page opened over a storage without a context an entry fetches first: {opened:?}")
-    };
-    key
-}
-
-async fn open_refusal(program: &Program) -> String {
-    program
-        .scope(async |s| unfilled_key(s.open(MemoryStorage::new()).await.map(|_| ())))
-        .await
 }
 
 #[tokio::test]
 async fn a_storing_script_runs_on_a_storage_that_holds_nothing_and_its_turns_push_to_it() {
     let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
-    let space = Space::new(Plain);
-    stored_by(&store_deque_program(), &space, "init").await;
-
     let program = fresh_log_program();
     assert_eq!(solved(&program, "log"), "Deque<String>");
     program
         .scope(async |s| {
-            let mut page = s.open(SpaceStorage::new(&space)).await.expect("the space holds `@log`");
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             run_unit(s, &mut page, "turn").await;
             run_unit(s, &mut page, "turn").await;
@@ -589,14 +616,16 @@ async fn a_storing_script_runs_on_a_storage_that_holds_nothing_and_its_turns_pus
         .await
 }
 
+/// A body fetches at its entry, before its first call, so a turn over a
+/// storage without its context ends before any of it runs.
 #[tokio::test]
-async fn a_turn_before_the_script_that_stores_its_context_is_refused_before_any_of_it_runs() {
+async fn a_turn_before_the_script_that_stores_its_context_ends_before_any_of_it_runs() {
     let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     let space = Space::new(Plain);
     let program = fresh_log_program();
     let bumps_before = BUMPS.load(Ordering::SeqCst);
 
-    assert_eq!(open_refusal(&program).await, "log");
+    assert_eq!(unfilled_key(ran_on_empty::<()>(&program, "turn").await), "log");
     assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before, "the turn's first call did not run");
 
     stored_by(&store_deque_program(), &space, "init").await;
@@ -604,10 +633,10 @@ async fn a_turn_before_the_script_that_stores_its_context_is_refused_before_any_
     assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before + 1);
 }
 
-/// The fetch is the callee's and comes after `bump()`: the refusal is the
-/// page's, before any run.
+/// Where the run ends against `bump()` is the optimizer's: RFC-0025 rule 10
+/// lets a fetch move past a call whose summary does not touch its context.
 #[tokio::test]
-async fn a_program_whose_callee_fetches_a_context_the_storage_lacks_opens_no_page() {
+async fn a_callee_that_fetches_a_context_the_storage_lacks_ends_the_run_unfilled() {
     let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     let space = Space::new(Plain);
     let program = compiled(
@@ -618,18 +647,19 @@ async fn a_program_whose_callee_fetches_a_context_the_storage_lacks_opens_no_pag
     );
     let bumps_before = BUMPS.load(Ordering::SeqCst);
 
-    assert_eq!(open_refusal(&program).await, "log");
-    assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before);
+    assert_eq!(unfilled_key(ran_on_empty::<()>(&program, "turn").await), "log");
+    let bumped = BUMPS.load(Ordering::SeqCst);
 
     stored_by(&store_deque_program(), &space, "init").await;
     stored_by(&program, &space, "turn").await;
-    assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before + 1);
+    assert_eq!(BUMPS.load(Ordering::SeqCst), bumped + 1);
+    assert!(bumped <= bumps_before + 1);
 }
 
 #[tokio::test]
 async fn a_context_assigned_on_one_branch_only_is_fetched_and_refused_on_an_empty_storage() {
     let bare = compiled(host().entry::<(), i64>("main", Source::Script("if coin() { @x = 1; } @x")));
-    assert_eq!(open_refusal(&bare).await, "x");
+    assert_eq!(unfilled_key(ran_on_empty::<i64>(&bare, "main").await), "x");
 
     let program = compiled(
         host()
@@ -638,9 +668,10 @@ async fn a_context_assigned_on_one_branch_only_is_fetched_and_refused_on_an_empt
     );
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let main = s.entry::<(), i64>("main").expect("the entry returns `i64`");
-            let output = main.run(&mut page, ()).await.expect("the page holds `@x`");
+            let output = main.run(&mut page, ()).await.expect("the init fills `@x`");
             assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 1);
         })
         .await
@@ -656,7 +687,7 @@ async fn a_whole_assignment_inside_a_callee_does_not_spare_the_callers_fetch() {
             .entry::<(), ()>("set_x", Source::Script("@x = 1;"))
             .entry::<(), i64>("main", Source::Script("set_x(); @x")),
     );
-    assert_eq!(open_refusal(&bare).await, "x");
+    assert_eq!(unfilled_key(ran_on_empty::<i64>(&bare, "main").await), "x");
 
     let program = compiled(
         host()
@@ -666,9 +697,10 @@ async fn a_whole_assignment_inside_a_callee_does_not_spare_the_callers_fetch() {
     );
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let main = s.entry::<(), i64>("main").expect("the entry returns `i64`");
-            let output = main.run(&mut page, ()).await.expect("the page holds `@x`");
+            let output = main.run(&mut page, ()).await.expect("the init fills `@x`");
             assert_eq!(
                 output.with(|n: &i64| *n).expect("the result is an `i64`"),
                 1,
@@ -685,7 +717,11 @@ async fn a_call_that_writes_a_context_before_the_body_assigns_it_makes_the_body_
             .entry::<(), ()>("set_x", Source::Script("@x = 1;"))
             .entry::<(), i64>("main", Source::Script("set_x(); @x = 2; @x")),
     );
-    assert_eq!(open_refusal(&bare).await, "x", "the body skipped the fetch the call's bracket needs");
+    assert_eq!(
+        unfilled_key(ran_on_empty::<i64>(&bare, "main").await),
+        "x",
+        "the body skipped the fetch the call's bracket needs"
+    );
 
     let program = compiled(
         host()
@@ -695,22 +731,24 @@ async fn a_call_that_writes_a_context_before_the_body_assigns_it_makes_the_body_
     );
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let main = s.entry::<(), i64>("main").expect("the entry returns `i64`");
-            let output = main.run(&mut page, ()).await.expect("the page holds `@x`");
+            let output = main.run(&mut page, ()).await.expect("the init fills `@x`");
             assert_eq!(
                 output.with(|n: &i64| *n).expect("the result is an `i64`"),
                 2,
                 "the body's own store is the last"
             );
             drop(output);
-            assert_eq!(int_of(&page, "x").expect("`@x` is held"), 2);
+            assert_eq!(int_of(&mut page, "x").await.expect("`@x` is held"), 2);
         })
         .await
 }
 
 /// The init writes 0, so a callee that read `@x` before its caller committed
-/// would return 0.
+/// would return 0. With no init the caller's commit is what the callee
+/// fetches, so the storage need not hold `@x` before the run.
 #[tokio::test]
 async fn a_callee_reads_what_its_caller_assigned_before_the_call() {
     let program = compiled(
@@ -719,24 +757,25 @@ async fn a_callee_reads_what_its_caller_assigned_before_the_call() {
             .entry::<(), i64>("read_x", Source::Script("@x"))
             .entry::<(), i64>("main", Source::Script("@x = 3; read_x()")),
     );
-    program
-        .scope(async |s| {
-            let mut page = open(s).await;
-            let main = s.entry::<(), i64>("main").expect("the entry returns `i64`");
-            let output = main
-                .run(&mut page, ())
-                .await
-                .expect("the caller commits `@x` before the callee fetches it");
-            assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 3);
-        })
-        .await;
-
     let bare = compiled(
         host()
             .entry::<(), i64>("read_x", Source::Script("@x"))
             .entry::<(), i64>("main", Source::Script("@x = 3; read_x()")),
     );
-    assert_eq!(open_refusal(&bare).await, "x");
+    for program in [program, bare] {
+        program
+            .scope(async |s| {
+                let mut storage = MemoryStorage::new();
+                let mut page = s.open(&mut storage);
+                let main = s.entry::<(), i64>("main").expect("the entry returns `i64`");
+                let output = main
+                    .run(&mut page, ())
+                    .await
+                    .expect("the caller commits `@x` before the callee fetches it");
+                assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 3);
+            })
+            .await;
+    }
 }
 
 #[tokio::test]
@@ -744,8 +783,9 @@ async fn an_insert_of_a_key_no_script_names_is_not_in_the_graph() {
     let program = store_log_program();
     program
         .scope(async |s| {
-            let mut page = open(s).await;
-            let refused = page.insert("transcript", vec!["kept by the host".to_owned()]);
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let refused = page.insert("transcript", vec!["kept by the host".to_owned()]).await;
             let Err(HostError::NotInGraph {
                 what: Named::Context(key),
             }) = refused
@@ -757,7 +797,7 @@ async fn an_insert_of_a_key_no_script_names_is_not_in_the_graph() {
         .await
 }
 
-/// Without a fetch, the value the page held is replaced at the exit's
+/// Without a fetch, the value the storage held is replaced at the exit's
 /// commit, and released there once.
 #[tokio::test]
 async fn a_store_only_run_over_a_held_value_releases_the_value_it_replaces_once() {
@@ -769,12 +809,15 @@ async fn a_store_only_run_over_a_held_value_releases_the_value_it_replaces_once(
     ));
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
-            assert_eq!(counting.released(), 0, "the page holds every element");
+            assert_eq!(counting.released(), 0, "the storage holds every element");
             run_unit(s, &mut page, "init").await;
             assert_eq!(counting.released(), ELEMENTS, "the replaced value is released once");
             drop(page);
+            assert_eq!(counting.released(), ELEMENTS, "a page holds nothing to release");
+            drop(storage);
             assert_eq!(counting.released(), 2 * ELEMENTS);
         })
         .await
@@ -787,16 +830,18 @@ async fn an_element_edited_in_place_is_what_the_next_run_reads() {
     let program = log_program();
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             run_unit(s, &mut page, "turn").await;
             page.with_mut(
                 "log",
                 |ctx: &mut Ctx<'_, Rt>, xs: &mut [Erased<Rt, String>]| xs[0].as_mut(ctx.rt).push('!'),
             )
+            .await
             .expect("`@log` holds a `Vec<String>`");
             run_unit(s, &mut page, "turn").await;
-            let log = log_of(&page).expect("`@log` holds a `Vec<String>`");
+            let log = log_of(&mut page).await.expect("`@log` holds a `Vec<String>`");
             assert_eq!(log, ["x!", "x"]);
         })
         .await
@@ -812,20 +857,23 @@ async fn a_derived_context_is_edited_through_its_projection_and_the_next_run_rea
     );
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             page.with_mut("p", |p: ProfileMut<'_>| {
                 *p.age += 1;
                 p.name.push('e');
             })
+            .await
             .expect("`@p` holds a `Profile`");
             let name = page
                 .with("p", |p: ProfileRef<'_>| p.name.clone())
+                .await
                 .expect("`@p` holds a `Profile`");
             assert_eq!(name, "anne");
 
             let age = s.entry::<(), i64>("age").expect("the entry returns `i64`");
-            let output = age.run(&mut page, ()).await.expect("the page holds `@p`");
+            let output = age.run(&mut page, ()).await.expect("the storage holds `@p`");
             assert_eq!(output.with(|n: &i64| *n).expect("the result is an `i64`"), 42);
         })
         .await
@@ -836,12 +884,13 @@ async fn a_closure_of_another_type_is_refused_before_it_runs_and_the_page_is_unc
     let program = log_program();
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
             run_unit(s, &mut page, "turn").await;
 
             let mut ran = false;
-            let refused = page.with_mut("log", |_: &mut String| ran = true);
+            let refused = page.with_mut("log", |_: &mut String| ran = true).await;
             let Err(HostError::Mismatched {
                 what: Part::Context(key),
                 held,
@@ -854,10 +903,10 @@ async fn a_closure_of_another_type_is_refused_before_it_runs_and_the_page_is_unc
             assert_eq!(key, "log");
             assert_eq!(held, "Vec<String>");
             assert_eq!(asked, "&mut String");
-            assert_eq!(log_of(&page).expect("`@log` is held"), ["x"]);
+            assert_eq!(log_of(&mut page).await.expect("`@log` is held"), ["x"]);
 
             let entry = s.entry::<(), ()>("turn").expect("the entry returns `()`");
-            let output = entry.run(&mut page, ()).await.expect("the page holds `@log`");
+            let output = entry.run(&mut page, ()).await.expect("the storage holds `@log`");
             let mut ran = false;
             let refused = output.with(|_: &i64| ran = true);
             assert!(
@@ -874,14 +923,19 @@ async fn a_string_context_is_kept_as_a_copy_the_host_makes() {
     let program = compiled(host().entry::<(), ()>("init", Source::Script(r#"@name = "ann".to_string();"#)));
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "init").await;
-            let kept: String = page.with("name", |s: &str| s.to_owned()).expect("`@name` is a `String`");
+            let kept: String = page
+                .with("name", |s: &str| s.to_owned())
+                .await
+                .expect("`@name` is a `String`");
             page.with_mut("name", |s: &mut String| s.push_str(" smith"))
+                .await
                 .expect("`@name` is a `String`");
             assert_eq!(kept, "ann");
             assert_eq!(
-                page.with("name", |s: &str| s.to_owned()).expect("`@name` is held"),
+                page.with("name", |s: &str| s.to_owned()).await.expect("`@name` is held"),
                 "ann smith"
             );
         })
@@ -901,17 +955,23 @@ async fn a_space_page_lends_what_it_loads_and_commits_what_it_was_lent() {
     );
     program
         .scope(async |s| {
-            let mut reopened = s.open(SpaceStorage::new(&space)).await.expect("same types");
+            let mut storage = SpaceStorage::new(&space);
+            let mut reopened = s.open(&mut storage);
             reopened
                 .with_mut("name", |s: &mut String| s.push('?'))
+                .await
                 .expect("`@name` loads from the space");
-            assert_eq!(reopened.with("name", |s: &str| s.to_owned()).expect("`@name` is held"), "ann?");
-            reopened.commit().expect("the space takes the edit");
+            assert_eq!(
+                reopened.with("name", |s: &str| s.to_owned()).await.expect("`@name` is held"),
+                "ann?"
+            );
+            reopened.commit().await.expect("the space takes the edit");
         })
         .await;
     program
         .scope(async |s| {
-            let mut fresh = s.open(SpaceStorage::new(&space)).await.expect("same types");
+            let mut storage = SpaceStorage::new(&space);
+            let mut fresh = s.open(&mut storage);
             let entry = s.entry::<(), String>("name").expect("the entry returns `String`");
             let output = entry.run(&mut fresh, ()).await.expect("the space holds `@name`");
             assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "ann?");
@@ -968,7 +1028,8 @@ where
 {
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<I, i64>("main").expect("the entry takes `I` and returns `i64`");
             let output = entry.run(&mut page, inputs).await.expect("the graph has no context");
             output.with(|n: &i64| *n).expect("the result is an `i64`")
@@ -996,7 +1057,8 @@ async fn a_text_input_crosses_as_the_string_it_is() {
     let program = compiled(host().entry::<S, String>("main", Source::Script(r#"$s + "x""#)));
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<S, String>("main").expect("the entry takes `S`");
             let output = entry
                 .run(&mut page, S { s: "jun".to_owned() })
@@ -1125,7 +1187,8 @@ async fn a_bound_variant_folds_to_the_arm_it_chose() {
         );
         let text = program
             .scope(async |s| {
-                let mut page = open(s).await;
+                let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
                 let entry = s.entry::<(), String>("main").expect("the entry returns `String`");
                 let output = entry.run(&mut page, ()).await.expect("the graph has no context");
                 output.with(|s: &str| s.to_owned()).expect("a `String`")
@@ -1153,8 +1216,10 @@ fn init_counted() -> MutexGuard<'static, ()> {
     INIT_COUNTED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Opening reads nothing, so the init runs where the turn's fetch finds the
+/// storage lacks `@log`.
 #[tokio::test]
-async fn opening_an_empty_storage_runs_the_expression_init_and_a_turn_reads_it() {
+async fn a_turn_over_an_empty_storage_runs_the_expression_init_at_its_fetch_and_pushes_to_it() {
     let program = compiled(
         host()
             .init("log", Source::Expr("vec([])"))
@@ -1163,11 +1228,13 @@ async fn opening_an_empty_storage_runs_the_expression_init_and_a_turn_reads_it()
     assert_eq!(solved(&program, "log"), "Vec<String>");
     program
         .scope(async |s| {
-            let mut page = open(s).await;
-            assert_eq!(page.filled(), ["log"]);
-            assert_eq!(log_of(&page).expect("the init filled `@log`"), Vec::<String>::new());
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            assert!(page.filled().is_empty(), "opening ran no init");
+            assert!(matches!(log_of(&mut page).await, Err(HostError::Unstored { .. })));
             run_unit(s, &mut page, "turn").await;
-            let log = log_of(&page).expect("`@log` holds a `Vec<String>`");
+            assert_eq!(page.filled(), ["log"]);
+            let log = log_of(&mut page).await.expect("`@log` holds a `Vec<String>`");
             assert_eq!(log, ["x"]);
         })
         .await
@@ -1188,13 +1255,14 @@ async fn a_script_init_edits_what_it_made_and_the_turn_sees_the_edit() {
     assert_eq!(solved(&program, "h"), "Deque<String>");
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "turn").await;
             let size = s.entry::<(), u64>("size").expect("`size` returns `u64`");
-            let output = size.run(&mut page, ()).await.expect("the page holds `@h`");
+            let output = size.run(&mut page, ()).await.expect("the storage holds `@h`");
             assert_eq!(output.with(|n: &u64| *n).expect("a `u64`"), 2);
             let oldest = s.entry::<(), String>("oldest").expect("`oldest` returns `String`");
-            let output = oldest.run(&mut page, ()).await.expect("the page holds `@h`");
+            let output = oldest.run(&mut page, ()).await.expect("the storage holds `@h`");
             assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "sys");
         })
         .await
@@ -1205,16 +1273,17 @@ async fn an_init_runs_once_and_a_second_run_reads_what_the_first_left() {
     let _counted = init_counted();
     let program = compiled(
         host()
-            .init("log", Source::Script("init_ran(); vec([])"))
+            .init("log", Source::Expr("init_ran(vec([]))"))
             .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
     );
     let before = INIT_RUNS.load(Ordering::SeqCst);
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "turn").await;
             run_unit(s, &mut page, "turn").await;
-            let log = log_of(&page).expect("`@log` holds a `Vec<String>`");
+            let log = log_of(&mut page).await.expect("`@log` holds a `Vec<String>`");
             assert_eq!(log, ["x", "x"]);
         })
         .await;
@@ -1227,12 +1296,12 @@ async fn a_storage_that_holds_the_key_never_runs_its_init() {
     let space = Space::new(Plain);
     let seeding = compiled(
         host()
-            .init("log", Source::Script("init_ran(); deque()"))
+            .init("log", Source::Expr("init_ran(deque())"))
             .entry::<(), ()>("seed", Source::Script(STORE_DEQUE)),
     );
     let program = compiled(
         host()
-            .init("log", Source::Script("init_ran(); deque()"))
+            .init("log", Source::Expr("init_ran(deque())"))
             .entry::<(), ()>("turn", Source::Script(PUSH_DEQUE))
             .entry::<(), u64>("size", Source::Script("@log.len()")),
     );
@@ -1241,33 +1310,29 @@ async fn a_storage_that_holds_the_key_never_runs_its_init() {
     stored_by(&seeding, &space, "seed").await;
     program
         .scope(async |s| {
-            let mut page = s.open(SpaceStorage::new(&space)).await.expect("the space holds `@log`");
-            assert!(page.filled().is_empty(), "{:?}", page.filled());
+            let mut storage = SpaceStorage::new(&space);
+            let mut page = s.open(&mut storage);
             run_unit(s, &mut page, "turn").await;
+            assert!(page.filled().is_empty(), "{:?}", page.filled());
             assert_eq!(size_of(s, &mut page).await, 2, "the held element and the turn's");
         })
         .await;
     assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before);
 }
 
+/// A body fetches its contexts at its entry, before its first call, so a
+/// key with neither a value nor an init ends the run before `bump()`.
 #[tokio::test]
-async fn a_key_with_no_value_and_no_init_refuses_the_open_before_any_init_or_op_runs() {
-    let _counted = init_counted();
+async fn a_key_with_no_value_and_no_init_ends_the_run_at_its_fetch_before_any_op_runs() {
     let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     let program = compiled(
         host()
-            .init("n", Source::Script("init_ran(); 1"))
+            .init("n", Source::Script("1"))
             .entry::<(), ()>("turn", Source::Script(&format!("bump(); @n = @n + 1; {PUSH_LOG}"))),
     );
-    let inits_before = INIT_RUNS.load(Ordering::SeqCst);
     let bumps_before = BUMPS.load(Ordering::SeqCst);
 
-    let key = program
-        .scope(async |s| unfilled_key(s.open(MemoryStorage::new()).await.map(|_| ())))
-        .await;
-
-    assert_eq!(key, "log");
-    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), inits_before);
+    assert_eq!(unfilled_key(ran_on_empty::<()>(&program, "turn").await), "log");
     assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before);
 }
 
@@ -1316,7 +1381,8 @@ async fn an_identity_carrying_context_takes_its_init_and_refuses_a_turns_new_sou
     );
     program
         .scope(async |s| {
-            let mut page = open(s).await;
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
             let entry = s.entry::<(), i64>("turn").expect("the entry returns `i64`");
             for expected in [1, 2] {
                 let output = entry.run(&mut page, ()).await.expect("the init fills `@h`");
@@ -1346,36 +1412,50 @@ async fn an_identity_carrying_context_takes_its_init_and_refuses_a_turns_new_sou
 }
 
 #[tokio::test]
-async fn an_empty_space_is_filled_committed_reopened_and_run_without_its_init() {
+async fn an_empty_space_is_filled_by_a_run_committed_reopened_and_run_without_its_init() {
     let _counted = init_counted();
     let space = Space::new(Plain);
     let program = compiled(
         host()
-            .init("name", Source::Script(r#"init_ran(); "ann".to_string()"#))
+            .init("name", Source::Expr(r#"init_ran("ann".to_string())"#))
             .entry::<(), String>("name", Source::Script("@name")),
     );
     let before = INIT_RUNS.load(Ordering::SeqCst);
 
-    program
-        .scope(async |s| {
-            let mut page = s.open(SpaceStorage::new(&space)).await.expect("the space opens");
-            assert_eq!(page.filled(), ["name"]);
-            page.commit().expect("the space takes the context it did not hold");
-        })
-        .await;
-    program
-        .scope(async |s| {
-            let mut reopened = s.open(SpaceStorage::new(&space)).await.expect("same types");
-            assert!(reopened.filled().is_empty());
-            let entry = s.entry::<(), String>("name").expect("the entry returns `String`");
-            let output = entry.run(&mut reopened, ()).await.expect("the space holds `@name`");
-            assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "ann");
-        })
-        .await;
+    for filled in [vec!["name"], vec![]] {
+        program
+            .scope(async |s| {
+                let mut storage = SpaceStorage::new(&space);
+                let mut page = s.open(&mut storage);
+                let entry = s.entry::<(), String>("name").expect("the entry returns `String`");
+                let output = entry.run(&mut page, ()).await.expect("the init or the space holds `@name`");
+                assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "ann");
+                assert_eq!(page.filled(), filled);
+                page.commit().await.expect("the space takes the context the init made");
+            })
+            .await;
+    }
     assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before + 1);
 }
 
-// -- A storage's errors reach the host where the page opens (RFC-0090 rule 6) --
+#[test]
+fn an_init_that_can_wait_is_refused_under_synchronous_access() {
+    let init = Source::Script("pause(); 1");
+    let refusals = refused(host().init("n", init).entry::<(), i64>("main", Source::Script("@n")));
+    let [refusal] = refusals.as_slice() else {
+        panic!("one refusal, the init's: {refusals:?}")
+    };
+    assert_eq!(refusal.origin, Some(Origin::Init("n".to_owned())));
+    assert!(refusal.message.contains("`Host::async_access`"), "{}", refusal.message);
+
+    let waited = host()
+        .async_access()
+        .init("n", Source::Script("pause(); 1"))
+        .entry::<(), i64>("main", Source::Script("@n"));
+    assert!(waited.compile(SequentialExecutor).is_ok());
+}
+
+// -- A storage's errors end the run that meets them (RFC-0090 rule 4) ----
 
 struct Unreadable;
 
@@ -1384,7 +1464,13 @@ impl Storage for Unreadable {
         Err(StorageError::new(format!("`@{key}` is on a disk that is gone")))
     }
 
-    fn store(&mut self, _: &str, _: Held) {}
+    fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+        Ok(())
+    }
+
+    fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+        Ok(())
+    }
 
     fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
         Ok(())
@@ -1419,37 +1505,45 @@ impl Store for HeadlessStore {
     }
 }
 
+async fn main_over<S>(program: &Program, storage: &mut S) -> Result<i64, HostError>
+where
+    S: Storage,
+{
+    program
+        .scope(async |s| {
+            let mut page = s.open(storage);
+            let main = s.entry::<(), i64>("main")?;
+            main.run(&mut page, ()).await?.with(|n: &i64| *n)
+        })
+        .await
+}
+
 #[tokio::test]
-async fn a_storage_that_fails_to_load_refuses_the_open() {
+async fn a_storage_that_fails_to_load_ends_the_run_at_the_load() {
     let program = compiled(
         host()
             .init("n", Source::Expr("1"))
             .entry::<(), i64>("main", Source::Script("@n")),
     );
-    let opened = program
-        .scope(async |s| s.open(Unreadable).await.map(|_| ()))
-        .await;
-    assert!(matches!(opened, Err(HostError::Storage(_))), "{opened:?}");
+    let ran = main_over(&program, &mut Unreadable).await;
+    assert!(matches!(ran, Err(HostError::Storage(_))), "{ran:?}");
 
     let space = Space::over(Plain, Box::new(HeadlessStore));
-    let opened = program
-        .scope(async |s| s.open(SpaceStorage::new(&space)).await.map(|_| ()))
-        .await;
-    let Err(HostError::Storage(error)) = opened else {
-        panic!("a space whose head does not read opened a page: {opened:?}")
+    let ran = main_over(&program, &mut SpaceStorage::new(&space)).await;
+    let Err(HostError::Storage(error)) = ran else {
+        panic!("a space whose head does not read gave a value: {ran:?}")
     };
     assert_eq!(error.to_string(), "the head of `@n` does not read");
 }
 
-/// Keeps every holder it is handed and never gives one back to the page
-/// that handed it, so a later page is offered it.
+/// Keeps every holder it is handed, and gives one out only while `giving`.
 #[derive(Default)]
 struct Hoard {
     held: std::collections::HashMap<String, Held>,
     giving: bool,
 }
 
-impl Storage for &mut Hoard {
+impl Storage for Hoard {
     fn load(&mut self, key: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
         match self.giving {
             true => Ok(self.held.remove(key)),
@@ -1457,8 +1551,14 @@ impl Storage for &mut Hoard {
         }
     }
 
-    fn store(&mut self, key: &str, held: Held) {
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
         self.held.insert(key.to_owned(), held);
+        Ok(())
+    }
+
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        self.held.entry(key.to_owned()).or_insert(held);
+        Ok(())
     }
 
     fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
@@ -1467,26 +1567,456 @@ impl Storage for &mut Hoard {
 }
 
 #[tokio::test]
-async fn a_holder_another_compilation_made_is_refused_where_the_page_opens() {
+async fn a_holder_another_compilation_made_is_refused_where_it_is_loaded() {
     let source = r#"@name = "ann".to_string();"#;
     let first = compiled(host().entry::<(), ()>("init", Source::Script(source)));
-    let second = compiled(host().entry::<(), ()>("init", Source::Script(source)));
+    let second = compiled(
+        host()
+            .entry::<(), ()>("init", Source::Script(source))
+            .entry::<(), String>("name", Source::Script("@name")),
+    );
     let mut hoard = Hoard::default();
 
-    let committed = first
+    first
         .scope(async |s| {
-            let mut page = s.open(&mut hoard).await.expect("the hoard gives nothing");
+            let mut page = s.open(&mut hoard);
             run_unit(s, &mut page, "init").await;
-            page.commit().map(|_| ())
+            page.commit().await.expect("the hoard keeps what it is handed");
         })
         .await;
-    assert!(matches!(committed, Err(HostError::Storage(_))), "{committed:?}");
     assert!(hoard.held.contains_key("name"), "the hoard kept the holder");
 
     hoard.giving = true;
-    let opened = second.scope(async |s| s.open(&mut hoard).await.map(|_| ())).await;
-    let Err(HostError::Storage(error)) = opened else {
-        panic!("a page took a holder another compilation made: {opened:?}")
+    let ran = second
+        .scope(async |s| {
+            let mut page = s.open(&mut hoard);
+            let name = s.entry::<(), String>("name")?;
+            name.run(&mut page, ()).await.map(|_| ())
+        })
+        .await;
+    let Err(HostError::Storage(error)) = ran else {
+        panic!("a run took a holder another compilation made: {ran:?}")
     };
     assert_eq!(error.to_string(), "the storage gave `@name` a holder another compilation made");
+    assert!(hoard.held.contains_key("name"), "the refused holder went back to the hoard");
+}
+
+// -- The storage is read at a load and written at a store that wrote ------
+// -- (RFC-0090 rule 3, RFC-0025 rule 2) -----------------------------------
+
+static ACCESS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+static ACCESS_RUNS: Mutex<()> = Mutex::new(());
+
+fn access_logged() -> MutexGuard<'static, ()> {
+    let runs = ACCESS_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
+    taken_access();
+    runs
+}
+
+fn logged(line: String) {
+    ACCESS.lock().unwrap_or_else(PoisonError::into_inner).push(line);
+}
+
+fn taken_access() -> Vec<String> {
+    std::mem::take(&mut *ACCESS.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Two clones share one set of holders, as two pages over one storage do.
+#[derive(Clone, Default)]
+struct Logged {
+    holders: std::sync::Arc<Mutex<std::collections::HashMap<String, Held>>>,
+}
+
+impl Logged {
+    fn holders(&self) -> MutexGuard<'_, std::collections::HashMap<String, Held>> {
+        self.holders.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Storage for Logged {
+    fn load(&mut self, key: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
+        logged(format!("load {key}"));
+        Ok(self.holders().remove(key))
+    }
+
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        logged(format!("store {key}"));
+        self.holders().insert(key.to_owned(), held);
+        Ok(())
+    }
+
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        logged(format!("restore {key}"));
+        self.holders().entry(key.to_owned()).or_insert(held);
+        Ok(())
+    }
+
+    fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
+        logged("commit".to_owned());
+        Ok(())
+    }
+}
+
+/// `@a` is interned before `@b`, so a body fetches and commits `@a` first.
+fn a_then_b_program() -> Program {
+    compiled(
+        host()
+            .entry::<(), ()>("step", Source::Script("let x = @a; @b = x + 1;"))
+            .entry::<(), ()>("both", Source::Script("let x = @a; @b = @b + x;"))
+            .entry::<(), i64>("total", Source::Script("let x = @a; x + @b")),
+    )
+}
+
+#[tokio::test]
+async fn a_run_loads_what_it_fetches_restores_what_it_read_and_stores_what_it_wrote() {
+    let _logged = access_logged();
+    let program = a_then_b_program();
+    let mut storage = Logged::default();
+    program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            assert_eq!(taken_access(), Vec::<String>::new(), "opening reads nothing");
+            page.insert("a", 1_i64).await.expect("`@a` is an `i64`");
+            assert_eq!(taken_access(), ["store a"]);
+
+            run_unit(s, &mut page, "step").await;
+            assert_eq!(taken_access(), ["load a", "restore a", "store b"]);
+            run_unit(s, &mut page, "both").await;
+            assert_eq!(taken_access(), ["load a", "load b", "restore a", "store b"]);
+
+            assert_eq!(int_of(&mut page, "b").await.expect("`@b` is held"), 3);
+            assert_eq!(taken_access(), ["load b", "restore b"]);
+            page.with_mut("a", |n: &mut i64| *n += 10).await.expect("`@a` is held");
+            assert_eq!(taken_access(), ["load a", "store a"]);
+            page.commit().await.expect("the storage commits");
+            assert_eq!(taken_access(), ["commit"]);
+            drop(page);
+        })
+        .await;
+    assert_eq!(taken_access(), Vec::<String>::new(), "dropping a page reads and writes nothing");
+}
+
+#[tokio::test]
+async fn a_read_only_run_moves_no_head_and_a_commit_moves_the_head_of_each_written_context_alone() {
+    let space = Space::new(Plain);
+    let seeding = compiled(host().entry::<(), ()>("seed", Source::Script("@a = 1; @b = 5;")));
+    stored_by(&seeding, &space, "seed").await;
+    let heads = |space: &Space| (space.head("a"), space.head("b"), space.node_count());
+    let seeded = heads(&space);
+
+    let program = a_then_b_program();
+    program
+        .scope(async |s| {
+            let mut storage = SpaceStorage::new(&space);
+            let mut page = s.open(&mut storage);
+            let total = s.entry::<(), i64>("total").expect("`total` returns `i64`");
+            let output = total.run(&mut page, ()).await.expect("the space holds `@a` and `@b`");
+            assert_eq!(output.with(|n: &i64| *n).expect("an `i64`"), 6);
+            page.commit().await.expect("the space commits nothing");
+            assert!(page.storage().committed().is_empty(), "{:?}", page.storage().committed());
+        })
+        .await;
+    assert_eq!(heads(&space), seeded, "a read-only run moved no head");
+
+    program
+        .scope(async |s| {
+            let mut storage = SpaceStorage::new(&space);
+            let mut page = s.open(&mut storage);
+            run_unit(s, &mut page, "step").await;
+            page.commit().await.expect("the space takes `@b`");
+            let moved: Vec<&str> = page.storage().committed().iter().map(|c| c.id.as_str()).collect();
+            assert_eq!(moved, ["b"]);
+        })
+        .await;
+    let (a, b, _) = heads(&space);
+    assert_eq!(a, seeded.0, "`@a` was read and not written");
+    assert_ne!(b, seeded.1, "`@b` was written");
+}
+
+#[extern_fn(effect = opaque)]
+async fn pause() {
+    tokio::task::yield_now().await;
+}
+
+#[extern_fn(effect = pure)]
+fn mark<T>(what: String, made: T) -> T
+where
+    T: Var<kind::Type>,
+{
+    logged(format!("mark {what}"));
+    made
+}
+
+/// `pause()` yields, so `join!` runs page 2's store between page 1's load
+/// of `@a` and its restore.
+#[tokio::test]
+async fn a_run_that_read_a_context_does_not_overwrite_what_another_page_stored_meanwhile() {
+    let _logged = access_logged();
+    let program = compiled(
+        host()
+            .entry::<(), i64>("read_a", Source::Script("let x = @a; pause(); x"))
+            .entry::<(), ()>("set_a", Source::Script("@a = 2;")),
+    );
+    let shared = Logged::default();
+    let (read, stored) = program
+        .scope(async |s| {
+            let (mut first, mut second) = (shared.clone(), shared.clone());
+            let mut page_1 = s.open(&mut first);
+            let mut page_2 = s.open(&mut second);
+            page_1.insert("a", 1_i64).await.expect("`@a` is an `i64`");
+            taken_access();
+            let read_a = s.entry::<(), i64>("read_a").expect("`read_a` returns `i64`");
+            let set_a = s.entry::<(), ()>("set_a").expect("`set_a` returns `()`");
+            let (read, set) = futures::join!(read_a.run(&mut page_1, ()), set_a.run(&mut page_2, ()));
+            set.expect("`set_a` stores `@a`");
+            let read = read.expect("the storage held `@a`").with(|n: &i64| *n).expect("an `i64`");
+            let stored = int_of(&mut page_1, "a").await.expect("`@a` is held");
+            (read, stored)
+        })
+        .await;
+    assert_eq!(read, 1, "page 1 read the value before page 2's store");
+    assert_eq!(stored, 2, "page 1 handed `@a` back without overwriting page 2's store");
+}
+
+#[tokio::test]
+async fn a_fetch_that_finds_nothing_runs_the_init_there_and_the_run_goes_on() {
+    let _logged = access_logged();
+    let program = compiled(
+        host()
+            .init("b", Source::Expr(r#"mark("init b".to_string(), 5)"#))
+            .entry::<(), i64>("total", Source::Script("let x = @a; x + @b")),
+    );
+    let mut storage = Logged::default();
+    let total = program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            page.insert("a", 1_i64).await.expect("`@a` is an `i64`");
+            taken_access();
+            let total = s.entry::<(), i64>("total").expect("`total` returns `i64`");
+            let output = total.run(&mut page, ()).await.expect("the init fills `@b`");
+            assert_eq!(page.filled(), ["b"]);
+            output.with(|n: &i64| *n).expect("an `i64`")
+        })
+        .await;
+    assert_eq!(total, 6);
+    assert_eq!(
+        taken_access(),
+        ["load a", "load b", "mark init b", "store b", "load b", "restore a", "restore b"]
+    );
+}
+
+#[tokio::test]
+async fn a_fetch_that_finds_nothing_and_no_init_ends_the_run_there_and_earlier_stores_stay() {
+    let _logged = access_logged();
+    let program = compiled(
+        host()
+            .entry::<(), ()>("set_c", Source::Script("@c = 7;"))
+            .entry::<(), i64>("read_d", Source::Script("@d"))
+            .entry::<(), i64>("main", Source::Script("set_c(); read_d()")),
+    );
+    let mut storage = Logged::default();
+    let ran = program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            let main = s.entry::<(), i64>("main").expect("`main` returns `i64`");
+            main.run(&mut page, ()).await.map(|_| ())
+        })
+        .await;
+    assert_eq!(unfilled_key(ran), "d");
+    assert_eq!(taken_access(), ["store c", "load d"]);
+    assert!(storage.holders().contains_key("c"), "the store before the fetch stays made");
+}
+
+struct Failing {
+    key: &'static str,
+    inner: MemoryStorage,
+}
+
+impl Failing {
+    fn refused(&self, key: &str) -> Result<(), StorageError> {
+        match key == self.key {
+            true => Err(StorageError::new(format!("`@{key}` does not reach its disk"))),
+            false => Ok(()),
+        }
+    }
+}
+
+impl Storage for Failing {
+    fn load(&mut self, key: &str, codec: &Codec<'_>) -> Result<Option<Held>, StorageError> {
+        self.refused(key)?;
+        Storage::load(&mut self.inner, key, codec)
+    }
+
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        self.refused(key)?;
+        Storage::store(&mut self.inner, key, held)
+    }
+
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        self.refused(key)?;
+        Storage::restore(&mut self.inner, key, held)
+    }
+
+    fn commit(&mut self, codec: &Codec<'_>) -> Result<(), StorageError> {
+        Storage::commit(&mut self.inner, codec)
+    }
+}
+
+#[tokio::test]
+async fn a_storage_failure_in_the_middle_of_a_run_ends_it_with_the_storage_error() {
+    let program = compiled(
+        host()
+            .entry::<(), ()>("set_c", Source::Script("@c = 7;"))
+            .entry::<(), i64>("read_d", Source::Script("@d"))
+            .entry::<(), i64>("main", Source::Script("set_c(); read_d()"))
+            .entry::<(), ()>("write_d", Source::Script("set_c(); @d = 1;")),
+    );
+    for (entry, failing) in [("main", "d"), ("write_d", "d"), ("main", "c")] {
+        let mut storage = Failing {
+            key: failing,
+            inner: MemoryStorage::new(),
+        };
+        let ran = program
+            .scope(async |s| {
+                let mut page = s.open(&mut storage);
+                match entry {
+                    "main" => s.entry::<(), i64>(entry)?.run(&mut page, ()).await.map(|_| ()),
+                    _ => s.entry::<(), ()>(entry)?.run(&mut page, ()).await.map(|_| ()),
+                }
+            })
+            .await;
+        let Err(HostError::Storage(error)) = ran else {
+            panic!("`{entry}` over a storage refusing `@{failing}` gave {ran:?}")
+        };
+        assert_eq!(error.to_string(), format!("`@{failing}` does not reach its disk"));
+    }
+}
+
+#[derive(Default)]
+struct Yielding {
+    inner: MemoryStorage,
+}
+
+impl AsyncStorage for Yielding {
+    async fn load(&mut self, key: &str, codec: &Codec<'_>) -> Result<Option<Held>, StorageError> {
+        tokio::task::yield_now().await;
+        Storage::load(&mut self.inner, key, codec)
+    }
+
+    async fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        tokio::task::yield_now().await;
+        Storage::store(&mut self.inner, key, held)
+    }
+
+    async fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        tokio::task::yield_now().await;
+        Storage::restore(&mut self.inner, key, held)
+    }
+
+    async fn commit(&mut self, codec: &Codec<'_>) -> Result<(), StorageError> {
+        tokio::task::yield_now().await;
+        Storage::commit(&mut self.inner, codec)
+    }
+}
+
+const COUNTER: &str = "@n = @n + 1; set_c(); @n + @c";
+
+fn counter_host<A>(host: Host<A>) -> Host<A>
+where
+    A: acvus_interpreter::Access,
+{
+    host.init("n", Source::Expr("40"))
+        .init("c", Source::Expr("0"))
+        .entry::<(), ()>("set_c", Source::Script("@c = 100;"))
+        .entry::<(), i64>("main", Source::Script(COUNTER))
+}
+
+#[tokio::test]
+async fn a_program_compiled_for_waited_access_runs_over_a_storage_that_yields_as_a_synchronous_one_does() {
+    let synchronous = compiled(counter_host(host()));
+    let waited: Program<AsyncAccess> = counter_host(host().async_access())
+        .compile(SequentialExecutor)
+        .expect("the program compiles for waited access");
+
+    let mut storage = MemoryStorage::new();
+    let by_sync = synchronous
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            let main = s.entry::<(), i64>("main").expect("`main` returns `i64`");
+            let mut seen = Vec::new();
+            for _ in 0..2 {
+                let output = main.run(&mut page, ()).await.expect("the init fills `@n`");
+                seen.push(output.with(|n: &i64| *n).expect("an `i64`"));
+            }
+            seen
+        })
+        .await;
+
+    let mut storage = Yielding::default();
+    let by_waiting = waited
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            let main = s.entry::<(), i64>("main").expect("`main` returns `i64`");
+            let mut seen = Vec::new();
+            for _ in 0..2 {
+                let output = main.run(&mut page, ()).await.expect("the init fills `@n`");
+                seen.push(output.with(|n: &i64| *n).expect("an `i64`"));
+            }
+            let mut filled = page.filled().to_vec();
+            filled.sort();
+            assert_eq!(filled, ["c", "n"]);
+            page.with("n", |n: &i64| *n).await.expect("`@n` is held")
+        })
+        .await;
+    assert_eq!(by_sync, [141, 142]);
+    assert_eq!(by_waiting, 42);
+}
+
+#[tokio::test]
+async fn a_memory_storage_keeps_what_a_run_changed_for_the_next_scope_with_or_without_commit() {
+    let program = log_program();
+    let mut storage = MemoryStorage::new();
+    for commit in [false, true] {
+        program
+            .scope(async |s| {
+                let mut page = s.open(&mut storage);
+                run_unit(s, &mut page, "turn").await;
+                if commit {
+                    page.commit().await.expect("a memory storage commits nothing");
+                }
+            })
+            .await;
+    }
+    let log = program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            log_of(&mut page).await
+        })
+        .await
+        .expect("`@log` is held");
+    assert_eq!(log, ["x", "x"]);
+}
+
+// -- A script named like a bare name a script calls (RFC-0043) ------------
+
+#[test]
+fn an_entry_named_like_a_bare_extern_name_is_refused_naming_what_it_would_shadow() {
+    let refusals = refused(
+        host()
+            .entry::<(), i64>("vec", Source::Script("1"))
+            .entry::<(), u64>("uses", Source::Script("vec([1, 2]).len()")),
+    );
+    let shadowing: Vec<&Refusal> = refusals
+        .iter()
+        .filter(|refusal| matches!(refusal.cause, Some(Cause::Shadows { .. })))
+        .collect();
+    let [refusal] = shadowing.as_slice() else {
+        panic!("one refusal names the shadowed extern: {refusals:?}")
+    };
+    assert_eq!(refusal.origin, Some(Origin::Entry("vec".to_owned())));
+    assert_eq!(
+        refusal.message,
+        "the entry `vec` would shadow `std::vec`, which a script calls as `vec`"
+    );
 }

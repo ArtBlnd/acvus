@@ -124,7 +124,7 @@ async fn run_i64_at(source: &str, opt: Opt) -> i64 {
         std::collections::HashMap::new(),
         Arc::new(acvus_interpreter::SequentialExecutor),
     );
-    interp.execute().await.expect("the page holds every context the run fetches first").as_int()
+    interp.execute().await.expect("the seeds hold every context the run fetches").as_int()
 }
 
 const EQUAL_INTS: &str = "if same(7, 7) { 1 } else { 0 }";

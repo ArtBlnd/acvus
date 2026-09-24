@@ -42,9 +42,9 @@ expression: raw
     33 |   r24 = take @output
     34 |   commit @output = r24
     35 |   r25 = take @min_score
-    36 |   commit @min_score = r25
+    36 |   commit @min_score = r25 (not written)
     37 |   r26 = take @user
-    38 |   commit @user = r26
+    38 |   commit @user = r26 (not written)
     39 |   return r23
 
     ; r0 (@min_score) : i64

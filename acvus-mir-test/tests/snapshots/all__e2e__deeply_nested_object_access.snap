@@ -14,7 +14,7 @@ expression: ir
      6 |   append r2 r1
      7 |   r3 = take <template>
      8 |   r4 = take @data
-     9 |   commit @data = r4
+     9 |   commit @data = r4 (not written)
     10 |   return r3
 
     ; r0 (@data) : {user: {address: {city: String}}}

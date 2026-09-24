@@ -41,7 +41,7 @@ expression: ir
     35 | L2:
     36 |   r17 = take @total
     37 |   r18 = take @outer
-    38 |   commit @outer = r18
+    38 |   commit @outer = r18 (not written)
     39 |   r19 = take @total
     40 |   commit @total = r19
     41 |   return r17

@@ -410,6 +410,7 @@ mod tests {
                 InstKind::Commit {
                     context: n,
                     value: v(5),
+                    wrote: true,
                 },
                 call(
                     &i,

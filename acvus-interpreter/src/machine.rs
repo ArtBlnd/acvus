@@ -164,6 +164,12 @@ impl<'c> Machine<'c> {
     }
 
     #[inline]
+    pub fn suspend_unit(&mut self, resume: BlockId, fut: BoxFuture<'static, ()>) {
+        self.at = resume;
+        self.pending = Some(Pending::Unit { fut });
+    }
+
+    #[inline]
     pub fn suspend_pair(
         &mut self,
         dst: SlicePair,
@@ -363,6 +369,7 @@ where
                 machine.regs.set_word(dst.ptr, ptr);
                 machine.regs.set_word(dst.len, len);
             }
+            Pending::Unit { fut } => fut.await,
         }
     }
 }
@@ -391,6 +398,27 @@ where
         regs.put(order, Value::unit());
     }
     drive(Machine::new(body, regs, &rt)).await
+}
+
+/// Run the entry body of the module `id` names to its result on a frame of
+/// its own, from an operation that cannot wait: an init a `Fetch` runs
+/// under synchronous access, which `Host::compile` admits only where its
+/// body cannot suspend.
+pub(crate) fn call_module_rooted(rt: &AcvusRuntime, id: QualifiedRef) -> Value {
+    let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
+    let body = prepared.main.as_ref();
+    assert!(
+        body.params.is_empty(),
+        "{id:?} is run with no arguments, and it takes {}",
+        body.params.len()
+    );
+    let mut store = Store::new();
+    let (regs, _) = store.bind(body);
+    run_frame(body, &id, regs, rt, false, |callee| {
+        if let Some(order) = body.order_param {
+            callee.regs.put(order, Value::unit());
+        }
+    })
 }
 
 pub fn call_module_sync<R>(

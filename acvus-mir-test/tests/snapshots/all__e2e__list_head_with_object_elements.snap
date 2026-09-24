@@ -40,7 +40,7 @@ expression: ir
     35 | L0(r17: Unit, r18: &{name: String}):
     36 |   r19 = take <template>
     37 |   r20 = take @users
-    38 |   commit @users = r20
+    38 |   commit @users = r20 (not written)
     39 |   return r19
 
     ; r0 (v25) : &{name: String}

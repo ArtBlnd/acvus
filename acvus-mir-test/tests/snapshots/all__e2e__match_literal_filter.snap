@@ -24,7 +24,7 @@ expression: ir
     16 |   jump L0(() (r7))
     17 | L0(r8: Unit):
     18 |   r9 = take <template>
-    19 |   commit @role = r1
+    19 |   commit @role = r1 (not written)
     20 |   return r9
 
     ; r0 (v15) : String

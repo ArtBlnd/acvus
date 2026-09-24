@@ -413,11 +413,16 @@ fn write_body(
                 vn.fmt_val(*dst),
                 ctx.interner.resolve(context.name)
             )?,
-            InstKind::Commit { context, value } => writeln!(
+            InstKind::Commit {
+                context,
+                value,
+                wrote,
+            } => writeln!(
                 f,
-                "commit @{} = {}",
+                "commit @{} = {}{}",
                 ctx.interner.resolve(context.name),
-                vn.fmt_use(*value, &consts, &texts)
+                vn.fmt_use(*value, &consts, &texts),
+                if *wrote { "" } else { " (not written)" }
             )?,
 
             // Scalar field access

@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::cfg::{BlockIdx, CfgBody, promote};
 use crate::graph::QualifiedRef;
 use crate::ir::{InstKind, MirBody, RefTarget, ValueId};
+use crate::ty::Mutability;
 
 struct EntryFetch {
     context: QualifiedRef,
@@ -23,6 +24,9 @@ pub(crate) struct PageOps {
     /// The registers the `Fetch` after a call writes. That store re-reads the
     /// page; the source did not write it, so it assigns nothing here.
     refetched: FxHashSet<ValueId>,
+    /// The registers a place taken out for a shared lend is put back from:
+    /// the value it held, so the store writes nothing new.
+    handed_back: FxHashSet<ValueId>,
 }
 
 impl PageOps {
@@ -37,26 +41,130 @@ impl PageOps {
     pub(crate) fn refetched(&mut self, fetched: ValueId) {
         self.refetched.insert(fetched);
     }
+
+    pub(crate) fn handed_back(&mut self, restored: ValueId) {
+        self.handed_back.insert(restored);
+    }
+}
+
+/// Set each `Commit`'s `wrote`: whether the body may have written its
+/// variable since the variable's last fetch (RFC-0025 rules 2, 4). A write is
+/// an assignment the source wrote, a store into a part, or a `&mut` lend; a
+/// `Fetch` into the variable, at entry or after a call, starts it over. A
+/// call that writes the context is bracketed, so no call between a fetch and
+/// the commit after it writes the variable. Decided as a forward may-analysis
+/// over the body's CFG, read at each commit.
+pub(crate) fn decide_writes(body: &mut MirBody, ops: &PageOps) {
+    if ops.entry.is_empty() {
+        return;
+    }
+    let at_of_slot: FxHashMap<ValueId, usize> = ops
+        .entry
+        .iter()
+        .enumerate()
+        .map(|(at, entry)| (entry.slot, at))
+        .collect();
+    let at_of_context: FxHashMap<QualifiedRef, usize> = ops
+        .entry
+        .iter()
+        .enumerate()
+        .map(|(at, entry)| (entry.context, at))
+        .collect();
+    let fetched: FxHashSet<ValueId> = ops.entry.iter().map(|entry| entry.fetched).collect();
+    let cfg = promote(body.clone());
+    let n = ops.entry.len();
+
+    // The state after `inst`, from the state before it; each commit's
+    // `wrote` goes to `commits`.
+    let step = |inst: &crate::ir::Inst, written: &mut [bool], commits: &mut FxHashMap<ValueId, bool>| {
+        match &inst.kind {
+            InstKind::Assign {
+                target: RefTarget::Var(slot),
+                path,
+                value,
+                ..
+            } => {
+                let Some(&at) = at_of_slot.get(slot) else { return };
+                if !path.is_empty() {
+                    written[at] = true;
+                } else if fetched.contains(value) || ops.refetched.contains(value) {
+                    written[at] = false;
+                } else if !ops.handed_back.contains(value) {
+                    written[at] = true;
+                }
+            }
+            InstKind::Ref {
+                target: RefTarget::Var(slot),
+                mutability: Mutability::Mut,
+                ..
+            } => {
+                if let Some(&at) = at_of_slot.get(slot) {
+                    written[at] = true;
+                }
+            }
+            InstKind::Commit { context, value, .. } => {
+                let wrote = at_of_context.get(context).is_none_or(|&at| written[at]);
+                commits.insert(*value, wrote);
+            }
+            _ => {}
+        }
+    };
+
+    let mut block_in: Vec<Option<Vec<bool>>> = vec![None; cfg.blocks.len()];
+    block_in[0] = Some(vec![false; n]);
+    let mut commits: FxHashMap<ValueId, bool> = FxHashMap::default();
+    let mut worklist = vec![BlockIdx(0)];
+    while let Some(at) = worklist.pop() {
+        let mut written = block_in[at.0]
+            .clone()
+            .expect("a block on the worklist has an entry state");
+        for inst in &cfg.blocks[at.0].insts {
+            step(inst, &mut written, &mut commits);
+        }
+        for succ in cfg.successors(at) {
+            let changed = match &mut block_in[succ.0] {
+                unreached @ None => {
+                    *unreached = Some(written.clone());
+                    true
+                }
+                Some(into) => {
+                    let mut changed = false;
+                    for (into, from) in into.iter_mut().zip(&written) {
+                        if *from && !*into {
+                            *into = true;
+                            changed = true;
+                        }
+                    }
+                    changed
+                }
+            };
+            if changed {
+                worklist.push(succ);
+            }
+        }
+    }
+    // A commit no path reaches never runs; a store there loses no write.
+    for inst in &mut body.insts {
+        if let InstKind::Commit { value, wrote, .. } = &mut inst.kind {
+            *wrote = commits.get(value).copied().unwrap_or(true);
+        }
+    }
 }
 
 /// Remove the entry fetch of every context `body` assigns whole on every
-/// path before touching it; the contexts it still fetches, in the order
-/// lowering fetched them.
-pub(crate) fn skip_assigned_fetches(body: &mut MirBody, ops: PageOps) -> Vec<QualifiedRef> {
+/// path before touching it.
+pub(crate) fn skip_assigned_fetches(body: &mut MirBody, ops: PageOps) {
     if ops.entry.is_empty() {
-        return Vec::new();
+        return;
     }
     let touched = touched_unset(&promote(body.clone()), &ops);
-
-    let mut still_fetched = Vec::new();
-    let mut skipped: FxHashSet<ValueId> = FxHashSet::default();
-    for (entry, touched) in ops.entry.iter().zip(touched) {
-        if touched {
-            still_fetched.push(entry.context);
-        } else {
-            skipped.insert(entry.fetched);
-        }
-    }
+    let skipped: FxHashSet<ValueId> = ops
+        .entry
+        .iter()
+        .zip(touched)
+        .filter(|(_, touched)| !touched)
+        .map(|(entry, _)| entry.fetched)
+        .collect();
     body.insts.retain(|inst| match &inst.kind {
         InstKind::Fetch { dst, .. } => !skipped.contains(dst),
         InstKind::Assign {
@@ -70,7 +178,6 @@ pub(crate) fn skip_assigned_fetches(body: &mut MirBody, ops: PageOps) -> Vec<Qua
     for fetched in &skipped {
         body.val_types.remove(fetched);
     }
-    still_fetched
 }
 
 /// Per entry fetch, in order: whether the body touches the variable where it

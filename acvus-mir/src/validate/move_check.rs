@@ -353,7 +353,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
         .iter()
         .flat_map(|block| block.insts.iter())
         .filter_map(|inst| match &inst.kind {
-            InstKind::Commit { context, value } => Some((*value, context.name)),
+            InstKind::Commit { context, value, .. } => Some((*value, context.name)),
             _ => None,
         })
         .collect();
@@ -1160,7 +1160,6 @@ mod tests {
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
             flows: crate::ty::Flows::Every,
-            fetched_first: Vec::new(),
         }
     }
 
@@ -1541,6 +1540,7 @@ mod tests {
                     kind: InstKind::Commit {
                         context: query,
                         value: committed,
+                        wrote: true,
                     },
                 },
             ],

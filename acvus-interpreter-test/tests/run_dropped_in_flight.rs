@@ -254,7 +254,7 @@ fn a_task_running_when_the_run_is_dropped_reads_live_cells() {
     let _serial = fresh();
     let parking = Arc::new(Parking::default());
     let mut interp = interpreter(Arc::clone(&parking) as Arc<dyn Executor>);
-    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(async { interp.execute().await.expect("the page holds every context the run fetches first") });
+    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(async { interp.execute().await.expect("the seeds hold every context the run fetches") });
     park_at_eval(&mut run);
     let worker = std::thread::spawn(parking.take_one());
     wait_until(|state| state.entered);
@@ -275,7 +275,7 @@ fn a_task_started_after_the_run_is_dropped_reads_live_cells() {
     let _serial = fresh();
     let parking = Arc::new(Parking::default());
     let mut interp = interpreter(Arc::clone(&parking) as Arc<dyn Executor>);
-    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(async { interp.execute().await.expect("the page holds every context the run fetches first") });
+    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(async { interp.execute().await.expect("the seeds hold every context the run fetches") });
     park_at_eval(&mut run);
     let job = parking.take_one();
 
@@ -295,7 +295,7 @@ fn a_tokio_task_running_when_the_run_is_cancelled_reads_live_cells() {
         .build()
         .expect("a multi-thread runtime");
     let mut interp = interpreter(Arc::new(TokioExecutor));
-    let run = runtime.spawn(async move { interp.execute().await.expect("the page holds every context the run fetches first") });
+    let run = runtime.spawn(async move { interp.execute().await.expect("the seeds hold every context the run fetches") });
     wait_until(|state| state.entered);
 
     run.abort();
@@ -323,7 +323,7 @@ fn a_run_that_is_not_dropped_answers_the_lent_read() {
         .build()
         .expect("a multi-thread runtime");
     let mut interp = interpreter(Arc::new(TokioExecutor));
-    let value = runtime.block_on(interp.execute()).expect("the page holds every context the run fetches first");
+    let value = runtime.block_on(interp.execute()).expect("the seeds hold every context the run fetches");
     assert_eq!(value.bits(), 42);
 }
 
@@ -337,7 +337,7 @@ fn a_body_that_returns_with_its_task_aloft_keeps_the_cells_until_the_task_ends()
         Arc::clone(&parking) as Arc<dyn Executor>,
         drop_the_eval,
     );
-    let value = futures::executor::block_on(interp.execute()).expect("the page holds every context the run fetches first");
+    let value = futures::executor::block_on(interp.execute()).expect("the seeds hold every context the run fetches");
     assert_eq!(value.bits(), 7);
     let job = parking.take_one();
 
@@ -358,7 +358,7 @@ fn a_heavy_call_running_when_the_run_is_dropped_reads_live_cells() {
         Arc::clone(&parking) as Arc<dyn Executor>,
         not_split,
     );
-    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(async { interp.execute().await.expect("the page holds every context the run fetches first") });
+    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(async { interp.execute().await.expect("the seeds hold every context the run fetches") });
     park_at_eval(&mut run);
     let worker = std::thread::spawn(parking.take_one());
     wait_until(|state| state.entered);

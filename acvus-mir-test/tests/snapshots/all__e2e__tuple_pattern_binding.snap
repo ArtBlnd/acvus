@@ -21,7 +21,7 @@ expression: ir
     12 |   append r7 r6
     14 |   r8 = take <template>
     15 |   r9 = take @pair
-    16 |   commit @pair = r9
+    16 |   commit @pair = r9 (not written)
     17 |   return r8
 
     ; r0 (v16) : String

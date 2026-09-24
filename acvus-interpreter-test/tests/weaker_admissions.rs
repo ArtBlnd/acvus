@@ -149,7 +149,7 @@ where
         .map_err(|refusal| refusal.messages.join("\n"))?;
     let (_shared, mut interp) =
         execute_compiled(&i, compiled, snapshot, Arc::new(SequentialExecutor));
-    Ok(interp.execute().await.expect("the page holds every context the run fetches first").as_int())
+    Ok(interp.execute().await.expect("the seeds hold every context the run fetches").as_int())
 }
 
 async fn runs_to(source: &str, expected: i64) {

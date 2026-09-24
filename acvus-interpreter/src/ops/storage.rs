@@ -10,8 +10,15 @@ use acvus_extern::{FieldAt, Owned, Release};
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::code::{Exit, Marked, Op, Step, successor};
+use std::sync::Arc;
+
+use acvus_mir::ty::Ty;
+
+use crate::code::{BlockId, Exit, Marked, Op, SUSPEND, Step, successor};
+use crate::host::{HostError, StorageError};
 use crate::machine::Machine;
+use crate::port::{Held, end_run, refusal_of};
+use crate::runtime::AcvusRuntime;
 use crate::ops::arith::Unary;
 use crate::ops::variant::scrutinee;
 use crate::regs::Regs;
@@ -679,10 +686,12 @@ impl<const LARGE: bool> Op for SetPath<LARGE> {
 
 // -- Contexts ---------------------------------------------------------
 
+/// A `Fetch` under synchronous access: the storage is read here, and a key
+/// it lacks is filled by its init here (RFC-0025 rule 2, RFC-0090 rule 1).
 pub struct Fetch<const LARGE: bool> {
     pub dst: Marked,
     pub key: Box<str>,
-    pub settled: std::sync::Arc<acvus_mir::ty::Ty>,
+    pub settled: Arc<Ty>,
     pub next: Box<dyn Op>,
 }
 
@@ -690,32 +699,19 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let key = &self.key;
-        let rt = m.ctx.rt;
-        let held = rt.page.take(key).unwrap_or_else(|| {
-            panic!(
-                "context fetch: '{key}' holds no value, and `Interpreter::execute` refuses a run \
-                 whose page lacks a context it fetches first (RFC-0025 rule 2); the page answered \
-                 `holds` and then gave nothing"
-            )
-        });
-        assert!(
-            held.ty().same_erased(&self.settled),
-            "context fetch: the page gave '{key}' a holder crossed at another type than the \
-             context's settled one (RFC-0090 rule 6)"
-        );
-        // SAFETY: the holder carries the context's settled type, the word
-        // moves into a register the checker typed at it, and the register
-        // owns it from then on.
-        m.regs().define::<LARGE>(self.dst, held.into_value().into_value(unsafe { acvus_extern::Holding::new() }));
+        let held = fetch_now(m.ctx.rt, &self.key, &self.settled);
+        m.regs().define::<LARGE>(self.dst, held.into_word());
         self.next.run(m, r0)
     }
 }
 
+/// A `Commit` under synchronous access: a store where the body may have
+/// written the context, else a restore.
 pub struct Commit<const LARGE: bool> {
     pub src: Marked,
     pub key: Box<str>,
-    pub settled: std::sync::Arc<acvus_mir::ty::Ty>,
+    pub settled: Arc<Ty>,
+    pub wrote: bool,
     pub next: Box<dyn Op>,
 }
 
@@ -723,18 +719,143 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let value = m.regs().take::<LARGE>(self.src);
-        // SAFETY: `take` moved the word out of its register, and the checker
-        // typed the write at the context's settled type, which the holder
-        // carries.
-        let value = unsafe { Owned::from_value(acvus_extern::Holding::new(), value) };
-        m.ctx
-            .rt
-            .page
-            .set_changed(
-                &self.key,
-                crate::journal::Held::new(value, std::sync::Arc::clone(&self.settled), m.ctx.rt.shared.compilation),
-            );
+        let held = committed::<LARGE>(m, self.src, &self.settled);
+        let port = &m.ctx.rt.port;
+        let handed = match self.wrote {
+            true => port.store(&self.key, held),
+            false => port.restore(&self.key, held),
+        };
+        if let Err(error) = handed {
+            end_run(error);
+        }
         self.next.run(m, r0)
     }
+}
+
+/// A `Fetch` under waited access: the load is a spawn the driver evaluates
+/// (RFC-0046, RFC-0090 rule 3), so the operation ends its block.
+pub struct FetchWaited<const LARGE: bool> {
+    pub dst: Marked,
+    pub key: Box<str>,
+    pub settled: Arc<Ty>,
+    pub next: BlockId,
+}
+
+impl<const LARGE: bool> Op for FetchWaited<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        let rt = m.ctx.rt.clone();
+        let key = self.key.clone();
+        let settled = Arc::clone(&self.settled);
+        m.suspend::<LARGE>(
+            self.dst,
+            self.next,
+            Box::pin(async move { fetch_waited(&rt, &key, &settled).await.into_word() }),
+        );
+        SUSPEND
+    }
+}
+
+pub struct CommitWaited<const LARGE: bool> {
+    pub src: Marked,
+    pub key: Box<str>,
+    pub settled: Arc<Ty>,
+    pub wrote: bool,
+    pub next: BlockId,
+}
+
+impl<const LARGE: bool> Op for CommitWaited<LARGE> {
+    fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
+        let held = committed::<LARGE>(m, self.src, &self.settled);
+        let handed = m.ctx.rt.port.store_waited(&self.key, held, self.wrote);
+        m.suspend_unit(
+            self.next,
+            Box::pin(async move {
+                if let Err(error) = handed.await {
+                    end_run(error);
+                }
+            }),
+        );
+        SUSPEND
+    }
+}
+
+fn committed<const LARGE: bool>(m: &mut Machine<'_>, src: Marked, settled: &Arc<Ty>) -> Held {
+    let value = m.regs().take::<LARGE>(src);
+    // SAFETY: `take` moved the word out of its register, and the checker
+    // typed the write at the context's settled type, which the holder
+    // carries.
+    let value = unsafe { Owned::from_value(acvus_extern::Holding::new(), value) };
+    Held::new(value, Arc::clone(settled), m.ctx.rt.shared.compilation)
+}
+
+fn fetch_now(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
+    let port = &rt.port;
+    let held = match port.load(rt, key) {
+        Ok(Some(held)) => held,
+        Ok(None) => fill_now(rt, key),
+        Err(error) => end_run(error),
+    };
+    let Some(refused) = refusal_of(rt, key, &held, settled) else {
+        return held;
+    };
+    if let Err(error) = port.restore(key, held) {
+        end_run(error);
+    }
+    end_run(refused)
+}
+
+fn fill_now(rt: &AcvusRuntime, key: &str) -> Held {
+    let Some(init) = rt.shared.inits.get(key) else {
+        end_run(HostError::Unfilled { key: key.to_owned() })
+    };
+    let value = crate::machine::call_module_rooted(rt, init.function);
+    let port = &rt.port;
+    if let Err(error) = port.store(key, init.held(value, rt)) {
+        end_run(error);
+    }
+    port.note_filled(key);
+    match port.load(rt, key) {
+        Ok(Some(held)) => held,
+        Ok(None) => end_run(HostError::Storage(unreturned(key))),
+        Err(error) => end_run(error),
+    }
+}
+
+async fn fetch_waited(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
+    let port = &rt.port;
+    let held = match port.load_waited(rt, key).await {
+        Ok(Some(held)) => held,
+        Ok(None) => fill_waited(rt, key).await,
+        Err(error) => end_run(error),
+    };
+    let Some(refused) = refusal_of(rt, key, &held, settled) else {
+        return held;
+    };
+    if let Err(error) = port.store_waited(key, held, false).await {
+        end_run(error);
+    }
+    end_run(refused)
+}
+
+async fn fill_waited(rt: &AcvusRuntime, key: &str) -> Held {
+    let Some(init) = rt.shared.inits.get(key) else {
+        end_run(HostError::Unfilled { key: key.to_owned() })
+    };
+    let value: Value = crate::machine::call_module(rt.clone(), init.function, Vec::new()).await;
+    let port = &rt.port;
+    if let Err(error) = port.store_waited(key, init.held(value, rt), true).await {
+        end_run(error);
+    }
+    port.note_filled(key);
+    match port.load_waited(rt, key).await {
+        Ok(Some(held)) => held,
+        Ok(None) => end_run(HostError::Storage(unreturned(key))),
+        Err(error) => end_run(error),
+    }
+}
+
+fn unreturned(key: &str) -> StorageError {
+    StorageError::new(format!(
+        "the storage gave back nothing for `@{key}`, which it was given at the fetch that found it absent"
+    ))
 }

@@ -121,7 +121,7 @@ fn measure(rt: &Runtime, grid: &Grid) -> Timing {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
+        let value = rt.block_on(interp.execute()).expect("the seeds hold every context the run fetches");
         (value.as_int(), start.elapsed())
     };
     let run_rust = || {

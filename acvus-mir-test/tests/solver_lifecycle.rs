@@ -187,6 +187,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(registry(i)),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);
@@ -420,6 +421,7 @@ fn s6_a_field_store_grows_the_object_for_every_use() {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(registry(&i)),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
     let ext = extract::extract(&i, &graph);

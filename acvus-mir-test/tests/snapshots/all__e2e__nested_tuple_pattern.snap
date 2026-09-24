@@ -25,7 +25,7 @@ expression: ir
     16 |   append r11 r10
     18 |   r12 = take <template>
     19 |   r13 = take @data
-    20 |   commit @data = r13
+    20 |   commit @data = r13 (not written)
     21 |   return r12
 
     ; r0 (v20) : &i64

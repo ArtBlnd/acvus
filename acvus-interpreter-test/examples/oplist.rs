@@ -186,6 +186,7 @@ fn main() {
         externs: &cr.extern_executables,
         context_names: &cr.context_names,
         instances: &cr.instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     for (qref, module) in &cr.modules {
         let prepared = prepare_module(module, &ctx);

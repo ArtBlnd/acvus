@@ -62,11 +62,11 @@ expression: opt
     53 |   jump L1(r47, r44)
     54 | L1(r48: Order, r49: i64):
     55 |   commit @result_label = r39
-    56 |   commit @weight = r0
+    56 |   commit @weight = r0 (not written)
     57 |   commit @alert_count = r49
     58 |   commit @result_score = r16
-    59 |   commit @threshold = r2
-    60 |   commit @user_id = r3
+    59 |   commit @threshold = r2 (not written)
+    60 |   commit @user_id = r3 (not written)
     61 |   return r16 [r48]
 
     ; orders: what the body's yielded Order waits for

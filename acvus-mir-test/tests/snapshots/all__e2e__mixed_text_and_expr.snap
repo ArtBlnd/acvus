@@ -22,7 +22,7 @@ expression: ir
     12 |   append r6 r5
     13 |   r7 = take <template>
     14 |   r8 = take @name
-    15 |   commit @name = r8
+    15 |   commit @name = r8 (not written)
     16 |   return r7
 
     ; r0 (@name) : String

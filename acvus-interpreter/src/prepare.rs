@@ -19,7 +19,7 @@ use std::sync::Arc;
 use acvus_ast::{Literal, UnaryOp};
 use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width};
 use acvus_mir::analysis::inst_info;
-use acvus_mir::graph::QualifiedRef;
+use acvus_mir::graph::{Access, QualifiedRef};
 use acvus_mir::ir::{
     BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, PathSeg,
     RefTarget, SwitchKey, TwoWay, ValueId, two_way,
@@ -176,6 +176,9 @@ pub struct PrepareCtx<'a> {
     pub externs: &'a FxHashMap<QualifiedRef, Executable>,
     pub context_names: &'a FxHashMap<QualifiedRef, Astr>,
     pub instances: &'a dyn acvus_extern::InstanceEntries<crate::runtime::AcvusRuntime>,
+    /// Under `Access::Async` a `Fetch` and a `Commit` wait, so each ends its
+    /// block (RFC-0090 rule 3).
+    pub access: Access,
 }
 
 impl PrepareCtx<'_> {
@@ -288,11 +291,6 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
         main,
         closures,
         instances: entries.into_inner(),
-        fetched_first: module
-            .fetched_first
-            .iter()
-            .map(|context| ctx.page_key(context))
-            .collect(),
     }
 }
 
@@ -2265,6 +2263,8 @@ impl<'a> Prepare<'a> {
             | InstKind::LoadFunction { .. }
             | InstKind::Poison { .. } => false,
 
+            InstKind::Fetch { .. } | InstKind::Commit { .. } => self.ctx.access == Access::Sync,
+
             InstKind::FunctionCall {
                 callee, callee_ty, ..
             } => match callee {
@@ -2283,8 +2283,6 @@ impl<'a> Prepare<'a> {
             | InstKind::Ref { .. }
             | InstKind::Take { .. }
             | InstKind::Assign { .. }
-            | InstKind::Fetch { .. }
-            | InstKind::Commit { .. }
             | InstKind::FieldGet { .. }
             | InstKind::FieldSet { .. }
             | InstKind::BinOp { .. }
@@ -4214,7 +4212,16 @@ impl<'a> Prepare<'a> {
                 let key = self.ctx.page_key(context);
                 let slot = self.marked(*dst);
                 let settled = Arc::new(self.ty(*dst).clone());
-                match self.owns(*dst) {
+                let large = self.owns(*dst);
+                if self.ctx.access == Access::Async {
+                    self.may_suspend = true;
+                    let next = next.block();
+                    return Some(match large {
+                        true => Box::new(storage::FetchWaited::<true> { dst: slot, key, settled, next }),
+                        false => Box::new(storage::FetchWaited::<false> { dst: slot, key, settled, next }),
+                    });
+                }
+                match large {
                     true => node(move |next| storage::Fetch::<true> {
                         dst: slot,
                         key,
@@ -4229,13 +4236,27 @@ impl<'a> Prepare<'a> {
                     }),
                 }
             }
-            InstKind::Commit { context, value } => {
+            InstKind::Commit {
+                context,
+                value,
+                wrote,
+            } => {
                 let key = self.ctx.page_key(context);
                 let src = self.marked(*value);
                 let settled = Arc::new(self.ty(*value).clone());
-                match self.owns(*value) {
-                    true => node(move |next| storage::Commit::<true> { src, key, settled, next }),
-                    false => node(move |next| storage::Commit::<false> { src, key, settled, next }),
+                let wrote = *wrote;
+                let large = self.owns(*value);
+                if self.ctx.access == Access::Async {
+                    self.may_suspend = true;
+                    let next = next.block();
+                    return Some(match large {
+                        true => Box::new(storage::CommitWaited::<true> { src, key, settled, wrote, next }),
+                        false => Box::new(storage::CommitWaited::<false> { src, key, settled, wrote, next }),
+                    });
+                }
+                match large {
+                    true => node(move |next| storage::Commit::<true> { src, key, settled, wrote, next }),
+                    false => node(move |next| storage::Commit::<false> { src, key, settled, wrote, next }),
                 }
             }
 
@@ -7092,6 +7113,7 @@ mod recognizer_tests {
                 externs: &self.externs,
                 context_names: &context_names,
                 instances: &acvus_extern::NoInstances,
+                access: Access::Sync,
             };
             let mut body = body_of(insts);
             body.task = task;
@@ -7125,6 +7147,7 @@ mod recognizer_tests {
                 externs: &self.externs,
                 context_names: &context_names,
                 instances: &acvus_extern::NoInstances,
+                access: Access::Sync,
             };
             let closures = FxHashMap::default();
             let body = body_of(insts);
@@ -7619,6 +7642,7 @@ mod assignment_tests {
             externs: &externs,
             context_names: &context_names,
             instances: &acvus_extern::NoInstances,
+            access: Access::Sync,
         };
         assign_slots(&body, &ctx, &labels)
     }

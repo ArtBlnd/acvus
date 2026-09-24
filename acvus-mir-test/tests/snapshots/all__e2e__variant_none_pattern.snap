@@ -26,7 +26,7 @@ expression: ir
     18 | L0(r8: Unit):
     19 |   r9 = take <template>
     20 |   r10 = take @opt
-    21 |   commit @opt = r10
+    21 |   commit @opt = r10 (not written)
     22 |   return r9
 
     ; r0 (@opt) : Option<i64>

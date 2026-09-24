@@ -8,7 +8,7 @@ expression: ir
      2 |   r1 = ref &@obj.a.b.c
      3 |   r2 = call #0(r1)
      4 |   r3 = take @obj
-     5 |   commit @obj = r3
+     5 |   commit @obj = r3 (not written)
      6 |   return r2
 
     ; r0 (@obj) : {a: {b: {c: i64}}}

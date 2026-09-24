@@ -51,6 +51,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![entry_qref],
     };
 
@@ -88,6 +89,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         externs: &exec_fns,
         context_names: &context_names,
         instances: &instances,
+        access: acvus_mir::graph::Access::Sync,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules
@@ -103,7 +105,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
     let shared = InterpreterContext::new(interner, exec_fns, executor);
     let page = HashMap::new();
     let mut interp = Interpreter::new(shared, entry_qref, page);
-    interp.execute().await.expect("the page holds every context the run fetches first")
+    interp.execute().await.expect("the seeds hold every context the run fetches")
 }
 
 /// Every intent is asked of both levels: `None` runs only what a program

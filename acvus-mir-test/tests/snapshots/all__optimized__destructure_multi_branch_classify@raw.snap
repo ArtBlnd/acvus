@@ -64,7 +64,7 @@ expression: raw
     56 |   r32 = take @output
     57 |   commit @output = r32
     58 |   r33 = take @user
-    59 |   commit @user = r33
+    59 |   commit @user = r33 (not written)
     60 |   return r31
 
     ; r0 (@user) : {age: i64, name: String}

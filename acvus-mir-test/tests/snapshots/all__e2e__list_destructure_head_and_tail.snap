@@ -48,7 +48,7 @@ expression: ir
     45 | L0(r20: Unit, r21: i64):
     46 |   r22 = take <template>
     47 |   r23 = take @items
-    48 |   commit @items = r23
+    48 |   commit @items = r23 (not written)
     49 |   return r22
 
     ; r0 (v28) : i64

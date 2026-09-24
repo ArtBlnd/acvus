@@ -24,7 +24,7 @@ expression: ir
     16 |   r10 = ref &mut <template>
     17 |   append r10 r9
     18 |   r11 = take <template>
-    19 |   commit @role = r2
+    19 |   commit @role = r2 (not written)
     20 |   return r11
 
     ; r0 (v17) : String

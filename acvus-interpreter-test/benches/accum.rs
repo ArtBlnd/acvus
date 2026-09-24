@@ -628,7 +628,7 @@ fn measure(rt: &Runtime, case: &Case, size: &Size) -> Timing {
             Arc::new(SequentialExecutor),
         );
         let start = Instant::now();
-        let value = rt.block_on(interp.execute()).expect("the page holds every context the run fetches first");
+        let value = rt.block_on(interp.execute()).expect("the seeds hold every context the run fetches");
         ((case.read)(&value), start.elapsed())
     };
     let run_rust = || {

@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use acvus_ast::Span;
 use acvus_ast::report::Label;
 use acvus_extern::{CombineError, Registry};
-use acvus_interpreter::{AcvusRuntime, Executor, Host, HostError, Origin, Program, Refusal, Source};
+use acvus_interpreter::{
+    AcvusRuntime, Cause, Executor, Host, HostError, Origin, Program, Refusal, Source,
+};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{Parsed, QualifiedRef};
 use acvus_utils::Interner;
@@ -26,6 +28,9 @@ pub enum Mode {
 /// at.
 pub struct Unit {
     pub role: Role,
+    /// The space that holds this source, which a refusal's next command
+    /// names; `None` for a source given on the command line.
+    pub space: Option<String>,
     pub path: String,
     pub mode: Mode,
     pub text: String,
@@ -108,10 +113,13 @@ pub fn parse(interner: &Interner, mode: Mode, text: &str) -> Parsed {
     source(mode, text).parse(interner)
 }
 
-/// Compile `units` as one graph, every entry declaring `!` and reading its
-/// `$` inputs from its body.
+/// Compile `units` as one graph. The script at `target` is the entry, which
+/// declares `!` and reads its `$` inputs from its body (RFC-0054 rule 5);
+/// every other script is a function the entry may call, returning what its
+/// body settles (RFC-0054 rule 1, RFC-0071 rule 4).
 pub fn compile<E>(
     units: &[Unit],
+    target: Option<usize>,
     bindings: &[Binding],
     registries: Vec<Registry<AcvusRuntime>>,
     opt: Opt,
@@ -124,10 +132,11 @@ where
     for Binding { name, text } in bindings {
         host = host.bind(name, text).map_err(|error| Refused::Usage(usage_of(error)))?;
     }
-    for unit in units {
+    for (at, unit) in units.iter().enumerate() {
         let source = source(unit.mode, &unit.text);
         host = match &unit.role {
-            Role::Entry(name) => host.untyped_entry(name, source),
+            Role::Entry(name) if target == Some(at) => host.untyped_entry(name, source),
+            Role::Entry(name) => host.function(name, source),
             Role::Init(key) => host.init(key, source),
         };
     }
@@ -164,9 +173,17 @@ fn diagnostics(units: &[Unit], error: HostError) -> Vec<Diagnostic> {
                 span,
                 primary,
                 labels,
+                cause,
             } = refusal;
+            let unit = origin.as_ref().and_then(|origin| unit_of(units, origin));
+            let message = match (cause, unit, &origin) {
+                (Some(Cause::Shadows { externs }), Some(at), Some(Origin::Entry(name))) => {
+                    shadowing(units[at].space.as_deref(), name, &externs).unwrap_or(message)
+                }
+                _ => message,
+            };
             Diagnostic {
-                unit: origin.and_then(|origin| unit_of(units, &origin)),
+                unit,
                 message,
                 primary,
                 span,
@@ -174,6 +191,18 @@ fn diagnostics(units: &[Unit], error: HostError) -> Vec<Diagnostic> {
             }
         })
         .collect()
+}
+
+/// A space script named like a bare name a script calls, and the commands
+/// that rename it (RFC-0031 rule 7); `None` for a source no space holds,
+/// which the host's message words.
+fn shadowing(space: Option<&str>, name: &str, externs: &[String]) -> Option<String> {
+    let space = space?;
+    let listed: Vec<String> = externs.iter().map(|name| format!("`{name}`")).collect();
+    Some(format!(
+        "the script `{name}` would shadow {}, which a script calls as `{name}`; `acvus ctl space rm-script {space} {name}` removes it, and `acvus ctl space add-script {space} <file>` stores it under another name",
+        listed.join(", ")
+    ))
 }
 
 fn unit_of(units: &[Unit], origin: &Origin) -> Option<usize> {

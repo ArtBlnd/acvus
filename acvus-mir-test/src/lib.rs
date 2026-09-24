@@ -180,6 +180,7 @@ pub fn compile_to_ir_with(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
     let module = run_pipeline(interner, &graph, test_qref)?;
@@ -265,6 +266,7 @@ pub fn compile_script_ir_with(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
     let module = run_pipeline(interner, &graph, test_qref)?;
@@ -302,6 +304,7 @@ pub fn compile_script_raw(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 
@@ -403,6 +406,7 @@ pub fn refuse_script_mode_ir_with(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 
@@ -529,6 +533,7 @@ fn lower_script_returning(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 
@@ -586,6 +591,7 @@ pub fn optimized_script_module(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 
@@ -683,6 +689,7 @@ pub fn compile_script_at(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 
@@ -814,6 +821,7 @@ pub fn refuse_script_mode_optimized(
         contexts: Freeze::new(contexts),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 
@@ -957,6 +965,7 @@ pub fn compile_inline_ir_with(
         contexts: Freeze::new(ctx_vec),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
 
@@ -1084,6 +1093,7 @@ fn compile_graph_raw(
         contexts: Freeze::new(ctx_vec),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
 
@@ -1194,6 +1204,7 @@ fn compile_multi_fn_at(
         contexts: Freeze::new(ctx_vec),
         types: Freeze::new(type_registry),
         bindings: Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
 
@@ -1279,6 +1290,7 @@ pub fn compile_template_bound(
         contexts: Freeze::new(vec![]),
         types: Freeze::new(type_registry),
         bindings,
+        access: acvus_mir::graph::Access::Sync,
         entries: vec![test_qref],
     };
 

@@ -340,6 +340,7 @@ fn effect_of(i: &Interner, functions: Vec<Function>, name: &str) -> Effect {
         contexts: Freeze::new(vec![]),
         types: Freeze::new(TypeRegistry::new()),
         bindings: acvus_mir::graph::Bindings::default(),
+        access: acvus_mir::graph::Access::Sync,
         entries: Vec::new(),
     };
     let ext = extract::extract(i, &graph);

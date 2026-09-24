@@ -6,7 +6,7 @@ expression: listing
      0 |   r0 = fetch @n
      2 |   r1 = r0 + 1 (r2)
      3 |   r3 = object {x: r0, y: r1}
-     4 |   commit @n = r0
+     4 |   commit @n = r0 (not written)
      5 |   return r3
 
     ; r0 (@n) : i64

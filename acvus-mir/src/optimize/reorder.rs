@@ -370,6 +370,7 @@ mod tests {
                 InstKind::Commit {
                     context: x,
                     value: v(0),
+                    wrote: true,
                 },
                 InstKind::Fetch {
                     dst: v(1),
@@ -378,6 +379,7 @@ mod tests {
                 InstKind::Commit {
                     context: x,
                     value: v(1),
+                    wrote: true,
                 },
                 InstKind::Return {
                     value: v(0),
@@ -439,6 +441,7 @@ mod tests {
                 InstKind::Commit {
                     context: x,
                     value: v(0),
+                    wrote: true,
                 },
                 InstKind::FunctionCall {
                     dst: v(1),
@@ -591,6 +594,7 @@ mod tests {
                 InstKind::Commit {
                     context: x,
                     value: v(0),
+                    wrote: true,
                 },
                 InstKind::Spawn {
                     dst: v(1),

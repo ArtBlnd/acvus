@@ -64,7 +64,7 @@ fn compile_and_run(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime");
-    Ok(runtime.block_on(interp.execute()).expect("the page holds every context the run fetches first"))
+    Ok(runtime.block_on(interp.execute()).expect("the seeds hold every context the run fetches"))
 }
 
 /// The number a program yields at both optimization levels, which is one

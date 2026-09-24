@@ -13,7 +13,7 @@ expression: ir
      8 |   jump L1(1 (r5))
      9 | L1(r6: i64):
     11 |   commit @x = r6
-    12 |   commit @cond = r3
+    12 |   commit @cond = r3 (not written)
     13 |   return r6
 
     ; r0 (v12) : i64

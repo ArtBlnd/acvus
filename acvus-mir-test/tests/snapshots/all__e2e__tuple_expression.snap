@@ -29,8 +29,8 @@ expression: ir
     20 |   r14 = ref &mut <template>
     21 |   append r14 r13
     23 |   r15 = take <template>
-    24 |   commit @a = r3
-    25 |   commit @b = r4
+    24 |   commit @a = r3 (not written)
+    25 |   commit @b = r4 (not written)
     26 |   return r15
 
     ; r0 (v26) : i64

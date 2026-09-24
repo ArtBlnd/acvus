@@ -124,7 +124,6 @@ async fn run_with(
         closures: FxHashMap::default(),
         ret,
         flows: acvus_mir::ty::Flows::Every,
-        fetched_first: Vec::new(),
     };
     let prepared = prepare_module(
         &module,
@@ -133,6 +132,7 @@ async fn run_with(
             externs: &functions,
             context_names: &context_names,
             instances: &acvus_extern::NoInstances,
+            access: acvus_mir::graph::Access::Sync,
         },
     );
     functions.insert(entry, Executable::Module(Arc::new(prepared)));
@@ -144,7 +144,7 @@ async fn run_with(
     )
     .with_context_names(context_names);
     let mut interpreter = Interpreter::new(shared, entry, page);
-    interpreter.execute().await.expect("the page holds every context the run fetches first")
+    interpreter.execute().await.expect("the seeds hold every context the run fetches")
 }
 
 async fn run(interner: &Interner, body: MirBody, ret: Ty) -> Value {
@@ -554,7 +554,6 @@ fn refusals(body: MirBody, ret: Ty) -> Vec<ValidationErrorKind> {
         closures: FxHashMap::default(),
         ret,
         flows: acvus_mir::ty::Flows::Every,
-        fetched_first: Vec::new(),
     };
     validate(&module).into_iter().map(|e| e.kind).collect()
 }

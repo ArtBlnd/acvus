@@ -7,12 +7,12 @@ expression: ir
      1 |   assign @a = r0
      2 |   r1 = take @a
      3 |   r2 = take @a
-     4 |   commit @a = r2
+     4 |   commit @a = r2 (not written)
      5 |   r3 = fetch @b
      6 |   assign @b = r3
      7 |   r4 = take @b
      8 |   r5 = take @b
-     9 |   commit @b = r5
+     9 |   commit @b = r5 (not written)
     10 |   r6 = r1 + r4
     11 |   return r6
 

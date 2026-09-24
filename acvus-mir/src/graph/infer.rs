@@ -919,6 +919,7 @@ pub fn infer_scc(
     sources: &mut Sources,
     registry: &TypeRegistry,
     probe: Option<Probe>,
+    access: Access,
 ) -> SccInferResult {
     let signatures = declared_instances(declared);
     let mut solver = Solver::new(sources, registry, &signatures);
@@ -1011,6 +1012,7 @@ pub fn infer_scc(
                     .chain(&member_inputs)
                     .map(|(fid, inputs)| (*fid, inputs.clone()))
                     .collect(),
+                access,
             };
 
             let TyTerm::Fn {
@@ -1352,6 +1354,7 @@ fn infer_at(
                         .chain(&member_inputs)
                         .map(|(fid, inputs)| (*fid, inputs.clone()))
                         .collect(),
+                    access: graph.access,
                 };
 
                 let TyTerm::Fn {
@@ -1555,6 +1558,7 @@ mod tests {
             contexts: Freeze::new(vec![]),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         }
     }
@@ -1592,6 +1596,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         }
     }
@@ -1690,6 +1695,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         }
     }
@@ -1776,6 +1782,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         };
         let ext = extract::extract(interner, &graph);
@@ -2952,6 +2959,7 @@ mod tests {
             contexts: Freeze::new(contexts),
             types: Freeze::default(),
             bindings: Bindings::default(),
+            access: crate::graph::Access::Sync,
             entries: Vec::new(),
         };
         let ext = extract::extract(&i, &graph);

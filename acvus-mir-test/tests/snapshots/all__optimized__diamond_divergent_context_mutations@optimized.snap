@@ -24,7 +24,7 @@ expression: opt
     24 |   jump L3(r18, r16)
     25 | L3(r20: i64, r21: i64):
     26 |   commit @output = r20
-    27 |   commit @input = r1
+    27 |   commit @input = r1 (not written)
     28 |   commit @low = r21
     29 |   commit @high = r15
     30 |   return r20
