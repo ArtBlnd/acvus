@@ -1077,9 +1077,19 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
    - A context enters the graph as a variable (RFC-0025). Its type is solved
      with the rest of the graph from every body that stores or reads it, and
      structural types meet as they do anywhere else.
-   - A store is always admitted where the solved type holds it. Initializing
-     a context is a script that stores it (`@log = [];`), compiled into the
-     same graph as the scripts that read it.
+   - A store is always admitted where the solved type holds it.
+   - A context's first value is its init: an expression or a script the
+     host gives for that one key, which returns the value and names no
+     context. It is compiled into the same graph, its result declared at the
+     context's type, so its value joins the solve. A declared type names no
+     source (RFC-0012 rule 7), so the source an init makes becomes the
+     context's without a join of two sources; inside a script, a store of
+     another source into the context stays refused.
+   - Before a run, every context the entry fetches before assigning
+     (RFC-0025 rule 2) that the page lacks is filled by running its init; a
+     key with neither a value nor an init refuses the run before it starts,
+     naming the key. An init never runs on a page that holds its key, so no
+     init replaces a value.
    - A context whose type the graph leaves open closes to `!` at the freeze
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
    - A value no script names is not a context. The host keeps it itself.
@@ -1155,8 +1165,8 @@ user takes on nothing. A host that reads the value word writes, again, the
 walk only the runtime can check, and a reinterpretation at a wrong type is a
 transmute. A context's type written in data is a second statement of what
 the scripts already say, and two statements can disagree. Solved in the
-graph, the type has one source, and the stores that initialize it are
-checked like every other store. An extern handler already crosses the
+graph, the type has one source, and an init is checked against it like a
+store. An extern handler already crosses the
 boundary soundly with values lent and not kept, and a host that lends into a
 closure needs nothing more, so one crossing serves both and a gap in one is a
 gap in the other. Anything the host keeps is copied in Rust, where Rust
@@ -1170,9 +1180,12 @@ checks it.
 **Rejected.**
 - A context type declared by the host or by data such as a manifest — a
   second source that can disagree with the scripts.
-- An initializer that returns the context's value — its result type would be
-  inferred from its own body with nothing to refuse it (RFC-0054). A store
-  is checked against the type the whole graph solves.
+- An initializer that stores the context — a store of a new source into a
+  context whose type carries an identity is refused (RFC-0012 rule 3), and
+  the compiler cannot know whether the page already holds a value it would
+  replace.
+- A `context` declaration in the language — a body must lower whether or not
+  its contexts were ever given a value; a first value is the host's concern.
 - `as_typed::<T>()` on a result value — it is a `Value -> T`, and it checks
   a kind after the run (RFC-0054).
 - Returning the value word with documented accessors — every host rewrites
