@@ -24,16 +24,13 @@ amount modulo the width, and `/` and `%` trap on a zero divisor and at
 
 Where Rust's own choice is a debug-build panic, the function here follows
 the language's rule instead: `abs`, `pow`, `div_euclid` and `rem_euclid`
-wrap. The `checked_*`, `wrapping_*` and `saturating_*` families are how a
-script asks for the other answers explicitly. `next_power_of_two` is the
+wrap. The `checked_*`, `wrapping_*`, `saturating_*` and `overflowing_*`
+families are how a script asks for the other answers explicitly. `next_power_of_two` is the
 one exception and traps at every build profile, because Rust's release
 answer there is `0` — a substituted failure, not an arithmetic one.
 
 ## What `std` has and this module does not
 
-- **`overflowing_*`.** Its result is `(T, bool)` and a Rust tuple does not
-  cross the extern boundary, so it is not declared. A script that wants
-  both halves calls `checked_*` and `wrapping_*`.
 - **`abs_diff`'s result type.** Rust returns the unsigned counterpart of
   the argument — `i64::abs_diff` gives a `u64`. One type variable cannot
   say "the unsigned counterpart of `T`", so the result is `u64` at every
