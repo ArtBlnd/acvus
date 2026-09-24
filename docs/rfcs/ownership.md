@@ -291,10 +291,8 @@ Status: Proposed
    alias falls to `Within`.
 9. **A value crossing out of the body holds no loan.** A body's result
    to the host and a context write are refused where any of their
-   positions may hold a loan. A spawn's argument may hold one: the
-   `Handle` holds it until the `Eval`, and a run that traps or is dropped
-   before the `Eval` releases no frame's cells until every task it spawned
-   has finished. A lambda's or named function's
+   positions may hold a loan; a spawn's argument may hold one until its
+   `Eval` (RFC-0046 rule 3). A lambda's or named function's
    outputs, its result and what it writes through a parameter or a
    capture, hold only loans on its inputs that its flows name (rule 5); a
    loan on the body's own storage there is refused, a by-value
@@ -324,8 +322,7 @@ its flows, meeting two function types joins them, and a component of the
 call graph that calls itself is checked once more per round its flows
 grow. Extern authors write lifetimes where a result borrows from more
 than one parameter, and an extension that holds a carrier declares a
-region parameter. A run that ends before an `Eval` keeps its frames' cells
-until the last task it spawned has finished.
+region parameter.
 **Rejected.**
 - Region variables solved by the type checker — loans exist per MIR slot
   and instruction; the checker would solve what the MIR check solves again.
@@ -340,10 +337,3 @@ until the last task it spawned has finished.
   hold `o`, refusing writes to `o` the program never makes through it.
 - Written lifetimes in the language — a script's positions and flows are
   inferred; only an extern states them, and Rust checks the handler.
-- A spawn refused where an argument has a position — the spawn is the
-  optimizer's split, so the program's parallelism would depend on whether
-  it lends.
-- A dropped run waiting for its tasks in `Drop` — an executor cannot stop
-  a task being polled on another thread or a handler on a pool thread, so
-  the wait blocks the thread dropping the run, and on a current-thread
-  runtime deadlocks against the task.

@@ -1,10 +1,12 @@
-//! A run dropped while a task it spawned is in flight keeps the cells the
-//! task was lent until the task has finished (RFC-0079 rule 9).
+//! A run dropped while a task it spawned is in flight, or a body that returns
+//! before its task's `Eval`, keeps the cells the task was lent until the task
+//! has finished (RFC-0079 rule 9).
 //!
 //! The program lends `&n` to a spawned extern that reads `n` only when the
-//! test opens its gate. The test drops the run's future first. Every block
-//! this binary frees is overwritten before it is returned to the system, so a
-//! read of released cells answers the fill pattern rather than 41.
+//! test opens its gate. The test drops the run's future, or lets the body
+//! return, first. Every block this binary frees is overwritten before it is
+//! returned to the system, so a read of released cells answers the fill
+//! pattern rather than 41.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::pin::Pin;
@@ -16,8 +18,10 @@ use acvus_extern::{Registry, extern_fn, extern_registry};
 use acvus_interpreter::{
     AcvusRuntime, Executor, HandleValue, Interpreter, TokioExecutor, Value,
 };
-use acvus_interpreter_test::{Context, compile_source_with_externs, execute_compiled, split_context};
+use acvus_interpreter_test::{Context, check_source, execute_compiled, split_context};
 use acvus_mir::graph::ParsedAst;
+use acvus_mir::graph::optimize::Opt;
+use acvus_mir::ir::InstKind;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 use futures::channel::oneshot;
@@ -85,8 +89,7 @@ fn move_gate(step: impl FnOnce(&mut Handshake)) {
     GATE_MOVED.notify_all();
 }
 
-#[extern_fn(effect = opaque)]
-fn read_when_opened(n: &i64) -> i64 {
+fn read_once_opened(n: &i64) -> i64 {
     LENT_CELL_ADDRESS.store(std::ptr::from_ref(n).addr(), Ordering::SeqCst);
     move_gate(|state| state.entered = true);
     wait_until(|state| state.open);
@@ -95,24 +98,74 @@ fn read_when_opened(n: &i64) -> i64 {
     value
 }
 
+#[extern_fn(effect = opaque)]
+fn read_when_opened(n: &i64) -> i64 {
+    read_once_opened(n)
+}
+
+#[extern_fn(heavy, effect = pure)]
+fn read_heavily_when_opened(n: &i64) -> i64 {
+    read_once_opened(n)
+}
+
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
         types: [],
-        fns: [read_when_opened],
+        fns: [read_when_opened, read_heavily_when_opened],
     }
 }
 
 const PROGRAM: &str = "let n = 41; let m = read_when_opened(&n); m + 1";
 
+const RETURNS_PAST_ITS_TASK: &str = "let n = 41; let m = read_when_opened(&n); 7";
+
 fn interpreter(executor: Arc<dyn Executor>) -> Interpreter {
+    interpreter_of(PROGRAM, Opt::Full, executor, |_| {})
+}
+
+fn interpreter_of<F>(source: &str, opt: Opt, executor: Arc<dyn Executor>, edit: F) -> Interpreter
+where
+    F: FnOnce(&mut acvus_mir::ir::MirModule),
+{
     let interner = Interner::new();
     let (context_types, snapshot) = split_context(&interner, Context::default());
-    let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, PROGRAM).expect("parses"));
+    let ast = ParsedAst::Script(acvus_ast::parse_script(&interner, source).expect("parses"));
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(registry());
-    let compiled = compile_source_with_externs(&interner, ast, &context_types, registries, Ty::I64);
+    let mut compiled =
+        check_source(&interner, ast, &context_types, registries, Ty::I64, opt, |_| {})
+            .unwrap_or_else(|refused| panic!("refused: {}", refused.messages.join("; ")));
+    let entry = compiled
+        .modules
+        .get_mut(&compiled.entry_qref)
+        .expect("the entry is compiled");
+    edit(entry);
     execute_compiled(&interner, compiled, snapshot, executor).1
+}
+
+/// Unsplit, the heavy call is awaited where it is made rather than spawned.
+fn not_split(module: &mut acvus_mir::ir::MirModule) {
+    assert!(
+        !module
+            .main
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::Spawn { .. })),
+        "the heavy call is not split"
+    );
+}
+
+/// No pass leaves a `Spawn` without its `Eval`; the test removes the `Eval`
+/// from the compiled body, so the body returns with its task aloft.
+fn drop_the_eval(module: &mut acvus_mir::ir::MirModule) {
+    let insts = &mut module.main.insts;
+    let evals = insts
+        .iter()
+        .filter(|inst| matches!(inst.kind, InstKind::Eval { .. }))
+        .count();
+    assert_eq!(evals, 1, "the body evaluates the lent call once");
+    insts.retain(|inst| !matches!(inst.kind, InstKind::Eval { .. }));
 }
 
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -276,4 +329,51 @@ fn a_run_that_is_not_dropped_answers_the_lent_read() {
     let mut interp = interpreter(Arc::new(TokioExecutor));
     let value = runtime.block_on(interp.execute());
     assert_eq!(value.bits(), 42);
+}
+
+#[test]
+fn a_body_that_returns_with_its_task_aloft_keeps_the_cells_until_the_task_ends() {
+    let _serial = fresh();
+    let parking = Arc::new(Parking::default());
+    let mut interp = interpreter_of(
+        RETURNS_PAST_ITS_TASK,
+        Opt::Full,
+        Arc::clone(&parking) as Arc<dyn Executor>,
+        drop_the_eval,
+    );
+    let value = futures::executor::block_on(interp.execute());
+    assert_eq!(value.bits(), 7);
+    let job = parking.take_one();
+
+    move_gate(|state| state.open = true);
+    let worker = std::thread::spawn(job);
+    worker.join().expect("the task finishes");
+
+    assert_lent_cells_outlived_the_run();
+}
+
+#[test]
+fn a_heavy_call_running_when_the_run_is_dropped_reads_live_cells() {
+    let _serial = fresh();
+    let parking = Arc::new(Parking::default());
+    let mut interp = interpreter_of(
+        "let n = 41; let m = read_heavily_when_opened(&n); m + 1",
+        Opt::None,
+        Arc::clone(&parking) as Arc<dyn Executor>,
+        not_split,
+    );
+    let mut run: Pin<Box<dyn Future<Output = Value> + '_>> = Box::pin(interp.execute());
+    park_at_eval(&mut run);
+    let worker = std::thread::spawn(parking.take_one());
+    wait_until(|state| state.entered);
+
+    drop(run);
+    assert!(
+        !LENT_CELL_FREED.load(Ordering::SeqCst),
+        "a dropped run keeps the cells its heavy call was lent"
+    );
+    move_gate(|state| state.open = true);
+    worker.join().expect("the heavy call finishes");
+
+    assert_lent_cells_outlived_the_run();
 }

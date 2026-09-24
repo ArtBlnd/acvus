@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use acvus_extern::{Ctx, Owned, Runtime, Variant};
 
-use crate::flight::Flight;
+use crate::flight::{Flight, Tally};
 use crate::interpreter::InterpreterContext;
 use crate::ops::call;
 use crate::regs::{FrameState, RootCells, RootFrame};
@@ -17,15 +17,18 @@ use crate::value::{Kind, Value, VariantValue};
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
 /// One run as a `Runtime`: the state its functions read, the page its
-/// contexts live on (RFC-0014), and the `Flight` its spawned tasks count in.
-/// `Interpreter` makes the three and a spawned run is handed its parent's,
-/// so a closure value carries none of them (RFC-0069 rule 1): every caller
-/// of one holds a `&AcvusRuntime`.
+/// contexts live on (RFC-0014), the `Flight` its spawned tasks count in, and
+/// the `Tally` of the frame a spawn through it counts in. `Interpreter`
+/// makes the first three and a spawned run is handed its parent's; each
+/// suspending frame runs on a copy naming its own tally. A closure value
+/// carries none of them (RFC-0069 rule 1): every caller of one holds a
+/// `&AcvusRuntime`.
 #[derive(Clone)]
 pub struct AcvusRuntime {
     pub shared: Arc<InterpreterContext>,
     pub page: Arc<dyn crate::journal::RuntimeContext>,
     pub(crate) flight: Arc<Flight>,
+    pub(crate) tally: Arc<Tally>,
 }
 
 impl AcvusRuntime {
@@ -33,11 +36,13 @@ impl AcvusRuntime {
         shared: Arc<InterpreterContext>,
         page: Arc<dyn crate::journal::RuntimeContext>,
         flight: Arc<Flight>,
+        tally: Arc<Tally>,
     ) -> AcvusRuntime {
         AcvusRuntime {
             shared,
             page,
             flight,
+            tally,
         }
     }
 }

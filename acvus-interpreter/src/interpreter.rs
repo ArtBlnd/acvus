@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::code::Prepared;
-use crate::flight::{Flight, Flying};
+use crate::flight::{Flight, Flying, Tally};
 use crate::journal::{ContextWrite, InMemoryContext, RuntimeContext};
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
@@ -83,6 +83,7 @@ impl InterpreterContext {
             Arc::new(self.clone()),
             Arc::new(crate::journal::InMemoryContext::empty()),
             Flight::new(),
+            Tally::outermost(),
         )
     }
 }
@@ -109,6 +110,7 @@ pub struct Interpreter {
     entry: QualifiedRef,
     page: Arc<dyn RuntimeContext>,
     flight: Arc<Flight>,
+    tally: Arc<Tally>,
     spawn_args: Vec<Value>,
     _flying: Option<Flying>,
 }
@@ -130,19 +132,22 @@ impl Interpreter {
             entry,
             page,
             flight: Flight::new(),
+            tally: Tally::outermost(),
             spawn_args: Vec::new(),
             _flying: None,
         }
     }
 
     /// The deferred run a `Spawn` of a module issues: the spawning run's
-    /// runtime, and the arguments it passed.
+    /// runtime, whose frame the new run's frames run within, and the
+    /// arguments it passed.
     pub(crate) fn spawned(rt: &AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> Self {
         Self {
             shared: Arc::clone(&rt.shared),
             entry,
             page: Arc::clone(&rt.page),
             flight: Arc::clone(&rt.flight),
+            tally: Arc::clone(&rt.tally),
             spawn_args: args,
             _flying: Some(rt.flight.start()),
         }
@@ -154,6 +159,7 @@ impl Interpreter {
             Arc::clone(&self.shared),
             Arc::clone(&self.page),
             Arc::clone(&self.flight),
+            Arc::clone(&self.tally),
         )
     }
 

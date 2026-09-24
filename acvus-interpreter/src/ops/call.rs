@@ -22,14 +22,14 @@ use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
 use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
-use crate::flight::Aloft;
+use crate::flight::{Aloft, Launched};
 use crate::interpreter::lookup_module;
 use crate::machine::{
     Lent, LentCall, LentOut, Machine, call_module, call_module_sync, fn_value_call,
 };
 use crate::ops::control::{self, Ends, Escapes, Rejoins};
 use crate::runtime::AcvusRuntime;
-use crate::value::{HandleValue, Value};
+use crate::value::Value;
 use acvus_extern::Release;
 
 /// The declared instance a call reaches, cloned out of the module table for
@@ -2070,11 +2070,16 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
             },
             flying,
         );
+        let unevaluated = m.ctx.rt.tally.spawned();
         let handle = executor.spawn_blocking(Box::new(move || work.run()));
         m.suspend::<LARGE>(
             self.dst,
             self.next,
-            Box::pin(async move { executor.eval(handle).await }),
+            Box::pin(async move {
+                let value = executor.eval(handle).await;
+                unevaluated.evaluated();
+                value
+            }),
         );
         SUSPEND
     }
@@ -2265,16 +2270,19 @@ pub struct Eval<const LARGE: bool> {
 impl<const LARGE: bool> Op for Eval<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         // SAFETY: the type checker admits only a handle value here.
-        let handle = unsafe {
-            m.regs()
-                .take::<true>(self.handle)
-                .materialize::<HandleValue>()
-        };
+        let Launched {
+            handle,
+            unevaluated,
+        } = unsafe { m.regs().take::<true>(self.handle).materialize::<Launched>() };
         let executor = Arc::clone(&m.shared().executor);
         m.suspend::<LARGE>(
             self.dst,
             self.next,
-            Box::pin(async move { executor.eval(handle).await }),
+            Box::pin(async move {
+                let value = executor.eval(handle).await;
+                unevaluated.evaluated();
+                value
+            }),
         );
         SUSPEND
     }
@@ -2309,8 +2317,9 @@ impl Op for SpawnExternSync {
             },
             flying,
         );
+        let unevaluated = m.ctx.rt.tally.spawned();
         let handle = m.shared().executor.spawn_blocking(Box::new(move || work.run()));
-        m.regs().define::<true>(self.dst, Value::handle(handle));
+        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
         self.next.run(m, r0)
     }
 }
@@ -2331,8 +2340,9 @@ impl Op for SpawnExternAsync {
         let flying = rt.flight.start();
         // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
         let fut = unsafe { self.f.call_async(rt, &args) };
+        let unevaluated = m.ctx.rt.tally.spawned();
         let handle = m.shared().executor.spawn_async(Box::pin(Aloft::new(fut, flying)));
-        m.regs().define::<true>(self.dst, Value::handle(handle));
+        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
         self.next.run(m, r0)
     }
 }
@@ -2351,8 +2361,9 @@ impl Op for SpawnModule {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = staged(m, &self.args, self.takes);
         let child = crate::interpreter::Interpreter::spawned(m.ctx.rt, self.callee, args);
+        let unevaluated = m.ctx.rt.tally.spawned();
         let handle = m.shared().executor.spawn_interpreter(child);
-        m.regs().define::<true>(self.dst, Value::handle(handle));
+        m.regs().define::<true>(self.dst, Value::handle(Launched { handle, unevaluated }));
         self.next.run(m, r0)
     }
 }

@@ -374,7 +374,7 @@ where
 {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
     let body = prepared.main.as_ref();
-    let mut cells = FrameCells::new(Store::new(), &rt.flight);
+    let (mut cells, rt) = FrameCells::open(Store::new(), &rt);
     let (mut regs, _) = cells.store().bind(body);
     open_frame(body, &mut regs);
     for (slot, arg) in body.params.iter().zip(args) {
@@ -383,9 +383,7 @@ where
     if let Some(order) = body.order_param {
         regs.put(order, Value::unit());
     }
-    let out = drive(Machine::new(body, regs, &rt)).await;
-    cells.returned();
-    out
+    drive(Machine::new(body, regs, &rt)).await
 }
 
 pub fn call_module_sync<R>(
@@ -536,11 +534,9 @@ pub fn fn_value_call<'f>(
     async move {
         match resume {
             Resume::Frame { body, store } => {
-                let mut cells = FrameCells::new(store, &rt.flight);
+                let (mut cells, rt) = FrameCells::open(store, rt);
                 let (regs, _) = cells.store().bind(body);
-                let out = drive(Machine::new(body, regs, rt)).await;
-                cells.returned();
-                out
+                drive(Machine::new(body, regs, &rt)).await
             }
             Resume::Done(value) => value,
         }
