@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use acvus_ext::Deque;
 use acvus_extern::{
-    Borrowable, Decode, Encode, ExternType, ExternTypeDecl, Externs, Journaled, NodeHash,
-    OneValue, Owned, Registry, Runtime, SpaceError, SpaceResult, UniformPayload, Var, Visit,
-    extern_fn, extern_registry, kind,
+    Borrowable, Decode, Encode, ExternType, ExternTypeDecl, Externs, Journaled, NodeHash, OneValue,
+    Owned, Payload, Registry, Runtime, SpaceError, SpaceResult, Var, Visit, extern_fn,
+    extern_registry, kind,
 };
 use acvus_interpreter::{
     AcvusRuntime, Commit, InterpreterContext, Log, Mode, NodeKind, Plain, Record,
@@ -550,7 +550,7 @@ where
     T: Var<kind::Type>,
     I: Var<kind::Identity>;
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 struct TallyState<T> {
     items: Vec<T>,
     settled: usize,

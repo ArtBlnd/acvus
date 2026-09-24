@@ -112,7 +112,7 @@ mod next_design {
         })
     }
 
-    #[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
+    #[derive(acvus_extern::Payload)]
     pub struct NMapBody<'a, I, T, U, E, Rt>
     where
         I: Var<kind::Type>,
@@ -166,7 +166,7 @@ mod next_design {
         Some(it.0.f.call_now(ctx, (x,)))
     }
 
-    #[derive(acvus_extern::UniformPayload, acvus_extern::Within)]
+    #[derive(acvus_extern::Payload)]
     pub struct NFilterBody<'a, I, T, E, Rt>
     where
         I: Var<kind::Type>,

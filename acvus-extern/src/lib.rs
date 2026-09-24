@@ -99,7 +99,7 @@ pub use vec::vec_ty;
 pub use within::Within;
 
 pub use acvus_extern_macro::{
-    ExternType, TyArg, UniformPayload, Within, extern_fn, extern_registry, extern_signature,
+    ExternType, Payload, TyArg, Within, extern_fn, extern_registry, extern_signature,
 };
 
 pub use acvus_mir::graph::{FnKind, Function};

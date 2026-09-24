@@ -1,5 +1,5 @@
 //! A payload of the author's own struct that does not derive
-//! `UniformPayload` is refused, naming that struct and the derive.
+//! `Payload` is refused, naming that struct and the derive.
 use acvus_extern::{ExternType, Var, kind};
 
 struct Pair<T> {

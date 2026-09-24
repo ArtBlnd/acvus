@@ -1,8 +1,8 @@
 //! A payload of the author's own struct is proved once that struct derives
-//! `UniformPayload`.
-use acvus_extern::{ExternType, UniformPayload, Var, kind};
+//! `Payload`.
+use acvus_extern::{ExternType, Payload, Var, kind};
 
-#[derive(UniformPayload)]
+#[derive(Payload)]
 struct Pair<T> {
     first: T,
     rest: Vec<T>,

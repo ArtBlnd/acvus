@@ -762,8 +762,10 @@ inherent methods, so no safe code breaks an `Erased`'s `T`.
    type parameters only by holding them. acvus-extern implements it for the
    primitives, `String`, `Vec`, `VecDeque`, `vec::IntoIter`, `Option`,
    `Result`, `Box`, tuples, arrays, `PhantomData` and the runtime's own
-   types; `#[derive(UniformPayload)]` implements it for a struct or enum by
-   bounding each field type that names a type parameter; `#[derive(ExternType)]`
+   types; `#[derive(Payload)]` implements it for a struct or enum by
+   bounding each field type that names a type parameter, and in the same
+   expansion `Within` (RFC-0079 rule 6), so a payload's author writes one
+   derive; `#[derive(ExternType)]`
    implements it for the extension type by bounding its payload. The derive
    proves the payload in a generated `fn` generic over a marker `__M` that
    only it names, under the struct's own predicates, with each type variable
@@ -782,7 +784,8 @@ inherent methods, so no safe code breaks an `Erased`'s `T`.
    with or without the attribute. A derived type may bound a parameter by
    `Chosen`: it is never canonicalized, and a projection through it is
    admitted. `Pipe<Ts, …>` holds `<Ts as TypeList>::Body`, so each
-   instance's box is its own Rust type. A payload that names no uniform
+   instance's box is its own Rust type, and its parts derive `Within`
+   alone. A payload that names no uniform
    type parameter is read at its own type and is not proved.
 
 A read at a type other than the canonical one rests on three layers.

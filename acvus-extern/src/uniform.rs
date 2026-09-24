@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 /// box is keyed by its payload with each uniform parameter at its canonical
 /// form and read at the parameter's own, and a payload that reached a
 /// parameter through a trait would have whatever layout that parameter's
-/// impl chose. `#[derive(UniformPayload)]` implements it for a struct or enum
+/// impl chose. `#[derive(Payload)]` implements it for a struct or enum
 /// by bounding each field that names a type parameter, and
 /// `#[derive(ExternType)]` proves it of an extension type's payload.
 ///
@@ -33,7 +33,7 @@ use std::marker::PhantomData;
     message = "`{Self}` is not known to hold its type parameters only as fields",
     label = "`{Self}` is not `UniformPayload`",
     note = "an extension type's payload that names a type parameter is proved `UniformPayload`, field type by field type, so that its layout reaches each parameter only by holding it (RFC-0076)",
-    note = "derive `UniformPayload` for `{Self}` if it is a struct or enum of this crate; for another crate's type, `#[extern_type(unsafe(uniform_payload))]` on the extension type asserts it of the payload by hand"
+    note = "derive `Payload` for `{Self}` if it is a struct or enum of this crate; for another crate's type, `#[extern_type(unsafe(uniform_payload))]` on the extension type asserts it of the payload by hand"
 )]
 pub unsafe trait UniformPayload<M> {}
 

@@ -2255,29 +2255,39 @@ fn projection_through(ty: &Type, uniform: &[Ident]) -> Option<(Ident, syn::TypeP
     find.found
 }
 
-// -- #[derive(UniformPayload)] ---------------------------------------
+// -- #[derive(Payload)] ----------------------------------------------
 
-#[proc_macro_derive(UniformPayload)]
-pub fn derive_uniform_payload(input: TokenStream) -> TokenStream {
+/// A payload's two proofs, `UniformPayload` at every marker (RFC-0076 rule 4)
+/// and `Within` at every lifetime (RFC-0079 rule 6), each from the fields.
+#[proc_macro_derive(Payload)]
+pub fn derive_payload(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match generate_uniform_payload(input) {
-        Ok(tokens) => tokens.into(),
+    match derived_fields(&input, "Payload") {
+        Ok(fields) => {
+            let uniform = generate_uniform_payload(&input, &fields);
+            let within = generate_within(&input, &fields);
+            quote! { #uniform #within }.into()
+        }
         Err(err) => err.to_compile_error().into(),
     }
 }
 
-fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn derived_fields<'a>(input: &'a DeriveInput, derive: &str) -> syn::Result<Vec<&'a syn::Field>> {
+    match &input.data {
+        syn::Data::Struct(data) => Ok(data.fields.iter().collect()),
+        syn::Data::Enum(data) => Ok(data.variants.iter().flat_map(|v| v.fields.iter()).collect()),
+        syn::Data::Union(_) => Err(syn::Error::new(
+            input.ident.span(),
+            format!("{derive} is derived on a struct or an enum"),
+        )),
+    }
+}
+
+fn generate_uniform_payload(
+    input: &DeriveInput,
+    fields: &[&syn::Field],
+) -> proc_macro2::TokenStream {
     let ident = &input.ident;
-    let fields: Vec<&syn::Field> = match &input.data {
-        syn::Data::Struct(data) => data.fields.iter().collect(),
-        syn::Data::Enum(data) => data.variants.iter().flat_map(|v| v.fields.iter()).collect(),
-        syn::Data::Union(_) => {
-            return Err(syn::Error::new(
-                ident.span(),
-                "UniformPayload is derived on a struct or an enum",
-            ));
-        }
-    };
     let type_params: Vec<Ident> = input
         .generics
         .type_params()
@@ -2295,7 +2305,7 @@ fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::Toke
         .flat_map(|w| w.predicates.iter());
     let params = input.generics.params.iter();
     let (_, ty_generics, _) = input.generics.split_for_impl();
-    Ok(quote! {
+    quote! {
         // SAFETY: each field that names a type parameter is bounded by
         // `UniformPayload` here, and a field that names none has one layout
         // at every instantiation.
@@ -2305,32 +2315,24 @@ fn generate_uniform_payload(input: DeriveInput) -> syn::Result<proc_macro2::Toke
             #(#bounded: ::acvus_extern::UniformPayload<__M>,)*
         {
         }
-    })
+    }
 }
 
 // -- #[derive(Within)] -----------------------------------------------
 
+/// `Within` alone, for a part of a payload whose `UniformPayload` the
+/// extension type asserts by `unsafe(uniform_payload)` (RFC-0076 rule 5).
 #[proc_macro_derive(Within)]
 pub fn derive_within(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match generate_within(input) {
-        Ok(tokens) => tokens.into(),
+    match derived_fields(&input, "Within") {
+        Ok(fields) => generate_within(&input, &fields).into(),
         Err(err) => err.to_compile_error().into(),
     }
 }
 
-fn generate_within(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn generate_within(input: &DeriveInput, fields: &[&syn::Field]) -> proc_macro2::TokenStream {
     let ident = &input.ident;
-    let fields: Vec<&syn::Field> = match &input.data {
-        syn::Data::Struct(data) => data.fields.iter().collect(),
-        syn::Data::Enum(data) => data.variants.iter().flat_map(|v| v.fields.iter()).collect(),
-        syn::Data::Union(_) => {
-            return Err(syn::Error::new(
-                ident.span(),
-                "Within is derived on a struct or an enum",
-            ));
-        }
-    };
     let lifetimes: Vec<syn::Lifetime> = input
         .generics
         .lifetimes()
@@ -2373,7 +2375,7 @@ fn generate_within(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         .params
         .iter()
         .filter(|param| !matches!(param, GenericParam::Lifetime(_)));
-    Ok(quote! {
+    quote! {
         // SAFETY: the type's own lifetimes are at `'__s`, and each field that
         // names a parameter is bounded here to hold its carriers at `'__s`. A
         // field that names none is one type at every lifetime.
@@ -2383,7 +2385,7 @@ fn generate_within(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             #(#bounded,)*
         {
         }
-    })
+    }
 }
 
 struct AtLifetime<'a> {

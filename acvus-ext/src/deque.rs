@@ -7,16 +7,16 @@
 use std::collections::VecDeque;
 
 use acvus_extern::{
-    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, PolyTy, PolyVars,
-    QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks, SpaceResult,
-    TransparentOver, TyArg, TyVarBound, UniformPayload, UserDefinedDecl, Var, Visit, Within, extern_fn,
+    Decode, Encode, ExternTypeDecl, Interner, Journaled, NodeHash, Owned, Payload, PolyTy,
+    PolyVars, QualifiedRef, Ref, Registry, Runtime, Shared, SlotRepr, SpaceError, SpaceHooks,
+    SpaceResult, TransparentOver, TyArg, TyVarBound, UserDefinedDecl, Var, Visit, extern_fn,
     extern_registry, kind,
 };
 use acvus_mir::ty::Ty;
 
 use crate::iter::{Items, Refs, sig};
 
-#[derive(Debug, Clone, PartialEq, UniformPayload, Within)]
+#[derive(Debug, Clone, PartialEq, Payload)]
 pub struct Deque<T>
 where
     T: Var<kind::Type>,

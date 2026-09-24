@@ -30,8 +30,8 @@ use std::ops::Deref;
 
 use acvus_extern::{Arr, InPlaceElement, PassedByValue};
 use acvus_extern::{
-    Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Ref, Runtime, Shared,
-    Stored, Suspends, TransparentOver, UniformPayload, Var, core, extern_fn, kind,
+    Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Payload, Ref, Runtime,
+    Shared, Stored, Suspends, TransparentOver, Var, core, extern_fn, kind,
 };
 
 /// The shared signatures of the iterator surface.
@@ -68,7 +68,7 @@ pub mod sig {
     }
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct ItemsBody<T> {
     rest: std::vec::IntoIter<T>,
 }
@@ -130,7 +130,7 @@ macro_rules! next_items_of {
 
 pub(crate) use next_items_of;
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct RefsBody<'a, C, Rt>
 where
     C: Var<kind::Type>,
@@ -261,7 +261,7 @@ where
     Some(current)
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct MapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -314,13 +314,13 @@ where
     Some(it.0.f.call(ctx, (x,)).await)
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub enum UnorderedDraw<U> {
     Undrawn,
     Drawn(VecDeque<U>),
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct UnorderedBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -398,7 +398,7 @@ where
     futures::future::join_all(calls).await.into()
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct FilterBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -455,7 +455,7 @@ where
     }
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct TakeBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -505,7 +505,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct SkipBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -562,7 +562,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct StepByBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -624,7 +624,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct TakeWhileBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -694,7 +694,7 @@ where
     None
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct SkipWhileBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -761,7 +761,7 @@ where
     it.0.next.call_await(ctx, &mut it.0.inner, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct ChunksBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -832,7 +832,7 @@ where
 /// element it holds when it meets the next one that differs, one draw
 /// behind its source, because it keeps the element itself and requires no
 /// `core::clone` to keep a copy of it.
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub(crate) enum Held<T> {
     NothingDrawn,
     Drawn(T),
@@ -845,7 +845,7 @@ enum Step<T> {
     End,
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct DedupBody<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -964,7 +964,7 @@ where
     None
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct ChainBody<'a, A, B, T, E, Rt>
 where
     A: Var<kind::Type>,
@@ -1034,7 +1034,7 @@ where
     it.0.next_second.call_await(ctx, &mut it.0.second, ()).await
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct FlattenBody<'a, I, C, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -1164,7 +1164,7 @@ where
     next_flatten_at(ctx, it).await
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct FlatMapBody<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,

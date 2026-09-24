@@ -32,9 +32,9 @@ use std::ops::Deref;
 
 use acvus_extern::{
     Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
-    FxHashMap, Interner, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
+    FxHashMap, Interner, OneValue, PassedByValue, Payload, PolyTy, PolyVars, QualifiedRef, Ref,
     Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg, TyVarBound,
-    UniformPayload, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry, kind,
+    UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry, kind,
 };
 use acvus_extern::{Instance, Later, held_effect};
 
@@ -53,7 +53,7 @@ type EqOf<'a, K, E, Rt> = Closure<'a, (Ref<'a, K, Shared, Rt>, Ref<'a, K, Shared
 /// LLVM must assume keeps it, and its sibling-call rule then refuses the
 /// tail jump every operation owes its successor (RFC-0052, enforced by
 /// `acvus-interpreter-test/benches/asm_probe.rs`).
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 enum Keying<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
@@ -105,14 +105,14 @@ where
     }
 }
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 struct Entry<K, V> {
     hash: u64,
     binding: Binding<K, V>,
 }
 
 /// A key and the value it names, each at the type the declaration gave it.
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 struct Binding<K, V> {
     key: K,
     value: V,
@@ -141,7 +141,7 @@ struct Placed<K, V> {
 /// insertion order, and the positions each hash occupies. A set's value
 /// slot is `()`: nothing reads it, and a runtime value written there would
 /// be a value the table owns for no reader.
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct Table<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -483,7 +483,7 @@ macro_rules! stored_extern_type {
 
 // -- The map ------------------------------------------------------------
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct HashMap<'a, K, V, E, Rt>(Table<'a, K, V, E, Rt>, PhantomData<(K, V, E)>)
 where
     K: Var<kind::Type>,
@@ -594,7 +594,7 @@ where
 /// type. A map has two element types and a stage carries one `iter::next`,
 /// so reading the keys and reading the values are two stages, each with a
 /// body of its own.
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct KeysBody<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -637,7 +637,7 @@ where
 }
 
 /// As `KeysBody`, over the values.
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct ValuesBody<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -999,7 +999,7 @@ where
 /// thing a set does not have is a value to hold.
 type SetTable<'a, K, E, Rt> = Table<'a, K, (), E, Rt>;
 
-#[derive(UniformPayload, acvus_extern::Within)]
+#[derive(Payload)]
 pub struct HashSet<'a, K, E, Rt>(SetTable<'a, K, E, Rt>, PhantomData<(K, E)>)
 where
     K: Var<kind::Type>,
