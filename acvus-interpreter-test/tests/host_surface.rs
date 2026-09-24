@@ -2533,3 +2533,147 @@ async fn a_hosts_load_runs_a_script_or_rust_init_under_waited_access_and_a_trap_
         })
         .await;
 }
+
+// -- A closure that panics loses no holder (RFC-0090 rule 5) --------------
+
+const LENT_PANIC: &str = "the host's closure panics";
+
+fn panic_program<A>(host: Host<A>) -> Host<A>
+where
+    A: acvus_interpreter::Access,
+{
+    host.init("n", Source::Expr("init_ran(0)"))
+        .entry::<(), i64>("main", Source::Script("@n"))
+}
+
+/// The panic a page call ended with, which must be the closure's own.
+async fn panicked<F>(call: F)
+where
+    F: Future,
+{
+    let Err(panic) = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(call)).await else {
+        panic!("the closure's panic did not reach the caller")
+    };
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&LENT_PANIC));
+}
+
+#[tokio::test]
+async fn a_with_whose_closure_panics_hands_the_holder_back_and_no_init_runs_again() {
+    let _counted = init_counted();
+    let program = compiled(panic_program(host()));
+    let before = INIT_RUNS.load(Ordering::SeqCst);
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            panicked(page.with("n", |_: &i64| -> i64 { std::panic::panic_any(LENT_PANIC) })).await;
+            assert_eq!(int_of(&mut page, "n").await.expect("`@n` went back"), 7);
+        })
+        .await;
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before, "no load found `@n` absent");
+}
+
+#[tokio::test]
+async fn a_with_whose_closure_panics_under_waited_access_hands_the_holder_back_and_no_init_runs_again() {
+    let _counted = init_counted();
+    let program: Program<AsyncAccess> = panic_program(host().async_access())
+        .compile(SequentialExecutor)
+        .expect("the program compiles for waited access");
+    let before = INIT_RUNS.load(Ordering::SeqCst);
+    program
+        .scope(async |s| {
+            let mut storage = Yielding::default();
+            let mut page = s.open(&mut storage);
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            panicked(page.with("n", |_: &i64| -> i64 { std::panic::panic_any(LENT_PANIC) })).await;
+            let read = page.with("n", |n: &i64| *n).await;
+            assert_eq!(read.expect("`@n` went back"), 7);
+        })
+        .await;
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before, "no load found `@n` absent");
+}
+
+#[tokio::test]
+async fn a_with_mut_whose_closure_edits_then_panics_restores_the_edited_holder_and_stores_nothing() {
+    let _logged = access_logged();
+    let program = compiled(panic_program(host()));
+    let mut storage = Logged::default();
+    program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            taken_access();
+            let edit = |n: &mut i64| -> i64 {
+                *n += 1;
+                std::panic::panic_any(LENT_PANIC)
+            };
+            panicked(page.with_mut("n", edit)).await;
+            assert_eq!(taken_access(), ["load n", "restore n"]);
+            assert_eq!(int_of(&mut page, "n").await.expect("`@n` went back"), 8);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_with_mut_whose_closure_edits_then_panics_under_waited_access_restores_the_edited_holder_and_stores_nothing() {
+    let _logged = access_logged();
+    let program: Program<AsyncAccess> = panic_program(host().async_access())
+        .compile(SequentialExecutor)
+        .expect("the program compiles for waited access");
+    let mut storage = Logged::default();
+    program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            taken_access();
+            let edit = |n: &mut i64| -> i64 {
+                *n += 1;
+                std::panic::panic_any(LENT_PANIC)
+            };
+            panicked(page.with_mut("n", edit)).await;
+            assert_eq!(taken_access(), ["load n", "restore n"]);
+            let read = page.with("n", |n: &i64| *n).await;
+            assert_eq!(read.expect("`@n` went back"), 8);
+        })
+        .await;
+}
+
+/// Refuses every `restore`, so a holder handed back is dropped with an error.
+#[derive(Default)]
+struct Unrestorable {
+    inner: MemoryStorage,
+}
+
+impl Storage for Unrestorable {
+    fn load(&mut self, key: &str, codec: &Codec<'_>) -> Result<Option<Held>, StorageError> {
+        Storage::load(&mut self.inner, key, codec)
+    }
+
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        Storage::store(&mut self.inner, key, held)
+    }
+
+    fn restore(&mut self, key: &str, _: Held) -> Result<(), StorageError> {
+        Err(StorageError::new(format!("`@{key}` does not go back")))
+    }
+
+    fn commit(&mut self, codec: &Codec<'_>) -> Result<(), StorageError> {
+        Storage::commit(&mut self.inner, codec)
+    }
+}
+
+#[tokio::test]
+async fn a_restore_that_fails_while_a_closure_panics_lets_the_panic_reach_the_caller() {
+    let program = compiled(panic_program(host()));
+    program
+        .scope(async |s| {
+            let mut storage = Unrestorable::default();
+            let mut page = s.open(&mut storage);
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            panicked(page.with("n", |_: &i64| -> i64 { std::panic::panic_any(LENT_PANIC) })).await;
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            panicked(page.with_mut("n", |_: &mut i64| -> i64 { std::panic::panic_any(LENT_PANIC) })).await;
+        })
+        .await;
+}
