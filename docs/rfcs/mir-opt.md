@@ -542,7 +542,8 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    not divided.
 
 10. **The lowerer runs the stages as a token pipeline, and the executor
-    decides how to wait.**
+    decides how to wait.** No lowerer builds this yet; every loop runs in
+    place.
     - Split, chunks of iterations, bounded in flight, pass the stages in
       order. A free stage runs a chunk on arrival; a stage with a cycle
       admits a chunk holding its token, passed in chunk order under
@@ -572,7 +573,6 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - Unrolling, tiling, blocking or permutation as MIR passes — a lowerer's
   guess written into the program's meaning, and nothing undoes it when the
   guess is wrong for a target.
-- Costs written in a script — the script would carry one machine's timing.
 - A table the runtime measures at first compilation and caches — it ties
   the compiler to one machine's timing at one moment and adds a cache to
   invalidate. The backend knows its costs, and the embedder that chose the
