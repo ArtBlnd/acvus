@@ -82,6 +82,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0077: A converted `&place` argument is taken out of its slot for the call
 - RFC-0080: A fact unsafe code relies on is held by a type or asserted with `unsafe`
 - RFC-0082: An extern states its laws and its postconditions in a closed vocabulary, and a pass reads each (Proposed)
+- RFC-0090: A host reads and writes values through the Rust types it declares, and never names a runtime value (Proposed)
 
 ### [identity.md](identity.md)
 

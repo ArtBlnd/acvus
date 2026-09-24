@@ -1941,6 +1941,83 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
     });
+    let payload_names_a_parameter = {
+        let type_params: Vec<Ident> =
+            input.generics.type_params().map(|tp| tp.ident.clone()).collect();
+        names_any(payload_ty, &type_params)
+    };
+    let projected = (n_regions == 0 && !payload_names_a_parameter).then(|| quote! {
+        impl<#static_params> ::acvus_extern::Borrowed for #static_self
+        where
+            #static_where
+        {
+            type Ref<'__a> = &'__a #key_ty where Self: '__a;
+            type Mut<'__a> = &'__a mut #key_ty where Self: '__a;
+        }
+
+        impl<#static_params __R> ::acvus_extern::Project<__R> for #static_self
+        where
+            __R: ::acvus_extern::Runtime,
+            #static_where
+        {
+            type Table = ();
+
+            fn table(_: ::acvus_extern::ArgAt<'_>) {}
+
+            unsafe fn project<'__a>(
+                __rt: &'__a __R,
+                __value: &'__a <__R as ::acvus_extern::Runtime>::Value,
+                _: &(),
+            ) -> &'__a #key_ty {
+                // SAFETY: the caller's contract, and `erase` boxed the payload
+                // at this key.
+                unsafe { __rt.value_as_ref::<#key_ty>(__value) }
+            }
+
+            unsafe fn project_mut<'__a>(
+                __rt: &'__a __R,
+                __value: &'__a mut <__R as ::acvus_extern::Runtime>::Value,
+                _: &(),
+            ) -> &'__a mut #key_ty {
+                // SAFETY: as `project`, with the caller's exclusive loan.
+                unsafe { __rt.value_as_mut::<#key_ty>(__value) }
+            }
+        }
+    });
+    let identity_indices: Option<Vec<usize>> = input
+        .generics
+        .params
+        .iter()
+        .map(|param| match param {
+            GenericParam::Type(tp) => match vars.lookup(&tp.ident) {
+                Some((VarKind::Identity, index)) => Some(index),
+                _ => None,
+            },
+            GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
+        })
+        .collect();
+    let declared = identity_indices.map(|indices| {
+        let (held, declaring) = match indices.is_empty() {
+            true => (quote! { #ident }, quote! { #ident }),
+            false => {
+                let held = indices.iter().map(|_| quote! { () });
+                let declaring = indices.iter().map(
+                    |k| quote! { ::acvus_extern::Nth<::acvus_extern::kind::Identity, #k> },
+                );
+                (quote! { #ident<#(#held),*> }, quote! { #ident<#(#declaring),*> })
+            }
+        };
+        quote! {
+            impl ::acvus_extern::Declared for #held {
+                fn declared(__i: &::acvus_extern::Interner) -> ::acvus_extern::PolyTy {
+                    <#declaring as ::acvus_extern::TyArg>::poly_ty(
+                        __i,
+                        &::acvus_extern::PolyVars::fresh(0, 0, 0, #n_identities),
+                    )
+                }
+            }
+        }
+    });
     let passed = quote! {
         type As = Self;
 
@@ -2087,6 +2164,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
 
         #stored
+
+        #projected
+
+        #declared
 
         impl<#static_params> ::acvus_extern::ExternTypeDecl for #static_self
         where
@@ -2601,6 +2682,12 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
                 __vars: &::acvus_extern::PolyVars,
             ) -> ::acvus_extern::PolyTy {
                 #ty
+            }
+        }
+
+        impl ::acvus_extern::Declared for #ident {
+            fn declared(__i: &::acvus_extern::Interner) -> ::acvus_extern::PolyTy {
+                <Self as ::acvus_extern::TyArg>::poly_ty(__i, &::acvus_extern::PolyVars::empty())
             }
         }
 

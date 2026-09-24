@@ -712,8 +712,9 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
-        // SAFETY: `take` moved the word out of its register.
-        m.ctx.rt.page.set(&self.key, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) });
+        // SAFETY: `take` moved the word out of its register, and the checker
+        // typed the write at the context's settled type.
+        unsafe { m.ctx.rt.page.set(&self.key, Owned::from_value(acvus_extern::Holding::new(), value)) };
         self.next.run(m, r0)
     }
 }

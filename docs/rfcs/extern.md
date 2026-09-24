@@ -1047,3 +1047,96 @@ evaluation of postconditions at every return.
   far beyond what any pass needs.
 - Laws inferred from the handler's body — the body is Rust, opaque to the
   checker.
+
+## RFC-0090: A host reads and writes values through the Rust types it declares, and never names a runtime value
+
+Status: Proposed
+
+A host supplies contexts, runs the entry, and reads the result and the
+contexts a run wrote. A host is an extern turned around. The entry's result
+crosses from the script into Rust, as an extern's argument does. A context
+the host supplies crosses into the script, as an extern's return does. Each
+crossing is the glue's, at the type the checker settled, as the rule at the
+top of `acvus-extern` holds for an extern. The host declares Rust types. It
+reads through projections of them, and it writes values of them.
+
+1. **The host declares by Rust type.**
+   - A compilation takes the entry's return type as a Rust type `R`. It
+     takes each context the host supplies as a key with a Rust type.
+   - The declared `Ty` is the Rust type's acvus type, read by the derive an
+     extern's parameter uses. It is the entry's return (RFC-0054 rule 1)
+     and the context's type.
+   - A declaration cannot differ from its Rust type, because it is read off
+     that type.
+   - A host that names no type declares `!` (RFC-0054 rule 5), and rule 6
+     covers it.
+
+2. **The result is an `Output<R>`.** Running the entry gives an `Output<R>`.
+   It owns the value and releases it when dropped. It offers
+   `get(&self) -> R::Ref<'_>` and `get_mut(&mut self) -> R::Mut<'_>`:
+   - for a type held whole, such as an opaque extern type, `R::Ref` is a
+     Rust reference;
+   - for a structural type, `R::Ref` is the derive's projection, `SRef` or
+     `SMut`, which borrows each field in place (RFC-0050 rule 6).
+
+   No read can fail, and nothing checks a kind after the run.
+
+3. **A page is read and written through a declared type.**
+   - A page (RFC-0033) offers `read::<T>(key) -> Result<T::Ref<'_>, _>`,
+     `update::<T>(key, |m: T::Mut<'_>| …)` and `insert::<T>(key, value: T)`.
+   - Each compares `T`'s acvus type with the type the page holds for `key`,
+     which is rule 1's declaration. A mismatch, or a key the page does not
+     hold, is an error before any value is touched.
+   - The comparison is of declared types. It reads no tag on the value,
+     which an untagged runtime does not have.
+   - `insert` moves `value` in through the glue an extern's return uses.
+   - The contexts a run wrote are read the same way, after the run.
+
+4. **A projection borrows its holder.**
+   - A projection borrows the `Output` or the page for its lifetime
+     (`Within<'s>`, RFC-0079 rule 6). `get_mut` and `update` hold it
+     exclusively.
+   - A value the host keeps is a copy the host makes in Rust from the
+     projection, as `&str` to `String`.
+   - No projection holds a loan into a run: the checker refuses an entry
+     result or a context write that may hold one (RFC-0079 rule 9).
+
+5. **The host's surface names no runtime value.** The host's surface is:
+   - the declarations;
+   - `Output`;
+   - the page's typed methods.
+
+   The value word, the construction of an `Owned`, and the accessors that
+   read a word at a kind belong to the runtime and the glue. A storage
+   behind a page (`RuntimeContext`) moves whole holders and never reads
+   inside one.
+
+6. **A host that declares `!` is the runtime's own tooling.** The CLI prints
+   whatever a file returns. It reads the value by its settled `Ty`, inside
+   the workspace, with the runtime's accessors. No public reader by `Ty` is
+   offered.
+
+**Why.** The burden falls on the language's developers first, then on the
+authors of externs and hosts, who take care but meet no trap. The script's
+user takes on nothing. A host that reads the value word writes, again, the
+walk only the runtime can check, and a reinterpretation at a wrong type is a
+transmute. A projection is enough to read and to change a value in place.
+Anything the host keeps is copied in Rust, where Rust checks it. Declaring
+by Rust type makes the checker's contract and the host's code one fact.
+**Cost.**
+- Each host names a Rust type for its entry and for each context it
+  supplies. A host whose types come from data, such as a JSON file, is
+  rule 6's.
+- The derive must cover every type a host declares.
+- A page compares two types on each call.
+
+**Rejected.**
+- `as_typed::<T>()` on a result value — it is a `Value -> T`, and it checks
+  a kind after the run (RFC-0054).
+- Returning the value word with documented accessors — every host rewrites
+  an unchecked walk, which is a trap at the host's tier.
+- A public reader over a `(Ty, value)` pair — a typed host does not need
+  it, and every host that used it would rebuild a type system on the
+  runtime's layout.
+- Converting the result into an owned `R` — a projection is enough, and a
+  host's copies are Rust's own.

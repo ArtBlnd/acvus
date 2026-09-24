@@ -5,11 +5,16 @@
 //! parent's node by head, so a log is structural.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::{Arc, Mutex};
 
-use acvus_extern::{NodeHash, Owned, SpaceError, SpaceResult};
+use acvus_extern::{
+    ArgAt, Borrowed, Crossing, Declared, Holding, NodeHash, OneValue, Owned, Project, SpaceError,
+    SpaceResult,
+};
 use acvus_mir::ty::Ty;
 
+use crate::host::{Contexts, Page, PageError, held_as};
 use crate::layout::{self, Nested};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -692,6 +697,7 @@ pub struct SpacePage {
     space: Arc<Space>,
     types: HashMap<String, Ty>,
     held: Mutex<HashMap<String, Owned<AcvusRuntime>>>,
+    declared: Option<Contexts>,
 }
 
 impl SpacePage {
@@ -711,7 +717,117 @@ impl SpacePage {
             space,
             types,
             held: Mutex::new(held),
+            declared: None,
         })
+    }
+
+    pub fn of(space: Arc<Space>, contexts: &Contexts) -> SpaceResult<Self> {
+        let interner = &contexts.rt().shared.interner;
+        let mut types: HashMap<String, Ty> = space.identities()?.into_iter().collect();
+        for (key, declared) in contexts.settled() {
+            match types.get(key) {
+                Some(stored) if !stored.same_erased(declared) => {
+                    return Err(SpaceError::new(format!(
+                        "@{key} is stored as {}, and declared as {}",
+                        stored.display(interner),
+                        declared.display(interner)
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    types.insert(key.clone(), declared.clone());
+                }
+            }
+        }
+        Ok(Self {
+            space,
+            types,
+            held: Mutex::new(HashMap::new()),
+            declared: Some(contexts.clone()),
+        })
+    }
+
+    pub fn read<T>(&mut self, key: &str) -> Result<<T as Borrowed>::Ref<'_>, PageError>
+    where
+        T: Declared + Project<AcvusRuntime>,
+    {
+        let (contexts, ty, value) = self.loaded_as::<T>(key)?;
+        let table = T::table(ArgAt {
+            interner: &contexts.rt().shared.interner,
+            ty,
+        });
+        // SAFETY: the page holds `key` at `ty`, which is `T`'s, and a value
+        // enters the page only at the type it holds the key at.
+        Ok(unsafe { T::project(contexts.rt(), value, &table) })
+    }
+
+    pub fn update<T, F, U>(&mut self, key: &str, f: F) -> Result<U, PageError>
+    where
+        T: Declared + Project<AcvusRuntime>,
+        F: FnOnce(<T as Borrowed>::Mut<'_>) -> U,
+    {
+        let (contexts, ty, value) = self.loaded_as::<T>(key)?;
+        let table = T::table(ArgAt {
+            interner: &contexts.rt().shared.interner,
+            ty,
+        });
+        // SAFETY: `&mut self` names the value exclusively, and a projection
+        // writes inside the storage the word names, never the word itself.
+        let word = unsafe { value.value_mut(Holding::new()) };
+        // SAFETY: as `read`, exclusively.
+        Ok(f(unsafe { T::project_mut(contexts.rt(), word, &table) }))
+    }
+
+    pub fn insert<T>(&mut self, key: &str, value: T) -> Result<(), PageError>
+    where
+        T: Declared + OneValue<AcvusRuntime>,
+    {
+        let Some(contexts) = &self.declared else {
+            return Err(PageError::Undeclared {
+                key: key.to_owned(),
+            });
+        };
+        held_as::<T>(&contexts.rt().shared.interner, key, self.types.get(key))?;
+        // SAFETY: `value` crosses at `T`, the type the page holds `key` at.
+        let held = Owned::erased(unsafe { Crossing::new(contexts.rt()) }, value);
+        self.held
+            .get_mut()
+            .expect("page")
+            .insert(key.to_owned(), held);
+        Ok(())
+    }
+
+    fn loaded_as<T>(
+        &mut self,
+        key: &str,
+    ) -> Result<(&Contexts, &Ty, &mut Owned<AcvusRuntime>), PageError>
+    where
+        T: Declared,
+    {
+        let Some(contexts) = &self.declared else {
+            return Err(PageError::Undeclared {
+                key: key.to_owned(),
+            });
+        };
+        let ty = held_as::<T>(&contexts.rt().shared.interner, key, self.types.get(key))?;
+        let value = match self.held.get_mut().expect("page").entry(key.to_owned()) {
+            Entry::Occupied(held) => held.into_mut(),
+            Entry::Vacant(vacant) => {
+                let Some(loaded) = self
+                    .space
+                    .load(contexts.rt(), key, ty)
+                    .map_err(PageError::Space)?
+                else {
+                    return Err(PageError::Absent {
+                        key: key.to_owned(),
+                    });
+                };
+                // SAFETY: `load` decodes a fresh word, which no other holder
+                // owns.
+                vacant.insert(unsafe { Owned::from_value(Holding::new(), loaded) })
+            }
+        };
+        Ok((contexts, ty, value))
     }
 
     pub fn types(&self) -> &HashMap<String, Ty> {
@@ -740,6 +856,12 @@ impl SpacePage {
     }
 }
 
+impl Page for SpacePage {
+    fn held_type(&self, key: &str) -> Option<&Ty> {
+        self.types.get(key)
+    }
+}
+
 impl crate::journal::RuntimeContext for SpacePage {
     fn take(&self, rt: &AcvusRuntime, key: &str) -> Option<Owned<AcvusRuntime>> {
         if let Some(v) = self.held.lock().expect("page").remove(key) {
@@ -754,7 +876,7 @@ impl crate::journal::RuntimeContext for SpacePage {
             .map(|value| unsafe { Owned::from_value(acvus_extern::Holding::new(), value) })
     }
 
-    fn set(&self, key: &str, value: Owned<AcvusRuntime>) {
+    unsafe fn set(&self, key: &str, value: Owned<AcvusRuntime>) {
         self.held
             .lock()
             .expect("page")

@@ -1,6 +1,7 @@
 pub mod code;
 pub mod executor;
 mod flight;
+mod host;
 mod interpreter;
 pub mod journal;
 pub mod layout;
@@ -19,6 +20,7 @@ pub mod vtable;
 
 pub use code::{Code, CodeBody, Prepared};
 pub use executor::{Executor, SequentialExecutor, TokioExecutor};
+pub use host::{Contexts, Host, Output, Page, PageError, Program, Refusal, Source};
 pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
 pub use journal::{ContextWrite, InMemoryContext, RuntimeContext};
 pub use layout::Hooks as SpaceHooksByType;

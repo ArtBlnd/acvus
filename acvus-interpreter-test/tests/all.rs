@@ -37,6 +37,7 @@ mod for_loop;
 mod for_parts;
 mod fused_run;
 mod hash_instances;
+mod host_surface;
 mod inlined_closure_capture;
 mod input_lent_to_a_view;
 mod instance_entry;
