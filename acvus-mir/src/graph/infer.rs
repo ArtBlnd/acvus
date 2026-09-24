@@ -857,16 +857,19 @@ struct KnownContexts<'g> {
 
 impl<'g> KnownContexts<'g> {
     fn instantiate(solver: &mut Solver<'_>, contexts: &'g [Context]) -> Self {
-        KnownContexts {
-            types: contexts
-                .iter()
-                .map(|ctx| (ctx.qref, solver.instantiate_poly(&ctx.ty)))
-                .collect(),
-            inits: contexts
-                .iter()
-                .filter_map(|ctx| Some((ctx.init?, ctx)))
-                .collect(),
+        let mut types = FxHashMap::default();
+        let mut inits = FxHashMap::default();
+        for ctx in contexts {
+            let ty = match (&ctx.init, &ctx.ty) {
+                (Some(ContextInit::Declared(declared)), TyTerm::Var(_)) => solver.instantiate_poly(declared),
+                _ => solver.instantiate_poly(&ctx.ty),
+            };
+            if let Some(ContextInit::Body(function)) = &ctx.init {
+                inits.insert(*function, ctx);
+            }
+            types.insert(ctx.qref, ty);
         }
+        KnownContexts { types, inits }
     }
 
     /// The return `fid` is checked against. An init returns its context's
@@ -1206,7 +1209,7 @@ fn solved_contexts(contexts: &[Context], solving: &InferResult) -> Vec<Context> 
             Some(ty) if !ty.is_error() && context.is_open() => Context {
                 qref: context.qref,
                 ty: lift_declaration(ty, &mut builder),
-                init: context.init,
+                init: context.init.clone(),
             },
             Some(_) | None => context.clone(),
         })

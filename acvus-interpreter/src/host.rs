@@ -235,12 +235,14 @@ use acvus_mir::ty::{
     try_freeze_poly,
 };
 use acvus_utils::{Astr, Freeze, Interner};
+use futures::FutureExt;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::init::{DeclaredInits, GraphParts, InitSource};
+use crate::init::{DeclaredInits, GraphParts, InitGiven, InitSource, RustInit};
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
-use crate::port::{Gate, Held, Port, refusal_of, serve};
+use crate::ops::storage::{fetch_now, fetch_waited};
+use crate::port::{Gate, Held, Port, ended, serve};
 use crate::prepare::{PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -339,12 +341,9 @@ pub enum HostError {
     Refused(Vec<Refusal>),
     NotInGraph { what: Named },
     Mismatched { what: Part, held: String, asked: String },
-    /// A run fetched a context the storage lacks, and the context has no
-    /// init to fill it (RFC-0090 rule 1).
     Unfilled { key: String },
-    /// A host asked for a context the storage lacks (RFC-0090 rule 4).
-    Unstored { key: String },
     Storage(StorageError),
+    Trapped { message: String },
 }
 
 impl fmt::Display for HostError {
@@ -384,14 +383,11 @@ impl fmt::Display for HostError {
                 f,
                 "the entry `{name}` was declared to return {held}, and was asked for as {asked}"
             ),
-            HostError::Unfilled { key } => write!(
-                f,
-                "the storage holds no value for `@{key}`, which the run fetched, and `@{key}` has no init"
-            ),
-            HostError::Unstored { key } => {
-                write!(f, "the storage holds no value for `@{key}`: no init filled it and no run stored it")
+            HostError::Unfilled { key } => {
+                write!(f, "`@{key}` has neither a value in the storage nor an init")
             }
             HostError::Storage(error) => write!(f, "the storage refused: {error}"),
+            HostError::Trapped { message } => write!(f, "the run trapped: {message}"),
         }
     }
 }
@@ -786,7 +782,23 @@ where
         let ast = self.parsed(Origin::Init(key.to_owned()), source);
         self.parts.inits.push(InitSource {
             key: key.to_owned(),
-            ast,
+            given: InitGiven::Source(ast),
+        });
+        self
+    }
+
+    /// A key's first value made by `make`, which runs at every load that
+    /// finds the storage lacking the key, on whichever thread the load runs.
+    pub fn init_with<T, F>(mut self, key: &str, make: F) -> Self
+    where
+        T: Declared + OneValue<AcvusRuntime>,
+        F: Fn() -> T + Send + Sync + 'static,
+    {
+        let declared = T::declared(&self.parts.interner);
+        let make = Box::new(move |crossing: Crossing<'_, AcvusRuntime>| Owned::erased(crossing, make()));
+        self.parts.inits.push(InitSource {
+            key: key.to_owned(),
+            given: InitGiven::Rust(RustInit::new(declared, make)),
         });
         self
     }
@@ -1235,11 +1247,20 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         .functions()
         .map(|(key, function)| (key.to_owned(), function))
         .collect();
+    let inits = match declared_inits.solved(interner, &solved) {
+        Ok(inits) => inits,
+        Err(refused) => {
+            refusals.extend(refused.into_iter().map(|refusal| {
+                Refusal::of(Some(Origin::Init(refusal.key().to_owned())), refusal.to_string())
+            }));
+            return Err(refusals);
+        }
+    };
     let shared = InterpreterContext::new(interner, executables, executor)
         .with_fn_types(fn_types)
         .with_context_names(context_names)
         .with_space(space)
-        .with_inits(declared_inits.solved(&solved));
+        .with_inits(inits);
     if access == GraphAccess::Sync {
         refusals.extend(
             init_functions
@@ -1620,31 +1641,12 @@ where
         }
     }
 
-    /// Load `key`'s holder and check it before its word is read (RFC-0090
-    /// rule 4); a refused holder goes back to the storage.
-    async fn loaded(&mut self, key: &str) -> Result<Held, HostError> {
-        let program = self.program;
-        let solved = program.solved_type(key)?;
-        let codec = program.codec();
-        let Some(held) = AsyncStorage::load(&mut *self.storage, key, &codec).await? else {
-            return Err(HostError::Unstored { key: key.to_owned() });
-        };
-        let Some(refused) = refusal_of(&program.rt, key, &held, solved) else {
-            return Ok(held);
-        };
-        AsyncStorage::restore(&mut *self.storage, key, held).await?;
-        Err(refused)
-    }
-
-    /// Lend `key`'s value to `f`, whose parameter crosses as a handler's
-    /// shared one does (RFC-0090 rule 3), and hand the holder back.
-    pub async fn with<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    async fn lent<Q, F, O>(&mut self, key: &str, held: Held, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
         F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
         let program = self.program;
-        let held = self.loaded(key).await?;
         let lent = held
             .lend(&program.rt, program.interner(), f)
             .map_err(|asked| program.mismatched(Part::Context(key.to_owned()), held.ty(), &asked));
@@ -1652,14 +1654,11 @@ where
         lent
     }
 
-    /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
-    /// handler's does, shared or exclusive, and store what it left.
-    pub async fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    async fn lent_mut<Q, F, O>(&mut self, key: &str, mut held: Held, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
     {
         let program = self.program;
-        let mut held = self.loaded(key).await?;
         match held.lend_mut(&program.rt, program.interner(), f) {
             Ok(lent) => {
                 AsyncStorage::store(&mut *self.storage, key, held).await?;
@@ -1716,6 +1715,43 @@ impl<'p, 's, S> Page<'p, 's, S, SyncAccess>
 where
     S: Storage,
 {
+    /// Lend `key`'s value to `f`, whose parameter crosses as a handler's
+    /// shared one does (RFC-0090 rule 3), and hand the holder back.
+    pub async fn with<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    where
+        F: Borrows<AcvusRuntime, Q, O>,
+        F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
+    {
+        let held = self.loaded(key)?;
+        self.lent(key, held, f).await
+    }
+
+    /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
+    /// handler's does, shared or exclusive, and store what it left.
+    pub async fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    where
+        F: Borrows<AcvusRuntime, Q, O>,
+    {
+        let held = self.loaded(key)?;
+        self.lent_mut(key, held, f).await
+    }
+
+    fn loaded(&mut self, key: &str) -> Result<Held, HostError> {
+        let program = self.program;
+        let settled = program.solved_type(key)?;
+        let storage: &mut dyn Storage = &mut *self.storage;
+        // SAFETY: `closing` closes the gate before this function returns,
+        // while `self` still borrows the storage exclusively.
+        let port = Port::gate(unsafe { Gate::open(storage) });
+        let closing = Closing(Arc::clone(&port));
+        let rt = program.shared.runtime_over(Arc::clone(&port));
+        let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch_now(&rt, key, settled)))
+            .map_err(ended);
+        drop(closing);
+        self.filled.extend(port.take_filled());
+        loaded
+    }
+
     async fn run(&mut self, entry: QualifiedRef, args: Vec<Value>) -> Result<Value, HostError> {
         let storage: &mut dyn Storage = &mut *self.storage;
         // SAFETY: `closing` closes the gate when this future returns or is
@@ -1733,6 +1769,39 @@ impl<'p, 's, S> Page<'p, 's, S, AsyncAccess>
 where
     S: AsyncStorage,
 {
+    /// Lend `key`'s value to `f`, whose parameter crosses as a handler's
+    /// shared one does (RFC-0090 rule 3), and hand the holder back.
+    pub async fn with<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    where
+        F: Borrows<AcvusRuntime, Q, O>,
+        F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
+    {
+        let held = self.loaded(key).await?;
+        self.lent(key, held, f).await
+    }
+
+    /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
+    /// handler's does, shared or exclusive, and store what it left.
+    pub async fn with_mut<Q, F, O>(&mut self, key: &str, f: F) -> Result<O, HostError>
+    where
+        F: Borrows<AcvusRuntime, Q, O>,
+    {
+        let held = self.loaded(key).await?;
+        self.lent_mut(key, held, f).await
+    }
+
+    async fn loaded(&mut self, key: &str) -> Result<Held, HostError> {
+        let program = self.program;
+        let settled = program.solved_type(key)?;
+        let (port, requests) = Port::queue();
+        let rt = program.shared.runtime_over(Arc::clone(&port));
+        let codec = program.codec();
+        let fetched = std::panic::AssertUnwindSafe(fetch_waited(&rt, key, settled)).catch_unwind();
+        let loaded = serve(&mut *self.storage, &codec, requests, fetched).await.map_err(ended);
+        self.filled.extend(port.take_filled());
+        loaded
+    }
+
     async fn run(&mut self, entry: QualifiedRef, args: Vec<Value>) -> Result<Value, HostError> {
         let program = self.program;
         let (port, requests) = Port::queue();
@@ -1760,25 +1829,19 @@ macro_rules! page_tooling {
         where
             S: Storage,
         {
-            /// Run the init of every key the storage lacks and store its
-            /// result; the keys filled, in key order.
+            /// Load every key that has an init, which runs where the storage
+            /// lacks the key, and hand each back; the keys filled, in key
+            /// order.
             $v async fn fill(&mut self) -> Result<Vec<String>, HostError> {
                 let program = self.program;
                 let mut keys: Vec<&str> = program.shared.inits.keys().map(|key| &**key).collect();
                 keys.sort_unstable();
-                let mut filled = Vec::new();
+                let before = self.filled.len();
                 for key in keys {
-                    let codec = program.codec();
-                    if let Some(held) = Storage::load(&mut *self.storage, key, &codec)? {
-                        Storage::restore(&mut *self.storage, key, held)?;
-                        continue;
-                    }
-                    let init = &program.shared.inits[key];
-                    let value = self.run(init.function, Vec::new()).await?;
-                    Storage::store(&mut *self.storage, key, init.held(value, &program.rt))?;
-                    filled.push(key.to_owned());
+                    let held = self.loaded(key)?;
+                    Storage::restore(&mut *self.storage, key, held)?;
                 }
-                Ok(filled)
+                Ok(self.filled[before..].to_vec())
             }
         }
     };

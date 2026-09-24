@@ -791,6 +791,13 @@ fn page_refusal(space: &str, error: HostError) -> Stop {
         } => Stop::run(format!(
             "`@{key}` is held in space `{space}` as {held}, and the space's scripts and inits solve it to {asked}; `acvus ctl space add-script {space} <file>` changes the scripts back"
         )),
+        other => run_failure(other),
+    }
+}
+
+fn run_failure(error: HostError) -> Stop {
+    match error {
+        HostError::Trapped { message } => Stop::run(message),
         other => Stop::run(other.to_string()),
     }
 }
@@ -837,7 +844,7 @@ impl Run<'_> {
                     let printed = self
                         .run_on(&entry, &mut page, timings)
                         .await
-                        .map_err(|e| Stop::run(e.to_string()))?;
+                        .map_err(run_failure)?;
                     printed.print();
                     Ok(())
                 })

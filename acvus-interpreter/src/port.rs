@@ -111,8 +111,8 @@ pub(crate) struct Ended(pub(crate) HostError);
 
 /// A synchronous frame, or a closure an extern handler called, has no way
 /// out but the unwinder, so a run ends the way RFC-0048 rule 8 ends a
-/// run-time failure: it releases nothing, and the run's caller catches
-/// `Ended` alone. `resume_unwind` runs no panic hook, so nothing is printed.
+/// run-time failure: it releases nothing. `resume_unwind` runs no panic
+/// hook, so nothing is printed.
 pub(crate) fn end_run(error: HostError) -> ! {
     std::panic::resume_unwind(Box::new(Ended(error)))
 }
@@ -120,7 +120,21 @@ pub(crate) fn end_run(error: HostError) -> ! {
 pub(crate) fn ended(payload: Box<dyn std::any::Any + Send>) -> HostError {
     match payload.downcast::<Ended>() {
         Ok(ended) => ended.0,
-        Err(other) => std::panic::resume_unwind(other),
+        Err(trap) => HostError::Trapped {
+            message: trap_message(trap),
+        },
+    }
+}
+
+const TRAP_WITHOUT_MESSAGE: &str = "the run trapped with a payload that is not a message";
+
+fn trap_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_owned();
+    }
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(_) => TRAP_WITHOUT_MESSAGE.to_owned(),
     }
 }
 

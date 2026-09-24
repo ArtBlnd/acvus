@@ -13,7 +13,6 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 #[test]
-#[should_panic(expected = "is run with 0 arguments, and it takes 1")]
 fn a_module_run_one_argument_short_is_stopped_at_its_entry() {
     let i = Interner::new();
     let parsed = ParsedAst::Script(acvus_ast::parse_script(&i, "$n + 1").expect("main parses"));
@@ -37,5 +36,9 @@ fn a_module_run_one_argument_short_is_stopped_at_its_entry() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime");
-    let _ = runtime.block_on(interp.execute());
+    let ran = runtime.block_on(interp.execute()).map(|_| ());
+    let Err(acvus_interpreter::HostError::Trapped { message }) = ran else {
+        panic!("a module run one argument short is stopped at its entry, and it gave {ran:?}")
+    };
+    assert!(message.contains("is run with 0 arguments, and it takes 1"), "{message}");
 }

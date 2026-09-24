@@ -16,6 +16,7 @@ use acvus_mir::ty::Ty;
 
 use crate::code::{BlockId, Exit, Marked, Op, SUSPEND, Step, successor};
 use crate::host::{HostError, StorageError};
+use crate::interpreter::Init;
 use crate::machine::Machine;
 use crate::port::{Held, end_run, refusal_of};
 use crate::runtime::AcvusRuntime;
@@ -788,7 +789,7 @@ fn committed<const LARGE: bool>(m: &mut Machine<'_>, src: Marked, settled: &Arc<
     Held::new(value, Arc::clone(settled), m.ctx.rt.shared.compilation)
 }
 
-fn fetch_now(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
+pub(crate) fn fetch_now(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
     let port = &rt.port;
     let held = match port.load(rt, key) {
         Ok(Some(held)) => held,
@@ -805,12 +806,9 @@ fn fetch_now(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
 }
 
 fn fill_now(rt: &AcvusRuntime, key: &str) -> Held {
-    let Some(init) = rt.shared.inits.get(key) else {
-        end_run(HostError::Unfilled { key: key.to_owned() })
-    };
-    let value = crate::machine::call_module_rooted(rt, init.function);
+    let made = init_of(rt, key).run_now(rt);
     let port = &rt.port;
-    if let Err(error) = port.store(key, init.held(value, rt)) {
+    if let Err(error) = port.store(key, made) {
         end_run(error);
     }
     port.note_filled(key);
@@ -821,7 +819,7 @@ fn fill_now(rt: &AcvusRuntime, key: &str) -> Held {
     }
 }
 
-async fn fetch_waited(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
+pub(crate) async fn fetch_waited(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
     let port = &rt.port;
     let held = match port.load_waited(rt, key).await {
         Ok(Some(held)) => held,
@@ -838,12 +836,9 @@ async fn fetch_waited(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
 }
 
 async fn fill_waited(rt: &AcvusRuntime, key: &str) -> Held {
-    let Some(init) = rt.shared.inits.get(key) else {
-        end_run(HostError::Unfilled { key: key.to_owned() })
-    };
-    let value: Value = crate::machine::call_module(rt.clone(), init.function, Vec::new()).await;
+    let made = init_of(rt, key).run_waited(rt).await;
     let port = &rt.port;
-    if let Err(error) = port.store_waited(key, init.held(value, rt), true).await {
+    if let Err(error) = port.store_waited(key, made, true).await {
         end_run(error);
     }
     port.note_filled(key);
@@ -851,6 +846,13 @@ async fn fill_waited(rt: &AcvusRuntime, key: &str) -> Held {
         Ok(Some(held)) => held,
         Ok(None) => end_run(HostError::Storage(unreturned(key))),
         Err(error) => end_run(error),
+    }
+}
+
+fn init_of<'r>(rt: &'r AcvusRuntime, key: &str) -> &'r Init {
+    match rt.shared.inits.get(key) {
+        Some(init) => init,
+        None => end_run(HostError::Unfilled { key: key.to_owned() }),
     }
 }
 

@@ -1525,8 +1525,12 @@ pub mod corpus {
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
         let mut interp = Interpreter::new(shared, cr.entry_qref, snapshot);
-        match catch_unwind(AssertUnwindSafe(|| runtime.block_on(interp.execute()).expect("the seeds hold every context the run fetches"))) {
-            Ok(value) => Outcome::Value(render(&interner, &value).to_string()),
+        match catch_unwind(AssertUnwindSafe(|| runtime.block_on(interp.execute()))) {
+            Ok(Ok(value)) => Outcome::Value(render(&interner, &value).to_string()),
+            Ok(Err(acvus_interpreter::HostError::Trapped { message })) => Outcome::RunPanicked(message),
+            Ok(Err(other)) => {
+                Outcome::RunPanicked(format!("the seeds hold every context the run fetches: {other:?}"))
+            }
             Err(panic) => Outcome::RunPanicked(message(panic.as_ref())),
         }
     }

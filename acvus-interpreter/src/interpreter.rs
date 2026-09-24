@@ -20,7 +20,8 @@ use futures::FutureExt;
 
 use crate::executor::AsyncJob;
 use crate::host::HostError;
-use crate::machine::call_module;
+use crate::init::SolvedRustInit;
+use crate::machine::{call_module, call_module_rooted};
 #[cfg(feature = "tooling")]
 use crate::port::ContextWrite;
 use crate::port::{Held, Port, ended};
@@ -60,20 +61,55 @@ impl Compilation {
     }
 }
 
-/// A context's init: the body a `Fetch` runs where the storage lacks the
-/// context, and the type its result is held at (RFC-0090 rule 1).
 pub(crate) struct Init {
-    pub(crate) function: QualifiedRef,
-    pub(crate) ty: Arc<Ty>,
+    body: InitBody,
+    ty: Arc<Ty>,
+}
+
+enum InitBody {
+    Script(QualifiedRef),
+    Rust(SolvedRustInit),
 }
 
 impl Init {
-    pub(crate) fn held(&self, value: Value, rt: &AcvusRuntime) -> Held {
-        // SAFETY: the init's run moved its result out to this caller, and no
-        // other holder owns it.
-        let value = unsafe { Owned::from_value(Holding::new(), value) };
+    pub(crate) fn script(function: QualifiedRef, ty: Arc<Ty>) -> Self {
+        Init {
+            body: InitBody::Script(function),
+            ty,
+        }
+    }
+
+    pub(crate) fn rust(make: SolvedRustInit, ty: Arc<Ty>) -> Self {
+        Init {
+            body: InitBody::Rust(make),
+            ty,
+        }
+    }
+
+    /// Run from an operation that cannot wait; `Host::compile` admits a
+    /// script init under synchronous access only where its body cannot
+    /// suspend.
+    pub(crate) fn run_now(&self, rt: &AcvusRuntime) -> Held {
+        let value = match &self.body {
+            InitBody::Script(function) => owned_result(call_module_rooted(rt, *function)),
+            InitBody::Rust(make) => make.make(rt),
+        };
         Held::new(value, Arc::clone(&self.ty), rt.shared.compilation)
     }
+
+    pub(crate) async fn run_waited(&self, rt: &AcvusRuntime) -> Held {
+        let value = match &self.body {
+            InitBody::Script(function) => owned_result(call_module(rt.clone(), *function, Vec::new()).await),
+            InitBody::Rust(make) => make.make(rt),
+        };
+        Held::new(value, Arc::clone(&self.ty), rt.shared.compilation)
+    }
+}
+
+fn owned_result(value: Value) -> Owned<AcvusRuntime> {
+    // SAFETY: the init's run moved its result out to this caller, and no
+    // other holder owns it.
+    unsafe { Owned::from_value(Holding::new(), value) }
 }
 
 /// Readonly shared state - clone is cheap (Freeze/Arc internally).
@@ -131,7 +167,11 @@ impl InterpreterContext {
     /// A runtime that reaches no storage: a run on it that touches a context
     /// ends with `HostError::Storage`.
     pub fn runtime_over_an_empty_page(&self) -> AcvusRuntime {
-        AcvusRuntime::new(Arc::new(self.clone()), Port::nothing(), Flight::new(), Tally::outermost())
+        self.runtime_over(Port::nothing())
+    }
+
+    pub(crate) fn runtime_over(&self, port: Arc<Port>) -> AcvusRuntime {
+        AcvusRuntime::new(Arc::new(self.clone()), port, Flight::new(), Tally::outermost())
     }
 }
 

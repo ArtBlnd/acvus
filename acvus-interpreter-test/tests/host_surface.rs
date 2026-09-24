@@ -207,7 +207,7 @@ where
 
 fn unfilled_key(ran: Result<(), HostError>) -> String {
     let Err(HostError::Unfilled { key }) = ran else {
-        panic!("a run fetched a context the storage lacks, and no init fills it: {ran:?}")
+        panic!("a load found a context the storage lacks, and no init fills it: {ran:?}")
     };
     key
 }
@@ -316,22 +316,23 @@ async fn a_context_the_graph_leaves_open_closes_to_never_and_no_rust_type_reads_
 }
 
 #[tokio::test]
-async fn a_store_only_context_no_run_stored_yet_is_unstored_and_the_page_is_unchanged() {
+async fn a_store_only_context_no_run_stored_yet_is_unfilled_and_the_page_is_unchanged() {
     let program = store_log_program();
     program
         .scope(async |s| {
             let mut storage = MemoryStorage::new();
             let mut page = s.open(&mut storage);
-            assert!(matches!(log_of(&mut page).await, Err(HostError::Unstored { .. })));
-            assert!(matches!(
-                page.with_mut("log", |_: &mut [Erased<Rt, String>]| ()).await,
-                Err(HostError::Unstored { .. })
-            ));
+            assert_eq!(unfilled_key(log_of(&mut page).await.map(|_| ())), "log");
+            assert_eq!(
+                unfilled_key(page.with_mut("log", |_: &mut [Erased<Rt, String>]| ()).await),
+                "log"
+            );
             assert!(matches!(
                 page.with("elsewhere", |_: &[Erased<Rt, String>]| ()).await,
                 Err(HostError::NotInGraph { what: Named::Context(_) })
             ));
-            assert!(matches!(log_of(&mut page).await, Err(HostError::Unstored { .. })));
+            assert_eq!(unfilled_key(log_of(&mut page).await.map(|_| ())), "log");
+            assert!(page.filled().is_empty());
         })
         .await
 }
@@ -1231,7 +1232,6 @@ async fn a_turn_over_an_empty_storage_runs_the_expression_init_at_its_fetch_and_
             let mut storage = MemoryStorage::new();
             let mut page = s.open(&mut storage);
             assert!(page.filled().is_empty(), "opening ran no init");
-            assert!(matches!(log_of(&mut page).await, Err(HostError::Unstored { .. })));
             run_unit(s, &mut page, "turn").await;
             assert_eq!(page.filled(), ["log"]);
             let log = log_of(&mut page).await.expect("`@log` holds a `Vec<String>`");
@@ -2019,4 +2019,345 @@ fn an_entry_named_like_a_bare_extern_name_is_refused_naming_what_it_would_shadow
         refusal.message,
         "the entry `vec` would shadow `std::vec`, which a script calls as `vec`"
     );
+}
+
+// -- RFC-0090 rule 1: a load that finds nothing runs the key's init, -----
+// -- whoever loads, and an init may be a Rust function -------------------
+
+#[tokio::test]
+async fn a_rust_init_fills_a_runs_fetch_and_a_hosts_load_on_an_empty_storage() {
+    let program = compiled(
+        host()
+            .init_with("greeting", || "hi".to_owned())
+            .entry::<(), String>("greet", Source::Script("@greeting")),
+    );
+    assert_eq!(solved(&program, "greeting"), "String");
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let greet = s.entry::<(), String>("greet").expect("the entry returns `String`");
+            let output = greet.run(&mut page, ()).await.expect("the init fills `@greeting`");
+            assert_eq!(output.with(|s: &str| s.to_owned()).expect("a `String`"), "hi");
+            assert_eq!(page.filled(), ["greeting"]);
+        })
+        .await;
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let read = page.with("greeting", |s: &str| s.to_owned()).await;
+            assert_eq!(read.expect("the init fills `@greeting`"), "hi");
+            assert_eq!(page.filled(), ["greeting"]);
+        })
+        .await;
+}
+
+#[test]
+fn a_script_that_stores_another_type_than_a_rust_init_makes_is_refused_at_compile() {
+    let refusals = refused(
+        host()
+            .init_with("greeting", || "hi".to_owned())
+            .entry::<(), ()>("set", Source::Script("@greeting = 1;")),
+    );
+    assert!(!refusals.is_empty());
+    assert!(
+        refusals
+            .iter()
+            .all(|refusal| refusal.origin == Some(Origin::Entry("set".to_owned()))),
+        "{refusals:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_rust_init_makes_a_derived_struct_and_an_extern_type() {
+    const ELEMENTS: usize = 2;
+    let _counting = Counting::start();
+    let program = compiled(
+        host()
+            .init_with("p", || Profile {
+                name: "ann".to_owned(),
+                age: 41,
+            })
+            .init_with("t", || Tracked((0..ELEMENTS).map(|_| Counted).collect()))
+            .entry::<(), i64>("age", Source::Script("@p.age + 1"))
+            .entry::<(), ()>("touch", Source::Script("@t = @t;")),
+    );
+    assert_eq!(solved(&program, "p"), "Profile{age: i64, name: String}");
+    assert_eq!(solved(&program, "t"), "Tracked");
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let age = s.entry::<(), i64>("age").expect("the entry returns `i64`");
+            let output = age.run(&mut page, ()).await.expect("the init fills `@p`");
+            assert_eq!(output.with(|n: &i64| *n).expect("an `i64`"), 42);
+            let name = page.with("p", |p: ProfileRef<'_>| p.name.clone()).await;
+            assert_eq!(name.expect("`@p` is held"), "ann");
+            let held = page.with("t", |t: &Tracked| t.0.len()).await;
+            assert_eq!(held.expect("the init fills `@t`"), ELEMENTS);
+            run_unit(s, &mut page, "touch").await;
+            let held = page.with("t", |t: &Tracked| t.0.len()).await;
+            assert_eq!(held.expect("`@t` is held"), ELEMENTS);
+            assert_eq!(page.filled(), ["p", "t"]);
+        })
+        .await;
+}
+
+/// A value the host makes names no source (RFC-0012 rule 7): the source the
+/// compilation mints for the Rust init becomes the context's, and a turn
+/// that stores another source is refused, as it is against a script init.
+#[tokio::test]
+async fn an_identity_carrying_rust_init_is_a_source_and_a_turns_new_source_is_refused() {
+    let turn = "@h.record(7); @h.recorded()";
+    let made = || History::<()>(Vec::new(), PhantomData);
+    let program = compiled(
+        host()
+            .init_with("h", made)
+            .entry::<(), i64>("turn", Source::Script(turn)),
+    );
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let entry = s.entry::<(), i64>("turn").expect("the entry returns `i64`");
+            for expected in [1, 2] {
+                let output = entry.run(&mut page, ()).await.expect("the init fills `@h`");
+                assert_eq!(output.with(|n: &i64| *n).expect("an `i64`"), expected);
+            }
+        })
+        .await;
+
+    let refusals = refused(
+        host()
+            .init_with("h", made)
+            .entry::<(), i64>("turn", Source::Script(turn))
+            .entry::<(), ()>("reset", Source::Script("@h = history();")),
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|refusal| refusal.origin == Some(Origin::Entry("reset".to_owned()))),
+        "a turn's store of a new source into `@h` is refused: {refusals:?}"
+    );
+    assert!(
+        refusals
+            .iter()
+            .all(|refusal| refusal.origin == Some(Origin::Entry("reset".to_owned()))),
+        "only the turn that stores a new source is refused: {refusals:?}"
+    );
+}
+
+#[test]
+fn a_script_init_and_a_rust_init_of_one_key_are_refused() {
+    let refusals = refused(
+        host()
+            .init("a", Source::Expr("1"))
+            .init_with("a", || 2_i64)
+            .entry::<(), i64>("main", Source::Script("@a")),
+    );
+    let [refusal] = refusals.as_slice() else {
+        panic!("one refusal, the second init's: {refusals:?}")
+    };
+    assert_eq!(refusal.origin, Some(Origin::Init("a".to_owned())));
+    assert_eq!(refusal.message, "`@a` is given two inits");
+}
+
+fn logged_inits_program() -> Program {
+    compiled(
+        host()
+            .init("b", Source::Expr(r#"mark("init b".to_string(), 5)"#))
+            .init_with("r", || {
+                logged("make r".to_owned());
+                5_i64
+            })
+            .entry::<(), i64>("total", Source::Script("@b + @r")),
+    )
+}
+
+#[tokio::test]
+async fn a_hosts_load_of_an_empty_key_runs_its_init_there_and_a_second_load_does_not() {
+    let _logged = access_logged();
+    let program = logged_inits_program();
+    let mut storage = Logged::default();
+    program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            assert_eq!(int_of(&mut page, "b").await.expect("the init fills `@b`"), 5);
+            assert_eq!(taken_access(), ["load b", "mark init b", "store b", "load b", "restore b"]);
+            assert_eq!(int_of(&mut page, "b").await.expect("`@b` is held"), 5);
+            assert_eq!(taken_access(), ["load b", "restore b"]);
+
+            assert_eq!(int_of(&mut page, "r").await.expect("the init fills `@r`"), 5);
+            assert_eq!(taken_access(), ["load r", "make r", "store r", "load r", "restore r"]);
+            assert_eq!(int_of(&mut page, "r").await.expect("`@r` is held"), 5);
+            assert_eq!(taken_access(), ["load r", "restore r"]);
+            assert_eq!(page.filled(), ["b", "r"]);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_hosts_exclusive_load_of_an_empty_key_runs_its_init_there_and_stores_the_edit() {
+    let _logged = access_logged();
+    let program = logged_inits_program();
+    let mut storage = Logged::default();
+    program
+        .scope(async |s| {
+            let mut page = s.open(&mut storage);
+            for key in ["b", "r"] {
+                page.with_mut(key, |n: &mut i64| *n += 1)
+                    .await
+                    .expect("the init fills the key");
+            }
+            assert_eq!(
+                taken_access(),
+                [
+                    "load b",
+                    "mark init b",
+                    "store b",
+                    "load b",
+                    "store b",
+                    "load r",
+                    "make r",
+                    "store r",
+                    "load r",
+                    "store r"
+                ]
+            );
+            page.with_mut("b", |n: &mut i64| *n += 1).await.expect("`@b` is held");
+            assert_eq!(taken_access(), ["load b", "store b"]);
+            let total = s.entry::<(), i64>("total").expect("`total` returns `i64`");
+            let output = total.run(&mut page, ()).await.expect("the storage holds both");
+            assert_eq!(output.with(|n: &i64| *n).expect("an `i64`"), 13);
+            assert_eq!(page.filled(), ["b", "r"]);
+        })
+        .await;
+}
+
+static RUST_INIT_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+#[tokio::test]
+async fn an_insert_on_an_empty_storage_runs_no_init_and_is_what_a_later_load_reads() {
+    let _counted = init_counted();
+    let program = compiled(
+        host()
+            .init("log", Source::Expr("init_ran(vec([]))"))
+            .init_with("n", || {
+                RUST_INIT_RUNS.fetch_add(1, Ordering::SeqCst);
+                0_i64
+            })
+            .entry::<(), ()>("turn", Source::Script(PUSH_LOG))
+            .entry::<(), i64>("n", Source::Script("@n")),
+    );
+    let before = INIT_RUNS.load(Ordering::SeqCst);
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            page.insert("log", vec!["from the host".to_owned()])
+                .await
+                .expect("`@log` is a `Vec<String>`");
+            page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            let log = log_of(&mut page).await.expect("`@log` is held");
+            assert_eq!(log, ["from the host"]);
+            assert_eq!(int_of(&mut page, "n").await.expect("`@n` is held"), 7);
+            assert!(page.filled().is_empty(), "{:?}", page.filled());
+        })
+        .await;
+    assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before);
+    assert_eq!(RUST_INIT_RUNS.load(Ordering::SeqCst), 0);
+}
+
+// -- A run's trap reaches the host as `Trapped` (RFC-0090 rule 4) ---------
+
+#[derive(TyArg)]
+pub struct Quotient {
+    n: i64,
+    d: i64,
+}
+
+fn trapped(ran: Result<(), HostError>) -> String {
+    let Err(HostError::Trapped { message }) = ran else {
+        panic!("the run trapped, and it gave {ran:?}")
+    };
+    message
+}
+
+#[tokio::test]
+async fn an_entry_that_traps_ends_its_run_with_the_traps_message() {
+    let program = compiled(
+        host()
+            .entry::<(), i64>("index", Source::Script("let xs = [1, 2, 3]; xs[9]"))
+            .entry::<Quotient, i64>("divide", Source::Script("$n / $d")),
+    );
+    assert_eq!(
+        trapped(ran_on_empty::<i64>(&program, "index").await),
+        "index out of bounds: the len is 3 but the index is 9"
+    );
+    let divided = program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let divide = s.entry::<Quotient, i64>("divide")?;
+            divide.run(&mut page, Quotient { n: 1, d: 0 }).await.map(|_| ())
+        })
+        .await;
+    assert_eq!(trapped(divided), "attempt to divide by zero");
+}
+
+#[tokio::test]
+async fn an_init_that_traps_ends_the_fetch_or_the_hosts_load_that_ran_it() {
+    let program = compiled(
+        host()
+            .init("n", Source::Script("let xs = [1, 2, 3]; xs[9]"))
+            .init_with("m", || -> i64 { panic!("the host's init traps") })
+            .entry::<(), i64>("n", Source::Script("@n"))
+            .entry::<(), i64>("m", Source::Script("@m")),
+    );
+    let index = "index out of bounds: the len is 3 but the index is 9";
+    assert_eq!(trapped(ran_on_empty::<i64>(&program, "n").await), index);
+    assert_eq!(trapped(ran_on_empty::<i64>(&program, "m").await), "the host's init traps");
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            assert_eq!(trapped(page.with("n", |_: &i64| ()).await), index);
+            assert_eq!(trapped(page.with_mut("m", |_: &mut i64| ()).await), "the host's init traps");
+            assert!(page.filled().is_empty(), "{:?}", page.filled());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_hosts_load_runs_a_script_or_rust_init_under_waited_access_and_a_trap_is_trapped() {
+    let program: Program<AsyncAccess> = host()
+        .async_access()
+        .init_with("greeting", || "hi".to_owned())
+        .init("n", Source::Script("pause(); 40"))
+        .init("bad", Source::Script("pause(); let xs = [1, 2, 3]; xs[9]"))
+        .entry::<(), String>("greet", Source::Script("@greeting"))
+        .entry::<(), i64>("bad", Source::Script("@bad"))
+        .compile(SequentialExecutor)
+        .expect("the program compiles for waited access");
+    program
+        .scope(async |s| {
+            let mut storage = Yielding::default();
+            let mut page = s.open(&mut storage);
+            let read = page.with("greeting", |s: &str| s.to_owned()).await;
+            assert_eq!(read.expect("the init fills `@greeting`"), "hi");
+            page.with_mut("n", |n: &mut i64| *n += 2).await.expect("the init fills `@n`");
+            assert_eq!(page.with("n", |n: &i64| *n).await.expect("`@n` is held"), 42);
+            assert_eq!(
+                trapped(page.with("bad", |_: &i64| ()).await),
+                "index out of bounds: the len is 3 but the index is 9"
+            );
+            let bad = s.entry::<(), i64>("bad").expect("`bad` returns `i64`");
+            assert_eq!(
+                trapped(bad.run(&mut page, ()).await.map(|_| ())),
+                "index out of bounds: the len is 3 but the index is 9"
+            );
+            assert_eq!(page.filled(), ["greeting", "n"]);
+        })
+        .await;
 }
