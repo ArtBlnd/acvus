@@ -288,8 +288,9 @@ accumulated text, a `String`.
    update that re-infers only the functions that read it.
 5. **A bound `$` is a constant, and what it makes unreachable is `!`.**
    Binding `$mode = "review"` folds `% if $mode == "review"`; the arms it
-   leaves behind are typed `!`, a `$` read only there closes to `!` at the
-   freeze (RFC-0038), and a `$` typed `!` is not required. Binding one input
+   leaves behind are typed `!`, and a `$` read only there is read by nothing
+   once the fold removes them, so it is not required and is no parameter of
+   the body (RFC-0054 rule 6). Binding one input
    therefore narrows the set still required and never widens it. A template
    whose value is `!` appends nothing and is absent from what its caller
    assembles.
