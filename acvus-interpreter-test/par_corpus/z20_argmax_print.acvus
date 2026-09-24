@@ -1,0 +1,13 @@
+// id: Z20
+// family: negative
+// desc: print each new maximum as it is found, outside `anyorder`: which lines appear and in which order depends on the order
+// expect: 5\n8\n9\n9
+let xs = vec([5, 3, 8, 1, 9]);
+let best = i64::MIN();
+for x in &xs {
+    if *x > best {
+        best = *x;
+        io::print(&best.to_string());
+    };
+}
+best

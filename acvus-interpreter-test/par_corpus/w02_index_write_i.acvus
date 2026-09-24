@@ -1,0 +1,9 @@
+// id: W02
+// family: mut-write
+// desc: `v[i] = v[i] * 2` over a range; each iteration writes its own slot
+// expect: 10,6,16,2
+let v = vec([5, 3, 8, 1]);
+for i in 0u64..v.len() {
+    v[i] = v[i] * 2;
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

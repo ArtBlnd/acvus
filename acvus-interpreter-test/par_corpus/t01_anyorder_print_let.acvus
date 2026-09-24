@@ -1,0 +1,12 @@
+// id: T01
+// family: temporaries
+// desc: anyorder print of each element's text through a `let` slot
+// expect: 10\n20\n30\n40\n4
+let xs = vec([1, 2, 3, 4]);
+anyorder {
+    for x in &xs {
+        let s = (*x * 10).to_string();
+        io::print(&s);
+    }
+}
+xs.len()

@@ -1,0 +1,14 @@
+// id: S10
+// family: search
+// desc: first index with a flag and no exit: `if !found && p { at = i; found = true }`
+// expect: 2
+let xs = vec([5, 3, 9, 1, 9]);
+let at = 99u64;
+let found = false;
+for i in 0u64..xs.len() {
+    if !found && xs[i] == 9 {
+        at = i;
+        found = true;
+    };
+}
+at

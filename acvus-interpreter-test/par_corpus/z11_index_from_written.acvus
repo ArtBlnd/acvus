@@ -1,0 +1,10 @@
+// id: Z11
+// family: negative
+// desc: `v[i] = v[v[i-1] % n]`: an index computed from the slot the previous iteration wrote
+// expect: 1,3,2,2,2
+let v = vec([1, 3, 0, 2, 4]);
+let n = v.len();
+for i in 1u64..n {
+    v[i] = v[(v[i - 1u64] as u64) % n];
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

@@ -1,0 +1,12 @@
+// id: R24
+// family: reduction
+// desc: two boolean flags set by `if p { flag = true }`
+// expect: [true,false]
+let xs = vec([5, 3, 9, 1, 7]);
+let has_nine = false;
+let has_zero = false;
+for x in &xs {
+    if *x == 9 { has_nine = true; };
+    if *x == 0 { has_zero = true; };
+}
+(has_nine, has_zero)

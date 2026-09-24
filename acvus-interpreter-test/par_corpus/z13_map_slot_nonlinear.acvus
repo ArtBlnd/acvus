@@ -1,0 +1,12 @@
+// id: Z13
+// family: negative
+// desc: one map slot rewritten from itself each step through a nonlinear update, `m[a] = m[a]*m[a] - x`
+// expect: 3841
+let xs = vec([1, 2, 3]);
+let m = hash_map();
+insert(&mut m, "a".to_string(), 3);
+for x in &xs {
+    let old = *get(&m, &"a".to_string()).unwrap();
+    insert(&mut m, "a".to_string(), old * old - *x);
+}
+*get(&m, &"a".to_string()).unwrap()

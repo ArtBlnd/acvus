@@ -1,0 +1,12 @@
+// id: C01
+// family: scan
+// desc: inclusive prefix sum pushed each iteration
+// expect: 5,8,16,17
+let xs = vec([5, 3, 8, 1]);
+let s = 0;
+let out = vec([]);
+for x in &xs {
+    s = s + *x;
+    out.push(s);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

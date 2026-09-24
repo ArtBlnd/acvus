@@ -1,0 +1,10 @@
+// id: R08
+// family: reduction
+// desc: string concatenation of each element's text; associative, not commutative
+// expect: 5381-9
+let xs = vec([5, 3, 8, 1, -9]);
+let s = "".to_string();
+for x in &xs {
+    s = s + (*x).to_string();
+}
+s

@@ -1,0 +1,16 @@
+// id: P04
+// family: state-machine
+// desc: count words as transitions from space to non-space, the previous byte's class carried
+// expect: 4
+let text = "  one two  three four ";
+let bs = text.to_string().to_bytes();
+let in_word = false;
+let words = 0;
+for b in &bs {
+    let sp = *b == b' ';
+    if !sp && !in_word {
+        words = words + 1;
+    };
+    in_word = !sp;
+}
+words

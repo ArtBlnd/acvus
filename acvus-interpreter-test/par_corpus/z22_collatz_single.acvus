@@ -1,0 +1,11 @@
+// id: Z22
+// family: negative
+// desc: one Collatz orbit: the step depends on the carried value's parity, and the trip count on the orbit
+// expect: 111
+let n = 27;
+let steps = 0;
+while n != 1 {
+    n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 };
+    steps = steps + 1;
+}
+steps

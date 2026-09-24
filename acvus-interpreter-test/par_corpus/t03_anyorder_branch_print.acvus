@@ -1,0 +1,14 @@
+// id: T03
+// family: temporaries
+// desc: anyorder print only for even elements, the text built in a `let` before the branch
+// expect: even 2\neven 4\n4
+let xs = vec([1, 2, 3, 4]);
+anyorder {
+    for x in &xs {
+        let s = "even {{ &(*x).to_string() }}";
+        if *x % 2 == 0 {
+            io::print(&s);
+        };
+    }
+}
+xs.len()

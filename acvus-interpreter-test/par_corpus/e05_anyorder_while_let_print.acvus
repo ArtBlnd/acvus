@@ -1,0 +1,13 @@
+// id: E05
+// family: effects
+// desc: anyorder print over `lines()` by `while let`
+// expect: A\nB\n0
+let text = "a\nb".to_string();
+let ls = text.lines();
+anyorder {
+    while let Some(l) = ls.next() {
+        let u = l.upper();
+        io::print(&u);
+    }
+}
+0

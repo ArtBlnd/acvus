@@ -1,0 +1,12 @@
+// id: Z18
+// family: negative
+// desc: apply each pattern in turn to the accumulated text; rewrites compose in order with no law
+// expect: xyc
+let pats = vec(["a".to_string(), "b".to_string(), "xb".to_string()]);
+let reps = vec(["b".to_string(), "xb".to_string(), "xy".to_string()]);
+let text = "ac".to_string();
+for i in 0u64..pats.len() {
+    let re = regex(&pats[i]).unwrap();
+    text = re.replace_all(&text, &reps[i]);
+}
+text

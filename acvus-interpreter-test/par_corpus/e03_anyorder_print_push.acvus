@@ -1,0 +1,14 @@
+// id: E03
+// family: effects
+// desc: anyorder print plus a push in the same body; the push keeps its order by its fold law
+// expect: 5\n3\n10,6
+let xs = vec([5, 3]);
+let out = vec([]);
+anyorder {
+    for x in &xs {
+        let s = (*x).to_string();
+        io::print(&s);
+        out.push(*x * 2);
+    }
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

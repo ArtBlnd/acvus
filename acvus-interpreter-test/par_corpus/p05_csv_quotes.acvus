@@ -1,0 +1,16 @@
+// id: P05
+// family: state-machine
+// desc: count commas outside double quotes; the quote flag toggles, chunks compose by parity
+// expect: 2
+let text = "a,\"b,c\",d";
+let bs = text.to_string().to_bytes();
+let quoted = false;
+let commas = 0;
+for b in &bs {
+    if *b == b'"' {
+        quoted = !quoted;
+    } else if *b == b',' && !quoted {
+        commas = commas + 1;
+    };
+}
+commas

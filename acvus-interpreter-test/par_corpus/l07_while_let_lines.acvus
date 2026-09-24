@@ -1,0 +1,13 @@
+// id: L07
+// family: while
+// desc: count lines containing "error" over `lines()` by `while let`
+// expect: 2
+let text = "ok\nerror a\nfine\nerror b".to_string();
+let ls = text.lines();
+let c = 0;
+while let Some(l) = ls.next() {
+    if l.contains("error") {
+        c = c + 1;
+    };
+}
+c

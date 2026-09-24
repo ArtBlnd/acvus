@@ -1,0 +1,9 @@
+// id: W10
+// family: mut-write
+// desc: swap each disjoint pair `(2i, 2i+1)`
+// expect: 3,5,1,8
+let v = vec([5, 3, 8, 1]);
+for i in 0u64..(v.len() / 2u64) {
+    v.swap(2u64 * i, 2u64 * i + 1u64);
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

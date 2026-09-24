@@ -1,0 +1,13 @@
+// id: Z12
+// family: negative
+// desc: pop the front, push back its square plus the element: the value popped depends on every earlier step nonlinearly
+// expect: 6|7
+let d = deque();
+d.push_back(1);
+d.push_back(2);
+let xs = vec([1, 2, 3]);
+for x in &xs {
+    let f = d.pop_front().unwrap();
+    d.push_back(f * f + *x);
+}
+d.pop_front().unwrap().to_string() + "|" + d.pop_front().unwrap().to_string()

@@ -1,0 +1,14 @@
+// id: O02
+// family: other
+// desc: sum payloads per variant of an enum by `match`, one accumulator per arm
+// expect: [8,4]
+let xs = vec([Shape::Sq(3), Shape::Ln(4), Shape::Sq(5)]);
+let sq = 0;
+let ln = 0;
+for s in &xs {
+    match s {
+        Shape::Sq(a) => { sq = sq + *a; },
+        Shape::Ln(b) => { ln = ln + *b; },
+    };
+}
+(sq, ln)

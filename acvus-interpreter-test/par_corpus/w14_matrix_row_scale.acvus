@@ -1,0 +1,11 @@
+// id: W14
+// family: mut-write
+// desc: scale every cell of a 2-D table, `m[i][j] = m[i][j] * (i+1)`
+// expect: 1,2|6,8
+let m = vec([vec([1, 2]), vec([3, 4])]);
+for i in 0u64..m.len() {
+    for j in 0u64..m[i].len() {
+        m[i][j] = m[i][j] * ((i + 1u64) as i64);
+    }
+}
+m[0u64].as_iter().map(|x| -> (*x).to_string()).join(",".to_string()) + "|" + m[1u64].as_iter().map(|x| -> (*x).to_string()).join(",".to_string())

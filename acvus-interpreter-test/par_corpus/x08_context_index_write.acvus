@@ -1,0 +1,10 @@
+// id: X08
+// family: contexts
+// desc: indexed write into a context vec at the counter, `@ys[i] = xs[i] + 1`
+// contexts: ys xs
+// expect: 6,4,9,2
+@ys = [0, 0, 0, 0];
+for i in 0u64..@xs.len() {
+    @ys[i] = @xs[i] + 1;
+}
+@ys.as_iter().map(|x| -> (*x).to_string()).join(",".to_string())

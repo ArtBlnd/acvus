@@ -1,0 +1,13 @@
+// id: S03
+// family: search
+// desc: `all` with `ok = false; break` at the first failure
+// expect: false
+let xs = vec([5, 3, 9, 1, 9]);
+let ok = true;
+for x in &xs {
+    if *x < 2 {
+        ok = false;
+        break;
+    };
+}
+ok

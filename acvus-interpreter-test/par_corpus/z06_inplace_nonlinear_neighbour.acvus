@@ -1,0 +1,9 @@
+// id: Z06
+// family: negative
+// desc: in place `v[i] = v[i-1]*v[i-1] - v[i]`, reading the slot the previous iteration wrote through a nonlinear step
+// expect: 2,1,-7,46
+let v = vec([2, 3, 8, 3]);
+for i in 1u64..v.len() {
+    v[i] = v[i - 1u64] * v[i - 1u64] - v[i];
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

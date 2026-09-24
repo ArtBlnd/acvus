@@ -1,0 +1,6 @@
+// id: F11
+// family: iterators
+// desc: `.flat_map` into a sum, nested pipelines with no `for`
+// expect: 12
+let xs = vec([1, 2, 3]);
+xs.into_iter().flat_map(|x| -> vec([x, x])).sum()

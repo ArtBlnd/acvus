@@ -1,0 +1,12 @@
+// id: R18
+// family: reduction
+// desc: min and max in one body, both by `if`
+// expect: [1,9]
+let xs = vec([5, 3, 9, 1, 7]);
+let lo = i64::MAX();
+let hi = i64::MIN();
+for x in &xs {
+    if *x < lo { lo = *x; };
+    if *x > hi { hi = *x; };
+}
+(lo, hi)

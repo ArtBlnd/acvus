@@ -1,0 +1,11 @@
+// id: M04
+// family: map-filter
+// desc: each push records the output's length so far, which is the counter for an unconditional push
+// expect: 0,10,20,30
+let xs = vec([5, 3, 8, 1]);
+let out = vec([]);
+for x in &xs {
+    let at = out.len() as i64;
+    out.push(at * 10);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

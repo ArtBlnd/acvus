@@ -1,0 +1,13 @@
+// id: Z14
+// family: negative
+// desc: prints in two branches with no `anyorder`: the interleaving of the two kinds is the output
+// expect: odd 5\neven 8\nodd 3\n3
+let xs = vec([5, 8, 3]);
+for x in &xs {
+    if *x % 2 == 0 {
+        io::print(&"even {{ &(*x).to_string() }}");
+    } else {
+        io::print(&"odd {{ &(*x).to_string() }}");
+    };
+}
+xs.len()

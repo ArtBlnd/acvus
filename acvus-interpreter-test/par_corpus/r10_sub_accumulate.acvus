@@ -1,0 +1,10 @@
+// id: R10
+// family: reduction
+// desc: `s = s - x`: a sum of negations, parallel once `-` is read as `+` of `-x`
+// expect: 74
+let xs = vec([5, 3, 8, 1, 9]);
+let s = 100;
+for x in &xs {
+    s = s - *x;
+}
+s

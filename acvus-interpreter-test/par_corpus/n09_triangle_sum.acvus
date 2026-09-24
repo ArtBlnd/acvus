@@ -1,0 +1,11 @@
+// id: N09
+// family: nested
+// desc: inner range bound by the outer counter, one total, sum of i*j over j<i
+// expect: 35
+let total = 0;
+for i in 0..5 {
+    for j in 0..i {
+        total = total + i * j;
+    }
+}
+total

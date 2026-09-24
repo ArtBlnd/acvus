@@ -1,0 +1,11 @@
+// id: Z07
+// family: negative
+// desc: a seed squared plus the counter each step (wrapping), pushed: the pushed sequence is a nonlinear orbit
+// expect: 4,17,291,84684,7171379860
+let seed = 2;
+let out = vec([]);
+for k in 0..5 {
+    seed = seed * seed + k;
+    out.push(seed);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

@@ -1,0 +1,10 @@
+// id: K04
+// family: keyed
+// desc: dedup into a set by `insert`; set union is associative and commutative
+// expect: 3
+let xs = vec([4, 1, 4, 3, 1, 4]);
+let s = hash_set();
+for x in &xs {
+    s.insert(*x);
+}
+s.len()

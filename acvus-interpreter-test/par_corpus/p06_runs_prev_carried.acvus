@@ -1,0 +1,14 @@
+// id: P06
+// family: state-machine
+// desc: count runs of equal neighbours with the previous element carried; the carried value is only the prior element
+// expect: 4
+let xs = vec([1, 1, 2, 2, 2, 3, 1, 1]);
+let prev = -1;
+let runs = 0;
+for x in &xs {
+    if *x != prev {
+        runs = runs + 1;
+    };
+    prev = *x;
+}
+runs

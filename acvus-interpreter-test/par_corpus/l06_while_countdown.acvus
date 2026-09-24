@@ -1,0 +1,12 @@
+// id: L06
+// family: while
+// desc: count down `while i > 0 { i = i - 1; .. }`, reading the element at the decremented index
+// expect: 1,8,3,5
+let xs = vec([5, 3, 8, 1]);
+let i = xs.len();
+let out = vec([]);
+while i > 0u64 {
+    i = i - 1u64;
+    out.push(xs[i]);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

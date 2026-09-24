@@ -1,0 +1,10 @@
+// id: Z04
+// family: negative
+// desc: float product with no permission to reassociate
+// expect: 3.375
+let xs = vec([1.5, 1.5, 1.5]);
+let p = 1.0;
+for x in &xs {
+    p = p * *x;
+}
+p

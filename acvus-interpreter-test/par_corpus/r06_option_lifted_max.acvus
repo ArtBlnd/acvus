@@ -1,0 +1,13 @@
+// id: R06
+// family: reduction
+// desc: option-lifted max: None until the first element, then Some(max)
+// expect: 9
+let xs = vec([5, 3, 8, 1, 9]);
+let best = None;
+for x in &xs {
+    best = match best {
+        None => Some(*x),
+        Some(b) => Some(max(b, *x)),
+    };
+}
+best.unwrap()

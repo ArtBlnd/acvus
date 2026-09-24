@@ -1,0 +1,12 @@
+// id: R01
+// family: reduction
+// desc: count elements above a threshold with `if p { c = c + 1 }`
+// expect: 3
+let xs = vec([5, 3, 8, 1, 9]);
+let c = 0;
+for x in &xs {
+    if *x > 4 {
+        c = c + 1;
+    };
+}
+c

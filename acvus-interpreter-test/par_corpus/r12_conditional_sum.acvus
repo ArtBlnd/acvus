@@ -1,0 +1,12 @@
+// id: R12
+// family: reduction
+// desc: sum of the even elements with `if p { s = s + x }`
+// expect: 8
+let xs = vec([5, 2, 8, 1, 9, -2]);
+let s = 0;
+for x in &xs {
+    if *x % 2 == 0 {
+        s = s + *x;
+    };
+}
+s

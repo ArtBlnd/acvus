@@ -1,0 +1,12 @@
+// id: R04
+// family: reduction
+// desc: minimum written as `if x < m { m = x }`
+// expect: 1
+let xs = vec([5, 3, 8, 1, 9]);
+let m = i64::MAX();
+for x in &xs {
+    if *x < m {
+        m = *x;
+    };
+}
+m

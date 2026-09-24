@@ -1,0 +1,11 @@
+// id: L01
+// family: while
+// desc: sum over `xs.as_iter()` drained by `while let`; the iterator is the only traversal
+// expect: 17
+let xs = vec([5, 3, 8, 1]);
+let it = xs.as_iter();
+let s = 0;
+while let Some(x) = it.next() {
+    s = s + *x;
+}
+s

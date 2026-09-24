@@ -1,0 +1,13 @@
+// id: W07
+// family: mut-write
+// desc: 3-point stencil reading `a` and writing its own slot of `b` (double buffer)
+// expect: 5,4,4,5,6
+let a = vec([6, 3, 3, 6, 6]);
+let n = a.len();
+let b = vec([0, 0, 0, 0, 0]);
+b[0u64] = a[0u64] - 1;
+b[n - 1u64] = a[n - 1u64];
+for i in 1u64..(n - 1u64) {
+    b[i] = (a[i - 1u64] + a[i] + a[i + 1u64]) / 3;
+}
+b.into_iter().map(|x| -> x.to_string()).join(",".to_string())

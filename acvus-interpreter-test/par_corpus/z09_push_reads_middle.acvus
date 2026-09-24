@@ -1,0 +1,11 @@
+// id: Z09
+// family: negative
+// desc: each push reads the output's middle element, which earlier iterations wrote
+// expect: 1,6,9,14,18
+let xs = vec([5, 3, 8, 9]);
+let out = vec([1]);
+for x in &xs {
+    let m = out[out.len() / 2u64];
+    out.push(m + *x);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

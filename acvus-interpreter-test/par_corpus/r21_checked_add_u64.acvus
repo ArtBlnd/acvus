@@ -1,0 +1,13 @@
+// id: R21
+// family: reduction
+// desc: unsigned sum through `checked_add`, an Option-lifted `+` that is None once the true sum passes MAX (associative for u64)
+// expect: 17
+let xs = vec([5u64, 3u64, 8u64, 1u64]);
+let p = Some(0u64);
+for x in &xs {
+    p = match p {
+        Some(v) => v.checked_add(*x),
+        None => None,
+    };
+}
+p.unwrap()

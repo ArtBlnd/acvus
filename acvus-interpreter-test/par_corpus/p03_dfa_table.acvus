@@ -1,0 +1,13 @@
+// id: P03
+// family: state-machine
+// desc: a 3-state DFA driven by a transition table (does the binary number divide by 3); chunks compose as state maps
+// expect: [0,true]
+let t = vec([vec([0u64, 1u64]), vec([2u64, 0u64]), vec([1u64, 2u64])]);
+let bits = "110011";
+let bs = bits.to_string().to_bytes();
+let s = 0u64;
+for b in &bs {
+    let d = (*b - b'0') as u64;
+    s = t[s][d];
+}
+(s, s == 0u64)

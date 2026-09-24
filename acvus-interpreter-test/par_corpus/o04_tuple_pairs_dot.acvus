@@ -1,0 +1,10 @@
+// id: O04
+// family: other
+// desc: dot product over a vec of pairs, fields read by `.a` / `.b`, the sum through a slot read by reference after
+// expect: 44|44
+let ps = vec([{ a: 2, b: 3, }, { a: 4, b: 5, }, { a: 6, b: 3, }]);
+let s = 0;
+for p in &ps {
+    s = s + p.a * p.b;
+}
+s.to_string() + "|" + s.to_string()

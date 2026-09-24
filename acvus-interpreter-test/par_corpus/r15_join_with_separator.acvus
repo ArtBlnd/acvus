@@ -1,0 +1,16 @@
+// id: R15
+// family: reduction
+// desc: join with a separator, the first element special-cased by a flag
+// expect: a, b, c
+let xs = vec(["a".to_string(), "b".to_string(), "c".to_string()]);
+let s = "".to_string();
+let first = true;
+for x in &xs {
+    if first {
+        s = x.to_string();
+        first = false;
+    } else {
+        s = s + ", " + x;
+    };
+}
+s

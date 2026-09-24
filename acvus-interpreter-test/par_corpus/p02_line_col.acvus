@@ -1,0 +1,17 @@
+// id: P02
+// family: state-machine
+// desc: line and column of the end of a text: a newline bumps the line and resets the column, a monoid over chunks
+// expect: [3,2]
+let text = "ab\ncde\nfg";
+let bs = text.to_string().to_bytes();
+let line = 1;
+let col = 0;
+for b in &bs {
+    if *b == b'\n' {
+        line = line + 1;
+        col = 0;
+    } else {
+        col = col + 1;
+    };
+}
+(line, col)

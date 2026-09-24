@@ -1,0 +1,12 @@
+// id: S12
+// family: search
+// desc: `?` exit on the first element that fails to parse, the sum of the ones before it
+// expect: 19
+let sum_all = |v| -> {
+    let s = 0;
+    for t in &v {
+        s = s + i64::from_str(t)?;
+    }
+    Ok(s)
+};
+sum_all(vec(["12".to_string(), "7".to_string()])).unwrap()

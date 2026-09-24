@@ -1,0 +1,10 @@
+// id: M07
+// family: map-filter
+// desc: build the reversed map by `insert(0, ..)`; a fold whose combine prepends
+// expect: 16,6,10
+let xs = vec([5, 3, 8]);
+let out = vec([]);
+for x in &xs {
+    out.insert(0u64, *x * 2);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

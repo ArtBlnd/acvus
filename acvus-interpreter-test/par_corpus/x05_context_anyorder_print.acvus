@@ -1,0 +1,12 @@
+// id: X05
+// family: contexts
+// desc: anyorder print of a context prefix and the element, the context only read
+// contexts: prefix xs
+// expect: n=5\nn=3\nn=8\nn=1\n4
+anyorder {
+    for x in &@xs {
+        let s = @prefix.to_string() + (*x).to_string();
+        io::print(&s);
+    }
+}
+@xs.len()

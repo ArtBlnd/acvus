@@ -1,0 +1,14 @@
+// id: L02
+// family: while
+// desc: drain a deque with `pop_front` summing squares; the deque is a stream source
+// expect: 99
+let d = deque();
+d.push_back(5);
+d.push_back(3);
+d.push_back(8);
+d.push_back(1);
+let s = 0;
+while let Some(x) = d.pop_front() {
+    s = s + x * x;
+}
+s

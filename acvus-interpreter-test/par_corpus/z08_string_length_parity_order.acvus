@@ -1,0 +1,14 @@
+// id: Z08
+// family: negative
+// desc: each step keeps the accumulated text only if its length is even, else reverses its role: `s = if len even { s + x } else { x + s }`, a length-dependent order
+// expect: dbac
+let xs = vec(["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()]);
+let s = "".to_string();
+for x in &xs {
+    if s.len() % 2u64 == 0u64 {
+        s = s + x;
+    } else {
+        s = x.to_string() + s;
+    };
+}
+s

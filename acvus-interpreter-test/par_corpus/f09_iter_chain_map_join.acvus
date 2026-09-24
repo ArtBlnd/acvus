@@ -1,0 +1,6 @@
+// id: F09
+// family: iterators
+// desc: `.map(to_string).join(sep)` over a vec, the join an ordered string fold
+// expect: 5-3-8-1
+let xs = vec([5, 3, 8, 1]);
+xs.into_iter().map(|x| -> x.to_string()).join("-".to_string())

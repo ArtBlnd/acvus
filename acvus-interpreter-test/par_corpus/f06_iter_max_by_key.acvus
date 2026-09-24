@@ -1,0 +1,6 @@
+// id: F06
+// family: iterators
+// desc: `.max_by_key(len)` over strings
+// expect: apple
+let xs = vec(["fig".to_string(), "apple".to_string(), "kiwi".to_string()]);
+xs.into_iter().max_by_key(|s| -> s.len() as i64).unwrap()

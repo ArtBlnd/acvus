@@ -1,0 +1,6 @@
+// id: F01
+// family: iterators
+// desc: `xs.into_iter().map(|x| -> x * x).sum()`, a pipeline with no `for`
+// expect: 99
+let xs = vec([5, 3, 8, 1]);
+xs.into_iter().map(|x| -> x * x).sum()

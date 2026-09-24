@@ -1,0 +1,12 @@
+// id: M10
+// family: map-filter
+// desc: map by a counted `while i < v.len()`, which RFC-0081 does not convert
+// expect: 10,6,16
+let xs = vec([5, 3, 8]);
+let out = vec([]);
+let i = 0u64;
+while i < xs.len() {
+    out.push(xs[i] * 2);
+    i = i + 1u64;
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

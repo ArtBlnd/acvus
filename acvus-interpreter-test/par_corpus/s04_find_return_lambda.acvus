@@ -1,0 +1,13 @@
+// id: S04
+// family: search
+// desc: `find` as a lambda that returns the first match from inside the loop
+// expect: 9
+let find_big = |v| -> {
+    for x in &v {
+        if *x > 8 {
+            return Some(*x);
+        };
+    }
+    None
+};
+find_big(vec([5, 3, 9, 1, 10])).unwrap()

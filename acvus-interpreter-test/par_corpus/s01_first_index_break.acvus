@@ -1,0 +1,13 @@
+// id: S01
+// family: search
+// desc: first index of a target, `at = i; break`
+// expect: 2
+let xs = vec([5, 3, 9, 1, 9]);
+let at = xs.len();
+for i in 0u64..xs.len() {
+    if xs[i] == 9 {
+        at = i;
+        break;
+    };
+}
+at

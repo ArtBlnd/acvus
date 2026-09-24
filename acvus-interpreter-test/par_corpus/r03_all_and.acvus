@@ -1,0 +1,10 @@
+// id: R03
+// family: reduction
+// desc: `all` as `ok = ok && p(x)` over all elements, no exit
+// expect: false
+let xs = vec([5, 3, 8, 1, 9]);
+let ok = true;
+for x in &xs {
+    ok = ok && *x > 2;
+}
+ok

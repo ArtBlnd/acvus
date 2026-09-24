@@ -1,0 +1,11 @@
+// id: R09
+// family: reduction
+// desc: one accumulator updated twice per iteration, `s = s + x; s = s + 1`
+// expect: 31
+let xs = vec([5, 3, 8, 1, 9]);
+let s = 0;
+for x in &xs {
+    s = s + *x;
+    s = s + 1;
+}
+s

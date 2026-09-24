@@ -1,0 +1,10 @@
+// id: W04
+// family: mut-write
+// desc: write the odd slots `out[2*i+1]`, an injective affine index
+// expect: 0,5,0,3,0,8
+let xs = vec([5, 3, 8]);
+let out = vec([0, 0, 0, 0, 0, 0]);
+for i in 0u64..xs.len() {
+    out[2u64 * i + 1u64] = xs[i];
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

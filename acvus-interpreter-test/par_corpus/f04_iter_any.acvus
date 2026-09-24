@@ -1,0 +1,6 @@
+// id: F04
+// family: iterators
+// desc: `.any(p)`, a search with an exit inside the extern
+// expect: true
+let xs = vec([5, 3, 8, 1]);
+xs.into_iter().any(|x| -> x > 7)

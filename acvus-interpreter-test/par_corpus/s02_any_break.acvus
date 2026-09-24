@@ -1,0 +1,13 @@
+// id: S02
+// family: search
+// desc: `any` with `found = true; break`
+// expect: true
+let xs = vec([5, 3, 9, 1, 9]);
+let found = false;
+for x in &xs {
+    if *x > 8 {
+        found = true;
+        break;
+    };
+}
+found

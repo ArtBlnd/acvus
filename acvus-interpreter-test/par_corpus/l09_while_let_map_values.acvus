@@ -1,0 +1,13 @@
+// id: L09
+// family: while
+// desc: sum a map's values over `values()` by `while let`; the map's order is unspecified, and `+` does not care
+// expect: 12
+let m = hash_map();
+insert(&mut m, "a".to_string(), 5);
+insert(&mut m, "b".to_string(), 7);
+let vs = values(&m);
+let s = 0;
+while let Some(v) = vs.next() {
+    s = s + *v;
+}
+s

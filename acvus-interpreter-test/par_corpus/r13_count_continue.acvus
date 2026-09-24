@@ -1,0 +1,13 @@
+// id: R13
+// family: reduction
+// desc: count with `continue` on negatives, the increment after the branch
+// expect: 4
+let xs = vec([5, -2, 8, 1, -9, 3]);
+let c = 0;
+for x in &xs {
+    if *x < 0 {
+        continue;
+    };
+    c = c + 1;
+}
+c

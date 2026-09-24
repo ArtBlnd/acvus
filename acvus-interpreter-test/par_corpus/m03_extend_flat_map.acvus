@@ -1,0 +1,10 @@
+// id: M03
+// family: map-filter
+// desc: flat-map by `extend` with a vec built per element; extend declares no fold law
+// expect: 1,1,2,2,3,3
+let xs = vec([1, 2, 3]);
+let out = vec([]);
+for x in &xs {
+    out.extend(vec([*x, *x]));
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

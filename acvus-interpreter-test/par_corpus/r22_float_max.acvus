@@ -1,0 +1,10 @@
+// id: R22
+// family: reduction
+// desc: float maximum through `max`; order-insensitive up to signed zero and NaN, which the float instance does not promise
+// expect: 3.5
+let xs = vec([1.5, 3.5, -2.0]);
+let m = -1000.0;
+for x in &xs {
+    m = max(m, *x);
+}
+m

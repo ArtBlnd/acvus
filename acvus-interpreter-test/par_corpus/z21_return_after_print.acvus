@@ -1,0 +1,14 @@
+// id: Z21
+// family: negative
+// desc: print then return at the first match from a lambda: the prints before the return are exactly the earlier elements
+// expect: 5\n3\n8
+let f = |v| -> {
+    for x in &v {
+        if *x > 7 {
+            return *x;
+        };
+        io::print(&(*x).to_string());
+    }
+    0
+};
+f(vec([5, 3, 8, 1]))

@@ -1,0 +1,16 @@
+// id: E09
+// family: effects
+// desc: anyorder around two sibling loops that print; both loops and their prints may interleave
+// expect: a5\na3\nb5\nb3\n2
+let xs = vec([5, 3]);
+anyorder {
+    for x in &xs {
+        let s = "a{{ &(*x).to_string() }}";
+        io::print(&s);
+    }
+    for x in &xs {
+        let s = "b{{ &(*x).to_string() }}";
+        io::print(&s);
+    }
+}
+xs.len()

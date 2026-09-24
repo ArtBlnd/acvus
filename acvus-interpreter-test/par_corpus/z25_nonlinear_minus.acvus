@@ -1,0 +1,10 @@
+// id: Z25
+// family: negative
+// desc: `s = x - s*s` (wrapping): a nonlinear map of the carried value per step, no law
+// expect: -51336230616
+let xs = vec([5, 3, 8, 1, 9]);
+let s = 0;
+for x in &xs {
+    s = *x - s * s;
+}
+s
