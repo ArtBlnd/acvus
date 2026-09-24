@@ -1,6 +1,7 @@
-//! The acvus runtime. A host compiles scripts with `Host`, runs an entry
-//! with `Program::entry`, reads its result through an `Output`, and reads
-//! and writes contexts through a page's typed methods (RFC-0090).
+//! The acvus runtime. A host compiles scripts with `Host`, opens a page over
+//! a storage and runs entries on it inside `Program::scope`, reads a result
+//! through an `Output`, and reads and writes contexts through the page's
+//! typed methods (RFC-0090).
 //!
 //! The runtime's own value word, the machine that runs it, and a run's raw
 //! writes are the runtime's and its tooling's (RFC-0090 rule 6): a module or
@@ -29,7 +30,7 @@ mod flight;
 mod host;
 mod init;
 mod interpreter;
-pub mod journal;
+mod journal;
 #[cfg(feature = "tooling")]
 pub mod layout;
 #[cfg(not(feature = "tooling"))]
@@ -67,23 +68,25 @@ mod vtable;
 
 pub use executor::{AsyncJob, BlockingJob, Done, Executor, Handle, SequentialExecutor, TokioExecutor};
 pub use host::{
-    Contexts, Entry, EntryError, EntryPart, Host, Origin, Output, OutputError, Page, PageError,
-    Program, Refusal, Source,
+    Codec, Entry, Host, HostError, MemoryStorage, Named, Origin, Output, Page, Part, Program,
+    Refusal, Scope, Source, Storage, StorageError,
 };
-pub use init::InitRefusal;
 #[cfg(feature = "tooling")]
-pub use init::{DeclaredInits, GraphParts, InitSource, Inits};
-pub use journal::{Held, InMemoryContext, RuntimeContext};
+pub use host::{
+    CompileTimes, InputListing, Listing, UntypedEntry, UntypedOutput, context_refs, environment,
+    untyped_entry_ty,
+};
+pub use journal::Held;
 pub use runtime::AcvusRuntime;
 pub use space::{
-    Commit, DirStore, Head, Log, MemoryStore, Mode, Node, NodeKind, Plain, Record, Space,
-    SpacePage, Store, hex,
+    Commit, Committed, DirStore, Head, Identity, Log, MemoryStore, Mode, Node, NodeKind, Plain,
+    Record, Space, SpaceStorage, Store, hex,
 };
 
 #[cfg(feature = "tooling")]
 pub use code::{Code, CodeBody, Prepared};
 #[cfg(feature = "tooling")]
-pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
+pub use interpreter::{Absent, Args, Executable, Interpreter, InterpreterContext};
 #[cfg(feature = "tooling")]
 pub use journal::ContextWrite;
 #[cfg(feature = "tooling")]

@@ -251,6 +251,7 @@ fn an_expression_that_stores_a_context_compiles_beside_the_space_s_scripts() {
     sandbox.ok(&["ctl", "use", "work"]);
     sandbox.ok(&["ctl", "space", "add", "notes", "dir:notes"]);
     sandbox.ok(&["ctl", "space", "add-script", "notes", "turn.acvus"]);
+    sandbox.ok(&["ctl", "space", "init", "notes", "notes", "-e", "deque()"]);
 
     sandbox.ok(&["run", "-e", "@notes = deque();", "--space", "notes"]);
     assert_eq!(

@@ -101,7 +101,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
 
     let executor = Arc::new(SequentialExecutor);
     let shared = InterpreterContext::new(interner, exec_fns, executor);
-    let page = InMemoryContext::new(HashMap::new());
+    let page = HashMap::new();
     let mut interp = Interpreter::new(shared, entry_qref, page);
     interp.execute().await.expect("the page holds every context the run fetches first")
 }

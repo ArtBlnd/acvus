@@ -7,7 +7,7 @@ pub mod scripts;
 use acvus_extern::{Externs, Owned, Registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::{
-    ContextWrite, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
+    ContextWrite, Executable, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
 };
 
@@ -394,7 +394,7 @@ pub fn execute_compiled(
     let shared = InterpreterContext::new(interner, functions, executor)
         .with_fn_types(cr.fn_types)
         .with_context_names(cr.context_names);
-    let page = InMemoryContext::new(snapshot);
+    let page = snapshot;
     let interp = Interpreter::new(shared.clone(), cr.entry_qref, page);
     (shared, interp)
 }
@@ -754,7 +754,7 @@ pub mod corpus {
     use std::time::Duration;
 
     use acvus_interpreter::{
-        Composite, Executable, Executor, InMemoryContext, Interpreter, InterpreterContext, Kind,
+        Composite, Executable, Executor, Interpreter, InterpreterContext, Kind,
         PrepareCtx, SequentialExecutor, TokioExecutor, Value, prepare_module,
     };
     use acvus_mir::graph::{ParsedAst, QualifiedRef};
@@ -1521,7 +1521,7 @@ pub mod corpus {
         let shared = InterpreterContext::new(&interner, functions, executor)
             .with_fn_types(cr.fn_types)
             .with_context_names(cr.context_names);
-        let mut interp = Interpreter::new(shared, cr.entry_qref, InMemoryContext::new(snapshot));
+        let mut interp = Interpreter::new(shared, cr.entry_qref, snapshot);
         match catch_unwind(AssertUnwindSafe(|| runtime.block_on(interp.execute()).expect("the page holds every context the run fetches first"))) {
             Ok(value) => Outcome::Value(render(&interner, &value).to_string()),
             Err(panic) => Outcome::RunPanicked(message(panic.as_ref())),

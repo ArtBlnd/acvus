@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use acvus_interpreter::{
-    Executable, InMemoryContext, Interpreter, InterpreterContext, SequentialExecutor,
-};
+use acvus_extern::Owned;
+use acvus_interpreter::{AcvusRuntime, Executable, Interpreter, InterpreterContext, SequentialExecutor};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ir::*;
 use acvus_mir::ty::Task;
@@ -28,8 +28,8 @@ fn inst(kind: InstKind) -> Inst {
     }
 }
 
-fn empty_page() -> InMemoryContext {
-    InMemoryContext::empty()
+fn empty_page() -> HashMap<String, (Ty, Owned<AcvusRuntime>)> {
+    HashMap::new()
 }
 
 fn make_context(

@@ -4,10 +4,8 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use acvus_interpreter::{DirStore, Log, Space};
-use acvus_utils::Interner;
 
 use crate::compile::Mode;
 
@@ -170,22 +168,22 @@ impl Location {
             Location::Dir(dir) => {
                 std::fs::create_dir_all(dir.join(SCRIPTS)).map_err(|e| self.io(e))?;
                 std::fs::create_dir_all(dir.join(INITS)).map_err(|e| self.io(e))?;
-                DirStore::open(dir, &Interner::new()).map_err(|e| e.to_string())?;
+                DirStore::open(dir).map_err(|e| e.to_string())?;
                 Ok(())
             }
         }
     }
 
-    pub fn open_contexts(&self, interner: &Interner) -> Result<Arc<Space>, String> {
+    pub fn open_contexts(&self) -> Result<Space, String> {
         match self {
             Location::Dir(dir) => {
-                let store = DirStore::open(dir, interner).map_err(|e| e.to_string())?;
-                Ok(Arc::new(Space::over(
+                let store = DirStore::open(dir).map_err(|e| e.to_string())?;
+                Ok(Space::over(
                     Log {
                         checkpoint_every: CHECKPOINT_EVERY,
                     },
                     Box::new(store),
-                )))
+                ))
             }
         }
     }

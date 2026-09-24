@@ -161,7 +161,7 @@ async fn run_parsed(
     let executor = Arc::new(SequentialExecutor);
     let shared =
         InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
-    let page = InMemoryContext::new(snapshot);
+    let page = snapshot;
     let mut interp = Interpreter::new(shared, entry_qref, page);
     interp.execute().await.expect("the page holds every context the run fetches first")
 }

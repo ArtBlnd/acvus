@@ -223,6 +223,27 @@ pub trait Executor: Send + Sync {
     fn sleep(&self, d: Duration) -> BoxFuture<'static, ()>;
 }
 
+impl<E> Executor for Box<E>
+where
+    E: Executor + ?Sized,
+{
+    fn spawn_blocking(&self, job: BlockingJob) -> Handle {
+        (**self).spawn_blocking(job)
+    }
+
+    fn spawn_async(&self, job: AsyncJob) -> Handle {
+        (**self).spawn_async(job)
+    }
+
+    fn eval(&self, handle: Handle) -> BoxFuture<'_, Done> {
+        (**self).eval(handle)
+    }
+
+    fn sleep(&self, d: Duration) -> BoxFuture<'static, ()> {
+        (**self).sleep(d)
+    }
+}
+
 // -- SequentialExecutor -----------------------------------------------
 
 enum Deferred {

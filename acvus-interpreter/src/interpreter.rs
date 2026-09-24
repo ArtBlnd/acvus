@@ -12,12 +12,12 @@ use smallvec::SmallVec;
 
 use crate::code::Prepared;
 use crate::flight::{Flight, Flying, Tally};
-use crate::host::PageError;
 #[cfg(feature = "tooling")]
-use crate::journal::ContextWrite;
-#[cfg(feature = "tooling")]
-use crate::journal::InMemoryContext;
+use std::collections::HashMap;
+
 use crate::executor::AsyncJob;
+#[cfg(feature = "tooling")]
+use crate::journal::{ContextWrite, Held};
 use crate::journal::RuntimeContext;
 use crate::machine::call_module;
 use crate::runtime::{AcvusRuntime, ExternHandler};
@@ -43,9 +43,23 @@ impl Executable {
     }
 }
 
+/// One compilation, told apart from every other in the process, so a holder
+/// one compilation made is never read by another, whose interner names its
+/// types and tags differently.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Compilation(u64);
+
+impl Compilation {
+    fn next() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Compilation(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 /// Readonly shared state - clone is cheap (Freeze/Arc internally).
 #[derive(Clone)]
 pub struct InterpreterContext {
+    pub(crate) compilation: Compilation,
     pub interner: Interner,
     pub functions: Freeze<FxHashMap<QualifiedRef, Executable>>,
     pub fn_types: Freeze<FxHashMap<QualifiedRef, Ty>>,
@@ -62,6 +76,7 @@ impl InterpreterContext {
         executor: Arc<dyn crate::executor::Executor>,
     ) -> Self {
         Self {
+            compilation: Compilation::next(),
             interner: interner.clone(),
             functions: Freeze::new(functions),
             fn_types: Freeze::new(FxHashMap::default()),
@@ -89,7 +104,7 @@ impl InterpreterContext {
     pub fn runtime_over_an_empty_page(&self) -> AcvusRuntime {
         AcvusRuntime::new(
             Arc::new(self.clone()),
-            Arc::new(crate::journal::InMemoryContext::empty()),
+            Arc::new(RuntimeContext::empty()),
             Flight::new(),
             Tally::outermost(),
         )
@@ -117,7 +132,7 @@ pub(crate) fn lookup_module<'a>(
 pub struct Interpreter {
     shared: Arc<InterpreterContext>,
     entry: QualifiedRef,
-    page: Arc<dyn RuntimeContext>,
+    page: Arc<RuntimeContext>,
     flight: Arc<Flight>,
     tally: Arc<Tally>,
     args: Vec<Value>,
@@ -125,17 +140,25 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
+    /// A run over contexts the tooling seeds, each at the type it states.
     #[cfg(feature = "tooling")]
-    pub fn new(shared: InterpreterContext, entry: QualifiedRef, page: InMemoryContext) -> Self {
-        Self::on_page(shared, entry, Arc::new(page))
-    }
-
-    /// An interpreter over a page the caller keeps a handle to: a space's
-    /// page, committed after the run (RFC-0033).
-    pub fn on_page(
+    pub fn new(
         shared: InterpreterContext,
         entry: QualifiedRef,
-        page: Arc<dyn RuntimeContext>,
+        seeds: HashMap<String, (Ty, acvus_extern::Owned<AcvusRuntime>)>,
+    ) -> Self {
+        let compilation = shared.compilation;
+        let holders = seeds
+            .into_iter()
+            .map(|(key, (ty, value))| (key, Held::new(value, Arc::new(ty), compilation)))
+            .collect();
+        Self::on_page(shared, entry, Arc::new(RuntimeContext::new(holders)))
+    }
+
+    pub(crate) fn on_page(
+        shared: InterpreterContext,
+        entry: QualifiedRef,
+        page: Arc<RuntimeContext>,
     ) -> Self {
         Self {
             shared: Arc::new(shared),
@@ -167,8 +190,7 @@ impl Interpreter {
         AsyncJob::new(Box::pin(async move { run.run().await }))
     }
 
-    /// The run as a `Runtime`, for a host that commits the page afterwards.
-    pub fn runtime(&self) -> AcvusRuntime {
+    fn runtime(&self) -> AcvusRuntime {
         AcvusRuntime::new(
             Arc::clone(&self.shared),
             Arc::clone(&self.page),
@@ -189,14 +211,14 @@ impl Interpreter {
     /// OneValue` refuses it there, so reaching this assert means a program
     /// arrived without passing the checker.
     #[cfg(feature = "tooling")]
-    pub async fn execute(&mut self) -> Result<Value, PageError> {
+    pub async fn execute(&mut self) -> Result<Value, Absent> {
         Ok(self.accept_page()?.run(Vec::new()).await)
     }
 
-    pub(crate) fn accept_page(&mut self) -> Result<Accepted<'_>, PageError> {
+    pub(crate) fn accept_page(&mut self) -> Result<Accepted<'_>, Absent> {
         let module = lookup_module(&self.shared, &self.entry);
         match module.fetched_first.iter().find(|key| !self.page.holds(key)) {
-            Some(key) => Err(PageError::Absent {
+            Some(key) => Err(Absent {
                 key: key.to_string(),
             }),
             None => Ok(Accepted(self)),
@@ -218,6 +240,13 @@ impl Interpreter {
     pub fn take_writes(&self) -> Vec<ContextWrite> {
         self.page.take_writes()
     }
+}
+
+/// A context the entry fetches before assigning it, which the page does not
+/// hold (RFC-0025 rule 2).
+#[derive(Debug)]
+pub struct Absent {
+    pub key: String,
 }
 
 pub(crate) struct Accepted<'i>(&'i mut Interpreter);

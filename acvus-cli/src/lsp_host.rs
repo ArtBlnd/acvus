@@ -8,7 +8,6 @@ use acvus_lsp::{
     Checked, CompilationId, CompilationSpec, Document, DocumentSpec, EntryKind, Environment, Host,
     HostDiagnostic, Listing, Mode, RecordingReader, Sites, Vfs,
 };
-use acvus_mir::graph::Bindings;
 use acvus_utils::Interner;
 
 use crate::compile;
@@ -110,15 +109,14 @@ fn environment_of(
         .read(&source.path)
         .map_err(|error| refused(&source.path, compile::unreadable_source(&source.path, &error)))?;
     let parsed = compile::parse(interner, compile_mode(source.mode), &text);
-    compile::environment(
+    acvus_interpreter::environment(
         interner,
-        compile::context_refs(&parsed.ast),
+        acvus_interpreter::context_refs(&parsed.ast),
         vec![compile::entry_ref(interner)],
-        Bindings::default(),
         crate::cli_registries(),
     )
-    .map(|environment| Environment {
-        graph: environment.graph,
+    .map(|graph| Environment {
+        graph,
         host: (),
         sites: Sites::default(),
     })
@@ -142,7 +140,7 @@ impl Host for CliHost {
                     document: Document {
                         qref: compile::entry_ref(interner),
                         mode: source.mode,
-                        ty: compile::entry_ty(),
+                        ty: acvus_interpreter::untyped_entry_ty(),
                         inputs: acvus_mir::graph::Inputs::FromReads,
                     },
                 }],
@@ -173,7 +171,24 @@ mod tests {
     use acvus_mir::graph::optimize::Opt;
 
     use super::*;
-    use crate::compile::Timed;
+
+    /// What `acvus check` says of `units`, message by message.
+    fn batch(units: &[compile::Unit]) -> Result<(), Vec<String>> {
+        let refused = compile::compile(
+            units,
+            &[],
+            crate::cli_registries(),
+            Opt::Full,
+            acvus_interpreter::SequentialExecutor,
+        );
+        match refused {
+            Ok(_) => Ok(()),
+            Err(compile::Refused::Diagnostics(diagnostics)) => {
+                Err(diagnostics.into_iter().map(|d| d.message).collect())
+            }
+            Err(compile::Refused::Usage(message)) => panic!("no binding is given, and one was refused: {message}"),
+        }
+    }
 
     const ADDS_ONE: &str = "let m = @n + 1;\n\"{{ &m | to_string }}\"\n";
     const PURE: &str = "let m = 1 + 2;\n\"{{ &m | to_string }}\"\n";
@@ -252,17 +267,9 @@ mod tests {
             mode: compile::Mode::Script,
             text: source.to_string(),
         }];
-        let Err(batch) = compile::check(
-            &interner,
-            &units,
-            Bindings::default(),
-            crate::cli_registries(),
-            Timed::Off,
-            Opt::Full,
-        ) else {
+        let Err(batch) = batch(&units) else {
             panic!("`acvus check` accepts a String added to an Int");
         };
-        let batch: Vec<String> = batch.into_iter().map(|d| d.message).collect();
 
         let diagnostics = workspace.diagnostics();
         let editor = &diagnostics[&script];
@@ -287,17 +294,9 @@ mod tests {
             mode: compile::Mode::Script,
             text: source.to_string(),
         }];
-        let Err(batch) = compile::check(
-            &interner,
-            &units,
-            Bindings::default(),
-            crate::cli_registries(),
-            Timed::Off,
-            Opt::Full,
-        ) else {
+        let Err(batch) = batch(&units) else {
             panic!("`acvus check` accepts a str added to an i64");
         };
-        let batch: Vec<String> = batch.into_iter().map(|d| d.message).collect();
 
         assert_eq!(batch, ["type mismatch in `+`: i64 vs str"]);
         assert_eq!(messages(&workspace.diagnostics()[&script]), batch);
@@ -453,16 +452,9 @@ mod tests {
                 mode,
                 text: std::fs::read_to_string(source).expect("an example reads"),
             }];
-            let batch: Vec<String> = match compile::check(
-                &interner,
-                &units,
-                Bindings::default(),
-                crate::cli_registries(),
-                Timed::Off,
-                Opt::Full,
-            ) {
-                Ok(_) => Vec::new(),
-                Err(refused) => refused.into_iter().map(|d| d.message).collect(),
+            let batch: Vec<String> = match batch(&units) {
+                Ok(()) => Vec::new(),
+                Err(messages) => messages,
             };
             let editor = diagnostics.get(source).map_or_else(Vec::new, |errors| messages(errors));
             assert_eq!(editor, batch, "{source:?}: the editor and `acvus check` disagree");

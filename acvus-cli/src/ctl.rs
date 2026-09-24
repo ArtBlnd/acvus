@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use acvus_interpreter::hex;
+use acvus_interpreter::{Identity, hex};
 use acvus_utils::Interner;
 use serde::{Deserialize, Serialize};
 
@@ -740,8 +740,9 @@ fn space_ls(file: &ConfigFile, options: &Options) -> Ctl<()> {
         println!("init @{} ({})", init.key, init.kind.extension());
     }
     let interner = Interner::new();
-    let space = location.open_contexts(&interner).map_err(failed)?;
-    for (id, ty) in space.identities().map_err(|e| failed(e.to_string()))? {
+    let space = location.open_contexts().map_err(failed)?;
+    let identities = space.identities(&interner).map_err(|e| failed(e.to_string()))?;
+    for Identity { id, ty } in identities {
         let Some(head) = space.head(&id) else {
             return Err(failed(format!("@{id} is listed by its head and has none")));
         };

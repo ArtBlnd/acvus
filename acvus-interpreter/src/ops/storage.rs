@@ -692,7 +692,7 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let key = &self.key;
         let rt = m.ctx.rt;
-        let held = rt.page.take(rt, key).unwrap_or_else(|| {
+        let held = rt.page.take(key).unwrap_or_else(|| {
             panic!(
                 "context fetch: '{key}' holds no value, and `Interpreter::execute` refuses a run \
                  whose page lacks a context it fetches first (RFC-0025 rule 2); the page answered \
@@ -731,7 +731,10 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
         m.ctx
             .rt
             .page
-            .set(&self.key, crate::journal::Held::new(value, std::sync::Arc::clone(&self.settled)));
+            .set_changed(
+                &self.key,
+                crate::journal::Held::new(value, std::sync::Arc::clone(&self.settled), m.ctx.rt.shared.compilation),
+            );
         self.next.run(m, r0)
     }
 }

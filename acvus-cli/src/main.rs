@@ -10,26 +10,23 @@ mod oplist;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Duration;
 
 use acvus_ast::Span;
 use acvus_ast::report::{LineIndex, Report, Severity};
 use acvus_extern::Registry;
 use acvus_interpreter::{
-    AcvusRuntime, Composite, Executor, InMemoryContext, Interpreter, InterpreterContext, Kind,
-    PageError, RuntimeContext, SequentialExecutor, SpacePage, TokioExecutor, Value, hex,
+    AcvusRuntime, CompileTimes, Composite, Executor, HostError, InputListing, Kind, MemoryStorage,
+    Page, Part, Program, SequentialExecutor, Space, SpaceStorage, Storage, TokioExecutor,
+    UntypedEntry, Value, hex,
 };
 use acvus_utils::Interner;
 
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::graph::{Bindings, BoundValue, ContextInfo, NotABoundValue};
 
-use crate::compile::{
-    Checked, CompileTimes, Compiled, Diagnostic, Mode, Role, Runnable, Stopwatch, Timed, Unit,
-};
+use crate::compile::{Binding, Diagnostic, Mode, Refused, Role, Stopwatch, Timed, Unit};
 use crate::ctl::{
-    ConfigFile, CtlError, Defaults, Layers, OptLevel, Parallel, ResolvedSpace, Settings, SpaceChoice,
+    ConfigFile, CtlError, Defaults, Layers, OptLevel, Parallel, ResolvedSpace, SpaceChoice,
     SpaceSource, Timing,
 };
 use crate::location::{EXPR_ENTRY, ScriptKind};
@@ -186,11 +183,6 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
     }))
 }
 
-struct Binding {
-    name: String,
-    text: String,
-}
-
 /// `name=<literal>`, where `name` is an input's name; any other word is a
 /// source.
 fn binding(word: &str) -> Option<Binding> {
@@ -203,33 +195,6 @@ fn binding(word: &str) -> Option<Binding> {
         name: name.to_string(),
         text: text.to_string(),
     })
-}
-
-/// Each `name=<literal>` read in the script's own syntax (RFC-0031 rule 4),
-/// and a value `Bindings::bind` refuses is a usage error as a form outside
-/// that syntax is.
-fn bound_literals(interner: &Interner, bindings: &[Binding]) -> Result<Bindings, String> {
-    let mut bound = Bindings::default();
-    for Binding { name, text } in bindings {
-        let expr = acvus_ast::parse_expr(interner, text)
-            .map_err(|e| format!("${name}: `{text}` does not parse: {e:?}"))?;
-        let written = |span: Span| &text[span.start..span.end];
-        let value = BoundValue::from_expr(interner, &expr).map_err(|e| match e {
-            NotABoundValue::NotALiteral { form } => format!(
-                "${name}: `{}` is not a value a literal writes",
-                written(form)
-            ),
-            NotABoundValue::RepeatedField { key, second } => format!(
-                "${name}: `{}` in `{}` is a field an object holds once",
-                interner.resolve(key),
-                written(second)
-            ),
-        })?;
-        bound
-            .bind(interner.intern(name), value)
-            .map_err(|refused| format!("${name}: {refused}"))?;
-    }
-    Ok(bound)
 }
 
 fn mode_of(path: &Path) -> Result<Mode, String> {
@@ -261,15 +226,11 @@ impl Rendering {
     /// What `check` says about the `$` names the source still requires: one
     /// line each on stderr, or, under `--json`, one object after the
     /// diagnostics array.
-    fn inputs(&self, interner: &Interner, required: &[ContextInfo]) {
+    fn inputs(&self, required: &[InputListing]) {
         match self {
             Rendering::Text => {
                 for input in required {
-                    eprintln!(
-                        "input ${}: {}",
-                        interner.resolve(input.name.name),
-                        input.ty.display(interner)
-                    );
+                    eprintln!("input ${}: {}", input.name, input.ty);
                 }
             }
             Rendering::Json => {
@@ -277,8 +238,8 @@ impl Rendering {
                     .iter()
                     .map(|input| {
                         serde_json::json!({
-                            "name": interner.resolve(input.name.name),
-                            "type": input.ty.display(interner).to_string(),
+                            "name": input.name,
+                            "type": input.ty,
                         })
                     })
                     .collect();
@@ -376,13 +337,16 @@ struct Timings {
 }
 
 impl Timings {
-    fn of(compile: Option<Duration>, stages: Option<CompileTimes>) -> Option<Self> {
-        Some(Timings {
-            compile: compile?,
-            stages: stages?,
-            prepare: None,
-            run: None,
-        })
+    fn of(timed: Timed, stages: &CompileTimes) -> Option<Self> {
+        match timed {
+            Timed::On => Some(Timings {
+                compile: stages.check(),
+                stages: *stages,
+                prepare: None,
+                run: None,
+            }),
+            Timed::Off => None,
+        }
     }
 
     fn report(&self, rendering: &Rendering) {
@@ -392,6 +356,7 @@ impl Timings {
             typeck,
             lower,
             optimize,
+            ..
         } = self.stages;
         match rendering {
             Rendering::Text => {
@@ -539,17 +504,10 @@ async fn fill_space(args: &[String]) -> Result<(), Stop> {
         source: SpaceSource::Flag,
     })?;
     let units = space_units(&space)?;
-    let interner = Interner::new();
-    let (checked, _) = match compile::check(
-        &interner,
-        &units,
-        Bindings::default(),
-        cli_registries(),
-        Timed::Off,
-        Opt::Full,
-    ) {
-        Ok(checked) => checked,
-        Err(diagnostics) => {
+    let program = match compile::compile(&units, &[], cli_registries(), Opt::Full, SequentialExecutor) {
+        Ok(program) => program,
+        Err(Refused::Usage(message)) => return Err(Stop::usage(message)),
+        Err(Refused::Diagnostics(diagnostics)) => {
             Rendering::Text.report(&units, &diagnostics);
             return Err(Stop {
                 message: format!("space `{name}` does not compile"),
@@ -557,22 +515,24 @@ async fn fill_space(args: &[String]) -> Result<(), Stop> {
             });
         }
     };
-    let page = open_space_page(&interner, &checked, &space)?;
-    let Runnable { shared, inits } =
-        checked.prepare(&interner).runnable(&interner, Arc::new(SequentialExecutor));
-    let held: Arc<dyn RuntimeContext> = page.clone();
-    let filled = inits
-        .fill_absent(&shared, &held)
+    let contexts = space.location.open_contexts().map_err(Stop::run)?;
+    program
+        .scope(async |scope| -> Result<(), Stop> {
+            let storage = SpaceStorage::new(&contexts);
+            let mut page = scope.open(storage).await.map_err(|e| page_refusal(&space.name, e))?;
+            let mut filled = page.filled().to_vec();
+            filled.extend(page.fill().await.map_err(|e| page_refusal(&space.name, e))?);
+            filled.sort();
+            for key in &filled {
+                eprintln!("init @{key}");
+            }
+            commit(&mut page)?;
+            if filled.is_empty() {
+                println!("space `{name}` holds every context it has an init of");
+            }
+            Ok(())
+        })
         .await
-        .map_err(|e| page_refusal(&space.name, e))?;
-    for key in &filled {
-        eprintln!("init @{key}");
-    }
-    commit(&page, &shared)?;
-    if filled.is_empty() {
-        println!("space `{name}` holds every context it has an init of");
-    }
-    Ok(())
 }
 
 /// A command that ends before its output, with the message and the exit
@@ -709,10 +669,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
         },
     };
 
-    let interner = Interner::new();
-    let registries = cli_registries();
     let rendering = Rendering::of(args.json);
-    let bindings = bound_literals(&interner, &args.bindings).map_err(Stop::usage)?;
     let timed = match settings.time.value {
         Timing::On => Timed::On,
         Timing::Off => Timed::Off,
@@ -721,20 +678,27 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
         OptLevel::None => Opt::None,
         OptLevel::Full => Opt::Full,
     };
-    let watch = Stopwatch::start(timed);
-    let (checked, stages) = match compile::check(&interner, &units, bindings, registries, timed, opt) {
-        Ok(c) => c,
-        Err(diagnostics) => {
+    let executor: Box<dyn Executor> = match settings.parallel.value {
+        Parallel::Tokio => Box::new(TokioExecutor),
+        Parallel::Sequential => Box::new(SequentialExecutor),
+    };
+    let program = match compile::compile(&units, &args.bindings, cli_registries(), opt, executor) {
+        Ok(program) => program,
+        Err(Refused::Usage(message)) => return Err(Stop::usage(message)),
+        Err(Refused::Diagnostics(diagnostics)) => {
             rendering.report(&units, &diagnostics);
             return Ok(ExitCode::from(EXIT_COMPILE));
         }
     };
-    let mut timings = Timings::of(watch.stop(), stages);
-    let about = checked.target(&interner, target);
+    let mut timings = Timings::of(timed, program.times());
+    let Role::Entry(entry) = &units[target].role else {
+        panic!("a command's target is a script or an expression, each an entry")
+    };
+    let about = program.listing(entry).map_err(|e| Stop::run(e.to_string()))?;
     match args.command {
         Command::Check => {
             rendering.report(&units, &[]);
-            rendering.inputs(&interner, &about.inputs);
+            rendering.inputs(&about.inputs);
             if let Some(timings) = &timings {
                 timings.report(&rendering);
             }
@@ -755,12 +719,10 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
                 true => oplist::Form::Json,
                 false => oplist::Form::Text,
             };
-            let watch = Stopwatch::start(timed);
-            let compiled = checked.prepare(&interner);
             if let Some(timings) = &mut timings {
-                timings.prepare = watch.stop();
+                timings.prepare = Some(program.times().prepare);
             }
-            let text = oplist::dump(compiled.prepared(&about.function), form)
+            let text = oplist::dump(about.prepared, form)
                 .map_err(|e| Stop::run(format!("the listing does not serialize: {e}")))?;
             print!("{text}");
             if let Some(timings) = &timings {
@@ -769,31 +731,25 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Run => {
-            let missing = &about.inputs;
-            if !missing.is_empty() {
-                for input in missing {
+            if !about.inputs.is_empty() {
+                for input in &about.inputs {
                     eprintln!(
                         "error: `${}` is required and not bound; `{}=<literal>` binds it",
-                        interner.resolve(input.name.name),
-                        interner.resolve(input.name.name)
+                        input.name, input.name
                     );
                 }
                 return Ok(ExitCode::from(EXIT_COMPILE));
             }
-            let page = open_page(&interner, &checked, space.as_ref())?;
-            let watch = Stopwatch::start(timed);
-            let compiled = checked.prepare(&interner);
             if let Some(timings) = &mut timings {
-                timings.prepare = watch.stop();
+                timings.prepare = Some(program.times().prepare);
             }
             let run = Run {
-                compiled,
-                entry: about.function,
-                fetched_first: &about.fetched_first,
-                page,
+                program: &program,
+                entry,
+                mode: units[target].mode,
+                timed,
             };
-            let value = run.run(&interner, &settings, timed, &mut timings).await?;
-            print_result(&interner, &value, units[target].mode);
+            run.run(space.as_ref(), &mut timings).await?;
             if let Some(timings) = &timings {
                 timings.report(&rendering);
             }
@@ -819,146 +775,136 @@ fn lsp() -> ExitCode {
     }
 }
 
-/// Where a run's contexts come from and go to: a space, or, for a source
-/// that names no context, nothing.
-enum PageSource {
-    Space {
-        name: String,
-        page: Arc<SpacePage>,
-    },
-    Alone,
-}
-
-/// A run over a space opens a page for the types the space's scripts and
-/// inits solve, and a context the space holds at another type refuses it
-/// before anything runs (RFC-0090 rule 4).
-fn open_page(
-    interner: &Interner,
-    checked: &Checked,
-    space: Option<&ResolvedSpace<'_>>,
-) -> Result<PageSource, Stop> {
-    let Some(space) = space else {
-        let mut named: Vec<&str> = checked.contexts().keys().map(String::as_str).collect();
-        if named.is_empty() {
-            return Ok(PageSource::Alone);
-        }
-        named.sort();
-        let named: Vec<String> = named.iter().map(|key| format!("`@{key}`")).collect();
-        return Err(Stop::usage(format!(
-            "{} {} kept in a space, and no space is named here; `acvus ctl space add <space> dir:<path>` maps one, `acvus ctl space add-script <space> <file>` stores this script in it, and `acvus run <script> --space <space>` runs it",
-            named.join(", "),
-            match named.len() {
-                1 => "is",
-                _ => "are",
-            }
-        )));
-    };
-    Ok(PageSource::Space {
-        name: space.name.clone(),
-        page: open_space_page(interner, checked, space)?,
-    })
-}
-
-fn open_space_page(
-    interner: &Interner,
-    checked: &Checked,
-    space: &ResolvedSpace<'_>,
-) -> Result<Arc<SpacePage>, Stop> {
-    let opened = space.location.open_contexts(interner).map_err(Stop::run)?;
-    SpacePage::new(opened, interner, checked.contexts())
-        .map(Arc::new)
-        .map_err(|e| page_refusal(&space.name, e))
-}
-
-/// A page's refusal in the words of the command that resolves it
+/// A context's refusal in the words of the command that resolves it
 /// (RFC-0031 rule 7).
-fn page_refusal(space: &str, error: PageError) -> Stop {
+fn page_refusal(space: &str, error: HostError) -> Stop {
     match error {
-        PageError::Absent { key } => Stop::run(format!(
+        HostError::Unfilled { key } => Stop::run(format!(
             "`@{key}` is not in space `{space}` yet and has no init; `acvus ctl space init {space} {key} -e <expr>` stores one"
         )),
-        PageError::Mismatched { key, held, asked } => Stop::run(format!(
+        HostError::Mismatched {
+            what: Part::Context(key),
+            held,
+            asked,
+        } => Stop::run(format!(
             "`@{key}` is held in space `{space}` as {held}, and the space's scripts and inits solve it to {asked}; `acvus ctl space add-script {space} <file>` changes the scripts back"
         )),
         other => Stop::run(other.to_string()),
     }
 }
 
-/// Commit every context the page holds, one `commit` line each on stderr.
-fn commit(page: &SpacePage, shared: &InterpreterContext) -> Result<(), Stop> {
-    let heads = page
-        .commit(&shared.runtime_over_an_empty_page())
-        .map_err(|e| Stop::run(e.to_string()))?;
-    for (key, head) in heads {
-        eprintln!("commit @{key} = {}", hex(&head));
+/// Commit every context the page changed, one `commit` line each on stderr.
+fn commit(page: &mut Page<'_, SpaceStorage<'_>>) -> Result<(), Stop> {
+    page.commit().map_err(|e| Stop::run(e.to_string()))?;
+    for committed in page.storage().committed() {
+        eprintln!("commit @{} = {}", committed.id, hex(&committed.head));
     }
     Ok(())
 }
 
 struct Run<'a> {
-    compiled: Compiled,
-    entry: acvus_mir::graph::QualifiedRef,
-    fetched_first: &'a [String],
-    page: PageSource,
+    program: &'a Program,
+    entry: &'a str,
+    mode: Mode,
+    timed: Timed,
 }
 
 impl Run<'_> {
-    /// Each context the entry fetches first that the page lacks is filled
-    /// from its init, then the entry runs, then a space commits the page.
-    async fn run(
-        self,
-        interner: &Interner,
-        settings: &Settings,
-        timed: Timed,
-        timings: &mut Option<Timings>,
-    ) -> Result<Value, Stop> {
-        let executor: Arc<dyn Executor> = match settings.parallel.value {
-            Parallel::Tokio => Arc::new(TokioExecutor),
-            Parallel::Sequential => Arc::new(SequentialExecutor),
-        };
-        let Runnable { shared, inits } = self.compiled.runnable(interner, executor);
-        let held: Arc<dyn RuntimeContext> = match &self.page {
-            PageSource::Space { page, .. } => page.clone(),
-            PageSource::Alone => Arc::new(InMemoryContext::empty()),
-        };
-        let watch = Stopwatch::start(timed);
-        if let PageSource::Space { name, .. } = &self.page {
-            let fetched = self.fetched_first.iter().map(String::as_str);
-            let filled = inits
-                .fill(&shared, &held, fetched)
-                .await
-                .map_err(|e| page_refusal(name, e))?;
-            for key in filled {
-                eprintln!("init @{key}");
+    /// A run over a space opens a page for the types the space's scripts and
+    /// inits solve, runs the entry, and commits; a source that names no
+    /// context runs alone.
+    async fn run(self, space: Option<&ResolvedSpace<'_>>, timings: &mut Option<Timings>) -> Result<(), Stop> {
+        let Some(space) = space else {
+            let named: Vec<String> = self.program.contexts().map(|key| format!("`@{key}`")).collect();
+            if !named.is_empty() {
+                return Err(Stop::usage(format!(
+                    "{} {} kept in a space, and no space is named here; `acvus ctl space add <space> dir:<path>` maps one, `acvus ctl space add-script <space> <file>` stores this script in it, and `acvus run <script> --space <space>` runs it",
+                    named.join(", "),
+                    match named.len() {
+                        1 => "is",
+                        _ => "are",
+                    }
+                )));
             }
-        }
-        let mut interp = Interpreter::on_page(shared.clone(), self.entry, Arc::clone(&held));
-        let value = interp
-            .execute()
+            return self
+                .program
+                .scope(async |scope| -> Result<(), Stop> {
+                    let entry = scope.untyped_entry(self.entry).map_err(|e| Stop::run(e.to_string()))?;
+                    let mut page = scope.open(MemoryStorage::new()).await.map_err(|e| Stop::run(e.to_string()))?;
+                    let printed = self.run_on(&entry, &mut page, timings).await?;
+                    printed.print();
+                    Ok(())
+                })
+                .await;
+        };
+        let contexts: Space = space.location.open_contexts().map_err(Stop::run)?;
+        self.program
+            .scope(async |scope| -> Result<(), Stop> {
+                let entry = scope.untyped_entry(self.entry).map_err(|e| Stop::run(e.to_string()))?;
+                let storage = SpaceStorage::new(&contexts);
+                let mut page = scope.open(storage).await.map_err(|e| page_refusal(&space.name, e))?;
+                for key in page.filled() {
+                    eprintln!("init @{key}");
+                }
+                let printed = self.run_on(&entry, &mut page, timings).await?;
+                commit(&mut page)?;
+                printed.print();
+                Ok(())
+            })
             .await
-            .map_err(|e| Stop::run(e.to_string()))?;
+    }
+
+    async fn run_on<'p, S>(
+        &self,
+        entry: &UntypedEntry<'p>,
+        page: &mut Page<'p, S>,
+        timings: &mut Option<Timings>,
+    ) -> Result<Printed, Stop>
+    where
+        S: Storage,
+    {
+        let watch = Stopwatch::start(self.timed);
+        let output = entry.run(page).await.map_err(|e| Stop::run(e.to_string()))?;
         if let Some(timings) = timings {
             timings.run = watch.stop();
         }
-        if let PageSource::Space { page, .. } = &self.page {
-            commit(page, &shared)?;
-        }
-        Ok(value)
+        let interner = self.program.interner();
+        Ok(output.with_value(|value, _| Printed::of(interner, value, self.mode)))
     }
 }
 
 /// RFC-0054: this host declares `!`, so it has no type for what comes back
-/// and reads the value by kind.
-fn print_result(interner: &Interner, value: &Value, mode: Mode) {
-    match value.composite() {
-        // SAFETY, both arms: the vtable is the runtime's witness of the type
-        // behind the pointer.
-        Some(Composite::String) => match mode {
-            Mode::Template => print!("{}", unsafe { value.as_str() }),
-            Mode::Script | Mode::Expr => println!("{}", unsafe { value.as_str() }),
-        },
-        Some(Composite::Tuple) if unsafe { value.as_tuple() }.is_empty() => {}
-        _ if value.kind() == Kind::Unit => {}
-        _ => println!("{}", json::by_kind(interner, value)),
+/// and reads the value by kind. The text is made while the result is lent
+/// and printed after the page commits.
+enum Printed {
+    Line(String),
+    Text(String),
+    Nothing,
+}
+
+impl Printed {
+    fn of(interner: &Interner, value: &Value, mode: Mode) -> Self {
+        match value.composite() {
+            // SAFETY, both arms: the vtable is the runtime's witness of the
+            // type behind the pointer.
+            Some(Composite::String) => {
+                let text = unsafe { value.as_str() }.to_owned();
+                match mode {
+                    Mode::Template => Printed::Text(text),
+                    Mode::Script | Mode::Expr => Printed::Line(text),
+                }
+            }
+            Some(Composite::Tuple) if unsafe { value.as_tuple() }.is_empty() => Printed::Nothing,
+            _ if value.kind() == Kind::Unit => Printed::Nothing,
+            _ => Printed::Line(json::by_kind(interner, value).to_string()),
+        }
+    }
+
+    fn print(self) {
+        match self {
+            Printed::Line(text) => println!("{text}"),
+            Printed::Text(text) => print!("{text}"),
+            Printed::Nothing => {}
+        }
     }
 }

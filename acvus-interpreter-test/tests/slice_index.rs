@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{Externs, Owned};
 use acvus_interpreter::{
-    AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx, Value,
+    AcvusRuntime, Executable, Interpreter, InterpreterContext, PrepareCtx, Value,
     prepare_module,
 };
 use acvus_mir::ir::{
@@ -141,7 +141,7 @@ async fn run_with(
         Arc::new(acvus_interpreter::SequentialExecutor),
     )
     .with_context_names(context_names);
-    let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page));
+    let mut interpreter = Interpreter::new(shared, entry, page);
     interpreter.execute().await.expect("the page holds every context the run fetches first")
 }
 

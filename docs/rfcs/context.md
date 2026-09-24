@@ -158,8 +158,11 @@ Status: Accepted
    bytes name it by its head; committing the parent commits each nested value
    first, and a nested head that moved is a new parent state.
 6. A space in `Plain` mode keeps no ops: every commit is a state node.
-7. A run's page may sit over a space: a context is loaded at the run's first
-   fetch, and every context the run held is committed when the host asks.
+7. A page may sit over a space: every context the space holds is loaded
+   when the page opens, at the type its head records, and every context the
+   page changed is committed when the host asks. A head records its type by
+   name and not by an interner's ids, so a program other than the one that
+   wrote it reads it.
    `acvus run <script> --space <space>` runs over the location `acvus ctl`
    maps the space to, and `acvus ctl space ls <space>` lists it
    (RFC-0031).

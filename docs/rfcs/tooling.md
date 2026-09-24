@@ -17,9 +17,10 @@ Status: Accepted
 2. **Contexts come from inits.** A context's type is the graph's, and its
    first value is its init (RFC-0090 rule 1): `ctl space init <space>
    <key> -e <expr> | -f <file>` stores one per key in the space. The runner
-   reads no context data. A run fills each context it fetches that the
-   space lacks by running that key's init first, and a key with no init
-   refuses the run before it starts, naming the command that adds one.
+   reads no context data. Opening a space fills each context a script of
+   the space fetches first that the space lacks by running that key's init,
+   and a key with no init refuses the command before anything runs, naming
+   the command that adds one.
 3. **A space holds its scripts.** `--space <name>` names a space the active
    ctl context maps to a location (rule 9). The space stores the sources of
    its scripts and inits beside its contexts, so a location carries code and

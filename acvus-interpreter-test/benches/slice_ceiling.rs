@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use acvus_extern::{Externs, Owned};
 use acvus_interpreter::code::{Body, Code, Op, substitute};
 use acvus_interpreter::{
-    AcvusRuntime, Executable, InMemoryContext, Interpreter, InterpreterContext, PrepareCtx,
+    AcvusRuntime, Executable, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
 };
 use acvus_mir::ir::{
@@ -514,7 +514,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
 
     let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor))
         .with_context_names(context_names);
-    let mut interpreter = Interpreter::new(shared, entry, InMemoryContext::new(page(&interner, n)));
+    let mut interpreter = Interpreter::new(shared, entry, page(&interner, n));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
