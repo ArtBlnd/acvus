@@ -1089,7 +1089,7 @@ glue at the type the checker settled.
    - A load of a key the storage lacks, a run's `Fetch` or a host's
      `with` or `with_mut`, runs that key's init at that point, stores its
      result and loads it, cloning nothing; a key with neither a value
-     nor an init is `Unfilled`, naming the key. `insert` stores and loads
+     nor an init is `Unfilled`, naming it. `insert` stores and loads
      nothing, so no init replaces a value.
    - A context whose type the graph leaves open closes to `!` at the freeze
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
