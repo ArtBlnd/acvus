@@ -1079,13 +1079,14 @@ glue at the type the checker settled.
      with the rest of the graph from every body that stores or reads it, and
      structural types meet as they do anywhere else.
    - A store is always admitted where the solved type holds it.
-   - A context's first value is its init: an expression or a script the
-     host gives for that one key, which returns the value and names no
-     context. It is compiled into the same graph, its result declared at the
-     context's type, so its value joins the solve. A declared type names no
-     source (RFC-0012 rule 7), so the source an init makes becomes the
-     context's without a join of two sources; inside a script, a store of
-     another source into the context stays refused.
+   - A context's first value is its init, one per key: an expression or a
+     script that returns the value and names no context, compiled into the
+     same graph with its result declared at the context's type, or a Rust
+     function returning a `T` whose declaration joins the solve as that
+     result would (`init_with::<T>`), its value crossing as `insert`'s does.
+     A declared type names no source (RFC-0012 rule 7), so an init's source
+     becomes the context's; a script's store of another source stays
+     refused.
    - A load of a key the storage lacks, a run's `Fetch` or a host's
      `with` or `with_mut`, runs that key's init at that point, stores its
      result and loads it, cloning nothing; a key with neither a value
