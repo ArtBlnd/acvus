@@ -4,14 +4,14 @@
 //!
 //! A header parameter `p` that `analysis::affine` derives as carried is
 //! `base + k·step` over the iteration number `k`. Carried from one iteration
-//! to the next, it makes each iteration wait for the one before, and it is a
-//! target the stages would order (RFC-0089 rule 2). The pass writes
+//! to the next, it makes each iteration wait for the one before: it is a
+//! token, and its cycle orders the iterations (RFC-0089 rule 2). The pass writes
 //! `base + k·step` at the head of the body, with `k` read off the counter the
 //! terminator advances: `counter − at` for a range and the index for a slice
 //! or an array. Where `p` is read after the loop, it writes `base + trip·step`
 //! at the head of the exit block, from the trip count the `for` terminator
 //! defines on its exit edge (RFC-0057 rule 9). A rewritten `p` is carried no
-//! longer, so it is no target and orders nothing.
+//! longer, so it is no token and orders nothing.
 //!
 //! The choice is per variable. It reads the parameter's derivation and its
 //! readers, and nothing the stage pass decides, which runs after this one
@@ -43,7 +43,7 @@
 //! applies to the result unchanged.
 //!
 //! It adds only `BinOp`, `Cast` and `Const` instructions. Strength reduction
-//! runs after the stages, and reduces only what an `InOrder` join reads
+//! runs after the stages, and reduces only what an `InOrder` stage reads
 //! (RFC-0056).
 
 use acvus_ast::Span;

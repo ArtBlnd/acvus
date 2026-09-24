@@ -1181,11 +1181,9 @@ fn remap_inst(
             let mut source = *source;
             source.for_each_use(|v| *v = r(*v));
             let mut stages = stages.clone();
-            for stage in stages.iter_mut() {
-                let entry = stage.entry_mut();
+            for entry in stages.entries_mut() {
                 *entry = rl(*entry);
             }
-            stages.values_mut().for_each(|v| *v = r(*v));
             InstKind::For {
                 source,
                 stages,

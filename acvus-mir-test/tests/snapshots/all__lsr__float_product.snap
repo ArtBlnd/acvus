@@ -6,7 +6,7 @@ expression: listing
      0 |   r0 = fetch @n
      4 |   jump L0(0.0 (r1), 0.0 (r2))
      5 | L0(r3: Float, r4: Float):
-     6 |   for range(0 (r5)..r0) -> L1 else L2 stages [L1: pure, L3: join(r4) in_order, L4: pure, L5: join(r3) in_order law(Op(Add) inexact commutative)]
+     6 |   for range(0 (r5)..r0) -> L1 else L2 stages [L1, L3, L4, L5]
      7 | L1(r6: i64):
     10 |   jump L3
     11 | L3:

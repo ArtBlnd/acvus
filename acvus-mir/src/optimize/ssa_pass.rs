@@ -268,13 +268,9 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
             else_args.iter_mut().for_each(&s);
         }
         Terminator::For {
-            source,
-            stages,
-            exit_args,
-            ..
+            source, exit_args, ..
         } => {
             source.for_each_use(|v| s(v));
-            stages.values_mut().for_each(&s);
             exit_args.iter_mut().for_each(&s);
         }
         Terminator::Switch { tag, arms, default } => {

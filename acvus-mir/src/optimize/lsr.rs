@@ -10,19 +10,20 @@
 //! latch, and replaces the body's multiplication and sum with the
 //! parameter. `i` itself stays: the loop condition reads it.
 //!
-//! # Only inside one `InOrder` join
+//! # Only inside one `InOrder` stage
 //!
 //! The pass runs after the stages are written (RFC-0089 rule 6), and it
 //! reduces a counter expression only when every reader of it sits in one
-//! `InOrder` join with no law (RFC-0056, RFC-0066 rule 7). The derived
-//! counter is a carried value: its advance is placed at the end of that
-//! join, and the join lists it among its targets. An `InOrder` join runs in
-//! order already, so the reduction costs it nothing. Anywhere else each
-//! iteration computes `i * k + x` from its own `i`, and a derived counter
-//! would make it wait for the previous iteration's value. A join with a law
-//! names the one target its law updates (RFC-0089 rule 6), so a second
-//! target would unmake the law; that join is declined. A `while` has no
-//! stages and is declined.
+//! stage whose every cycle `analysis::loop_deps` judges `InOrder` with no
+//! law (RFC-0056, RFC-0066 rule 7). The derived counter is a carried value:
+//! its advance is placed at the end of that stage, where its own cycle then
+//! lies. Such a stage runs in order already, so the reduction costs it
+//! nothing. Anywhere else each iteration computes `i * k + x` from its own
+//! `i`, and a derived counter would make it wait for the previous
+//! iteration's value. A stage with a law combines a chunk before it joins
+//! the partial (RFC-0066 rule 10), which a counter carried from the chunk
+//! before would serialize; that stage is declined. A `while` has no stages
+//! and is declined.
 //!
 //! `i` is a `for`'s counter, which the terminator advances by one, or a
 //! carried header parameter IV canonicalization left (RFC-0066 rule 7). For
@@ -86,22 +87,21 @@ use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loops::{Invariant, Invariants, LoopNest, NaturalLoop, edge_args};
-use crate::analysis::stages::StageMembership;
+use crate::analysis::loop_deps::{LoopDeps, Order, StageMembership};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{
-    ForSource, Inst, InstKind, Label, Order, Stage, Target, Targets, ValOrigin, ValueId,
-};
+use crate::ir::{ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::laws::LawTable;
 use crate::optimize::ssa_pass::apply_subst;
 use crate::ty::Ty;
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
     for (_, loop_) in nest.iter() {
         let Some(frame) = Frame::of(cfg, &loop_.natural) else {
             continue;
         };
-        let Some(chain) = Chain::of(cfg, &loop_.natural, &frame) else {
+        let Some(chain) = Chain::of(cfg, &frame, laws) else {
             continue;
         };
         let invariants = Invariants::of(cfg);
@@ -165,13 +165,13 @@ struct Chain {
 }
 
 impl Chain {
-    fn of(cfg: &CfgBody, loop_: &NaturalLoop, frame: &Frame) -> Option<Chain> {
-        let Terminator::For { source, stages, .. } = &cfg.blocks[frame.header.0].terminator else {
+    fn of(cfg: &CfgBody, frame: &Frame, laws: &LawTable) -> Option<Chain> {
+        let Terminator::For { source, .. } = &cfg.blocks[frame.header.0].terminator else {
             return None;
         };
-        let loop_blocks: Vec<BlockIdx> = loop_.blocks().collect();
-        let membership = StageMembership::of(cfg, frame.header, stages, &loop_blocks).ok()?;
-        let ends: Vec<BlockIdx> = membership
+        let deps = LoopDeps::of(cfg, frame.header).ok()?;
+        let ends: Vec<BlockIdx> = deps
+            .membership
             .stages()
             .iter()
             .map(|stage| stage.sole_end())
@@ -179,22 +179,24 @@ impl Chain {
         if ends.last() != Some(&frame.latch) {
             return None;
         }
-        let reducible = stages
-            .iter()
+        let judged = deps.judge(cfg, laws);
+        let reducible = (0..ends.len())
             .map(|stage| {
-                matches!(
-                    stage,
-                    Stage::Join {
-                        order: Order::InOrder,
-                        law: None,
-                        ..
-                    }
-                )
+                let mut held = deps
+                    .cycles
+                    .iter()
+                    .zip(&judged)
+                    .filter(|(cycle, _)| cycle.stage() == Some(stage))
+                    .peekable();
+                held.peek().is_some()
+                    && held.all(|(_, judged)| {
+                        judged.order == Order::InOrder && judged.law.is_none()
+                    })
             })
             .collect();
         Some(Chain {
             source: *source,
-            membership,
+            membership: deps.membership,
             ends,
             reducible,
         })
@@ -315,8 +317,8 @@ struct Reduction {
     offset: Invariant,
     product: Site,
     sum: Site,
-    /// The stage that reads the reduced value: an `InOrder` join with no
-    /// law, which the derived counter joins.
+    /// The stage that reads the reduced value, whose every cycle is
+    /// `InOrder` with no law; the derived counter's cycle lies there too.
     join: usize,
 }
 
@@ -643,23 +645,6 @@ fn apply(
     sole_edge_args_mut(&mut preheader.terminator, frame.header_label).push(start);
 
     cfg.blocks[frame.header.0].params.push(derived);
-    let Terminator::For { stages, .. } = &mut cfg.blocks[frame.header.0].terminator else {
-        panic!(
-            "block {} is a `for` header and does not end in `For`",
-            frame.header.0
-        )
-    };
-    let Some(Stage::Join { targets, .. }) = stages.iter_mut().nth(reduction.join) else {
-        panic!(
-            "stage {} of the chain is the join the reduction reads in",
-            reduction.join
-        )
-    };
-    match targets {
-        Targets::Everything => {}
-        Targets::Listed(listed) => listed.push(Target::Carried(derived)),
-    }
-
     let ends_join = chain.ends[reduction.join];
     cfg.blocks[ends_join.0].insts.push(advanced_inst);
     let latch = &mut cfg.blocks[frame.latch.0];

@@ -6,10 +6,16 @@ use crate::ir::BinOp;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::ir::{
-    Accumulator, CallIdentity, Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label,
-    Law, LawOp, MirBody, MirModule, Order, Stage, Target, Targets, ValueId,
+use crate::analysis::loop_deps::{
+    Accumulator, BodyDeps, CallIdentity, Control, Cycle, Law, LawOp, LoopDeps, Member,
+    Order, Placement, Storage, Token,
 };
+use crate::cfg::{CfgBody, Terminator, promote};
+use crate::ir::{
+    Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label, MirBody, MirModule,
+    ValueId,
+};
+use crate::laws::LawTable;
 
 /// Normalizes ValueIds to sequential order of first appearance.
 struct ValNormalizer {
@@ -92,32 +98,98 @@ fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer
     format!("{law}{exact}{commutative}")
 }
 
-/// `L3: pure`, or `L1: join(r9, @ctx) any_order law(Op(Add) exact
-/// commutative)`: a join's targets, its order and its law.
-fn fmt_stage(stage: &Stage, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
-    let (entry, targets, order, law) = match stage {
-        Stage::Pure { entry } => return format!("{}: pure", fmt_label(*entry)),
-        Stage::Join {
-            entry,
-            targets,
-            order,
-            law,
-        } => (*entry, targets, *order, law),
-    };
-    let targets = match targets {
-        Targets::Everything => "everything".to_string(),
-        Targets::Listed(listed) => listed
+/// What the listing shows of each `For`'s stages: the boundaries the
+/// terminator states, or those and what `analysis::loop_deps` computes of
+/// each stage, which needs the law table.
+#[derive(Clone, Copy)]
+pub enum StageFacts<'a> {
+    Boundaries,
+    Computed(&'a LawTable),
+}
+
+/// The comment lines under one `For`: per stage, `free` or its cycles, each
+/// with its tokens, order and law and the operations it holds; a cycle that
+/// crosses a boundary; and the loop's control.
+fn fmt_loop_facts(
+    deps: &LoopDeps,
+    cfg: &CfgBody,
+    laws: &LawTable,
+    ctx: &PrintCtx<'_>,
+    vn: &mut ValNormalizer,
+) -> Vec<String> {
+    let judged = deps.judge(cfg, laws);
+    let mut lines = Vec::new();
+    for (stage, blocks) in deps.membership.stages().iter().enumerate() {
+        let entry = fmt_label(blocks.entry);
+        if deps.is_free(stage) {
+            let held: Vec<String> = blocks
+                .blocks
+                .iter()
+                .flat_map(|block| &cfg.blocks[block.0].insts)
+                .map(|inst| mnemonic(&inst.kind, ctx))
+                .collect();
+            lines.push(format!("{entry}: free {{{}}}", held.join(", ")));
+            continue;
+        }
+        for (cycle, judged) in deps.cycles.iter().zip(&judged) {
+            if cycle.stage() == Some(stage) {
+                lines.push(format!(
+                    "{entry}: {}",
+                    fmt_cycle(cycle, judged.order, judged.law.as_ref(), cfg, ctx, vn)
+                ));
+            }
+        }
+    }
+    for (cycle, judged) in deps.cycles.iter().zip(&judged) {
+        let Placement::Crosses(stages) = &cycle.placement else {
+            continue;
+        };
+        let entries: Vec<String> = stages
             .iter()
-            .map(|target| match target {
-                Target::Carried(value) | Target::Storage(value) => vn.fmt_val(*value),
-                Target::Context(context) => {
-                    format!("@{}", ctx.interner.resolve(context.name))
-                }
-                Target::Element => "elem".to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-    };
+            .map(|stage| fmt_label(deps.membership.stages()[*stage].entry))
+            .collect();
+        lines.push(format!(
+            "crosses {}: {}",
+            entries.join(", "),
+            fmt_cycle(cycle, judged.order, judged.law.as_ref(), cfg, ctx, vn)
+        ));
+    }
+    lines.push(match deps.control {
+        Control::Upfront => "control upfront".to_string(),
+        Control::Chained { cycle } => match deps.cycles[cycle].stage() {
+            Some(stage) => format!(
+                "control chained through {}",
+                fmt_label(deps.membership.stages()[stage].entry)
+            ),
+            None => "control chained across stages".to_string(),
+        },
+    });
+    lines
+}
+
+/// `cycle Carried(r3) any_order law(Op(Add) exact commutative) {+}`.
+fn fmt_cycle(
+    cycle: &Cycle,
+    order: Order,
+    law: Option<&Accumulator>,
+    cfg: &CfgBody,
+    ctx: &PrintCtx<'_>,
+    vn: &mut ValNormalizer,
+) -> String {
+    let tokens: Vec<String> = cycle
+        .tokens
+        .iter()
+        .map(|token| match token {
+            Token::Order(value) => format!("Order({})", vn.fmt_val(*value)),
+            Token::Carried(value) => format!("Carried({})", vn.fmt_val(*value)),
+            Token::Storage(Storage::Slot(slot)) => format!("Storage({})", vn.fmt_val(*slot)),
+            Token::Storage(Storage::Context(context)) => {
+                format!("Storage(@{})", ctx.interner.resolve(context.name))
+            }
+            Token::Storage(Storage::Element) => "Storage(element)".to_string(),
+            Token::Control => "Control".to_string(),
+        })
+        .collect();
     let order = match order {
         Order::Disjoint => "disjoint",
         Order::AnyOrder => "any_order",
@@ -127,7 +199,102 @@ fn fmt_stage(stage: &Stage, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> Strin
         Some(acc) => format!(" law({})", fmt_accumulator(acc, ctx, vn)),
         None => String::new(),
     };
-    format!("{}: join({targets}) {order}{law}", fmt_label(entry))
+    let held: Vec<String> = cycle
+        .members
+        .iter()
+        .filter_map(|member| match *member {
+            Member::Inst(at) => Some(mnemonic(&cfg.blocks[at.block.0].insts[at.at].kind, ctx)),
+            Member::Term(block) => terminator_mnemonic(&cfg.blocks[block.0].terminator),
+        })
+        .collect();
+    format!(
+        "cycle {} {order}{law} {{{}}}",
+        tokens.join("+"),
+        held.join(", ")
+    )
+}
+
+/// A terminator as a cycle names it; a plain jump passing nothing is only
+/// the edge between two blocks, and is not named.
+fn terminator_mnemonic(term: &Terminator) -> Option<String> {
+    let name = match term {
+        Terminator::Jump { args, .. } if args.is_empty() => return None,
+        Terminator::Jump { .. } => "jump",
+        Terminator::JumpIf { .. } | Terminator::Diamond { .. } => "branch",
+        Terminator::Switch { .. } => "switch",
+        Terminator::For { .. } => "for",
+        Terminator::Return { .. } => "return",
+        Terminator::Diverge => "diverge",
+        Terminator::Fallthrough => "fallthrough",
+    };
+    Some(name.to_string())
+}
+
+/// An instruction as a stage's summary names it: an operator by its
+/// spelling, a call by its callee's name, anything else by its kind.
+fn mnemonic(kind: &InstKind, ctx: &PrintCtx<'_>) -> String {
+    let callee_name = |callee: &Callee| match callee {
+        Callee::Direct(id) | Callee::Extern { id, .. } => {
+            ctx.interner.resolve(id.name).to_string()
+        }
+        Callee::Indirect(_) => "indirect".to_string(),
+    };
+    let name = match kind {
+        InstKind::BinOp { op, .. } => {
+            return match fmt_binop(*op) {
+                Spelling::Infix(spelled) | Spelling::Call(spelled) => spelled.to_string(),
+            };
+        }
+        InstKind::UnaryOp { op, .. } => return fmt_unaryop(*op).to_string(),
+        InstKind::FunctionCall { callee, .. } => return format!("call {}", callee_name(callee)),
+        InstKind::Spawn { callee, .. } => return format!("spawn {}", callee_name(callee)),
+        InstKind::Const { .. } => "const",
+        InstKind::ConstStr { .. } => "const_str",
+        InstKind::StringConcat { .. } => "concat",
+        InstKind::StringAppend { .. } => "append",
+        InstKind::StringEq { .. } => "string_eq",
+        InstKind::StringClone { .. } => "string_clone",
+        InstKind::StructuralEq { .. } => "eq",
+        InstKind::StructuralClone { .. } => "clone",
+        InstKind::Ref { .. } => "ref",
+        InstKind::Take { .. } => "take",
+        InstKind::Assign { .. } => "assign",
+        InstKind::AsSlice { .. } => "as_slice",
+        InstKind::Index { .. } => "index",
+        InstKind::IndexSet { .. } => "index_set",
+        InstKind::Fetch { .. } => "fetch",
+        InstKind::Commit { .. } => "commit",
+        InstKind::FieldGet { .. } => "field_get",
+        InstKind::FieldSet { .. } => "field_set",
+        InstKind::Cast { .. } => "cast",
+        InstKind::LoadFunction { .. } => "load_function",
+        InstKind::Eval { .. } => "eval",
+        InstKind::Merge { .. } => "merge",
+        InstKind::MakeArray { .. } => "make_array",
+        InstKind::MakeObject { .. } => "make_object",
+        InstKind::MakeTuple { .. } => "make_tuple",
+        InstKind::TupleIndex { .. } => "tuple_index",
+        InstKind::TestLiteral { .. } => "test_literal",
+        InstKind::TestObjectKey { .. } => "test_key",
+        InstKind::ArrayIndex { .. } => "array_index",
+        InstKind::ObjectGet { .. } => "object_get",
+        InstKind::MakeClosure { .. } => "make_closure",
+        InstKind::MakeVariant { .. } => "make_variant",
+        InstKind::TestVariant { .. } => "test_variant",
+        InstKind::UnwrapVariant { .. } => "unwrap_variant",
+        InstKind::BlockLabel { .. } => "label",
+        InstKind::Jump { .. } => "jump",
+        InstKind::JumpIf { .. } | InstKind::Diamond { .. } => "branch",
+        InstKind::Switch { .. } => "switch",
+        InstKind::For { .. } => "for",
+        InstKind::Return { .. } => "return",
+        InstKind::Diverge => "diverge",
+        InstKind::Undef { .. } => "undef",
+        InstKind::Nop => "nop",
+        InstKind::Drop { .. } => "drop",
+        InstKind::Poison { .. } => "poison",
+    };
+    name.to_string()
 }
 
 fn fmt_label(l: Label) -> String {
@@ -194,6 +361,7 @@ fn fmt_unaryop(op: UnaryOp) -> &'static str {
 
 struct PrintCtx<'a> {
     interner: &'a Interner,
+    facts: StageFacts<'a>,
     lit_to_tidx: &'a FxHashMap<String, usize>,
     /// FunctionId -> canonical index (order of first appearance across all bodies).
     fn_id_map: FxHashMap<crate::graph::QualifiedRef, usize>,
@@ -299,6 +467,14 @@ fn fmt_place(
     }
 }
 
+/// A body's `For`s as `analysis::loop_deps` computes them, for the
+/// comment lines under each.
+struct Computed<'a> {
+    cfg: CfgBody,
+    deps: BodyDeps,
+    laws: &'a LawTable,
+}
+
 fn write_body(
     f: &mut fmt::Formatter<'_>,
     body: &MirBody,
@@ -306,6 +482,18 @@ fn write_body(
     ctx: &PrintCtx<'_>,
 ) -> fmt::Result {
     let mut vn = ValNormalizer::new();
+    let computed = match ctx.facts {
+        StageFacts::Boundaries => None,
+        StageFacts::Computed(laws) => {
+            let cfg = promote(body.clone());
+            Some(Computed {
+                deps: BodyDeps::of(&cfg),
+                cfg,
+                laws,
+            })
+        }
+    };
+    let mut block = crate::cfg::ENTRY_LABEL;
 
     // A constant is shown at its use sites only while its ValueId names that
     // one definition; after register allocation an id is reused, and a use
@@ -776,6 +964,7 @@ fn write_body(
 
             // Control flow
             InstKind::BlockLabel { label, params } => {
+                block = *label;
                 if params.is_empty() {
                     writeln!(f, "{}:", fmt_label(*label))?
                 } else {
@@ -794,10 +983,10 @@ fn write_body(
                     writeln!(f, "{}({params_str}):", fmt_label(*label))?
                 }
             }
-            // `for slice(r3) -> L1 else L2 stages [L1: pure, L3: join(r9)
-            // any_order law(Op(Add) exact commutative)]` (RFC-0057,
-            // RFC-0089). The element and the counter are the body block's
-            // parameters, printed where that block's label is. An exit edge
+            // `for slice(r3) -> L1 else L2 stages [L1, L3]` (RFC-0057,
+            // RFC-0089 rule 1), and with computed facts a comment line per
+            // stage below it. The element and the counter are the body
+            // block's parameters, printed where that block's label is. An exit edge
             // that defines the trip count prints it as `trip` where the exit
             // block's first parameter takes it: `else L2(trip, r5)`
             // (RFC-0057 rule 9).
@@ -838,16 +1027,28 @@ fn write_body(
                         format!("{}(trip, {carried})", fmt_label(exit))
                     }
                 };
-                let stages: Vec<String> = stages
-                    .iter()
-                    .map(|stage| fmt_stage(stage, ctx, &mut vn))
-                    .collect();
+                let entries: Vec<String> = stages.entries().map(fmt_label).collect();
                 writeln!(
                     f,
                     "for {over} -> {} else {left} stages [{}]",
                     fmt_label(stages_body),
-                    stages.join(", ")
-                )?
+                    entries.join(", ")
+                )?;
+                if let Some(computed) = &computed {
+                    let found = computed
+                        .deps
+                        .loops
+                        .iter()
+                        .find(|found| computed.cfg.blocks[found.header.0].label == block)
+                        .expect("promoting a body keeps each `For` at the end of its block");
+                    let lines = match &found.deps {
+                        Ok(deps) => fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, &mut vn),
+                        Err(fault) => vec![format!("stages refused: {}", fault.shown())],
+                    };
+                    for line in lines {
+                        writeln!(f, "{indent}     |     // {line}")?;
+                    }
+                }
             }
             // `switch r5 { A -> L1, B -> L2, _ -> L3 }`, and a literal
             // dispatch's keys as written: `switch r5 { 1 -> L1, _ -> L2 }`
@@ -1002,6 +1203,7 @@ fn write_body(
 pub struct MirModuleDisplay<'a> {
     module: &'a MirModule,
     interner: &'a Interner,
+    facts: StageFacts<'a>,
 }
 
 impl fmt::Display for MirModuleDisplay<'_> {
@@ -1036,6 +1238,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
 
         let ctx = PrintCtx {
             interner: self.interner,
+            facts: self.facts,
             lit_to_tidx: &lit_to_tidx,
             fn_id_map,
         };
@@ -1058,6 +1261,21 @@ impl MirModule {
         MirModuleDisplay {
             module: self,
             interner,
+            facts: StageFacts::Boundaries,
+        }
+    }
+
+    /// As [`Self::display`], with what `analysis::loop_deps` computes of
+    /// each `For`'s stages under its terminator.
+    pub fn display_with_facts<'a>(
+        &'a self,
+        interner: &'a Interner,
+        laws: &'a LawTable,
+    ) -> MirModuleDisplay<'a> {
+        MirModuleDisplay {
+            module: self,
+            interner,
+            facts: StageFacts::Computed(laws),
         }
     }
 }
@@ -1230,6 +1448,7 @@ impl fmt::Display for MirBodyDisplay<'_> {
         collect_fn_ids_from_body(self.body, &mut fn_id_map);
         let ctx = PrintCtx {
             interner: self.interner,
+            facts: StageFacts::Boundaries,
             lit_to_tidx: &empty_lits,
             fn_id_map,
         };
@@ -1255,6 +1474,11 @@ pub fn dump(interner: &Interner, module: &MirModule) -> String {
 /// Alias for `dump`. Kept for backward compatibility.
 pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
     dump(interner, module)
+}
+
+/// `dump`, with each `For`'s computed stage facts.
+pub fn dump_with_facts(interner: &Interner, module: &MirModule, laws: &LawTable) -> String {
+    format!("{}", module.display_with_facts(interner, laws))
 }
 
 #[cfg(test)]

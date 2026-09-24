@@ -139,35 +139,28 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 header.0,
                 fault.shown()
             ),
-            ValidationErrorKind::PureStageEffect {
+            ValidationErrorKind::CycleCrossesBoundary {
                 header,
-                stage,
-                effect,
+                tokens,
+                stages,
             } => write!(
                 f,
-                "stage {stage} of the `for` headed at L{} is pure and {}",
-                header.0,
-                effect.shown()
+                "the dependence cycle through {} of the `for` headed at L{} lies in \
+                 stages {stages:?}, and a cycle lies in one stage",
+                crate::analysis::loop_deps::Token::shown_all(tokens),
+                header.0
             ),
-            ValidationErrorKind::JoinOrder {
+            ValidationErrorKind::StateReadBeforeItsCycle {
                 header,
+                token,
                 stage,
-                fault,
+                cycle_stage,
             } => write!(
                 f,
-                "join {stage} of the `for` headed at L{} {}",
+                "stage {stage} of the `for` headed at L{} reads the state of {}, \
+                 whose cycle lies in the later stage {cycle_stage}",
                 header.0,
-                fault.shown()
-            ),
-            ValidationErrorKind::StageLeaves {
-                header,
-                stage,
-                from,
-            } => write!(
-                f,
-                "block L{} of stage {stage} of the `for` headed at L{} leaves the loop, \
-                 and only the header or an `InOrder` join may",
-                from.0, header.0
+                token.shown()
             ),
             ValidationErrorKind::DemotedDiamondMeetsAgain { join } => write!(
                 f,

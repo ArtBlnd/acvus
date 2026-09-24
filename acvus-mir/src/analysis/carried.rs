@@ -24,8 +24,8 @@
 //!
 //! The kind of the state is what a reader asks, not its count: how many
 //! merges a loop carries is a cost, and cost is the lowerer's. How each
-//! kind is ordered is stated per target by the stages of RFC-0089, which
-//! `optimize::stages` writes from these facts (RFC-0066 rule 6).
+//! kind orders its cycle is `analysis::loop_deps`'s to judge from these
+//! facts (RFC-0089 rule 4).
 //!
 //! An `Order` is how MIR marks an effect that keeps its place in the run:
 //! a call whose effect is not Pure carries one and a Pure call carries
@@ -56,7 +56,8 @@ use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Loop, LoopKind};
 use crate::cfg::CfgBody;
 use crate::graph::QualifiedRef;
-use crate::ir::{CallIdentity, Callee, ForSource, InstKind, ValueId};
+use crate::analysis::loop_deps::CallIdentity;
+use crate::ir::{Callee, ForSource, InstKind, ValueId};
 use crate::laws::{BinaryLaws, FoldLaw, LawTable, Laws};
 use crate::ty::{Mutability, Ty};
 

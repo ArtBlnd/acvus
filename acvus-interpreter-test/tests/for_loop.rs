@@ -14,9 +14,7 @@ use acvus_interpreter::listing::{BlockListing, RegionListing, ops_of_anywhere, r
 use acvus_interpreter_test::corpus::{self, Outcome, Stage};
 use acvus_interpreter_test::listing::{script_listing, script_listing_with_externs};
 use acvus_interpreter_test::*;
-use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loops::natural_loops_innermost_first;
-use acvus_mir::analysis::stages::{StageMembership, loop_blocks_of};
+use acvus_mir::analysis::loop_deps::LoopDeps;
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ty::{IntTy, Ty};
 use acvus_utils::Interner;
@@ -735,22 +733,15 @@ async fn an_owned_element_one_part_reads_is_released_once_in_that_part() {
     let module = &compiled.modules[&compiled.entry_qref];
     let mir = acvus_mir::printer::dump_with(&i, module);
     let cfg = acvus_mir::cfg::promote(module.main.clone());
-    let Some((header, stages)) = cfg
-        .blocks
-        .iter()
-        .enumerate()
-        .find_map(|(at, block)| match &block.terminator {
-            acvus_mir::cfg::Terminator::For { stages, .. } => {
-                Some((acvus_mir::cfg::BlockIdx(at), stages))
-            }
-            _ => None,
-        })
+    let Some(header) = (0..cfg.blocks.len())
+        .map(acvus_mir::cfg::BlockIdx)
+        .find(|at| matches!(cfg.blocks[at.0].terminator, acvus_mir::cfg::Terminator::For { .. }))
     else {
         panic!("the loop states its stages:\n{mir}")
     };
-    let loops = natural_loops_innermost_first(&cfg, &DomTree::build(&cfg));
-    let membership = StageMembership::of(&cfg, header, stages, &loop_blocks_of(&loops, header))
-        .unwrap_or_else(|fault| panic!("{}:\n{mir}", fault.shown()));
+    let membership = LoopDeps::of(&cfg, header)
+        .unwrap_or_else(|fault| panic!("{}:\n{mir}", fault.shown()))
+        .membership;
     let stages_holding = |holds: fn(&acvus_mir::ir::InstKind) -> bool| -> Vec<usize> {
         membership
             .stages()
@@ -788,17 +779,15 @@ async fn an_owned_element_two_sums_read_is_released_once() {
     let module = &compiled.modules[&compiled.entry_qref];
     let mir = acvus_mir::printer::dump_with(&i, module);
     let cfg = acvus_mir::cfg::promote(module.main.clone());
-    let joins: Vec<usize> = cfg
-        .blocks
-        .iter()
-        .filter_map(|block| match &block.terminator {
-            acvus_mir::cfg::Terminator::For { stages, .. } => Some(
-                stages
-                    .iter()
-                    .filter(|stage| matches!(stage, acvus_mir::ir::Stage::Join { .. }))
-                    .count(),
-            ),
-            _ => None,
+    let joins: Vec<usize> = (0..cfg.blocks.len())
+        .map(acvus_mir::cfg::BlockIdx)
+        .filter(|at| matches!(cfg.blocks[at.0].terminator, acvus_mir::cfg::Terminator::For { .. }))
+        .map(|header| {
+            let deps = LoopDeps::of(&cfg, header)
+                .unwrap_or_else(|fault| panic!("{}:\n{mir}", fault.shown()));
+            (0..deps.membership.stages().len())
+                .filter(|stage| !deps.is_free(*stage))
+                .count()
         })
         .collect();
     assert_eq!(joins, [2], "{mir}");

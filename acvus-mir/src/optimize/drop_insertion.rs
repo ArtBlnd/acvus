@@ -25,15 +25,11 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::domtree::DomTree;
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::natural_loops_innermost_first;
-use crate::analysis::stages::{StageMembership, loop_blocks_of};
+use crate::analysis::loop_deps::{BodyDeps, HeaderDeps, Storage, Token};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{
-    ExitTrip, ForSource, Inst, InstKind, Label, Stage, Stages, Target, Targets, ValueId,
-};
+use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
 use crate::validate::move_check::{emptied_by, is_move_only};
 
@@ -220,53 +216,38 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 }
 
 /// The stage entries at which values dying on a `For`'s body edge are
-/// dropped, so that a pure stage releases no carried value and no storage a
-/// join writes (RFC-0089 rule 3). Such a value is a header parameter no stage
-/// reads, which the join that targets it releases, or a value one stage
-/// alone touches. A value two stages touch has no entry here and is dropped
-/// where the body begins.
+/// dropped, so that a free stage releases no carried value and no storage a
+/// cycle writes (RFC-0089 rule 3). Such a value is a header parameter no
+/// stage reads, which the stage holding its cycle releases, or a value one
+/// stage alone touches. A value two stages touch has no entry here and is
+/// dropped where the body begins.
 fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>) -> StageEntries {
     let mut carried_entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut shared: FxHashSet<ValueId> = FxHashSet::default();
-    let fors: Vec<(BlockIdx, ForSource, &Stages)> = cfg
-        .blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(at, block)| match &block.terminator {
-            Terminator::For { source, stages, .. } => Some((BlockIdx(at), *source, stages)),
-            _ => None,
-        })
-        .collect();
-    if fors.is_empty() {
-        return StageEntries {
-            targeted: carried_entries,
-            touched: entries,
-        };
-    }
-    let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
-    for (header, source, stages) in fors {
-        // A chain with no membership is refused by `validate::stages`, which
+    for HeaderDeps { header, deps } in BodyDeps::of(cfg).loops {
+        // A chain whose shape fails is refused by `validate::stages`, which
         // reads this pass's output; its values are dropped where the body
         // begins.
-        let Ok(membership) =
-            StageMembership::of(cfg, header, stages, &loop_blocks_of(&loops, header))
-        else {
+        let Ok(deps) = deps else {
             continue;
         };
+        let Terminator::For { source, stages, .. } = &cfg.blocks[header.0].terminator else {
+            panic!("block {} heads the `For` `loop_deps` found there", header.0)
+        };
         let body_params = &cfg.blocks[cfg.label_to_block[&stages.body()].0].params;
-        for (stage, blocks) in stages.iter().zip(membership.stages()) {
+        for (stage, blocks) in deps.membership.stages().iter().enumerate() {
             let entry = blocks.blocks[0];
-            if let Stage::Join {
-                targets: Targets::Listed(targets),
-                ..
-            } = stage
-            {
-                for target in targets {
-                    if let Target::Carried(value) | Target::Storage(value) = target {
-                        carried_entries.insert(*value, entry);
+            for token in deps.cycles_in(stage).flat_map(|cycle| &cycle.tokens) {
+                let released = match *token {
+                    Token::Order(value)
+                    | Token::Carried(value)
+                    | Token::Storage(Storage::Slot(value)) => value,
+                    Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => {
+                        continue;
                     }
-                }
+                };
+                carried_entries.insert(released, entry);
             }
             for held in &blocks.blocks {
                 for inst in &cfg.blocks[held.0].insts {

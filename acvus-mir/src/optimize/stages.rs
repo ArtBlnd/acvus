@@ -1,42 +1,42 @@
-//! A `for`'s body as a chain of stages (RFC-0089 rules 2, 3, 4 and 6).
+//! Where a `for`'s body is cut (RFC-0089 rule 6). The pass reads each
+//! loop's dependence cycles from `analysis::loop_deps`, keeps each cycle
+//! whole in one stage, puts the work a cycle reads before it and the work
+//! it does not read after it, and names no token. A branch stays whole in
+//! one stage with its arms, and so does a loop inside the body. A loop the
+//! pass cannot cut is one stage: every loop left other than from its header
+//! and every loop whose header holds an instruction.
 //!
-//! The pass finds the loop's targets, forms each target's join as its
-//! dependence cycle, merges joins that share an instruction, and orders the
-//! joins and the pure work between them by the values each reads. A branch
-//! stays whole in one stage with its arms, and so does a loop inside the
-//! body. A loop the pass cannot split is one `InOrder` join over every
-//! target, as written; that is every loop left other than from its header,
-//! every loop whose header holds an instruction, and every loop with pure
-//! work that carries an ordered effect outside every join.
+//! Run again over a loop already cut, the pass cuts nothing new: it removes
+//! each boundary between two free stages and each boundary before a stage
+//! that holds no instruction, so a pass that removed a `merge` or a phi
+//! leaves no boundary behind that nothing orders.
 
 use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::affine::AffineValues;
-use crate::analysis::carried::{
-    Carried, CarriedState, MergeOp, StorageMerge, carries_order,
-};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
+use crate::analysis::loop_deps::{self, LoopDeps, Token};
 use crate::analysis::loops::{Invariants, LoopNest};
-use crate::analysis::targets::{TargetSlots, effect, slots_lent_mutably, touched_slots};
+use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
-use crate::graph::QualifiedRef;
-use crate::ir::{
-    Accumulator, CallLaw, ExitTrip, FoldAccumulator, Inst, InstKind, Label, Law, LawOp, Order,
-    Stage, Stages, Target, Targets, ValueId,
-};
-use crate::laws::LawTable;
+use crate::ir::{ExitTrip, Inst, InstKind, Label, Stages, ValueId};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::Ty;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody) {
     let mut examined: FxHashSet<Label> = FxHashSet::default();
     while let Some(header) = innermost_unexamined_for(cfg, &examined) {
         examined.insert(header);
-        stage(cfg, header, laws);
+        let at = cfg.label_to_block[&header];
+        let Terminator::For { stages, .. } = &cfg.blocks[at.0].terminator else {
+            continue;
+        };
+        match stages.len() {
+            1 => cut(cfg, header),
+            _ => merge_boundaries(cfg, at),
+        }
     }
 }
 
@@ -51,40 +51,54 @@ fn innermost_unexamined_for(cfg: &CfgBody, examined: &FxHashSet<Label>) -> Optio
         .find(|label| !examined.contains(label))
 }
 
+/// Removes each boundary before a stage that holds no instruction, or that
+/// is free and follows a free stage. A chain whose shape fails is left for
+/// `validate::stages` to refuse.
+fn merge_boundaries(cfg: &mut CfgBody, header: BlockIdx) {
+    let Ok(deps) = LoopDeps::of(cfg, header) else {
+        return;
+    };
+    let stages = deps.membership.stages();
+    let holds_nothing = |stage: usize| {
+        stages[stage]
+            .blocks
+            .iter()
+            .all(|block| cfg.blocks[block.0].insts.is_empty())
+    };
+    let mut kept: Vec<Label> = Vec::new();
+    let mut last_kept_free = deps.is_free(0);
+    for (stage, blocks) in stages.iter().enumerate().skip(1) {
+        let free = deps.is_free(stage);
+        if holds_nothing(stage) || (free && last_kept_free) {
+            continue;
+        }
+        kept.push(blocks.entry);
+        last_kept_free = free;
+    }
+    let body = stages[0].entry;
+    let Terminator::For { stages, .. } = &mut cfg.blocks[header.0].terminator else {
+        panic!("block {} heads the `For` `loop_deps` read", header.0)
+    };
+    *stages = Stages::new(body, kept);
+}
+
 struct Facts {
     header: BlockIdx,
-    header_params: Vec<ValueId>,
-    targets: Vec<Target>,
     slots: TargetSlots,
-    carried_params: Vec<Carried>,
-    storage_merges: Vec<StorageMerge>,
     leaves: bool,
 }
 
-fn stage(cfg: &mut CfgBody, header_label: Label, laws: &LawTable) {
-    let Some(facts) = Facts::of(cfg, header_label, laws) else {
+fn cut(cfg: &mut CfgBody, header_label: Label) {
+    let Some(facts) = Facts::of(cfg, header_label) else {
         return;
     };
-    let stated = match plan(cfg, &facts) {
-        Some(Plan::Rewritten(written)) => {
-            *cfg = written;
-            return;
-        }
-        Some(Plan::AsWritten(kind)) => kind,
-        None => StageKind::Join {
-            targets: facts.targets.clone(),
-            order: Order::InOrder,
-            law: None,
-        },
-    };
-    let Terminator::For { stages, .. } = &mut cfg.blocks[facts.header.0].terminator else {
-        return;
-    };
-    *stages = Stages::new(stated.at(stages.body()), Vec::new());
+    if let Some(written) = plan(cfg, &facts) {
+        *cfg = written;
+    }
 }
 
 impl Facts {
-    fn of(cfg: &CfgBody, header_label: Label, laws: &LawTable) -> Option<Facts> {
+    fn of(cfg: &CfgBody, header_label: Label) -> Option<Facts> {
         let header = cfg.label_to_block[&header_label];
         let Terminator::For { source, .. } = &cfg.blocks[header.0].terminator else {
             return None;
@@ -97,10 +111,8 @@ impl Facts {
         let loans = Loans::build(cfg);
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
         let slots = TargetSlots::of(&loans, source, &loop_blocks);
-        let affine = AffineValues::of(cfg, loop_, &invariants);
-        let state = CarriedState::of(&loans, loop_, &affine, laws);
-        // Rule 7: a `break` or a `return` leaves from a block of the body,
-        // and the iterations after the one that leaves never run.
+        // RFC-0089 rule 5: a `break` or a `return` leaves from a block of
+        // the body, and this pass does not cut such a loop.
         let leaves = loop_blocks
             .iter()
             .filter(|block| **block != header)
@@ -111,138 +123,23 @@ impl Facts {
                         .iter()
                         .any(|succ| !loop_.natural.contains(*succ))
             });
-
-        let mut targets: Vec<Target> = Vec::new();
-        let mut add = |target: Target| {
-            if !targets.contains(&target) {
-                targets.push(target);
-            }
-        };
-        let header_params = cfg.blocks[header.0].params.clone();
-        for (index, &param) in header_params.iter().enumerate() {
-            let changed = loop_.natural.latches.iter().any(|latch| {
-                edge_args_into(&cfg.blocks[latch.0].terminator, header_label)
-                    .iter()
-                    .any(|args| args.get(index) != Some(&param))
-            });
-            if changed {
-                add(Target::Carried(param));
-            }
-        }
-        for &block in &loop_blocks {
-            for inst in &cfg.blocks[block.0].insts {
-                let written = effect(&loans, &inst.kind)
-                    .writes
-                    .into_iter()
-                    .chain(slots_lent_mutably(&loans, &inst.kind));
-                for slot in written {
-                    if let Some(target) = slots.target_of(slot) {
-                        add(target);
-                    }
-                }
-                if let InstKind::Commit { context, .. } = &inst.kind {
-                    add(Target::Context(*context));
-                }
-            }
-        }
         Some(Facts {
             header,
-            header_params,
-            targets,
             slots,
-            carried_params: state.params.iter().map(|param| param.carried).collect(),
-            storage_merges: state.storage_merges.clone(),
             leaves,
         })
-    }
-
-    fn param_index(&self, param: ValueId) -> Option<usize> {
-        self.header_params.iter().position(|held| *held == param)
-    }
-}
-
-fn edge_args_into<'a>(term: &'a Terminator, header: Label) -> Vec<&'a [ValueId]> {
-    let mut found: Vec<&'a [ValueId]> = Vec::new();
-    let mut push = |to: Label, args: &'a [ValueId]| {
-        if to == header {
-            found.push(args);
-        }
-    };
-    match term {
-        Terminator::Jump { label, args } => push(*label, args),
-        Terminator::JumpIf {
-            then_label,
-            then_args,
-            else_label,
-            else_args,
-            ..
-        }
-        | Terminator::Diamond {
-            then_label,
-            then_args,
-            else_label,
-            else_args,
-            ..
-        } => {
-            push(*then_label, then_args);
-            push(*else_label, else_args);
-        }
-        Terminator::Switch { arms, default, .. } => {
-            for (_, label, args) in arms {
-                push(*label, args);
-            }
-            if let Some((label, args)) = default {
-                push(*label, args);
-            }
-        }
-        Terminator::For {
-            exit, exit_args, ..
-        } => push(*exit, exit_args),
-        Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
-    }
-    found
-}
-
-#[derive(Clone)]
-enum StageKind {
-    Pure,
-    Join {
-        targets: Vec<Target>,
-        order: Order,
-        law: Option<Accumulator>,
-    },
-}
-
-impl StageKind {
-    fn at(self, entry: Label) -> Stage {
-        match self {
-            Self::Pure => Stage::Pure { entry },
-            Self::Join {
-                targets,
-                order,
-                law,
-            } => Stage::Join {
-                entry,
-                targets: Targets::Listed(targets),
-                order,
-                law,
-            },
-        }
     }
 }
 
 struct Planned {
     members: Vec<Member>,
     params: Vec<ValueId>,
-    kind: StageKind,
+    free: bool,
 }
 
-enum Plan {
-    AsWritten(StageKind),
-    Rewritten(CfgBody),
-}
-
-fn plan(cfg: &CfgBody, facts: &Facts) -> Option<Plan> {
+/// The body rewritten as the chain the cycles cut it into, or `None` where
+/// the loop stays one stage.
+fn plan(cfg: &CfgBody, facts: &Facts) -> Option<CfgBody> {
     let header = facts.header;
     if facts.leaves || !cfg.blocks[header.0].insts.is_empty() {
         return None;
@@ -279,14 +176,15 @@ fn plan(cfg: &CfgBody, facts: &Facts) -> Option<Plan> {
         let loans = Loans::build(&work);
         let units = Units::of(&work, &region, &shape, &loans, facts)?;
         let graph = Graph::of(&work, &region, &shape, &units, facts)?;
-        let joins = graph.joins(&units, facts);
-        graph.order(&units, &joins, facts)?
+        let deps = LoopDeps::of(&work, region.header).ok()?;
+        let joins = graph.joins(&units, &deps);
+        graph.order(&units, &joins)?
     };
-    if let [only] = &stages[..] {
-        return Some(Plan::AsWritten(only.kind.clone()));
+    if stages.len() == 1 {
+        return None;
     }
     Chain::write(&mut work, &mut labels, &region, &shape, stages)?;
-    Some(Plan::Rewritten(work))
+    Some(work)
 }
 
 type UnitId = usize;
@@ -303,13 +201,12 @@ struct Unit {
     uses: Vec<ValueId>,
     touched: Vec<ValueId>,
     written: Vec<ValueId>,
-    contexts: Vec<QualifiedRef>,
-    carries_order: bool,
 }
 
 struct Units {
     units: Vec<Unit>,
     defined_by: FxHashMap<ValueId, UnitId>,
+    by_member: FxHashMap<Member, UnitId>,
 }
 
 #[derive(Default)]
@@ -427,6 +324,7 @@ impl Units {
         let mut built = Units {
             units: Vec::new(),
             defined_by: FxHashMap::default(),
+            by_member: FxHashMap::default(),
         };
         let mut unit_of = |sets: &mut UnionFind, units: &mut Vec<Unit>, node: Node| {
             let root = sets.find(node);
@@ -452,15 +350,7 @@ impl Units {
                 );
                 unit.touched.extend(touched_slots(loans, &inst.kind));
                 unit.written.extend(written_slots(loans, &inst.kind));
-                unit.carries_order |= carries_order(&inst.kind);
-                match &inst.kind {
-                    InstKind::Commit { context, .. } => {
-                        unit.contexts.push(*context);
-                        unit.carries_order = true;
-                    }
-                    InstKind::Fetch { context, .. } => unit.contexts.push(*context),
-                    _ => {}
-                }
+                built.by_member.insert(member, id);
                 for def in inst_info::defs(&inst.kind) {
                     if !slot_values.contains(&def) {
                         built.defined_by.insert(def, id);
@@ -470,6 +360,7 @@ impl Units {
             if shape.is_branch(block) {
                 let id = unit_of(&mut sets, &mut built.units, branch_node(block));
                 let member = Member::Branch(block);
+                built.by_member.insert(member, id);
                 let unit = &mut built.units[id];
                 unit.members.push(member);
                 unit.position = unit.position.min(Position::of(shape, member));
@@ -510,6 +401,20 @@ impl Units {
 
     fn len(&self) -> usize {
         self.units.len()
+    }
+
+    /// The unit a member `analysis::loop_deps` names belongs to; a
+    /// terminator that is no branch of the body, such as the jump between
+    /// two blocks, belongs to none.
+    fn of_member(&self, member: loop_deps::Member) -> Option<UnitId> {
+        let member = match member {
+            loop_deps::Member::Inst(at) => Member::Inst(InstAt {
+                block: at.block,
+                at: at.at,
+            }),
+            loop_deps::Member::Term(block) => Member::Branch(block),
+        };
+        self.by_member.get(&member).copied()
     }
 
     fn with(&self, holds: impl Fn(&Unit) -> bool) -> Vec<UnitId> {
@@ -567,10 +472,7 @@ fn slot_values(cfg: &CfgBody) -> FxHashSet<ValueId> {
 struct Graph {
     succs: Vec<BTreeSet<UnitId>>,
     preds: Vec<BTreeSet<UnitId>>,
-    readers_of_param: Vec<Vec<UnitId>>,
-    latch_value_unit: Vec<Option<UnitId>>,
-    order_params: Vec<ValueId>,
-    carrying_order: Vec<UnitId>,
+    readers_of_param: FxHashMap<ValueId, Vec<UnitId>>,
     element: Vec<ValueId>,
 }
 
@@ -593,10 +495,7 @@ impl Graph {
         let mut graph = Graph {
             succs: vec![BTreeSet::new(); n],
             preds: vec![BTreeSet::new(); n],
-            readers_of_param: Vec::new(),
-            latch_value_unit: Vec::new(),
-            order_params: Vec::new(),
-            carrying_order: units.with(|unit| unit.carries_order),
+            readers_of_param: FxHashMap::default(),
             element: Vec::new(),
         };
         for (id, unit) in units.units.iter().enumerate() {
@@ -612,25 +511,17 @@ impl Graph {
         if shape.latch_args.len() != header_params.len() {
             return None;
         }
-        graph.order_params = header_params
-            .iter()
-            .copied()
-            .filter(|param| cfg.val_types.get(param) == Some(&Ty::Order))
-            .collect();
-        for (&param, sent) in header_params.iter().zip(&shape.latch_args) {
+        for &param in header_params {
             graph
                 .readers_of_param
-                .push(units.with(|unit| unit.uses.contains(&param)));
-            graph
-                .latch_value_unit
-                .push(units.defined_by.get(sent).copied());
+                .insert(param, units.with(|unit| unit.uses.contains(&param)));
         }
         graph.element = units
             .units
             .iter()
             .flat_map(|unit| &unit.touched)
             .copied()
-            .filter(|slot| facts.slots.target_of(*slot) == Some(Target::Element))
+            .filter(|slot| facts.slots.target_of(*slot) == Some(Written::Element))
             .collect();
         let mut on_element: Vec<ElementTouch> = units
             .units
@@ -670,7 +561,7 @@ impl Graph {
         seen
     }
 
-    /// RFC-0089 rule 4's dependence cycle: every unit on a path from one of
+    /// RFC-0089 rule 3's dependence cycle: every unit on a path from one of
     /// `starts` to one of `ends`, both included.
     fn cycle(&self, starts: &[UnitId], ends: &[UnitId]) -> FxHashSet<UnitId> {
         let forward = Self::reach(starts, &self.succs);
@@ -678,31 +569,36 @@ impl Graph {
         forward.intersection(&backward).copied().collect()
     }
 
-    /// Each target's join (RFC-0089 rule 4): a carried value's cycle from
-    /// its readers to what the latch sends it, and a storage's touchers with
-    /// the cycle from them to its writers. Joins that share a unit are one
-    /// join, and a join holds every unit between two of its own.
-    fn joins(&self, units: &Units, facts: &Facts) -> Vec<Join> {
-        let mut joins: Vec<Join> = facts
-            .targets
+    /// Each dependence cycle `analysis::loop_deps` finds, as the units that
+    /// hold its members. Joins that share a unit are one join, and a join
+    /// holds every unit between two of its own, and every unit between one
+    /// that reads its state and one of its own.
+    fn joins(&self, units: &Units, deps: &LoopDeps) -> Vec<Join> {
+        let mut joins: Vec<Join> = deps
+            .cycles
             .iter()
-            .map(|target| Join {
-                targets: vec![*target],
-                units: self.cycle_of(units, facts, *target),
+            .map(|cycle| Join {
+                tokens: cycle.tokens.clone(),
+                units: cycle
+                    .members
+                    .iter()
+                    .filter_map(|member| units.of_member(*member))
+                    .collect(),
             })
+            .filter(|join| !join.units.is_empty())
             .collect();
         loop {
             let mut changed = false;
             if let Some(Overlap { keep, absorb }) = first_overlap(&joins) {
                 let absorbed = joins.remove(absorb);
-                joins[keep].targets.extend(absorbed.targets);
+                joins[keep].tokens.extend(absorbed.tokens);
                 joins[keep].units.extend(absorbed.units);
                 changed = true;
             }
             for join in &mut joins {
                 let held: Vec<UnitId> = join.units.iter().copied().collect();
                 let mut starts = held.clone();
-                starts.extend(self.after_state(facts, join));
+                starts.extend(self.after_state(join));
                 for unit in self.cycle(&starts, &held) {
                     changed |= join.units.insert(unit);
                 }
@@ -713,71 +609,22 @@ impl Graph {
         }
     }
 
-    fn cycle_of(&self, units: &Units, facts: &Facts, target: Target) -> FxHashSet<UnitId> {
-        match target {
-            Target::Carried(param) => {
-                let Some(index) = facts.param_index(param) else {
-                    return FxHashSet::default();
-                };
-                let mut starts = self.readers_of_param[index].clone();
-                let mut ends: Vec<UnitId> = self.latch_value_unit[index].into_iter().collect();
-                let mut held = FxHashSet::default();
-                // Every order-carrying instruction touches the `Order` a
-                // loop carries, whether it waits on the header's `Order` or,
-                // in an `anyorder` region, on the region's entry `Order`
-                // and is merged into it after (RFC-0007).
-                if self.order_params.contains(&param) {
-                    starts.extend(&self.carrying_order);
-                    ends.extend(&self.carrying_order);
-                    held.extend(self.carrying_order.iter().copied());
-                }
-                held.extend(self.cycle(&starts, &ends));
-                held
-            }
-            Target::Storage(slot) => {
-                let touchers = units.with(|unit| unit.touched.contains(&slot));
-                let writers = units.with(|unit| unit.written.contains(&slot));
-                let mut held = self.cycle(&touchers, &writers);
-                held.extend(touchers);
-                held
-            }
-            Target::Element => {
-                let writers =
-                    units.with(|unit| unit.written.iter().any(|slot| self.element.contains(slot)));
-                let mut held = self.cycle(&writers, &writers);
-                held.extend(writers);
-                held
-            }
-            Target::Context(context) => {
-                let touchers = units.with(|unit| unit.contexts.contains(&context));
-                let mut held = self.cycle(&touchers, &touchers);
-                held.extend(touchers);
-                held
-            }
-        }
-    }
-
-    /// The units that read a carried target's state outside its join: they
-    /// run after it (RFC-0089 rule 4).
-    fn after_state(&self, facts: &Facts, join: &Join) -> Vec<UnitId> {
-        if join.units.is_empty() {
-            return Vec::new();
-        }
-        join.targets
+    /// The units that read a header parameter's state outside the join of
+    /// its cycle: they run after it (RFC-0089 rule 6).
+    fn after_state(&self, join: &Join) -> Vec<UnitId> {
+        join.tokens
             .iter()
-            .filter_map(|target| match target {
-                Target::Carried(param) => facts.param_index(*param),
-                Target::Storage(_) | Target::Element | Target::Context(_) => None,
-            })
-            .flat_map(|index| self.readers_of_param[index].iter().copied())
+            .filter_map(|token| token.header_param())
+            .flat_map(|param| self.readers_of_param.get(&param).into_iter().flatten())
+            .copied()
             .filter(|unit| !join.units.contains(unit))
             .collect()
     }
 
     /// The stages in the order they run: a node whose inputs are all ready
-    /// runs first where the body wrote it first, and pure units next to
-    /// each other are one pure stage.
-    fn order(&self, units: &Units, joins: &[Join], facts: &Facts) -> Option<Vec<Planned>> {
+    /// runs first where the body wrote it first, and units in no cycle next to
+    /// each other are one free stage.
+    fn order(&self, units: &Units, joins: &[Join]) -> Option<Vec<Planned>> {
         let mut node_of: Vec<Option<usize>> = vec![None; units.len()];
         let mut nodes: Vec<OrderNode> = Vec::new();
         for (index, join) in joins.iter().enumerate() {
@@ -799,9 +646,6 @@ impl Graph {
             if node_of[id].is_some() {
                 continue;
             }
-            if unit.carries_order {
-                return None;
-            }
             node_of[id] = Some(nodes.len());
             nodes.push(OrderNode {
                 join: None,
@@ -822,7 +666,7 @@ impl Graph {
             let Some(index) = node.join else {
                 continue;
             };
-            for unit in self.after_state(facts, &joins[index]) {
+            for unit in self.after_state(&joins[index]) {
                 if node_of[unit] != at {
                     succs[at].insert(node_of[unit]);
                 }
@@ -871,21 +715,18 @@ impl Graph {
                 (
                     None,
                     Some(Planned {
-                        kind: StageKind::Pure,
-                        members: pure_members,
-                        params: pure_params,
+                        free: true,
+                        members: free_members,
+                        params: free_params,
                     }),
                 ) => {
-                    pure_members.extend(members);
-                    pure_params.extend(params);
+                    free_members.extend(members);
+                    free_params.extend(params);
                 }
                 (join, _) => stages.push(Planned {
                     members: members.collect(),
                     params: params.collect(),
-                    kind: match join {
-                        Some(index) => joins[index].kind(facts),
-                        None => StageKind::Pure,
-                    },
+                    free: join.is_none(),
                 }),
             }
         }
@@ -919,60 +760,8 @@ struct Ready {
 }
 
 struct Join {
-    targets: Vec<Target>,
+    tokens: Vec<Token>,
     units: FxHashSet<UnitId>,
-}
-
-impl Join {
-    /// RFC-0089 rules 5 and 6. A join over one target whose update is a
-    /// monoid action names the law, and is `AnyOrder` where the law is exact
-    /// and commutative; the element alone is `Disjoint`; anything else is
-    /// `InOrder`.
-    fn kind(&self, facts: &Facts) -> StageKind {
-        let (order, law) = match self.targets[..] {
-            [Target::Carried(param)] => {
-                let law =
-                    facts
-                        .param_index(param)
-                        .and_then(|index| match facts.carried_params[index] {
-                            Carried::Merge { op, exact } => Some(accumulator(op, exact)),
-                            Carried::Iv | Carried::Recurrence => None,
-                        });
-                (commuting(law.as_ref()), law)
-            }
-            [Target::Storage(slot)] => {
-                let law = facts
-                    .storage_merges
-                    .iter()
-                    .find(|merge| merge.storage == slot)
-                    .map(|merge| Accumulator {
-                        law: Law::Fold(FoldAccumulator {
-                            storage: merge.storage,
-                            callee: merge.callee,
-                            instance: merge.instance,
-                            fold: merge.fold,
-                        }),
-                        exact: true,
-                        commutative: merge.fold.commutative,
-                    });
-                (commuting(law.as_ref()), law)
-            }
-            [Target::Element] => (Order::Disjoint, None),
-            _ => (Order::InOrder, None),
-        };
-        StageKind::Join {
-            targets: self.targets.clone(),
-            order,
-            law,
-        }
-    }
-}
-
-fn commuting(law: Option<&Accumulator>) -> Order {
-    match law {
-        Some(acc) if acc.exact && acc.commutative => Order::AnyOrder,
-        _ => Order::InOrder,
-    }
 }
 
 impl Position {
@@ -1626,35 +1415,6 @@ fn incoming(cfg: &CfgBody, region: &Region, label: Label) -> Vec<IncomingEdge> {
     edges
 }
 
-fn accumulator(op: MergeOp, exact: bool) -> Accumulator {
-    match op {
-        MergeOp::Add => Accumulator {
-            law: Law::Op(LawOp::Add),
-            exact,
-            commutative: true,
-        },
-        MergeOp::Mul => Accumulator {
-            law: Law::Op(LawOp::Mul),
-            exact,
-            commutative: true,
-        },
-        MergeOp::Extern(merge) => Accumulator {
-            law: Law::Call(CallLaw {
-                callee: merge.callee,
-                instance: merge.instance,
-                identity: merge.identity,
-            }),
-            exact,
-            commutative: merge.commutative,
-        },
-        MergeOp::Order => Accumulator {
-            law: Law::Order,
-            exact,
-            commutative: true,
-        },
-    }
-}
-
 /// RFC-0089 rule 1's chain written over the body.
 struct Chain<'a> {
     shape: &'a Shape,
@@ -1689,7 +1449,7 @@ enum InBlock {
 
 /// A stage's blocks as written, its entry, and its last block, which the
 /// caller closes with the jump onward.
-struct Written {
+struct WrittenStage {
     entry: Label,
     blocks: Vec<Block>,
     last: Open,
@@ -1735,7 +1495,7 @@ impl Chain<'_> {
         let header_label = cfg.blocks[region.header.0].label;
         let supplied = cfg.blocks[region.body.0].params.clone();
 
-        let mut written: Vec<Written> = Vec::with_capacity(stages.len());
+        let mut written: Vec<WrittenStage> = Vec::with_capacity(stages.len());
         for index in 0..stages.len() {
             let first = (index == 0).then(|| Open {
                 label: cfg.blocks[region.body.0].label,
@@ -1765,12 +1525,7 @@ impl Chain<'_> {
             blocks_written.push(stage.last.close(onward));
         }
 
-        let mut stated = stages
-            .into_iter()
-            .zip(&entries)
-            .map(|(stage, &entry)| stage.kind.at(entry));
-        let first_stage = stated.next()?;
-        let stated = Stages::new(first_stage, stated.collect());
+        let stated = Stages::new(entries[0], entries[1..].to_vec());
         let first = region.blocks.iter().min().copied()?;
         let mut blocks: Vec<Block> = Vec::with_capacity(cfg.blocks.len() + blocks_written.len());
         for (at, block) in std::mem::take(&mut cfg.blocks).into_iter().enumerate() {
@@ -1878,7 +1633,7 @@ impl Chain<'_> {
         labels: &mut LabelFactory,
         index: usize,
         first: Option<Open>,
-    ) -> Option<Written> {
+    ) -> Option<WrittenStage> {
         let spine = &self.shape.spine;
         let mine = |member: Member| self.owner_of(member) == Some(index);
         let mut writer = StageWriter {
@@ -2065,11 +1820,11 @@ impl StageWriter<'_> {
         self.begin(own, Vec::new(), Vec::new(), Reached::OnlyFromBefore);
     }
 
-    fn finish(mut self) -> Option<Written> {
+    fn finish(mut self) -> Option<WrittenStage> {
         if self.open.is_none() && self.entry.is_none() {
             self.begin_own();
         }
-        Some(Written {
+        Some(WrittenStage {
             entry: self.entry?,
             blocks: self.blocks,
             last: self.open?,

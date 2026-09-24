@@ -6,7 +6,7 @@ expression: listing
      0 |   r0 = fetch @n
      3 |   jump L0(0 (r1))
      4 | L0(r2: i64):
-     5 |   for range(0 (r3)..r0) -> L1 else L2 stages [L1: pure, L7: join(r2) in_order]
+     5 |   for range(0 (r3)..r0) -> L1 else L2 stages [L1, L7]
      6 | L1(r4: i64):
      8 |   r5 = r4 % 2 (r6)
     10 |   r7 = r5 == 0 (r8)

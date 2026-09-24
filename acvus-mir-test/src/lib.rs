@@ -576,6 +576,17 @@ pub fn optimized_script_module(
     source: &str,
     extern_fns: &[Function],
 ) -> Result<MirModule, String> {
+    optimized_script(interner, source, extern_fns, vec![]).map(|optimized| optimized.module)
+}
+
+/// `optimized_script_module` with registries of the caller's own beside the
+/// standard ones, and the law table the pipeline read.
+pub fn optimized_script(
+    interner: &Interner,
+    source: &str,
+    extern_fns: &[Function],
+    own: Vec<Registry<TypesOnly>>,
+) -> Result<LoweredScript, String> {
     let test_qref = QualifiedRef::root(interner.intern("test"));
     let ast =
         acvus_ast::parse_script(interner, source).map_err(|e| format!("parse error: {e:?}"))?;
@@ -584,7 +595,7 @@ pub fn optimized_script_module(
         FnKind::Local(ParsedAst::Script(ast), acvus_mir::graph::Inputs::FromReads),
         vec![],
     )];
-    let type_registry = extend_with_std(interner, &mut functions);
+    let type_registry = extend_with_registries(interner, &mut functions, own);
     functions.extend_from_slice(extern_fns);
     let graph = CompilationGraph {
         functions: Freeze::new(functions),
@@ -618,7 +629,8 @@ pub fn optimized_script_module(
         return Err(errors.join("\n"));
     }
 
-    let opt = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, Opt::Full);
+    let laws = LawTable::of(graph.functions.iter());
+    let opt = acvus_mir::graph::optimize::optimize(interner, &laws, result.modules, Opt::Full);
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {
@@ -628,10 +640,12 @@ pub fn optimized_script_module(
     if !errors.is_empty() {
         return Err(errors.join("\n"));
     }
-    opt.modules
+    let module = opt
+        .modules
         .get(&test_qref)
         .cloned()
-        .ok_or_else(|| "no module produced for target".to_string())
+        .ok_or_else(|| "no module produced for target".to_string())?;
+    Ok(LoweredScript { module, laws })
 }
 
 /// Compile a **script** with the **full optimization pipeline** (SROA -> SSA -> Inline -> Pass2).
@@ -1165,6 +1179,34 @@ fn compile_multi_fn_at(
     extern_fns: &[Function],
     opt: Opt,
 ) -> Result<String, String> {
+    multi_fn_module_at(interner, target, helpers, contexts, extern_fns, opt)
+        .map(|compiled| dump_with(interner, &compiled.module))
+}
+
+/// `compile_multi_fn_optimized`, listing each `For` with what
+/// `analysis::loop_deps` computes of its stages.
+pub fn compile_multi_fn_optimized_with_facts(
+    interner: &Interner,
+    target: (&str, &str),
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    contexts: &[(&str, Ty)],
+    extern_fns: &[Function],
+) -> Result<String, String> {
+    multi_fn_module_at(interner, target, helpers, contexts, extern_fns, Opt::Full).map(
+        |compiled| {
+            acvus_mir::printer::dump_with_facts(interner, &compiled.module, &compiled.laws)
+        },
+    )
+}
+
+fn multi_fn_module_at(
+    interner: &Interner,
+    target: (&str, &str),
+    helpers: &[(&str, &str, Vec<PolyParam>)],
+    contexts: &[(&str, Ty)],
+    extern_fns: &[Function],
+    opt: Opt,
+) -> Result<LoweredScript, String> {
     let mut pb = PolyBuilder::new();
     let ctx_vec: Vec<Context> = contexts
         .iter()
@@ -1232,7 +1274,8 @@ fn compile_multi_fn_at(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, opt);
+    let laws = LawTable::of(graph.functions.iter());
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &laws, result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1247,8 +1290,9 @@ fn compile_multi_fn_at(
     let module = opt_result
         .modules
         .get(&target_qref)
+        .cloned()
         .ok_or_else(|| "no module for target".to_string())?;
-    Ok(dump_with(interner, module))
+    Ok(LoweredScript { module, laws })
 }
 
 /// `inputs` is read off the code that survived the passes, which is what

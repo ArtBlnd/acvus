@@ -1,31 +1,30 @@
-//! What `optimize::stages` leaves (RFC-0089): each loop's stages after the
-//! full pipeline, in order, with each join's targets, order and law.
+//! Where `optimize::stages` cuts each loop after the full pipeline, and what
+//! `analysis::loop_deps` computes of each stage (RFC-0089): free, or its
+//! cycles, each with its tokens, order and law; and the loop's control.
 
 use acvus_mir::analysis::affine::{AffineValues, Derivation};
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::inst_info;
 use acvus_mir::analysis::loans::Loans;
-use acvus_mir::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
-use acvus_mir::analysis::stages::{StageMembership, loop_blocks_of};
+use acvus_mir::analysis::loop_deps::{
+    Control, Law, LawOp, LoopDeps, Member, Order, StageMembership, Storage, Token,
+};
+use acvus_mir::analysis::loops::{Invariants, LoopNest};
 use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
-use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, demote, promote};
+use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ir::{
-    BinOp, InstKind, Law, LawOp, MirModule, Order, Stage, Stages, Target, Targets, ValueId,
-};
-use acvus_mir::printer::dump_with;
+use acvus_mir::ir::{BinOp, InstKind, ValueId};
+use acvus_mir::laws::LawTable;
+use acvus_mir::printer::dump_with_facts;
 use acvus_mir::ty::{Effect, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
-use acvus_mir::validate::ValidationErrorKind;
-use acvus_mir::validate::stages::PureEffect;
-use acvus_mir_test::{compile_script_at, optimized_script_module};
+use acvus_mir_test::{LoweredScript, compile_script_at, optimized_script};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
 struct Compiled {
     listing: String,
-    module: MirModule,
     cfg: CfgBody,
+    laws: LawTable,
 }
 
 impl Compiled {
@@ -42,21 +41,30 @@ impl Compiled {
             .collect();
         let compiled = compile_script_at(&interner, source, &context, Opt::Full)
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
-        Self {
-            listing: dump_with(&interner, &compiled.module),
-            cfg: promote(compiled.module.main.clone()),
-            module: compiled.module,
-        }
+        Self::from(&interner, compiled)
     }
 
     fn with_externs(source: &str, externs: impl FnOnce(&Interner) -> Vec<Function>) -> Self {
         let interner = Interner::new();
-        let module = optimized_script_module(&interner, source, &externs(&interner))
+        let compiled = optimized_script(&interner, source, &externs(&interner), vec![])
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
+        Self::from(&interner, compiled)
+    }
+
+    /// `source` with `io` beside the standard registries.
+    fn with_io(source: &str) -> Self {
+        let interner = Interner::new();
+        let own = vec![acvus_ext::io_registry::<acvus_extern::TypesOnly>()];
+        let compiled = optimized_script(&interner, source, &[], own)
+            .unwrap_or_else(|e| panic!("{source}\n{e}"));
+        Self::from(&interner, compiled)
+    }
+
+    fn from(interner: &Interner, compiled: LoweredScript) -> Self {
         Self {
-            listing: dump_with(&interner, &module),
-            cfg: promote(module.main.clone()),
-            module,
+            listing: dump_with_facts(interner, &compiled.module, &compiled.laws),
+            cfg: promote(compiled.module.main.clone()),
+            laws: compiled.laws,
         }
     }
 
@@ -69,6 +77,15 @@ impl Compiled {
             [header] => header,
             _ => panic!("one `for`:\n{}", self.listing),
         }
+    }
+
+    fn deps(&self) -> LoopDeps {
+        LoopDeps::of(&self.cfg, self.only_header())
+            .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing))
+    }
+
+    fn membership(&self) -> StageMembership {
+        self.deps().membership
     }
 
     /// The header parameters `analysis::affine` derives as carried
@@ -92,56 +109,11 @@ impl Compiled {
             .collect()
     }
 
-    fn membership(&self) -> StageMembership {
-        let header = self.only_header();
-        let loops = natural_loops_innermost_first(&self.cfg, &DomTree::build(&self.cfg));
-        StageMembership::of(
-            &self.cfg,
-            header,
-            self.only_loop(),
-            &loop_blocks_of(&loops, header),
-        )
-        .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing))
-    }
-
     fn stage_blocks(&self) -> Vec<Vec<BlockIdx>> {
         self.membership()
             .stages()
             .iter()
             .map(|stage| stage.blocks.clone())
-            .collect()
-    }
-
-    fn refusals_with_every_stage_pure(&self) -> Vec<ValidationErrorKind> {
-        let mut cfg = self.cfg.clone();
-        let header = self.only_header();
-        let Terminator::For { stages, .. } = &mut cfg.blocks[header.0].terminator else {
-            panic!("the header ends in `For`:\n{}", self.listing)
-        };
-        for stage in stages.iter_mut() {
-            *stage = Stage::Pure {
-                entry: stage.entry(),
-            };
-        }
-        let module = MirModule {
-            main: demote(cfg),
-            ..self.module.clone()
-        };
-        acvus_mir::validate::stages::check(&module)
-            .into_iter()
-            .map(|error| error.kind)
-            .collect()
-    }
-
-    fn stages_refused_pure_for(&self, wanted: impl Fn(&PureEffect) -> bool) -> Vec<usize> {
-        self.refusals_with_every_stage_pure()
-            .into_iter()
-            .filter_map(|kind| match kind {
-                ValidationErrorKind::PureStageEffect { stage, effect, .. } if wanted(&effect) => {
-                    Some(stage)
-                }
-                _ => None,
-            })
             .collect()
     }
 
@@ -187,53 +159,120 @@ impl Compiled {
             .collect()
     }
 
-    fn only_loop(&self) -> &Stages {
-        let found: Vec<&Stages> = self
-            .cfg
-            .blocks
-            .iter()
-            .filter_map(|block| match &block.terminator {
-                Terminator::For { stages, .. } => Some(stages),
-                _ => None,
+    /// The `for` line and the facts printed under it.
+    fn for_lines(&self) -> String {
+        let mut lines = self
+            .listing
+            .lines()
+            .skip_while(|line| !line.contains(" for "));
+        let head = lines
+            .next()
+            .unwrap_or_else(|| panic!("no `for` is printed:\n{}", self.listing));
+        std::iter::once(head)
+            .chain(lines.take_while(|line| line.contains("// ")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Each stage as `loop_deps` computes it.
+    fn shapes(&self) -> Vec<Shape> {
+        let deps = self.deps();
+        let judged = deps.judge(&self.cfg, &self.laws);
+        assert_eq!(
+            deps.crossing().count(),
+            0,
+            "no cycle crosses a boundary:\n{}",
+            self.listing
+        );
+        (0..deps.membership.stages().len())
+            .map(|stage| {
+                let cycles: Vec<CycleShape> = deps
+                    .cycles
+                    .iter()
+                    .zip(&judged)
+                    .filter(|(cycle, _)| cycle.stage() == Some(stage))
+                    .map(|(cycle, judged)| CycleShape {
+                        tokens: cycle.tokens.iter().map(TokenKind::of).collect(),
+                        order: judged.order,
+                        law: judged.law.as_ref().map(|acc| LawShape {
+                            law: match &acc.law {
+                                Law::Op(op) => LawKind::Op(*op),
+                                Law::Call(_) => LawKind::Call,
+                                Law::Fold(_) => LawKind::Fold,
+                                Law::Order => LawKind::Order,
+                            },
+                            exact: acc.exact,
+                        }),
+                    })
+                    .collect();
+                match cycles.is_empty() {
+                    true => Shape::Free,
+                    false => Shape::Cycles(cycles),
+                }
+            })
+            .collect()
+    }
+
+    /// The instruction kinds a stage's cycles hold, by name.
+    fn held_by_cycles_of(&self, stage: usize) -> Vec<&'static str> {
+        let deps = self.deps();
+        let mut held: Vec<&'static str> = deps
+            .cycles_in(stage)
+            .flat_map(|cycle| &cycle.members)
+            .filter_map(|member| match *member {
+                Member::Inst(at) => Some(kind_name(&self.cfg.blocks[at.block.0].insts[at.at].kind)),
+                Member::Term(_) => None,
             })
             .collect();
-        match found[..] {
-            [stages] => stages,
-            _ => panic!(
-                "{} loops where one was written:\n{}",
-                found.len(),
-                self.listing
-            ),
-        }
+        held.sort_unstable();
+        held
     }
+}
 
-    fn for_line(&self) -> &str {
-        self.listing
-            .lines()
-            .find(|line| line.contains(" for "))
-            .unwrap_or_else(|| panic!("no `for` is printed:\n{}", self.listing))
-    }
-
-    fn shapes(&self) -> Vec<Shape> {
-        self.only_loop().iter().map(Shape::of).collect()
+fn kind_name(kind: &InstKind) -> &'static str {
+    match kind {
+        InstKind::Spawn { .. } => "spawn",
+        InstKind::Eval { .. } => "eval",
+        InstKind::Merge { .. } => "merge",
+        InstKind::FunctionCall { .. } => "call",
+        _ => "other",
     }
 }
 
 #[derive(Debug, PartialEq)]
 enum Shape {
-    Pure,
-    Join {
-        targets: Vec<TargetKind>,
-        order: Order,
-        law: Option<LawShape>,
-    },
+    Free,
+    Cycles(Vec<CycleShape>),
 }
 
 #[derive(Debug, PartialEq)]
-enum TargetKind {
+struct CycleShape {
+    tokens: Vec<TokenKind>,
+    order: Order,
+    law: Option<LawShape>,
+}
+
+#[derive(Debug, PartialEq)]
+enum TokenKind {
+    Order,
     Carried,
     Storage,
     Element,
+    Context,
+    Control,
+}
+
+impl TokenKind {
+    fn of(token: &Token) -> TokenKind {
+        match token {
+            Token::Order(_) => TokenKind::Order,
+            Token::Carried(_) => TokenKind::Carried,
+            Token::Storage(Storage::Slot(_)) => TokenKind::Storage,
+            Token::Storage(Storage::Element) => TokenKind::Element,
+            Token::Storage(Storage::Context(_)) => TokenKind::Context,
+            Token::Control => TokenKind::Control,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -247,100 +286,72 @@ enum LawKind {
     Op(LawOp),
     Call,
     Fold,
+    Order,
 }
 
-impl Shape {
-    fn of(stage: &Stage) -> Shape {
-        let Stage::Join {
-            targets,
-            order,
-            law,
-            ..
-        } = stage
-        else {
-            return Shape::Pure;
-        };
-        let Targets::Listed(targets) = targets else {
-            panic!("the stage pass lists every join's targets: {stage:?}")
-        };
-        Shape::Join {
-            targets: targets
-                .iter()
-                .map(|target| match target {
-                    Target::Carried(_) => TargetKind::Carried,
-                    Target::Storage(_) => TargetKind::Storage,
-                    Target::Element => TargetKind::Element,
-                    Target::Context(_) => panic!("no test here commits a context"),
-                })
-                .collect(),
-            order: *order,
-            law: law.as_ref().map(|acc| LawShape {
-                law: match &acc.law {
-                    Law::Op(op) => LawKind::Op(*op),
-                    Law::Call(_) => LawKind::Call,
-                    Law::Fold(_) => LawKind::Fold,
-                    Law::Order => panic!("no test here runs in an `anyorder` region"),
-                },
-                exact: acc.exact,
-            }),
-        }
-    }
+fn cycle(tokens: Vec<TokenKind>, order: Order, law: Option<LawShape>) -> CycleShape {
+    CycleShape { tokens, order, law }
 }
 
-fn join(targets: Vec<TargetKind>, order: Order, law: Option<LawShape>) -> Shape {
-    Shape::Join {
-        targets,
-        order,
-        law,
-    }
+fn one(tokens: Vec<TokenKind>, order: Order, law: Option<LawShape>) -> Shape {
+    Shape::Cycles(vec![cycle(tokens, order, law)])
 }
 
 fn exact(law: LawKind) -> Option<LawShape> {
     Some(LawShape { law, exact: true })
 }
 
+fn cycle_stages(shapes: &[Shape]) -> Vec<&Shape> {
+    shapes
+        .iter()
+        .filter(|shape| **shape != Shape::Free)
+        .collect()
+}
+
 #[test]
-fn a_range_sum_is_one_any_order_join_with_an_add_law() {
+fn a_range_sum_is_one_any_order_cycle_with_an_add_law() {
     let c = Compiled::of("let s = 0; for x in 0..10 { s = s + x; } s");
     assert_eq!(
         c.shapes(),
-        [join(
-            vec![TargetKind::Carried],
+        [one(
+            vec![TokenKind::Carried],
             Order::AnyOrder,
             exact(LawKind::Op(LawOp::Add))
         )],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
+/// Table row `s = s + x` over `i64`: `[free, cycle s any_order Op(+)]`.
 #[test]
-fn a_slice_sum_reads_its_element_in_a_pure_stage_before_the_join() {
+fn a_slice_sum_reads_its_element_in_a_free_stage_before_the_cycle() {
     let c = Compiled::of("let v = [1, 2, 3, 4]; let s = 0; for x in &v { s = s + *x; } s");
     assert_eq!(
         c.shapes(),
         [
-            Shape::Pure,
-            join(
-                vec![TargetKind::Carried],
+            Shape::Free,
+            one(
+                vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Op(LawOp::Add))
             )
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
+/// Table row `s = s + x` over `f64`: the cycle is `in_order`.
 #[test]
 fn a_float_sum_is_in_order_with_its_inexact_law() {
     let c = Compiled::of("let v = [1.5, 2.5, 3.0]; let s = 0.0; for x in &v { s = s + *x; } s");
     assert_eq!(
         c.shapes(),
         [
-            Shape::Pure,
-            join(
-                vec![TargetKind::Carried],
+            Shape::Free,
+            one(
+                vec![TokenKind::Carried],
                 Order::InOrder,
                 Some(LawShape {
                     law: LawKind::Op(LawOp::Add),
@@ -349,12 +360,13 @@ fn a_float_sum_is_in_order_with_its_inexact_law() {
             )
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
+/// Table row `out.push(f(x))`: `[free(f), cycle Storage(out) in_order]`.
 #[test]
-fn a_pure_call_is_a_pure_stage_before_the_push_it_feeds() {
+fn a_pure_call_is_a_free_stage_before_the_push_it_feeds() {
     let c = Compiled::of(
         "let v = [1, 2, 3, 4]; let out = vec::new(); \
          for x in &v { let y = min(*x, 3); vec::push(&mut out, y); } vec::len(&out)",
@@ -362,123 +374,126 @@ fn a_pure_call_is_a_pure_stage_before_the_push_it_feeds() {
     assert_eq!(
         c.shapes(),
         [
-            Shape::Pure,
-            join(
-                vec![TargetKind::Storage],
+            Shape::Free,
+            one(
+                vec![TokenKind::Storage],
                 Order::InOrder,
                 exact(LawKind::Fold)
             )
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
+/// Table row `for x in &mut xs { *x = g(*x) }`:
+/// `[free(load, g), cycle Storage(element) disjoint]`.
 #[test]
-fn a_store_through_a_mutable_element_is_a_disjoint_join_after_its_pure_load() {
+fn a_store_through_a_mutable_element_is_a_disjoint_cycle_after_its_free_load() {
     let c = Compiled::of("let v = [1, 2, 3, 4]; for x in &mut v { *x = min(*x, 2); } v[3]");
     assert_eq!(
         c.shapes(),
         [
-            Shape::Pure,
-            join(vec![TargetKind::Element], Order::Disjoint, None)
+            Shape::Free,
+            one(vec![TokenKind::Element], Order::Disjoint, None)
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
+/// Table row `pop → pure → push` on one vec: one cycle, `in_order`.
 #[test]
-fn a_pop_a_pure_computation_and_a_push_on_one_vec_are_one_in_order_join() {
+fn a_pop_a_pure_computation_and_a_push_on_one_vec_are_one_in_order_cycle() {
     let c = Compiled::of(
         "let q = vec::new(); vec::push(&mut q, 5); \
          for i in 0..3 { let t = unwrap_or(vec::pop(&mut q), 0); let y = min(t * 2, 50); \
          vec::push(&mut q, y); } vec::len(&q)",
     );
-    let joins: Vec<Shape> = c
-        .shapes()
-        .into_iter()
-        .filter(|shape| *shape != Shape::Pure)
-        .collect();
     assert_eq!(
-        joins,
-        [join(vec![TargetKind::Storage], Order::InOrder, None)],
+        cycle_stages(&c.shapes()),
+        [&one(vec![TokenKind::Storage], Order::InOrder, None)],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
 #[test]
-fn a_recurrence_with_no_law_is_one_in_order_join() {
+fn a_recurrence_with_no_law_is_one_in_order_cycle() {
     let c =
         Compiled::of("let v = [1, 2, 3]; let acc = 1; for x in &v { acc = acc * acc + *x; } acc");
     assert_eq!(
         c.shapes(),
         [
-            Shape::Pure,
-            join(vec![TargetKind::Carried], Order::InOrder, None)
+            Shape::Free,
+            one(vec![TokenKind::Carried], Order::InOrder, None)
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
 #[test]
-fn three_independent_accumulators_are_three_joins() {
+fn three_independent_accumulators_are_three_cycles_in_three_stages() {
     let c = Compiled::of(
         "let v = [1, 2, 3, 4]; let a = 0; let b = 1; let c = 100; \
          for x in &v { a = a + *x; b = b * *x; c = min(c, *x); } a + b + c",
     );
-    let joins: Vec<Shape> = c
-        .shapes()
-        .into_iter()
-        .filter(|shape| *shape != Shape::Pure)
-        .collect();
     assert_eq!(
-        joins,
+        cycle_stages(&c.shapes()),
         [
-            join(
-                vec![TargetKind::Carried],
+            &one(
+                vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Op(LawOp::Add))
             ),
-            join(
-                vec![TargetKind::Carried],
+            &one(
+                vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Op(LawOp::Mul))
             ),
-            join(
-                vec![TargetKind::Carried],
+            &one(
+                vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Call)
             ),
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
-/// RFC-0089 rule 5: the `break` leaves from the body, so the pure
-/// computation it tests sits in the one `InOrder` join the loop is.
+/// Table row, a loop with `break`: its control is chained. The `break`
+/// leaves from the body, so the loop is one stage, whose cycles are one
+/// `InOrder` join with the exit (RFC-0089 rule 5, RFC-0066 rule 10).
 #[test]
-fn a_break_in_a_pure_computation_sits_in_an_in_order_join() {
+fn a_break_chains_the_control_token_through_its_one_in_order_stage() {
     let c = Compiled::of(
         "let v = [1, 2, 3, 4]; let s = 0; \
          for x in &v { let y = *x * 3; if y > 6 { break; } s = s + y; } s",
     );
     assert_eq!(
         c.shapes(),
-        [join(vec![TargetKind::Carried], Order::InOrder, None)],
+        [one(
+            vec![TokenKind::Carried, TokenKind::Control],
+            Order::InOrder,
+            None
+        )],
         "{}",
-        c.for_line()
+        c.for_lines()
+    );
+    assert!(
+        matches!(c.deps().control, Control::Chained { .. }),
+        "{}",
+        c.for_lines()
     );
 }
 
-/// RFC-0089 rule 4: the body needs the id `pop` hands it before it can
-/// compute, so the join over `ids` is a producer ahead of the pure stage
+/// RFC-0089 rule 6: the body needs the id `pop` hands it before it can
+/// compute, so the cycle over `ids` is a producer ahead of the free stage
 /// that reads it.
 #[test]
-fn a_counter_the_body_reads_is_a_producer_join_first() {
+fn a_counter_the_body_reads_is_a_producer_cycle_first() {
     let c = Compiled::of(
         "let ids = vec::new(); vec::push(&mut ids, 7); vec::push(&mut ids, 8); \
          let v = [1, 2]; let s = 0; \
@@ -487,16 +502,16 @@ fn a_counter_the_body_reads_is_a_producer_join_first() {
     assert_eq!(
         c.shapes(),
         [
-            join(vec![TargetKind::Storage], Order::InOrder, None),
-            Shape::Pure,
-            join(
-                vec![TargetKind::Carried],
+            one(vec![TokenKind::Storage], Order::InOrder, None),
+            Shape::Free,
+            one(
+                vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Op(LawOp::Add))
             ),
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
@@ -541,10 +556,10 @@ fn every_stage_entry_is_a_block_and_the_first_is_the_body() {
 // -- Induction variables and strength reduction (RFC-0066 rule 7) -------
 
 /// `i` is read by `*x * i`, a pure computation, so IV canonicalization
-/// computes it from the counter: the header carries `s` alone, and no join
-/// is over `i`.
+/// computes it from the counter: the header carries `s` alone, and no
+/// cycle is over `i`.
 #[test]
-fn a_counter_a_pure_computation_reads_is_not_carried_and_has_no_join() {
+fn a_counter_a_pure_computation_reads_is_not_carried_and_has_no_cycle() {
     let c = Compiled::of(
         "let v = [1, 2, 3, 4]; let i = 0; let s = 0; \
          for x in &v { let y = *x * i; s = s + y; i = i + 1; } s + i",
@@ -559,52 +574,46 @@ fn a_counter_a_pure_computation_reads_is_not_carried_and_has_no_join() {
     assert_eq!(
         c.shapes(),
         [
-            Shape::Pure,
-            join(
-                vec![TargetKind::Carried],
+            Shape::Free,
+            one(
+                vec![TokenKind::Carried],
                 Order::AnyOrder,
                 exact(LawKind::Op(LawOp::Add))
             )
         ],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
-/// `i * 4 + 7` is read only by `acc`'s update, which is its `InOrder` join,
-/// so strength reduction carries it as a counter of its own, and that
-/// counter and its step belong to the join (RFC-0056).
+/// `i * 4 + 7` is read only by `acc`'s update, whose stage is `InOrder`, so
+/// strength reduction carries it as a counter of its own, whose cycle lies
+/// in that stage beside `acc`'s (RFC-0056).
 #[test]
-fn a_counter_expression_an_in_order_join_alone_reads_is_reduced_inside_that_join() {
+fn a_counter_expression_an_in_order_stage_alone_reads_is_reduced_inside_that_stage() {
     let c = Compiled::of(
         "let i = 0; let acc = 1; \
          for k in 0..10 { acc = acc * acc + (i * 4 + 7); i = i + 1; } acc",
     );
     let shapes = c.shapes();
-    let Some(Shape::Join {
-        targets,
-        order,
-        law,
-    }) = shapes.last()
-    else {
-        panic!("the chain ends in `acc`'s join: {}", c.for_line());
+    let Some(Shape::Cycles(last)) = shapes.last() else {
+        panic!("the chain ends in `acc`'s stage: {}", c.for_lines());
     };
     assert_eq!(
-        (targets.as_slice(), *order, law),
-        (
-            &[TargetKind::Carried, TargetKind::Carried][..],
-            Order::InOrder,
-            &None
-        ),
-        "the join lists `acc` and the reduced counter:\n{}",
+        last[..],
+        [
+            cycle(vec![TokenKind::Carried], Order::InOrder, None),
+            cycle(vec![TokenKind::Carried], Order::InOrder, None)
+        ],
+        "the stage holds `acc`'s cycle and the reduced counter's:\n{}",
         c.listing
     );
     assert!(
         shapes[..shapes.len() - 1]
             .iter()
-            .all(|shape| *shape == Shape::Pure),
+            .all(|shape| *shape == Shape::Free),
         "{}",
-        c.for_line()
+        c.for_lines()
     );
     assert_eq!(
         c.stages_multiplying_by(4),
@@ -618,20 +627,24 @@ fn a_counter_expression_an_in_order_join_alone_reads_is_reduced_inside_that_join
             c.listing
         );
     };
-    let join = c.stage_blocks().len() - 1;
-    let advanced_in_join = c.stage_blocks()[join].iter().any(|block| {
+    let stage = c.stage_blocks().len() - 1;
+    let advanced_in_stage = c.stage_blocks()[stage].iter().any(|block| {
         c.cfg.blocks[block.0].insts.iter().any(|inst| {
             matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, right, .. }
                 if *left == derived || *right == derived)
         })
     });
-    assert!(advanced_in_join, "its step is in the join:\n{}", c.listing);
+    assert!(
+        advanced_in_stage,
+        "its step is in the stage:\n{}",
+        c.listing
+    );
 }
 
 /// The same expression read by `min`, a pure call, stays `i * 4 + 7`
-/// computed from the canonical `i` in a pure stage.
+/// computed from the canonical `i` in a free stage.
 #[test]
-fn a_counter_expression_a_pure_stage_reads_is_computed_from_the_counter() {
+fn a_counter_expression_a_free_stage_reads_is_computed_from_the_counter() {
     let c = Compiled::of(
         "let i = 0; let acc = 1; \
          for k in 0..10 { acc = acc * acc + min(i * 4 + 7, 50); i = i + 1; } acc",
@@ -642,16 +655,16 @@ fn a_counter_expression_a_pure_stage_reads_is_computed_from_the_counter() {
     let [stage] = multiplies[..] else {
         panic!("one stage multiplies by 4:\n{}", c.listing);
     };
-    assert_eq!(shapes[stage], Shape::Pure, "{}", c.listing);
+    assert_eq!(shapes[stage], Shape::Free, "{}", c.listing);
     assert_eq!(
         shapes.last(),
-        Some(&join(vec![TargetKind::Carried], Order::InOrder, None)),
+        Some(&one(vec![TokenKind::Carried], Order::InOrder, None)),
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
-// -- What orders a loop (RFC-0089 rules 2 and 4) --------------------------
+// -- What orders a loop (RFC-0089 rules 2, 4 and 5) -----------------------
 
 fn emit(i: &Interner) -> Vec<Function> {
     vec![Function {
@@ -675,78 +688,132 @@ fn emit(i: &Interner) -> Vec<Function> {
     }]
 }
 
-/// An opaque call carries an order, so it sits in an `InOrder` join and in
-/// no pure stage.
+/// An opaque call carries an order, so it sits in the `InOrder` cycle of
+/// the loop's `Order` and in no free stage.
 #[test]
-fn an_ordered_effect_sits_in_an_in_order_join() {
+fn an_ordered_effect_sits_in_the_in_order_cycle_of_the_order() {
     let c = Compiled::with_externs("let n = 3; for k in 0..n { emit(k); } 0", emit);
-    let calls: Vec<usize> = c
-        .stage_blocks()
-        .iter()
-        .enumerate()
-        .filter(|(_, blocks)| {
-            blocks.iter().any(|block| {
-                c.cfg.blocks[block.0].insts.iter().any(|inst| {
-                    matches!(
-                        inst.kind,
-                        InstKind::FunctionCall { .. } | InstKind::Spawn { .. }
-                    )
-                })
-            })
+    let calls = c.stages_where(|cfg, block| {
+        cfg.blocks[block.0].insts.iter().any(|inst| {
+            matches!(
+                inst.kind,
+                InstKind::FunctionCall { .. } | InstKind::Spawn { .. }
+            )
         })
-        .map(|(index, _)| index)
-        .collect();
+    });
     let [stage] = calls[..] else {
         panic!("one stage calls `emit`:\n{}", c.listing);
     };
-    assert!(
-        matches!(
-            c.only_loop().iter().nth(stage),
-            Some(Stage::Join {
-                order: Order::InOrder,
-                ..
-            })
-        ),
+    assert_eq!(
+        c.shapes()[stage],
+        one(vec![TokenKind::Order], Order::InOrder, None),
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
-/// A write through the element is the element's `Disjoint` join; one
-/// through another `&mut` is a storage target, joined `InOrder`.
+/// Table row, `io::print` in a loop without `anyorder`: the cycle of the
+/// `Order` is `in_order` and holds the spawn and the eval.
 #[test]
-fn a_write_elsewhere_than_the_element_is_an_in_order_join_over_its_storage() {
+fn a_print_outside_anyorder_is_an_in_order_cycle_holding_its_spawn_and_eval() {
+    let c = Compiled::with_io("let v = [1, 2, 3]; for x in &v { io::print(\"a\"); } 0");
+    let shapes = c.shapes();
+    let ordered: Vec<usize> = (0..shapes.len())
+        .filter(|stage| shapes[*stage] != Shape::Free)
+        .collect();
+    let [stage] = ordered[..] else {
+        panic!("one stage holds a cycle:\n{}", c.for_lines());
+    };
+    assert_eq!(
+        shapes[stage],
+        one(vec![TokenKind::Order], Order::InOrder, None),
+        "{}",
+        c.for_lines()
+    );
+    let held = c.held_by_cycles_of(stage);
+    assert!(
+        held.contains(&"spawn") && held.contains(&"eval"),
+        "{held:?}\n{}",
+        c.for_lines()
+    );
+}
+
+/// Table row, `anyorder { … io::print … }`: the spawn, which takes the
+/// block's entry `Order`, sits in a free stage, and the cycle of the loop's
+/// `Order` holds the eval and the merge alone, `any_order` by the law of
+/// `merge`. Rule 5 lets the spawn run once its iteration holds the control
+/// token, which it holds from the start.
+#[test]
+fn an_anyorder_print_spawns_in_a_free_stage_and_joins_by_eval_and_merge() {
+    let c =
+        Compiled::with_io("let v = [1, 2, 3]; anyorder { for x in &v { io::print(\"a\"); } } 0");
+    let shapes = c.shapes();
+    let Some(Shape::Cycles(last)) = shapes.last() else {
+        panic!("the chain ends in the `Order`'s stage: {}", c.for_lines());
+    };
+    assert_eq!(
+        last[..],
+        [cycle(
+            vec![TokenKind::Order],
+            Order::AnyOrder,
+            exact(LawKind::Order)
+        )],
+        "{}",
+        c.for_lines()
+    );
+    assert!(
+        shapes[..shapes.len() - 1]
+            .iter()
+            .all(|shape| *shape == Shape::Free),
+        "{}",
+        c.for_lines()
+    );
+    assert_eq!(
+        c.held_by_cycles_of(shapes.len() - 1),
+        ["eval", "merge"],
+        "{}",
+        c.for_lines()
+    );
+    let deps = c.deps();
+    let spawns: Vec<Control> = deps
+        .effects_in_free_stages()
+        .iter()
+        .filter(|wait| match wait.member {
+            Member::Inst(at) => matches!(
+                c.cfg.blocks[at.block.0].insts[at.at].kind,
+                InstKind::Spawn { .. }
+            ),
+            Member::Term(_) => false,
+        })
+        .map(|wait| wait.control)
+        .collect();
+    assert_eq!(spawns, [Control::Upfront], "{}", c.for_lines());
+}
+
+/// A write through the element is the element's `Disjoint` cycle; one
+/// through another `&mut` is a storage's, `InOrder`.
+#[test]
+fn a_write_elsewhere_than_the_element_is_an_in_order_cycle_over_its_storage() {
     let c = Compiled::of(
         "let v = vec([1, 2, 3]); let t = 0; let r = &mut t; for x in &mut v { *r = *x; } t",
     );
-    let joins: Vec<Shape> = c
-        .shapes()
-        .into_iter()
-        .filter(|shape| *shape != Shape::Pure)
-        .collect();
     assert_eq!(
-        joins,
-        [join(vec![TargetKind::Storage], Order::InOrder, None)],
+        cycle_stages(&c.shapes()),
+        [&one(vec![TokenKind::Storage], Order::InOrder, None)],
         "{}",
-        c.for_line()
+        c.for_lines()
     );
 }
 
-// -- One membership, three readers (RFC-0089 rule 1) ---------------------
-//
-// `validate::stages`, `optimize::drop_insertion` and `optimize::lsr` each
-// act on a stage's blocks; each test below reads one stage kind through a
-// reader and holds what it did against `analysis::stages`.
+// -- One membership, the readers of each cycle (RFC-0089 rule 1) ---------
 
 const BREAK: &str = "let j = 0; let s = 0; \
      for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j";
 
-/// A loop that leaves early is one `InOrder` join and keeps its carried
-/// induction variable; restated pure, the stage that reads it is refused
-/// with `ReadsCarriedIv`, and that is the stage membership puts the reader
-/// in.
+/// A loop that leaves early is one stage and keeps its carried induction
+/// variable, whose readers lie in the stage its cycle lies in.
 #[test]
-fn a_pure_stage_is_refused_for_a_carried_iv_where_membership_puts_its_reader() {
+fn a_carried_iv_is_read_in_the_stage_its_cycle_lies_in() {
     let c = Compiled::reading(BREAK, &["n"]);
     let [iv] = c.carried_ivs()[..] else {
         panic!("one carried induction variable:\n{}", c.listing);
@@ -756,22 +823,28 @@ fn a_pure_stage_is_refused_for_a_carried_iv_where_membership_puts_its_reader() {
         block
             .insts
             .iter()
-            .any(|inst| inst_info::uses(&inst.kind).contains(&iv))
-            || inst_info::terminator_uses(&block.terminator).contains(&iv)
+            .any(|inst| acvus_mir::analysis::inst_info::uses(&inst.kind).contains(&iv))
+            || acvus_mir::analysis::inst_info::terminator_uses(&block.terminator).contains(&iv)
     });
-    assert!(!reading.is_empty(), "the body reads {iv:?}:\n{}", c.listing);
+    let deps = c.deps();
+    let cycle = deps
+        .cycles
+        .iter()
+        .find(|cycle| cycle.tokens.contains(&Token::Carried(iv)))
+        .unwrap_or_else(|| panic!("{iv:?} has a cycle:\n{}", c.for_lines()));
     assert_eq!(
-        c.stages_refused_pure_for(|effect| *effect == PureEffect::ReadsCarriedIv(iv)),
+        cycle.stage().into_iter().collect::<Vec<_>>(),
         reading,
         "{}",
-        c.listing
+        c.for_lines()
     );
+    assert!(deps.early_reads().is_empty(), "{}", c.for_lines());
 }
 
-/// `lsr` advances the reduced counter at the end of the `InOrder` join that
-/// reads it, which is the block membership ends that join with.
+/// `lsr` advances the reduced counter at the end of the `InOrder` stage
+/// that reads it, which is the block membership ends that stage with.
 #[test]
-fn an_in_order_join_s_reduced_counter_advances_at_the_end_membership_gives_it() {
+fn a_reduced_counter_advances_at_the_end_membership_gives_its_stage() {
     let c = Compiled::of(
         "let i = 0; let acc = 1; for k in 0..10 { acc = acc * acc + (i * 4 + 7); i = i + 1; } acc",
     );
@@ -786,56 +859,46 @@ fn an_in_order_join_s_reduced_counter_advances_at_the_end_membership_gives_it() 
             matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, .. } if *left == derived)
         })
     };
-    let join = c.shapes().len() - 1;
+    let stage = c.shapes().len() - 1;
+    let Shape::Cycles(held) = &c.shapes()[stage] else {
+        panic!("the last stage holds cycles: {}", c.for_lines());
+    };
     assert!(
-        matches!(
-            c.only_loop().iter().nth(join),
-            Some(Stage::Join {
-                order: Order::InOrder,
-                law: None,
-                ..
-            })
-        ),
+        held.iter()
+            .all(|cycle| cycle.order == Order::InOrder && cycle.law.is_none()),
         "{}",
-        c.for_line()
+        c.for_lines()
     );
-    assert_eq!(c.stages_where(advances), [join], "{}", c.listing);
-    let end = c.membership().stages()[join]
+    assert_eq!(c.stages_where(advances), [stage], "{}", c.listing);
+    let end = c.membership().stages()[stage]
         .sole_end()
-        .unwrap_or_else(|| panic!("the join ends in one block:\n{}", c.listing));
+        .unwrap_or_else(|| panic!("the stage ends in one block:\n{}", c.listing));
     assert!(advances(&c.cfg, end), "{}", c.listing);
 }
 
 /// A carried value no stage reads dies on the body edge, and
-/// `drop_insertion` releases it at the entry of the join that targets it,
-/// the entry membership gives that join.
+/// `drop_insertion` releases it at the entry of the stage its cycle lies
+/// in, the entry membership gives that stage.
 #[test]
-fn an_overwritten_carried_value_is_dropped_at_the_entry_membership_gives_its_join() {
+fn an_overwritten_carried_value_is_dropped_at_the_entry_of_its_cycle_s_stage() {
     let c = Compiled::reading(
         "let last = \"\".to_string(); for x in 0..@n { last = x.to_string(); } last",
         &["n"],
     );
     let header = c.only_header();
-    let targeted: Vec<(usize, ValueId)> = c
-        .only_loop()
+    let deps = c.deps();
+    let carried: Vec<(usize, ValueId)> = deps
+        .cycles
         .iter()
-        .enumerate()
-        .flat_map(|(index, stage)| match stage {
-            Stage::Join {
-                targets: Targets::Listed(listed),
-                ..
-            } => listed
-                .iter()
-                .filter_map(|target| match target {
-                    Target::Carried(param) => Some((index, *param)),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
+        .flat_map(|cycle| {
+            cycle.tokens.iter().filter_map(|token| match token {
+                Token::Carried(param) => cycle.stage().map(|stage| (stage, *param)),
+                _ => None,
+            })
         })
         .collect();
-    let [(join, last)] = targeted[..] else {
-        panic!("one join targets one carried value:\n{}", c.listing);
+    let [(stage, last)] = carried[..] else {
+        panic!("one cycle carries one value:\n{}", c.for_lines());
     };
     assert!(
         c.cfg.blocks[header.0].params.contains(&last),
@@ -853,32 +916,20 @@ fn an_overwritten_carried_value_is_dropped_at_the_entry_membership_gives_its_joi
         .collect();
     assert_eq!(
         dropped_at,
-        [c.membership().stages()[join].blocks[0]],
+        [c.membership().stages()[stage].blocks[0]],
         "{}",
         c.listing
     );
 }
 
-/// Restated pure, the `AnyOrder` join is refused for holding its target's
-/// update, at the stage membership puts that update in.
+/// The `AnyOrder` cycle's update lies in the stage membership puts it in.
 #[test]
-fn an_any_order_join_s_update_is_refused_pure_where_membership_puts_it() {
+fn an_any_order_cycle_s_update_lies_where_membership_puts_it() {
     let c = Compiled::of("let v = [1, 2, 3, 4]; let s = 0; for x in &v { s = s + *x; } s");
     let header = c.only_header();
     let [s] = c.cfg.blocks[header.0].params[..] else {
         panic!("the header carries `s` alone:\n{}", c.listing);
     };
-    assert!(
-        matches!(
-            c.only_loop().iter().last(),
-            Some(Stage::Join {
-                order: Order::AnyOrder,
-                ..
-            })
-        ),
-        "{}",
-        c.for_line()
-    );
     let updating = c.stages_where(|cfg, block| {
         cfg.blocks[block.0].insts.iter().any(|inst| {
             matches!(&inst.kind, InstKind::BinOp { op: BinOp::Add, left, right, .. }
@@ -887,24 +938,22 @@ fn an_any_order_join_s_update_is_refused_pure_where_membership_puts_it() {
     });
     assert_eq!(updating, [c.shapes().len() - 1], "{}", c.listing);
     assert_eq!(
-        c.stages_refused_pure_for(|effect| *effect == PureEffect::ChangesCarried(s)),
-        updating,
+        c.shapes()[updating[0]],
+        one(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Add))
+        ),
         "{}",
-        c.listing
+        c.for_lines()
     );
 }
 
-/// Restated pure, the `Disjoint` join is refused for its store through the
-/// element, at the stage membership puts that store in.
+/// The `Disjoint` cycle's store through the element lies in the stage
+/// membership puts it in.
 #[test]
-fn a_disjoint_join_s_store_is_refused_pure_where_membership_puts_it() {
+fn a_disjoint_cycle_s_store_lies_where_membership_puts_it() {
     let c = Compiled::of("let v = [1, 2, 3, 4]; for x in &mut v { *x = min(*x, 2); } v[3]");
-    assert_eq!(
-        c.shapes().last(),
-        Some(&join(vec![TargetKind::Element], Order::Disjoint, None)),
-        "{}",
-        c.for_line()
-    );
     let loans = Loans::build(&c.cfg);
     let writing = c.stages_where(|cfg, block| {
         cfg.blocks[block.0].insts.iter().any(|inst| {
@@ -913,11 +962,51 @@ fn a_disjoint_join_s_store_is_refused_pure_where_membership_puts_it() {
         })
     });
     assert_eq!(writing, [c.shapes().len() - 1], "{}", c.listing);
-    let refused = c.stages_refused_pure_for(|effect| {
-        matches!(
-            effect,
-            PureEffect::WritesTarget(_) | PureEffect::LendsTargetMutably(_)
-        )
-    });
-    assert_eq!(refused, writing, "{}", c.listing);
+    assert_eq!(
+        c.shapes()[writing[0]],
+        one(vec![TokenKind::Element], Order::Disjoint, None),
+        "{}",
+        c.for_lines()
+    );
+}
+
+/// Table row, the DSE property: `f`'s only effectful call sits in an arm
+/// the fold removes once `f` is inlined, so the loop's `Order` is handed on
+/// unchanged, no token is left, and the loop is one free stage. The
+/// terminator names no token, so nothing keeps the `Order`'s phi alive.
+#[test]
+fn a_loop_whose_only_effect_folds_away_after_inlining_is_one_free_stage() {
+    let i = Interner::new();
+    let listing = acvus_mir_test::compile_multi_fn_optimized_with_facts(
+        &i,
+        ("main", "for x in 1..@n { f(x); } 0"),
+        &[(
+            "f",
+            "if false { emit($x); }; 10 / $x",
+            vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+        )],
+        &[("n", Ty::I64)],
+        &emit(&i),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut lines = listing.lines().skip_while(|line| !line.contains(" for "));
+    let head = lines
+        .next()
+        .unwrap_or_else(|| panic!("the loop stands:\n{listing}"));
+    let facts: Vec<&str> = lines
+        .take_while(|line| line.contains("// "))
+        .map(|line| {
+            line.split_once("// ")
+                .expect("`take_while` kept only the lines holding the marker")
+                .1
+        })
+        .collect();
+    assert!(head.contains("stages [L"), "{listing}");
+    assert_eq!(facts.len(), 2, "one stage and the control:\n{listing}");
+    assert!(facts[0].contains(": free {"), "{listing}");
+    assert_eq!(facts[1], "control upfront", "{listing}");
+    assert!(!listing.contains("spawn"), "{listing}");
 }

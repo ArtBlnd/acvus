@@ -381,212 +381,45 @@ impl ExitTrip {
     }
 }
 
-/// The stages of a `For` in body order (RFC-0089 rule 1). The first stage's
-/// entry is the body block. Each stage's last block jumps to the next
-/// stage's entry and the last stage's jumps to the header;
-/// `validate::stages` refuses a chain of any other shape.
-#[derive(Debug, Clone, PartialEq)]
+/// Where a `For`'s body is cut (RFC-0089 rule 1): the entry block of each
+/// stage, in body order. The first is the body block, whose parameters are
+/// the element and the counter. Each stage's last block jumps to the next
+/// stage's entry and the last stage's jumps to the header. The chain names
+/// no token: which stage serializes what, in which order and by which law,
+/// is `analysis::loop_deps`'s to compute from the tokens and the
+/// declarations, and `validate::stages` refuses a chain some dependence
+/// cycle crosses.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stages {
-    first: Stage,
-    rest: Vec<Stage>,
+    body: Label,
+    rest: Vec<Label>,
 }
 
 impl Stages {
-    pub fn new(first: Stage, rest: Vec<Stage>) -> Self {
-        Self { first, rest }
+    pub fn new(body: Label, rest: Vec<Label>) -> Self {
+        Self { body, rest }
     }
 
+    /// The chain a `for` is lowered with: one stage, the body.
     pub fn lowered(body: Label) -> Self {
-        Self::new(
-            Stage::Join {
-                entry: body,
-                targets: Targets::Everything,
-                order: Order::InOrder,
-                law: None,
-            },
-            Vec::new(),
-        )
+        Self::new(body, Vec::new())
     }
 
     pub fn body(&self) -> Label {
-        self.first.entry()
-    }
-
-    pub fn body_mut(&mut self) -> &mut Label {
-        self.first.entry_mut()
+        self.body
     }
 
     pub fn len(&self) -> usize {
         1 + self.rest.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Stage> {
-        std::iter::once(&self.first).chain(&self.rest)
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Stage> {
-        std::iter::once(&mut self.first).chain(&mut self.rest)
-    }
-
     pub fn entries(&self) -> impl Iterator<Item = Label> + '_ {
-        self.iter().map(Stage::entry)
+        std::iter::once(self.body).chain(self.rest.iter().copied())
     }
 
-    /// The values the stages name. A pass that renames the body's values
-    /// renames these with it, or the targets name values the body no longer
-    /// has.
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut ValueId> {
-        self.iter_mut().flat_map(Stage::values_mut)
+    pub fn entries_mut(&mut self) -> impl Iterator<Item = &mut Label> {
+        std::iter::once(&mut self.body).chain(self.rest.iter_mut())
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Stage {
-    /// Changes no target; `validate::stages` refuses one that does
-    /// (RFC-0089 rule 3).
-    Pure { entry: Label },
-    /// The dependence cycle of `targets` (RFC-0089 rule 4). `law` is the
-    /// monoid action the update is, where the stage pass found one (rule 6).
-    Join {
-        entry: Label,
-        targets: Targets,
-        order: Order,
-        law: Option<Accumulator>,
-    },
-}
-
-impl Stage {
-    pub fn entry(&self) -> Label {
-        match self {
-            Self::Pure { entry } | Self::Join { entry, .. } => *entry,
-        }
-    }
-
-    pub fn entry_mut(&mut self) -> &mut Label {
-        match self {
-            Self::Pure { entry } | Self::Join { entry, .. } => entry,
-        }
-    }
-
-    fn values_mut(&mut self) -> Vec<&mut ValueId> {
-        let Self::Join { targets, law, .. } = self else {
-            return Vec::new();
-        };
-        let mut values: Vec<&mut ValueId> = match targets {
-            Targets::Everything => Vec::new(),
-            Targets::Listed(listed) => listed.iter_mut().filter_map(Target::value_mut).collect(),
-        };
-        if let Some(Accumulator {
-            law: Law::Fold(fold),
-            ..
-        }) = law
-        {
-            values.push(&mut fold.storage);
-        }
-        values
-    }
-}
-
-/// How a join's changes are ordered (RFC-0089 rule 5); `validate::stages`
-/// holds a mark to the operations' declarations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Order {
-    /// Each iteration writes only the element at its counter.
-    Disjoint,
-    /// The join's operations commute, stand in an `anyorder` region, or join
-    /// through a commutative exact law.
-    AnyOrder,
-    /// Anything else.
-    InOrder,
-}
-
-/// The storage a join changes (RFC-0089 rule 2).
-#[derive(Debug, Clone, PartialEq)]
-pub enum Targets {
-    /// Everything the body touches: the one join a `for` is lowered with,
-    /// before the stage pass states its targets (rule 8).
-    Everything,
-    Listed(Vec<Target>),
-}
-
-/// A storage live at the header that the body writes or lends `&mut`
-/// (RFC-0089 rule 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    /// A header parameter: a value the loop carries (RFC-0066 rule 6).
-    Carried(ValueId),
-    Storage(ValueId),
-    /// A context the body commits (RFC-0025).
-    Context(QualifiedRef),
-    /// The element of a `&mut` source, whose writes land at the counter's
-    /// slot.
-    Element,
-}
-
-impl Target {
-    fn value_mut(&mut self) -> Option<&mut ValueId> {
-        match self {
-            Self::Carried(value) | Self::Storage(value) => Some(value),
-            Self::Context(_) | Self::Element => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Accumulator {
-    pub law: Law,
-    pub exact: bool,
-    pub commutative: bool,
-}
-
-/// RFC-0089 rule 4's closed vocabulary. `analysis::carried` is the
-/// recognizer every law enters it through.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Law {
-    Op(LawOp),
-    Call(CallLaw),
-    Fold(FoldAccumulator),
-    /// The `Order` of an `anyorder` region, joined by `Merge`.
-    Order,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LawOp {
-    Add,
-    Mul,
-}
-
-impl LawOp {
-    pub fn bin_op(self) -> BinOp {
-        match self {
-            Self::Add => BinOp::Add,
-            Self::Mul => BinOp::Mul,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CallLaw {
-    pub callee: QualifiedRef,
-    pub instance: usize,
-    pub identity: CallIdentity,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallIdentity {
-    Declared,
-    /// The extern declares no identity, so a chunk's monoid is `Option` of
-    /// the type with `None` as its identity. The lifting is the lowerer's to
-    /// write when it chunks the part; MIR records only that it is needed.
-    OptionLifted,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FoldAccumulator {
-    pub storage: ValueId,
-    pub callee: QualifiedRef,
-    pub instance: usize,
-    pub fold: crate::laws::FoldLaw,
 }
 
 /// Which of the four heads a `for` was written with (RFC-0057 rule 1).
@@ -934,8 +767,9 @@ pub enum InstKind {
         arms: Vec<(SwitchKey, Label, Vec<ValueId>)>,
         default: Option<(Label, Vec<ValueId>)>,
     },
-    /// One traversal (RFC-0057) whose body is a chain of stages (RFC-0089);
-    /// `validate::stages` refuses a chain that is not rule 1's shape.
+    /// One traversal (RFC-0057) whose body is cut into a chain of stages
+    /// (RFC-0089 rule 1); `validate::stages` refuses a chain that is not
+    /// rule 1's shape or that a dependence cycle crosses.
     For {
         source: ForSource,
         stages: Stages,

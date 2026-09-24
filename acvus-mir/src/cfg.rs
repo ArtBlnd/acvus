@@ -79,7 +79,7 @@ pub enum Terminator {
     /// It fills the body block's parameters itself -- the element and the
     /// counter, which `ForSource::supplied_params` counts -- and the body
     /// reads the carried values as the header's parameters. The body is a
-    /// chain of `stages` (RFC-0089). Where `exit_trip` is `Defined` it
+    /// chain of `stages` (RFC-0089 rule 1). Where `exit_trip` is `Defined` it
     /// fills the exit block's leading parameter with the trip count
     /// (RFC-0057 rule 9), and `exit_args` follow it.
     For {

@@ -133,27 +133,22 @@ pub enum ValidationErrorKind {
     /// rule 1's.
     StageShape {
         header: Label,
-        fault: crate::analysis::stages::ShapeFault,
+        fault: crate::analysis::loop_deps::ShapeFault,
     },
-    /// Pure stage `stage` changes a target (RFC-0089 rule 3).
-    PureStageEffect {
+    /// A dependence cycle through `tokens` lies in several stages of the
+    /// `For` ending `header` (RFC-0089 rule 3).
+    CycleCrossesBoundary {
         header: Label,
-        stage: usize,
-        effect: crate::validate::stages::PureEffect,
+        tokens: Vec<crate::analysis::loop_deps::Token>,
+        stages: Vec<usize>,
     },
-    /// Join `stage` is marked an order its operations' declarations do not
-    /// admit (RFC-0089 rule 5).
-    JoinOrder {
+    /// Stage `stage` reads `token`'s state, and that token's cycle lies in
+    /// the later stage `cycle_stage` (RFC-0089 rules 3 and 6).
+    StateReadBeforeItsCycle {
         header: Label,
+        token: crate::analysis::loop_deps::Token,
         stage: usize,
-        fault: crate::validate::stages::OrderFault,
-    },
-    /// Block `from` of stage `stage` leaves the loop, and the stage is not
-    /// an `InOrder` join (RFC-0089 rule 5).
-    StageLeaves {
-        header: Label,
-        stage: usize,
-        from: Label,
+        cycle_stage: usize,
     },
     /// A `match` over a locally closed enum leaves a variant untaken.
     MatchMissesVariants {

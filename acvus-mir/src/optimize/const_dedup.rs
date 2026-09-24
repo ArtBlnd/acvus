@@ -264,13 +264,9 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
         }
 
         InstKind::For {
-            source,
-            stages,
-            exit_args,
-            ..
+            source, exit_args, ..
         } => {
             source.for_each_use(|v| remap_val(v, remap));
-            stages.values_mut().for_each(|v| remap_val(v, remap));
             remap_vec(exit_args, remap);
         }
 

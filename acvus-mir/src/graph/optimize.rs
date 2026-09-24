@@ -105,7 +105,7 @@ pub fn optimize(
 
         let mut errors = validate::type_check::check_types(&module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
-        // RFC-0089 rules 1, 3, 4 and 5, asked of the module after
+        // RFC-0089 rules 1, 3 and 5, asked of the module after
         // `insert_drops`, which is the last pass: the form must hold on the
         // body the machine runs.
         errors.extend(validate::stages::check(&module));
@@ -329,6 +329,9 @@ fn settle_inputs(undropped: &mut [Undropped]) {
             for body in module.bodies_mut() {
                 if strip_arguments(body, &removed) {
                     optimize::dce::run(body);
+                    // RFC-0089 rule 6: what `dce` removed may have freed a
+                    // stage, and cutting again merges the boundaries it left.
+                    optimize::stages::run(body);
                 }
             }
         }
@@ -485,14 +488,14 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // instructions -- `code_motion` and `forward` across blocks, `gvn`
     // merging, `reorder` within one block -- since a stage is a set of
     // instructions and a pass that moved one across a stage's boundary
-    // would put a target's write in a pure stage after the fact; after
-    // `iv_canon`, so a canonicalized induction variable is no target.
-    optimize::stages::run(cfg, laws);
+    // would leave a dependence cycle crossing it after the fact; after
+    // `iv_canon`, so a canonicalized induction variable is no token.
+    optimize::stages::run(cfg);
     // RFC-0056, RFC-0066 rule 7: after the stages, since it reduces only a
-    // counter expression that one `InOrder` join reads, and gives that join
-    // the derived counter and its step. It adds instructions to the
-    // preheader, the end of that join and nowhere else, and moves none.
-    optimize::lsr::run(cfg);
+    // counter expression that one `InOrder` stage reads, and puts the
+    // derived counter's step in that stage. It adds instructions to the
+    // preheader, the end of that stage and nowhere else, and moves none.
+    optimize::lsr::run(cfg, laws);
     // Before `bce`, which then reads the chain the stage pass wrote as the
     // order `validate::bounds` reads again, and before the drops, which it
     // places in the stage that touches each value.

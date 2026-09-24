@@ -1,13 +1,22 @@
-//! The storage a `for` changes (RFC-0089 rule 2), as the stage pass writes
-//! it and `validate::stages` reads it back.
+//! The storage a `for` changes (RFC-0089 rule 2), which `analysis::loop_deps`
+//! reads as tokens.
 
 use rustc_hash::FxHashSet;
 
 use crate::analysis::inst_info;
 use crate::analysis::loans::{Loans, StorageEffect};
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::ir::{ForSource, InstKind, RefTarget, Target, ValueId};
+use crate::ir::{ForSource, InstKind, RefTarget, ValueId};
 use crate::ty::Mutability;
+
+/// What a write to a slot live at the header changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Written {
+    Storage(ValueId),
+    /// The element of a `&mut` source, whose writes land at the counter's
+    /// slot.
+    Element,
+}
 
 pub struct TargetSlots {
     element: Vec<ValueId>,
@@ -49,11 +58,11 @@ impl TargetSlots {
 
     /// The target a write to `slot` changes, or `None` for a slot the body
     /// defines and releases within one iteration.
-    pub fn target_of(&self, slot: ValueId) -> Option<Target> {
+    pub fn target_of(&self, slot: ValueId) -> Option<Written> {
         if self.element.contains(&slot) {
-            return Some(Target::Element);
+            return Some(Written::Element);
         }
-        self.live.contains(&slot).then_some(Target::Storage(slot))
+        self.live.contains(&slot).then_some(Written::Storage(slot))
     }
 }
 
