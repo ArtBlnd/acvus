@@ -223,7 +223,12 @@ holder that took ownership. Everything else copies.
    never in a body.
 8. **A panic is an exit, not a release.** A run-time failure is a panic
    (RFC-0044); no cleanup runs and none is owed. A host that catches a
-   script's panic and lives sweeps the frame's mark words at the catch.
+   script's panic and lives sweeps the frame's mark words at the catch. A
+   trap is not ordered with effects: which effects a run issued before it
+   is not stated, and which trap a run reports is (the least in iteration
+   and stage, RFC-0089 rule 5). A trap stays where control puts it: an
+   operation that can trap moves only to where it runs on exactly the
+   paths it ran on.
 
 **Why.** A droppable `Value` needs an address wherever it may drop, which puts
 unwind landing pads in handlers and keeps values in memory; it forces a second
