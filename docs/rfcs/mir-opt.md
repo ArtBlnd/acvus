@@ -520,15 +520,21 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    exact recognizer makes it a `for`, and this pass applies to that
    unchanged.
 
-8. **A cost table is the backend's, supplied from outside.** The embedder
-   gives the lowerer one table for the backend it runs. The table has a row
-   per operation kind the backend can emit (each `Op` family at its
-   register forms, a spawn, a join, a frame bind) in the table's own unit.
-   How a backend produces its table is its own. Every cost is a sum of
-   rows. A table records ranges, and the lowerer compares against the
-   conservative end. With no table, every loop runs in place. A loop's cost
-   is its body's rows times its trip count, a lower bound. Costs are
-   computed once, by the lowerer, and no MIR pass reads them.
+8. **Cost is one scalar per loop, from a static table.** The unit is a
+   tick. A backend holds one table, a row per operation family (arithmetic,
+   compare, load, store, allocation, local call, extern call, spawn, merge,
+   a chunk's dispatch, one buffered element), fixed in the backend. An
+   extern may state its own weight (`cost = N`, or `heavy`); one that
+   states none weighs its family's row. A loop's work `W` is the least
+   weight one iteration of its free stages can take: summed over their
+   blocks, the lighter arm of a branch, an inner loop at its least trip
+   count, zero where that is unknown. Its overhead `O` is the table's cost
+   of splitting it. The loop splits when `n · W > K · O`, where `n` is the
+   trip count, known on entry, and `K` is a high constant, so a wrong
+   estimate errs toward running in place. `⌈K · O / W⌉` folds into one
+   constant, and the run makes one compare. With no table, or no free
+   stage, every loop runs in place. No MIR pass reads a cost, and none is
+   measured at run time: another dialect's lowering decides statically.
 
 9. **Regions.** A region is a stage of a `For` (RFC-0089) evaluated as
    one unit, without crossing a jump the analysis cannot see through. A
@@ -546,10 +552,8 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
     - In a `Sync` body the split is one synchronous executor call, and the
       executor decides how to wait; the body stays `Sync` (RFC-0046 rule
       1). A body that already suspends spawns the chunks and awaits them.
-    - Running in place is always admitted, and is the only choice with no
-      table (rule 8). Where the count is known only at run time, one
-      compare ahead of the loop, against a threshold folded from the table,
-      chooses between the split chain and the in-place chain.
+    - Running in place is always admitted; rule 8's one compare chooses
+      the split chain.
     - A chunk does not split again: one level, by structure.
 
 **Why.** A normal form that holds on every target is the same program
@@ -561,17 +565,14 @@ iterations can be reordered, and a count says only what reordering costs. The au
 the loop, and the system finds the parallelism from facts the checker
 already establishes.
 **Cost.** Three analyses built per body and read by every loop pass. A
-table per backend and a family of split operations (chunk, spawn, join
-through a merge). An induction variable's normalization is chosen per
-variable, so a change in who reads it moves it between two forms. RFC-0057's and
+table per backend and a family of split operations. A change in who reads
+an induction variable moves it between two forms. RFC-0057's and
 RFC-0064's analyses become inputs whose promises must stay stable.
 **Rejected.**
 - Unrolling, tiling, blocking or permutation as MIR passes — a lowerer's
   guess written into the program's meaning, and nothing undoes it when the
   guess is wrong for a target.
-- Strength decided by the number of carried values — a count is a cost, and
-  a loop with one recurrence is ordered where a loop with ten sums is not.
-- Constant costs in source — true on one machine on one day.
+- Costs written in a script — the script would carry one machine's timing.
 - A table the runtime measures at first compilation and caches — it ties
   the compiler to one machine's timing at one moment and adds a cache to
   invalidate. The backend knows its costs, and the embedder that chose the
@@ -586,10 +587,11 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - An explicit `par for` — the facts the split needs are the checker's. Where
   they are not established, the author is told why, not asked to assert them.
 
-**Open.** How `&&` and `||` are recognized as merges. Whether
-rule 9's jump-boundary conditions reduce to effect boundaries alone. Whether
-the machine offers an explicitly reassociable float reduction, which is a
-language decision.
+- A reassociable float reduction — it fixes a rounding every later lowering
+  would have to keep.
+
+**Open.** How `&&` and `||` are recognized as merges. Whether rule 9's
+jump-boundary conditions reduce to effect boundaries alone.
 
 ## RFC-0089: a `for` is a chain of stages no dependence cycle crosses, and what each stage is the IR already says
 
