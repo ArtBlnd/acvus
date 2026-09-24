@@ -68,8 +68,9 @@ mod vtable;
 
 pub use executor::{AsyncJob, BlockingJob, Done, Executor, Handle, SequentialExecutor, TokioExecutor};
 pub use host::{
-    Access, AsyncAccess, AsyncStorage, Cause, Codec, Entry, Host, HostError, MemoryStorage, Named,
-    Origin, Output, Page, Part, Program, Refusal, Scope, Source, Storage, StorageError, SyncAccess,
+    Access, AsyncAccess, AsyncStorage, Cause, Codec, Entry, Host, HostError, InputShape, Inputs,
+    MemoryStorage, Named, Origin, Output, Page, Part, Program, Refusal, RunInputs, Scope, Source,
+    Storage, StorageError, SyncAccess,
 };
 #[cfg(feature = "tooling")]
 pub use host::{

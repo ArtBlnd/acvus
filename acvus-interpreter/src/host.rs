@@ -220,18 +220,18 @@ use acvus_ast::Span;
 use acvus_ast::report::Label;
 use acvus_extern::{
     Borrows, CombineError, Cross, Crossing, Declared, Externs, Form, FormKind, Gives, Handlers,
-    Holding, InstanceTable, Lendable, ObjectShape, OneValue, Owned, Registry, Returned, Shared,
-    SpaceError, Uniform, Val,
+    Holding, InstanceTable, Lendable, OneValue, Owned, Registry, Returned, Shared, SpaceError,
+    Uniform, Val, lend_run,
 };
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
-    Access as GraphAccess, Bindings, BoundValue, CompilationGraph, Context, ContextInfo, FnKind, Function, Inputs,
-    NotABoundValue, Parsed, ParsedAst, QualifiedRef, RecoveredAst, extract, infer, lower,
+    Access as GraphAccess, Bindings, BoundValue, CompilationGraph, Context, ContextInfo, FnKind, Function,
+    Inputs as GraphInputs, NotABoundValue, Parsed, ParsedAst, QualifiedRef, RecoveredAst, extract, infer, lower,
     optimize,
 };
-use acvus_mir::ir::MirModule;
+use acvus_mir::ir::{MirModule, ValueId};
 use acvus_mir::ty::{
-    Effect, Flows, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
+    Effect, Flows, ParamTerm, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
     try_freeze_poly,
 };
 use acvus_utils::{Astr, Freeze, Interner};
@@ -676,32 +676,163 @@ tooling_vis!(tooling_graph);
 
 // -- Host ----------------------------------------------------------------
 
-/// The entry's `$` inputs as `I` declares them (RFC-0090 rule 2).
-struct DeclaredInputs {
-    ty: PolyTy,
-    params: Vec<ParamTerm<Poly>>,
+// -- Input shapes --------------------------------------------------------
+
+/// An entry's `$` inputs built from data: named fields, each typed by a
+/// Rust `T` (RFC-0090 rule 2).
+#[derive(Default)]
+pub struct InputShape {
+    fields: Vec<ShapeField>,
 }
 
-impl DeclaredInputs {
-    fn of(interner: &Interner, ty: PolyTy) -> Option<Self> {
-        let params = match &ty {
-            TyTerm::Unit => Vec::new(),
-            TyTerm::Object(fields) => {
-                let order = ObjectShape::of(interner, fields.keys().copied());
-                order
-                    .names()
-                    .iter()
-                    .map(|name| ParamTerm::new(*name, fields[name].clone()))
-                    .collect()
-            }
-            _ => return None,
-        };
-        Some(DeclaredInputs { ty, params })
+struct ShapeField {
+    name: String,
+    declared: fn(&Interner) -> PolyTy,
+}
+
+impl InputShape {
+    pub fn new() -> Self {
+        InputShape::default()
+    }
+
+    pub fn field<T>(mut self, name: &str) -> Self
+    where
+        T: Declared + OneValue<AcvusRuntime>,
+    {
+        self.fields.push(ShapeField {
+            name: name.to_owned(),
+            declared: T::declared,
+        });
+        self
+    }
+}
+
+impl fmt::Debug for InputShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.fields.iter().map(|field| &field.name)).finish()
+    }
+}
+
+struct ResolvedShape {
+    fields: Vec<(Astr, PolyTy)>,
+}
+
+impl ResolvedShape {
+    fn of_declared(interner: &Interner, ty: &PolyTy) -> Option<ResolvedShape> {
+        match ty {
+            TyTerm::Unit => Some(ResolvedShape { fields: Vec::new() }),
+            TyTerm::Object(fields) => Some(ResolvedShape::sorted(
+                interner,
+                fields.iter().map(|(name, ty)| (*name, ty.clone())).collect(),
+            )),
+            _ => None,
+        }
+    }
+
+    fn of_fields(interner: &Interner, shape: &InputShape) -> ResolvedShape {
+        let fields = shape
+            .fields
+            .iter()
+            .map(|field| (interner.intern(&field.name), (field.declared)(interner)))
+            .collect();
+        ResolvedShape::sorted(interner, fields)
+    }
+
+    /// A derived struct's crossing writes its fields in the order its derive
+    /// sorted their names as strings (RFC-0050 rule 8), and a run pairs those
+    /// values with these fields position by position, so this sort and the
+    /// derive's in `acvus-extern-macro` must stay the same comparison.
+    fn sorted(interner: &Interner, mut fields: Vec<(Astr, PolyTy)>) -> ResolvedShape {
+        fields.sort_by(|(a, _), (b, _)| interner.resolve(*a).cmp(interner.resolve(*b)));
+        ResolvedShape { fields }
+    }
+
+    fn len(&self) -> usize {
+        self.fields.len()
+    }
+
+    fn position_of(&self, interner: &Interner, name: &str) -> Option<usize> {
+        self.fields
+            .binary_search_by(|(held, _)| interner.resolve(*held).cmp(name))
+            .ok()
+    }
+
+    fn repeated_names(&self) -> Vec<Astr> {
+        let mut repeated: Vec<Astr> = self
+            .fields
+            .windows(2)
+            .filter(|pair| pair[0].0 == pair[1].0)
+            .map(|pair| pair[0].0)
+            .collect();
+        repeated.dedup();
+        repeated
+    }
+
+    fn same_fields(&self, other: &ResolvedShape) -> bool {
+        self.fields.len() == other.fields.len()
+            && self
+                .fields
+                .iter()
+                .zip(&other.fields)
+                .all(|((a, a_ty), (b, b_ty))| a == b && a_ty.same_erased(b_ty))
+    }
+
+    fn display(&self, interner: &Interner) -> String {
+        shape_display(
+            self.fields
+                .iter()
+                .map(|(name, ty)| (interner.resolve(*name), ty.display(interner).to_string())),
+        )
+    }
+}
+
+fn shape_display<'n>(fields: impl Iterator<Item = (&'n str, String)>) -> String {
+    let written: Vec<String> = fields.map(|(name, ty)| format!("{name}: {ty}")).collect();
+    match written.is_empty() {
+        true => "()".to_owned(),
+        false => format!("{{{}}}", written.join(", ")),
+    }
+}
+
+/// The values of an entry's inputs built from data, one per field of its
+/// shape (RFC-0090 rule 2).
+#[derive(Default)]
+pub struct Inputs {
+    given: Vec<Given>,
+}
+
+struct Given {
+    name: String,
+    declared: fn(&Interner) -> PolyTy,
+    cross: Box<dyn for<'c> FnOnce(Crossing<'c, AcvusRuntime>) -> Value + Send>,
+}
+
+impl Inputs {
+    pub fn new() -> Self {
+        Inputs::default()
+    }
+
+    pub fn set<T>(mut self, name: &str, value: T) -> Self
+    where
+        T: Declared + OneValue<AcvusRuntime> + Send,
+    {
+        self.given.push(Given {
+            name: name.to_owned(),
+            declared: T::declared,
+            cross: Box::new(move |crossing| value.erase(crossing)),
+        });
+        self
+    }
+}
+
+impl fmt::Debug for Inputs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.given.iter().map(|given| &given.name)).finish()
     }
 }
 
 enum EntryDeclaration {
-    Typed { inputs: DeclaredInputs, declared: PolyTy },
+    Typed { inputs: ResolvedShape, declared: PolyTy },
     Untyped,
     /// A body scripts call and no host runs: its return is what its body
     /// settles, and its `$` inputs are the ones it reads (RFC-0071 rule 4).
@@ -811,7 +942,7 @@ where
         let origin = Some(Origin::Entry(name.to_owned()));
         let interner = &self.parts.interner;
         let asked = I::declared(interner);
-        let Some(inputs) = DeclaredInputs::of(interner, asked.clone()) else {
+        let Some(inputs) = ResolvedShape::of_declared(interner, &asked) else {
             let message = format!(
                 "the inputs of the entry `{name}` are declared as {}, which is neither `()` \
                  nor a struct of named fields",
@@ -820,7 +951,22 @@ where
             self.parts.refusals.push(Refusal::of(origin, message));
             return self;
         };
-        let declared = R::declared(interner);
+        self.typed_entry::<R>(name, inputs, source)
+    }
+
+    pub fn entry_shaped<R>(self, name: &str, shape: InputShape, source: Source<'_>) -> Self
+    where
+        R: Declared,
+    {
+        let inputs = ResolvedShape::of_fields(&self.parts.interner, &shape);
+        self.typed_entry::<R>(name, inputs, source)
+    }
+
+    fn typed_entry<R>(self, name: &str, inputs: ResolvedShape, source: Source<'_>) -> Self
+    where
+        R: Declared,
+    {
+        let declared = R::declared(&self.parts.interner);
         self.declare_entry(name, source, EntryDeclaration::Typed { inputs, declared })
     }
 
@@ -910,8 +1056,121 @@ macro_rules! host_tooling {
 tooling_vis!(host_tooling);
 
 enum EntryShape {
-    Typed { inputs: PolyTy, declared: PolyTy },
+    Typed { inputs: ResolvedShape, declared: PolyTy },
     Untyped,
+}
+
+enum CompiledShape {
+    Typed { inputs: EntryInputs, declared: PolyTy },
+    Untyped,
+}
+
+struct EntryInputs {
+    shape: ResolvedShape,
+    param_of: Vec<FieldParam>,
+    params: usize,
+}
+
+enum FieldParam {
+    At(usize),
+    Unread,
+}
+
+impl EntryInputs {
+    fn of(interner: &Interner, shape: ResolvedShape, params: &[(Astr, ValueId)]) -> EntryInputs {
+        let param_of: Vec<FieldParam> = shape
+            .fields
+            .iter()
+            .map(|(field, _)| match params.iter().position(|(param, _)| param == field) {
+                Some(at) => FieldParam::At(at),
+                None => FieldParam::Unread,
+            })
+            .collect();
+        if let Some((param, _)) = params
+            .iter()
+            .find(|(param, _)| shape.fields.iter().all(|(field, _)| field != param))
+        {
+            panic!(
+                "the entry's module takes `${}`, which its declared inputs lack: a typed entry's \
+                 parameters are its declared inputs",
+                interner.resolve(*param)
+            )
+        }
+        EntryInputs {
+            shape,
+            param_of,
+            params: params.len(),
+        }
+    }
+
+    fn checked(&self, interner: &Interner, entry: &str, inputs: Inputs) -> Result<Vec<Given>, HostError> {
+        let shape = &self.shape;
+        let at: Option<Vec<usize>> = inputs
+            .given
+            .iter()
+            .map(|given| {
+                let at = shape.position_of(interner, &given.name)?;
+                (given.declared)(interner)
+                    .same_erased(&shape.fields[at].1)
+                    .then_some(at)
+            })
+            .collect();
+        let mut taken = vec![false; shape.len()];
+        let each_once = at.as_ref().is_some_and(|at| {
+            at.iter().all(|at| !std::mem::replace(&mut taken[*at], true)) && taken.iter().all(|taken| *taken)
+        });
+        let (Some(at), true) = (at, each_once) else {
+            let mut asked: Vec<(&str, String)> = inputs
+                .given
+                .iter()
+                .map(|given| (given.name.as_str(), (given.declared)(interner).display(interner).to_string()))
+                .collect();
+            asked.sort();
+            return Err(HostError::Mismatched {
+                what: Part::Inputs(entry.to_owned()),
+                held: shape.display(interner),
+                asked: shape_display(asked.into_iter()),
+            });
+        };
+        let mut given: Vec<(usize, Given)> = at.into_iter().zip(inputs.given).collect();
+        given.sort_by_key(|(at, _)| *at);
+        Ok(given.into_iter().map(|(_, given)| given).collect())
+    }
+
+    fn arguments<V>(&self, crossing: Crossing<'_, AcvusRuntime>, values: Vec<V>) -> Vec<Value>
+    where
+        V: FieldValue,
+    {
+        assert_eq!(
+            values.len(),
+            self.param_of.len(),
+            "a run gives one value per field of the entry's shape"
+        );
+        let mut arguments: Vec<Value> = std::iter::repeat_with(Value::unit).take(self.params).collect();
+        for (param, value) in self.param_of.iter().zip(values) {
+            match param {
+                FieldParam::At(at) => arguments[*at] = value.into_word(crossing),
+                FieldParam::Unread => drop(value),
+            }
+        }
+        arguments
+    }
+}
+
+trait FieldValue {
+    fn into_word(self, crossing: Crossing<'_, AcvusRuntime>) -> Value;
+}
+
+impl FieldValue for Owned<AcvusRuntime> {
+    fn into_word(self, crossing: Crossing<'_, AcvusRuntime>) -> Value {
+        self.into_value(crossing.holding())
+    }
+}
+
+impl FieldValue for Given {
+    fn into_word(self, crossing: Crossing<'_, AcvusRuntime>) -> Value {
+        (self.cross)(crossing)
+    }
 }
 
 struct Declaration {
@@ -929,8 +1188,7 @@ struct LocalFunction {
 struct CompiledEntry {
     name: String,
     qref: QualifiedRef,
-    shape: EntryShape,
-    module_params: Vec<Astr>,
+    shape: CompiledShape,
     ret: Ty,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     module: MirModule,
@@ -1032,43 +1290,52 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         named.extend(context_refs(&ast));
         let local = match declaration {
             EntryDeclaration::Typed { inputs, declared } => {
+                refusals.extend(inputs.repeated_names().into_iter().map(|repeated| {
+                    let message = format!(
+                        "the input `${}` of the entry `{name}` is given twice",
+                        interner.resolve(repeated)
+                    );
+                    Refusal::of(origin.clone(), message)
+                }));
                 refusals.extend(
                     inputs
-                        .params
+                        .fields
                         .iter()
-                        .filter(|param| bindings.get(param.name).is_some())
-                        .map(|param| {
+                        .filter(|(field, _)| bindings.get(*field).is_some())
+                        .map(|(field, _)| {
                             let message = format!(
                                 "the input `${}` of the entry `{name}` is already fixed by a binding",
-                                interner.resolve(param.name)
+                                interner.resolve(*field)
                             );
                             Refusal::of(origin.clone(), message)
                         }),
                 );
+                let params = inputs
+                    .fields
+                    .iter()
+                    .map(|(field, ty)| ParamTerm::new(*field, ty.clone()))
+                    .collect();
                 let ty = TyTerm::Fn {
-                    params: inputs.params,
+                    params,
                     ret: Box::new(declared.clone()),
                     captures: vec![],
                     effect: Effect::OPAQUE.into(),
                     flows: Flows::Every.into(),
                 };
-                let shape = EntryShape::Typed {
-                    inputs: inputs.ty,
-                    declared,
-                };
+                let shape = EntryShape::Typed { inputs, declared };
                 LocalFunction {
-                    kind: FnKind::Local(ast, Inputs::Declared),
+                    kind: FnKind::Local(ast, GraphInputs::Declared),
                     ty,
                     shape: Some(shape),
                 }
             }
             EntryDeclaration::Untyped => LocalFunction {
-                kind: FnKind::Local(ast, Inputs::FromReads),
+                kind: FnKind::Local(ast, GraphInputs::FromReads),
                 ty: untyped_entry_ty(),
                 shape: Some(EntryShape::Untyped),
             },
             EntryDeclaration::Function => LocalFunction {
-                kind: FnKind::Local(ast, Inputs::FromReads),
+                kind: FnKind::Local(ast, GraphInputs::FromReads),
                 ty: TyTerm::Fn {
                     params: vec![],
                     ret: Box::new(open.fresh_ty_var()),
@@ -1217,11 +1484,17 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
             let (Some(module), Some(required)) = (modules.remove(&qref), required.remove(&qref)) else {
                 panic!("`optimize` keeps a module and its inputs for an entry no stage refused")
             };
+            let shape = match shape {
+                EntryShape::Typed { inputs, declared } => CompiledShape::Typed {
+                    inputs: EntryInputs::of(interner, inputs, &module.main.params),
+                    declared,
+                },
+                EntryShape::Untyped => CompiledShape::Untyped,
+            };
             let entry = CompiledEntry {
                 name: name.clone(),
                 qref,
                 shape,
-                module_params: module.main.params.iter().map(|(name, _)| *name).collect(),
                 ret: module.ret.clone(),
                 module,
                 required,
@@ -1314,38 +1587,6 @@ fn bare_callable(
         .collect();
     reached.sort();
     reached
-}
-
-enum InputsCrossing {
-    Nothing,
-    Fields { width: usize },
-}
-
-impl InputsCrossing {
-    fn of<I>(interner: &Interner, asked: &PolyTy, params: &[Astr]) -> Option<Self>
-    where
-        I: Cross<AcvusRuntime>,
-    {
-        match asked {
-            TyTerm::Unit => params.is_empty().then_some(InputsCrossing::Nothing),
-            TyTerm::Object(fields) => {
-                let form = (
-                    <I::ReturnForm as Form>::KIND,
-                    <I::ReturnForm as Form>::WIDTH,
-                );
-                let order = ObjectShape::of(interner, fields.keys().copied());
-                match form {
-                    (FormKind::Components, width)
-                        if width == params.len() && order.names() == params =>
-                    {
-                        Some(InputsCrossing::Fields { width })
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
 }
 
 // -- Program -------------------------------------------------------------
@@ -1543,25 +1784,49 @@ where
         I: Declared + Cross<AcvusRuntime>,
         R: Declared,
     {
+        let (compiled, inputs) = self.typed::<R>(name)?;
+        let interner = self.program.interner();
+        let asked = I::declared(interner);
+        let refused = || HostError::Mismatched {
+            what: Part::Inputs(name.to_owned()),
+            held: inputs.shape.display(interner),
+            asked: asked.display(interner).to_string(),
+        };
+        let Some(shape) = ResolvedShape::of_declared(interner, &asked) else {
+            return Err(refused());
+        };
+        if !shape.same_fields(&inputs.shape) {
+            return Err(refused());
+        }
+        let form = (<I::ReturnForm as Form>::KIND, <I::ReturnForm as Form>::WIDTH);
+        let crosses_by_field = match form {
+            (FormKind::Components, width) => width == shape.len(),
+            _ => shape.len() == 0,
+        };
+        if !crosses_by_field {
+            return Err(refused());
+        }
+        Ok(Entry::of(self.program, compiled, inputs))
+    }
+
+    pub fn entry_shaped<R>(self, name: &str) -> Result<Entry<'p, Inputs, R, A>, HostError>
+    where
+        R: Declared,
+    {
+        let (compiled, inputs) = self.typed::<R>(name)?;
+        Ok(Entry::of(self.program, compiled, inputs))
+    }
+
+    fn typed<R>(self, name: &str) -> Result<(&'p CompiledEntry, &'p EntryInputs), HostError>
+    where
+        R: Declared,
+    {
         let program = self.program;
         let compiled = program.compiled(name)?;
         let interner = program.interner();
-        let asked_inputs = I::declared(interner);
         let asked = R::declared(interner);
-        let EntryShape::Typed { inputs, declared } = &compiled.shape else {
+        let CompiledShape::Typed { inputs, declared } = &compiled.shape else {
             return Err(program.mismatched(Part::Result(name.to_owned()), &Ty::Never, &asked));
-        };
-        let refused_inputs = || HostError::Mismatched {
-            what: Part::Inputs(name.to_owned()),
-            held: inputs.display(interner).to_string(),
-            asked: asked_inputs.display(interner).to_string(),
-        };
-        if !asked_inputs.same_erased(inputs) {
-            return Err(refused_inputs());
-        }
-        let Some(crossed) = InputsCrossing::of::<I>(interner, &asked_inputs, &compiled.module_params)
-        else {
-            return Err(refused_inputs());
         };
         if !asked.same_erased(declared) {
             return Err(HostError::Mismatched {
@@ -1570,14 +1835,7 @@ where
                 asked: asked.display(interner).to_string(),
             });
         }
-        Ok(Entry {
-            program,
-            compiled,
-            crossed,
-            declared: PhantomData,
-            access: PhantomData,
-            brand: PhantomData,
-        })
+        Ok((compiled, inputs))
     }
 }
 
@@ -1859,31 +2117,35 @@ tooling_vis!(page_tooling);
 pub struct Entry<'p, I, R, A = SyncAccess> {
     program: &'p Compiled,
     compiled: &'p CompiledEntry,
-    crossed: InputsCrossing,
+    inputs: &'p EntryInputs,
     declared: PhantomData<fn(I) -> R>,
     access: PhantomData<fn() -> A>,
     brand: Brand<'p>,
 }
 
-impl<'p, I, R, A> Entry<'p, I, R, A>
-where
-    I: Cross<AcvusRuntime>,
-    I::ReturnForm: Returned<Verdict = ()>,
-{
-    fn arguments(&self, inputs: I) -> Vec<Value> {
-        match self.crossed {
-            InputsCrossing::Nothing => Vec::new(),
-            InputsCrossing::Fields { width } => {
-                let mut run: Vec<Value> = std::iter::repeat_with(Value::unit).take(width).collect();
-                // SAFETY: `Scope::entry` compared `I`'s declaration with the
-                // one the entry was compiled against, and `I`'s crossing
-                // writes one value per parameter, at that parameter's type and
-                // in the order the module takes them.
-                let crossing = unsafe { Crossing::new(&self.program.rt) };
-                <I as Gives<Val<I, Uniform>, AcvusRuntime>>::give(inputs, crossing, &mut run);
-                run
-            }
+impl<'p, I, R, A> Entry<'p, I, R, A> {
+    fn of(program: &'p Compiled, compiled: &'p CompiledEntry, inputs: &'p EntryInputs) -> Self {
+        Entry {
+            program,
+            compiled,
+            inputs,
+            declared: PhantomData,
+            access: PhantomData,
+            brand: PhantomData,
         }
+    }
+
+    fn arguments(&self, inputs: I) -> Result<Vec<Value>, HostError>
+    where
+        I: RunInputs,
+    {
+        let program = self.program;
+        inputs.arguments(sealed_inputs::ArgumentsOf {
+            rt: &program.rt,
+            interner: program.interner(),
+            entry: &self.compiled.name,
+            inputs: self.inputs,
+        })
     }
 
     fn output(&self, value: Value) -> Output<'p, R> {
@@ -1901,29 +2163,86 @@ where
 
 impl<'p, I, R> Entry<'p, I, R, SyncAccess>
 where
-    I: Cross<AcvusRuntime>,
-    I::ReturnForm: Returned<Verdict = ()>,
+    I: RunInputs,
 {
     pub async fn run<S>(&self, page: &mut Page<'p, '_, S, SyncAccess>, inputs: I) -> Result<Output<'p, R>, HostError>
     where
         S: Storage,
     {
-        let value = page.run(self.compiled.qref, self.arguments(inputs)).await?;
+        let arguments = self.arguments(inputs)?;
+        let value = page.run(self.compiled.qref, arguments).await?;
         Ok(self.output(value))
     }
 }
 
 impl<'p, I, R> Entry<'p, I, R, AsyncAccess>
 where
-    I: Cross<AcvusRuntime>,
-    I::ReturnForm: Returned<Verdict = ()>,
+    I: RunInputs,
 {
     pub async fn run<S>(&self, page: &mut Page<'p, '_, S, AsyncAccess>, inputs: I) -> Result<Output<'p, R>, HostError>
     where
         S: AsyncStorage,
     {
-        let value = page.run(self.compiled.qref, self.arguments(inputs)).await?;
+        let arguments = self.arguments(inputs)?;
+        let value = page.run(self.compiled.qref, arguments).await?;
         Ok(self.output(value))
+    }
+}
+
+/// What a run takes as an entry's inputs: a derived struct or `()`, whose
+/// shape `Scope::entry` compared with the entry's, or `Inputs`, which each
+/// run checks field by field before any value crosses.
+pub trait RunInputs: sealed_inputs::Given {}
+
+impl<I> RunInputs for I where I: sealed_inputs::Given {}
+
+mod sealed_inputs {
+    use super::{AcvusRuntime, EntryInputs, HostError, Interner, Value};
+
+    pub struct ArgumentsOf<'a> {
+        pub(super) rt: &'a AcvusRuntime,
+        pub(super) interner: &'a Interner,
+        pub(super) entry: &'a str,
+        pub(super) inputs: &'a EntryInputs,
+    }
+
+    pub trait Given {
+        #[doc(hidden)]
+        fn arguments(self, of: ArgumentsOf<'_>) -> Result<Vec<Value>, HostError>;
+    }
+}
+
+impl<I> sealed_inputs::Given for I
+where
+    I: Cross<AcvusRuntime>,
+    I::ReturnForm: Returned<Verdict = ()>,
+{
+    fn arguments(self, of: sealed_inputs::ArgumentsOf<'_>) -> Result<Vec<Value>, HostError> {
+        // SAFETY: `Scope::entry` made this entry only after finding `I`'s
+        // fields the entry's, each at its type, and `I` crossing as one
+        // component per field in that same order.
+        let crossing = unsafe { Crossing::new(of.rt) };
+        let holding = crossing.holding();
+        let width = of.inputs.shape.len();
+        let mut fields: Vec<Owned<AcvusRuntime>> = std::iter::repeat_with(|| Owned::vacant(holding))
+            .take(width)
+            .collect();
+        if width > 0 {
+            // SAFETY: every slot of `fields` is vacant.
+            let run = unsafe { lend_run(holding, &mut fields) };
+            <I as Gives<Val<I, Uniform>, AcvusRuntime>>::give(self, crossing, run);
+        }
+        Ok(of.inputs.arguments(crossing, fields))
+    }
+}
+
+impl sealed_inputs::Given for Inputs {
+    fn arguments(self, of: sealed_inputs::ArgumentsOf<'_>) -> Result<Vec<Value>, HostError> {
+        let given = of.inputs.checked(of.interner, of.entry, self)?;
+        // SAFETY: `checked` found each value's `T` declared at the type of
+        // the field it fills.
+        let crossing = unsafe { Crossing::new(of.rt) };
+        Ok(of.inputs.arguments(crossing, given))
     }
 }
 

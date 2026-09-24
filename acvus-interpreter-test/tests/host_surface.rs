@@ -11,9 +11,9 @@ use acvus_extern::{
     extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::{
-    AcvusRuntime, AsyncAccess, AsyncStorage, Cause, Codec, Head, Held, Host, HostError,
-    MemoryStorage, Named, Origin, Page, Part, Plain, Program, Refusal, Scope, SequentialExecutor,
-    Source, Space, SpaceStorage, Storage, StorageError, Store,
+    AcvusRuntime, AsyncAccess, AsyncStorage, Cause, Codec, Head, Held, Host, HostError, InputShape,
+    Inputs, MemoryStorage, Named, Origin, Output, Page, Part, Plain, Program, Refusal, Scope,
+    SequentialExecutor, Source, Space, SpaceStorage, Storage, StorageError, Store,
 };
 
 type Rt = AcvusRuntime;
@@ -1164,6 +1164,163 @@ async fn an_input_the_entry_does_not_read_is_released_once_by_the_run() {
     };
     assert_eq!(int_result(&program, inputs).await, 7);
     assert_eq!(counting.released(), ELEMENTS);
+}
+
+// -- An entry's inputs as a shape built from data (RFC-0090 rule 2) -------
+
+fn pair_shape() -> InputShape {
+    InputShape::new().field::<i64>("a").field::<i64>("b")
+}
+
+async fn shaped_run<R, O>(program: &Program, name: &str, inputs: Inputs, read: impl FnOnce(&Output<'_, R>) -> O) -> Result<O, HostError>
+where
+    R: Declared,
+{
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let entry = s.entry_shaped::<R>(name)?;
+            let output = entry.run(&mut page, inputs).await?;
+            Ok(read(&output))
+        })
+        .await
+}
+
+fn output_int(output: &Output<'_, i64>) -> i64 {
+    output.with(|n: &i64| *n).expect("the result is an `i64`")
+}
+
+#[tokio::test]
+async fn a_tool_declared_by_a_data_shape_runs_on_the_values_set_for_its_fields() {
+    let program = compiled(host().entry_shaped::<i64>("plus", pair_shape(), Source::Script("$a + $b")));
+    let inputs = Inputs::new().set("a", 1i64).set("b", 2i64);
+    assert_eq!(shaped_run(&program, "plus", inputs, output_int).await.expect("the inputs fit"), 3);
+}
+
+#[tokio::test]
+async fn two_shapes_with_different_names_are_compiled_into_one_program_and_each_runs() {
+    let greeting = InputShape::new().field::<String>("who").field::<i64>("times");
+    let program = compiled(
+        host()
+            .entry_shaped::<i64>("plus", pair_shape(), Source::Script("$a + $b"))
+            .entry_shaped::<String>("greet", greeting, Source::Script(r#""hi ".to_string() + $who"#)),
+    );
+    let added = shaped_run(&program, "plus", Inputs::new().set("b", 5i64).set("a", 4i64), output_int).await;
+    assert_eq!(added.expect("the inputs fit"), 9);
+    let greeted = Inputs::new().set("who", "ann".to_owned()).set("times", 2i64);
+    let greeted = shaped_run(&program, "greet", greeted, |output: &Output<'_, String>| {
+        output.with(|s: &str| s.to_owned()).expect("the result is a `String`")
+    })
+    .await;
+    assert_eq!(greeted.expect("the inputs fit"), "hi ann");
+}
+
+#[tokio::test]
+async fn inputs_that_do_not_fit_the_shape_are_refused_before_the_entry_runs() {
+    let _bumps = BUMPED_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
+    let program = compiled(host().entry_shaped::<i64>("plus", pair_shape(), Source::Script("bump(); $a + $b")));
+    let bumps_before = BUMPS.load(Ordering::SeqCst);
+    let unfit = [
+        ("a wrong type", Inputs::new().set("a", 1i64).set("b", "2".to_owned())),
+        ("a missing field", Inputs::new().set("a", 1i64)),
+        ("an extra name", Inputs::new().set("a", 1i64).set("b", 2i64).set("c", 3i64)),
+        ("a field set twice", Inputs::new().set("a", 1i64).set("b", 2i64).set("a", 3i64)),
+    ];
+    for (what, inputs) in unfit {
+        let refused = shaped_run(&program, "plus", inputs, output_int).await;
+        assert!(
+            matches!(&refused, Err(HostError::Mismatched { what: Part::Inputs(entry), .. }) if entry == "plus"),
+            "{what}: {refused:?}"
+        );
+    }
+    assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before, "no refused run reached its body");
+    let fits = shaped_run(&program, "plus", Inputs::new().set("a", 1i64).set("b", 2i64), output_int).await;
+    assert_eq!(fits.expect("the inputs fit"), 3);
+    assert_eq!(BUMPS.load(Ordering::SeqCst), bumps_before + 1);
+}
+
+#[tokio::test]
+async fn a_field_no_body_reads_is_accepted_and_released_once() {
+    const ELEMENTS: usize = 3;
+    let counting = Counting::start();
+    let shape = InputShape::new()
+        .field::<i64>("used")
+        .field::<Tracked>("never")
+        .field::<i64>("folded");
+    let program = compiled(
+        host()
+            .bind("mode", r#""kept""#)
+            .expect("a string is a literal")
+            .entry_shaped::<i64>(
+                "main",
+                shape,
+                Source::Script(r#"if $mode == "gone" { $folded } else { $used }"#),
+            ),
+    );
+    let inputs = Inputs::new()
+        .set("used", 7i64)
+        .set("never", Tracked((0..ELEMENTS).map(|_| Counted).collect()))
+        .set("folded", 1i64);
+    let ran = shaped_run(&program, "main", inputs, output_int).await;
+    assert_eq!(ran.expect("the inputs fit"), 7);
+    assert_eq!(counting.released(), ELEMENTS);
+}
+
+#[test]
+fn a_shape_field_a_binding_already_fixes_is_refused_at_compile_time() {
+    let bound = host().bind("a", "1").expect("an integer is a literal");
+    let messages = refusal_messages(bound.entry_shaped::<i64>("plus", pair_shape(), Source::Script("$a + $b")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`$a`") && message.contains("binding")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn a_shape_that_names_a_field_twice_is_refused_at_compile_time() {
+    let twice = InputShape::new().field::<i64>("a").field::<String>("a");
+    let messages = refusal_messages(host().entry_shaped::<i64>("main", twice, Source::Script("1")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`$a`") && message.contains("twice")),
+        "{messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_segment_and_a_hook_that_each_declare_input_compile_together_and_each_runs() {
+    let turn = InputShape::new().field::<String>("input");
+    let hook = InputShape::new().field::<i64>("input");
+    let program = compiled(
+        host()
+            .entry_shaped::<String>("segment", turn, Source::Script(r#""said: ".to_string() + $input"#))
+            .entry_shaped::<i64>("hook", hook, Source::Script("$input * 2")),
+    );
+    let said = Inputs::new().set("input", "hello".to_owned());
+    let said = shaped_run(&program, "segment", said, |output: &Output<'_, String>| {
+        output.with(|s: &str| s.to_owned()).expect("the result is a `String`")
+    })
+    .await;
+    assert_eq!(said.expect("the inputs fit"), "said: hello");
+    let hooked = shaped_run(&program, "hook", Inputs::new().set("input", 21i64), output_int).await;
+    assert_eq!(hooked.expect("the inputs fit"), 42);
+}
+
+#[tokio::test]
+async fn a_derived_struct_and_a_data_shape_with_the_same_fields_are_one_shape() {
+    let by_data = compiled(host().entry_shaped::<i64>(
+        "main",
+        InputShape::new().field::<i64>("b").field::<i64>("a"),
+        Source::Script("$a * 10 + $b"),
+    ));
+    assert_eq!(int_result(&by_data, DeclaredAgainstNameOrder { b: 2, a: 1 }).await, 12);
+    let by_struct = compiled(host().entry::<DeclaredAgainstNameOrder, i64>("main", Source::Script("$a * 10 + $b")));
+    let ran = shaped_run(&by_struct, "main", Inputs::new().set("a", 1i64).set("b", 2i64), output_int).await;
+    assert_eq!(ran.expect("the inputs fit"), 12);
 }
 
 // -- A binding folds as the CLI's `name=<literal>` does (RFC-0087) -------
