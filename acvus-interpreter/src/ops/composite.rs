@@ -44,8 +44,8 @@ impl Op for MakeArray {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let items = self.elements.take(m);
-        m.regs().define::<true>(self.dst, Value::array(items));
+        let value = Value::array_with(|| self.elements.take(m));
+        m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
     }
 }
@@ -60,8 +60,8 @@ impl Op for MakeTuple {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let items = self.elements.take(m);
-        m.regs().define::<true>(self.dst, Value::tuple(items));
+        let value = Value::tuple_with(|| self.elements.take(m));
+        m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
     }
 }
@@ -85,7 +85,7 @@ impl Op for MakeObject {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let object = Value::object_filled(Arc::clone(&self.shape), |at| {
+        let object = Value::object_filled(&self.shape, |at| {
             let word = match self.fields[at.index()] {
                 Some(at) => regs.read(at),
                 None => Value::UNDEF,

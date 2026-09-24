@@ -1,7 +1,5 @@
 //! `==` and `clone` at a structural type, component by component (RFC-0020).
 
-use std::sync::Arc;
-
 use acvus_extern::{Ctx, Instance, Owned, core};
 use acvus_utils::Astr;
 
@@ -121,37 +119,35 @@ impl Shape {
                     clone.call(ctx, owned(value), ()).into_value(acvus_extern::Holding::new())
                 }
                 Shape::Never => unreachable!("no value of type `!` exists to copy"),
-                Shape::Array(element) => Value::array(
+                Shape::Array(element) => Value::array_with(|| {
                     value
                         .as_array()
                         .iter()
                         .map(|part| copied(element, part))
-                        .collect(),
-                ),
-                Shape::Tuple(parts) => Value::tuple(
+                        .collect()
+                }),
+                Shape::Tuple(parts) => Value::tuple_with(|| {
                     parts
                         .iter()
                         .zip(value.as_tuple())
                         .map(|(shape, part)| copied(shape, part))
-                        .collect(),
-                ),
-                Shape::Object(fields) => Value::object(
-                    Arc::clone(value.as_shape()),
+                        .collect()
+                }),
+                Shape::Object(fields) => Value::object_with(value.as_shape(), || {
                     fields
                         .iter()
                         .zip(value.as_object())
                         .map(|(shape, part)| copied(shape, part))
-                        .collect(),
-                ),
+                        .collect()
+                }),
                 Shape::Variant(arms) => {
                     let held = value.as_variant();
-                    let payload = match Shape::arm(arms, held.tag()) {
+                    Value::variant_with(**held.tag(), || match Shape::arm(arms, held.tag()) {
                         Some(shape) => copied(shape, held.payload()),
                         // SAFETY (`from_value`, inside the block above):
                         // `UNDEF` owns nothing.
                         None => Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF),
-                    };
-                    Value::variant_of(**held.tag(), payload)
+                    })
                 }
                 Shape::Option(payload) => match value.option_payload() {
                     None => *value,
