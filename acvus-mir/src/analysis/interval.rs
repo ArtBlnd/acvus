@@ -22,7 +22,7 @@ use acvus_ast::Literal;
 
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{BinOp, Callee, ForSource, InstKind, PathSeg, RefTarget, Traversal, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, InstKind, PathSeg, RefTarget, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
 use crate::ty::{IntTy, Mutability, Ty};
 
@@ -592,7 +592,6 @@ impl<'a> Domain<'a> {
             | InstKind::Diamond { .. }
             | InstKind::Switch { .. }
             | InstKind::For { .. }
-            | InstKind::ForParts { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge => {
                 unreachable!("a block's instructions hold no control flow: {kind:?}")
@@ -980,24 +979,23 @@ impl<'a> Domain<'a> {
                     push(block_of(label), args, Supplied::Nothing, None);
                 }
             }
-            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-                let Traversal {
-                    source,
-                    body,
-                    body_args,
-                    exit,
-                    exit_trip,
-                    exit_args,
-                } = term.traversal().expect("a `For` or a `ForParts`");
-                let supplied = match source {
+            Terminator::For {
+                source,
+                stages,
+                exit,
+                exit_trip,
+                exit_args,
+            } => {
+                let supplied = match *source {
                     ForSource::Range { at, hi } => Supplied::Counter { at, hi },
                     ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => {
                         Supplied::Unknown(source.supplied_params())
                     }
                 };
-                push(block_of(&body), body_args, supplied, None);
+                let body = stages.body();
+                push(block_of(&body), &[], supplied, None);
                 let trip = Supplied::Unknown(exit_trip.supplied_params());
-                push(block_of(&exit), exit_args, trip, None);
+                push(block_of(exit), exit_args, trip, None);
             }
             Terminator::Fallthrough => {
                 let next = BlockIdx(b.0 + 1);

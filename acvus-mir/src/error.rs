@@ -482,6 +482,10 @@ pub enum MirErrorKind {
     /// A `$` input nothing that reads it gives a type, so no value can be
     /// supplied for it.
     InputTypeUndecided(String),
+    UndeclaredInput {
+        input: String,
+        reader: String,
+    },
     BindingTypeMismatch {
         name: String,
         value: crate::graph::BoundValue,
@@ -1168,6 +1172,12 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "`${name}` is bound to {}, which is not a value of {}, the type its uses require",
                     value.display(interner),
                     ty.shown(interner)
+                )
+            }
+            MirErrorKind::UndeclaredInput { input, reader } => {
+                write!(
+                    f,
+                    "`{reader}` reads the input `{input}`, which is neither declared here nor bound"
                 )
             }
             MirErrorKind::InputTypeUndecided(name) => {

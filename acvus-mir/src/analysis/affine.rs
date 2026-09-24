@@ -36,7 +36,7 @@ use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
 
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, Term};
-use crate::cfg::{BlockIdx, CfgBody};
+use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, InstKind, ValueId};
 use crate::ty::Ty;
 
@@ -271,11 +271,11 @@ impl Arithmetic {
 /// # Panics
 /// If `header` does not end in a `For`, or its body label names no block.
 pub fn for_body(cfg: &CfgBody, header: BlockIdx) -> BlockIdx {
-    let Some(traversal) = cfg.blocks[header.0].terminator.traversal() else {
+    let Terminator::For { stages, .. } = &cfg.blocks[header.0].terminator else {
         panic!(
             "block {} is a `for` header and does not end in `For`",
             header.0
         )
     };
-    cfg.label_to_block[&traversal.body]
+    cfg.label_to_block[&stages.body()]
 }

@@ -374,6 +374,13 @@ where
 {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
     let body = prepared.main.as_ref();
+    assert_eq!(
+        args.len(),
+        body.params.len(),
+        "{id:?} is run with {} arguments, and it takes {}",
+        args.len(),
+        body.params.len()
+    );
     let (mut cells, rt) = FrameCells::open(Store::new(), &rt);
     let (mut regs, _) = cells.store().bind(body);
     open_frame(body, &mut regs);

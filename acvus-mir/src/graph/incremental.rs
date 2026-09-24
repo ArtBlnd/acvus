@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::error::Refusal;
 use crate::ir::MirModule;
 use crate::laws::LawTable;
-use crate::ty::{PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
+use crate::ty::{InputParam, PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
 use crate::typeck::ProbeProduct;
 
 use super::extract::{ParsedSource, extract, extract_one};
@@ -18,7 +18,7 @@ use super::infer::{
     FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, solve_contexts,
     tarjan_scc,
 };
-use super::lower::{close_fetched_first, lower_one};
+use super::lower::{close_fetched_first, inputs_of, lower_one};
 use super::optimize::{Opt, optimize};
 use super::types::*;
 
@@ -209,13 +209,12 @@ impl IncrementalGraph {
         let Some(meta) = self.fn_meta(qref) else {
             return Vec::new();
         };
-        meta.params
+        meta.inputs
             .iter()
-            .filter(|param| param.ty != Ty::Never)
-            .filter(|param| self.bindings.get(param.name).is_none())
-            .map(|param| ContextInfo {
-                name: QualifiedRef::root(param.name),
-                ty: param.ty.clone(),
+            .filter(|input| input.ty != Ty::Never)
+            .map(|input| ContextInfo {
+                name: QualifiedRef::root(input.name),
+                ty: input.ty.clone(),
             })
             .collect()
     }
@@ -345,13 +344,14 @@ impl IncrementalGraph {
         // An SCC before the probe's reaches no body the probe changed, so
         // its members' types are the ones the graph settled.
         let mut resolved_fn_types = self.extern_fn_types();
+        let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
         for member in scc_order[..at].iter().flatten() {
             let settled = self.fn_to_scc[member];
-            let resolved = &self.infer_cache[settled]
+            let inferred = self.infer_cache[settled]
                 .as_ref()
-                .expect("every SCC was inferred by the last settle")
-                .resolved_types[member];
-            resolved_fn_types.insert(*member, lift_to_poly(resolved));
+                .expect("every SCC was inferred by the last settle");
+            resolved_fn_types.insert(*member, lift_to_poly(&inferred.resolved_types[member]));
+            resolved_inputs.insert(*member, inferred.resolved_inputs[member].clone());
         }
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
@@ -382,6 +382,7 @@ impl IncrementalGraph {
             &parsed_for_scc,
             &self.solved,
             &resolved_fn_types,
+            &resolved_inputs,
             &super::infer::declared_bounds(self.functions.values()),
             &mut sources,
             &self.types,
@@ -483,6 +484,7 @@ impl IncrementalGraph {
 
     fn run_infer(&mut self) {
         let mut resolved_fn_types = self.extern_fn_types();
+        let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
@@ -508,6 +510,7 @@ impl IncrementalGraph {
                             .iter()
                             .map(|(&k, v)| (k, lift_to_poly(v))),
                     );
+                    resolved_inputs.extend(cached.resolved_inputs.clone());
                 }
                 continue;
             }
@@ -526,6 +529,7 @@ impl IncrementalGraph {
                 &parsed_owned,
                 &self.solved,
                 &resolved_fn_types,
+                &resolved_inputs,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
                 &self.types,
@@ -538,6 +542,7 @@ impl IncrementalGraph {
                     .iter()
                     .map(|(&k, v)| (k, lift_to_poly(v))),
             );
+            resolved_inputs.extend(result.resolved_inputs.clone());
             self.infer_cache[scc_idx] = Some(result);
         }
     }
@@ -552,6 +557,7 @@ impl IncrementalGraph {
 
         // Re-run infer from this SCC onwards.
         let mut resolved_fn_types = self.extern_fn_types();
+        let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
@@ -575,6 +581,7 @@ impl IncrementalGraph {
                         .iter()
                         .map(|(&k, v)| (k, lift_to_poly(v))),
                 );
+                resolved_inputs.extend(cached.resolved_inputs.clone());
             }
         }
 
@@ -592,6 +599,7 @@ impl IncrementalGraph {
                             .iter()
                             .map(|(&k, v)| (k, lift_to_poly(v))),
                     );
+                    resolved_inputs.extend(cached.resolved_inputs.clone());
                 }
                 continue;
             }
@@ -599,7 +607,7 @@ impl IncrementalGraph {
             let scc = &self.scc_order[scc_idx];
             let old_types = self.infer_cache[scc_idx]
                 .as_ref()
-                .map(|r| r.resolved_types.clone());
+                .map(|r| (r.resolved_types.clone(), r.resolved_inputs.clone()));
 
             let parsed_for_scc: FxHashMap<QualifiedRef, &ParsedSource> = scc
                 .iter()
@@ -615,6 +623,7 @@ impl IncrementalGraph {
                 &parsed_for_scc,
                 &self.solved,
                 &resolved_fn_types,
+                &resolved_inputs,
                 &super::infer::declared_bounds(self.functions.values()),
                 &mut self.sources,
                 &self.types,
@@ -624,7 +633,9 @@ impl IncrementalGraph {
             // Early cutoff: if types didn't change, don't propagate.
             let types_changed = old_types
                 .as_ref()
-                .map(|old| old != &result.resolved_types)
+                .map(|(types, inputs)| {
+                    types != &result.resolved_types || inputs != &result.resolved_inputs
+                })
                 .unwrap_or(true);
 
             if types_changed {
@@ -653,6 +664,7 @@ impl IncrementalGraph {
                     .iter()
                     .map(|(&k, v)| (k, lift_to_poly(v))),
             );
+            resolved_inputs.extend(result.resolved_inputs.clone());
             self.infer_cache[scc_idx] = Some(result);
         }
     }
@@ -685,6 +697,12 @@ impl IncrementalGraph {
             .copied()
             .filter(|qref| !self.lower_cache.contains_key(qref))
             .collect();
+        let callee_inputs = inputs_of(
+            self.infer_cache
+                .iter()
+                .flatten()
+                .flat_map(|inferred| &inferred.outcomes),
+        );
         for qref in to_lower {
             let lowered = {
                 let Some(outcome) = self.outcome(qref) else {
@@ -695,6 +713,7 @@ impl IncrementalGraph {
                     &self.extract_cache[&qref].parsed,
                     outcome,
                     &self.bindings,
+                    &callee_inputs,
                 )
             };
             let Some(lowered) = lowered else {
@@ -796,7 +815,8 @@ impl IncrementalGraph {
         let solved = solve_contexts(&self.interner, &graph, &extract(&self.interner, &graph));
         let same = |a: &[Context], b: &[Context]| {
             a.len() == b.len()
-                && a.iter().all(|a| b.iter().any(|b| a.qref == b.qref && a.ty == b.ty))
+                && a.iter()
+                    .all(|a| b.iter().any(|b| a.qref == b.qref && a.ty == b.ty))
         };
         let changed = !same(&self.solved, &solved);
         self.solved = solved;

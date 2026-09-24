@@ -978,6 +978,32 @@ struct ExternParam {
     name: Astr,
     ty: InferTy,
     first_read: Option<Span>,
+    origin: ParamOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamOrigin {
+    Declared,
+    Bound,
+    Read(Reader),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    ThisBody,
+    Reached(QualifiedRef),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedParam {
+    pub name: Astr,
+    pub ty: Ty,
+    pub origin: ParamOrigin,
+}
+
+struct InputRead {
+    ty: InferTy,
+    admitted: bool,
 }
 
 /// A `$name` the host bound, typed in this body before it was checked
@@ -1090,8 +1116,8 @@ pub struct TypeResolution {
     /// The return type of the function each `?` leaves early from (RFC-0038).
     pub try_returns: FxHashMap<AstId, Ty>,
     pub tail_ty: Ty,
-    /// Extern parameters ($name) discovered during typecheck.
-    pub extern_params: Vec<(Astr, Ty)>,
+    /// Every `$name` of the body in the order its module takes them.
+    pub extern_params: Vec<ResolvedParam>,
     /// A lambda's captures, keyed by the lambda's own `AstId`. The lowering
     /// takes this list as the closure's captures, and the same lambda's
     /// `Fn { captures }` in `type_map` holds those names' types positionally,
@@ -1914,6 +1940,7 @@ where
                 name: param.name,
                 ty: param.ty,
                 first_read: None,
+                origin: ParamOrigin::Declared,
             }));
         self
     }
@@ -1933,6 +1960,7 @@ where
                 name,
                 ty,
                 first_read: None,
+                origin: ParamOrigin::Bound,
             });
             self.bound_inputs.push(BoundInput {
                 name,
@@ -5356,10 +5384,9 @@ where
         self.context_uses.entry(qref).or_insert(span);
     }
 
-    /// Every `$name` this body reads, at the type the solve closed it to.
     /// A parameter a Signature declared has no place of its own, so a type
     /// that does not close is refused at the body.
-    fn frozen_extern_params(&mut self, body: Span) -> Vec<(Astr, Ty)> {
+    fn frozen_extern_params(&mut self, body: Span) -> Vec<ResolvedParam> {
         let params = std::mem::take(&mut self.param_types);
         params
             .iter()
@@ -5371,9 +5398,85 @@ where
                     let name = self.interner.resolve(param.name).to_string();
                     self.error(MirErrorKind::InputTypeUndecided(name), at);
                 }
-                (param.name, closed)
+                ResolvedParam {
+                    name: param.name,
+                    ty: closed,
+                    origin: param.origin,
+                }
             })
             .collect()
+    }
+
+    fn read_input(&mut self, name: Astr, span: Span, reader: Reader) -> InputRead {
+        if let Some(bound) = self.bound_inputs.iter_mut().find(|b| b.name == name) {
+            bound.first_read.get_or_insert(span);
+        }
+        let read = match self.param_types.iter().find(|p| p.name == name) {
+            Some(param) => InputRead {
+                ty: param.ty.clone(),
+                admitted: true,
+            },
+            None => match self.inputs {
+                Inputs::FromReads => {
+                    let ty = self.solver.fresh_ty_var();
+                    self.param_types.push(ExternParam {
+                        name,
+                        ty: ty.clone(),
+                        first_read: Some(span),
+                        origin: ParamOrigin::Read(reader),
+                    });
+                    InputRead { ty, admitted: true }
+                }
+                Inputs::Declared => {
+                    let input = format!("${}", self.interner.resolve(name));
+                    let refusal = match reader {
+                        Reader::ThisBody => MirErrorKind::UndefinedVariable {
+                            name: input,
+                            near: DidYouMean::default(),
+                        },
+                        Reader::Reached(reader) => MirErrorKind::UndeclaredInput {
+                            input,
+                            reader: self.interner.resolve(reader.name).to_string(),
+                        },
+                    };
+                    self.error(refusal, span);
+                    InputRead {
+                        ty: Self::infer_error(),
+                        admitted: false,
+                    }
+                }
+            },
+        };
+        let capturing: Vec<usize> = (0..self.lambda_stack.len()).collect();
+        self.captured_by(name, &read.ty, &capturing);
+        read
+    }
+
+    /// A call to a local function reads, in the caller, each `$` the
+    /// callee's reachable code reads, and the lowering passes those values
+    /// (RFC-0071 rule 4).
+    fn pass_inputs(&mut self, callee: QualifiedRef, span: Span) {
+        let env = self.env;
+        let Some(inputs) = env.inputs.get(&callee) else {
+            return;
+        };
+        for input in inputs {
+            let read = self.read_input(input.name, span, Reader::Reached(input.reader));
+            if !read.admitted {
+                continue;
+            }
+            let passed = crate::ty::lift_ty(&input.ty);
+            if self.solver.unify(&read.ty, &passed).is_err() {
+                let got = self.type_as_written(&read.ty);
+                self.error(
+                    MirErrorKind::UnificationFailure {
+                        expected: input.ty.clone(),
+                        got,
+                    },
+                    span,
+                );
+            }
+        }
     }
 
     fn named_context_types(&self) -> FxHashMap<QualifiedRef, Ty> {
@@ -5850,6 +5953,7 @@ where
                     source_begins: call.callee.span,
                 };
                 let (call_type, callee) = self.instantiate_call(qref, &scheme, site);
+                self.pass_inputs(qref, call.span);
                 let ret = self.call_one(&call_type, first.as_ref(), call.args, call.span);
                 self.record(call.callee.id, call_type.ty);
                 self.calls
@@ -5957,6 +6061,16 @@ where
         receiver: Option<OpenReceiver<S>>,
         call: &NamedCall<'_, S>,
     ) -> InferTy {
+        // Which candidate the call settles on is known only once the solve
+        // has run, after this body's inputs are fixed, so the inputs of
+        // every local function among the candidates are read here. A
+        // candidate the call does not settle on leaves its reads unread,
+        // and `graph::optimize` removes such an input from the module.
+        for candidate in &candidates {
+            if let SignatureCandidate::Named { qref, .. } = candidate {
+                self.pass_inputs(*qref, call.span);
+            }
+        }
         let mut narrowing = Narrowing {
             options: candidates
                 .into_iter()
@@ -7421,42 +7535,11 @@ where
                 self.probe_scope(*id, *span, name.name);
                 let ty = match ref_kind {
                     RefKind::ExternParam => {
-                        if let Some(bound) =
-                            self.bound_inputs.iter_mut().find(|b| b.name == name.name)
-                        {
-                            bound.first_read.get_or_insert(*span);
+                        let read = self.read_input(name.name, *span, Reader::ThisBody);
+                        if read.admitted {
+                            self.resolved.record(*id, Resolved::Input(name.name));
                         }
-                        let ty = match self.param_types.iter().find(|p| p.name == name.name) {
-                            Some(param) => {
-                                self.resolved.record(*id, Resolved::Input(name.name));
-                                param.ty.clone()
-                            }
-                            None => match self.inputs {
-                                Inputs::FromReads => {
-                                    let ty = self.solver.fresh_ty_var();
-                                    self.param_types.push(ExternParam {
-                                        name: name.name,
-                                        ty: ty.clone(),
-                                        first_read: Some(*span),
-                                    });
-                                    self.resolved.record(*id, Resolved::Input(name.name));
-                                    ty
-                                }
-                                Inputs::Declared => {
-                                    self.error(
-                                        MirErrorKind::UndefinedVariable {
-                                            name: format!("${}", self.interner.resolve(name.name)),
-                                            near: DidYouMean::default(),
-                                        },
-                                        *span,
-                                    );
-                                    Self::infer_error()
-                                }
-                            },
-                        };
-                        let capturing: Vec<usize> = (0..self.lambda_stack.len()).collect();
-                        self.captured_by(name.name, &ty, &capturing);
-                        ty
+                        read.ty
                     }
                     RefKind::Value => match self.lookup_var(name.name) {
                         Some((ty, binder)) => {
@@ -9412,6 +9495,7 @@ mod tests {
             contexts: qref_contexts,
             functions: qref_functions,
             machine: FxHashMap::default(),
+            inputs: FxHashMap::default(),
         };
         let checker = TypeChecker::new(interner, &env, &mut solver, Inputs::Declared);
         let resolution = checker
@@ -9450,12 +9534,10 @@ mod tests {
             contexts: FxHashMap::default(),
             functions: FxHashMap::default(),
             machine: FxHashMap::default(),
+            inputs: FxHashMap::default(),
         };
-        let checked = TypeChecker::new(&interner, &env, &mut solver, Inputs::Declared).check_script(
-            &script,
-            None,
-            ResultCrossing::Registers,
-        );
+        let checked = TypeChecker::new(&interner, &env, &mut solver, Inputs::Declared)
+            .check_script(&script, None, ResultCrossing::Registers);
         let Ok(resolution) = &checked.resolution else {
             panic!("the body is accepted: {:?}", checked.resolution.err());
         };

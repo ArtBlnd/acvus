@@ -13,7 +13,8 @@ use acvus_interpreter::{
     prepare_module,
 };
 use acvus_mir::ir::{
-    DebugInfo, ExternInstance, IndexBound, IndexMode, Inst, InstKind, MirBody, MirModule, RefTarget, ValueId,
+    DebugInfo, ExternInstance, IndexBound, IndexMode, Inst, InstKind, MirBody, MirModule,
+    RefTarget, ValueId,
 };
 use acvus_mir::ty::{IntTy, LenTerm, Mutability, Task, Ty, TypeArg};
 use acvus_mir::validate::{ValidationErrorKind, validate};
@@ -118,6 +119,7 @@ async fn run_with(
         .map(|qref| (qref, qref.name))
         .collect();
     let module = MirModule {
+        declared_params: body.params.len(),
         main: body,
         closures: FxHashMap::default(),
         ret,
@@ -547,6 +549,7 @@ fn indexing_body(interner: &Interner, element: Ty, mode: IndexMode, dst_ty: Ty) 
 
 fn refusals(body: MirBody, ret: Ty) -> Vec<ValidationErrorKind> {
     let module = MirModule {
+        declared_params: body.params.len(),
         main: body,
         closures: FxHashMap::default(),
         ret,

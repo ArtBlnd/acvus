@@ -300,9 +300,9 @@ second is the case the hoist cannot reach: control equivalence keeps a
 `Const` inside the body, yet it reads nothing and writes the same word every
 time. Such a constant is re-emitted above the header, not moved.
 
-**Only a counter read in an `InOrder` join is reduced** (RFC-0066 rule
-7). A counter that feeds a pure stage or an unordered join is canonicalized
-instead, so each iteration computes `i * k + x` from its own `i`. A derived
+**Only a counter expression read in one `InOrder` join is reduced**
+(RFC-0066 rule 7), after the stages are written; its step joins that join.
+Elsewhere each iteration computes `i * k + x` from its own `i`. A derived
 counter would carry that value from the previous iteration and order what
 reads it. An `InOrder` join runs in order already, so the reduction costs
 it nothing.
@@ -326,10 +326,11 @@ point the accumulated form is a different number, and on mandelbrot's grid
 34 of 20000 pixels reach a different escape count. A multiplication that does
 not run on every iteration is not reduced.
 
-The pass runs after `code_motion` and before `reorder`. The hoist is what
-puts `k` and `x` above the header and leaves the preheader a block of its
-own. The reorder schedules within a block and must see the instructions this
-pass adds.
+The pass runs after the stages are written (RFC-0089 rule 8) and before
+`bce`. `code_motion` has put `k` and `x` above the header and left the
+preheader a block of its own. No value numbering follows, so the pass writes
+its start and step already folded where their operands are constants: a
+start `0 * k + x` is `x`.
 
 **Why.** Two passes asking what a loop is, with two answers, is the failure
 the shared definition prevents. The reduction must not change a result.
@@ -507,14 +508,17 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    is its `&mut` source's element, joined `Disjoint`.
 
 7. **One normalization per induction variable.** IV canonicalization
-   rewrites an `Iv` into `base + k·step` in the body, `k` read off the
-   counter, and `base + trip·step` where it is read after the loop, from
-   the count the exit edge defines (RFC-0057 rule 9), whenever the `Iv`
-   feeds a join that is not `InOrder` or a pure stage. Strength reduction
-   (RFC-0056) applies to an `Iv` whose readers all sit in an `InOrder`
-   join, which runs in order anyway. The choice is per variable, not per
-   loop. A `while` is declined, since it states no count; a later exact
-   recognizer makes it a `for`, and this pass applies to that unchanged.
+   rewrites every `Iv` of a `for` that anything besides its own step reads
+   into `base + k·step` in the body, `k` read off the counter, and
+   `base + trip·step` where it is read after the loop, from the count the
+   exit edge defines (RFC-0057 rule 9). A rewritten `Iv` is carried no
+   longer, so it is no target and orders nothing. The choice is per
+   variable, not per loop, and reads nothing the stage pass decides. After
+   the stages are written, strength reduction (RFC-0056) reduces a counter
+   expression whose readers all sit in one `InOrder` join, and its step
+   joins that join. A `while` is declined, since it states no count; a later
+   exact recognizer makes it a `for`, and this pass applies to that
+   unchanged.
 
 8. **A cost table is the backend's, supplied from outside.** The embedder
    gives the lowerer one table for the backend it runs. The table has a row
@@ -552,15 +556,15 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
 **Why.** A normal form that holds on every target is the same program
 everywhere, so writing it into MIR decides nothing a target could decide
 better. A shape chosen for a target is a guess about the lowerer, which
-knows the target, the runtime and the actual `n`. Strength is read from the
-kind of the carried state because the kind says whether iterations can be
-reordered, and a count says only what reordering costs. The author writes
+knows the target, the runtime and the actual `n`. Order is read from the
+declarations of the operations on each target, because they say whether
+iterations can be reordered, and a count says only what reordering costs. The author writes
 the loop, and the system finds the parallelism from facts the checker
 already establishes.
 **Cost.** Three analyses built per body and read by every loop pass. A
 table per backend and a family of split operations (chunk, spawn, join
-through a merge). A loop's normalization is chosen by its strength, so
-a change in the analysis moves a loop between two passes. RFC-0057's and
+through a merge). An induction variable's normalization is chosen per
+variable, so a change in who reads it moves it between two forms. RFC-0057's and
 RFC-0064's analyses become inputs whose promises must stay stable.
 **Rejected.**
 - Unrolling, tiling, blocking or permutation as MIR passes — a lowerer's
@@ -622,7 +626,9 @@ states. How either runs is the lowerer's (RFC-0066 rule 10).
    the loop. It reads the element, the counter, values from outside the
    loop and values earlier stages defined, through shared borrows.
    `validate` refuses a pure stage that breaks this, from stage membership
-   and `analysis::loans`; nothing else about purity is assumed.
+   and `analysis::loans`; nothing else about purity is assumed. Membership is
+   one analysis, `analysis::stages`, which `validate`, the drops and
+   strength reduction read.
 
 4. **A join is the smallest slice that touches a target.** It starts at
    each instruction that reads a target's state, such as a `pop`, and holds
@@ -664,8 +670,9 @@ states. How either runs is the lowerer's (RFC-0066 rule 10).
    scattered over chunks exists.
 
 8. **Who writes it.** A pass after IV canonicalization, which is decided
-   per target rather than per loop (RFC-0066 rule 7), and after every pass
-   that moves or merges the body's instructions, writes the stages. It
+   per variable rather than per loop (RFC-0066 rule 7), and after every pass
+   that moves or merges the body's instructions, writes the stages;
+   strength reduction runs after it, inside `InOrder` joins. It
    duplicates nothing: an instruction two joins share joins them. A loop
    the pass cannot split is one `InOrder` join over everything it
    touches, and runs as written.
@@ -903,15 +910,12 @@ simplifies the integer identities below.
    removes nothing. What it leaves unread is swept by a `dce` that runs
    right after it. A `Const` is not replaced (rule 1).
 
-6. **Placement.** The pass runs after `lsr`, and so after IV
-   canonicalization (RFC-0066 rule 7). Both write arithmetic that rule 3
-   simplifies: the canonical `base + k · step`, and a reduction's start and
-   step products (RFC-0056). It runs before `forward` and `reorder`. No
-   `dce` followed the loop passes before, so one is added after this pass.
-   It also sweeps what the header arguments IV canonicalization removes
-   leave unread, which that pass swept itself before, and an induction
-   variable that `lsr` replaced and that nothing reads but its own
-   advance.
+6. **Placement.** The pass runs after IV canonicalization (RFC-0066 rule
+   7), whose canonical `base + k · step` rule 3 simplifies, and before
+   `forward`, `reorder` and the stages, since it merges values. Strength
+   reduction runs after the stages and folds its own start and step
+   (RFC-0056). A `dce` follows this pass; it sweeps what the header
+   arguments IV canonicalization removes leave unread.
 
 **Why.** IV canonicalization writes `base + (counter − at) · step`, which
 is `0 + (c − 0) * 1` for a loop that starts at 0 and counts by 1, and equals

@@ -9,7 +9,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
-use crate::ir::{Callee, InstKind, MirBody, MirModule, ValueId};
+use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::laws::LawTable;
 use crate::optimize;
 use crate::ty::Ty;
@@ -90,18 +90,25 @@ pub fn optimize(
     let mut result_modules = FxHashMap::default();
     let mut inputs = FxHashMap::default();
 
-    for (qref, mut module) in inlined.modules {
-        run_pass2_body(interner, laws, &mut module.main, opt);
-        for closure in module.closures.values_mut() {
-            run_pass2_body(interner, laws, closure, opt);
-        }
+    let mut undropped: Vec<Undropped> = inlined
+        .modules
+        .into_iter()
+        .map(|(qref, module)| Undropped::optimized(interner, laws, qref, module, opt))
+        .collect();
+    settle_inputs(&mut undropped);
+    assert_arity(&undropped);
+
+    for module in undropped {
+        let qref = module.qref;
+        let module = module.finished();
         inputs.insert(qref, required_inputs(&module.main));
 
         let mut errors = validate::type_check::check_types(&module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
-        // RFC-0089 rule 7, asked of the module after `insert_drops`, which is
-        // the last pass: the form must hold on the body the machine runs.
-        errors.extend(validate::for_parts::check(&module));
+        // RFC-0089 rules 1, 3, 5 and 7, asked of the module after
+        // `insert_drops`, which is the last pass: the form must hold on the
+        // body the machine runs.
+        errors.extend(validate::stages::check(&module));
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }
@@ -222,14 +229,198 @@ fn run_pass1_body(body: &mut crate::ir::MirBody) {
     *body = cfg::demote(cfg);
 }
 
-fn run_pass2_body(interner: &Interner, laws: &LawTable, body: &mut crate::ir::MirBody, opt: Opt) {
-    let mut cfg = cfg::promote(std::mem::take(body));
-    match opt {
-        Opt::None => run_pass2_required(interner, &mut cfg),
-        Opt::Full => run_pass2(interner, laws, &mut cfg),
+/// Inputs settle across modules before any value is dropped, so the value
+/// of an argument a call no longer passes is released by its caller's own
+/// drops.
+struct Undropped {
+    qref: QualifiedRef,
+    shell: MirModule,
+    main: CfgBody,
+    closures: Vec<(Label, CfgBody)>,
+}
+
+impl Undropped {
+    fn optimized(
+        interner: &Interner,
+        laws: &LawTable,
+        qref: QualifiedRef,
+        mut module: MirModule,
+        opt: Opt,
+    ) -> Undropped {
+        let optimized = |body: MirBody| {
+            let mut cfg = cfg::promote(body);
+            match opt {
+                Opt::None => run_pass2_required(interner, &mut cfg),
+                Opt::Full => run_pass2(interner, laws, &mut cfg),
+            }
+            cfg
+        };
+        let main = optimized(std::mem::take(&mut module.main));
+        let closures = std::mem::take(&mut module.closures)
+            .into_iter()
+            .map(|(label, closure)| (label, optimized(closure)))
+            .collect();
+        Undropped {
+            qref,
+            shell: module,
+            main,
+            closures,
+        }
     }
-    *body = cfg::demote(cfg);
-    optimize::rejoin::run(body);
+
+    fn bodies(&self) -> impl Iterator<Item = &CfgBody> {
+        std::iter::once(&self.main).chain(self.closures.iter().map(|(_, body)| body))
+    }
+
+    fn bodies_mut(&mut self) -> impl Iterator<Item = &mut CfgBody> {
+        std::iter::once(&mut self.main).chain(self.closures.iter_mut().map(|(_, body)| body))
+    }
+
+    fn finished(self) -> MirModule {
+        let finish = |mut cfg: CfgBody| {
+            debug_validate(&cfg);
+            let val_types = cfg.val_types.clone();
+            optimize::drop_insertion::insert_drops(&mut cfg, &val_types);
+            let mut body = cfg::demote(cfg);
+            optimize::rejoin::run(&mut body);
+            body
+        };
+        let Undropped {
+            shell,
+            main,
+            closures,
+            ..
+        } = self;
+        MirModule {
+            main: finish(main),
+            closures: closures
+                .into_iter()
+                .map(|(label, closure)| (label, finish(closure)))
+                .collect(),
+            ..shell
+        }
+    }
+}
+
+/// An input a module's body no longer reads after the folds is not required
+/// and is no parameter (RFC-0071 rule 5). A call passes its callee's inputs,
+/// so a parameter removed here is removed from every call to the module, and
+/// a value a caller read only to pass it is unread in turn: the removal
+/// repeats until no module loses one.
+fn settle_inputs(undropped: &mut [Undropped]) {
+    loop {
+        let mut removed: FxHashMap<QualifiedRef, Vec<usize>> = FxHashMap::default();
+        for module in undropped.iter_mut() {
+            let read = values_read(&module.main);
+            let unread: Vec<usize> = (module.shell.declared_params..module.main.params.len())
+                .filter(|at| !read.contains(&module.main.params[*at].1))
+                .collect();
+            for at in unread.iter().rev() {
+                module.main.params.remove(*at);
+            }
+            if !unread.is_empty() {
+                removed.insert(module.qref, unread);
+            }
+        }
+        if removed.is_empty() {
+            return;
+        }
+        for module in undropped.iter_mut() {
+            for body in module.bodies_mut() {
+                if strip_arguments(body, &removed) {
+                    optimize::dce::run(body);
+                }
+            }
+        }
+    }
+}
+
+fn values_read(cfg: &CfgBody) -> FxHashSet<ValueId> {
+    let mut read: FxHashSet<ValueId> = FxHashSet::default();
+    for block in &cfg.blocks {
+        for inst in &block.insts {
+            read.extend(inst_info::uses(&inst.kind));
+            if let InstKind::Ref { target, .. } | InstKind::Take { target, .. } = &inst.kind {
+                read.extend(inst_info::storage(target));
+            }
+        }
+        read.extend(inst_info::terminator_uses(&block.terminator));
+    }
+    read
+}
+
+fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usize>>) -> bool {
+    let mut stripped = false;
+    for inst in cfg.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        let (InstKind::FunctionCall {
+            callee: Callee::Direct(callee),
+            callee_ty,
+            args,
+            ..
+        }
+        | InstKind::Spawn {
+            callee: Callee::Direct(callee),
+            callee_ty,
+            args,
+            ..
+        }) = &mut inst.kind
+        else {
+            continue;
+        };
+        let Some(unread) = removed.get(callee) else {
+            continue;
+        };
+        let Ty::Fn { params, .. } = callee_ty else {
+            panic!("a call to {callee:?} is typed by its function type, not {callee_ty:?}")
+        };
+        for at in unread.iter().rev() {
+            args.remove(*at);
+            params.remove(*at);
+        }
+        stripped = true;
+    }
+    stripped
+}
+
+/// The machine's synchronous call binds the argument run without counting
+/// it against the callee's parameters, so the count is held here, where
+/// every call and every callee are in view.
+fn assert_arity(undropped: &[Undropped]) {
+    let taken: FxHashMap<QualifiedRef, usize> = undropped
+        .iter()
+        .map(|module| (module.qref, module.main.params.len()))
+        .collect();
+    for module in undropped {
+        let insts = module
+            .bodies()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.insts);
+        for inst in insts {
+            let (InstKind::FunctionCall {
+                callee: Callee::Direct(callee),
+                args,
+                ..
+            }
+            | InstKind::Spawn {
+                callee: Callee::Direct(callee),
+                args,
+                ..
+            }) = &inst.kind
+            else {
+                continue;
+            };
+            let Some(&params) = taken.get(callee) else {
+                continue;
+            };
+            assert_eq!(
+                args.len(),
+                params,
+                "{:?} calls {callee:?} with {} arguments, and it takes {params}",
+                module.qref,
+                args.len()
+            );
+        }
+    }
 }
 
 /// Which inputs a body requires is a fact about the language and not an
@@ -245,8 +436,6 @@ fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::fold::run(cfg);
     optimize::branch::run(interner, cfg);
     optimize::dce::run(cfg);
-    debug_validate(cfg);
-    optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
 fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
@@ -273,16 +462,14 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     optimize::while_to_for::run(cfg);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);
-    // RFC-0066 rule 7: the weak loops' normal form, before `lsr` reduces
-    // the strong ones; after the hoist, which leaves each loop's invariants
-    // above its header.
-    optimize::iv_canon::run(cfg, laws);
-    // RFC-0056: after the hoist, which puts a loop's invariants above the
-    // header and leaves the preheader a block of its own; before the
-    // reorder, which schedules within a block.
-    optimize::lsr::run(cfg, laws);
-    // RFC-0083: after both loop passes, whose arithmetic it simplifies and
-    // merges; before a `dce` of its own, which sweeps what it leaves unread.
+    // RFC-0066 rule 7: every induction variable of a `for` that anything
+    // besides its own step reads is computed from the counter, decided per
+    // variable; after the hoist, which leaves each loop's invariants above
+    // its header.
+    optimize::iv_canon::run(cfg);
+    // RFC-0083: after IV canonicalization, whose arithmetic it simplifies
+    // and merges; before a `dce` of its own, which sweeps what it leaves
+    // unread, the header arguments the canonicalization removed included.
     optimize::gvn::run(cfg);
     optimize::dce::run(cfg);
     // RFC-0088: after that `dce`, which sweeps the arithmetic the loop passes
@@ -290,27 +477,31 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // no instruction; before `forward`, which collapses the header the
     // removal leaves only jumping.
     optimize::empty_loop::run(cfg);
-    // A block that only jumps is its target: after `lsr`, which writes a
-    // reduction into the preheader `code_motion` may have left empty;
-    // before `reorder`, which schedules within a block.
+    // A block that only jumps is its target; before `reorder`, which
+    // schedules within a block.
     optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
-    // RFC-0089 rule 5: after every pass that moves or merges a body's
-    // instructions -- `code_motion` and `forward` across blocks, `reorder`
-    // within one -- since a part is a set of instructions and a pass that
-    // moved one across a part's boundary would join two parts after the
-    // fact; after `iv_canon`, so a weak loop carries only its counter and
-    // its merges. Before `bce`, which then reads the chain this writes as
-    // the order `validate::bounds` reads again.
-    optimize::for_parts::run(cfg, laws);
+    // RFC-0089 rule 8: after every pass that moves or merges a body's
+    // instructions -- `code_motion` and `forward` across blocks, `gvn`
+    // merging, `reorder` within one block -- since a stage is a set of
+    // instructions and a pass that moved one across a stage's boundary
+    // would put a target's write in a pure stage after the fact; after
+    // `iv_canon`, so a canonicalized induction variable is no target.
+    optimize::stages::run(cfg, laws);
+    // RFC-0056, RFC-0066 rule 7: after the stages, since it reduces only a
+    // counter expression that one `InOrder` join reads, and gives that join
+    // the derived counter and its step. It adds instructions to the
+    // preheader, the end of that join and nowhere else, and moves none.
+    optimize::lsr::run(cfg);
+    // Before `bce`, which then reads the chain the stage pass wrote as the
+    // order `validate::bounds` reads again, and before the drops, which it
+    // places in the stage that touches each value.
     // RFC-0047 rule 7: after the loop passes, which leave a range `for`
     // whose counter indexes and one hoisted `as_slice`, and after the last
     // pass that moves an instruction, so that `validate::bounds` reads the
     // order this pass read; what follows adds only `Drop`s, which the
     // interval domain does not read as a write.
     optimize::bce::run(cfg, laws);
-    debug_validate(cfg);
-    optimize::drop_insertion::insert_drops(cfg, &cfg.val_types.clone());
 }
 
 /// Until this assertion replaced it, pass 2 reported these two rules to the
@@ -446,12 +637,11 @@ fn debug_validate(cfg: &CfgBody) {
                 v.extend(else_args);
                 v
             }
-            term @ (crate::cfg::Terminator::For { .. }
-            | crate::cfg::Terminator::ForParts { .. }) => {
-                let traversal = term.traversal().expect("a `For` or a `ForParts`");
-                let mut v = traversal.source.uses().to_vec();
-                v.extend(traversal.body_args.iter());
-                v.extend(traversal.exit_args);
+            crate::cfg::Terminator::For {
+                source, exit_args, ..
+            } => {
+                let mut v = source.uses().to_vec();
+                v.extend(exit_args);
                 v
             }
             crate::cfg::Terminator::Switch { tag, arms, default } => {

@@ -8,8 +8,8 @@
 //! is. The two are the reduced and the unreduced form of one computation, in
 //! one program, on one run, and the test reads their difference. The
 //! accumulator doubles before it adds, `acc * 2 + …`: a plain sum is a merge,
-//! which makes the loop weak, and the pass reduces only strong loops
-//! (`analysis::carried`).
+//! joined `AnyOrder`, and the pass reduces only what an `InOrder` join reads
+//! (RFC-0066 rule 7).
 //!
 //! `*` and `+` wrap at the operand's width (RFC-0037), so no product of an
 //! induction variable can raise and there is no trap to move. What the

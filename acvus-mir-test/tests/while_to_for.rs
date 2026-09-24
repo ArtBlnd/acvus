@@ -85,11 +85,11 @@ impl Promoted {
     }
 
     fn body_block(&self, loop_: &Loop) -> BlockIdx {
-        let Terminator::For { body, .. } = &self.cfg.blocks[loop_.natural.header.0].terminator
+        let Terminator::For { stages, .. } = &self.cfg.blocks[loop_.natural.header.0].terminator
         else {
             panic!("the header ends in `For`");
         };
-        self.cfg.label_to_block[body]
+        self.cfg.label_to_block[&stages.body()]
     }
 
     fn readers(&self, value: ValueId) -> Vec<BlockIdx> {
@@ -277,13 +277,13 @@ fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
     while_to_for::run(&mut cfg);
     let after = snapshot(&cfg);
 
-    let Terminator::For { body, .. } = &cfg.blocks[header.0].terminator else {
+    let Terminator::For { stages, .. } = &cfg.blocks[header.0].terminator else {
         panic!(
             "the header ends in `For`: {:?}",
             cfg.blocks[header.0].terminator
         );
     };
-    let body = cfg.label_to_block[body];
+    let body = cfg.label_to_block[&stages.body()];
     let mut grew = Vec::new();
     for (b, (was, is)) in before.iter().zip(&after).enumerate() {
         if b == header.0 {

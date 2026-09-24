@@ -72,7 +72,6 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
-        | InstKind::ForParts { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge
         | InstKind::Nop => smallvec![],
@@ -211,13 +210,12 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             v.extend(else_args.iter().copied());
             v
         }
-        // The source is read once; the two edges carry the block arguments
-        // their targets take after the ones the terminator fills itself
-        // (RFC-0057).
-        kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-            let traversal = crate::ir::traversal(kind).expect("a `For` or a `ForParts`");
-            traversal_uses(&traversal)
-        }
+        // The source is read once, and the exit edge carries the block
+        // arguments its target takes after the trip count the terminator
+        // fills itself (RFC-0057).
+        InstKind::For {
+            source, exit_args, ..
+        } => traversal_uses(source, exit_args),
         // The tag is read once; every edge carries the block arguments
         // its target takes (RFC-0051).
         InstKind::Switch { tag, arms, default } => {
@@ -253,9 +251,9 @@ pub fn terminator_uses(term: &Terminator) -> SmallVec<[ValueId; 4]> {
             .chain(then_args.iter().copied())
             .chain(else_args.iter().copied())
             .collect(),
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            traversal_uses(&term.traversal().expect("a `For` or a `ForParts`"))
-        }
+        Terminator::For {
+            source, exit_args, ..
+        } => traversal_uses(source, exit_args),
         Terminator::Switch { tag, arms, default } => std::iter::once(*tag)
             .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
             .chain(default.iter().flat_map(|(_, args)| args.iter().copied()))
@@ -265,13 +263,11 @@ pub fn terminator_uses(term: &Terminator) -> SmallVec<[ValueId; 4]> {
     }
 }
 
-fn traversal_uses(traversal: &crate::ir::Traversal<'_>) -> SmallVec<[ValueId; 4]> {
-    traversal
-        .source
+fn traversal_uses(source: &crate::ir::ForSource, exit_args: &[ValueId]) -> SmallVec<[ValueId; 4]> {
+    source
         .uses()
         .into_iter()
-        .chain(traversal.body_args.iter().copied())
-        .chain(traversal.exit_args.iter().copied())
+        .chain(exit_args.iter().copied())
         .collect()
 }
 

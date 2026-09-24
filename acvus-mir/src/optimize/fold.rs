@@ -180,16 +180,13 @@ fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
             .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
             .chain(default.iter().flat_map(|(_, args)| args.iter().copied()))
             .collect(),
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            traversal
-                .source
-                .uses()
-                .into_iter()
-                .chain(traversal.body_args.iter().copied())
-                .chain(traversal.exit_args.iter().copied())
-                .collect()
-        }
+        Terminator::For {
+            source, exit_args, ..
+        } => source
+            .uses()
+            .into_iter()
+            .chain(exit_args.iter().copied())
+            .collect(),
         Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }

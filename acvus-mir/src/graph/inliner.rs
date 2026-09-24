@@ -62,6 +62,7 @@ fn inline_module(
     }
 
     MirModule {
+        declared_params: module.declared_params,
         main: body,
         closures,
         ret: module.ret.clone(),
@@ -304,12 +305,12 @@ fn direct_target<'a>(
     if makes_a_closure(&callee.main) {
         return None;
     }
-    // A `$` the callee reads is an input the host injects rather than an
-    // argument the call carries (RFC-0071 rule 4), so this call supplies
-    // no value for it and the callee is left standing.
-    if callee.main.params.len() > args.len() {
-        return None;
-    }
+    assert_eq!(
+        callee.main.params.len(),
+        args.len(),
+        "a call to {callee_id:?} passes one argument per parameter, its inputs included \
+         (RFC-0071 rule 4)"
+    );
     Some(InlineTarget {
         dst: *dst,
         callee_body: &callee.main,
@@ -1166,22 +1167,28 @@ fn remap_inst(
             else_args: rv(else_args),
             join: rl(*join),
         },
-        InstKind::For { .. } | InstKind::ForParts { .. } => {
-            let mut remapped = kind.clone();
-            let mut traversal =
-                crate::ir::traversal_mut(&mut remapped).expect("a `For` or a `ForParts`");
-            traversal.source.for_each_use(|v| *v = r(*v));
-            *traversal.body = rl(*traversal.body);
-            traversal.body_args.for_each(|v| *v = r(*v));
-            *traversal.exit = rl(*traversal.exit);
-            traversal.exit_args.iter_mut().for_each(|v| *v = r(*v));
-            if let InstKind::ForParts { parts, .. } = &mut remapped {
-                for part in parts {
-                    part.entry = rl(part.entry);
-                    part.fold_storages_mut().for_each(|v| *v = r(*v));
-                }
+        InstKind::For {
+            source,
+            stages,
+            exit,
+            exit_trip,
+            exit_args,
+        } => {
+            let mut source = *source;
+            source.for_each_use(|v| *v = r(*v));
+            let mut stages = stages.clone();
+            for stage in stages.iter_mut() {
+                let entry = stage.entry_mut();
+                *entry = rl(*entry);
             }
-            remapped
+            stages.values_mut().for_each(|v| *v = r(*v));
+            InstKind::For {
+                source,
+                stages,
+                exit: rl(*exit),
+                exit_trip: *exit_trip,
+                exit_args: rv(exit_args),
+            }
         }
         InstKind::Switch { tag, arms, default } => InstKind::Switch {
             tag: r(*tag),
@@ -1247,6 +1254,7 @@ mod tests {
 
     fn make_module(body: MirBody) -> MirModule {
         MirModule {
+            declared_params: body.params.len(),
             main: body,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
@@ -1574,6 +1582,7 @@ mod tests {
         );
 
         MirModule {
+            declared_params: main.params.len(),
             main,
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: crate::ty::Ty::Unit,

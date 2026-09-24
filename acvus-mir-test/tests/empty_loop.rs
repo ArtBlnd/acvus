@@ -11,7 +11,7 @@ use acvus_mir::analysis::inst_info;
 use acvus_mir::cfg::{Block, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{
-    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, ValueId,
+    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
 };
 use acvus_mir::optimize::{empty_loop, fold, gvn};
 use acvus_mir::printer::dump_with;
@@ -393,7 +393,7 @@ fn built(shape: Shape) -> Built {
             vec![hand.value(parts.element.clone()), hand.value(Ty::U64)]
         }
     };
-    let body_carried: Vec<ValueId> = header_params.iter().map(|_| hand.value(Ty::I64)).collect();
+    let body_carried: Vec<ValueId> = header_params.clone();
     let trip: Vec<ValueId> = match shape.exit_trip {
         ExitTrip::Defined => vec![hand.value(Ty::U64)],
         ExitTrip::Absent => Vec::new(),
@@ -409,15 +409,14 @@ fn built(shape: Shape) -> Built {
     });
     hand.push(InstKind::For {
         source: parts.source,
-        body: BODY,
-        body_args: header_params,
+        stages: Stages::lowered(BODY),
         exit: EXIT,
         exit_trip: shape.exit_trip,
         exit_args: vec![],
     });
     hand.push(InstKind::BlockLabel {
         label: BODY,
-        params: supplied.into_iter().chain(body_carried.clone()).collect(),
+        params: supplied,
     });
     match shape.body {
         BodyHolds::Nothing => hand.push(InstKind::Jump {
@@ -468,7 +467,7 @@ fn built(shape: Shape) -> Built {
 fn fors(cfg: &CfgBody) -> usize {
     cfg.blocks
         .iter()
-        .filter(|block| block.terminator.traversal().is_some())
+        .filter(|block| matches!(block.terminator, Terminator::For { .. }))
         .count()
 }
 
@@ -731,7 +730,7 @@ fn a_loop_that_carries_a_merge_stays() {
         .cfg
         .blocks
         .iter()
-        .filter(|block| block.terminator.traversal().is_some())
+        .filter(|block| matches!(block.terminator, Terminator::For { .. }))
         .collect();
     let [header] = headers.as_slice() else {
         panic!("one loop stays: {listing}")

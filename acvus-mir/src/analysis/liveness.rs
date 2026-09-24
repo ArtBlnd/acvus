@@ -80,9 +80,8 @@ impl DataflowAnalysis for LivenessAnalysis<'_, '_> {
             Terminator::Switch { tag, .. } => state.set(*tag, Liveness::Live),
             // A `For` reads the source it traverses on every iteration
             // (RFC-0057).
-            term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-                let traversal = term.traversal().expect("a `For` or a `ForParts`");
-                for v in traversal.source.uses() {
+            Terminator::For { source, .. } => {
+                for v in source.uses() {
                     state.set(v, Liveness::Live);
                 }
             }

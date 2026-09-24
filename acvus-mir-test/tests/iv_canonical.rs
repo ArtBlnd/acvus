@@ -7,20 +7,22 @@
 //! level gives it; that corpus says the shape computes the same number.
 
 use acvus_ast::{Literal, Span};
-use acvus_mir::ir::BinOp;
 use acvus_mir::analysis::affine::{AffineValues, for_body};
-use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp, Strength};
+use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
-use acvus_mir::cfg::{BlockIdx, CfgBody, promote};
+use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::{ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, ValueId};
+use acvus_mir::ir::BinOp;
+use acvus_mir::ir::{
+    ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Stages, ValueId,
+};
+use acvus_mir::laws::LawTable;
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{CastTy, IntTy, Ty};
 use acvus_mir::validate::type_check::{ValidationErrorKind, check_types};
-use acvus_mir::laws::LawTable;
 use acvus_mir_test::compile_script_at;
 use acvus_utils::{Astr, Interner, LocalFactory};
 use rustc_hash::FxHashMap;
@@ -85,17 +87,17 @@ impl Compiled {
 
     fn exit_trip(&self, loop_: &Loop) -> ExitTrip {
         let header = &self.cfg.blocks[loop_.natural.header.0].terminator;
-        match header.traversal() {
-            Some(traversal) => traversal.exit_trip,
-            None => panic!("a `for` header ends in {header:?}"),
+        match header {
+            Terminator::For { exit_trip, .. } => *exit_trip,
+            _ => panic!("a `for` header ends in {header:?}"),
         }
     }
 
     fn exit_block(&self, loop_: &Loop) -> BlockIdx {
         let header = &self.cfg.blocks[loop_.natural.header.0].terminator;
-        match header.traversal() {
-            Some(traversal) => self.cfg.label_to_block[&traversal.exit],
-            None => panic!("a `for` header ends in {header:?}"),
+        match header {
+            Terminator::For { exit, .. } => self.cfg.label_to_block[exit],
+            _ => panic!("a `for` header ends in {header:?}"),
         }
     }
 
@@ -210,7 +212,6 @@ fn a_second_counter_is_computed_from_the_first() {
         "the header carries the sum and not `j`:\n{}",
         full.listing
     );
-    assert_eq!(full.state(loop_).strength(), Strength::Weak);
 
     let LoopKind::For {
         source: ForSource::Range { at, .. },
@@ -222,7 +223,12 @@ fn a_second_counter_is_computed_from_the_first() {
     let body = for_body(&full.cfg, loop_.natural.header);
     let counter = full.cfg.blocks[body.0].params[0];
     let insts = full.insts(body);
-    assert_eq!(full.word(at), Some(0), "the range starts at 0:\n{}", full.listing);
+    assert_eq!(
+        full.word(at),
+        Some(0),
+        "the range starts at 0:\n{}",
+        full.listing
+    );
     let subtracts = insts
         .iter()
         .any(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Sub, .. }));
@@ -292,8 +298,11 @@ const RECURRENCE: &str = "let acc = 0; let j = 0; \
 const BREAK: &str = "let j = 0; let s = 0; \
      for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j";
 
+/// `j` is read by `j * @base + 1`, so it is computed from the counter; that
+/// sum is read only by `acc`'s update, its `InOrder` join, so `lsr` then
+/// carries it as a counter of its own (RFC-0066 rule 7, RFC-0056).
 #[test]
-fn a_strong_loop_is_left_to_lsr() {
+fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_iv() {
     let none = Compiled::of(RECURRENCE, Opt::None);
     let full = Compiled::of(RECURRENCE, Opt::Full);
     let [before] = none.loops_by_header()[..] else {
@@ -302,20 +311,19 @@ fn a_strong_loop_is_left_to_lsr() {
     let [loop_] = full.loops_by_header()[..] else {
         panic!("one loop:\n{}", full.listing);
     };
-    assert_eq!(full.state(loop_).strength(), Strength::Strong);
     assert_eq!(none.ivs(before), 1, "`j`:\n{}", none.listing);
     assert_eq!(
         full.ivs(loop_),
         1,
-        "`lsr` carries `j·base + 1` in `j`'s place: once the product is \
-         reduced nothing reads `j` but its own `j + 1`, and the `dce` after \
-         GVN sweeps both (RFC-0083):\n{}",
+        "`j` is the counter, and `lsr` carries `j·base + 1` in the join \
+         that reads it:\n{}",
         full.listing
     );
-    let body = for_body(&full.cfg, loop_.natural.header);
-    let products = full
-        .insts(body)
-        .iter()
+    let products = loop_
+        .natural
+        .blocks()
+        .filter(|block| *block != loop_.natural.header)
+        .flat_map(|block| full.insts(block))
         .filter(|inst| matches!(inst.kind, InstKind::BinOp { op: BinOp::Mul, .. }))
         .count();
     assert_eq!(products, 1, "only `acc * 2` multiplies:\n{}", full.listing);
@@ -325,11 +333,12 @@ fn a_strong_loop_is_left_to_lsr() {
     let [loop_] = full.loops_by_header()[..] else {
         panic!("one loop:\n{}", full.listing);
     };
-    assert_eq!(full.state(loop_).strength(), Strength::Strong);
     assert_eq!(
         full.ivs(loop_),
         1,
-        "a loop a `break` leaves keeps `j`:\n{}",
+        "the read of `j` after the loop is reached from the exit and from \
+         the `break`, and no one value is `j` on both, so `j` stays \
+         carried:\n{}",
         full.listing
     );
     assert_eq!(full.exit_trip(loop_), ExitTrip::Absent);
@@ -340,38 +349,34 @@ const BOTH: &str = "let j = 0; let s = 0; for i in 0..@n { s = s + j; j = j + 2;
      for i in 0..@n { acc = acc * 2 + (q * @base + 1); q = q + 1; } \
      s + j + acc";
 
+/// The first loop's `j` is read by the merge and after the loop, and is
+/// computed from the counter and the trip count. The second's `q` is read
+/// only by `q * @base + 1`, which `acc`'s `InOrder` join reads, and that sum
+/// is reduced to a counter of its own, the one `Iv` the loop carries.
 #[test]
-fn no_loop_is_rewritten_by_both_passes() {
+fn each_loop_computes_its_ivs_from_its_counter_and_reduces_only_in_an_in_order_join() {
     let none = Compiled::of(BOTH, Opt::None);
     let full = Compiled::of(BOTH, Opt::Full);
     let before = none.loops_by_header();
     let after = full.loops_by_header();
     assert_eq!(before.len(), 2, "{}", none.listing);
-    assert_eq!(after.len(), 2, "{}", full.listing);
-    for (before, after) in before.into_iter().zip(after) {
-        match full.state(after).strength() {
-            Strength::Weak => {
-                assert_eq!(
-                    full.ivs(after),
-                    0,
-                    "a weak loop carries only merges:\n{}",
-                    full.listing
-                );
-                assert_eq!(full.exit_trip(after), ExitTrip::Defined);
-            }
-            Strength::Strong => {
-                assert_eq!(
-                    full.ivs(after),
-                    none.ivs(before),
-                    "`lsr` adds one `Iv` to a strong loop, and the `dce` after \
-                     GVN sweeps the one it replaced, which nothing reads but \
-                     its own advance (RFC-0083):\n{}",
-                    full.listing
-                );
-                assert_eq!(full.exit_trip(after), ExitTrip::Absent);
-            }
-        }
-    }
+    let [first, second] = after[..] else {
+        panic!("two loops:\n{}", full.listing);
+    };
+    assert_eq!(
+        full.ivs(first),
+        0,
+        "the first loop carries only its sum:\n{}",
+        full.listing
+    );
+    assert_eq!(full.exit_trip(first), ExitTrip::Defined);
+    assert_eq!(
+        full.ivs(second),
+        1,
+        "the second carries the reduced counter in `q`'s place:\n{}",
+        full.listing
+    );
+    assert_eq!(full.exit_trip(second), ExitTrip::Absent);
 }
 
 // -- Nests -----------------------------------------------------------
@@ -379,24 +384,23 @@ fn no_loop_is_rewritten_by_both_passes() {
 /// Each inner loop also sums `r`, a merge it keeps carrying, so it stays a
 /// loop once `q` is canonicalized. A body that does nothing is removed
 /// (RFC-0088), which would leave one loop to judge.
-const WEAK_IN_WEAK: &str = "let v = vec([0, 0, 0]); let j = 1; \
+const SUM_INSIDE_AN_ELEMENT_LOOP: &str = "let v = vec([0, 0, 0]); let j = 1; \
      for x in &mut v { let q = j; let r = 0; for k in 0..4 { q = q + 3; r = r + k; } \
      *x = q + r; j = j + 2; } \
      j * 1000000 + v[0u64] * 10000 + v[1u64] * 100 + v[2u64]";
 
-const WEAK_IN_STRONG: &str = "let t = 0; \
+const SUM_INSIDE_A_RECURRENCE: &str = "let t = 0; \
      for i in 0..@n { let q = 0; let r = 0; for k in 0..@m { q = q + 3; r = r + k; } \
      t = t * 2 + q + r; } t";
 
 #[test]
 fn nested_loops_are_each_judged_by_their_own_state() {
-    let full = Compiled::of(WEAK_IN_WEAK, Opt::Full);
+    let full = Compiled::of(SUM_INSIDE_AN_ELEMENT_LOOP, Opt::Full);
     let [outer, inner] = full.loops_by_header()[..] else {
         panic!("two loops:\n{}", full.listing);
     };
     assert!(outer.natural.contains(inner.natural.header));
     for (loop_, carried) in [(outer, vec![]), (inner, vec![exact_add()])] {
-        assert_eq!(full.state(loop_).strength(), Strength::Weak);
         assert_eq!(
             full.carried(loop_),
             carried,
@@ -411,13 +415,11 @@ fn nested_loops_are_each_judged_by_their_own_state() {
         );
     }
 
-    let full = Compiled::of(WEAK_IN_STRONG, Opt::Full);
+    let full = Compiled::of(SUM_INSIDE_A_RECURRENCE, Opt::Full);
     let [outer, inner] = full.loops_by_header()[..] else {
         panic!("two loops:\n{}", full.listing);
     };
-    assert_eq!(full.state(outer).strength(), Strength::Strong);
     assert_eq!(full.exit_trip(outer), ExitTrip::Absent);
-    assert_eq!(full.state(inner).strength(), Strength::Weak);
     assert_eq!(full.carried(inner), vec![exact_add()], "{}", full.listing);
     assert_eq!(full.exit_trip(inner), ExitTrip::Defined);
 }
@@ -427,7 +429,7 @@ fn nested_loops_are_each_judged_by_their_own_state() {
 const WHILE: &str = "let j = 0; let i = 0; while i <= 4 { j = j + 2; i = i + 1; } j";
 
 #[test]
-fn a_weak_while_is_untouched() {
+fn a_while_is_untouched() {
     let none = Compiled::of(WHILE, Opt::None);
     let full = Compiled::of(WHILE, Opt::Full);
     let [before] = none.loops_by_header()[..] else {
@@ -437,14 +439,19 @@ fn a_weak_while_is_untouched() {
         panic!("one loop:\n{}", full.listing);
     };
     assert!(matches!(loop_.kind, LoopKind::While));
-    assert_eq!(full.state(loop_).strength(), Strength::Weak);
     assert_eq!(full.carried(loop_), none.carried(before));
     assert_eq!(full.ivs(loop_), 2, "`i` and `j`:\n{}", full.listing);
 }
 
 #[test]
 fn no_level_below_full_asks_for_a_count() {
-    for source in [SECOND_COUNTER, MERGE, BOTH, WEAK_IN_WEAK, WEAK_IN_STRONG] {
+    for source in [
+        SECOND_COUNTER,
+        MERGE,
+        BOTH,
+        SUM_INSIDE_AN_ELEMENT_LOOP,
+        SUM_INSIDE_A_RECURRENCE,
+    ] {
         let none = Compiled::of(source, Opt::None);
         for loop_ in none.loops_by_header() {
             if matches!(loop_.kind, LoopKind::For { .. }) {
@@ -523,8 +530,7 @@ fn hand_built(trip_ty: Ty, entries: ExitEntries) -> MirModule {
         }),
         inst(InstKind::For {
             source: ForSource::Range { at, hi },
-            body,
-            body_args: vec![],
+            stages: Stages::lowered(body),
             exit,
             exit_trip: ExitTrip::Defined,
             exit_args: vec![],
@@ -547,6 +553,7 @@ fn hand_built(trip_ty: Ty, entries: ExitEntries) -> MirModule {
         }),
     ]);
     MirModule {
+        declared_params: 0,
         main: MirBody {
             insts,
             val_types,

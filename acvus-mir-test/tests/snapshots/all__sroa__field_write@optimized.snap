@@ -6,7 +6,7 @@ expression: listing
      0 |   r0 = fetch @n
      3 |   jump L0(0 (r1))
      4 | L0(r2: i64):
-     5 |   for range(0 (r3)..r0) -> L1 else L2 parts [L1(r2): law(Op(Add) exact commutative)]
+     5 |   for range(0 (r3)..r0) -> L1 else L2 stages [L1: join(r2) any_order law(Op(Add) exact commutative)]
      6 | L1(r4: i64):
      7 |   r5 = r2 + r4
      8 |   jump L0(r5)

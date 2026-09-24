@@ -46,7 +46,10 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Callee, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
+use crate::ir::{
+    Callee, ExitTrip, ForSource, Inst, InstKind, Label, Stages, ValOrigin, ValueId,
+};
+use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{Mutability, Ty};
 
 pub fn run(cfg: &mut CfgBody) {
@@ -485,12 +488,22 @@ impl Counted {
                 renamed[&value]
             }
         };
+        // The body block's one predecessor is the header, so each of its
+        // parameters is the argument the `then` edge passed, and the body
+        // reads that value by dominance (RFC-0089 rule 1).
+        let passed = std::mem::take(&mut cfg.blocks[self.body_block.0].params);
+        let subst: FxHashMap<ValueId, ValueId> = passed.into_iter().zip(self.body_args).collect();
+        for block in &mut cfg.blocks {
+            for inst in &mut block.insts {
+                apply_subst(&mut inst.kind, &subst);
+            }
+            apply_subst_terminator(&mut block.terminator, &subst);
+        }
         let counter = fresh(cfg, &ty);
-        cfg.blocks[self.body_block.0].params.insert(0, counter);
+        cfg.blocks[self.body_block.0].params.push(counter);
         cfg.blocks[self.header.0].terminator = Terminator::For {
             source: ForSource::Range { at: self.at, hi },
-            body: self.body,
-            body_args: self.body_args,
+            stages: Stages::lowered(self.body),
             exit: self.exit,
             exit_args: self.exit_args,
             exit_trip: ExitTrip::Absent,

@@ -73,6 +73,7 @@ async fn spawn_eval_basic() {
             }),
         ];
         MirModule {
+            declared_params: 1,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 task: Task::Sync,
@@ -123,6 +124,7 @@ async fn spawn_eval_basic() {
             }),
         ];
         MirModule {
+            declared_params: 0,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 // An `Eval` awaits (RFC-0046).
@@ -168,7 +170,10 @@ async fn spawn_eval_basic() {
     let shared = make_context(&interner, functions);
     let page = empty_page();
     let mut interp = Interpreter::new(shared, entry_id, page);
-    let result = interp.execute().await.expect("the page holds every context the run fetches first");
+    let result = interp
+        .execute()
+        .await
+        .expect("the page holds every context the run fetches first");
 
     assert_eq!(result.as_int(), 42);
 }
@@ -198,6 +203,7 @@ async fn spawn_eval_multi_args() {
             }),
         ];
         MirModule {
+            declared_params: 2,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 task: Task::Sync,
@@ -255,6 +261,7 @@ async fn spawn_eval_multi_args() {
             }),
         ];
         MirModule {
+            declared_params: 0,
             main: MirBody {
                 demoted_diamonds: Default::default(),
                 // An `Eval` awaits (RFC-0046).
@@ -301,7 +308,10 @@ async fn spawn_eval_multi_args() {
     let shared = make_context(&interner, functions);
     let page = empty_page();
     let mut interp = Interpreter::new(shared, entry_id, page);
-    let result = interp.execute().await.expect("the page holds every context the run fetches first");
+    let result = interp
+        .execute()
+        .await
+        .expect("the page holds every context the run fetches first");
 
     assert_eq!(result.as_int(), 42);
 }

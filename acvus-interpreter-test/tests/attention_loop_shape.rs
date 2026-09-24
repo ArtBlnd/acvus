@@ -62,8 +62,9 @@ fn attention_loops() -> Vec<LoopShape> {
 /// `AsSlice` and no drop — a slice is a register pair the frame never owns
 /// (RFC-0047 rule 6).
 ///
-/// The last loop's back edge carries one move: its body's `CallExtern2`
-/// writes the accumulator the head reads.
+/// No back edge carries a move: a counter the body reads is computed from
+/// the `for` counter (RFC-0066 rule 7), so nothing is carried to the head
+/// but what the terminator advances.
 #[test]
 fn each_loop_runs_only_what_its_own_nesting_level_holds() {
     let shapes: Vec<String> = attention_loops()
@@ -74,9 +75,9 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
         shapes,
         [
             "body 3 back 0",
-            "body 9 back 0",
+            "body 8 back 0",
             "body 6 back 0",
-            "body 7 back 1",
+            "body 5 back 0",
         ],
         "an operation in a head it does not belong to, or a back edge that moves, is a hoist that went too deep or a register it lengthened"
     );

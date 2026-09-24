@@ -1,6 +1,6 @@
-//! Loops `optimize::for_parts` writes as a `ForParts` run in place to the
-//! value the source computes (RFC-0089 rule 2), each checked against a hand
-//! computation and against the listing holding the form.
+//! Loops `optimize::stages` writes as several stages run in place to the
+//! value the source computes (RFC-0089 rule 1), each checked against a hand
+//! computation and against the loop's stages.
 
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -15,20 +15,35 @@ fn registries() -> Vec<acvus_extern::Registry<AcvusRuntime>> {
     registries
 }
 
-fn listing(interner: &Interner, source: &str) -> String {
+struct Listed {
+    shown: String,
+    stages: usize,
+}
+
+fn listing(interner: &Interner, source: &str) -> Listed {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse error"));
     let compiled =
         compile_source_with_externs(interner, ast, &FxHashMap::default(), registries(), Ty::I64);
-    acvus_mir::printer::dump_with(interner, &compiled.modules[&compiled.entry_qref])
+    let module = &compiled.modules[&compiled.entry_qref];
+    let cfg = acvus_mir::cfg::promote(module.main.clone());
+    let stages = cfg
+        .blocks
+        .iter()
+        .find_map(|block| match &block.terminator {
+            acvus_mir::cfg::Terminator::For { stages, .. } => Some(stages.len()),
+            _ => None,
+        })
+        .unwrap_or(0);
+    Listed {
+        shown: acvus_mir::printer::dump_with(interner, module),
+        stages,
+    }
 }
 
 async fn run_to(source: &str, expected: i64) {
     let interner = Interner::new();
-    let shown = listing(&interner, source);
-    assert!(
-        shown.contains(" parts ["),
-        "the loop states its parts:\n{shown}"
-    );
+    let Listed { shown, stages } = listing(&interner, source);
+    assert!(stages > 1, "the loop is several stages:\n{shown}");
     let ran =
         run_script_with_externs(&interner, source, Context::default(), registries(), Ty::I64).await;
     assert_eq!(ran.value.as_int(), expected, "{shown}");

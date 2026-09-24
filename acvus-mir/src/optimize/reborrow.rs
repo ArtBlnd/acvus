@@ -96,16 +96,13 @@ fn terminator_uses_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
             .chain(then_args.iter_mut())
             .chain(else_args.iter_mut())
             .collect(),
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-            traversal
-                .source
-                .uses_mut()
-                .into_iter()
-                .chain(traversal.body_args.into_values_mut())
-                .chain(traversal.exit_args.iter_mut())
-                .collect()
-        }
+        Terminator::For {
+            source, exit_args, ..
+        } => source
+            .uses_mut()
+            .into_iter()
+            .chain(exit_args.iter_mut())
+            .collect(),
         Terminator::Switch { tag, arms, default } => std::iter::once(tag)
             .chain(arms.iter_mut().flat_map(|(_, _, args)| args.iter_mut()))
             .chain(default.iter_mut().flat_map(|(_, args)| args.iter_mut()))

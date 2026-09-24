@@ -516,10 +516,21 @@ pub(super) fn admit(value: &BoundValue) -> Result<(), BindingRefused> {
 
 // -- The constant ---------------------------------------------------------
 
-pub fn substitute(interner: &Interner, body: &mut MirBody, bindings: &Bindings) -> Vec<MirError> {
+/// A parameter the declaration names is filled by its call, so a binding of
+/// the same name leaves it standing, as the checker does (RFC-0054 rule 6).
+pub fn substitute(
+    interner: &Interner,
+    body: &mut MirBody,
+    declared_params: usize,
+    bindings: &Bindings,
+) -> Vec<MirError> {
     let mut errors = Vec::new();
     for (name, value) in bindings.iter() {
-        let Some(at) = body.params.iter().position(|(held, _)| *held == name) else {
+        let Some(at) = body.params[declared_params..]
+            .iter()
+            .position(|(held, _)| *held == name)
+            .map(|at| declared_params + at)
+        else {
             continue;
         };
         let (_, slot) = body.params[at];

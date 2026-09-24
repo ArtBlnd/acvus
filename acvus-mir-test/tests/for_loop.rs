@@ -1,16 +1,14 @@
 //! A `for` loop is a terminator (RFC-0057): the four heads it admits, what
 //! the header holds, and what it refuses.
 
-use acvus_mir::analysis::affine::AffineValues;
-use acvus_mir::analysis::carried::CarriedState;
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loans::Loans;
-use acvus_mir::analysis::loops::{
-    Invariants, LoopNest, for_headers, natural_loops_innermost_first,
+use acvus_mir::analysis::loops::{for_headers, natural_loops_innermost_first};
+use acvus_mir::cfg::{BlockIdx, Terminator, promote};
+use acvus_mir::graph::optimize::Opt;
+use acvus_mir::ir::{Order, Stage, Stages, Target, Targets};
+use acvus_mir_test::{
+    compile_script_ir, compile_script_module_at, compile_script_optimized, lowered_script_module,
 };
-use acvus_mir::cfg::{BlockIdx, promote};
-use acvus_mir::optimize::{dce, ssa_pass};
-use acvus_mir_test::{compile_script_ir, compile_script_optimized, lowered_script, lowered_script_module};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -189,6 +187,9 @@ fn a_for_header_is_named_by_its_terminator_and_is_the_natural_loop() {
     );
 }
 
+/// RFC-0057 rule 3's question, which RFC-0066 rule 6 states per target: the
+/// iterations run apart when the loop's only target is its `&mut` source's
+/// element, joined `Disjoint`, and every other stage is pure.
 #[test]
 fn iterations_run_apart_when_nothing_crosses_the_latch() {
     let i = Interner::new();
@@ -206,21 +207,30 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
             false,
         ),
     ] {
-        let lowered = lowered_script(&i, source, &[], vec![]).expect("it compiles");
-        let mut cfg = promote(lowered.module.main);
-        ssa_pass::run(&mut cfg);
-        dce::run(&mut cfg);
-        let headers = for_headers(&cfg);
-        let [header] = headers.keys().copied().collect::<Vec<_>>()[..] else {
+        let module = compile_script_module_at(&i, source, &FxHashMap::default(), Opt::Full)
+            .unwrap_or_else(|e| panic!("{source}\n{e}"));
+        let cfg = promote(module.main);
+        let stages: Vec<&Stages> = cfg
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator {
+                Terminator::For { stages, .. } => Some(stages),
+                _ => None,
+            })
+            .collect();
+        let [stages] = stages[..] else {
             panic!("{source} holds one `for`")
         };
-        let invariants = Invariants::of(&cfg);
-        let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
-        let loop_ = nest.get(nest.by_header(header).expect("the header heads a loop"));
-        let affine = AffineValues::of(&cfg, loop_, &invariants);
-        let loans = Loans::build(&cfg);
-        let state = CarriedState::of(&loans, loop_, &affine, &lowered.laws);
-        assert_eq!(state.runs_apart(), apart, "{source}");
+        let runs_apart = stages.iter().all(|stage| match stage {
+            Stage::Pure { .. } => true,
+            Stage::Join {
+                targets: Targets::Listed(targets),
+                order: Order::Disjoint,
+                ..
+            } => targets[..] == [Target::Element],
+            Stage::Join { .. } => false,
+        });
+        assert_eq!(runs_apart, apart, "{source}: {stages:?}");
     }
 }
 

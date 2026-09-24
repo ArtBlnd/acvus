@@ -444,10 +444,14 @@ compilation holds the body to it.**
 6. **A compilation declares the entry's inputs as it declares its
    return.** The declared inputs are the entry's parameters, and a body reads
    a `$` only as one of them or as a binding (RFC-0071 rule 5). A
-   declaration of none declares none. Taking the inputs from the body's `$`
-   reads instead is spelled by the host, as `!` is: it serves an analysis that
-   reports what a body requires, and an entry compiled that way runs only
-   once a binding fixes every `$` it reads.
+   declaration of none declares none. They are `$`s shared by the graph
+   (RFC-0071 rule 4): a call to an entry passes the caller's own `$` of each
+   name, and an entry whose reachable code reads a `$` it neither declares
+   nor has bound is refused, naming the `$` and the function that reads it.
+   Taking the inputs from the body's `$` reads instead is spelled by the
+   host, as `!` is: it serves an analysis that reports what a body requires,
+   and an entry compiled that way runs only once a binding fixes every `$`
+   it reads.
 
 What the entry's result is at run time — one runtime value — is RFC-0062 and
 RFC-0064.

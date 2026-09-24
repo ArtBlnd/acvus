@@ -330,12 +330,6 @@ impl ForSource {
         }
     }
 
-    /// The body block's parameters that `body_args` supplies, which are the
-    /// ones left after `supplied_params`.
-    pub fn carried_params<'a>(&self, body_params: &'a [ValueId]) -> &'a [ValueId] {
-        body_params.get(self.supplied_params()..).unwrap_or(&[])
-    }
-
     /// Which body parameter is the loop's counter, the induction variable
     /// the machine's `For` advances.
     pub fn counter_param(&self) -> usize {
@@ -387,35 +381,155 @@ impl ExitTrip {
     }
 }
 
-/// One part of a `ForParts` (RFC-0089 rule 1). `carried` names the header
-/// parameters the part reads and hands back through the latch;
-/// `validate::for_parts` refuses a list that is not a partition of them.
+/// The stages of a `For` in body order (RFC-0089 rule 1). The first stage's
+/// entry is the body block. Each stage's last block jumps to the next
+/// stage's entry and the last stage's jumps to the header;
+/// `validate::stages` refuses a chain of any other shape.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Part {
-    pub entry: Label,
-    pub carried: Vec<ValueId>,
-    pub kind: PartKind,
+pub struct Stages {
+    first: Stage,
+    rest: Vec<Stage>,
 }
 
-impl Part {
-    pub fn fold_storages_mut(&mut self) -> impl Iterator<Item = &mut ValueId> {
-        let accs: &mut [Accumulator] = match &mut self.kind {
-            PartKind::Law(accs) => accs,
-            PartKind::Sequential => &mut [],
-        };
-        accs.iter_mut().filter_map(|acc| match &mut acc.law {
-            Law::Fold(fold) => Some(&mut fold.storage),
-            Law::Op(_) | Law::Call(_) | Law::Order => None,
-        })
+impl Stages {
+    pub fn new(first: Stage, rest: Vec<Stage>) -> Self {
+        Self { first, rest }
+    }
+
+    pub fn lowered(body: Label) -> Self {
+        Self::new(
+            Stage::Join {
+                entry: body,
+                targets: Targets::Everything,
+                order: Order::InOrder,
+                law: None,
+            },
+            Vec::new(),
+        )
+    }
+
+    pub fn body(&self) -> Label {
+        self.first.entry()
+    }
+
+    pub fn body_mut(&mut self) -> &mut Label {
+        self.first.entry_mut()
+    }
+
+    pub fn len(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Stage> {
+        std::iter::once(&self.first).chain(&self.rest)
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Stage> {
+        std::iter::once(&mut self.first).chain(&mut self.rest)
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = Label> + '_ {
+        self.iter().map(Stage::entry)
+    }
+
+    /// The values the stages name. A pass that renames the body's values
+    /// renames these with it, or the targets name values the body no longer
+    /// has.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut ValueId> {
+        self.iter_mut().flat_map(Stage::values_mut)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum PartKind {
-    /// One accumulator per carried value, in `carried`'s order, then one
-    /// `Law::Fold` per storage the part folds into.
-    Law(Vec<Accumulator>),
-    Sequential,
+pub enum Stage {
+    /// Changes no target; `validate::stages` refuses one that does
+    /// (RFC-0089 rule 3).
+    Pure { entry: Label },
+    /// The dependence cycle of `targets` (RFC-0089 rule 4). `law` is the
+    /// monoid action the update is, where the stage pass found one (rule 6).
+    Join {
+        entry: Label,
+        targets: Targets,
+        order: Order,
+        law: Option<Accumulator>,
+    },
+}
+
+impl Stage {
+    pub fn entry(&self) -> Label {
+        match self {
+            Self::Pure { entry } | Self::Join { entry, .. } => *entry,
+        }
+    }
+
+    pub fn entry_mut(&mut self) -> &mut Label {
+        match self {
+            Self::Pure { entry } | Self::Join { entry, .. } => entry,
+        }
+    }
+
+    fn values_mut(&mut self) -> Vec<&mut ValueId> {
+        let Self::Join { targets, law, .. } = self else {
+            return Vec::new();
+        };
+        let mut values: Vec<&mut ValueId> = match targets {
+            Targets::Everything => Vec::new(),
+            Targets::Listed(listed) => listed.iter_mut().filter_map(Target::value_mut).collect(),
+        };
+        if let Some(Accumulator {
+            law: Law::Fold(fold),
+            ..
+        }) = law
+        {
+            values.push(&mut fold.storage);
+        }
+        values
+    }
+}
+
+/// How a join's changes are ordered (RFC-0089 rule 5); `validate::stages`
+/// holds a mark to the operations' declarations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    /// Each iteration writes only the element at its counter.
+    Disjoint,
+    /// The join's operations commute, stand in an `anyorder` region, or join
+    /// through a commutative exact law.
+    AnyOrder,
+    /// Anything else.
+    InOrder,
+}
+
+/// The storage a join changes (RFC-0089 rule 2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Targets {
+    /// Everything the body touches: the one join a `for` is lowered with,
+    /// before the stage pass states its targets (rule 8).
+    Everything,
+    Listed(Vec<Target>),
+}
+
+/// A storage live at the header that the body writes or lends `&mut`
+/// (RFC-0089 rule 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// A header parameter: a value the loop carries (RFC-0066 rule 6).
+    Carried(ValueId),
+    Storage(ValueId),
+    /// A context the body commits (RFC-0025).
+    Context(QualifiedRef),
+    /// The element of a `&mut` source, whose writes land at the counter's
+    /// slot.
+    Element,
+}
+
+impl Target {
+    fn value_mut(&mut self) -> Option<&mut ValueId> {
+        match self {
+            Self::Carried(value) | Self::Storage(value) => Some(value),
+            Self::Context(_) | Self::Element => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -473,160 +587,6 @@ pub struct FoldAccumulator {
     pub callee: QualifiedRef,
     pub instance: usize,
     pub fold: crate::laws::FoldLaw,
-}
-
-/// A `For` or a `ForParts`, read as the traversal both state. The parts of
-/// a `ForParts` run one after another as written (RFC-0089 rule 2), so a
-/// reader of edges reads it as the `For` it replaced, through this, as
-/// [`two_way`] is read for `JumpIf` and `Diamond`.
-pub struct Traversal<'a> {
-    pub source: ForSource,
-    pub body: Label,
-    pub body_args: &'a [ValueId],
-    pub exit: Label,
-    pub exit_trip: ExitTrip,
-    pub exit_args: &'a [ValueId],
-}
-
-pub struct TraversalMut<'a> {
-    pub source: &'a mut ForSource,
-    pub body: &'a mut Label,
-    pub body_args: BodyArgsMut<'a>,
-    pub exit: &'a mut Label,
-    pub exit_trip: &'a mut ExitTrip,
-    pub exit_args: &'a mut Vec<ValueId>,
-}
-
-pub enum BodyArgsMut<'a> {
-    Listed(&'a mut Vec<ValueId>),
-    /// A `ForParts` body edge, which passes nothing (RFC-0089 rule 1). Edits
-    /// to it do nothing, by decision: a pass that gives its body block a
-    /// parameter leaves one no edge fills, and `validate::for_parts` refuses
-    /// that form (`a_body_block_parameter_after_the_counter_is_refused`).
-    Unlisted,
-}
-
-impl<'a> BodyArgsMut<'a> {
-    pub fn for_each(&mut self, f: impl FnMut(&mut ValueId)) {
-        match self {
-            Self::Listed(args) => args.iter_mut().for_each(f),
-            Self::Unlisted => {}
-        }
-    }
-
-    pub fn values(&self) -> Vec<ValueId> {
-        match self {
-            Self::Listed(args) => args.to_vec(),
-            Self::Unlisted => Vec::new(),
-        }
-    }
-
-    pub fn into_values_mut(self) -> Vec<&'a mut ValueId> {
-        match self {
-            Self::Listed(args) => args.iter_mut().collect(),
-            Self::Unlisted => Vec::new(),
-        }
-    }
-
-    pub fn extend(&mut self, values: &[ValueId]) {
-        match self {
-            Self::Listed(args) => args.extend_from_slice(values),
-            Self::Unlisted => {}
-        }
-    }
-
-    pub fn clear(&mut self) {
-        match self {
-            Self::Listed(args) => args.clear(),
-            Self::Unlisted => {}
-        }
-    }
-
-    pub fn remove_positions(&mut self, dead: &[usize]) {
-        match self {
-            Self::Listed(args) => {
-                let mut at = 0;
-                args.retain(|_| {
-                    let keep = !dead.contains(&at);
-                    at += 1;
-                    keep
-                });
-            }
-            Self::Unlisted => {}
-        }
-    }
-}
-
-pub fn traversal(kind: &InstKind) -> Option<Traversal<'_>> {
-    match kind {
-        InstKind::For {
-            source,
-            body,
-            body_args,
-            exit,
-            exit_trip,
-            exit_args,
-        } => Some(Traversal {
-            source: *source,
-            body: *body,
-            body_args,
-            exit: *exit,
-            exit_trip: *exit_trip,
-            exit_args,
-        }),
-        InstKind::ForParts {
-            source,
-            body,
-            parts: _,
-            exit,
-            exit_trip,
-            exit_args,
-        } => Some(Traversal {
-            source: *source,
-            body: *body,
-            body_args: &[],
-            exit: *exit,
-            exit_trip: *exit_trip,
-            exit_args,
-        }),
-        _ => None,
-    }
-}
-
-pub fn traversal_mut(kind: &mut InstKind) -> Option<TraversalMut<'_>> {
-    match kind {
-        InstKind::For {
-            source,
-            body,
-            body_args,
-            exit,
-            exit_trip,
-            exit_args,
-        } => Some(TraversalMut {
-            source,
-            body,
-            body_args: BodyArgsMut::Listed(body_args),
-            exit,
-            exit_trip,
-            exit_args,
-        }),
-        InstKind::ForParts {
-            source,
-            body,
-            parts: _,
-            exit,
-            exit_trip,
-            exit_args,
-        } => Some(TraversalMut {
-            source,
-            body,
-            body_args: BodyArgsMut::Unlisted,
-            exit,
-            exit_trip,
-            exit_args,
-        }),
-        _ => None,
-    }
 }
 
 /// Which of the four heads a `for` was written with (RFC-0057 rule 1).
@@ -970,20 +930,11 @@ pub enum InstKind {
         arms: Vec<(SwitchKey, Label, Vec<ValueId>)>,
         default: Option<(Label, Vec<ValueId>)>,
     },
+    /// One traversal (RFC-0057) whose body is a chain of stages (RFC-0089);
+    /// `validate::stages` refuses a chain that is not rule 1's shape.
     For {
         source: ForSource,
-        body: Label,
-        body_args: Vec<ValueId>,
-        exit: Label,
-        exit_trip: ExitTrip,
-        exit_args: Vec<ValueId>,
-    },
-    /// A `For` whose body states its independent parts (RFC-0089);
-    /// `validate::for_parts` refuses one whose shape is not rule 1's.
-    ForParts {
-        source: ForSource,
-        body: Label,
-        parts: Vec<Part>,
+        stages: Stages,
         exit: Label,
         exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
@@ -1094,10 +1045,7 @@ fn successor_labels(insts: &[Inst], at: usize) -> Vec<Label> {
                     .chain(default.iter().map(|(label, _)| *label))
                     .collect();
             }
-            kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
-                let traversal = traversal(kind).expect("a `For` or a `ForParts`");
-                return vec![traversal.body, traversal.exit];
-            }
+            InstKind::For { stages, exit, .. } => return vec![stages.body(), *exit],
             InstKind::Return { .. } | InstKind::Diverge => return Vec::new(),
             _ => {}
         }
@@ -1324,6 +1272,12 @@ impl MirBody {
 
 #[derive(Debug, Clone)]
 pub struct MirModule {
+    /// How many of `main.params`, first, the function's declaration names:
+    /// a call or a run passes them whether or not the body reads them. The
+    /// rest are inputs the body reads (RFC-0071 rule 4), and one it no longer
+    /// reads after the folds is not required and is no parameter
+    /// (RFC-0071 rule 5).
+    pub declared_params: usize,
     pub main: MirBody,
     pub closures: FxHashMap<Label, MirBody>,
     /// The `ret` of the graph `Function` this module is the body of; for the

@@ -25,10 +25,15 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::domtree::DomTree;
 use crate::analysis::loans::Loans;
+use crate::analysis::loops::natural_loops_innermost_first;
+use crate::analysis::stages::{StageMembership, loop_blocks_of};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{BodyArgsMut, ExitTrip, Inst, InstKind, Label, TraversalMut, ValueId};
+use crate::ir::{
+    ExitTrip, ForSource, Inst, InstKind, Label, Stage, Stages, Target, Targets, ValueId,
+};
 use crate::ty::Ty;
 use crate::validate::move_check::{emptied_by, is_move_only};
 
@@ -47,7 +52,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     // -- Phase 1: within-block drops --------------------------------
 
-    let part_entries = part_entries(cfg, &loans);
+    let stage_entries = stage_entries(cfg, &loans);
     let mut block_drops: Vec<Vec<BlockDrop>> = Vec::with_capacity(cfg.blocks.len());
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
@@ -183,11 +188,12 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
             if dying.is_empty() {
                 continue;
             }
-            if let EdgeSlot::ForBody = edge.slot
-                && let Terminator::ForParts { .. } = cfg.blocks[bi].terminator
-            {
+            // The body block's one predecessor is the header, so its edge
+            // needs no block of its own; a value is dropped in the stage
+            // that touches it (RFC-0089 rule 3).
+            if let EdgeSlot::ForBody = edge.slot {
                 for value in dying {
-                    let entry = part_entries.of(value).unwrap_or(target);
+                    let entry = stage_entries.of(value).unwrap_or(target);
                     head_drops.entry(entry).or_default().push(value);
                 }
                 continue;
@@ -213,37 +219,56 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     apply_edge_splits(cfg, splits);
 }
 
-/// The part entries at which values dying on a `ForParts` body edge are
-/// dropped, since a value's drop is placed in the part that touches it
-/// (RFC-0089 rule 8). Such a value is a header parameter no part reads, which
-/// its part carries, or a storage a part assigns before any read. A value
-/// two parts touch has no entry here and is dropped where the body begins.
-fn part_entries(cfg: &CfgBody, loans: &Loans<'_>) -> PartEntries {
+/// The stage entries at which values dying on a `For`'s body edge are
+/// dropped, so that a pure stage releases no carried value and no storage a
+/// join writes (RFC-0089 rule 3). Such a value is a header parameter no stage
+/// reads, which the join that targets it releases, or a value one stage
+/// alone touches. A value two stages touch has no entry here and is dropped
+/// where the body begins.
+fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>) -> StageEntries {
     let mut carried_entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut shared: FxHashSet<ValueId> = FxHashSet::default();
-    for (at, block) in cfg.blocks.iter().enumerate() {
-        let Terminator::ForParts {
-            source, body, parts, ..
-        } = &block.terminator
+    let fors: Vec<(BlockIdx, ForSource, &Stages)> = cfg
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(at, block)| match &block.terminator {
+            Terminator::For { source, stages, .. } => Some((BlockIdx(at), *source, stages)),
+            _ => None,
+        })
+        .collect();
+    if fors.is_empty() {
+        return StageEntries {
+            targeted: carried_entries,
+            touched: entries,
+        };
+    }
+    let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+    for (header, source, stages) in fors {
+        // A chain with no membership is refused by `validate::stages`, which
+        // reads this pass's output; its values are dropped where the body
+        // begins.
+        let Ok(membership) =
+            StageMembership::of(cfg, header, stages, &loop_blocks_of(&loops, header))
         else {
             continue;
         };
-        let header = BlockIdx(at);
-        let body_params = &cfg.blocks[cfg.label_to_block[body].0].params;
-        let part_entries: Vec<BlockIdx> = parts
-            .iter()
-            .map(|part| cfg.label_to_block[&part.entry])
-            .collect();
-        for (index, part) in parts.iter().enumerate() {
-            let entry = part_entries[index];
-            for value in &part.carried {
-                carried_entries.insert(*value, entry);
+        let body_params = &cfg.blocks[cfg.label_to_block[&stages.body()].0].params;
+        for (stage, blocks) in stages.iter().zip(membership.stages()) {
+            let entry = blocks.blocks[0];
+            if let Stage::Join {
+                targets: Targets::Listed(targets),
+                ..
+            } = stage
+            {
+                for target in targets {
+                    if let Target::Carried(value) | Target::Storage(value) = target {
+                        carried_entries.insert(*value, entry);
+                    }
+                }
             }
-            let next = part_entries.get(index + 1).copied().unwrap_or(header);
-            let mut seen: FxHashSet<BlockIdx> = FxHashSet::from_iter([entry]);
-            let mut work = vec![entry];
-            while let Some(held) = work.pop() {
+            for held in &blocks.blocks {
                 for inst in &cfg.blocks[held.0].insts {
                     let effect = loans.storage_effect(&inst.kind);
                     let touched = loans
@@ -264,11 +289,6 @@ fn part_entries(cfg: &CfgBody, loans: &Loans<'_>) -> PartEntries {
                         }
                     }
                 }
-                for succ in cfg.successors(held) {
-                    if succ != next && succ != header && seen.insert(succ) {
-                        work.push(succ);
-                    }
-                }
             }
         }
         for supplied in &body_params[..source.supplied_params()] {
@@ -276,20 +296,20 @@ fn part_entries(cfg: &CfgBody, loans: &Loans<'_>) -> PartEntries {
         }
     }
     entries.retain(|value, _| !shared.contains(value));
-    PartEntries {
-        carried: carried_entries,
+    StageEntries {
+        targeted: carried_entries,
         touched: entries,
     }
 }
 
-struct PartEntries {
-    carried: FxHashMap<ValueId, BlockIdx>,
+struct StageEntries {
+    targeted: FxHashMap<ValueId, BlockIdx>,
     touched: FxHashMap<ValueId, BlockIdx>,
 }
 
-impl PartEntries {
+impl StageEntries {
     fn of(&self, value: ValueId) -> Option<BlockIdx> {
-        self.carried
+        self.targeted
             .get(&value)
             .or_else(|| self.touched.get(&value))
             .copied()
@@ -446,15 +466,12 @@ fn apply_edge_splits(cfg: &mut CfgBody, splits: Vec<EdgeSplit>) {
 /// One edge of a terminator, in place.
 struct EdgeRef<'a> {
     label: &'a mut Label,
-    args: BodyArgsMut<'a>,
+    args: &'a mut Vec<ValueId>,
 }
 
 impl<'a> EdgeRef<'a> {
     fn of(term: &'a mut Terminator, slot: EdgeSlot) -> Self {
-        let listed = |label, args| Self {
-            label,
-            args: BodyArgsMut::Listed(args),
-        };
+        let listed = |label, args| Self { label, args };
         match (term, slot) {
             (Terminator::Jump { label, args }, EdgeSlot::Jump)
             | (
@@ -483,21 +500,12 @@ impl<'a> EdgeRef<'a> {
                 },
                 EdgeSlot::Else,
             ) => listed(label, args),
-            (term @ (Terminator::For { .. } | Terminator::ForParts { .. }), EdgeSlot::ForBody) => {
-                let TraversalMut {
-                    body, body_args, ..
-                } = term.traversal_mut().expect("a `For` or a `ForParts`");
-                Self {
-                    label: body,
-                    args: body_args,
-                }
-            }
-            (term @ (Terminator::For { .. } | Terminator::ForParts { .. }), EdgeSlot::ForExit) => {
-                let TraversalMut {
+            (
+                Terminator::For {
                     exit, exit_args, ..
-                } = term.traversal_mut().expect("a `For` or a `ForParts`");
-                listed(exit, exit_args)
-            }
+                },
+                EdgeSlot::ForExit,
+            ) => listed(exit, exit_args),
             (Terminator::Switch { arms, .. }, EdgeSlot::SwitchArm(i)) => {
                 let (_, label, args) = &mut arms[i];
                 listed(label, args)
@@ -516,7 +524,7 @@ impl<'a> EdgeRef<'a> {
 /// Send one edge to the block that now holds its drops. The split block takes
 /// no parameters and passes the arguments on itself, so the edge loses them.
 fn retarget(term: &mut Terminator, slot: EdgeSlot, to: Label) {
-    let mut edge = EdgeRef::of(term, slot);
+    let edge = EdgeRef::of(term, slot);
     *edge.label = to;
     edge.args.clear();
 }
@@ -585,11 +593,11 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
         }
         // The source a `For` traverses, which it reads on every iteration
         // (RFC-0057), and the arguments each edge forwards.
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            uses.extend(traversal.source.uses());
-            uses.extend(traversal.body_args.iter().copied());
-            uses.extend(traversal.exit_args.iter().copied());
+        Terminator::For {
+            source, exit_args, ..
+        } => {
+            uses.extend(source.uses());
+            uses.extend(exit_args.iter().copied());
         }
         // The tag a `Switch` reads, and the arguments each edge forwards.
         Terminator::Switch { tag, arms, default } => {
@@ -634,23 +642,26 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
             edge(EdgeSlot::Then, then_label, then_args),
             edge(EdgeSlot::Else, else_label, else_args),
         ],
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            vec![
-                OutEdge {
-                    slot: EdgeSlot::ForBody,
-                    target: traversal.body,
-                    trip: ExitTrip::Absent,
-                    forwarded: traversal.body_args.to_vec(),
-                },
-                OutEdge {
-                    slot: EdgeSlot::ForExit,
-                    target: traversal.exit,
-                    trip: traversal.exit_trip,
-                    forwarded: traversal.exit_args.to_vec(),
-                },
-            ]
-        }
+        Terminator::For {
+            stages,
+            exit,
+            exit_trip,
+            exit_args,
+            ..
+        } => vec![
+            OutEdge {
+                slot: EdgeSlot::ForBody,
+                target: stages.body(),
+                trip: ExitTrip::Absent,
+                forwarded: Vec::new(),
+            },
+            OutEdge {
+                slot: EdgeSlot::ForExit,
+                target: *exit,
+                trip: *exit_trip,
+                forwarded: exit_args.clone(),
+            },
+        ],
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .enumerate()
@@ -792,7 +803,6 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
-        | InstKind::ForParts { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge => false,
     }
@@ -819,11 +829,11 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
         // A `For`'s edge args are transferred, and an `Array` source is
         // moved into the terminator: the loop takes its elements out
         // (RFC-0057 rule 2). A slice or a range is read-only.
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            traversal.body_args.contains(&val)
-                || traversal.exit_args.contains(&val)
-                || matches!(traversal.source, crate::ir::ForSource::Array(array) if array == val)
+        Terminator::For {
+            source, exit_args, ..
+        } => {
+            exit_args.contains(&val)
+                || matches!(source, crate::ir::ForSource::Array(array) if *array == val)
         }
         // A Switch's edge args are transferred; the tag is read-only.
         Terminator::Switch { arms, default, .. } => {

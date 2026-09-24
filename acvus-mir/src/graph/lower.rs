@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 
 use crate::error::MirError;
 use crate::ir::{Callee, InstKind, MirBody, MirModule};
-use crate::ty::Ty;
+use crate::ty::{InputParam, Ty};
 
 use super::extract::{ExtractResult, ParsedSource};
 use super::infer::{FnInferOutcome, InferResult};
@@ -62,6 +62,7 @@ pub fn lower(
 ) -> LowerResult {
     let mut modules = FxHashMap::default();
     let mut errors = Vec::new();
+    let callee_inputs = inputs_of(infer_result.outcomes.iter());
 
     for func in graph.functions.iter() {
         let Some(source) = parsed.get(&func.qref) else {
@@ -70,7 +71,8 @@ pub fn lower(
         let Some(outcome) = infer_result.outcomes.get(&func.qref) else {
             continue;
         };
-        let Some(lowered) = lower_one(interner, source, outcome, &graph.bindings) else {
+        let Some(lowered) = lower_one(interner, source, outcome, &graph.bindings, &callee_inputs)
+        else {
             continue;
         };
         if !lowered.errors.is_empty() {
@@ -84,6 +86,17 @@ pub fn lower(
     close_fetched_first(&mut modules);
 
     LowerResult { modules, errors }
+}
+
+/// Each local function's inputs as inference settled them, which a call to
+/// it passes after its arguments.
+pub fn inputs_of<'o, I>(outcomes: I) -> FxHashMap<QualifiedRef, Vec<InputParam>>
+where
+    I: Iterator<Item = (&'o QualifiedRef, &'o FnInferOutcome)>,
+{
+    outcomes
+        .map(|(qref, outcome)| (*qref, outcome.meta().inputs.clone()))
+        .collect()
 }
 
 /// RFC-0025 rule 2 across calls. A module's own `fetched_first` holds the
@@ -215,20 +228,22 @@ pub fn lower_one(
     parsed: &ParsedSource,
     outcome: &FnInferOutcome,
     bindings: &Bindings,
+    callee_inputs: &FxHashMap<QualifiedRef, Vec<InputParam>>,
 ) -> Option<Lowered> {
     let resolution = outcome.resolution()?;
     let ret = match &outcome.meta().ty {
         crate::ty::Ty::Fn { ret, .. } => (**ret).clone(),
         other => other.clone(),
     };
-    let lowerer = crate::lower::Lowerer::new(interner, resolution, ret);
+    let lowerer = crate::lower::Lowerer::new(interner, resolution, ret, callee_inputs);
     let mut module = match parsed {
         ParsedSource::Script(script) => lowerer.lower_script(script),
         ParsedSource::Template(template) => lowerer.lower_template(template),
         ParsedSource::Recovered(_) => return None,
     };
 
-    let mut errors = super::bind::substitute(interner, &mut module.main, bindings);
+    let mut errors =
+        super::bind::substitute(interner, &mut module.main, module.declared_params, bindings);
 
     // Definite assignment reads the pre-SSA shape the source wrote, so it
     // runs here and not in `validate`, which sees the optimized body.

@@ -1,7 +1,7 @@
 pub mod borrow_check;
 pub mod bounds;
 pub mod exhaustive;
-pub mod for_parts;
+pub mod stages;
 pub mod init_check;
 pub mod move_check;
 pub mod type_check;
@@ -28,7 +28,7 @@ use crate::ir::{MirModule, ValOrigin};
 /// is what fails then.
 pub fn validate(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module);
-    errors.extend(for_parts::check(module));
+    errors.extend(stages::check(module));
     errors.extend(borrow_check::check_borrows(module));
     errors.extend(exhaustive::check_exhaustive(module));
     errors
@@ -133,42 +133,40 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 "an `if`'s {side} arm does not reach the join L{} it is written to rejoin at",
                 join.0
             ),
-            ValidationErrorKind::ForPartsShape { header, fault } => write!(
+            ValidationErrorKind::StageShape { header, fault } => write!(
                 f,
-                "the parted `for` headed at L{} is not the chain its parts state: {}",
+                "the `for` headed at L{} is not the stage chain it states: {}",
                 header.0,
                 fault.shown()
             ),
-            ValidationErrorKind::ForPartsCrossing {
+            ValidationErrorKind::PureStageEffect {
                 header,
-                part,
-                crossing,
-            } => write!(
-                f,
-                "part {part} of the parted `for` headed at L{} {}, which another part owns",
-                header.0,
-                crossing.shown()
-            ),
-            ValidationErrorKind::ForPartsAccumulatorRead { header, part, acc } => write!(
-                f,
-                "accumulator {acc} of part {part} of the parted `for` headed at L{} is read \
-                 other than as its law's operand",
-                header.0
-            ),
-            ValidationErrorKind::ForPartsLawEffect {
-                header,
-                part,
+                stage,
                 effect,
             } => write!(
                 f,
-                "part {part} of the parted `for` headed at L{} is a law and {}",
+                "stage {stage} of the `for` headed at L{} is pure and {}",
                 header.0,
                 effect.shown()
             ),
-            ValidationErrorKind::ForPartsLeaves { header, from } => write!(
+            ValidationErrorKind::JoinOrder {
+                header,
+                stage,
+                fault,
+            } => write!(
                 f,
-                "block L{} of the parted `for` headed at L{} leaves the body other than \
-                 through the header",
+                "join {stage} of the `for` headed at L{} {}",
+                header.0,
+                fault.shown()
+            ),
+            ValidationErrorKind::StageLeaves {
+                header,
+                stage,
+                from,
+            } => write!(
+                f,
+                "block L{} of stage {stage} of the `for` headed at L{} leaves the loop, \
+                 and only the header or an `InOrder` join may",
                 from.0, header.0
             ),
             ValidationErrorKind::DemotedDiamondMeetsAgain { join } => write!(

@@ -10,15 +10,24 @@
 //! latch, and replaces the body's multiplication and sum with the
 //! parameter. `i` itself stays: the loop condition reads it.
 //!
-//! # Strong loops only
+//! # Only inside one `InOrder` join
 //!
-//! The pass transforms a loop that `analysis::carried` classifies strong and
-//! leaves a weak one exactly as it is (RFC-0056). A weak loop's iterations
-//! may run in any order, and its counters are IV canonicalization's to
-//! normalize (RFC-0066), which keeps each iteration computing `i * k + x`
-//! from its own `i`; a derived counter would make it wait for the previous
-//! iteration's value. A strong loop runs in order anyway, so the
-//! accumulated form costs it no independence.
+//! The pass runs after the stages are written (RFC-0089 rule 8), and it
+//! reduces a counter expression only when every reader of it sits in one
+//! `InOrder` join with no law (RFC-0056, RFC-0066 rule 7). The derived
+//! counter is a carried value: its advance is placed at the end of that
+//! join, and the join lists it among its targets. An `InOrder` join runs in
+//! order already, so the reduction costs it nothing. Anywhere else each
+//! iteration computes `i * k + x` from its own `i`, and a derived counter
+//! would make it wait for the previous iteration's value. A join with a law
+//! names the one target its law updates (RFC-0089 rule 6), so a second
+//! target would unmake the law; that join is declined. A `while` has no
+//! stages and is declined.
+//!
+//! `i` is a `for`'s counter, which the terminator advances by one, or a
+//! carried header parameter IV canonicalization left (RFC-0066 rule 7). For
+//! the counter the step is `k` itself and the start is `at * k + x` for a
+//! range and `x` for a slice or an array, whose counter starts at zero.
 //!
 //! # The count is the rule
 //!
@@ -39,11 +48,9 @@
 //! one product and the one sum that reads it, and it is declined for that
 //! reason rather than for the count.
 //!
-//! It runs after `code_motion` and before `reorder` (`graph/optimize.rs`).
-//! After the hoist, because the hoist is what puts `k` and `x` above the
-//! header and what leaves the preheader a block of its own; before the
-//! reorder, because the reorder schedules within a block and this pass adds
-//! instructions to three of them.
+//! It runs after the stage pass (`graph/optimize.rs`), which follows the
+//! hoist that puts `k` and `x` above the header. It needs the preheader a
+//! block of its own that jumps to the header, and one latch.
 //!
 //! # Why this is not a rounding change
 //!
@@ -68,52 +75,50 @@
 //! no scalar evolution here: a derived variable of a derived variable, a
 //! step that is itself an induction variable, and a loop whose counter is
 //! rewritten through memory are all outside the pattern and stay as they
-//! are. A `for`'s counter is affine from its terminator, and a product of
-//! it is not reduced: the pattern RFC-0056 states multiplies a carried
-//! header parameter.
+//! are.
 
-use acvus_ast::Span;
+use acvus_ast::{Literal, Span};
 
 use crate::ir::BinOp;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};
-use crate::analysis::carried::{CarriedState, Strength};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Invariant, Invariants, LoopNest, NaturalLoop, edge_args};
+use crate::analysis::stages::StageMembership;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, InstKind, Label, ValOrigin, ValueId};
-use crate::laws::LawTable;
+use crate::ir::{
+    ForSource, Inst, InstKind, Label, Order, Stage, Target, Targets, ValOrigin, ValueId,
+};
 use crate::optimize::ssa_pass::apply_subst;
 use crate::ty::Ty;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
     for (_, loop_) in nest.iter() {
         let Some(frame) = Frame::of(cfg, &loop_.natural) else {
             continue;
         };
+        let Some(chain) = Chain::of(cfg, &loop_.natural, &frame) else {
+            continue;
+        };
         let invariants = Invariants::of(cfg);
         let affine = AffineValues::of(cfg, loop_, &invariants);
-        let loans = Loans::build(cfg);
-        if CarriedState::of(&loans, loop_, &affine, laws).strength() == Strength::Weak {
-            continue;
-        }
         let uses = use_blocks(cfg);
         let reductions = Scope {
             cfg,
             loop_: &loop_.natural,
             frame: &frame,
+            chain: &chain,
             affine: &affine,
             uses: &uses,
             domtree: &domtree,
         }
         .candidates();
         for reduction in reductions {
-            apply(cfg, &frame, &reduction);
+            apply(cfg, &invariants, &frame, &chain, &reduction);
         }
     }
 }
@@ -146,6 +151,52 @@ impl Frame {
             header_label,
             preheader,
             latch,
+        })
+    }
+}
+
+// -- The stages ------------------------------------------------------
+
+struct Chain {
+    source: ForSource,
+    membership: StageMembership,
+    ends: Vec<BlockIdx>,
+    reducible: Vec<bool>,
+}
+
+impl Chain {
+    fn of(cfg: &CfgBody, loop_: &NaturalLoop, frame: &Frame) -> Option<Chain> {
+        let Terminator::For { source, stages, .. } = &cfg.blocks[frame.header.0].terminator else {
+            return None;
+        };
+        let loop_blocks: Vec<BlockIdx> = loop_.blocks().collect();
+        let membership = StageMembership::of(cfg, frame.header, stages, &loop_blocks).ok()?;
+        let ends: Vec<BlockIdx> = membership
+            .stages()
+            .iter()
+            .map(|stage| stage.sole_end())
+            .collect::<Option<_>>()?;
+        if ends.last() != Some(&frame.latch) {
+            return None;
+        }
+        let reducible = stages
+            .iter()
+            .map(|stage| {
+                matches!(
+                    stage,
+                    Stage::Join {
+                        order: Order::InOrder,
+                        law: None,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        Some(Chain {
+            source: *source,
+            membership,
+            ends,
+            reducible,
         })
     }
 }
@@ -191,10 +242,11 @@ fn sole_edge_args_mut(term: &mut Terminator, label: Label) -> &mut Vec<ValueId> 
                 }
             }
         }
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-            if *traversal.exit == label {
-                edges.push(traversal.exit_args);
+        Terminator::For {
+            exit, exit_args, ..
+        } => {
+            if *exit == label {
+                edges.push(exit_args);
             }
         }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
@@ -244,22 +296,35 @@ struct DerivedKey {
     offset: ValueId,
 }
 
+/// Where `i` starts and how it advances.
+enum Counted {
+    /// A carried header parameter entered as `init` and advanced by `step`.
+    Carried { init: ValueId, step: Invariant },
+    /// A range's counter, from `at` by one.
+    Range { at: ValueId },
+    /// A slice's or an array's index, from zero by one.
+    Index,
+}
+
 struct Reduction {
     span: Span,
     dst: ValueId,
     ty: Ty,
-    iv_init: ValueId,
-    iv_step: Invariant,
+    counted: Counted,
     factor: Invariant,
     offset: Invariant,
     product: Site,
     sum: Site,
+    /// The stage that reads the reduced value: an `InOrder` join with no
+    /// law, which the derived counter joins.
+    join: usize,
 }
 
 struct Scope<'a> {
     cfg: &'a CfgBody,
     loop_: &'a NaturalLoop,
     frame: &'a Frame,
+    chain: &'a Chain,
     affine: &'a AffineValues,
     uses: &'a FxHashMap<ValueId, Vec<BlockIdx>>,
     domtree: &'a DomTree,
@@ -270,12 +335,33 @@ impl Scope<'_> {
         self.domtree.dominates(block, self.frame.latch)
     }
 
-    fn used_only_inside(&self, value: ValueId) -> bool {
-        self.uses
+    /// The one reducible stage every reader of `value` sits in.
+    fn read_in_one_join(&self, value: ValueId) -> Option<usize> {
+        let mut stages = self
+            .uses
             .get(&value)
             .into_iter()
             .flatten()
-            .all(|b| self.loop_.contains(*b))
+            .map(|block| self.chain.membership.stage_of(*block));
+        let join = stages.next()??;
+        let one = stages.all(|stage| stage == Some(join));
+        (one && self.chain.reducible[join]).then_some(join)
+    }
+
+    fn counted(&self, iv: ValueId) -> Option<Counted> {
+        match self.derivation(iv)? {
+            Derivation::Carried { init, step } => Some(Counted::Carried {
+                init: *init,
+                step: step.invariant.clone(),
+            }),
+            Derivation::Counter => match self.chain.source {
+                ForSource::Range { at, .. } => Some(Counted::Range { at }),
+                ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => {
+                    Some(Counted::Index)
+                }
+            },
+            Derivation::Scaled { .. } | Derivation::Offset { .. } => None,
+        }
     }
 
     fn use_count(&self, value: ValueId) -> usize {
@@ -308,15 +394,15 @@ impl Scope<'_> {
                 let Some(Derivation::Scaled { of: iv, factor }) = self.derivation(*dst) else {
                     continue;
                 };
-                let Some(Derivation::Carried { init, step }) = self.derivation(*iv) else {
+                let Some(counted) = self.counted(*iv) else {
                     continue;
                 };
                 let Some(sum) = self.sole_invariant_sum(*dst) else {
                     continue;
                 };
-                if !self.used_only_inside(sum.dst) {
+                let Some(join) = self.read_in_one_join(sum.dst) else {
                     continue;
-                }
+                };
                 let key = DerivedKey {
                     iv: *iv,
                     factor: factor.value,
@@ -329,12 +415,12 @@ impl Scope<'_> {
                     span: item.span,
                     dst: sum.dst,
                     ty: self.cfg.val_types[dst].clone(),
-                    iv_init: *init,
-                    iv_step: step.invariant.clone(),
+                    counted,
                     factor: factor.invariant.clone(),
                     offset: sum.offset.invariant,
                     product: Site { block, inst },
                     sum: sum.site,
+                    join,
                 });
             }
         }
@@ -377,13 +463,31 @@ impl Scope<'_> {
 
 // -- Applying one reduction ------------------------------------------
 
-/// The fresh values one reduction adds, and the instructions that give a
-/// re-emitted word a register above the header.
+#[derive(Clone)]
+enum SetupOperand {
+    Value(ValueId),
+    Int {
+        value: i128,
+        literal: Literal,
+        held: Option<ValueId>,
+    },
+}
+
+impl SetupOperand {
+    fn is(&self, int: i128) -> bool {
+        matches!(self, SetupOperand::Int { value, .. } if *value == int)
+    }
+}
+
+/// No value numbering runs after this pass (RFC-0056), so the start and the
+/// step are written folded where an operand is the integer 0 or 1.
 struct Emit<'a> {
     cfg: &'a mut CfgBody,
+    invariants: &'a Invariants,
     ty: Ty,
     span: Span,
-    preamble: Vec<Inst>,
+    words: Vec<Inst>,
+    setup: Vec<Inst>,
 }
 
 impl Emit<'_> {
@@ -398,16 +502,57 @@ impl Emit<'_> {
         value
     }
 
-    fn read(&mut self, invariant: &Invariant) -> ValueId {
+    fn held(&self, value: ValueId) -> SetupOperand {
+        match self
+            .invariants
+            .word(value)
+            .map(|literal| (literal.desugared(), literal))
+        {
+            Some((Literal::Int(int), literal)) => SetupOperand::Int {
+                value: int,
+                literal: literal.clone(),
+                held: Some(value),
+            },
+            _ => SetupOperand::Value(value),
+        }
+    }
+
+    fn term(&self, invariant: &Invariant) -> SetupOperand {
         match invariant {
-            Invariant::Outside(value) => *value,
-            Invariant::Word(literal) => {
+            Invariant::Outside(value) => self.held(*value),
+            Invariant::Word(literal) => match literal.desugared() {
+                Literal::Int(int) => SetupOperand::Int {
+                    value: int,
+                    literal: literal.clone(),
+                    held: None,
+                },
+                _ => panic!(
+                    "a reduced counter's operand is an integer word (`exact_under_wrapping`), \
+                     not {literal:?}"
+                ),
+            },
+        }
+    }
+
+    fn value(&mut self, term: SetupOperand) -> ValueId {
+        match term {
+            SetupOperand::Value(value)
+            | SetupOperand::Int {
+                held: Some(value), ..
+            } => value,
+            SetupOperand::Int {
+                literal,
+                held: None,
+                ..
+            } => {
                 let dst = self.fresh();
-                let value = literal.clone();
                 let span = self.span;
-                self.preamble.push(Inst {
+                self.words.push(Inst {
                     span,
-                    kind: InstKind::Const { dst, value },
+                    kind: InstKind::Const {
+                        dst,
+                        value: literal,
+                    },
                 });
                 dst
             }
@@ -429,27 +574,68 @@ impl Emit<'_> {
             },
         )
     }
+
+    fn setup(&mut self, op: BinOp, left: SetupOperand, right: SetupOperand) -> SetupOperand {
+        let left = self.value(left);
+        let right = self.value(right);
+        let (dst, inst) = self.arith(op, left, right);
+        self.setup.push(inst);
+        SetupOperand::Value(dst)
+    }
+
+    fn mul(&mut self, left: SetupOperand, right: SetupOperand) -> SetupOperand {
+        match (left, right) {
+            (zero, _) | (_, zero) if zero.is(0) => zero,
+            (one, other) | (other, one) if one.is(1) => other,
+            (left, right) => self.setup(BinOp::Mul, left, right),
+        }
+    }
+
+    fn add(&mut self, left: SetupOperand, right: SetupOperand) -> SetupOperand {
+        match (left, right) {
+            (zero, other) | (other, zero) if zero.is(0) => other,
+            (left, right) => self.setup(BinOp::Add, left, right),
+        }
+    }
 }
 
-fn apply(cfg: &mut CfgBody, frame: &Frame, reduction: &Reduction) {
+fn apply(
+    cfg: &mut CfgBody,
+    invariants: &Invariants,
+    frame: &Frame,
+    chain: &Chain,
+    reduction: &Reduction,
+) {
     let mut emit = Emit {
         cfg,
+        invariants,
         ty: reduction.ty.clone(),
         span: reduction.span,
-        preamble: Vec::new(),
+        words: Vec::new(),
+        setup: Vec::new(),
     };
     let derived = emit.fresh();
-    let iv_step = emit.read(&reduction.iv_step);
-    let factor = emit.read(&reduction.factor);
-    let offset = emit.read(&reduction.offset);
-
-    let (step, step_inst) = emit.arith(BinOp::Mul, iv_step, factor);
-    let (start_product, start_product_inst) = emit.arith(BinOp::Mul, reduction.iv_init, factor);
-    let (start, start_inst) = emit.arith(BinOp::Add, start_product, offset);
-    let mut preheader_insts = std::mem::take(&mut emit.preamble);
-    preheader_insts.push(step_inst);
-    preheader_insts.push(start_product_inst);
-    preheader_insts.push(start_inst);
+    let factor = emit.term(&reduction.factor);
+    let offset = emit.term(&reduction.offset);
+    let (step, start) = match &reduction.counted {
+        Counted::Carried { init, step } => {
+            let iv_step = emit.term(step);
+            let step = emit.mul(iv_step, factor.clone());
+            let init = emit.held(*init);
+            let start_product = emit.mul(init, factor);
+            (step, emit.add(start_product, offset))
+        }
+        Counted::Range { at } => {
+            let at = emit.held(*at);
+            let start_product = emit.mul(at, factor.clone());
+            (factor, emit.add(start_product, offset))
+        }
+        Counted::Index => (factor, offset),
+    };
+    let step = emit.value(step);
+    let start = emit.value(start);
+    let mut preheader_insts = std::mem::take(&mut emit.words);
+    preheader_insts.append(&mut emit.setup);
     let (advanced, advanced_inst) = emit.arith(BinOp::Add, derived, step);
 
     let preheader = &mut cfg.blocks[frame.preheader.0];
@@ -457,9 +643,26 @@ fn apply(cfg: &mut CfgBody, frame: &Frame, reduction: &Reduction) {
     sole_edge_args_mut(&mut preheader.terminator, frame.header_label).push(start);
 
     cfg.blocks[frame.header.0].params.push(derived);
+    let Terminator::For { stages, .. } = &mut cfg.blocks[frame.header.0].terminator else {
+        panic!(
+            "block {} is a `for` header and does not end in `For`",
+            frame.header.0
+        )
+    };
+    let Some(Stage::Join { targets, .. }) = stages.iter_mut().nth(reduction.join) else {
+        panic!(
+            "stage {} of the chain is the join the reduction reads in",
+            reduction.join
+        )
+    };
+    match targets {
+        Targets::Everything => {}
+        Targets::Listed(listed) => listed.push(Target::Carried(derived)),
+    }
 
+    let ends_join = chain.ends[reduction.join];
+    cfg.blocks[ends_join.0].insts.push(advanced_inst);
     let latch = &mut cfg.blocks[frame.latch.0];
-    latch.insts.push(advanced_inst);
     sole_edge_args_mut(&mut latch.terminator, frame.header_label).push(advanced);
 
     for site in [reduction.product, reduction.sum] {
@@ -499,11 +702,11 @@ fn subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) 
             then_args.iter_mut().for_each(&mut one);
             else_args.iter_mut().for_each(&mut one);
         }
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let mut traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-            traversal.source.for_each_use(&mut one);
-            traversal.body_args.for_each(&mut one);
-            traversal.exit_args.iter_mut().for_each(&mut one);
+        Terminator::For {
+            source, exit_args, ..
+        } => {
+            source.for_each_use(&mut one);
+            exit_args.iter_mut().for_each(&mut one);
         }
         Terminator::Switch { tag, arms, default } => {
             one(tag);

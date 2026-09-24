@@ -155,10 +155,7 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => then_args.iter().chain(else_args).copied().collect(),
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal().expect("a `For` or a `ForParts`");
-            traversal.body_args.iter().chain(traversal.exit_args).copied().collect()
-        }
+        Terminator::For { exit_args, .. } => exit_args.clone(),
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .flat_map(|(_, _, args)| args.iter())
@@ -190,13 +187,9 @@ fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, Vec<&mut ValueId>)> {
             else_args,
             ..
         } => vec![(*then_label, each(then_args)), (*else_label, each(else_args))],
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-            vec![
-                (*traversal.body, traversal.body_args.into_values_mut()),
-                (*traversal.exit, each(traversal.exit_args)),
-            ]
-        }
+        Terminator::For {
+            exit, exit_args, ..
+        } => vec![(*exit, each(exit_args))],
         Terminator::Switch { arms, default, .. } => arms
             .iter_mut()
             .map(|(_, label, args)| (*label, each(args)))

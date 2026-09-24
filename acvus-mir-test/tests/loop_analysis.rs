@@ -4,17 +4,16 @@
 
 use acvus_ast::Literal;
 use acvus_mir::analysis::affine::{Affine, AffineValues, Derivation, for_body};
-use acvus_mir::analysis::carried::{Carried, CarriedState, Dependence, MergeOp, Strength};
+use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{
     Invariants, Loop, LoopId, LoopKind, LoopNest, Nesting, Term, Trip,
 };
 use acvus_mir::cfg::{CfgBody, promote};
-use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::graph::Function;
 use acvus_mir::ir::{ForSource, ValueId};
 use acvus_mir::optimize::{dce, ssa_pass};
-use acvus_mir::ty::{Effect, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_extern::{Registry, TypesOnly, Var, extern_fn, extern_registry, kind};
 use acvus_mir::analysis::carried::{ExternMerge, StorageMerge};
 use acvus_mir::laws::LawTable;
@@ -98,7 +97,7 @@ fn exact_add() -> Carried {
 }
 
 #[test]
-fn a_range_sum_is_a_weak_exact_merge_run_max_of_hi_minus_at_times() {
+fn a_range_sum_is_an_exact_merge_run_max_of_hi_minus_at_times() {
     let a = Analyzed::of("let n = 10; let s = 0; for i in 0..n { s = s + i; } s");
     let loop_ = a.sole_loop();
     let LoopKind::For {
@@ -124,11 +123,10 @@ fn a_range_sum_is_a_weak_exact_merge_run_max_of_hi_minus_at_times() {
         "a range's element is `at + k`"
     );
     assert_eq!(a.carried(loop_), [exact_add()]);
-    assert_eq!(a.state(loop_).strength(), Strength::Weak);
 }
 
 #[test]
-fn a_slice_sum_is_a_weak_exact_merge_run_len_times() {
+fn a_slice_sum_is_an_exact_merge_run_len_times() {
     let a = Analyzed::of("let v = vec([1, 2, 3]); let s = 0; for x in &v { s = s + *x; } s");
     let loop_ = a.sole_loop();
     let LoopKind::For {
@@ -150,11 +148,10 @@ fn a_slice_sum_is_a_weak_exact_merge_run_len_times() {
         "a slice's index is `0 + k`"
     );
     assert_eq!(a.carried(loop_), [exact_add()]);
-    assert_eq!(a.state(loop_).strength(), Strength::Weak);
 }
 
 #[test]
-fn a_float_sum_is_a_weak_inexact_merge() {
+fn a_float_sum_is_an_inexact_merge() {
     let a = Analyzed::of("let v = vec([1.0, 2.0]); let s = 0.0; for x in &v { s = s + *x; } s");
     let loop_ = a.sole_loop();
     assert_eq!(
@@ -164,7 +161,6 @@ fn a_float_sum_is_a_weak_inexact_merge() {
             exact: false,
         }]
     );
-    assert_eq!(a.state(loop_).strength(), Strength::Weak);
 }
 
 #[test]
@@ -187,11 +183,10 @@ fn a_counter_derived_in_a_while_is_an_iv_and_the_while_has_no_trip_count() {
         steps.contains(&Term::Const(Literal::Int(3))),
         "`j = j + 3` steps by 3, a word the body writes and the term reads as a constant: {steps:?}"
     );
-    assert_eq!(a.state(loop_).strength(), Strength::Weak);
 }
 
 #[test]
-fn a_recurrence_is_strong() {
+fn a_state_read_beyond_its_merge_is_a_recurrence() {
     let a = Analyzed::of("let n = 10; let a = 1; for i in 0..n { a = a * a + 1; } a");
     let loop_ = a.sole_loop();
     let state = a.state(loop_);
@@ -199,67 +194,6 @@ fn a_recurrence_is_strong() {
         panic!("one carried value");
     };
     assert_eq!(param.carried, Carried::Recurrence);
-    assert_eq!(state.dependences, [Dependence::Recurrence(param.param)]);
-    assert_eq!(state.strength(), Strength::Strong);
-}
-
-fn emit(i: &Interner) -> Function {
-    Function {
-        qref: QualifiedRef::root(i.intern("emit")),
-        kind: FnKind::Extern {
-            bounds: vec![],
-            effect_bounds: vec![],
-            instances: Default::default(),
-            requires: vec![],
-        },
-        ty: TyTerm::Fn {
-            params: vec![ParamTerm::<Poly>::new(
-                i.intern("x"),
-                lift_to_poly(&Ty::I64),
-            )],
-            ret: Box::new(lift_to_poly(&Ty::I64)),
-            captures: vec![],
-            effect: Effect::OPAQUE.into(),
-            flows: acvus_mir::ty::Flows::Every.into(),
-        },
-    }
-}
-
-#[test]
-fn an_ordered_effect_in_the_body_is_strong() {
-    let i = Interner::new();
-    let a = Analyzed::with_externs(&i, "let n = 3; for k in 0..n { emit(k); } 0", &[emit(&i)]);
-    let loop_ = a.sole_loop();
-    let state = a.state(loop_);
-    assert!(
-        state
-            .dependences
-            .iter()
-            .any(|d| matches!(d, Dependence::OrderedEffect { .. })),
-        "{:?}",
-        state.dependences
-    );
-    assert_eq!(state.strength(), Strength::Strong);
-}
-
-#[test]
-fn a_write_through_the_element_is_weak_and_one_elsewhere_is_strong() {
-    let through = Analyzed::of("let v = vec([1, 2, 3]); for x in &mut v { *x = 0; } 0");
-    let loop_ = through.sole_loop();
-    assert_eq!(through.state(loop_).strength(), Strength::Weak);
-    assert!(through.state(loop_).runs_apart());
-
-    let elsewhere = Analyzed::of(
-        "let v = vec([1, 2, 3]); let t = 0; let r = &mut t; for x in &mut v { *r = *x; } t",
-    );
-    let loop_ = elsewhere.sole_loop();
-    let state = elsewhere.state(loop_);
-    assert!(
-        matches!(state.dependences[..], [Dependence::StorageWrite(_)]),
-        "the write through `r` is the one dependence; the element's is admitted: {:?}",
-        state.dependences
-    );
-    assert_eq!(state.strength(), Strength::Strong);
 }
 
 struct Nested {
@@ -319,34 +253,30 @@ fn an_inner_range_bounded_by_the_outer_counter_is_not_rectangular() {
     );
 }
 
-/// RFC-0066 rule 6: a loop left from anywhere but its header is ordered,
-/// since the iterations after the one that leaves never run. The same loop
-/// without the `break` is weak.
+/// A `break` changes what the loop carries no more than a write through
+/// another `&mut` does: the sum is a merge with or without the `break`, and
+/// the write carries nothing through the header and merges no storage.
+/// What orders either loop is the stages' (`stages.rs`).
 #[test]
-fn a_break_from_the_body_orders_the_iterations() {
-    let a = Analyzed::of("let v = vec([1, 2, 3]); let s = 0; for x in &v { s = s + *x; } s");
-    assert_eq!(a.state(a.sole_loop()).strength(), Strength::Weak);
-
+fn a_break_or_a_write_elsewhere_leaves_the_carried_kinds_as_they_are() {
     let a = Analyzed::of(
         "let v = vec([1, 2, 3]); let s = 0; for x in &v { if *x == 2 { break; }; s = s + *x; } s",
     );
-    let state = a.state(a.sole_loop());
-    assert!(
-        state
-            .dependences
-            .iter()
-            .any(|d| matches!(d, Dependence::EarlyExit { .. })),
-        "{:?}",
-        state.dependences
+    assert_eq!(a.carried(a.sole_loop()), [exact_add()]);
+
+    let a = Analyzed::of(
+        "let v = vec([1, 2, 3]); let t = 0; let r = &mut t; for x in &mut v { *r = *x; } t",
     );
-    assert_eq!(state.strength(), Strength::Strong);
+    let state = a.state(a.sole_loop());
+    assert!(state.params.is_empty(), "{:?}", state.params);
+    assert!(state.storage_merges.is_empty(), "{:?}", state.storage_merges);
 }
 
 // -- Merges an extern declares (RFC-0082 rules 2, 3 and 6) ---------------
 
 /// Type-only fixtures: two copies of one binary function and of one
-/// storage write, one declaring laws and one declaring none, so that a
-/// loop's strength moves with the declaration alone.
+/// storage write, one declaring laws and one declaring none, so that what
+/// a loop carries moves with the declaration alone.
 mod laws_fx {
     use super::*;
 
@@ -426,7 +356,7 @@ fn extern_merge(carried: Carried) -> Option<ExternMerge> {
 }
 
 #[test]
-fn a_max_over_a_range_is_a_weak_merge_on_the_extern() {
+fn a_max_over_a_range_is_a_merge_on_the_extern() {
     let a = Analyzed::of("let n = 10; let m = 0; for x in 0..n { m = max(m, x); } m");
     let loop_ = a.sole_loop();
     let state = a.state(loop_);
@@ -436,22 +366,17 @@ fn a_max_over_a_range_is_a_weak_merge_on_the_extern() {
     let merge = extern_merge(param.carried)
         .unwrap_or_else(|| panic!("`max` declares itself associative: {:?}", param.carried));
     assert!(merge.commutative);
-    assert_eq!(state.strength(), Strength::Weak, "{:?}", state.dependences);
 }
 
 #[test]
-fn the_same_loop_over_an_extern_that_declares_no_law_is_a_strong_recurrence() {
+fn the_same_loop_over_an_extern_that_declares_no_law_is_a_recurrence() {
     let lawful = with_laws("let n = 10; let m = 0; for x in 0..n { m = lawful::joined(m, x); } m");
     let loop_ = lawful.sole_loop();
     assert!(extern_merge(lawful.carried(loop_)[0]).is_some());
-    assert_eq!(lawful.state(loop_).strength(), Strength::Weak);
 
     let lawless = with_laws("let n = 10; let m = 0; for x in 0..n { m = lawful::lawless(m, x); } m");
     let loop_ = lawless.sole_loop();
-    let state = lawless.state(loop_);
     assert_eq!(lawless.carried(loop_), [Carried::Recurrence]);
-    assert_eq!(state.dependences, [Dependence::Recurrence(state.params[0].param)]);
-    assert_eq!(state.strength(), Strength::Strong);
 }
 
 #[test]
@@ -488,11 +413,10 @@ fn a_state_read_beside_the_merge_is_a_recurrence() {
         "the loop reads the partial `m`: {:?}",
         state.params
     );
-    assert_eq!(state.strength(), Strength::Strong);
 }
 
 #[test]
-fn a_push_with_a_fold_law_is_a_weak_storage_merge_and_without_it_strong() {
+fn a_push_with_a_fold_law_is_a_storage_merge_and_without_it_none() {
     let lawful = with_laws("let n = 3; let w = vec([0]); for x in 0..n { lawful::put(&mut w, x); } 0");
     let loop_ = lawful.sole_loop();
     let state = lawful.state(loop_);
@@ -500,46 +424,29 @@ fn a_push_with_a_fold_law_is_a_weak_storage_merge_and_without_it_strong() {
         panic!("`w` is merged through its storage: {:?}", state.storage_merges);
     };
     assert!(!fold.commutative);
-    assert!(state.dependences.is_empty(), "{:?}", state.dependences);
-    assert_eq!(state.strength(), Strength::Weak);
-    assert!(!state.runs_apart(), "a storage merge carries state");
 
     let lawless =
         with_laws("let n = 3; let w = vec([0]); for x in 0..n { lawful::put_lawless(&mut w, x); } 0");
     let loop_ = lawless.sole_loop();
     let state = lawless.state(loop_);
     assert!(state.storage_merges.is_empty());
-    assert!(
-        matches!(state.dependences[..], [Dependence::StorageWrite(_)]),
-        "{:?}",
-        state.dependences
-    );
-    assert_eq!(state.strength(), Strength::Strong);
 }
 
 #[test]
-fn a_fold_storage_the_loop_also_reads_is_a_strong_write() {
+fn a_fold_storage_the_loop_also_reads_is_no_storage_merge() {
     let a = with_laws(
         "let n = 3; let w = vec([0]); let t = 0; for x in 0..n { lawful::put(&mut w, x); t = t + w.len(); } t",
     );
     let loop_ = a.sole_loop();
     let state = a.state(loop_);
     assert!(state.storage_merges.is_empty(), "{:?}", state.storage_merges);
-    assert!(
-        state
-            .dependences
-            .iter()
-            .any(|d| matches!(d, Dependence::StorageWrite(_))),
-        "{:?}",
-        state.dependences
-    );
 }
 
 /// std `Vec::push` declares `fold(combine = extend, identity = new)`
 /// (RFC-0082 rule 3), so a loop whose one write of `v` is a push merges
-/// through `v`'s storage and stays weak.
+/// through `v`'s storage.
 #[test]
-fn a_std_push_in_a_loop_is_a_weak_storage_merge() {
+fn a_std_push_in_a_loop_is_a_storage_merge() {
     let a = Analyzed::of("let n = 3; let v = new(); for x in 0..n { v.push(x); } v.len()");
     let loop_ = a.sole_loop();
     let state = a.state(loop_);
@@ -548,26 +455,14 @@ fn a_std_push_in_a_loop_is_a_weak_storage_merge() {
         panic!("`v` is merged through its storage: {:?}", state.storage_merges);
     };
     assert!(!fold.commutative, "`push` keeps order");
-    assert!(state.dependences.is_empty(), "{:?}", state.dependences);
-    assert_eq!(state.strength(), Strength::Weak);
-    assert!(!state.runs_apart(), "a storage merge carries state");
 }
 
 #[test]
-fn a_std_push_storage_the_loop_also_reads_is_a_strong_write() {
+fn a_std_push_storage_the_loop_also_reads_is_no_storage_merge() {
     let a = Analyzed::of(
         "let n = 3; let v = new(); let t = 0u64; for x in 0..n { v.push(x); t = t + v.len(); } t",
     );
     let loop_ = a.sole_loop();
     let state = a.state(loop_);
     assert!(state.storage_merges.is_empty(), "{:?}", state.storage_merges);
-    assert!(
-        state
-            .dependences
-            .iter()
-            .any(|d| matches!(d, Dependence::StorageWrite(_))),
-        "{:?}",
-        state.dependences
-    );
-    assert_eq!(state.strength(), Strength::Strong);
 }

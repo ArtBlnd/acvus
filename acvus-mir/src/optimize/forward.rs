@@ -238,13 +238,12 @@ fn edges_mut(term: &mut Terminator) -> Vec<EdgeMut<'_>> {
         // edge redirects as a `Jump` does: a forwarder has no parameters,
         // so an exit block the terminator hands a trip count is never one
         // (RFC-0057 rule 9).
-        term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
-            let traversal = term.traversal_mut().expect("a `For` or a `ForParts`");
-            vec![EdgeMut {
-                to: traversal.exit,
-                args: traversal.exit_args,
-            }]
-        }
+        Terminator::For {
+            exit, exit_args, ..
+        } => vec![EdgeMut {
+            to: exit,
+            args: exit_args,
+        }],
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }
 }

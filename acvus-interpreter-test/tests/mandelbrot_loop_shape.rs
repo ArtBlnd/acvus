@@ -141,8 +141,8 @@ fn every_while_is_one_loop_operation_and_the_diamond_is_one_more() {
                 back_moves: 0,
             },
             LoopShape::For {
-                body_ops: 4,
-                back_moves: 1,
+                body_ops: 2,
+                back_moves: 0,
             },
         ],
         "the loops are listed innermost first: `i < @max` and the short-circuit \
