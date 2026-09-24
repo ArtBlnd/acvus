@@ -235,12 +235,14 @@ Status: Accepted
    program no meaning, and every
    analysis and pass assumes it does not happen. This implementation traps
    at the operation that overflows (RFC-0048 rule 8), so an overflowing run
-   ends before its value reaches anything. A pass may merge or drop such an
-   operation as if it could not trap, and moves it, as `/` and `%`, only
-   onto exactly the paths it ran on: on another path the operands may be
-   ones the program never combined, and the trap would end a run the
-   program defines. An operation a pass writes wraps, since the program
-   never asked for it. A script that wants
+   ends before its value reaches anything: an analysis's bound is safe
+   because no wrapped value is ever used. A pass drops such an operation
+   only when its value reaches nothing, and merges two that compute the
+   same. One it rewrites into another computation keeps the trap on exactly
+   the runs, at the iteration and stage, where it trapped. It moves one, as
+   `/` and `%`, only onto exactly the paths it ran on: on another path the
+   trap would end a run the program defines. An operation a pass writes
+   wraps, since the program never asked for it. A script that wants
    another behaviour names it: `wrapping_*`, `checked_*`, `saturating_*`,
    `overflowing_*`; this rule stands on those being there.
 4. An unsuffixed integer literal's type is a variable only an integer type
