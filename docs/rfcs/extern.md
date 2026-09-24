@@ -1064,16 +1064,13 @@ evaluation of postconditions at every return.
 
 Status: Proposed
 
-A host runs programs, reads their results, and reads and writes the
-contexts that persist between runs. A host is an extern turned around. The
-entry's result crosses from the script into Rust, as an extern's argument
-does. A value the host puts into a context crosses into the script, as an
-extern's return does. Each crossing is the glue's, at the type the checker
-settled, as the rule at the top of `acvus-extern` holds for an extern.
+A host runs programs and reads and writes their contexts. A host is an
+extern turned around: a result crosses into Rust as an extern's argument
+does, a value into a context as an extern's return does, each through the
+glue at the type the checker settled.
 
 1. **A context's type is the graph's.**
-   - The host does not declare a context's type, and neither does data the
-     host reads.
+   - Neither the host nor data it reads declares a context's type.
    - A context enters the graph as a variable (RFC-0025). Its type is solved
      with the rest of the graph from every body that stores or reads it, and
      structural types meet as they do anywhere else.
@@ -1085,11 +1082,11 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      source (RFC-0012 rule 7), so the source an init makes becomes the
      context's without a join of two sources; inside a script, a store of
      another source into the context stays refused.
-   - Before a run, every context the entry fetches before assigning
-     (RFC-0025 rule 2) that the page lacks is filled by running its init; a
-     key with neither a value nor an init refuses the run before it starts,
-     naming the key. An init never runs on a page that holds its key, so no
-     init replaces a value.
+   - A `Fetch` of a key the storage lacks runs that key's init at that
+     point and stores its result, then the run goes on; a key with neither a
+     value nor an init ends the run there with `Unfilled`, naming the key.
+     An init runs only where a load finds nothing, so no init replaces a
+     value.
    - A context whose type the graph leaves open closes to `!` at the freeze
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
    - A value no script names is not a context. The host keeps it itself.
@@ -1105,7 +1102,6 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      `Ty` is read by the derive an extern's parameter uses, and it is the
      entry's declaration (RFC-0054 rule 1). The declaration and `R` cannot
      differ.
-   - A script that only stores returns `Unit`.
    - A host that names no type declares `!` (RFC-0054 rule 5), and rule 6
      covers it.
 
@@ -1121,10 +1117,16 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      another: `Program::scope` brands the pages and entries its closure
      makes with a lifetime no other scope shares, so an entry takes only
      its own scope's page and neither leaves the closure.
-     Opening checks every stored type against the solved one and runs the
-     init of each context an entry fetches before assigning that the
-     storage lacks (rule 1); an open page holds every such context, so no
-     run meets an absent one. A run takes the page exclusively.
+     A page holds no value itself: the storage is read at a load and
+     written at a store, exactly where the program or the host does one
+     (RFC-0025 rule 2), and nowhere else. Opening a page reads nothing. A run
+     takes the page exclusively.
+   - The storage is trusted to give back what it was given. A storage whose
+     access can wait is declared when the host compiles
+     (`Host::async_access`), so every `Fetch` and `Commit` is typed `Async`
+     and lowered as a spawn and its evaluation (RFC-0046); a program compiled
+     for synchronous access opens only a synchronous storage, a mismatch the
+     Rust types refuse.
    - Running the entry gives an `Output`, which borrows the program as a
      page does. It owns the value, releases it when dropped, and offers
      `with(|p| …)` and `with_mut(|p| …)`; no value leaves it except through
@@ -1141,13 +1143,12 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      type of `key`, and `Output` compares it with `R`. A mismatch, a key the
      graph does not have, or a key no init fills and no run has stored yet
      is an error before any value is touched. Every error a host meets is
-     one `HostError`.
-   - The comparison is of types the compilation settled. It reads no tag on
-     the value, which an untagged runtime does not have.
-   - The contexts a run wrote are read the same way, after the run.
-   - A stored value whose type differs from the solved one, as after a
-     script changed, is a mismatch when the page opens. What to do with it
-     is the host's.
+     one `HostError`, a storage's failure during a run among them: the run
+     ends there and releases nothing (RFC-0048 rule 8).
+   - It compares settled types and reads no tag on the value.
+   - A loaded holder whose type differs from the solved one, as after a
+     script changed, is a mismatch at that load. What to do with it is the
+     host's.
 
 5. **A lent value lives for the closure.**
    - The borrow is the closure's, as a handler's is the call's
@@ -1166,26 +1167,24 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      the glue. Raw writes are reached only under the runtime's `tooling`
      feature, which a host turns on only by naming it.
    - A storage behind a page (`Storage`) moves whole holders and never
-     reads inside one, so implementing one is safe; its errors reach the
-     host when the page opens or commits, never inside a run. A holder
-     records the compilation that made it, and a page refuses another
-     compilation's.
-   - The CLI, which declares `!` and prints whatever a file returns, is the
-     runtime's own tooling. It reads by the settled `Ty` inside the
-     workspace. No public reader by `Ty` is offered.
+     reads inside one, so implementing one is safe. A holder records its type
+     and the compilation that made it, and a load refuses another
+     compilation's or another type's, so a wrong storage is refused and never
+     read at another type.
+   - The CLI is the runtime's own tooling and reads by the settled `Ty`; no
+     public reader by `Ty` is offered.
 
 **Why.** The burden falls on the language's developers first, then on the
 authors of externs and hosts, who take care but meet no trap. The script's
-user takes on nothing. A host that reads the value word writes, again, the
-walk only the runtime can check, and a reinterpretation at a wrong type is a
-transmute. A context's type written in data is a second statement of what
+user takes on nothing. A context's type written in data is a second statement of what
 the scripts already say, and two statements can disagree. Solved in the
 graph, the type has one source, and an init is checked against it like a
 store. An extern handler already crosses the
 boundary soundly with values lent and not kept, and a host that lends into a
 closure needs nothing more, so one crossing serves both and a gap in one is a
-gap in the other. Anything the host keeps is copied in Rust, where Rust
-checks it.
+gap in the other. A storage is read and written where the program says,
+because a read the program did not make can be stale by the time it would
+have made it.
 **Cost.**
 - A host names a Rust type for its entry, and for each context it reads or
   inserts.
@@ -1203,7 +1202,8 @@ checks it.
   its contexts were ever given a value; a first value is the host's concern.
 - `as_typed::<T>()` on a result value — it is a `Value -> T`, and it checks
   a kind after the run (RFC-0054).
-- Returning the value word with documented accessors — every host rewrites
-  an unchecked walk, which is a trap at the host's tier.
-- A public reader over a `(Ty, value)` pair — every host that used it would
-  rebuild a type system on the runtime's layout.
+- Returning the value word, with accessors or a reader over `(Ty, value)` —
+  every host would rewrite an unchecked walk over the runtime's layout.
+- Loading contexts when a page opens — a read the program did not make.
+- Choosing waited access by the storage at run time — a body compiled
+  `Sync` cannot wait.

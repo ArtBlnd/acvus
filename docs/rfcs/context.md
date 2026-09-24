@@ -69,7 +69,10 @@ Status: Accepted
      assignment is not the body's. Such a variable starts unset, as a `let`
      with no value does, and RFC-0018's rules hold it until the assignment.
    - **Exit.** On every return, each such variable is committed back:
-     `Commit { context, value }`, where `value` is a `Take` of the variable.
+     `Commit { context, value, wrote }`, where `value` is a `Take` of the
+     variable. `wrote` holds when the body or a call since the fetch may
+     have written it (rule 4's write sets); a commit that did not write
+     hands the value back to the page and stores nothing.
    - **Around a call.** A call whose summary touches `@x` is bracketed:
      `Commit` of the variable before it, `Fetch` into the variable after it.
      A call whose summary does not touch `@x` touches nothing.
@@ -79,9 +82,9 @@ Status: Accepted
    A context the body does not name is not fetched; a context touched only by
    callees is fetched and committed by the callees. `Fetch` and `Commit` carry
    no path: the page stores whole values, and a field of a context is a field
-   of the variable. The contexts a run fetches before assigning are known
-   before it starts, and a run whose page does not hold one is refused before
-   it starts (RFC-0090); no fetch reaches an absent context.
+   of the variable. The page is read at a `Fetch` and written at a `Commit`
+   that wrote, at the point each runs; a `Fetch` of an absent context is the
+   host's to fill or refuse there (RFC-0090 rule 1).
 3. **Moves.** A context left moved out at an exit is reported at the move the
    source wrote, once per move, as `context @x is moved out here and not
    assigned again before the run ends`. A context touched while a spawn that
