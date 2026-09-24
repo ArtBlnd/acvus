@@ -204,6 +204,104 @@ fn every_head_prepares_to_one_for_region() {
     }
 }
 
+/// RFC-0089 rule 2: in place, a `ForParts` chain is the body of the region
+/// its `For` would be, so each loop `optimize::for_parts` partitions
+/// prepares to what the same loop prepares to without the form. Case h's
+/// body spawns its call and evaluates it, which no region part admits, so it
+/// runs on the joints path on master as well.
+#[test]
+fn every_partitioned_loop_prepares_as_its_for_did() {
+    struct Partitioned {
+        source: &'static str,
+        prepares_to: Expected,
+    }
+    enum Expected {
+        OneRegion(&'static str),
+        Joints,
+    }
+    let cases = [
+        Partitioned {
+            source: "let v = [1, 2, 3, 4]; let s = 0; let p = 1; \
+                     for x in &v { s = s + *x; p = p * *x; } s + p",
+            prepares_to: Expected::OneRegion("For<Slice, Rejoins>"),
+        },
+        Partitioned {
+            source: "let a = 0; let b = 0; let c = 0; \
+                     for i in 0..10 { a = a * a + i; b = b * b + 1; c = c * c + 2; } a + b + c",
+            prepares_to: Expected::OneRegion("For<Range<i64>, Rejoins>"),
+        },
+        Partitioned {
+            source: "let a = 1; let s = 0; for i in 0..5 { a = a * a + i; s = s + i; } a + s",
+            prepares_to: Expected::OneRegion("For<Range<i64>, Rejoins>"),
+        },
+        Partitioned {
+            source: "let v = [1, 2, 3, 4]; let s = 0; let t = 0; \
+                     for x in &v { let y = *x * *x + 3; s = s + y; t = t + y; } s + t",
+            prepares_to: Expected::OneRegion("For<Slice, Rejoins>"),
+        },
+        Partitioned {
+            source: "let v = [1, 2, 3]; anyorder { for x in &v { io::print(\"a\"); } } 0",
+            prepares_to: Expected::Joints,
+        },
+        Partitioned {
+            source: "let v = [1, 2, 3, 4]; let s = 0; let p = 1; \
+                     for x in &v { if *x > 2 { s = s + *x; } p = p * *x; } s + p",
+            prepares_to: Expected::OneRegion("For<Slice, Rejoins>"),
+        },
+        Partitioned {
+            source: "let s = 0; let p = 1; \
+                     for i in 0..10 { p = p * 2; if i % 2 == 0 { continue; } s = s + i; } s + p",
+            prepares_to: Expected::OneRegion("For<Range<i64>, Escapes>"),
+        },
+    ];
+    for case in cases {
+        let i = Interner::new();
+        let registries = || {
+            let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
+            registries.push(acvus_ext::io_registry::<AcvusRuntime>());
+            registries
+        };
+        let ast = acvus_mir::graph::ParsedAst::Script(
+            acvus_ast::parse_script(&i, case.source).expect("parse error"),
+        );
+        let compiled = compile_source_with_externs(
+            &i,
+            ast,
+            &rustc_hash::FxHashMap::default(),
+            registries(),
+            Ty::I64,
+        );
+        let mir = acvus_mir::printer::dump_with(&i, &compiled.modules[&compiled.entry_qref]);
+        assert!(mir.contains(" parts ["), "{}\n{mir}", case.source);
+        let found =
+            script_listing_with_externs(&i, case.source, Context::default(), registries(), Ty::I64);
+        let names: Vec<String> = found
+            .iter()
+            .flat_map(|block| block.regions.iter())
+            .map(|region| region.name.clone())
+            .collect();
+        let joints: Vec<String> = ops_of_anywhere(&found)
+            .into_iter()
+            .chain(found.iter().map(|block| block.end.clone()))
+            .filter(|op| {
+                ["ForStart<", "ForAt<", "ForStep<"]
+                    .iter()
+                    .any(|joint| op.starts_with(joint))
+            })
+            .collect();
+        match case.prepares_to {
+            Expected::OneRegion(region) => {
+                assert_eq!(names, [region], "{}\n{mir}", case.source);
+                assert!(joints.is_empty(), "{}: {joints:?}\n{mir}", case.source);
+            }
+            Expected::Joints => {
+                assert!(names.is_empty(), "{}: {names:?}\n{mir}", case.source);
+                assert_eq!(joints.len(), 3, "{}: {joints:?}\n{mir}", case.source);
+            }
+        }
+    }
+}
+
 #[test]
 fn the_body_holds_no_comparison_and_no_move_of_the_counter() {
     for source in [SLICE, ARRAY, RANGE_I64] {
@@ -604,6 +702,80 @@ fn a_traversal_of_owners_a_break_leaves_runs_as_joints_and_releases_nothing_itse
         2,
         "{ops:?}"
     );
+}
+
+/// RFC-0089 rule 8: an owned element's drop is placed in the part that last
+/// reads it. The element is bound to a storage one part alone reads, and the
+/// binding opens the body, so that part is the first: its release is that
+/// part's, the product's part holds none, and each element is released once.
+const OWNER_READ_BY_ONE_PART: &str = "let a = [tracked(1), tracked(1), tracked(1)]; \
+     let n = 0; let m = 1; for t in a { m = m * 2; n = n + rank(&t); } n * 100 + m";
+
+/// Two sums that each read the element: the element is bound to a storage
+/// that every iteration writes and both sums read, so rule 5 joins them into
+/// one part, and a part that writes a storage is `Sequential`, so the loop
+/// stays a `For`.
+const OWNER_READ_BY_TWO_SUMS: &str = "let a = [tracked(1), tracked(1), tracked(1)]; \
+     let n = 0; let m = 0; for t in a { n = n + rank(&t); m = m + rank(&t) * 2; } n * 10 + m";
+
+#[tokio::test]
+async fn an_owned_element_one_part_reads_is_released_once_in_that_part() {
+    let measured = Measured::start();
+    assert_eq!(tracked_int(OWNER_READ_BY_ONE_PART).await, 308);
+    assert_eq!(measured.count(), 3);
+
+    let i = Interner::new();
+    let ast = acvus_mir::graph::ParsedAst::Script(
+        acvus_ast::parse_script(&i, OWNER_READ_BY_ONE_PART).expect("parse error"),
+    );
+    let compiled =
+        compile_source_with_externs(&i, ast, &rustc_hash::FxHashMap::default(), regs(), Ty::I64);
+    let module = &compiled.modules[&compiled.entry_qref];
+    let mir = acvus_mir::printer::dump_with(&i, module);
+    let cfg = acvus_mir::cfg::promote(module.main.clone());
+    let Some((header, parts)) = cfg.blocks.iter().find_map(|block| match &block.terminator {
+        acvus_mir::cfg::Terminator::ForParts { parts, .. } => Some((block.label, parts)),
+        _ => None,
+    }) else {
+        panic!("the loop states its parts:\n{mir}")
+    };
+    assert_eq!(parts.len(), 2, "{mir}");
+    let entries: Vec<usize> = parts
+        .iter()
+        .map(|part| cfg.label_to_block[&part.entry].0)
+        .collect();
+    let latch = (entries[0]..cfg.blocks.len())
+        .find(|at| {
+            matches!(&cfg.blocks[*at].terminator,
+                acvus_mir::cfg::Terminator::Jump { label, .. } if *label == header)
+        })
+        .expect("the last part jumps back to the header");
+    let dropped_in: Vec<usize> = (entries[0]..=latch)
+        .filter(|at| {
+            cfg.blocks[*at]
+                .insts
+                .iter()
+                .any(|inst| matches!(inst.kind, acvus_mir::ir::InstKind::Drop { .. }))
+        })
+        .map(|at| entries.iter().rposition(|entry| *entry <= at).unwrap_or(0))
+        .collect();
+    assert_eq!(dropped_in, [0], "{mir}");
+}
+
+#[tokio::test]
+async fn an_owned_element_two_sums_read_is_released_once() {
+    let measured = Measured::start();
+    assert_eq!(tracked_int(OWNER_READ_BY_TWO_SUMS).await, 3 * 10 + 6);
+    assert_eq!(measured.count(), 3);
+
+    let i = Interner::new();
+    let ast = acvus_mir::graph::ParsedAst::Script(
+        acvus_ast::parse_script(&i, OWNER_READ_BY_TWO_SUMS).expect("parse error"),
+    );
+    let compiled =
+        compile_source_with_externs(&i, ast, &rustc_hash::FxHashMap::default(), regs(), Ty::I64);
+    let mir = acvus_mir::printer::dump_with(&i, &compiled.modules[&compiled.entry_qref]);
+    assert!(!mir.contains(" parts ["), "{mir}");
 }
 
 // -- An element's reference outlives its iteration ----------------------

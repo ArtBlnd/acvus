@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 use crate::ir::{
     BodyArgsMut, DebugInfo, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, Part, SwitchKey,
-    Traversal, TraversalMut, ValueId, body_args_of,
+    Traversal, TraversalMut, ValueId,
 };
 use crate::ty::{Task, Ty};
 
@@ -125,7 +125,7 @@ impl Terminator {
             } => Some(Traversal {
                 source: *source,
                 body: *body,
-                body_args: std::borrow::Cow::Borrowed(body_args),
+                body_args,
                 exit: *exit,
                 exit_trip: *exit_trip,
                 exit_args,
@@ -133,14 +133,14 @@ impl Terminator {
             Terminator::ForParts {
                 source,
                 body,
-                parts,
+                parts: _,
                 exit,
                 exit_trip,
                 exit_args,
             } => Some(Traversal {
                 source: *source,
                 body: *body,
-                body_args: std::borrow::Cow::Owned(body_args_of(parts)),
+                body_args: &[],
                 exit: *exit,
                 exit_trip: *exit_trip,
                 exit_args,
@@ -169,14 +169,14 @@ impl Terminator {
             Terminator::ForParts {
                 source,
                 body,
-                parts,
+                parts: _,
                 exit,
                 exit_trip,
                 exit_args,
             } => Some(TraversalMut {
                 source,
                 body,
-                body_args: BodyArgsMut::Parts(parts),
+                body_args: BodyArgsMut::Unlisted,
                 exit,
                 exit_trip,
                 exit_args,

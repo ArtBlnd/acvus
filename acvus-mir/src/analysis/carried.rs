@@ -64,7 +64,7 @@ use rustc_hash::FxHashMap;
 use crate::analysis::affine::{AffineValues, Arithmetic, Derivation, exact_under_wrapping};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::{Loop, LoopKind, passed_into_body};
+use crate::analysis::loops::{Loop, LoopKind};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
 use crate::ir::{CallIdentity, Callee, ForSource, InstKind, ValueId};
@@ -144,14 +144,12 @@ impl CarriedState {
     pub fn of(loans: &Loans<'_>, loop_: &Loop, affine: &AffineValues, laws: &LawTable) -> Self {
         let cfg = loans.cfg();
         let natural = &loop_.natural;
-        let into_body = passed_into_body(cfg, natural.header);
         let body = Body {
             loans,
             loop_,
             laws,
-            reads: Reads::in_loop(cfg, loop_, &into_body),
+            reads: Reads::in_loop(cfg, loop_),
             arithmetic: Arithmetic::in_loop(cfg, loop_),
-            into_body,
         };
         let params: Vec<CarriedParam> = cfg.blocks[natural.header.0]
             .params
@@ -242,18 +240,11 @@ struct Body<'a, 'cfg> {
     laws: &'a LawTable,
     reads: Reads,
     arithmetic: Arithmetic,
-    into_body: FxHashMap<ValueId, ValueId>,
 }
 
 impl<'cfg> Body<'_, 'cfg> {
     fn cfg(&self) -> &'cfg CfgBody {
         self.loans.cfg()
-    }
-
-    /// Whether `value` is header parameter `param`: the parameter itself,
-    /// or the body parameter its traversal's body edge passes it to.
-    fn is_param(&self, value: ValueId, param: ValueId) -> bool {
-        value == param || self.into_body.get(&param) == Some(&value)
     }
 
     /// `Carried::Merge` when header parameter `param`, at `index`, is one.
@@ -262,10 +253,7 @@ impl<'cfg> Body<'_, 'cfg> {
         let next = natural.back_arg(self.cfg(), index)?;
         let merge = match self.arithmetic.get(next) {
             Some(operation) => {
-                let taken = self.into_body.get(&param).copied();
-                let reads_param = operation.one_operand_is(param)
-                    || taken.is_some_and(|taken| operation.one_operand_is(taken));
-                if !reads_param {
+                if !operation.one_operand_is(param) {
                     return None;
                 }
                 let op = match operation.op {
@@ -306,7 +294,7 @@ impl<'cfg> Body<'_, 'cfg> {
             let InstKind::Merge { orders, .. } = self.defining(at)? else {
                 return None;
             };
-            if orders.iter().any(|order| self.is_param(*order, param)) {
+            if orders.contains(&param) {
                 return Some(chain);
             }
             let linked: Vec<ValueId> = orders
@@ -329,7 +317,7 @@ impl<'cfg> Body<'_, 'cfg> {
         match self.defining(value) {
             Some(InstKind::Merge { orders, .. }) => orders
                 .iter()
-                .any(|order| self.is_param(*order, param) || self.reaches_through_merges(*order, param)),
+                .any(|order| *order == param || self.reaches_through_merges(*order, param)),
             _ => false,
         }
     }
@@ -422,8 +410,8 @@ impl<'cfg> Body<'_, 'cfg> {
         let &[first, second] = args.as_slice() else {
             return None;
         };
-        let param_is_first = self.is_param(first, param) && !self.is_param(second, param);
-        let param_is_second = self.is_param(second, param) && !self.is_param(first, param);
+        let param_is_first = first == param && second != param;
+        let param_is_second = second == param && first != param;
         (param_is_first || (*commutative && param_is_second)).then_some(ExternMerge {
             callee: *id,
             instance: *instance,
@@ -541,35 +529,15 @@ struct Reads {
 }
 
 impl Reads {
-    /// A body parameter a header parameter is passed to is read as that
-    /// header parameter, and the pass itself is no read.
-    fn in_loop(cfg: &CfgBody, loop_: &Loop, into_body: &FxHashMap<ValueId, ValueId>) -> Self {
-        let as_header: FxHashMap<ValueId, ValueId> = into_body
-            .iter()
-            .map(|(header, body)| (*body, *header))
-            .collect();
-        let header = loop_.natural.header;
+    fn in_loop(cfg: &CfgBody, loop_: &Loop) -> Self {
         let mut by_value: FxHashMap<ValueId, usize> = FxHashMap::default();
-        for at in loop_.natural.blocks() {
-            let block = &cfg.blocks[at.0];
+        for block in loop_.natural.blocks() {
+            let block = &cfg.blocks[block.0];
             let insts = block
                 .insts
                 .iter()
                 .flat_map(|inst| inst_info::uses(&inst.kind));
-            let mut terminator = inst_info::terminator_uses(&block.terminator);
-            if at == header
-                && let Some(traversal) = block.terminator.traversal()
-            {
-                for passed in traversal.body_args.iter() {
-                    if into_body.contains_key(passed)
-                        && let Some(at) = terminator.iter().position(|used| used == passed)
-                    {
-                        terminator.remove(at);
-                    }
-                }
-            }
-            for value in insts.chain(terminator) {
-                let value = as_header.get(&value).copied().unwrap_or(value);
+            for value in insts.chain(inst_info::terminator_uses(&block.terminator)) {
                 *by_value.entry(value).or_default() += 1;
             }
         }

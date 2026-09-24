@@ -756,10 +756,10 @@ fn write_body(
             // that block's label is. An exit edge that defines the trip count
             // prints it as `trip` where the exit block's first parameter
             // takes it: `else L2(trip, r5)` (RFC-0057 rule 9).
-            // `for slice(r3) -> L1(r9, r10) else L2 parts [L1(r9): law(Op(Add)
-            // exact commutative), L3(r10): sequential]` (RFC-0089): the
-            // traversal as a `For` prints it, then each part's entry, its run
-            // of the carried values, and its kind with each law.
+            // `for slice(r3) -> L1 else L2 parts [L1(r9): law(Op(Add) exact
+            // commutative), L3(r10): sequential]` (RFC-0089): the traversal
+            // as a `For` prints it, then each part's entry, the header
+            // parameters it carries, and its kind with each law.
             kind @ (InstKind::For { .. } | InstKind::ForParts { .. }) => {
                 let crate::ir::Traversal {
                     source,

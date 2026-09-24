@@ -12,8 +12,8 @@
 //! `Sequential` part, and a `while` stay as they are. So does a `for` whose
 //! header holds an instruction: that instruction runs on every entry to the
 //! header, the last one included, and belongs to no part of the body. And so
-//! does a body that holds no instruction and carries nothing: it has no part
-//! for the form's body edge to enter.
+//! do a loop with an arm that ends in `!` and a body that holds no
+//! instruction (rule 5).
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -88,12 +88,18 @@ fn partition(cfg: &CfgBody, header_label: Label, laws: &LawTable) -> Option<CfgB
             .filter(|block| *block != header)
             .collect(),
     };
+    if region.holds_no_instruction(&work) {
+        return None;
+    }
     region.pass_body_args(&mut work);
     region.name_fallthroughs(&mut work)?;
     if let Some(latch) = region.one_latch(&mut work, &mut labels) {
         region.drop_trivial_params(&mut work, latch);
     }
-    let carried = region.carry_into_body(&mut work, source);
+    let carried = CarriedValues {
+        header: work.blocks[header.0].params.clone(),
+        supplied: work.blocks[region.body.0].params.clone(),
+    };
 
     let shape = Shape::of(&work, &region)?;
     let loans = Loans::build(&work);
@@ -153,21 +159,19 @@ struct Region {
 }
 
 struct CarriedValues {
-    values: Vec<CarriedValue>,
-    /// The body parameters the terminator fills: the element and the
-    /// counter.
+    header: Vec<ValueId>,
     supplied: Vec<ValueId>,
-}
-
-#[derive(Clone, Copy)]
-struct CarriedValue {
-    header: ValueId,
-    body: ValueId,
 }
 
 impl Region {
     fn contains(&self, block: BlockIdx) -> bool {
         self.blocks.contains(&block)
+    }
+
+    fn holds_no_instruction(&self, cfg: &CfgBody) -> bool {
+        self.blocks
+            .iter()
+            .all(|block| cfg.blocks[block.0].insts.is_empty())
     }
 
     fn substitute(&self, cfg: &mut CfgBody, subst: &FxHashMap<ValueId, ValueId>) {
@@ -310,30 +314,6 @@ impl Region {
             );
         }
         Some(incoming)
-    }
-
-    /// The body block takes the header's parameters after the element and
-    /// the counter, and the body reads them there (RFC-0089 rule 1).
-    fn carry_into_body(&self, cfg: &mut CfgBody, source: ForSource) -> CarriedValues {
-        let values: Vec<CarriedValue> = cfg.blocks[self.header.0]
-            .params
-            .clone()
-            .into_iter()
-            .map(|header| CarriedValue {
-                header,
-                body: fresh_like(cfg, header),
-            })
-            .collect();
-        let subst: FxHashMap<ValueId, ValueId> = values
-            .iter()
-            .map(|value| (value.header, value.body))
-            .collect();
-        self.substitute(cfg, &subst);
-        cfg.blocks[self.body.0]
-            .params
-            .extend(values.iter().map(|value| value.body));
-        let supplied = cfg.blocks[self.body.0].params[..source.supplied_params()].to_vec();
-        CarriedValues { values, supplied }
     }
 }
 
@@ -501,7 +481,11 @@ impl Shape {
         let mut deciders_of: FxHashMap<BlockIdx, Vec<BlockIdx>> = FxHashMap::default();
         let mut arms_of: FxHashMap<BlockIdx, Vec<BlockIdx>> = FxHashMap::default();
         for &branch in &region.blocks {
-            if succs[&branch].len() < 2 {
+            let two_way = matches!(
+                cfg.blocks[branch.0].terminator,
+                Terminator::JumpIf { .. } | Terminator::Diamond { .. } | Terminator::Switch { .. }
+            );
+            if succs[&branch].len() < 2 && !two_way {
                 continue;
             }
             let join = ipdom[&branch];
@@ -712,7 +696,7 @@ struct IncomingEdge {
 /// RFC-0089 rule 5's relation over the body, closed.
 struct Components {
     sets: UnionFind,
-    carried: Vec<CarriedValue>,
+    carried: Vec<ValueId>,
 }
 
 impl Components {
@@ -812,14 +796,14 @@ impl Components {
             }
         }
 
-        for (value, &arg) in carried.values.iter().zip(&shape.latch_args) {
+        for (&param, &arg) in carried.header.iter().zip(&shape.latch_args) {
             if let Some(arg) = node(arg) {
-                sets.union(Node::Value(value.body), arg);
+                sets.union(Node::Value(param), arg);
             }
         }
         Self {
             sets,
-            carried: carried.values.clone(),
+            carried: carried.header.clone(),
         }
     }
 
@@ -839,8 +823,8 @@ impl Components {
             let root = self.sets.find(member.into());
             by_root.entry(root).or_default().members.push(member);
         }
-        for (index, value) in self.carried.iter().enumerate() {
-            let root = self.sets.find(Node::Value(value.body));
+        for (index, &param) in self.carried.iter().enumerate() {
+            let root = self.sets.find(Node::Value(param));
             by_root.entry(root).or_default().carried.push(index);
         }
         for &block in region.blocks.iter().filter(|block| **block != region.body) {
@@ -870,11 +854,12 @@ struct Classified {
     kind: PartKind,
 }
 
-/// The values the body defines, which are what the relation joins: every
-/// block parameter and instruction result inside the body, and what a
-/// traversal inside it fills. The element and the counter are every part's
-/// and are left out, and so is a storage slot, which the relation reaches
-/// through what touches it.
+/// The values the relation joins: every block parameter and instruction
+/// result inside the body, what a traversal inside it fills, and the
+/// header's parameters, which the parts read as their carried values
+/// (RFC-0089 rule 1). The element and the counter are every part's and are
+/// left out, and so is a storage slot, which the relation reaches through
+/// what touches it.
 fn values_inside(cfg: &CfgBody, region: &Region, carried: &CarriedValues) -> FxHashSet<ValueId> {
     let mut slots: FxHashSet<ValueId> = FxHashSet::default();
     for inst in cfg.blocks.iter().flat_map(|block| &block.insts) {
@@ -894,6 +879,7 @@ fn values_inside(cfg: &CfgBody, region: &Region, carried: &CarriedValues) -> FxH
             inside.extend(inst_info::defs(&inst.kind));
         }
     }
+    inside.extend(carried.header.iter().copied());
     for supplied in &carried.supplied {
         inside.remove(supplied);
     }
@@ -1184,38 +1170,13 @@ impl Chain<'_> {
         chain.label_owner = chain.label_owners(cfg)?;
         chain.join_labels = chain.join_labels(cfg, labels)?;
 
-        let order: Vec<usize> = parts
-            .iter()
-            .flat_map(|part| part.component.carried.iter().copied())
-            .collect();
-        let permute = |values: &[ValueId]| -> Vec<ValueId> {
-            order.iter().map(|&index| values[index]).collect()
-        };
         let header_label = cfg.blocks[region.header.0].label;
-        for block in (0..cfg.blocks.len()).map(BlockIdx) {
-            if region.contains(block) {
-                continue;
-            }
-            for edge in edges_into(&mut cfg.blocks[block.0].terminator, header_label) {
-                *edge.args = permute(edge.args);
-            }
-        }
-        let header_params: Vec<ValueId> = carried.values.iter().map(|v| v.header).collect();
-        let body_carried: Vec<ValueId> = carried.values.iter().map(|v| v.body).collect();
-        cfg.blocks[region.header.0].params = permute(&header_params);
-        let latch_args = permute(&shape.latch_args);
-        let body_params: Vec<ValueId> = carried
-            .supplied
-            .iter()
-            .copied()
-            .chain(permute(&body_carried))
-            .collect();
 
         let mut written: Vec<Written> = Vec::with_capacity(parts.len());
         for index in 0..parts.len() {
             let first = (index == 0).then(|| Open {
                 label: cfg.blocks[region.body.0].label,
-                params: body_params.clone(),
+                params: carried.supplied.clone(),
                 insts: Vec::new(),
             });
             written.push(chain.part(cfg, labels, index, first)?);
@@ -1230,7 +1191,7 @@ impl Chain<'_> {
                 },
                 None => Terminator::Jump {
                     label: header_label,
-                    args: latch_args.clone(),
+                    args: shape.latch_args.clone(),
                 },
             };
             blocks_written.extend(part.blocks);
@@ -1246,7 +1207,7 @@ impl Chain<'_> {
                     .component
                     .carried
                     .iter()
-                    .map(|&index| carried.values[index].header)
+                    .map(|&index| carried.header[index])
                     .collect(),
                 kind: part.kind,
             })

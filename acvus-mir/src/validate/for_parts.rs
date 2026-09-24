@@ -42,12 +42,9 @@ impl ShapeFault {
             Self::HeaderHoldsInstructions => "its header holds an instruction",
             Self::BodyIsNotFirstEntry => "its body block is not its first part's entry",
             Self::CarriedAreNotHeaderParams => {
-                "its parts' carried values are not the header's parameters in order"
+                "its parts do not carry each of the header's parameters exactly once"
             }
-            Self::BodyParams => {
-                "its body block's parameters are not the element, the counter and one per \
-                 carried value"
-            }
+            Self::BodyParams => "its body block's parameters are not the element and the counter",
             Self::PartEntryEnteredElsewhere => {
                 "a part's entry is entered other than from the part before it"
             }
@@ -214,16 +211,23 @@ impl<'a> Form<'a> {
             return vec![shape(ShapeFault::BodyIsNotFirstEntry)];
         }
         let header_params = &cfg.blocks[header.0].params;
-        let carried: Vec<ValueId> = crate::ir::body_args_of(parts);
-        if carried != *header_params {
+        let mut carried_owner: FxHashMap<ValueId, usize> = FxHashMap::default();
+        for (index, part) in parts.iter().enumerate() {
+            for value in &part.carried {
+                let named_once = carried_owner.insert(*value, index).is_none();
+                if !named_once || !header_params.contains(value) {
+                    return vec![shape(ShapeFault::CarriedAreNotHeaderParams)];
+                }
+            }
+        }
+        if carried_owner.len() != header_params.len() {
             return vec![shape(ShapeFault::CarriedAreNotHeaderParams)];
         }
         let Some(&body_block) = cfg.label_to_block.get(body) else {
             return vec![shape(ShapeFault::BodyParams)];
         };
         let body_params = &cfg.blocks[body_block.0].params;
-        let supplied = source.supplied_params();
-        if body_params.len() != supplied + carried.len() {
+        if body_params.len() != source.supplied_params() {
             return vec![shape(ShapeFault::BodyParams)];
         }
         let regions = match Self::regions(cfg, header, exit, parts) {
@@ -235,21 +239,15 @@ impl<'a> Form<'a> {
         };
         let latch_args = match &cfg.blocks[latch.0].terminator {
             Terminator::Jump { label, args }
-                if *label == header_label && args.len() == carried.len() =>
+                if *label == header_label && args.len() == header_params.len() =>
             {
                 args.clone()
             }
             _ => return vec![shape(ShapeFault::LatchArgs)],
         };
-        let carried_part: Vec<usize> = parts
+        let carried_part: Vec<usize> = header_params
             .iter()
-            .enumerate()
-            .flat_map(|(index, part)| std::iter::repeat_n(index, part.carried.len()))
-            .collect();
-        let carried_owner: FxHashMap<ValueId, usize> = body_params[supplied..]
-            .iter()
-            .copied()
-            .zip(carried_part.iter().copied())
+            .map(|param| carried_owner[param])
             .collect();
         let form = Form {
             cfg,
@@ -262,7 +260,7 @@ impl<'a> Form<'a> {
             latch,
             carried_owner,
             carried_part,
-            supplied: body_params[..supplied].to_vec(),
+            supplied: body_params.clone(),
             latch_args,
         };
         if let Some(fault) = form.law_layout() {
@@ -399,17 +397,16 @@ impl<'a> Form<'a> {
         refusals
     }
 
-    /// Where each value the body defines is defined: a carried body
-    /// parameter by its part, any other body value by the part whose block
-    /// defines it.
+    /// The part each value a part may read belongs to: a header parameter
+    /// to the part that carries it, and a value the body defines to the part
+    /// whose block defines it. The element and the counter are every part's.
     fn owners(&self) -> FxHashMap<ValueId, usize> {
-        let mut owners: FxHashMap<ValueId, usize> = FxHashMap::default();
+        let mut owners: FxHashMap<ValueId, usize> = self.carried_owner.clone();
         for (index, region) in self.regions.iter().enumerate() {
             for &block in region {
                 let block = &self.cfg.blocks[block.0];
                 for param in &block.params {
-                    let owner = self.carried_owner.get(param).copied().unwrap_or(index);
-                    owners.insert(*param, owner);
+                    owners.insert(*param, index);
                 }
                 for inst in &block.insts {
                     for def in inst_info::defs(&inst.kind) {
@@ -428,7 +425,6 @@ impl<'a> Form<'a> {
 
     fn crossings(&self) -> Vec<ValidationErrorKind> {
         let owners = self.owners();
-        let header_params = &self.cfg.blocks[self.header.0].params;
         let mut refusals = Vec::new();
         let mut refuse = |part: usize, crossing: Crossing| {
             let refusal = ValidationErrorKind::ForPartsCrossing {
@@ -457,11 +453,7 @@ impl<'a> Form<'a> {
                     read.extend(inst_info::terminator_uses(&held.terminator));
                 }
                 for value in read {
-                    let foreign = match owners.get(&value) {
-                        Some(owner) => *owner != index,
-                        None => header_params.contains(&value),
-                    };
-                    if foreign {
+                    if owners.get(&value).is_some_and(|owner| *owner != index) {
                         refuse(index, Crossing::Value(value));
                     }
                 }
@@ -492,11 +484,10 @@ impl<'a> Form<'a> {
         }
         for (at, arg) in self.latch_args.iter().enumerate() {
             let owner = self.carried_part[at];
-            let foreign = match owners.get(arg) {
-                Some(defined_by) => *defined_by != owner,
-                None => header_params.contains(arg),
-            };
-            if foreign {
+            if owners
+                .get(arg)
+                .is_some_and(|defined_by| *defined_by != owner)
+            {
                 refuse(owner, Crossing::Value(*arg));
             }
         }
@@ -558,12 +549,10 @@ impl<'a> Form<'a> {
     }
 
     fn accumulator_reads(&self) -> Vec<ValidationErrorKind> {
-        let body_params = &self.cfg.blocks[self.cfg.label_to_block[&self.parts[0].entry].0].params;
+        let header_params = &self.cfg.blocks[self.header.0].params;
         let mut refusals = Vec::new();
-        let mut first = self.supplied.len();
         for (index, part) in self.parts.iter().enumerate() {
             let PartKind::Law(accs) = &part.kind else {
-                first += part.carried.len();
                 continue;
             };
             for (acc_at, acc) in accs.iter().enumerate() {
@@ -572,9 +561,12 @@ impl<'a> Form<'a> {
                         self.folds_only(index, fold.storage, fold.callee, fold.instance)
                     }
                     Law::Op(_) | Law::Call(_) | Law::Order => {
-                        let param = body_params[first + acc_at];
-                        let at = first + acc_at - self.supplied.len();
-                        self.read_as_operand(acc, param, at)
+                        let param = part.carried.get(acc_at).copied();
+                        let at = param
+                            .and_then(|param| header_params.iter().position(|held| *held == param));
+                        param
+                            .zip(at)
+                            .is_some_and(|(param, at)| self.read_as_operand(acc, param, at))
                     }
                 };
                 if !lawful {
@@ -585,7 +577,6 @@ impl<'a> Form<'a> {
                     });
                 }
             }
-            first += part.carried.len();
         }
         refusals
     }
@@ -893,8 +884,6 @@ mod tests {
     const H_S: usize = 4;
     const H_P: usize = 5;
     const I: usize = 6;
-    const B_S: usize = 7;
-    const B_P: usize = 8;
     const S_NEXT: usize = 9;
     const P_NEXT: usize = 10;
     const SUM: usize = 11;
@@ -967,9 +956,9 @@ mod tests {
             },
             InstKind::BlockLabel {
                 label: Label(1),
-                params: vec![v(I), v(B_S), v(B_P)],
+                params: vec![v(I)],
             },
-            add(S_NEXT, B_S, I, crate::ir::BinOp::Add),
+            add(S_NEXT, H_S, I, crate::ir::BinOp::Add),
             InstKind::Jump {
                 label: Label(3),
                 args: vec![],
@@ -978,7 +967,7 @@ mod tests {
                 label: Label(3),
                 params: vec![],
             },
-            add(P_NEXT, B_P, I, crate::ir::BinOp::Mul),
+            add(P_NEXT, H_P, I, crate::ir::BinOp::Mul),
             InstKind::Jump {
                 label: Label(0),
                 args: vec![v(S_NEXT), v(P_NEXT)],
@@ -1042,20 +1031,37 @@ mod tests {
     }
 
     #[test]
-    fn carried_values_out_of_the_header_order_are_refused() {
+    fn a_header_parameter_two_parts_carry_is_refused() {
         let module = body(|insts, _| {
             let at = position(insts, |kind| matches!(kind, InstKind::ForParts { .. }));
-            let InstKind::ForParts { parts, .. } = &mut insts[at] else {
-                unreachable!("found above")
-            };
-            parts.swap(0, 1);
-            parts[0].entry = Label(1);
-            parts[1].entry = Label(3);
+            if let InstKind::ForParts { parts, .. } = &mut insts[at] {
+                parts[1].carried = vec![v(H_S)];
+            }
         });
         assert!(matches!(
             refusals(&module)[..],
             [ValidationErrorKind::ForPartsShape {
                 fault: ShapeFault::CarriedAreNotHeaderParams,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_body_block_parameter_after_the_counter_is_refused() {
+        let module = body(|insts, _| {
+            let at = position(
+                insts,
+                |kind| matches!(kind, InstKind::BlockLabel { label, .. } if *label == Label(1)),
+            );
+            if let InstKind::BlockLabel { params, .. } = &mut insts[at] {
+                params.push(v(SPARE));
+            }
+        });
+        assert!(matches!(
+            refusals(&module)[..],
+            [ValidationErrorKind::ForPartsShape {
+                fault: ShapeFault::BodyParams,
                 ..
             }]
         ));
@@ -1071,7 +1077,7 @@ mod tests {
             insts[at] = InstKind::BinOp {
                 dst: v(P_NEXT),
                 op: crate::ir::BinOp::Mul,
-                left: v(B_P),
+                left: v(H_P),
                 right: v(S_NEXT),
             };
         });
@@ -1097,7 +1103,7 @@ mod tests {
             insts[at] = InstKind::BinOp {
                 dst: v(S_NEXT),
                 op: crate::ir::BinOp::Mul,
-                left: v(B_S),
+                left: v(H_S),
                 right: v(I),
             };
         });

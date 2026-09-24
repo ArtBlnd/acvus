@@ -603,27 +603,28 @@ lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
 1. **The terminator.** `Terminator::ForParts { source, body, parts, exit,
    exit_trip, exit_args }`, where `source`, `exit`, `exit_trip` and
    `exit_args` are `For`'s (RFC-0057).
-   - The body block's leading parameters are the element and the counter,
-     and the header's carried values follow them, grouped by part in part
-     order.
-   - `Part { entry, carried, kind }` names the part's first block, its range
-     of the carried values, and its kind.
+   - The body block's parameters are the element and the counter, as
+     `For`'s. A part reads its carried values as the header's parameters.
+   - `Part { entry, carried, kind }` names the part's first block, the
+     header parameters it carries, and its kind. Parts are in body order.
    - `body` is the first part's entry. Each part's last block jumps to the
-     next part's entry, and the last part's jumps to the header with every
-     carried value.
+     next part's entry, and the last part's is the one latch, which jumps to
+     the header with every carried value.
 
 2. **The body is a sequential program, and its parts are independent.** The
    parts run one after another as written. Every pass that reads edges
-   therefore reads the body as it read a `For`, and running the loop as
-   written is not a second meaning. What the terminator adds is that no
+   therefore reads the body as it read a `For`. Running the loop as written
+   is not a second meaning: in place, the chain is the body of the region
+   the `For` would be (RFC-0057 rule 3). What the terminator adds is that no
    part reads a value another part defines, and no part reads or writes a
    storage another part writes. A part reads only its own carried values,
    the element, the counter, and values defined outside the loop. Any order
    of the parts, or any interleaving of them, is then the same program.
 
 3. **Kinds.** A part is `Law(accs)` when every carried value of the part is
-   an accumulator (rule 4). Otherwise it is `Sequential`, and its
-   iterations keep their order, as a recurrence's do.
+   an accumulator (rule 4), and a part that carries nothing is `Law` with
+   none. Otherwise it is `Sequential`, and its iterations keep their order,
+   as a recurrence's do.
 
 4. **A law is a monoid action.**
    - Each iteration contributes an element of a monoid `M` without reading
@@ -661,19 +662,22 @@ lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
    merges the body's instructions.
    - The parts are the connected components of the body's instructions. Two
      instructions are connected when one reads a value the other defines,
-     when both touch a storage that one of them writes, or when one lies in
-     an arm of a branch the other's terminator decides.
+     when both touch a storage that one of them writes (a context is a
+     storage, RFC-0025), or when one lies in an arm of a branch the other's
+     terminator decides.
    - The pass duplicates nothing: an instruction two parts would share
      joins them.
    - A loop left from anywhere but its header stays a `For`: a `break` in
      one part skips the others.
-   - A loop whose partition is one `Sequential` part stays a `For`.
+   - A loop stays a `For` when its partition is one `Sequential` part, its
+     header holds an instruction, an arm ends in `!`, or its body holds no
+     instruction.
 
 6. **An ordered call inside `anyorder` is not a recurrence.** The lowering
    gives every effectful call in the region the region's entry order. It
    merges the order the call yields into the region's accumulator. A call
    whose order input is an `Order` accumulator's `init`, and whose order
-   output reaches only that accumulator's `Merge`, is unordered by the
+   output reaches only that accumulator's `Merge`s, is unordered by the
    author's declaration (RFC-0007 rule 2), and `analysis::carried` does not
    count it as a dependence.
    - Its effects are unordered with respect to a trap in the region, as
@@ -689,7 +693,8 @@ lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
    - a part crosses rule 2's boundary;
    - an accumulator is read other than as its law's operand, which is
      `Op`'s `BinOp`, `Call`'s call, the storage lent only to `Fold`'s calls,
-     or `Order`'s `Merge`;
+     or `Order`'s `Merge`, or its law's result is read other than by the
+     latch;
    - a `Law` part holds an order-carrying instruction other than rule 6's,
      or writes a storage other than the `SliceMut` source's element or a
      `Fold` accumulator;
@@ -700,7 +705,8 @@ lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
 
 8. **Loans, drops and traps.**
    - The loans and drops read the body as the sequential program of rule 2.
-     A value's drop is placed in the part that defines it.
+     A value's drop is placed in the part that touches it. The element's is
+     in the part that last reads it, or in the first part when none does.
    - Run apart:
      - a `SliceMut` element belongs to one part by rule 2, and chunks reach
        disjoint elements (RFC-0057 rule 5);
@@ -749,6 +755,7 @@ gains rule 6's exception. An instruction two parts would share merges them.
 - An early exit as a law that keeps the first, which requires cancelling
   chunks past it.
 - Keeping the last value.
+- A merge under a branch whose other arm passes the accumulator through.
 - An affine recurrence `x' = a·x + b`, whose maps compose, as a law, with
   a scan's two passes when the body reads it.
 - Parts of a `while`.

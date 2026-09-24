@@ -22,8 +22,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use std::borrow::Cow;
-
 use crate::ir::{Inst, InstKind, Label, Traversal, ValueId};
 use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
@@ -472,9 +470,9 @@ pub fn run(cfg: &mut CfgBody) {
                         // the first parameter the edge carries an argument for:
                         // a `For`'s body edge starts after the parameters the
                         // terminator fills itself (RFC-0057).
-                        let pred_args: Vec<(usize, Cow<'_, [ValueId]>)> = match &pred_block.terminator {
+                        let pred_args: Vec<(usize, &[ValueId])> = match &pred_block.terminator {
                             Terminator::Jump { label, args } if *label == block_label => {
-                                vec![(0, Cow::Borrowed(args.as_slice()))]
+                                vec![(0, args.as_slice())]
                             }
                             Terminator::JumpIf {
                                 then_label,
@@ -492,14 +490,14 @@ pub fn run(cfg: &mut CfgBody) {
                             } => [(then_label, then_args), (else_label, else_args)]
                                 .into_iter()
                                 .filter(|(label, _)| **label == block_label)
-                                .map(|(_, args)| (0, Cow::Borrowed(args.as_slice())))
+                                .map(|(_, args)| (0, args.as_slice()))
                                 .collect(),
                             Terminator::Switch { arms, default, .. } => arms
                                 .iter()
                                 .map(|(_, label, args)| (label, args))
                                 .chain(default.iter().map(|(label, args)| (label, args)))
                                 .filter(|(label, _)| **label == block_label)
-                                .map(|(_, args)| (0, Cow::Borrowed(args.as_slice())))
+                                .map(|(_, args)| (0, args.as_slice()))
                                 .collect(),
                             term @ (Terminator::For { .. } | Terminator::ForParts { .. }) => {
                                 let Traversal {
@@ -512,7 +510,7 @@ pub fn run(cfg: &mut CfgBody) {
                                 } = term.traversal().expect("a `For` or a `ForParts`");
                                 [
                                     (body, source.supplied_params(), body_args),
-                                    (exit, exit_trip.supplied_params(), Cow::Borrowed(exit_args)),
+                                    (exit, exit_trip.supplied_params(), exit_args),
                                 ]
                                 .into_iter()
                                 .filter(|(label, _, _)| *label == block_label)
@@ -522,8 +520,7 @@ pub fn run(cfg: &mut CfgBody) {
                             _ => Vec::new(),
                         };
                         for (first, args) in pred_args {
-                            if let Some(&arg) = param.checked_sub(first).and_then(|i| args.get(i))
-                            {
+                            if let Some(&arg) = param.checked_sub(first).and_then(|i| args.get(i)) {
                                 worklist.push(arg);
                             }
                         }

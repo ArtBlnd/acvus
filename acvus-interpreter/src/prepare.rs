@@ -453,6 +453,128 @@ fn noops(body: &MirBody, plan: &runs::RunPlan) -> FxHashSet<usize> {
     out
 }
 
+/// How a `ForParts` body is laid out, read as the body of the region the
+/// `For` would be (RFC-0089 rule 2, RFC-0057 rule 3): the jumps from one part
+/// to the next, and the block its back edges meet in where it has several.
+struct PartChains {
+    steps: FxHashSet<usize>,
+    latches_by_header: FxHashMap<Label, Latch>,
+}
+
+/// The one latch of a `ForParts` whose back edges are several: a block that
+/// holds nothing and jumps to the header (RFC-0089 rule 1). Each jump into it
+/// is the back edge the `For` had, a `continue` or the fall at the body's
+/// end, with the header's arguments read through the latch's parameters.
+struct Latch {
+    label: Label,
+    params: Vec<ValueId>,
+    args: Vec<ValueId>,
+    jump_at: usize,
+    fall_at: usize,
+}
+
+impl Latch {
+    fn header_args_on_edge_into(&self, into: &[ValueId]) -> Vec<ValueId> {
+        self.args
+            .iter()
+            .map(|arg| match self.params.iter().position(|param| param == arg) {
+                Some(at) => into[at],
+                None => *arg,
+            })
+            .collect()
+    }
+}
+
+impl PartChains {
+    fn of(body: &MirBody, labels: &FxHashMap<Label, u32>) -> Self {
+        let insts = body.insts.as_slice();
+        let label_at = |label: &Label| labels.get(label).map(|at| *at as usize);
+        let only_jumps_reach = |label: Label| {
+            let reaching: Vec<&Inst> = insts.iter().filter(|inst| targets(inst, label)).collect();
+            let all_jumps = reaching
+                .iter()
+                .all(|inst| matches!(inst.kind, InstKind::Jump { .. }));
+            all_jumps.then_some(reaching.len())
+        };
+        let mut steps = FxHashSet::default();
+        let mut latches_by_header = FxHashMap::default();
+        for (terminator, inst) in insts.iter().enumerate() {
+            let InstKind::ForParts { parts, .. } = &inst.kind else {
+                continue;
+            };
+            for part in parts.iter().skip(1) {
+                let Some(entry_at) = label_at(&part.entry) else {
+                    continue;
+                };
+                let Some(jump_at) = entry_at.checked_sub(1) else {
+                    continue;
+                };
+                let steps_on = matches!(&insts[jump_at].kind,
+                    InstKind::Jump { label, args } if *label == part.entry && args.is_empty())
+                    && matches!(&insts[entry_at].kind,
+                        InstKind::BlockLabel { params, .. } if params.is_empty())
+                    && only_jumps_reach(part.entry) == Some(1);
+                if steps_on {
+                    steps.insert(jump_at);
+                }
+            }
+            let Some(header) = terminator
+                .checked_sub(1)
+                .and_then(|at| block_label(&insts[at]))
+            else {
+                continue;
+            };
+            let Some(latch) = Self::latch(insts, header, &only_jumps_reach) else {
+                continue;
+            };
+            latches_by_header.insert(header, latch);
+        }
+        Self {
+            steps,
+            latches_by_header,
+        }
+    }
+
+    fn latch(
+        insts: &[Inst],
+        header: Label,
+        only_jumps_reach: &impl Fn(Label) -> Option<usize>,
+    ) -> Option<Latch> {
+        let jump_at = insts.iter().rposition(|inst| targets(inst, header))?;
+        let InstKind::Jump { args, .. } = &insts[jump_at].kind else {
+            return None;
+        };
+        let label_at = jump_at.checked_sub(1)?;
+        let InstKind::BlockLabel { label, params } = &insts[label_at].kind else {
+            return None;
+        };
+        let fall_at = label_at.checked_sub(1)?;
+        let falls = matches!(&insts[fall_at].kind, InstKind::Jump { label: to, .. } if to == label);
+        (falls && only_jumps_reach(*label)? > 1).then(|| Latch {
+            label: *label,
+            params: params.clone(),
+            args: args.clone(),
+            jump_at,
+            fall_at,
+        })
+    }
+
+    fn is_step(&self, at: usize) -> bool {
+        self.steps.contains(&at)
+    }
+
+    fn is_step_or_its_label(&self, at: usize) -> bool {
+        self.steps.contains(&at)
+            || at
+                .checked_sub(1)
+                .is_some_and(|jump| self.steps.contains(&jump))
+    }
+
+    fn latch_of(&self, header: Label) -> Option<&Latch> {
+        self.latches_by_header.get(&header)
+    }
+}
+
 fn label_map(body: &MirBody) -> FxHashMap<Label, u32> {
     body.insts
         .iter()
@@ -488,6 +610,7 @@ struct Prepare<'a> {
     /// two of a slice's pair.
     scratch_used: u32,
     run_noops: FxHashSet<usize>,
+    part_chains: PartChains,
     may_suspend: bool,
     /// The block array being emitted. A region owns its blocks, so the
     /// array a jump's target names is the innermost one being built, and
@@ -576,6 +699,9 @@ struct Join(Label);
 struct Within {
     header: Label,
     exit: Label,
+    /// The latch a `ForParts` gathers its back edges in, where a jump to it
+    /// is a `continue`; see `recognize_for`.
+    continues_through: Option<Label>,
 }
 
 /// What a chain can hand the region above it besides `FALL`.
@@ -1113,6 +1239,7 @@ impl<'a> Prepare<'a> {
         labels: FxHashMap<Label, u32>,
     ) -> Self {
         let slots = assign_slots(body, ctx, &labels);
+        let part_chains = PartChains::of(body, &labels);
         let values = body.val_factory.len();
         let mut def_inst: Vec<Option<usize>> = vec![None; values];
         let mut use_counts: Vec<u32> = vec![0; values];
@@ -1137,6 +1264,7 @@ impl<'a> Prepare<'a> {
             run_base: 0,
             scratch_used: 0,
             run_noops: FxHashSet::default(),
+            part_chains,
             may_suspend: false,
             level: Level::default(),
             def_inst,
@@ -1622,6 +1750,21 @@ impl<'a> Prepare<'a> {
     /// correctness argument: there is no second run for it to cross into.
     fn move_ops(&mut self, label: &Label, args: &[ValueId]) -> Vec<Node> {
         self.moves_past(label, args, 0)
+    }
+
+    fn back_moves(&mut self, label: &Label, args: &[ValueId]) -> Vec<Node> {
+        let latch = self
+            .part_chains
+            .latches_by_header
+            .iter()
+            .find(|(_, latch)| latch.label == *label);
+        match latch {
+            Some((header, latch)) => {
+                let (header, through) = (*header, latch.header_args_on_edge_into(args));
+                self.move_ops(&header, &through)
+            }
+            None => self.move_ops(label, args),
+        }
     }
 
     fn block_params(&self, label: &Label) -> &'_ [ValueId] {
@@ -2178,7 +2321,7 @@ impl<'a> Prepare<'a> {
             {
                 at = region.end();
                 regions.push(region);
-            } else if self.is_straight_line(&insts[at]) {
+            } else if self.is_straight_line(&insts[at]) || self.part_chains.is_step(at) {
                 at += 1;
             } else {
                 break;
@@ -2213,6 +2356,9 @@ impl<'a> Prepare<'a> {
         match &self.body.insts.get(stops_at)?.kind {
             InstKind::Jump { label, .. } if *label == within.exit => Some(Verdict::Break(stops_at)),
             InstKind::Jump { label, .. } if *label == within.header => {
+                Some(Verdict::Continue(stops_at))
+            }
+            InstKind::Jump { label, .. } if within.continues_through == Some(*label) => {
                 Some(Verdict::Continue(stops_at))
             }
             InstKind::Return { .. } => Some(Verdict::Returns(stops_at)),
@@ -2415,6 +2561,7 @@ impl<'a> Prepare<'a> {
             Some(Within {
                 header,
                 exit: exit_label,
+                continues_through: None,
             }),
         );
         if body_end != back {
@@ -2476,25 +2623,38 @@ impl<'a> Prepare<'a> {
             return None;
         }
 
-        let StraightRun {
-            stops_at: body_end,
-            regions: body_regions,
-        } = self.straight_run(
-            body_label + 1,
-            back,
-            Some(Within {
-                header,
-                exit: *exit,
-            }),
-        );
-        if body_end != back {
-            return None;
-        }
+        // A body whose back edges a `ForParts` gathers in one latch is read
+        // as the `For` it replaced, whose `continue`s jumped to the header:
+        // a jump to the latch is a `continue`, and the jump that falls into
+        // it is the body's end. That reading is asked only of a body that
+        // is no region as it stands, so a latch that is also a branch's join
+        // stays the join it is.
+        let within = Within {
+            header,
+            exit: *exit,
+            continues_through: None,
+        };
+        let as_written = self.straight_run(body_label + 1, back, Some(within));
+        let (body_end, body_regions) = match (as_written, self.part_chains.latch_of(header)) {
+            (StraightRun { stops_at, regions }, _) if stops_at == back => (back, regions),
+            (_, Some(latch)) if latch.jump_at == back => {
+                let within = Within {
+                    continues_through: Some(latch.label),
+                    ..within
+                };
+                let gathered = self.straight_run(body_label + 1, latch.fall_at, Some(within));
+                if gathered.stops_at != latch.fall_at {
+                    return None;
+                }
+                (latch.fall_at, gathered.regions)
+            }
+            _ => return None,
+        };
 
         let region = ForRegion {
             enter_jump: at,
             terminator,
-            body_block: body_label + 1..back,
+            body_block: body_label + 1..body_end,
             body_regions,
             back,
         };
@@ -2873,7 +3033,10 @@ impl<'a> Prepare<'a> {
     ) -> (Vec<Node>, bool) {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
-        let units = self.layout(range, nested, &runs, &chains);
+        let mut units = self.layout(range, nested, &runs, &chains);
+        units.retain(
+            |unit| !matches!(unit, Unit::Inst(at) if self.part_chains.is_step_or_its_label(*at)),
+        );
         let mut rides = self.rides_in(&units, None);
         // The part's last operation is the one whose word `Yield` hands
         // back, so a word rides out only where that operation produced it
@@ -3263,9 +3426,9 @@ impl<'a> Prepare<'a> {
             panic!("a recognized `for`'s terminator is not a `For`")
         };
         let InstKind::Jump {
-            label: header,
+            label: back_to,
             args: back_args,
-        } = &body.insts[region.back].kind
+        } = &body.insts[region.body_block.end].kind
         else {
             panic!("a recognized `for`'s latch is not a jump")
         };
@@ -3280,9 +3443,10 @@ impl<'a> Prepare<'a> {
         let entering = self.move_ops(entered, entering);
         ops.extend(entering);
 
-        let into_body = self.moves_past(&body_label, &body_args, source.supplied_params());
+        let into_body = self.moves_past(&body_label, body_args, source.supplied_params());
         let leaving = self.exit_moves(region.terminator);
-        let back = self.move_ops(header, back_args);
+        let (back_to, back_args) = (*back_to, back_args.clone());
+        let back = self.back_moves(&back_to, &back_args);
 
         let exits = Ends::of(hands_of(&region.body_regions));
         let ran = self.straight(
@@ -3718,7 +3882,7 @@ impl<'a> Prepare<'a> {
                     panic!("a recognized escape's `break` or `continue` is not a jump")
                 };
                 let (label, args) = (*label, args.clone());
-                let moves = self.move_ops(&label, &args);
+                let moves = self.back_moves(&label, &args);
                 let ends: Box<dyn Op> = match region.verdict {
                     Verdict::Break(_) => Box::new(control::Break),
                     _ => Box::new(control::Continue),

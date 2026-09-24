@@ -35,7 +35,7 @@
 use crate::ir::BinOp;
 use rustc_hash::FxHashMap;
 
-use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, Term, passed_into_body};
+use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, Term};
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::{ForSource, InstKind, ValueId};
 use crate::ty::Ty;
@@ -114,7 +114,6 @@ impl AffineValues {
         }
 
         let arithmetic = Arithmetic::in_loop(cfg, loop_);
-        let into_body = passed_into_body(cfg, natural.header);
 
         for (index, &param) in cfg.blocks[natural.header.0].params.iter().enumerate() {
             if !integer(param) {
@@ -128,31 +127,26 @@ impl AffineValues {
             let Some(sum) = arithmetic.get(next).filter(|a| a.op == BinOp::Add) else {
                 continue;
             };
-            let taken = into_body.get(&param).copied();
-            let Some(step) = sum
-                .other_than(param)
-                .or_else(|| taken.and_then(|taken| sum.other_than(taken)))
-            else {
+            let Some(step) = sum.other_than(param) else {
                 continue;
             };
             let Some(invariant) = invariants.at(natural, step) else {
                 continue;
             };
-            let affine = Affine {
-                base: Term::Value(init),
-                step: Term::from(invariant.clone()),
-                derivation: Derivation::Carried {
-                    init,
-                    step: Operand {
-                        value: step,
-                        invariant,
+            values.insert(
+                param,
+                Affine {
+                    base: Term::Value(init),
+                    step: Term::from(invariant.clone()),
+                    derivation: Derivation::Carried {
+                        init,
+                        step: Operand {
+                            value: step,
+                            invariant,
+                        },
                     },
                 },
-            };
-            if let Some(taken) = taken {
-                values.insert(taken, affine.clone());
-            }
-            values.insert(param, affine);
+            );
         }
 
         loop {

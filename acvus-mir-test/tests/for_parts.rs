@@ -6,7 +6,7 @@ use acvus_extern::{Externs, TypesOnly};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::Function;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ir::{InstKind, Label, Law, LawOp, Part, PartKind, ValueId};
+use acvus_mir::ir::{InstKind, Label, Law, LawOp, Part, PartKind};
 use acvus_mir::printer::dump_with;
 use acvus_mir_test::{compile_script_at, optimized_script_module};
 use acvus_utils::Interner;
@@ -87,19 +87,6 @@ impl Compiled {
         let mut blocks: Vec<BlockIdx> = seen.into_iter().collect();
         blocks.sort();
         blocks
-    }
-
-    fn body_param(&self, header: BlockIdx, carried: ValueId) -> ValueId {
-        let Terminator::ForParts { source, body, .. } = &self.cfg.blocks[header.0].terminator
-        else {
-            panic!("block {} is not a `for_parts` header", header.0)
-        };
-        let at = self.cfg.blocks[header.0]
-            .params
-            .iter()
-            .position(|param| *param == carried)
-            .expect("a part's carried value is a header parameter");
-        self.cfg.blocks[self.cfg.label_to_block[body].0].params[source.supplied_params() + at]
     }
 }
 
@@ -302,14 +289,13 @@ fn an_if_in_the_body_and_the_sum_it_guards_are_one_part() {
         panic!("one part holds the `if`:\n{}", c.listing)
     };
     let s = parts[branching].carried[0];
-    let s_in_body = c.body_param(header, s);
     let adds_s = c
         .blocks_of(header, parts, branching)
         .iter()
         .flat_map(|block| &c.cfg.blocks[block.0].insts)
         .any(|inst| {
             matches!(&inst.kind, InstKind::BinOp { left, right, .. }
-                if *left == s_in_body || *right == s_in_body)
+                if *left == s || *right == s)
         });
     assert!(
         adds_s,
@@ -328,10 +314,17 @@ fn every_part_entry_is_a_block_and_the_first_is_the_body() {
          for x in &v { s = s + *x; p = p * *x; } s + p",
     );
     let (header, parts) = c.parts();
-    let Terminator::ForParts { body, .. } = &c.cfg.blocks[header.0].terminator else {
+    let Terminator::ForParts { source, body, .. } = &c.cfg.blocks[header.0].terminator else {
         unreachable!("`parts` found a `for_parts` here")
     };
     assert_eq!(parts[0].entry, *body);
+    assert_eq!(
+        c.cfg.blocks[c.cfg.label_to_block[body].0].params.len(),
+        source.supplied_params(),
+        "the body block takes the element and the counter, and no carried value \
+         (RFC-0089 rule 1):\n{}",
+        c.listing
+    );
     let entries: Vec<Label> = parts.iter().map(|part| part.entry).collect();
     assert!(
         entries

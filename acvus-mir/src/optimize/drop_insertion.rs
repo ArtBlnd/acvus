@@ -48,7 +48,6 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     // -- Phase 1: within-block drops --------------------------------
 
     let part_entries = part_entries(cfg, &loans);
-    let mut at_part_entry: Vec<PartEntryDrop> = Vec::new();
     let mut block_drops: Vec<Vec<BlockDrop>> = Vec::with_capacity(cfg.blocks.len());
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
@@ -123,10 +122,9 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
                         .filter(|(_, inst)| inst_info::defs(&inst.kind).contains(&v))
                         .map(|(at, _)| at + 1)
                         .collect();
-                    match (defined.is_empty(), part_entries.carried.get(&v)) {
-                        (true, Some(&entry)) => at_part_entry.push(PartEntryDrop { entry, value: v }),
-                        (true, None) => drops.push(BlockDrop { at: 0, value: v }),
-                        (false, _) => {
+                    match defined.is_empty() {
+                        true => drops.push(BlockDrop { at: 0, value: v }),
+                        false => {
                             drops.extend(defined.into_iter().map(|at| BlockDrop { at, value: v }))
                         }
                     }
@@ -136,14 +134,9 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
             }
         }
 
-        block_drops.push(drops);
-    }
-    for PartEntryDrop { entry, value } in at_part_entry {
-        block_drops[entry.0].push(BlockDrop { at: 0, value });
-    }
-    for drops in &mut block_drops {
         // Sort by insertion point (reverse order to preserve indices when inserting).
         drops.sort_by(|a, b| b.at.cmp(&a.at));
+        block_drops.push(drops);
     }
 
     // The registers each block leaves empty, for phase 2.
@@ -220,14 +213,11 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     apply_edge_splits(cfg, splits);
 }
 
-/// A value's drop is placed in the part that defines it (RFC-0089 rule 8).
-/// The body block is the first part's entry and holds every part's carried
-/// values as its parameters, and a storage a part writes may die on the
-/// body edge, before any part runs. Each such value is dropped where the
-/// one part that touches it begins: a carried value by its part, and any
-/// other value by the part whose instructions alone use, define or touch
-/// it. A value two parts touch is every part's, and stays where the body
-/// begins.
+/// The part entries at which values dying on a `ForParts` body edge are
+/// dropped, since a value's drop is placed in the part that touches it
+/// (RFC-0089 rule 8). Such a value is a header parameter no part reads, which
+/// its part carries, or a storage a part assigns before any read. A value
+/// two parts touch has no entry here and is dropped where the body begins.
 fn part_entries(cfg: &CfgBody, loans: &Loans<'_>) -> PartEntries {
     let mut carried_entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
@@ -241,14 +231,13 @@ fn part_entries(cfg: &CfgBody, loans: &Loans<'_>) -> PartEntries {
         };
         let header = BlockIdx(at);
         let body_params = &cfg.blocks[cfg.label_to_block[body].0].params;
-        let mut carried = body_params[source.supplied_params()..].iter();
         let part_entries: Vec<BlockIdx> = parts
             .iter()
             .map(|part| cfg.label_to_block[&part.entry])
             .collect();
         for (index, part) in parts.iter().enumerate() {
             let entry = part_entries[index];
-            for value in carried.by_ref().take(part.carried.len()) {
+            for value in &part.carried {
                 carried_entries.insert(*value, entry);
             }
             let next = part_entries.get(index + 1).copied().unwrap_or(header);
@@ -293,8 +282,6 @@ fn part_entries(cfg: &CfgBody, loans: &Loans<'_>) -> PartEntries {
     }
 }
 
-/// The part entries values are dropped at: a carried value's by the range
-/// it lies in, and any other value's by the one part that touches it.
 struct PartEntries {
     carried: FxHashMap<ValueId, BlockIdx>,
     touched: FxHashMap<ValueId, BlockIdx>,
@@ -307,11 +294,6 @@ impl PartEntries {
             .or_else(|| self.touched.get(&value))
             .copied()
     }
-}
-
-struct PartEntryDrop {
-    entry: BlockIdx,
-    value: ValueId,
 }
 
 /// Where the drops of a dying edge run.

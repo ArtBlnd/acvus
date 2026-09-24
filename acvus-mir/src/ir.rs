@@ -387,8 +387,9 @@ impl ExitTrip {
     }
 }
 
-/// One part of a `ForParts` (RFC-0089 rule 1). `carried` is the part's run
-/// of the header parameters, which the body edge passes on.
+/// One part of a `ForParts` (RFC-0089 rule 1). `carried` names the header
+/// parameters the part reads and hands back through the latch;
+/// `validate::for_parts` refuses a list that is not a partition of them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Part {
     pub entry: Label,
@@ -481,14 +482,10 @@ pub struct FoldAccumulator {
 pub struct Traversal<'a> {
     pub source: ForSource,
     pub body: Label,
-    pub body_args: std::borrow::Cow<'a, [ValueId]>,
+    pub body_args: &'a [ValueId],
     pub exit: Label,
     pub exit_trip: ExitTrip,
     pub exit_args: &'a [ValueId],
-}
-
-pub fn body_args_of(parts: &[Part]) -> Vec<ValueId> {
-    parts.iter().flat_map(|part| part.carried.iter().copied()).collect()
 }
 
 pub struct TraversalMut<'a> {
@@ -502,63 +499,49 @@ pub struct TraversalMut<'a> {
 
 pub enum BodyArgsMut<'a> {
     Listed(&'a mut Vec<ValueId>),
-    Parts(&'a mut [Part]),
+    /// A `ForParts` body edge, which passes nothing (RFC-0089 rule 1). Edits
+    /// to it do nothing, by decision: a pass that gives its body block a
+    /// parameter leaves one no edge fills, and `validate::for_parts` refuses
+    /// that form (`a_body_block_parameter_after_the_counter_is_refused`).
+    Unlisted,
 }
 
 impl<'a> BodyArgsMut<'a> {
-    pub fn for_each(&mut self, mut f: impl FnMut(&mut ValueId)) {
+    pub fn for_each(&mut self, f: impl FnMut(&mut ValueId)) {
         match self {
             Self::Listed(args) => args.iter_mut().for_each(f),
-            Self::Parts(parts) => parts
-                .iter_mut()
-                .flat_map(|part| part.carried.iter_mut())
-                .for_each(&mut f),
+            Self::Unlisted => {}
         }
     }
 
     pub fn values(&self) -> Vec<ValueId> {
         match self {
             Self::Listed(args) => args.to_vec(),
-            Self::Parts(parts) => body_args_of(parts),
+            Self::Unlisted => Vec::new(),
         }
     }
 
     pub fn into_values_mut(self) -> Vec<&'a mut ValueId> {
         match self {
             Self::Listed(args) => args.iter_mut().collect(),
-            Self::Parts(parts) => parts
-                .iter_mut()
-                .flat_map(|part| part.carried.iter_mut())
-                .collect(),
+            Self::Unlisted => Vec::new(),
         }
     }
 
-    /// A `ForParts` part that is given carried values its kind was not
-    /// found for runs them in order: they join the last part, which becomes
-    /// `Sequential`.
     pub fn extend(&mut self, values: &[ValueId]) {
         match self {
             Self::Listed(args) => args.extend_from_slice(values),
-            Self::Parts(parts) => {
-                let Some(last) = parts.last_mut() else {
-                    panic!("a `ForParts` has at least one part")
-                };
-                last.carried.extend_from_slice(values);
-                if !values.is_empty() {
-                    last.kind = PartKind::Sequential;
-                }
-            }
+            Self::Unlisted => {}
         }
     }
 
     pub fn clear(&mut self) {
-        let every: Vec<usize> = (0..self.values().len()).collect();
-        self.remove_positions(&every);
+        match self {
+            Self::Listed(args) => args.clear(),
+            Self::Unlisted => {}
+        }
     }
 
-    /// Drops the arguments at `dead`, positions over the whole edge. A
-    /// part's carried value leaves with the accumulator that stands at its
-    /// position.
     pub fn remove_positions(&mut self, dead: &[usize]) {
         match self {
             Self::Listed(args) => {
@@ -569,28 +552,7 @@ impl<'a> BodyArgsMut<'a> {
                     keep
                 });
             }
-            Self::Parts(parts) => {
-                let mut first = 0;
-                for part in parts.iter_mut() {
-                    let width = part.carried.len();
-                    let local: Vec<usize> = dead
-                        .iter()
-                        .filter_map(|&at| at.checked_sub(first).filter(|&at| at < width))
-                        .collect();
-                    first += width;
-                    let keep: Vec<bool> = (0..width).map(|at| !local.contains(&at)).collect();
-                    let mut kept = keep.iter();
-                    part.carried.retain(|_| *kept.next().expect("one flag per carried value"));
-                    if let PartKind::Law(accs) = &mut part.kind {
-                        let mut at = 0;
-                        accs.retain(|_| {
-                            let keep = keep.get(at).copied().unwrap_or(true);
-                            at += 1;
-                            keep
-                        });
-                    }
-                }
-            }
+            Self::Unlisted => {}
         }
     }
 }
@@ -607,7 +569,7 @@ pub fn traversal(kind: &InstKind) -> Option<Traversal<'_>> {
         } => Some(Traversal {
             source: *source,
             body: *body,
-            body_args: std::borrow::Cow::Borrowed(body_args),
+            body_args,
             exit: *exit,
             exit_trip: *exit_trip,
             exit_args,
@@ -615,14 +577,14 @@ pub fn traversal(kind: &InstKind) -> Option<Traversal<'_>> {
         InstKind::ForParts {
             source,
             body,
-            parts,
+            parts: _,
             exit,
             exit_trip,
             exit_args,
         } => Some(Traversal {
             source: *source,
             body: *body,
-            body_args: std::borrow::Cow::Owned(body_args_of(parts)),
+            body_args: &[],
             exit: *exit,
             exit_trip: *exit_trip,
             exit_args,
@@ -651,14 +613,14 @@ pub fn traversal_mut(kind: &mut InstKind) -> Option<TraversalMut<'_>> {
         InstKind::ForParts {
             source,
             body,
-            parts,
+            parts: _,
             exit,
             exit_trip,
             exit_args,
         } => Some(TraversalMut {
             source,
             body,
-            body_args: BodyArgsMut::Parts(parts),
+            body_args: BodyArgsMut::Unlisted,
             exit,
             exit_trip,
             exit_args,
