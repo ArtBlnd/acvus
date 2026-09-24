@@ -2,7 +2,7 @@
 
 use std::any::TypeId;
 
-use acvus_ext::Deque;
+use acvus_ext::{Deque, HashMap, HashSet};
 use acvus_extern::Owned;
 use acvus_interpreter::{AcvusRuntime, Composite, Kind, Value};
 use acvus_mir::ty::IntTy;
@@ -101,6 +101,8 @@ fn by_composite(interner: &Interner, value: &Value) -> Json {
 /// container's box at its element's canonical form, `Owned` over the runtime
 /// (RFC-0039 rule 5, RFC-0076). A change to that key moves this type with it.
 type ResultElement = Owned<AcvusRuntime>;
+type ResultMap = HashMap<'static, ResultElement, ResultElement, (), AcvusRuntime>;
+type ResultSet = HashSet<'static, ResultElement, (), AcvusRuntime>;
 
 fn by_extension(interner: &Interner, value: &Value) -> Json {
     if let Some(items) = payload_of::<Vec<ResultElement>>(value) {
@@ -108,6 +110,18 @@ fn by_extension(interner: &Interner, value: &Value) -> Json {
     }
     if let Some(items) = payload_of::<Deque<ResultElement>>(value) {
         return items_array(interner, items.iter());
+    }
+    if let Some(map) = payload_of::<ResultMap>(value) {
+        return Json::Array(
+            map.iter()
+                .map(|(key, item)| {
+                    Json::Array(vec![by_kind(interner, key), by_kind(interner, item)])
+                })
+                .collect(),
+        );
+    }
+    if let Some(keys) = payload_of::<ResultSet>(value) {
+        return items_array(interner, keys.iter());
     }
     named(value)
 }

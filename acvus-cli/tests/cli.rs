@@ -1010,6 +1010,47 @@ fn a_vec_and_a_deque_print_as_the_json_array_of_their_items() {
 }
 
 #[test]
+fn a_map_prints_as_its_key_value_pairs_and_a_set_as_its_keys_in_insertion_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "let m = hash_map(); insert(&mut m, \"b\".to_string(), 2); insert(&mut m, \"a\".to_string(), 1); \
+             insert(&mut m, \"c\".to_string(), 3); retain(&mut m, |k, v| -> *v != 2); \
+             insert(&mut m, \"b\".to_string(), 4); m",
+            "[[\"a\",1],[\"c\",3],[\"b\",4]]\n",
+        ),
+        (
+            "let m = hash_map(); insert(&mut m, 2, vec([20])); insert(&mut m, 1, vec([10, 11])); \
+             insert(&mut m, 3, vec([30])); insert(&mut m, 3, vec([31])); \
+             retain(&mut m, |k, v| -> *k != 2); insert(&mut m, 2, vec([21])); m",
+            "[[1,[10,11]],[3,[31]],[2,[21]]]\n",
+        ),
+        (
+            "let m = hash_map(); insert(&mut m, 1, 10); retain(&mut m, |k, v| -> false); m",
+            "[]\n",
+        ),
+        (
+            "let s = hash_set(); insert(&mut s, \"b\".to_string()); insert(&mut s, \"a\".to_string()); \
+             insert(&mut s, \"c\".to_string()); insert(&mut s, \"a\".to_string()); \
+             let gone = hash_set(); insert(&mut gone, \"b\".to_string()); \
+             let s = difference(s, gone); insert(&mut s, \"b\".to_string()); s",
+            "[\"a\",\"c\",\"b\"]\n",
+        ),
+        (
+            "let s = hash_set(); insert(&mut s, 1); let gone = hash_set(); insert(&mut gone, 1); difference(s, gone)",
+            "[]\n",
+        ),
+    ];
+    for (source, expected) in cases {
+        for level in ["full", "none"] {
+            let out = acvus(dir.path(), &["run", "-e", source, "--opt", level]);
+            assert_eq!(out.status.code(), Some(0), "{source}: {}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), expected, "{source} at opt {level}");
+        }
+    }
+}
+
+#[test]
 fn a_value_with_no_data_view_prints_its_name_and_a_closure_never_reaches_the_printer() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
