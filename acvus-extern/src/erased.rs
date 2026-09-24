@@ -197,7 +197,11 @@ mod brand {
 }
 crate::cross_one_value!(Erased<__Rt, T>, [T: 'static] where Self: crate::Branded,);
 
-impl<Rep, R, T> OneValue<R, Rep> for Erased<R, T>
+// SAFETY: an `Erased<R, T>` holds the word the crossing made for the `T` the
+// checker settled, so `erase` hands that word back and `materialize` holds the
+// word it is handed, unread; nothing else crosses, and the capability is not
+// used.
+unsafe impl<Rep, R, T> OneValue<R, Rep> for Erased<R, T>
 where
     R: Runtime,
     T: 'static,
@@ -214,7 +218,10 @@ where
     }
 }
 
-impl<R, T> Stored<R> for Erased<R, T>
+// SAFETY: the body is `stored_as_canonical!`'s, which names the payload as a
+// `Self` through `Canonical`'s layers and reads nothing else; the capability is
+// not kept.
+unsafe impl<R, T> Stored<R> for Erased<R, T>
 where
     R: Runtime,
     T: 'static,
@@ -249,7 +256,10 @@ where
 
 impl<R, T> crate::obj::sealed::Sealed for Erased<R, T> where R: Runtime {}
 
-impl<R, T> InPlaceElement<R> for Erased<R, T>
+// SAFETY: the storage is named as a `Vec<Self>` only because `Owned<R>` is this
+// type's canonical form, with the layout checked in the body; the capability is
+// not used.
+unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
 where
     R: Runtime,
     T: 'static,

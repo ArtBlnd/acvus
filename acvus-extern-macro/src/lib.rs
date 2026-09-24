@@ -1937,7 +1937,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
     };
     let stored = (n_regions == 0).then(|| quote! {
-        impl<#static_params __R> ::acvus_extern::Stored<__R> for #static_self
+        // SAFETY: the payload is the struct's one `#[repr(transparent)]` field,
+        // checked above, which `erase` hands the runtime; nothing else is read,
+        // and the capability is not used.
+        unsafe impl<#static_params __R> ::acvus_extern::Stored<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
             #static_where
@@ -2066,7 +2069,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
 
-        impl<#static_params __R> ::acvus_extern::Cross<__R> for #static_self
+        // SAFETY: every method is the type's own `OneValue` at one word;
+        // nothing else crosses, and the capability is not kept.
+        unsafe impl<#static_params __R> ::acvus_extern::Cross<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
             #static_where
@@ -2075,7 +2080,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             #one_value_run
         }
 
-        impl<#static_params __R> ::acvus_extern::OneValue<__R> for #static_self
+        // SAFETY: `transparent::erase` and `transparent::materialize` box and
+        // unbox the payload the struct is transparent over, at the type the
+        // derive names; nothing else crosses, and the capability is not kept.
+        unsafe impl<#static_params __R> ::acvus_extern::OneValue<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
             #static_where
@@ -2084,7 +2092,8 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             #payload_crossing
         }
 
-        impl<#static_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
+        // SAFETY: as the uniform impl's.
+        unsafe impl<#static_params __R> ::acvus_extern::OneValue<__R, ::acvus_extern::Specialized>
             for #static_self
         where
             __R: ::acvus_extern::Runtime,
@@ -2094,7 +2103,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             #payload_crossing
         }
 
-        impl<#static_params __R> ::acvus_extern::Passed<__R> for #static_self
+        // SAFETY: `cross` and `restore` are the type's own `erase` and
+        // `materialize`; nothing else crosses, and the capability is not kept.
+        unsafe impl<#static_params __R> ::acvus_extern::Passed<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
             #static_where
@@ -2669,14 +2680,21 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
 
         #borrowable
 
-        impl<__R> ::acvus_extern::Cross<__R> for #ident
+        // SAFETY: every method is the type's own `OneValue` or, for a struct's
+        // result, its fields' own crossings; nothing else crosses, and the
+        // capability is not kept.
+        unsafe impl<__R> ::acvus_extern::Cross<__R> for #ident
         where
             __R: ::acvus_extern::Runtime,
         {
             #one_value_run
         }
 
-        impl<__R> ::acvus_extern::OneValue<__R> for #ident
+        // SAFETY: `erase` and `materialize` are the derive's, which cross each
+        // field or variant payload by that part's own crossing at the type the
+        // derive read off the declaration; nothing else crosses, and the
+        // capability is not kept.
+        unsafe impl<__R> ::acvus_extern::OneValue<__R> for #ident
         where
             __R: ::acvus_extern::Runtime,
         {
@@ -2689,7 +2707,9 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
             }
         }
 
-        impl<__R> ::acvus_extern::Passed<__R> for #ident
+        // SAFETY: `cross` and `restore` are the type's own `erase` and
+        // `materialize`; nothing else crosses, and the capability is not kept.
+        unsafe impl<__R> ::acvus_extern::Passed<__R> for #ident
         where
             __R: ::acvus_extern::Runtime,
         {
@@ -4331,7 +4351,9 @@ fn signature_module(
         RetShape::Concrete => quote! {
             pub type Ret<#runtime> = <#ret as ::acvus_extern::RestRun<#runtime>>::Run;
 
-            impl<#runtime> Returned<#runtime> for #ret
+            // SAFETY: a concrete result crosses as itself; the capability
+            // crosses nothing and is not kept.
+            unsafe impl<#runtime> Returned<#runtime> for #ret
             where
                 #runtime: ::acvus_extern::Runtime,
             {
@@ -4345,7 +4367,10 @@ fn signature_module(
             pub type Ret<#runtime> =
                 ::core::option::Option<<#runtime as ::acvus_extern::Runtime>::Value>;
 
-            impl<#runtime, __T> Returned<#runtime> for ::core::option::Option<__T>
+            // SAFETY: the word is `__T`'s own `erase` of the present value,
+            // at the `__T` the checker settled; nothing else crosses and the
+            // capability is not kept.
+            unsafe impl<#runtime, __T> Returned<#runtime> for ::core::option::Option<__T>
             where
                 #runtime: ::acvus_extern::Runtime,
                 __T: ::acvus_extern::OneValue<#runtime>,
@@ -4359,7 +4384,10 @@ fn signature_module(
         RetShape::Whole => quote! {
             pub type Ret<#runtime> = <#runtime as ::acvus_extern::Runtime>::Value;
 
-            impl<#runtime, __T> Returned<#runtime> for __T
+            // SAFETY: the word is `__T`'s own `erase` of the result, at the
+            // `__T` the checker settled; nothing else crosses and the
+            // capability is not kept.
+            unsafe impl<#runtime, __T> Returned<#runtime> for __T
             where
                 #runtime: ::acvus_extern::Runtime,
                 __T: ::acvus_extern::OneValue<#runtime>,
@@ -4462,7 +4490,13 @@ fn signature_module(
             /// requirer: `Ret` is one type for every instance of the
             /// signature, and `restore` reads it back at the requirer's
             /// own type, which the checker unified with the instance's.
-            pub trait Returned<#runtime>: Sized
+            ///
+            /// # Safety
+            /// The word `cross` hands back is exactly the result at the
+            /// type the checker settled for it; it crosses nothing else
+            /// with the capability; and it keeps no capability past the
+            /// call.
+            pub unsafe trait Returned<#runtime>: Sized
             where
                 #runtime: ::acvus_extern::Runtime,
             {
@@ -4758,7 +4792,11 @@ fn signature_call(
             }
         }
 
-        impl<#(#marker_params,)*> ::acvus_extern::CrossesRest<#runtime>
+        // SAFETY: a variable's position taken by value crosses by its own
+        // `Passed`, a borrowed variable's as the word its storage derefs to,
+        // and any other position as itself; nothing else crosses, and the
+        // capability is not kept.
+        unsafe impl<#(#marker_params,)*> ::acvus_extern::CrossesRest<#runtime>
             for #ident<#(#marker_params,)*>
         where
             #runtime: ::acvus_extern::Runtime,

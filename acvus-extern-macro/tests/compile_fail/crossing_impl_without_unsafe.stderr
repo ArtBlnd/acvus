@@ -1,0 +1,13 @@
+error[E0200]: the trait `OneValue<Rt>` requires an `unsafe impl` declaration
+  --> tests/compile_fail/crossing_impl_without_unsafe.rs:12:1
+   |
+12 | / impl<Rt> OneValue<Rt> for MyType
+13 | | where
+14 | |     Rt: Runtime,
+   | |________________^
+   |
+   = note: the trait `OneValue<Rt>` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+   |
+12 | unsafe impl<Rt> OneValue<Rt> for MyType
+   | ++++++

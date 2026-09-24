@@ -52,7 +52,10 @@ where
 
 crate::cross_one_value!(Vec<T>, T: crate::OneValue<__Rt>);
 
-impl<T, Rt> OneValue<Rt> for Vec<T>
+// SAFETY: each element crosses by `T`'s own crossing, or in place where `T` is
+// stored as the runtime's value, inside the runtime's `Vec<Owned<Rt>>`; nothing
+// else crosses, and the capability is not kept.
+unsafe impl<T, Rt> OneValue<Rt> for Vec<T>
 where
     T: OneValue<Rt>,
     Rt: Runtime,

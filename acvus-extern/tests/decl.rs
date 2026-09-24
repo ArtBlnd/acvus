@@ -245,7 +245,10 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 
 acvus_extern::cross_one_value!(V, at Tiny);
 
-impl acvus_extern::OneValue<Tiny> for V {
+// SAFETY: the test runtime's own value crosses as itself: `erase` and
+// `materialize` hand the word through unchanged, and the capability is not
+// used.
+unsafe impl acvus_extern::OneValue<Tiny> for V {
     fn erase(self, _: acvus_extern::Crossing<'_, Tiny>) -> V {
         self
     }

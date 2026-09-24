@@ -440,7 +440,9 @@ where
     }
 }
 
-impl<'a, 'w, P, Rt> Arg<'a, 'w, Rt> for ByProjection<P>
+// SAFETY: the projection is `P::of` over this parameter's own word with the
+// site's table; the capability lends only its runtime and is not kept.
+unsafe impl<'a, 'w, P, Rt> Arg<'a, 'w, Rt> for ByProjection<P>
 where
     P: Projected<Rt> + 'static,
     Rt: Runtime,

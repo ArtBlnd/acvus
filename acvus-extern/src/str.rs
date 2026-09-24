@@ -98,7 +98,9 @@ impl TyArg for StrView {
 
 crate::unbranded!(StrView);
 
-impl<Rt> Cross<Rt> for StrView
+// SAFETY: the run is the pair the runtime writes and reads for this view's own
+// bytes; nothing else crosses, and the capability is not kept.
+unsafe impl<Rt> Cross<Rt> for StrView
 where
     Rt: Runtime,
 {
@@ -124,7 +126,9 @@ where
 /// result written `&str` in Rust.
 pub struct RetStr;
 
-impl<Rt> Ret<Rt> for RetStr
+// SAFETY: the pair names exactly the `&str` the handler returned; nothing else
+// crosses, and the capability is not kept.
+unsafe impl<Rt> Ret<Rt> for RetStr
 where
     Rt: Runtime,
 {
@@ -153,7 +157,9 @@ where
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<'a, 'w, Rt> Arg<'a, 'w, Rt> for ByStr
+// SAFETY: the `&str` is read from this parameter's own pair; nothing else
+// crosses, and the capability is not kept.
+unsafe impl<'a, 'w, Rt> Arg<'a, 'w, Rt> for ByStr
 where
     Rt: Runtime,
 {

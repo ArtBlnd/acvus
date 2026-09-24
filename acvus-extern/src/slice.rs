@@ -202,7 +202,9 @@ where
 
 /// A result declared `&[T]` / `&mut [T]` is returned as Rust's slice of a
 /// parameter the caller lent (RFC-0047 rule 3), and crosses as the pair.
-impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Shared, Rt>
+// SAFETY: the pair names exactly the slice the handler returned; nothing else
+// crosses, and the capability is not kept.
+unsafe impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Shared, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -219,7 +221,8 @@ where
     }
 }
 
-impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Mut, Rt>
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<T, Rt> crate::LentBack<Rt> for Slice<'static, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -252,7 +255,10 @@ where
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 }
 
-impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Shared>
+// SAFETY: the slice is read from this parameter's own pair at `T`, which
+// `TransparentOver` lays out as the runtime's value; nothing else crosses, and
+// the capability is not kept.
+unsafe impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Shared>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -269,7 +275,8 @@ where
     }
 }
 
-impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Mut>
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<'a, 'w, T, Rt> crate::handler::Arg<'a, 'w, Rt> for BySlice<T, Mut>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -296,7 +303,9 @@ where
 /// say its length, since `with` reads the run as `[T]` under that layout
 /// alone. Such a parameter is refused at its declaration, where
 /// `TransparentOver`'s diagnostic names `Slice<Erased<Rt, T>, _, Rt>`.
-impl<T, M, Rt> Cross<Rt> for Slice<'static, T, M, Rt>
+// SAFETY: the run is the pair the runtime writes and reads for this slice's own
+// elements; nothing else crosses, and the capability is not kept.
+unsafe impl<T, M, Rt> Cross<Rt> for Slice<'static, T, M, Rt>
 where
     T: TransparentOver<Rt>,
     M: Loan,

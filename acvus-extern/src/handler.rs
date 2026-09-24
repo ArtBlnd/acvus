@@ -173,7 +173,13 @@ where
 /// type's. `'a` is the call and `'w` the lifetime of the call's `Ctx`: a
 /// carrier is handed out at the first, a required instance at the second
 /// (RFC-0079 rule 6).
-pub trait Arg<'a, 'w, Rt>: Sited<Rt>
+///
+/// # Safety
+/// What `take` hands the body is exactly the value its own `WIDTH` values of
+/// the run hold at the type the checker settled for the parameter; it
+/// crosses nothing else with the capability, a part only through that part's
+/// own crossing; and it keeps no capability past the call.
+pub unsafe trait Arg<'a, 'w, Rt>: Sited<Rt>
 where
     Rt: Runtime,
 {
@@ -272,7 +278,8 @@ where
     }
 }
 
-impl<'a, 'w, S, I, T, Rt, const NTH: usize> Arg<'a, 'w, Rt> for Required<S, I, T, NTH>
+// SAFETY: the instance is the site table's; the capability is not used.
+unsafe impl<'a, 'w, S, I, T, Rt, const NTH: usize> Arg<'a, 'w, Rt> for Required<S, I, T, NTH>
 where
     S: Signature<Rt>,
     I: Send + Sync + 'static,
@@ -291,7 +298,9 @@ where
     }
 }
 
-impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Uniform>
+// SAFETY: the value is `T`'s own `Cross::from_run` of this parameter's run;
+// nothing else crosses, and the capability is not kept.
+unsafe impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Uniform>
 where
     T: Cross<Rt>,
     Rt: Runtime,
@@ -306,7 +315,8 @@ where
     }
 }
 
-impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Specialized>
+// SAFETY: as the uniform impl's, through `T`'s specialized `OneValue`.
+unsafe impl<'a, 'w, T, Rt> Arg<'a, 'w, Rt> for ByValue<T, Specialized>
 where
     T: OneValue<Rt, Specialized>,
     Rt: Runtime,
@@ -320,7 +330,10 @@ where
     }
 }
 
-impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
+// SAFETY: the borrow is `M::borrow` of this parameter's own word at `T`, the
+// type the checker settled for it; the capability lends only its runtime and is
+// not kept.
+unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
 where
     T: Borrowable<Rt>,
     M: Loan,
@@ -336,7 +349,8 @@ where
     }
 }
 
-impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
+// SAFETY: as the uniform impl's, at the specialized representation.
+unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
 where
     T: BorrowableSpecialized<Rt>,
     M: Loan,
@@ -460,7 +474,14 @@ where
 /// body where it escapes; a handler writes the same components either way.
 pub type Out<'a, Rt> = &'a mut [<Rt as Runtime>::Value];
 
-pub trait Ret<Rt>: Sized
+/// How a handler's result crosses into the destination run.
+///
+/// # Safety
+/// The run `into_run` writes is exactly the value of `Of` at the type the
+/// checker settled for the result; it crosses nothing else with the
+/// capability, a part only through that part's own crossing; and it keeps
+/// no capability past the call.
+pub unsafe trait Ret<Rt>: Sized
 where
     Rt: Runtime,
 {
@@ -484,7 +505,13 @@ where
 /// The arguments of a closure call, written into the callee's parameter
 /// registers — the run the window a handler was lent begins with (RFC-0052
 /// rule 7). Each member crosses at its own width, as a result does through `Ret`.
-pub trait IntoRun<Rt>: Sized
+///
+/// # Safety
+/// The run `into_run` writes is exactly the arguments at the types the
+/// checker settled for them; it crosses nothing else with the capability, a
+/// member only through that member's own crossing; and it keeps no
+/// capability past the call.
+pub unsafe trait IntoRun<Rt>: Sized
 where
     Rt: Runtime,
 {
@@ -493,7 +520,8 @@ where
     fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]);
 }
 
-impl<Rt> IntoRun<Rt> for ()
+// SAFETY: nothing crosses, and the capability is not used.
+unsafe impl<Rt> IntoRun<Rt> for ()
 where
     Rt: Runtime,
 {
@@ -504,7 +532,9 @@ where
 
 macro_rules! into_run_tuple {
     ($($A:ident: $at:tt),*) => {
-        impl<Rt, $($A,)*> IntoRun<Rt> for ($($A,)*)
+        // SAFETY: each member crosses by its own `Cross::into_run` into its own
+        // width; nothing else crosses, and the capability is not kept.
+        unsafe impl<Rt, $($A,)*> IntoRun<Rt> for ($($A,)*)
         where
             Rt: Runtime,
             $($A: Cross<Rt>,)*
@@ -536,7 +566,13 @@ into_run_tuple!(A0: 0, A1: 1, A2: 2, A3: 3, A4: 4, A5: 5, A6: 6, A7: 7);
 /// type the declaration names for it (RFC-0047 rule 3, RFC-0068 rule 4): `Ref`,
 /// `Slice`, and an `Option` of one. The handler returns Rust's borrow with
 /// Rust's lifetime; the crossing writes the word or pair.
-pub trait LentBack<Rt>: Sized
+///
+/// # Safety
+/// The word or pair `into_run` writes names exactly the borrow the handler
+/// returned, at the type the checker settled for the result; it crosses
+/// nothing else with the capability; and it keeps no capability past the
+/// call.
+pub unsafe trait LentBack<Rt>: Sized
 where
     Rt: Runtime,
 {
@@ -550,7 +586,9 @@ where
     ) -> <Self::Form as Returned>::Verdict;
 }
 
-impl<L, Rt> LentBack<Rt> for Option<L>
+// SAFETY: a present borrow crosses by `L`'s own `LentBack` and an absent one
+// writes nothing; the capability is not kept.
+unsafe impl<L, Rt> LentBack<Rt> for Option<L>
 where
     L: LentBack<Rt, Form = One>,
     Rt: Runtime,
@@ -571,7 +609,9 @@ where
 /// result written as a Rust borrow.
 pub struct RetLent<L>(PhantomData<fn() -> L>);
 
-impl<L, Rt> Ret<Rt> for RetLent<L>
+// SAFETY: the result crosses by `L`'s own `LentBack`; the capability is not
+// kept.
+unsafe impl<L, Rt> Ret<Rt> for RetLent<L>
 where
     L: LentBack<Rt>,
     Rt: Runtime,
@@ -587,7 +627,9 @@ where
 /// A result crossing as itself, at whichever width its type declares.
 pub struct Val<T, C = Uniform>(PhantomData<fn() -> (T, C)>);
 
-impl<T, Rt> Ret<Rt> for Val<T, Uniform>
+// SAFETY: the result crosses by `T`'s own `Cross::into_return_run`; nothing
+// else crosses, and the capability is not kept.
+unsafe impl<T, Rt> Ret<Rt> for Val<T, Uniform>
 where
     T: Cross<Rt>,
     Rt: Runtime,
@@ -605,7 +647,8 @@ where
     }
 }
 
-impl<T, Rt> Ret<Rt> for Val<T, Specialized>
+// SAFETY: as the uniform impl's, through `T`'s specialized `OneValue`.
+unsafe impl<T, Rt> Ret<Rt> for Val<T, Specialized>
 where
     T: OneValue<Rt, Specialized>,
     Rt: Runtime,
@@ -862,7 +905,13 @@ const _: () = assert!(
 /// The run a declaration's parameters make, as the form its call takes, the
 /// site table they make — one `Arg::Site` per parameter — and the tuple the
 /// body is handed.
-pub trait Parameters<Rt>
+///
+/// # Safety
+/// What `take` hands the body is exactly each parameter's value, taken by
+/// that parameter's own `Arg` over its own values of the run; it crosses
+/// nothing else with the capability; and it keeps no capability past the
+/// call.
+pub unsafe trait Parameters<Rt>
 where
     Rt: Runtime,
 {
@@ -1121,7 +1170,9 @@ macro_rules! run_of {
 /// one more parameter.
 macro_rules! parameters {
     ($($arg:ident: $out:ident: $at:tt),*) => {
-        impl<Rt, $($arg,)*> Parameters<Rt> for ($($arg,)*)
+        // SAFETY: each parameter is taken by its own `Arg` over its own values
+        // of the run; nothing else crosses, and the capability is not kept.
+        unsafe impl<Rt, $($arg,)*> Parameters<Rt> for ($($arg,)*)
         where
             Rt: Runtime,
             $($arg: for<'a, 'w> Arg<'a, 'w, Rt> + 'static,)*

@@ -143,13 +143,12 @@ where
     }
 }
 
-impl<T, Rt> acvus_extern::Stored<Rt> for Deque<T>
-where
-    T: Var<kind::Type> + Unbranded,
-    Rt: Runtime,
-{
-    acvus_extern::stored_as_canonical!(Rt);
-}
+acvus_extern::stored_as_canonical!(
+    Deque<T>, [T, Rt] at Rt
+    where
+        T: Var<kind::Type> + Unbranded,
+        Rt: Runtime,
+);
 
 impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>
 where

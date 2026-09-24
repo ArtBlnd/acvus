@@ -471,23 +471,21 @@ macro_rules! stored_extern_type {
                 Rt: Runtime,
         );
 
-        impl<$($k,)+ E, Rt> OneValue<Rt> for $t<'static, $($k,)+ E, Rt>
-        where
-            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            acvus_extern::whole_box!($t<'static, $($k,)+ E, Rt>, Rt);
-        }
+        acvus_extern::cross_whole!(
+            acvus_extern::Uniform, $t<'static, $($k,)+ E, Rt>, [$($k,)+ E, Rt] at Rt
+            where
+                $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+                E: Var<kind::Effect>,
+                Rt: Runtime,
+        );
 
-        impl<$($k,)+ E, Rt> OneValue<Rt, Specialized> for $t<'static, $($k,)+ E, Rt>
-        where
-            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            acvus_extern::whole_box!($t<'static, $($k,)+ E, Rt>, Rt);
-        }
+        acvus_extern::cross_whole!(
+            Specialized, $t<'static, $($k,)+ E, Rt>, [$($k,)+ E, Rt] at Rt
+            where
+                $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+                E: Var<kind::Effect>,
+                Rt: Runtime,
+        );
 
         borrowed_as_self!(
             $t<'static, $($k,)+ E, Rt>,

@@ -934,7 +934,17 @@ Status: Accepted
    comes back holding a loan that ended. Both also take the runtime's
    `Holding`, as `Owned::erased` takes the glue's `Crossing` (RFC-0068
    rule 1), and the space's `Decode` and `Visit` hand over and lend `Owned`
-   holders, not words.
+   holders, not words. A trait whose methods receive a `Crossing` or a
+   `Holding` (`Cross`, `OneValue`, `Passed`, `CallArgs`, `Arg`,
+   `Parameters`, `Ret`, `IntoRun`, `LentBack`, `CrossesRest`, the three
+   `Restore*`, `Stored`, `InPlaceElement`, and a signature's `Returned`) is
+   `unsafe` to implement, since the capability crosses any word at any
+   type: its `# Safety` is that the word an impl hands back or reads is
+   the value of `Self` at the type the checker settled, that it crosses
+   nothing else with the capability, and that it keeps none. The derives,
+   `#[extern_fn]`, `extern_signature!` and the library's macros emit
+   `unsafe impl` with the `SAFETY` that discharges it, so their users
+   write no `unsafe`; a crossing written by hand says `unsafe impl`.
 3. **A lent type variable is asserted.** `unsafe(lent(T))` on
    `#[extern_fn]` or `#[extern_type]`, or `NotKept::asserted()`, which is
    `unsafe`, in a declaration written by hand, asserts `NotKept`'s
@@ -959,8 +969,9 @@ swapped, an `Instance` forged from a word each reached undefined behaviour
 with no `unsafe` in the author's code. One form of guarantee makes each
 such fact visible where it is made.
 **Cost.** A runtime writes `unsafe` where it builds a `Ctx` or a call site,
-and where it makes an `Owned` of a word; an extern author writes
-`unsafe(lent(..))` for a variable the handler must be handed references in.
+and where it makes an `Owned` of a word, and says `unsafe impl` for its own
+value's crossing; an extern author writes `unsafe(lent(..))` for a variable
+the handler must be handed references in.
 **Rejected.**
 - `ctx_of` on a runtime-only trait — the glue calls it with `Rt: Runtime`
   alone, so the trait is `Runtime`'s supertrait and a handler reaches it

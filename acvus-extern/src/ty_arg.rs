@@ -381,7 +381,9 @@ crate::cross_one_value!(Nth<kind::Type, N>, const N: usize);
 
 /// The stand-ins appear inside types that ask their element to be
 /// `Stored`, such as `Erased<Rt, T>`; being uninhabited, they never cross.
-impl<const N: usize, Rt> crate::OneValue<Rt> for Nth<kind::Type, N>
+// SAFETY: a stand-in is uninhabited: `erase` is never reached and `materialize`
+// crosses nothing.
+unsafe impl<const N: usize, Rt> crate::OneValue<Rt> for Nth<kind::Type, N>
 where
     Rt: crate::Runtime,
 {
@@ -394,7 +396,10 @@ where
     }
 }
 
-impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N>
+// SAFETY: the body is `stored_as_canonical!`'s, which names the payload as a
+// `Self` through `Canonical`'s layers and reads nothing else; the capability is
+// not kept.
+unsafe impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N>
 where
     Rt: crate::Runtime,
 {
@@ -425,7 +430,8 @@ where
 }
 crate::cross_one_value!(Spec<T>, T: Send + Sync + 'static);
 
-impl<T, Rt> crate::OneValue<Rt> for Spec<T>
+// SAFETY: as `Nth<kind::Type, N>`'s.
+unsafe impl<T, Rt> crate::OneValue<Rt> for Spec<T>
 where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,
@@ -439,7 +445,8 @@ where
     }
 }
 
-impl<T, Rt> crate::Stored<Rt> for Spec<T>
+// SAFETY: as `Nth<kind::Type, N>`'s.
+unsafe impl<T, Rt> crate::Stored<Rt> for Spec<T>
 where
     T: Var<kind::Type>,
     Rt: crate::Runtime,
@@ -466,7 +473,8 @@ where
 crate::unbranded!(ChosenNth<N>, const N: usize);
 crate::cross_one_value!(ChosenNth<N>, const N: usize);
 
-impl<const N: usize, Rt> crate::OneValue<Rt> for ChosenNth<N>
+// SAFETY: as `Nth<kind::Type, N>`'s.
+unsafe impl<const N: usize, Rt> crate::OneValue<Rt> for ChosenNth<N>
 where
     Rt: crate::Runtime,
 {
@@ -479,7 +487,8 @@ where
     }
 }
 
-impl<const N: usize, Rt> crate::Stored<Rt> for ChosenNth<N>
+// SAFETY: as `Nth<kind::Type, N>`'s.
+unsafe impl<const N: usize, Rt> crate::Stored<Rt> for ChosenNth<N>
 where
     Rt: crate::Runtime,
 {

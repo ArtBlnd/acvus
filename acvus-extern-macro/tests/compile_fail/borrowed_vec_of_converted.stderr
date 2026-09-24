@@ -14,7 +14,7 @@ help: the trait `InPlaceElement<__R>` is not implemented for `Rendered`
 help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
   --> $WORKSPACE/acvus-extern/src/erased.rs
    |
-   | / impl<R, T> InPlaceElement<R> for Erased<R, T>
+   | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
    | |     T: 'static,
@@ -36,7 +36,7 @@ error[E0277]: a borrowed container of `i64` has no storage of its own type: the 
 help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
   --> $WORKSPACE/acvus-extern/src/erased.rs
    |
-   | / impl<R, T> InPlaceElement<R> for Erased<R, T>
+   | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
    | |     T: 'static,
@@ -58,7 +58,7 @@ error[E0277]: a borrowed container of `i64` has no storage of its own type: the 
 help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
   --> $WORKSPACE/acvus-extern/src/erased.rs
    |
-   | / impl<R, T> InPlaceElement<R> for Erased<R, T>
+   | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
    | |     T: 'static,
@@ -80,7 +80,7 @@ error[E0277]: a borrowed container of `i64` has no storage of its own type: the 
 help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
   --> $WORKSPACE/acvus-extern/src/erased.rs
    |
-   | / impl<R, T> InPlaceElement<R> for Erased<R, T>
+   | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
    | | where
    | |     R: Runtime,
    | |     T: 'static,

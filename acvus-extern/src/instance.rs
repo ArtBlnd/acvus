@@ -302,7 +302,13 @@ where
 /// `Signature` impl. It is its own trait because the crossing of a position
 /// at a variable asks a bound of that variable, which a signature a
 /// requirer only names, and never calls at such a position, must not ask.
-pub trait CrossesRest<Rt>: Signature<Rt>
+///
+/// # Safety
+/// The words `cross_rest` hands back are exactly the rest the requirer
+/// passed, at the types the checker settled for the signature's positions;
+/// it crosses nothing else with the capability, a position only through its
+/// own crossing; and it keeps no capability past the call.
+pub unsafe trait CrossesRest<Rt>: Signature<Rt>
 where
     Rt: Runtime,
 {
@@ -369,7 +375,12 @@ where
 /// for that parameter, so the spelling — a Rust reference read at entry, or
 /// the `Ref` carrier a body that keeps the reference takes (RFC-0018) — and
 /// the representation are read off one type.
-pub trait RestoreShared<Rt>
+///
+/// # Safety
+/// What `restore_shared` hands back reads exactly the caller's value at the
+/// type the checker settled for the position; it crosses nothing else with
+/// the capability; and it keeps no capability past the call.
+pub unsafe trait RestoreShared<Rt>
 where
     Rt: Runtime,
 {
@@ -388,7 +399,10 @@ where
 }
 
 /// As `RestoreShared`, for a position a signature takes by `&mut`.
-pub trait RestoreExclusive<Rt>
+///
+/// # Safety
+/// As `RestoreShared`'s, for `restore_exclusive`.
+pub unsafe trait RestoreExclusive<Rt>
 where
     Rt: Runtime,
 {
@@ -407,7 +421,10 @@ where
 }
 
 /// As `RestoreShared`, for a position a signature takes by value.
-pub trait RestoreByValue<Rt>
+///
+/// # Safety
+/// As `RestoreShared`'s, for `restore_by_value`.
+pub unsafe trait RestoreByValue<Rt>
 where
     Rt: Runtime,
 {
@@ -419,7 +436,10 @@ where
     unsafe fn restore_by_value<'b>(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> Self::Out<'b>;
 }
 
-impl<T, C, Rt> RestoreShared<Rt> for ByRef<T, Shared, C>
+// SAFETY: the reference names the caller's own value, borrowed at `T` through
+// `C`'s `Lends`, the type the checker settled for the position; the capability
+// is not kept.
+unsafe impl<T, C, Rt> RestoreShared<Rt> for ByRef<T, Shared, C>
 where
     T: crate::Branded + Send + Sync + 'static,
     C: Lends<T, Rt>,
@@ -444,7 +464,9 @@ where
     }
 }
 
-impl<T, M, C, Rt> RestoreShared<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
+// SAFETY: the `Ref` is `materialize` of a reference to the caller's own value;
+// nothing else crosses, and the capability is not kept.
+unsafe impl<T, M, C, Rt> RestoreShared<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -470,7 +492,8 @@ where
     }
 }
 
-impl<T, C, Rt> RestoreExclusive<Rt> for ByRef<T, Mut, C>
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<T, C, Rt> RestoreExclusive<Rt> for ByRef<T, Mut, C>
 where
     T: crate::Branded + Send + Sync + 'static,
     C: Lends<T, Rt>,
@@ -494,7 +517,8 @@ where
     }
 }
 
-impl<T, M, C, Rt> RestoreExclusive<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<T, M, C, Rt> RestoreExclusive<Rt> for ByValue<Ref<'static, T, M, Rt>, C>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -518,7 +542,9 @@ where
     }
 }
 
-impl<T, C, Rt> RestoreByValue<Rt> for ByValue<T, C>
+// SAFETY: the value is `T`'s own `materialize` of the word the caller crossed;
+// nothing else crosses, and the capability is not kept.
+unsafe impl<T, C, Rt> RestoreByValue<Rt> for ByValue<T, C>
 where
     T: OneValue<Rt, C>,
     Rt: Runtime,

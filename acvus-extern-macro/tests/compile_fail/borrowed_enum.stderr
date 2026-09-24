@@ -15,14 +15,14 @@ help: the trait `BorrowedWhole<__R>` is not implemented for `Shape`
 help: the following other types implement trait `Arg<'a, 'w, Rt>`
   --> $WORKSPACE/acvus-extern/src/handler.rs
    |
-   | / impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
+   | / unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Uniform>
    | | where
    | |     T: Borrowable<Rt>,
    | |     M: Loan,
    | |     Rt: Runtime,
    | |________________^ `ByRef<T, M>`
 ...
-   | / impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
+   | / unsafe impl<'a, 'w, T, M, Rt> Arg<'a, 'w, Rt> for ByRef<T, M, Specialized>
    | | where
    | |     T: BorrowableSpecialized<Rt>,
    | |     M: Loan,

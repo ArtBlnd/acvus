@@ -383,7 +383,9 @@ acvus_extern::cross_one_value!(Value, at AcvusRuntime);
 
 /// The runtime's own value crosses as itself: nothing to convert, and a
 /// reference to one is read through the word that names it (RFC-0039).
-impl acvus_extern::OneValue<AcvusRuntime> for Value {
+// SAFETY: the runtime's own value crosses as itself: `erase` and `materialize`
+// hand the word through unchanged, and the capability is not used.
+unsafe impl acvus_extern::OneValue<AcvusRuntime> for Value {
     fn erase(self, _: acvus_extern::Crossing<'_, AcvusRuntime>) -> Value {
         self
     }

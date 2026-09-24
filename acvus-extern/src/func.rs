@@ -40,7 +40,13 @@ use crate::ty_arg::{Term, Var, kind};
 /// declared `Ref<T, M, Rt>` as the Rust borrow it stands for. What a
 /// handler passes to a closure at that position, and what it receives back
 /// from a signature's instance there (RFC-0068 rules 4 and 6).
-pub trait Passed<Rt>: Send + Sync + 'static
+///
+/// # Safety
+/// The word `cross` hands back and the word `restore` reads are exactly the
+/// value of `Self` at the type the checker settled for it, passed as `As`;
+/// it crosses nothing else with the capability, a part only through that
+/// part's own crossing; and it keeps no capability past the call.
+pub unsafe trait Passed<Rt>: Send + Sync + 'static
 where
     Rt: Runtime,
 {
@@ -77,7 +83,13 @@ where
 pub trait Args: Send + Sync + 'static {}
 
 /// The same tuple, as a call needs it.
-pub trait CallArgs<Rt>: Args
+///
+/// # Safety
+/// The run `cross_into` writes, and the run `awaited` calls with, are
+/// exactly the tuple's members at the types the checker settled for them,
+/// each crossed by its own `Passed`; it crosses nothing else with the
+/// capability; and it keeps no capability past the call.
+pub unsafe trait CallArgs<Rt>: Args
 where
     Rt: Runtime,
 {
@@ -107,7 +119,9 @@ where
     A: CallArgs<Rt>,
     Rt: Runtime;
 
-impl<'p, A, Rt> crate::IntoRun<Rt> for PassedRun<'p, A, Rt>
+// SAFETY: the run is `A::cross_into`'s, the tuple's own crossing; nothing else
+// crosses, and the capability is not kept.
+unsafe impl<'p, A, Rt> crate::IntoRun<Rt> for PassedRun<'p, A, Rt>
 where
     A: CallArgs<Rt>,
     Rt: Runtime,
@@ -218,7 +232,11 @@ crate::cross_one_value!(
     A: Send + Sync + 'static, R: Send + Sync + 'static, E: Var<kind::Effect>
 );
 
-impl<A, R, E, Rt> crate::OneValue<Rt> for Closure<'static, A, R, E, Rt>
+// SAFETY: `erase` hands back the closure's own word, and `materialize` holds
+// the word it is handed as the closure the checker settled at this type, asking
+// the runtime only whether a call of it is sync; nothing else crosses, and the
+// capability is not kept.
+unsafe impl<A, R, E, Rt> crate::OneValue<Rt> for Closure<'static, A, R, E, Rt>
 where
     A: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -347,7 +365,9 @@ where
 
 impl Args for () {}
 
-impl<Rt> CallArgs<Rt> for ()
+// SAFETY: no member crosses, and the capability makes the call and ends with
+// it.
+unsafe impl<Rt> CallArgs<Rt> for ()
 where
     Rt: Runtime,
 {
@@ -376,7 +396,9 @@ impl ArgTypes for () {
 impl<A0> Args for (A0,) where A0: Send + Sync + 'static {}
 
 /// The one argument the runtime has an entry of its own for.
-impl<A0, Rt> CallArgs<Rt> for (A0,)
+// SAFETY: the one member crosses by its own `Passed`, and the capability makes
+// the call and ends with it.
+unsafe impl<A0, Rt> CallArgs<Rt> for (A0,)
 where
     A0: Passed<Rt>,
     Rt: Runtime,
@@ -410,7 +432,9 @@ macro_rules! args_of {
         {
         }
 
-        impl<$($A,)+ Rt> CallArgs<Rt> for ($($A,)+)
+        // SAFETY: each member crosses by its own `Passed`, and the capability
+        // makes the call and ends with it.
+        unsafe impl<$($A,)+ Rt> CallArgs<Rt> for ($($A,)+)
         where
             $($A: Passed<Rt>,)+
             Rt: Runtime,

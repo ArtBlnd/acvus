@@ -136,7 +136,9 @@ where
     }
 }
 
-impl<T, M, Rt> crate::Cross<Rt> for Ref<'static, T, M, Rt>
+// SAFETY: every method is the reference's own `OneValue` at one word; nothing
+// else crosses, and the capability is not kept.
+unsafe impl<T, M, Rt> crate::Cross<Rt> for Ref<'static, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
@@ -163,7 +165,10 @@ where
 /// lives for the call by Rust's rule, and the reference word the crossing
 /// makes from it is kept no longer than the call by the runtime's
 /// (`Runtime::reference`, RFC-0018).
-impl<T, Rt> crate::Passed<Rt> for Ref<'static, T, Shared, Rt>
+// SAFETY: `cross` makes the reference word to the handler's own `&T`, and
+// `restore` reads a reference word at `T`, which `TransparentOver` lays out as
+// the runtime's value; nothing else crosses, and the capability is not kept.
+unsafe impl<T, Rt> crate::Passed<Rt> for Ref<'static, T, Shared, Rt>
 where
     T: TransparentOver<Rt> + Sync,
     Rt: Runtime,
@@ -187,7 +192,8 @@ where
     }
 }
 
-impl<T, Rt> crate::Passed<Rt> for Ref<'static, T, Mut, Rt>
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<T, Rt> crate::Passed<Rt> for Ref<'static, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -212,7 +218,9 @@ where
 /// A result declared `&T` / `&mut T` is returned as Rust's borrow of a
 /// parameter the caller lent (RFC-0047 rule 3), and crosses as one reference
 /// word.
-impl<T, Rt> crate::LentBack<Rt> for Ref<'static, T, Shared, Rt>
+// SAFETY: the word is a reference to the borrow the handler returned, at `T`;
+// nothing else crosses, and the capability is not kept.
+unsafe impl<T, Rt> crate::LentBack<Rt> for Ref<'static, T, Shared, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -227,7 +235,8 @@ where
     }
 }
 
-impl<T, Rt> crate::LentBack<Rt> for Ref<'static, T, Mut, Rt>
+// SAFETY: as the shared impl's, exclusively.
+unsafe impl<T, Rt> crate::LentBack<Rt> for Ref<'static, T, Mut, Rt>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
@@ -252,7 +261,10 @@ where
     unsafe { &*(item as *const T).cast::<Rt::Value>() }
 }
 
-impl<T, M, Rt> crate::OneValue<Rt> for Ref<'static, T, M, Rt>
+// SAFETY: a `Ref` holds its reference word, so `erase` hands it back and
+// `materialize` holds the word it is handed, unread; the capability is not
+// used.
+unsafe impl<T, M, Rt> crate::OneValue<Rt> for Ref<'static, T, M, Rt>
 where
     T: Send + Sync + 'static,
     M: Loan,
