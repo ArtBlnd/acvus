@@ -441,6 +441,12 @@ compilation holds the body to it.**
    runtime carries with the value. It is spelled by the host, never
    defaulted. `types_match` reads a declared `!` on the expected side; a `!`
    value satisfying any slot is a separate site.
+6. **A compilation declares the entry's inputs as it declares its
+   return.** The declared inputs are the entry's parameters, and a body reads
+   a `$` only as one of them or as a binding (RFC-0071 rule 5). A
+   declaration of none declares none. Taking the inputs from the body's `$`
+   reads instead is spelled by the host, as `!` is: it serves an analysis that
+   reports what a body requires, and an entry compiled that way does not run.
 
 What the entry's result is at run time — one runtime value — is RFC-0062 and
 RFC-0064.
@@ -1077,7 +1083,13 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
      (RFC-0038). A `Vec<!>` holds nothing, and that is sound.
    - A value no script names is not a context. The host keeps it itself.
 
-2. **The entry's result is declared by Rust type.**
+2. **The entry's inputs and result are declared by Rust types.**
+   - A compilation takes the entry's inputs as a Rust type `I`: a derived
+     struct whose fields name the `$` inputs the entry reads (RFC-0071 rule
+     4) and give their types, in the order the entry takes them, or `()` for
+     none (RFC-0054 rule 6). A `$` the entry reads that `I` does not name is
+     refused at compile, and so is a field a binding already fixes. A run
+     takes an `I`, and it crosses as an extern's returned value does.
    - A compilation takes the entry's return type as a Rust type `R`. Its
      `Ty` is read by the derive an extern's parameter uses, and it is the
      entry's declaration (RFC-0054 rule 1). The declaration and `R` cannot
