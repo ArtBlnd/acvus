@@ -495,8 +495,8 @@ pub type SitesOf<Rt, M> = <(M,) as Parameters<Rt>>::Sites;
 /// which nothing calls.
 pub struct Alone<Q, P>(PhantomData<fn() -> (Q, P)>);
 
-/// A closure of one lent parameter `Q` and the `Ctx` a handler is called
-/// with, `C`, written after it.
+/// A closure of the `Ctx` a handler is called with, `C`, written first as a
+/// handler writes it (RFC-0023 rule 2), and one lent parameter `Q`.
 pub struct WithCtx<Q, C, P>(PhantomData<fn() -> (Q, C, P)>);
 
 /// A closure that takes a lent value as a handler takes a parameter. The
@@ -554,8 +554,8 @@ where
 impl<F, O, P, Q, C, Rt> Borrows<Rt, WithCtx<Q, C, P>, O> for F
 where
     Q: Param<Rt>,
-    F: FnOnce(Q, C) -> P,
-    F: for<'a, 'c, 'w> FnOnce(Q::At<'a>, &'c mut Ctx<'w, Rt>) -> O,
+    F: FnOnce(C, Q) -> P,
+    F: for<'a, 'c, 'w> FnOnce(&'c mut Ctx<'w, Rt>, Q::At<'a>) -> O,
     Rt: Runtime,
 {
     type Marker = Q::Marker;
@@ -575,7 +575,7 @@ where
         // SAFETY: the `Ctx` is lent to the closure alone, as a handler's is,
         // and safe code reaches no second one to exchange it with.
         let ctx = unsafe { Rt::ctx_of(&mut rooted) };
-        self(lent.take::<Q::At<'_>>(), ctx)
+        self(ctx, lent.take::<Q::At<'_>>())
     }
 }
 

@@ -1086,7 +1086,8 @@ settled, as the rule at the top of `acvus-extern` holds for an extern.
    closure, and the closure's parameters cross exactly as an extern
    handler's do, through the glue the macro emits for a handler parameter:
    `&T`, `&mut T`, `&str`, a slice of `Erased<Rt, T>`, a derive's
-   projection, and a `Ctx` that carries the runtime. There is no second
+   projection, and a `Ctx` that carries the runtime, written first as a
+   handler writes it (RFC-0023 rule 2). There is no second
    crossing and no host-only view.
    - Running the entry gives an `Output<R>`. It owns the value, releases it
      when dropped, and offers `with(|p| …)` and `with_mut(|p| …)`.

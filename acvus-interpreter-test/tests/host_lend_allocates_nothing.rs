@@ -82,7 +82,7 @@ struct Read {
 }
 
 fn read(page: &mut InMemoryContext) -> Read {
-    page.with("log", |xs: &[Erased<Rt, String>], ctx: &mut Ctx<'_, Rt>| {
+    page.with("log", |ctx: &mut Ctx<'_, Rt>, xs: &[Erased<Rt, String>]| {
         let before = allocations();
         let bytes = xs.iter().map(|x| x.as_ref(ctx.rt).len()).sum();
         let first = xs[0].as_ref(ctx.rt) == "one" && xs[1].as_ref(ctx.rt) == "two";

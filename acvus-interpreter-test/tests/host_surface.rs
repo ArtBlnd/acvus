@@ -108,7 +108,7 @@ fn solved(program: &Program, i: &Interner, key: &str) -> String {
 
 /// `@log`'s strings, each copied in Rust out of the element the page lends.
 fn log_of(page: &mut InMemoryContext) -> Result<Vec<String>, PageError> {
-    page.with("log", |xs: &[Erased<Rt, String>], ctx: &mut Ctx<'_, Rt>| {
+    page.with("log", |ctx: &mut Ctx<'_, Rt>, xs: &[Erased<Rt, String>]| {
         xs.iter().map(|x| x.as_ref(ctx.rt).to_owned()).collect()
     })
 }
@@ -668,7 +668,7 @@ async fn an_element_edited_in_place_is_what_the_next_run_reads() {
     exclusive(&mut page)
         .with_mut(
             "log",
-            |xs: &mut [Erased<Rt, String>], ctx: &mut Ctx<'_, Rt>| xs[0].as_mut(ctx.rt).push('!'),
+            |ctx: &mut Ctx<'_, Rt>, xs: &mut [Erased<Rt, String>]| xs[0].as_mut(ctx.rt).push('!'),
         )
         .expect("`@log` holds a `Vec<String>`");
     run_unit(&program, "turn", &page).await;
